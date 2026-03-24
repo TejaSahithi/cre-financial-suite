@@ -974,7 +974,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
         <Button 
           onClick={() => {
             refreshProfile();
-            const { toast } = import("sonner").then(m => m.toast.info("Checking status..."));
+            import("sonner").then(({ toast }) => toast.info("Checking status..."));
           }} 
           className="h-11 rounded-xl font-bold bg-[#1a2744] hover:bg-[#243b67]"
         >
