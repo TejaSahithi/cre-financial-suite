@@ -50,11 +50,13 @@ export default function Welcome() {
       await refreshProfile();
       
       // 4. Navigate out!
-      // For owners, they will go to Onboarding automatically via App.jsx
-      // For invited, App.jsx will automatically send them to Dashboard depending on org
-      window.location.href = createPageUrl(
-        user?.profile?.onboarding_type === 'invited' ? 'Dashboard' : 'Onboarding'
-      );
+      // If onboarding is already finished, go to Dashboard. Otherwise go to Onboarding.
+      const isOwner = user?.profile?.onboarding_type !== 'invited';
+      const needsOnboarding = isOwner && !user?.profile?.onboarding_complete;
+      
+      console.log('[Welcome] Password reset complete, navigating to:', needsOnboarding ? 'Onboarding' : 'Dashboard');
+      
+      window.location.href = createPageUrl(needsOnboarding ? 'Onboarding' : 'Dashboard');
     } catch (err) {
       console.error("[Welcome] Reset Password Error:", err);
       setError(err.message || "An error occurred while saving your new password.");
