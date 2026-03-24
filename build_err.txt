@@ -1,0 +1,38 @@
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 3187 modules transformed.
+rendering chunks...
+
+---STDERR---
+[33m[plugin vite:esbuild] src/pages/Workflows.jsx: [33mDuplicate key "draft" in object literal[33m
+20 |    locked: { label: "Locked", color: "bg-slate-200 text-slate-800" },
+21 |    ai_generated: { label: "AI Generated", color: "bg-cyan-100 text-cyan-700" },
+22 |    draft: { label: "Draft", color: "bg-slate-100 text-slate-700" },
+   |    ^
+23 |    extracted: { label: "Extracted", color: "bg-blue-100 text-blue-700" },
+24 |    validated: { label: "Validated", color: "bg-emerald-100 text-emerald-700" },
+[39m
+[31m✗[39m Build failed in 5.43s
+[31merror during build:
+[31m[vite:esbuild-transpile] Transform failed with 1 error:
+assets/index-!~{001}~.js:8650:29: ERROR: Top-level await is not available in the configured target environment ("chrome87", "edge88", "es2020", "firefox78", "safari14" + 2 overrides)[31m
+file: [36massets/index-!~{001}~.js:8650:29[31m
+[33m
+[33mTop-level await is not available in the configured target environment ("chrome87", "edge88", "es2020", "firefox78", "safari14" + 2 overrides)[33m
+8648|    const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqd2R3dXFxZG9rYmxha2hleWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTgyNjEsImV4cCI6MjA4OTU5NDI2MX0.zBHQJPHcm4OCZPgQRvJleiXKcu5iKgUOyo1HKqMu0OQ";
+8649|    if (supabaseUrl && supabaseKey) {
+8650|      const { createClient } = await __vitePreload(async () => { const { createClient } = await import('./index-!~{002}~.js');return { createClient }},true              ?__VITE_PRELOAD__:void 0);
+   |                               ^
+8651|      supabase = createClient(supabaseUrl, supabaseKey, {
+8652|        auth: {
+[31m
+    at failureErrorWithLog (C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\node_modules\esbuild\lib\main.js:1467:15)
+    at C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\node_modules\esbuild\lib\main.js:736:50
+    at responseCallbacks.<computed> (C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\node_modules\esbuild\lib\main.js:603:9)
+    at handleIncomingPacket (C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\node_modules\esbuild\lib\main.js:658:12)
+    at Socket.readFromStdout (C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\node_modules\esbuild\lib\main.js:581:7)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:563:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:514:3)
+    at Readable.push (node:internal/streams/readable:394:5)
+    at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)[39m

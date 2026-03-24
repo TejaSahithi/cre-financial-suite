@@ -1,0 +1,341 @@
+import React, { useState } from "react";
+import { PropertyService, ExpenseService, LeaseService, UnitService, BuildingService, CAMCalculationService, BudgetService } from "@/services/api";
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { Calculator, ArrowRight, Plus, Trash2, DollarSign, TrendingUp } from "lucide-react";
+import PageHeader from "@/components/PageHeader";
+import MetricCard from "@/components/MetricCard";
+import ScopeSelector from "@/components/ScopeSelector";
+import CAMReviewTab from "@/components/cam/CAMReviewTab";
+
+const DEFAULT_CAM_RULES = [
+  { id: "admin_fee", name: "Admin Fee", type: "percentage", enabled: true, value: 10, description: "Administrative fee applied to total CAM pool" },
+  { id: "gross_up", name: "Gross-Up Clause", type: "toggle", enabled: false, value: 95, description: "Gross up expenses to assumed occupancy level (%)" },
+  { id: "base_year_stop", name: "Base Year / Expense Stop", type: "toggle", enabled: false, value: 0, description: "Tenant only pays increases above base year CAM" },
+  { id: "exclude_vacant", name: "Exclude Vacant from Allocation", type: "toggle", enabled: false, description: "Exclude vacant units from pro-rata share calculation" },
+  { id: "cam_cap", name: "CAM Cap (Annual Increase)", type: "percentage", enabled: true, value: 5, description: "Max annual % increase in CAM charges" },
+  { id: "cpi_escalation", name: "CPI-Based Escalation", type: "cpi", enabled: false, value: 3, cpi_index: "CPI-U", description: "Annual CAM increase tied to CPI index" },
+  { id: "controllable_cap", name: "Controllable Expense Cap", type: "percentage", enabled: false, value: 5, description: "Cap only on controllable expenses (separate from non-controllable)" },
+  { id: "proration", name: "Mid-Year Proration", type: "toggle", enabled: true, description: "Prorate CAM for tenants with mid-year lease start/end" },
+];
+
+const expenseCategories = [
+  { name: "Property Tax", controllable: false },
+  { name: "Insurance", controllable: false },
+  { name: "Common Area Utilities", controllable: false },
+  { name: "Landscaping", controllable: true },
+  { name: "Snow Removal", controllable: true },
+  { name: "Parking Lot Maintenance", controllable: true },
+  { name: "Elevator Maintenance", controllable: true },
+  { name: "Security Services", controllable: true },
+  { name: "Janitorial", controllable: true },
+  { name: "Trash Removal", controllable: true },
+  { name: "Fire Systems", controllable: false },
+  { name: "HVAC Maintenance", controllable: true },
+  { name: "Management Fee", controllable: true },
+];
+
+export default function CAMDashboard() {
+  const { data: camCalcs = [] } = useQuery({ queryKey: ['cam-all'], queryFn: () => CAMCalculationService.list() });
+  const { data: budgets = [] } = useQuery({ queryKey: ['budgets-cam'], queryFn: () => BudgetService.list() });
+  const { data: leaseList = [] } = useQuery({ queryKey: ['leases-cam'], queryFn: () => LeaseService.list() });
+  const { data: properties = [] } = useQuery({ queryKey: ['properties-cam'], queryFn: () => PropertyService.list() });
+  const { data: allBuildings = [] } = useQuery({ queryKey: ['buildings-cam'], queryFn: () => BuildingService.list() });
+  const { data: allUnits = [] } = useQuery({ queryKey: ['units-cam'], queryFn: () => UnitService.list() });
+  const { data: expenses = [] } = useQuery({ queryKey: ['expenses-cam'], queryFn: () => ExpenseService.list() });
+  const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+
+  const currentYear = new Date().getFullYear();
+  const prevYear = currentYear - 1;
+  const scopedCAMs = scopeProperty !== "all" ? camCalcs.filter(c => c.property_id === scopeProperty) : camCalcs;
+  const scopedLeases = scopeProperty !== "all" ? leaseList.filter(l => l.property_id === scopeProperty) : leaseList;
+  const currentCAMs = scopedCAMs.filter(c => c.fiscal_year === currentYear);
+  const prevCAMs = scopedCAMs.filter(c => c.fiscal_year === prevYear);
+  const currentTotal = currentCAMs.reduce((s, c) => s + (c.annual_cam || 0), 0);
+  const prevTotal = prevCAMs.reduce((s, c) => s + (c.annual_cam || 0), 0);
+  const camBudgeted = budgets.filter(b => b.budget_year === currentYear).reduce((s, b) => s + (b.cam_total || 0), 0);
+  const leaseCAMTotal = scopedLeases.reduce((s, l) => s + ((l.cam_per_month || 0) * 12), 0);
+
+  const [camRules, setCamRules] = useState(DEFAULT_CAM_RULES);
+  const [showAddRule, setShowAddRule] = useState(false);
+  const [newRule, setNewRule] = useState({ name: "", type: "percentage", value: 0, description: "", enabled: true });
+
+  const [config, setConfig] = useState({
+    building_sqft: 100000,
+    occupied_sqft: 85000,
+    allocation_method: "pro_rata",
+  });
+
+  const [expenseAmounts, setExpenseAmounts] = useState({});
+
+  const toggleRule = (id) => {
+    setCamRules(rules => rules.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+  };
+
+  const updateRuleValue = (id, value) => {
+    setCamRules(rules => rules.map(r => r.id === id ? { ...r, value: parseFloat(value) || 0 } : r));
+  };
+
+  const updateRuleCPI = (id, index) => {
+    setCamRules(rules => rules.map(r => r.id === id ? { ...r, cpi_index: index } : r));
+  };
+
+  const deleteRule = (id) => {
+    setCamRules(rules => rules.filter(r => r.id !== id));
+  };
+
+  const addCustomRule = () => {
+    if (!newRule.name) return;
+    setCamRules(rules => [...rules, { ...newRule, id: `custom_${Date.now()}` }]);
+    setNewRule({ name: "", type: "percentage", value: 0, description: "", enabled: true });
+    setShowAddRule(false);
+  };
+
+  return (
+    <div className="p-4 lg:p-6 space-y-5">
+      <PageHeader icon={Calculator} title="CAM Engine" subtitle="Configure rules, manage allocations, and calculate tenant charges at every level" iconColor="from-teal-500 to-cyan-600">
+        <Link to={createPageUrl("CreateBudget")}>
+          <Button variant="outline" size="sm">Budget Studio <ArrowRight className="w-4 h-4 ml-1" /></Button>
+        </Link>
+      </PageHeader>
+
+      <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} showUnit={false} />
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <MetricCard label={`CAM Pool (${currentYear})`} value={`$${currentTotal.toLocaleString()}`} icon={Calculator} color="bg-teal-50 text-teal-600" trend={prevTotal > 0 ? parseFloat(((currentTotal - prevTotal) / prevTotal * 100).toFixed(1)) : undefined} />
+        <MetricCard label={`Prior Year (${prevYear})`} value={`$${prevTotal.toLocaleString()}`} icon={DollarSign} color="bg-slate-100 text-slate-500" sub="Historical baseline" />
+        <MetricCard label={`Budgeted CAM`} value={`$${camBudgeted.toLocaleString()}`} icon={TrendingUp} color="bg-blue-50 text-blue-600" sub={`FY ${currentYear}`} />
+        <MetricCard label="Lease CAM Revenue" value={`$${leaseCAMTotal.toLocaleString()}`} icon={DollarSign} color="bg-amber-50 text-amber-600" sub={`From ${scopedLeases.length} leases`} />
+      </div>
+
+      <Tabs defaultValue="rules">
+        <TabsList className="bg-white border">
+          <TabsTrigger value="rules">CAM Rules</TabsTrigger>
+          <TabsTrigger value="expenses">Expense Entry</TabsTrigger>
+          <TabsTrigger value="calculate">Calculate</TabsTrigger>
+          <TabsTrigger value="review">CAM Review</TabsTrigger>
+        </TabsList>
+
+        {/* CAM Rules Tab */}
+        <TabsContent value="rules" className="mt-4 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">CAM Rules & Configuration</h2>
+              <p className="text-xs text-slate-500">Enable/disable rules, set values, or add custom rules. These apply to CAM calculations.</p>
+            </div>
+            <Button onClick={() => setShowAddRule(true)} className="bg-blue-600 hover:bg-blue-700">
+              <Plus className="w-4 h-4 mr-2" />Add Custom Rule
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            {camRules.map(rule => (
+              <Card key={rule.id} className={`transition-all ${rule.enabled ? 'border-l-4 border-l-blue-500' : 'opacity-60'}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-1">
+                        <Switch checked={rule.enabled} onCheckedChange={() => toggleRule(rule.id)} />
+                        <span className="text-sm font-bold text-slate-900">{rule.name}</span>
+                        {rule.type === 'cpi' && <Badge className="bg-purple-100 text-purple-700 text-[10px]">CPI-BASED</Badge>}
+                        {rule.type === 'percentage' && <Badge variant="outline" className="text-[10px]">%</Badge>}
+                        {rule.type === 'toggle' && <Badge variant="outline" className="text-[10px]">ON/OFF</Badge>}
+                        {rule.id.startsWith('custom_') && <Badge className="bg-amber-100 text-amber-700 text-[10px]">CUSTOM</Badge>}
+                      </div>
+                      <p className="text-xs text-slate-500 ml-11">{rule.description}</p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {rule.enabled && rule.type === 'percentage' && (
+                        <div className="flex items-center gap-1">
+                          <Input type="number" value={rule.value} onChange={e => updateRuleValue(rule.id, e.target.value)} className="w-20 h-8 text-sm text-right" />
+                          <span className="text-xs text-slate-400">%</span>
+                        </div>
+                      )}
+                      {rule.enabled && rule.type === 'toggle' && rule.value !== undefined && rule.value !== null && (
+                        <div className="flex items-center gap-1">
+                          <Input type="number" value={rule.value} onChange={e => updateRuleValue(rule.id, e.target.value)} className="w-20 h-8 text-sm text-right" placeholder="Value" />
+                          {rule.id === 'gross_up' && <span className="text-xs text-slate-400">% occ.</span>}
+                          {rule.id === 'base_year_stop' && <span className="text-xs text-slate-400">$</span>}
+                        </div>
+                      )}
+                      {rule.enabled && rule.type === 'cpi' && (
+                        <div className="flex items-center gap-2">
+                          <Select value={rule.cpi_index || "CPI-U"} onValueChange={v => updateRuleCPI(rule.id, v)}>
+                            <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="CPI-U">CPI-U</SelectItem>
+                              <SelectItem value="CPI-W">CPI-W</SelectItem>
+                              <SelectItem value="custom">Custom Rate</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Input type="number" value={rule.value} onChange={e => updateRuleValue(rule.id, e.target.value)} className="w-20 h-8 text-sm text-right" placeholder="Rate %" />
+                          <span className="text-xs text-slate-400">%</span>
+                        </div>
+                      )}
+                      {rule.enabled && (
+                        <Badge variant="outline" className="text-[10px] font-mono bg-slate-50">
+                          {rule.type === 'toggle' && (rule.value !== undefined && rule.value !== null)
+                            ? (rule.id === 'gross_up' ? `${rule.value}%` : rule.id === 'base_year_stop' ? `$${rule.value}` : rule.value)
+                            : rule.type === 'toggle' ? 'Active' 
+                            : rule.type === 'cpi' ? `${rule.value}% ${rule.cpi_index || 'CPI-U'}`
+                            : `${rule.value}%`}
+                        </Badge>
+                      )}
+                      {rule.id.startsWith('custom_') && (
+                        <Button variant="ghost" size="sm" onClick={() => deleteRule(rule.id)} className="text-red-400 hover:text-red-600">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
+
+        {/* Expense Entry Tab */}
+        <TabsContent value="expenses" className="mt-4 space-y-6">
+          {/* Classification legend */}
+          <div className="grid grid-cols-3 gap-4">
+            <Card className="border-l-4 border-l-emerald-500">
+              <CardContent className="p-4">
+                <p className="text-sm font-bold text-emerald-700">Recoverable</p>
+                <p className="text-[10px] text-slate-500">Property Tax, Insurance, Utilities, Security, Janitorial, HVAC...</p>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-red-500">
+              <CardContent className="p-4">
+                <p className="text-sm font-bold text-red-600">Non-Recoverable</p>
+                <p className="text-[10px] text-slate-500">Mortgage, Depreciation, Capital Improvements, Legal Disputes...</p>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-amber-500">
+              <CardContent className="p-4">
+                <p className="text-sm font-bold text-amber-600">Controllable (Capped)</p>
+                <p className="text-[10px] text-slate-500">Maintenance, Landscaping, Security, Janitorial, Management Fee...</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Enter Operating Expenses</CardTitle>
+              <p className="text-xs text-slate-500">Only recoverable expenses go into the CAM pool</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {expenseCategories.map(cat => (
+                <div key={cat.name} className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-700">{cat.name}</p>
+                    <p className="text-[10px] text-slate-400">{cat.controllable ? '🔒 Controllable (capped)' : '🔥 Non-controllable'}</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-slate-400">$</span>
+                    <Input type="number" className="w-28 h-8 text-sm text-right" placeholder="0"
+                      value={expenseAmounts[cat.name] || ""}
+                      onChange={e => setExpenseAmounts({ ...expenseAmounts, [cat.name]: e.target.value })} />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Calculate Tab */}
+        <TabsContent value="calculate" className="mt-4 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Building Configuration</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div><Label className="text-xs">Building SqFt</Label><Input type="number" value={config.building_sqft} onChange={e => setConfig({ ...config, building_sqft: parseInt(e.target.value) || 0 })} /></div>
+                <div><Label className="text-xs">Occupied SqFt</Label><Input type="number" value={config.occupied_sqft} onChange={e => setConfig({ ...config, occupied_sqft: parseInt(e.target.value) || 0 })} /></div>
+                <div>
+                  <Label className="text-xs">Allocation Method</Label>
+                  <Select value={config.allocation_method} onValueChange={v => setConfig({ ...config, allocation_method: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pro_rata">Pro-Rata by SqFt</SelectItem>
+                      <SelectItem value="equal">Equal Distribution</SelectItem>
+                      <SelectItem value="weighted">Weighted Allocation</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Active rules summary */}
+              <div className="bg-slate-50 rounded-xl p-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Active Rules</p>
+                <div className="flex flex-wrap gap-2">
+                  {camRules.filter(r => r.enabled).map(r => (
+                    <Badge key={r.id} className="bg-blue-100 text-blue-700 text-[10px]">
+                      {r.name}{r.type !== 'toggle' ? `: ${r.value}%` : ''}{r.cpi_index ? ` (${r.cpi_index})` : ''}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+
+              <Button className="w-full bg-red-500 hover:bg-red-600 h-12 text-base font-semibold">
+                <Calculator className="w-5 h-5 mr-2" /> Calculate CAM Allocation
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        {/* CAM Review Tab */}
+        <TabsContent value="review" className="mt-4">
+          <CAMReviewTab
+            camCalcs={camCalcs}
+            expenses={expenses}
+            leases={leaseList}
+            currentYear={currentYear}
+            prevYear={prevYear}
+            scopeProperty={scopeProperty}
+          />
+        </TabsContent>
+      </Tabs>
+
+      {/* Add Custom Rule Dialog */}
+      <Dialog open={showAddRule} onOpenChange={setShowAddRule}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Custom CAM Rule</DialogTitle><DialogDescription>Define a new rule for CAM calculations</DialogDescription></DialogHeader>
+          <div className="space-y-4">
+            <div><Label>Rule Name *</Label><Input value={newRule.name} onChange={e => setNewRule({ ...newRule, name: e.target.value })} placeholder="e.g. Parking Surcharge" /></div>
+            <div>
+              <Label>Rule Type</Label>
+              <Select value={newRule.type} onValueChange={v => setNewRule({ ...newRule, type: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="percentage">Percentage (%)</SelectItem>
+                  <SelectItem value="toggle">Toggle (ON/OFF)</SelectItem>
+                  <SelectItem value="cpi">CPI-Based</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {newRule.type !== 'toggle' && (
+              <div><Label>Default Value (%)</Label><Input type="number" value={newRule.value} onChange={e => setNewRule({ ...newRule, value: parseFloat(e.target.value) || 0 })} /></div>
+            )}
+            <div><Label>Description</Label><Input value={newRule.description} onChange={e => setNewRule({ ...newRule, description: e.target.value })} placeholder="Brief description of the rule" /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddRule(false)}>Cancel</Button>
+            <Button onClick={addCustomRule} disabled={!newRule.name} className="bg-blue-600 hover:bg-blue-700">Add Rule</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

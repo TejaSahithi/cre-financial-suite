@@ -1,0 +1,11 @@
+
+[functions.save-security-questions]
+enabled = true
+verify_jwt = true
+import_map = "./functions/save-security-questions/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/save-security-questions/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/save-security-questions/*.html" ]
