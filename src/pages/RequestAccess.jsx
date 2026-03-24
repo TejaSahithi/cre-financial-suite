@@ -99,19 +99,46 @@ export default function RequestAccess() {
       try {
         const { sendEmail } = await import("@/services/integrations");
         const isDemo = requestType === "demo";
-        await sendEmail({
-          to: form.email,
-          subject: isDemo ? "CRE Suite - Demo Request Received" : "CRE Suite - Access Request Received",
-          html: `
-            <div style="font-family: sans-serif; max-w: 600px; margin: 0 auto;">
-              <h2>Hi ${form.full_name.split(' ')[0]},</h2>
-              <p>Thank you for requesting ${isDemo ? 'a demo of' : 'access to'} CRE Financial Suite!</p>
-              <p>Our team has received your request and will review it shortly. We typically respond within 24-48 business hours.</p>
-              <br/>
-              <p>Best regards,<br/>The CRE Suite Team</p>
-            </div>
-          `
-        });
+        const demoUrl = `${window.location.origin}${createPageUrl("DemoExperience")}`;
+        
+        if (isDemo) {
+          await sendEmail({
+            to: form.email,
+            subject: "Thanks for requesting a demo",
+            html: `
+              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <p>Hi ${form.full_name},</p>
+                <p>Thanks for requesting a demo.</p>
+                <p>You can explore the platform here:</p>
+                <p>👉 Watch Demo:<br/>
+                <a href="${demoUrl}">${demoUrl}</a></p>
+                <p>This will give you a complete overview of:</p>
+                <ul>
+                  <li>Portfolio and property structure</li>
+                  <li>CAM calculations</li>
+                  <li>Financial workflows</li>
+                </ul>
+                <p>If you'd like guided support, we can also schedule a live session.</p>
+                <br/>
+                <p>Best regards,<br/>CRE Financial Suite Team</p>
+              </div>
+            `
+          });
+        } else {
+          await sendEmail({
+            to: form.email,
+            subject: "CRE Suite - Access Request Received",
+            html: `
+              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2>Hi ${form.full_name.split(' ')[0]},</h2>
+                <p>Thank you for requesting access to CRE Financial Suite!</p>
+                <p>Our team has received your request and will review it shortly. We typically respond within 24-48 business hours.</p>
+                <br/>
+                <p>Best regards,<br/>The CRE Suite Team</p>
+              </div>
+            `
+          });
+        }
       } catch (emailErr) {
         console.error("Auto-reply fail:", emailErr);
       }

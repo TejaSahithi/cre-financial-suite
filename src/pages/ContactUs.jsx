@@ -39,11 +39,36 @@ export default function ContactUs() {
     e.preventDefault();
     if (!validate()) return;
     setSending(true);
+    
+    // Internal Notification
     await sendEmail({
-      to: form.department === "sales" ? "sales@cresuite.com" : "support@cresuite.com",
+      to: "support@cresuite.org",
       subject: `[${form.department === "sales" ? "Sales" : "Support"}] Contact from ${form.name} @ ${form.company}`,
       body: `Name: ${form.name}\nEmail: ${form.email}\nPhone: ${form.phone}\nCompany: ${form.company}\nDept: ${form.department}\n\nMessage:\n${form.message}`
     });
+
+    // Auto-reply to user
+    await sendEmail({
+      to: form.email,
+      subject: "We received your request",
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <p>Hi ${form.name},</p>
+          <p>Thank you for reaching out to us.</p>
+          <p>Your request has been received and our team will get back to you shortly.</p>
+          <p>Request Type: ${form.department === "sales" ? "Sales" : "Technical Support"}</p>
+          <p>In the meantime, you can:</p>
+          <ul>
+            <li>Explore our demo</li>
+            <li>Learn more about the platform capabilities</li>
+          </ul>
+          <p>We appreciate your interest.</p>
+          <br/>
+          <p>Best regards,<br/>CRE Financial Suite Team</p>
+        </div>
+      `
+    });
+
     setSending(false);
     setSent(true);
   };
@@ -85,7 +110,7 @@ export default function ContactUs() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Email</p>
-                    <a href="mailto:support@cresuite.com" className="text-blue-600 hover:underline text-sm">support@cresuite.com</a>
+                    <a href="mailto:support@cresuite.org" className="text-blue-600 hover:underline text-sm">support@cresuite.org</a>
                     <p className="text-xs text-slate-400 mt-0.5">For general inquiries and support</p>
                   </div>
                 </div>

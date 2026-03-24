@@ -348,12 +348,6 @@ export default function SuperAdmin() {
                           />
                         </TableCell>
                         <TableCell>
-                          <Checkbox 
-                            checked={selectedRequests.has(r.id)}
-                            onCheckedChange={(c) => toggleSelect(r.id, c)}
-                          />
-                        </TableCell>
-                        <TableCell>
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{r.full_name?.substring(0, 2).toUpperCase()}</div>
                             <div><p className="text-sm font-medium">{r.full_name}</p><p className="text-xs text-slate-400">{r.email}</p></div>
@@ -376,7 +370,11 @@ export default function SuperAdmin() {
                             <span className="text-slate-300">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-sm text-slate-500">{r.created_at?.substring(0, 10)}</TableCell>
+                        <TableCell className="text-sm text-slate-500">
+                          {r.created_at ? new Date(r.created_at).toLocaleString('en-US', {
+                            month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
+                          }) : '—'}
+                        </TableCell>
                         <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1">

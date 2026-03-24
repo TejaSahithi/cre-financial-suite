@@ -4,6 +4,8 @@ import { Building2, ArrowRight, Video, FileText, CheckCircle2, Shield, BarChart3
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { markDemoViewed } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
+import { sendEmail } from "@/services/integrations";
 
 // Fallback constants if not provided in route state
 const FALLBACK_VIDEO_URL = "https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/End-to-End_CRE_Budgeting_&_CAM.mp4";
@@ -15,7 +17,46 @@ export default function DemoExperience() {
   
   useEffect(() => {
     if (location.state?.requestId) {
-      markDemoViewed(location.state.requestId);
+      markDemoViewed(location.state.requestId).then(async () => {
+        try {
+          const { data, error } = await supabase
+            .from('access_requests')
+            .select('email, full_name, demo_viewed')
+            .eq('id', location.state.requestId)
+            .single();
+            
+          if (data && data.email && !sessionStorage.getItem(`demo_email_sent_${location.state.requestId}`)) {
+            sessionStorage.setItem(`demo_email_sent_${location.state.requestId}`, "true");
+            
+            const requestAccessUrl = `${window.location.origin}${createPageUrl("RequestAccess")}?tab=access`;
+            
+            await sendEmail({
+              to: data.email,
+              subject: "Thanks for exploring CRE Suite",
+              html: `
+                <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                  <p>Hi ${data.full_name},</p>
+                  <p>Thanks for taking the time to explore our platform.</p>
+                  <p>We hope the demo gave you a clear view of how you can:</p>
+                  <ul>
+                    <li>Automate budgeting and CAM</li>
+                    <li>Manage portfolios and properties efficiently</li>
+                    <li>Replace spreadsheets with a unified system</li>
+                  </ul>
+                  <p>If you're ready to move forward, you can request platform access below:</p>
+                  <p>👉 Request Access:<br/>
+                  <a href="${requestAccessUrl}">${requestAccessUrl}</a></p>
+                  <p>If you'd like a live walkthrough or have specific questions, we’d be happy to help.</p>
+                  <br/>
+                  <p>Best regards,<br/>CRE Financial Suite Team</p>
+                </div>
+              `
+            });
+          }
+        } catch (e) {
+          console.error("Failed to send demo follow-up email", e);
+        }
+      });
     }
   }, [location.state?.requestId]);
   

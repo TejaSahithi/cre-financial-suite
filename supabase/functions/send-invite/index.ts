@@ -37,7 +37,7 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .eq('org_id', org_id)
       .eq('role', 'org_admin');
-      
+
     if (!callerMemberships || callerMemberships.length === 0) {
       // Check if super_admin
       const { data: superAdmin } = await supabaseAdmin.from('memberships').select('role').eq('user_id', user.id).eq('role', 'super_admin');
@@ -53,10 +53,10 @@ serve(async (req) => {
 
     // Delete any existing pending invites for this exact email+org to satisfy UNIQUE constraint
     await supabaseAdmin.from('invitations')
-        .delete()
-        .eq('email', email)
-        .eq('org_id', org_id)
-        .eq('status', 'pending_approval');
+      .delete()
+      .eq('email', email)
+      .eq('org_id', org_id)
+      .eq('status', 'pending_approval');
 
     // Insert invitation
     const { error: insertError } = await supabaseAdmin
@@ -82,7 +82,7 @@ serve(async (req) => {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from: 'CRE Platform <invites@creplatform.io>',
+          from: 'CRE Platform <support@cresuite.org>',
           to: email,
           subject: 'You have been invited to join an organization',
           html: `<p>You've been invited to join as a ${role}. Click below to accept your invitation:</p><p><a href="${inviteLink}">${inviteLink}</a></p>`

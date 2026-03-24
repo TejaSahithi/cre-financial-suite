@@ -162,7 +162,7 @@ Deno.serve(async (req: Request) => {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'CRE Suite <onboarding@cresuite.com>',
+              from: 'CRE Suite <support@cresuite.org>',
               to: accessRequest.email,
               subject: 'Did you enjoy the CRE Suite demo? Here\'s your next step!',
               html: html
@@ -221,23 +221,29 @@ Deno.serve(async (req: Request) => {
 
           const loginLink = `${frontendUrl}/signin`;
           const html = emailWrapper(`
-            <h1>Welcome to CRE Suite! 🎉</h1>
             <p>Hi ${accessRequest.full_name},</p>
-            <p>Great news! Your request to access <strong>CRE Suite</strong> has been <strong>approved</strong>.</p>
-            <div class="info-box">
-              <p>You can now create your account and securely sign in using your validated email address (<strong>${accessRequest.email}</strong>).</p>
-            </div>
-            <a href="${loginLink}" class="cta">Create Account & Sign In</a>
-            <p>Simply click the link above to reach the sign in page. From there, click on "Create Account" at the bottom to set up your profile and password. After your account is created, you will be guided through our secure onboarding process.</p>
+            <p>Your access request has been approved.</p>
+            <p>You can now create your account and get started with the platform.</p>
+            <p>👉 Create your account:<br/>
+            <a href="${loginLink}">${loginLink}</a></p>
+            <p>Once signed in, you will:</p>
+            <ul>
+              <li>Set up your company profile</li>
+              <li>Complete onboarding (MSA, payment)</li>
+              <li>Access your dashboard and modules</li>
+            </ul>
+            <p>If you have any questions, feel free to reply to this email.</p>
+            <br/>
+            <p>Welcome aboard,<br/>CRE Financial Suite Team</p>
           `);
 
             const emailRes = await fetch('https://api.resend.com/emails', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                from: 'CRE Suite <onboarding@cresuite.com>',
+                from: 'CRE Suite <support@cresuite.org>',
                 to: accessRequest.email,
-                subject: 'Your CRE Suite Access is Approved! (Action Required)',
+                subject: 'Your access request has been approved',
                 html: html
               })
             });
@@ -268,7 +274,7 @@ Deno.serve(async (req: Request) => {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from: 'CRE Platform <onboarding@cresuite.com>',
+          from: 'CRE Platform <support@cresuite.org>',
           to: accessRequest.email,
           subject: 'Update on your CRE Platform Access Request',
           html: `
