@@ -20,7 +20,13 @@ const steps = [
 
 export default function Onboarding() {
   const { user: authUser, refreshProfile, logout } = useAuth();
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('onboarding_step');
+      if (saved) return parseInt(saved, 10);
+    }
+    return 1;
+  });
   const [user, setUser] = useState(null);
   const [org, setOrg] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +37,10 @@ export default function Onboarding() {
     currency: "USD", primary_contact_email: "", plan: "professional",
     industry: "commercial_re"
   });
+
+  useEffect(() => {
+    sessionStorage.setItem('onboarding_step', step);
+  }, [step]);
 
   useEffect(() => {
     const init = async () => {
@@ -44,19 +54,21 @@ export default function Onboarding() {
 
         // Find existing org using the user's membership org_id
         if (authUser.org_id) {
-          const orgs = await OrganizationService.filter({ id: authUser.org_id });
-          if (orgs.length > 0) {
-            const existingOrg = orgs[0];
-            setOrg(existingOrg);
+          console.log('[Onboarding] Initializing with Org:', authUser.org_id);
+          const orgData = await OrganizationService.get(authUser.org_id);
+          if (orgData) {
+            setOrg(orgData);
             
-            // Only sync the step from server on initial mount or if user is at 1
-            // This prevents the refreshProfile() call from resetting the state during transitions
-            if (existingOrg.onboarding_step && step === 1) {
-              const serverStep = existingOrg.onboarding_step > 4 ? 4 : existingOrg.onboarding_step;
-              setStep(serverStep);
+            // Sync step from server if it's ahead of current local step
+            if (orgData.onboarding_step) {
+              const serverStep = orgData.onboarding_step > 4 ? 4 : orgData.onboarding_step;
+              if (serverStep > step) {
+                console.log('[Onboarding] Server is ahead, jumping to step:', serverStep);
+                setStep(serverStep);
+              }
             }
             
-            if (existingOrg.status === "active") {
+            if (orgData.status === "active") {
               window.location.href = createPageUrl("Welcome");
               return;
             }

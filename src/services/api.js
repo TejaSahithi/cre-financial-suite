@@ -128,6 +128,42 @@ export function createEntityService(entityName) {
   }
 
   return {
+    // ── GET ──────────────────────────────────────────────────────────
+    /**
+     * Get a single record by ID.
+     * @param {string|number} id
+     * @returns {Promise<object|null>}
+     */
+    async get(id) {
+      if (!id) return null;
+      const cacheKey = `${entityName}:get:${id}`;
+      const cached = getCached(cacheKey);
+      if (cached) return cached;
+
+      try {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from(tableName)
+            .select('*')
+            .eq('id', id)
+            .single();
+          if (error) {
+            if (error.code === 'PGRST116') return null; // Not found
+            throw error;
+          }
+          setCached(cacheKey, data);
+          return data;
+        }
+        // In-memory fallback
+        seedMemoryStore();
+        const record = getStore(entityName).find(r => r.id === id);
+        return record || null;
+      } catch (err) {
+        console.error(`[api] ${entityName}.get() error:`, err);
+        return null;
+      }
+    },
+
     // ── LIST ─────────────────────────────────────────────────────────
     /**
      * List all records, optionally sorted.
