@@ -95,6 +95,27 @@ export default function RequestAccess() {
       });
       if (error) throw error;
 
+      // Auto-reply email to user
+      try {
+        const { sendEmail } = await import("@/services/integrations");
+        const isDemo = requestType === "demo";
+        await sendEmail({
+          to: form.email,
+          subject: isDemo ? "CRE Suite - Demo Request Received" : "CRE Suite - Access Request Received",
+          html: `
+            <div style="font-family: sans-serif; max-w: 600px; margin: 0 auto;">
+              <h2>Hi ${form.full_name.split(' ')[0]},</h2>
+              <p>Thank you for requesting ${isDemo ? 'a demo of' : 'access to'} CRE Financial Suite!</p>
+              <p>Our team has received your request and will review it shortly. We typically respond within 24-48 business hours.</p>
+              <br/>
+              <p>Best regards,<br/>The CRE Suite Team</p>
+            </div>
+          `
+        });
+      } catch (emailErr) {
+        console.error("Auto-reply fail:", emailErr);
+      }
+
       if (requestType === "demo") {
         navigate(createPageUrl("DemoExperience"), {
           state: {

@@ -78,13 +78,31 @@ export default function ContactSection() {
     if (!validate()) return;
     setSending(true);
     try {
-      // Send via Resend or generic email service
       const { sendEmail } = await import("@/services/integrations");
+      // Notify internal team
       await sendEmail({
         to: form.department === "sales" ? "sales@cresuite.com" : "support@cresuite.com",
         subject: `[${form.department === "sales" ? "Sales" : "Support"}] Contact from ${form.name}`,
         body: `Name: ${form.name}\nEmail: ${form.email}\nPhone: ${form.phone}\nDept: ${form.department}\n\n${form.message}`
       });
+      // Send auto-reply to user
+      try {
+        await sendEmail({
+          to: form.email,
+          subject: "CRE Suite - We received your message",
+          html: `
+            <div style="font-family: sans-serif; max-w: 600px; margin: 0 auto;">
+              <h2>Hi ${form.name.split(' ')[0]},</h2>
+              <p>Thank you for contacting CRE Suite. We have received your message to our ${form.department} team.</p>
+              <p>Someone will be in touch with you within 4 business hours.</p>
+              <br/>
+              <p>Best regards,<br/>The CRE Suite Team</p>
+            </div>
+          `
+        });
+      } catch (e) {
+        console.error("Auto-reply fail:", e);
+      }
       setSent(true);
     } catch (err) {
       console.error("Contact form error:", err);

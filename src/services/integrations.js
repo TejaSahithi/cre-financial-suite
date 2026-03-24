@@ -3,6 +3,7 @@
  *
  * LLM invocation, file upload, email sending, and data extraction.
  */
+import { supabase } from "@/services/supabaseClient";
 
 /**
  * Invoke an LLM with the given parameters.
@@ -56,26 +57,27 @@ export async function uploadFile(params) {
 }
 
 /**
- * Send an email.
- * @param {object} params - { to, subject, body }
+ * Send an email using Supabase Edge Functions mapping to Resend.
+ * @param {object} params - { to, subject, body, html }
  * @returns {Promise<{success: boolean}>}
  */
 export async function sendEmail(params) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL;
-    if (apiUrl) {
-      const response = await fetch(`${apiUrl}/integrations/email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      if (!response.ok) throw new Error(`Email send failed: ${response.statusText}`);
-      return await response.json();
-    }
-    console.log('[integrations] sendEmail() — no backend configured', params);
+    const { data, error } = await supabase.functions.invoke('send-email', {
+      body: {
+        to: params.to,
+        subject: params.subject,
+        text: params.body,
+        html: params.html
+      }
+    });
+    
+    if (error) throw error;
+    if (data && data.error) throw new Error(data.error);
+
     return { success: true };
   } catch (err) {
-    console.error('[integrations] sendEmail() error:', err);
+    console.error('[integrations] sendEmail() error:', err.message || err);
     return { success: false };
   }
 }
