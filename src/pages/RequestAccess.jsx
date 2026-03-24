@@ -110,7 +110,7 @@ export default function RequestAccess() {
                 <p>Thanks for requesting a demo.</p>
                 <p>You can explore the platform here:</p>
                 <p>👉 Watch Demo:<br/>
-                <a href="${demoUrl}">${demoUrl}</a></p>
+                <a href="${demoUrl}?requestId=${requestId}">${demoUrl}?requestId=${requestId}</a></p>
                 <p>This will give you a complete overview of:</p>
                 <ul>
                   <li>Portfolio and property structure</li>

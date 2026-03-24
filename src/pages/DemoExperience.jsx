@@ -16,8 +16,12 @@ export default function DemoExperience() {
   const navigate = useNavigate();
   
   useEffect(() => {
-    if (location.state?.requestId) {
-      markDemoViewed(location.state.requestId).then(async () => {
+    const searchParams = new URLSearchParams(location.search);
+    const requestId = location.state?.requestId || searchParams.get("requestId");
+    
+    if (requestId) {
+      console.log('[DemoExperience] Marking demo as viewed for:', requestId);
+      markDemoViewed(requestId).then(async () => {
         try {
           const { data, error } = await supabase
             .from('access_requests')
@@ -25,8 +29,8 @@ export default function DemoExperience() {
             .eq('id', location.state.requestId)
             .single();
             
-          if (data && data.email && !sessionStorage.getItem(`demo_email_sent_${location.state.requestId}`)) {
-            sessionStorage.setItem(`demo_email_sent_${location.state.requestId}`, "true");
+          if (data && data.email && !sessionStorage.getItem(`demo_email_sent_${requestId}`)) {
+            sessionStorage.setItem(`demo_email_sent_${requestId}`, "true");
             
             const requestAccessUrl = `${window.location.origin}${createPageUrl("RequestAccess")}?tab=access`;
             
