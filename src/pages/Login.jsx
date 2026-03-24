@@ -47,12 +47,6 @@ export default function Login() {
     if (!email) { setError("Please enter your email."); return; }
     if (!password) { setError("Please enter your password."); return; }
     
-    // Block unapproved users
-    if (!loginVerifiedCompany && loginEmailChecked) {
-      setError("Your email is not approved for sign-in. Please request access first.");
-      return;
-    }
-    
     setError("");
     setLoading(true);
     try {
@@ -65,26 +59,7 @@ export default function Login() {
     setLoading(false);
   };
 
-  const handleLoginEmailBlur = async () => {
-    if (view !== "login" || !email) return;
-    setIsValidatingEmail(true);
-    try {
-      const res = await verifyAccessRequest(email);
-      if (res && res.valid) {
-        setLoginVerifiedCompany(res.company_name);
-        setLoginEmailChecked(true);
-        setError("");
-      } else {
-        setLoginVerifiedCompany(null);
-        setLoginEmailChecked(true);
-        setError("This email is not approved. Please request access first.");
-      }
-    } catch {
-      setLoginVerifiedCompany(null);
-      setLoginEmailChecked(true);
-    }
-    setIsValidatingEmail(false);
-  };
+
 
   const validateApprovedEmail = async (emailToCheck) => {
     if (!emailToCheck) {
@@ -265,21 +240,11 @@ export default function Login() {
                       <Input
                         type="email"
                         value={email}
-                        onChange={(e) => { setEmail(e.target.value); setLoginVerifiedCompany(null); setLoginEmailChecked(false); setError(""); }}
-                        onBlur={handleLoginEmailBlur}
+                        onChange={(e) => setEmail(e.target.value)}
                         placeholder="you@company.com"
-                        className={`h-11 pl-10 pr-10 ${loginEmailChecked && !loginVerifiedCompany ? "border-red-500 ring-1 ring-red-500 bg-red-50" : loginVerifiedCompany ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`}
+                        className="h-11 pl-10"
                       />
-                      {isValidatingEmail && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-slate-400" />}
-                      {loginVerifiedCompany && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />}
-                      {loginEmailChecked && !loginVerifiedCompany && !isValidatingEmail && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                     </div>
-                    {loginVerifiedCompany && (
-                      <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <p className="text-xs text-emerald-700 font-medium">{loginVerifiedCompany}</p>
-                      </div>
-                    )}
                   </div>
                   <div>
                     <div className="flex items-center justify-between mt-4">
