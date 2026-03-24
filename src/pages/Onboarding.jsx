@@ -70,27 +70,30 @@ export default function Onboarding() {
     init();
   }, [authUser]);
   const saveCompanyInfo = async () => {
+    console.log('[Onboarding] saveCompanyInfo started', { name: !!form.name, email: !!form.primary_contact_email });
     if (!form.name || !form.primary_contact_email) {
       setSaving('val_error');
       try {
         const { toast } = await import("sonner");
-        toast.error("Please enter an Organization Name to continue.");
+        toast.error("Organization Name and Primary Email are required to continue.");
       } catch (e) {}
       return;
     }
+    
     setSaving(true);
+    const { toast } = await import("sonner");
+    const loadingToast = toast.loading("Saving company information...");
+    
     try {
-      const { toast } = await import("sonner");
       let savedOrg;
       if (org) {
+        console.log('[Onboarding] Updating existing org:', org.id);
         savedOrg = await OrganizationService.update(org.id, { ...form, onboarding_step: 2 });
-        console.log('[Onboarding] Updated org:', savedOrg?.id);
       } else {
         // Fallback: This should rarely happen if first-login worked
         console.warn('[Onboarding] Org missing, attempting fresh create');
         savedOrg = await OrganizationService.create({ ...form, status: "onboarding", onboarding_step: 2 });
-        console.log('[Onboarding] Created org:', savedOrg?.id);
-
+        
         if (savedOrg?.id && authUser?.id && supabase) {
           await supabase.from('memberships').upsert({
             user_id: authUser.id,
@@ -100,17 +103,19 @@ export default function Onboarding() {
           await refreshProfile();
         }
       }
+      
+      console.log('[Onboarding] Save success, moving to step 2');
       setOrg(savedOrg);
       setStep(2);
-      toast.success("Company information saved!");
+      toast.success("Company information saved!", { id: loadingToast });
     } catch (e) {
       console.error('[Onboarding] save error:', e);
-      const { toast } = await import("sonner");
-      toast.error(e.message || "Failed to save company information");
+      toast.error(e.message || "Failed to save company information", { id: loadingToast });
     } finally {
       setSaving(false);
     }
-  }; // Called when the final step (Confirmation) is reached
+  };
+ // Called when the final step (Confirmation) is reached
   const completeOnboarding = async () => {
     try {
       // Advance step visually
@@ -288,7 +293,8 @@ export default function Onboarding() {
               </div>
               <Button 
                 onClick={saveCompanyInfo} 
-                className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all shadow-lg active:scale-[0.98]"
+                disabled={saving === true || !form.name || !form.primary_contact_email}
+                className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving === true ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Continue to Agreement <ArrowRight className="w-4 h-4" />
