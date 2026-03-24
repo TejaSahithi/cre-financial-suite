@@ -42,8 +42,10 @@ Deno.serve(async (req: any) => {
 
     const body = await req.json();
     const { q1, a1, q2, a2, q3, a3 } = body;
+    console.log('[save-security-questions] Received payload for user:', user.id);
 
     if (!q1 || !a1 || !q2 || !a2 || !q3 || !a3) {
+      console.error('[save-security-questions] Missing fields');
       return new Response(JSON.stringify({ error: 'All 3 questions and answers are required.' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
@@ -51,6 +53,7 @@ Deno.serve(async (req: any) => {
     const normalize = (str: string) => str.toLowerCase().trim();
 
     // 2. Hash answers using bcrypt
+    console.log('[save-security-questions] Hashing answers...');
     const salt = await bcrypt.genSalt(10);
     const hash1 = await bcrypt.hash(normalize(a1), salt);
     const hash2 = await bcrypt.hash(normalize(a2), salt);
@@ -65,6 +68,7 @@ Deno.serve(async (req: any) => {
     );
 
     // 3. Upsert into security_questions table
+    console.log('[save-security-questions] Upserting security_questions...');
     const { error: insertError } = await supabaseAdmin
       .from('security_questions')
       .upsert({
@@ -77,16 +81,24 @@ Deno.serve(async (req: any) => {
         answer_3_hash: hash3
       }, { onConflict: 'user_id' });
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error('[save-security-questions] Insert Error:', insertError);
+      throw insertError;
+    }
 
     // 4. Update profile completion flag
+    console.log('[save-security-questions] Updating profile...');
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
       .update({ security_questions_setup: true })
       .eq('id', user.id);
 
-    if (profileError) throw profileError;
+    if (profileError) {
+      console.error('[save-security-questions] Profile Update Error:', profileError);
+      throw profileError;
+    }
 
+    console.log('[save-security-questions] Success!');
     return new Response(JSON.stringify({ success: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

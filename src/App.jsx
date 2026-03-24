@@ -55,7 +55,7 @@ const AppRoutes = () => (
       </LayoutWrapper>
     } />
     {Object.entries(Pages).map(([path, Page]) => {
-      const isMandatorySetup = ["SecurityQuestionsSetup", "Onboarding", "Welcome"].includes(path);
+      const isMandatorySetup = ["Onboarding", "Welcome"].includes(path);
       return (
         <Route
           key={path}
@@ -237,8 +237,6 @@ const AuthenticatedApp = () => {
       if (p.status === 'suspended' || org?.status === 'suspended') return 'Login';
       if (p.status === 'pending_approval') return 'PendingApproval';
 
-      // 1. SECURITY QUESTIONS SETUP: Required after MFA, before Onboarding
-      if (!p.security_questions_setup) return 'SecurityQuestionsSetup';
       
       // 2. ONBOARDING: Case 1 - Profile approved but Org not created yet -> Redirect to Onboarding
       // Case 2 - status is 'onboarding' (Step 1-3)
