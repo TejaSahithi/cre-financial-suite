@@ -360,7 +360,7 @@ export default function Onboarding() {
                 
                 // All DB calls are non-blocking — navigation must always succeed
                 try {
-                  const { supabase } = await import('@/lib/supabase');
+                  const { supabase } = await import('@/services/supabaseClient');
                   await supabase.from('invoices').insert({
                     org_id: org.id,
                     amount: paymentInfo.displayPrice,
