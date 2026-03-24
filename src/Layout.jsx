@@ -72,13 +72,17 @@ const navSections = [
   { label: "Documents", icon: FolderOpen, page: "Documents" },
   { label: "Integrations", icon: Plug, page: "Integrations" },
   {
-    label: "Admin", icon: Shield, children: [
-      { label: "SuperAdmin", page: "SuperAdmin" },
-      { label: "Stakeholders", page: "Stakeholders" },
+    label: "Settings", icon: Shield, children: [
       { label: "User Management", page: "UserManagement" },
       { label: "Org Settings", page: "OrgSettings" },
       { label: "Chart of Accounts", page: "ChartOfAccounts" },
       { label: "Audit Log", page: "AuditLog" },
+    ]
+  },
+  {
+    label: "Platform", icon: Layers, children: [
+      { label: "Organizations", page: "SuperAdmin" },
+      { label: "Stakeholders", page: "Stakeholders" },
     ]
   },
 ];

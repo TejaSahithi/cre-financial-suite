@@ -633,7 +633,17 @@ export default function SuperAdmin() {
                               Approve
                             </Button>
                           )}
-                          <Button variant="ghost" size="sm" className="h-7 text-[10px] px-2" onClick={() => { setEditingOrgModules(org); setSelectedModules(org.enabled_modules || []); }}>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-7 text-[10px] px-2" 
+                            onClick={(e) => { 
+                              e.stopPropagation();
+                              console.log('[SuperAdmin] Opening module config for org:', org.id, org.name);
+                              setEditingOrgModules(org); 
+                              setSelectedModules(org.enabled_modules || []); 
+                            }}
+                          >
                             <Package className="w-3 h-3 mr-1" /> Modules
                           </Button>
                         </div>

@@ -161,19 +161,31 @@ export function getPermissions(role) {
  */
 export function filterNavForRole(navSections, role) {
   if (!role) return [];
-  // SuperAdmin sees all nav items — support both mapped and raw role
-  if (role === "admin" || role === "super_admin") return navSections;
+  // SuperAdmin sees all nav items
+  const isSuperAdmin = role === "admin" || role === "super_admin";
+  
   const allowed = ROLE_PAGES[role];
-  if (!allowed) return [];
-  const allowedSet = new Set([...allowed, ...ADMIN_ONLY_PAGES.filter(() => false)]);
+  const allowedSet = new Set(allowed || []);
+  
   return navSections
     .map(item => {
+      // If it's a top-level page, check access
+      if (item.page) {
+        if (ADMIN_ONLY_PAGES.includes(item.page) && !isSuperAdmin) return null;
+        if (!isSuperAdmin && !allowedSet.has(item.page)) return null;
+      }
+      
       if (item.children) {
-        const filteredChildren = item.children.filter(c => allowedSet.has(c.page));
+        const filteredChildren = item.children.filter(c => {
+          if (ADMIN_ONLY_PAGES.includes(c.page) && !isSuperAdmin) return false;
+          if (isSuperAdmin) return true;
+          return allowedSet.has(c.page);
+        });
         if (filteredChildren.length === 0) return null;
         return { ...item, children: filteredChildren };
       }
-      return allowedSet.has(item.page) ? item : null;
+      
+      return item;
     })
     .filter(Boolean);
 }
