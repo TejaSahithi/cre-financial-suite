@@ -42,22 +42,26 @@ export default function Onboarding() {
         setUser(authUser);
         setForm(f => ({ ...f, primary_contact_email: authUser.email || "" }));
 
-        // Find existing org using the user's membership org_id (not email lookup)
+        // Find existing org using the user's membership org_id
         if (authUser.org_id) {
           const orgs = await OrganizationService.filter({ id: authUser.org_id });
           if (orgs.length > 0) {
             const existingOrg = orgs[0];
             setOrg(existingOrg);
-            if (existingOrg.onboarding_step) {
-              setStep(existingOrg.onboarding_step > 4 ? 4 : existingOrg.onboarding_step);
+            
+            // Only sync the step from server on initial mount or if user is at 1
+            // This prevents the refreshProfile() call from resetting the state during transitions
+            if (existingOrg.onboarding_step && step === 1) {
+              const serverStep = existingOrg.onboarding_step > 4 ? 4 : existingOrg.onboarding_step;
+              setStep(serverStep);
             }
+            
             if (existingOrg.status === "active") {
               window.location.href = createPageUrl("Welcome");
               return;
             }
           }
         }
-        // No org_id in membership → user is brand new, show step 1
       } catch (e) {
         console.error('[Onboarding] init error:', e);
       }
