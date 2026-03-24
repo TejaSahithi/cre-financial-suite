@@ -808,8 +808,12 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
   const info = paymentInfo || dbInvoice;
 
   const handleDownloadInvoice = async () => {
+    const { toast } = await import("sonner");
     try {
+      console.log("[Onboarding] Starting invoice download...", { info, plan });
       const { jsPDF } = await import('jspdf');
+      if (!jsPDF) throw new Error("jsPDF library failed to load");
+      
       const doc = new jsPDF();
       
       const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
@@ -911,8 +915,10 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      toast.success("Invoice downloaded successfully!");
     } catch (err) {
       console.error("Failed to generate PDF", err);
+      toast.error("Failed to generate invoice: " + err.message);
     }
   };
 
@@ -957,8 +963,21 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
 
       {/* Action Buttons */}
       <div className="flex flex-col gap-3 max-w-sm mx-auto">
-        <Button onClick={handleDownloadInvoice} variant="outline" className="h-11 rounded-xl font-semibold gap-2 border-slate-300">
+        <Button 
+          onClick={handleDownloadInvoice} 
+          variant="outline" 
+          className="h-11 rounded-xl font-semibold gap-2 border-slate-300"
+        >
           <FileText className="w-4 h-4" /> Download Invoice
+        </Button>
+        <Button 
+          onClick={() => {
+            refreshProfile();
+            const { toast } = import("sonner").then(m => m.toast.info("Checking status..."));
+          }} 
+          className="h-11 rounded-xl font-bold bg-[#1a2744] hover:bg-[#243b67]"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" /> Refresh Status
         </Button>
       </div>
     </div>

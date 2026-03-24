@@ -14,8 +14,8 @@ import { Input } from "@/components/ui/input";
  *
  * Once aal2 is reached, calls onVerified() to proceed into the app.
  */
-export default function MFAGuard({ onVerified }) {
-  const [phase, setPhase] = useState("loading"); // loading | enroll | challenge
+export default function MFAGuard({ onVerified, needsEnroll }) {
+  const [phase, setPhase] = useState(needsEnroll === false ? "challenge" : "loading"); // loading | enroll | challenge
   const [factorId, setFactorId] = useState(null);
   const [qrCode, setQrCode] = useState(null);
   const [secret, setSecret] = useState(null);
@@ -37,29 +37,35 @@ export default function MFAGuard({ onVerified }) {
       const verifiedFactor = totpFactors.find(f => f.status === "verified");
       const unverifiedFactors = totpFactors.filter(f => f.status === "unverified");
 
+      console.log("[MFAGuard] Existing factors:", { verified: verifiedFactor?.id, unverifiedCount: unverifiedFactors.length });
+
       if (verifiedFactor) {
-        // Factor already enrolled and verified — just need to challenge
         setFactorId(verifiedFactor.id);
         setPhase("challenge");
-      } else {
-        // No verified factor — need to enroll.
-        // If ANY unverified factors exist, we must unenroll them all first to avoid "factor already exists" error.
-        if (unverifiedFactors.length > 0) {
-          console.log(`[MFAGuard] Removing ${unverifiedFactors.length} stale unverified factors`);
-          for (const f of unverifiedFactors) {
-             try {
-                await supabase.auth.mfa.unenroll({ factorId: f.id });
-             } catch (cleanErr) {
-                console.warn("[MFAGuard] Cleanup error for factor:", f.id, cleanErr);
-             }
-          }
+      } else if (unverifiedFactors.length > 0) {
+        // We have unverified factors but no verified one.
+        // Try to UNENROLL them so we can start fresh.
+        console.log(`[MFAGuard] cleaning up ${unverifiedFactors.length} unverified factors...`);
+        for (const f of unverifiedFactors) {
+          await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e => console.warn("[MFAGuard] Unenroll failed:", e));
         }
+        setPhase("enroll");
+        await startEnrollment();
+      } else {
         setPhase("enroll");
         await startEnrollment();
       }
     } catch (err) {
       console.error("[MFAGuard] initialize error:", err);
-      setPhase("enroll");
+      // If we can't even list factors, we might be offline or session is invalid.
+      // Don't blindly show enrollment if we have an error that implies something else.
+      if (err.message?.includes("JWN") || err.message?.includes("JWT")) {
+          setError("Session expired. Please sign in again.");
+      } else {
+          // Final fallback: try to enroll anyway, but handle the "already exists" there.
+          setPhase("enroll");
+          await startEnrollment();
+      }
     }
   };
 
@@ -67,19 +73,34 @@ export default function MFAGuard({ onVerified }) {
     setEnrolling(true);
     setError("");
     try {
-      // Use a unique friendly name to prevent "already exists" errors
       const uniqueName = `Authenticator_${Date.now()}`;
       const { data, error } = await supabase.auth.mfa.enroll({
         factorType: "totp",
         issuer: "CRE Suite",
         friendlyName: uniqueName
       });
-      if (error) throw error;
+      
+      if (error) {
+        // SELF-CORRECTION: If we get "Maximum number of verified factors reached",
+        // it means our listFactors check failed (maybe cache?) but the factor exists.
+        if (error.message?.includes("Maximum number of verified factors") || error.message?.includes("already exists")) {
+            console.warn("[MFAGuard] Enrollment failed because factor exists. Retrying factor list...");
+            const { data: retryList } = await supabase.auth.mfa.listFactors();
+            const verified = retryList?.totp?.find(f => f.status === "verified");
+            if (verified) {
+                setFactorId(verified.id);
+                setPhase("challenge");
+                return;
+            }
+        }
+        throw error;
+      }
 
       setFactorId(data.id);
       setQrCode(data.totp.qr_code);
       setSecret(data.totp.secret);
     } catch (err) {
+      console.error("[MFAGuard] startEnrollment error:", err);
       setError(err.message || "Failed to start enrollment. Please refresh.");
     } finally {
       setEnrolling(false);

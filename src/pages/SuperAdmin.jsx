@@ -704,6 +704,8 @@ export default function SuperAdmin() {
               onClick={async () => {
                 await OrganizationService.update(editingOrgModules.id, { enabled_modules: selectedModules });
                 queryClient.invalidateQueries({ queryKey: ['organizations'] });
+                const { toast } = await import("sonner");
+                toast.success(`Modules updated for ${editingOrgModules.name}`);
                 setEditingOrgModules(null);
               }}
             >

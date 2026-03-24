@@ -118,15 +118,20 @@ const AuthenticatedApp = () => {
 
         // List enrolled factors to see if user has TOTP set up
         const { data: factorsData } = await supabase.auth.mfa.listFactors();
-        const totpFactors = (factorsData?.totp || []).filter(f => f.status === 'verified');
+        const totpFactors = (factorsData?.totp || []);
+        const verifiedFactors = totpFactors.filter(f => f.status === 'verified');
 
         if (totpFactors.length === 0) {
-          // User has no TOTP enrolled → force enrollment
+          // User has no TOTP enrolled at all → force enrollment
           setMfaNeedsEnroll(true);
           setMfaRequired(true);
-        } else if (currentLevel === 'aal1' && nextLevel === 'aal2') {
-          // TOTP exists but session is aal1 → force verification challenge
+        } else if (verifiedFactors.length > 0 && currentLevel === 'aal1' && nextLevel === 'aal2') {
+          // TOTP exists and is verified, but session is aal1 → force verification challenge
           setMfaNeedsEnroll(false);
+          setMfaRequired(true);
+        } else if (verifiedFactors.length === 0 && totpFactors.length > 0) {
+          // User has an unverified factor → MFAGuard will clean it up and re-enroll
+          setMfaNeedsEnroll(true);
           setMfaRequired(true);
         } else {
           // aal2 reached
