@@ -20,6 +20,7 @@ export default function SuperAdmin() {
   const queryClient = useQueryClient();
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [processingRequests, setProcessingRequests] = useState(new Set());
+  const [selectedRequests, setSelectedRequests] = useState(new Set());
   const [inviting, setInviting] = useState(false);
   const [inviteSuccess, setInviteSuccess] = useState(false);
   
@@ -196,6 +197,46 @@ export default function SuperAdmin() {
     },
   });
 
+  const handleBulkDelete = () => {
+    if (selectedRequests.size === 0) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedRequests.size} requests?`)) {
+      setProcessingRequests(prev => new Set([...prev, ...selectedRequests]));
+      Promise.all(Array.from(selectedRequests).map(id => AccessRequestService.delete(id)))
+        .then(() => {
+          import('sonner').then(({ toast }) => toast.success(`Deleted ${selectedRequests.size} requests`));
+          setSelectedRequests(new Set());
+          queryClient.invalidateQueries({ queryKey: ['access-requests'] });
+        })
+        .catch(() => {
+          import('sonner').then(({ toast }) => toast.error('Failed to delete some requests'));
+        })
+        .finally(() => {
+          setProcessingRequests(prev => {
+            const next = new Set(prev);
+            selectedRequests.forEach(id => next.delete(id));
+            return next;
+          });
+        });
+    }
+  };
+
+  const toggleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedRequests(new Set(requests.map(r => r.id)));
+    } else {
+      setSelectedRequests(new Set());
+    }
+  };
+
+  const toggleSelect = (id, checked) => {
+    setSelectedRequests(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   const pendingCount = requests.filter(r => r.status === 'pending_approval').length;
 
   if (!authChecked) {
@@ -260,6 +301,12 @@ export default function SuperAdmin() {
                 <p className="text-xs text-slate-400">{pendingCount} pending</p>
               </div>
               <div className="flex gap-2">
+                {selectedRequests.size > 0 && (
+                  <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    Delete Selected ({selectedRequests.size})
+                  </Button>
+                )}
                 <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search requests..." className="pl-9 w-48 h-8" /></div>
                 <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
               </div>
@@ -268,6 +315,12 @@ export default function SuperAdmin() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
+                    <TableHead className="w-10">
+                      <Checkbox 
+                        checked={requests.length > 0 && selectedRequests.size === requests.length}
+                        onCheckedChange={toggleSelectAll}
+                      />
+                    </TableHead>
                     <TableHead className="text-[11px]">APPLICANT</TableHead>
                     <TableHead className="text-[11px]">COMPANY</TableHead>
                     <TableHead className="text-[11px]">PHONE</TableHead>
@@ -288,6 +341,18 @@ export default function SuperAdmin() {
                   ) : (
                     requests.map(r => (
                       <TableRow key={r.id}>
+                        <TableCell>
+                          <Checkbox 
+                            checked={selectedRequests.has(r.id)}
+                            onCheckedChange={(c) => toggleSelect(r.id, c)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Checkbox 
+                            checked={selectedRequests.has(r.id)}
+                            onCheckedChange={(c) => toggleSelect(r.id, c)}
+                          />
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{r.full_name?.substring(0, 2).toUpperCase()}</div>

@@ -9,7 +9,7 @@ import { motion } from "framer-motion";
 
 // ─── Validation Helpers ─────────────────────────────────
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-const PHONE_REGEX = /^\+?[1-9]\d{6,14}$/; // E.164-ish: optional +, 7-15 digits
+const PHONE_REGEX = /^\+?[\d]{7,15}$/; // E.164-ish: optional +, 7-15 digits
 
 /**
  * Validate email format. Replace body with API call when ready.
