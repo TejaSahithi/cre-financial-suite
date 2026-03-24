@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { OrganizationService } from "@/services/api";
 import { updateProfile, redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
@@ -20,13 +21,11 @@ const steps = [
 
 export default function Onboarding() {
   const { user: authUser, refreshProfile, logout } = useAuth();
-  const [step, setStep] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('onboarding_step');
-      if (saved) return parseInt(saved, 10);
-    }
-    return 1;
-  });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const step = parseInt(searchParams.get('step') || '1', 10);
+  const setStep = (newStep) => {
+    setSearchParams({ step: newStep.toString() });
+  };
   const [user, setUser] = useState(null);
   const [org, setOrg] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -37,10 +36,6 @@ export default function Onboarding() {
     currency: "USD", primary_contact_email: "", plan: "professional",
     industry: "commercial_re"
   });
-
-  useEffect(() => {
-    sessionStorage.setItem('onboarding_step', step);
-  }, [step]);
 
   useEffect(() => {
     const init = async () => {
@@ -55,17 +50,22 @@ export default function Onboarding() {
         // Find existing org using the user's membership org_id
         if (authUser.org_id) {
           console.log('[Onboarding] Initializing with Org:', authUser.org_id);
+          
+          // Small delay to ensure DB propagation from previous steps
+          await new Promise(r => setTimeout(r, 600));
+
           const orgData = await OrganizationService.get(authUser.org_id);
           if (orgData) {
             setOrg(orgData);
             
-            // Sync step from server if it's ahead of current local step
-            if (orgData.onboarding_step) {
-              const serverStep = orgData.onboarding_step > 4 ? 4 : orgData.onboarding_step;
-              if (serverStep > step) {
-                console.log('[Onboarding] Server is ahead, jumping to step:', serverStep);
-                setStep(serverStep);
-              }
+            // Sync step from server ONLY if the server is significantly ahead
+            // and we don't have a local step override in the URL.
+            const serverStep = orgData.onboarding_step || 1;
+            const currentUrlStep = parseInt(searchParams.get('step'), 10);
+            
+            if (!currentUrlStep && serverStep > 1) {
+              console.log('[Onboarding] Syncing to server step:', serverStep);
+              setStep(serverStep);
             }
             
             if (orgData.status === "active") {
