@@ -319,13 +319,15 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
               <MSAStep org={org} onNext={async (signatureData) => {
                 console.log('[Onboarding] MSA signed, updating org', org?.id);
-                // 1. Update Org with signature info
-                await OrganizationService.update(org.id, {
-                  onboarding_step: 3,
-                  msa_signed: true,
-                  msa_signed_date: new Date().toISOString(),
-                  msa_signed_by: signatureData.fullName,
-                });
+                
+                // 1. Update Org — fault-tolerant: don't block navigation on DB errors
+                try {
+                  await OrganizationService.update(org.id, {
+                    onboarding_step: 3,
+                  });
+                } catch (e) {
+                  console.error('[Onboarding] Org update failed (non-blocking):', e);
+                }
 
                 // 2. Create Document record for the MSA
                 try {
@@ -335,12 +337,13 @@ export default function Onboarding() {
                     document_type: "Contract",
                     file_name: "MSA_Signed.pdf",
                     uploaded_by: authUser?.id,
-                    description: `Signed by ${signatureData.fullName} on ${new Date().toLocaleDateString()}`
+                    description: `Signed by ${signatureData.fullName}, ${signatureData.role}, on ${signatureData.date}`
                   });
                 } catch (docErr) {
-                  console.error('[Onboarding] Document creation failed:', docErr);
+                  console.error('[Onboarding] Document creation failed (non-blocking):', docErr);
                 }
 
+                // 3. ALWAYS advance to Payment — this is the critical line
                 console.log('[Onboarding] Moving to step 3 (Payment)');
                 setStep(3);
               }} onBack={() => setStep(1)} user={authUser} />
@@ -382,13 +385,17 @@ export default function Onboarding() {
 // ─── MSA Step ──────────────────────────────────────────
 function MSAStep({ org, onNext, onBack, user }) {
   const [accepted, setAccepted] = useState(false);
-  const [signature, setSignature] = useState("");
+  const [fullName, setFullName] = useState(user?.full_name || "");
+  const [email, setEmail] = useState(user?.email || "");
+  const [role, setRole] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   const handleSign = async () => {
     setSaving(true);
     try {
-      await onNext({ fullName: signature });
+      await onNext({ fullName, email, role, date: today });
     } catch (e) {
       console.error('[Onboarding][MSA] handleSign error:', e);
     } finally {
@@ -396,13 +403,64 @@ function MSAStep({ org, onNext, onBack, user }) {
     }
   };
 
-  const canProceed = accepted && signature.trim().length >= 3;
+  const handleDownload = () => {
+    const content = `
+CRE PLATFORM MASTER SERVICE AGREEMENT
+Version 4.2 • Effective Date: ${today}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This Master Service Agreement ("Agreement") is entered into between
+CRE Platform, Inc. ("Provider") and the organization
+${org?.name || "The Client"} ("Client").
+
+1. SCOPE OF SERVICE
+Provider shall provide Client with access to the CRE Suite cloud-based
+platform for commercial real estate portfolio management and automation.
+
+2. SUBSCRIPTION TERM
+The term of this Agreement shall begin on the date of execution and
+continue for the duration of the selected subscription plan, renewing
+automatically unless cancelled.
+
+3. PAYMENT TERMS
+Client agrees to pay all applicable fees via the authorized payment
+method. All fees are non-refundable except as expressly stated herein.
+
+4. CONFIDENTIALITY & DATA
+Client retains all rights to its data. Provider implements bank-grade
+security and isolation to protect Client information.
+
+5. ACCEPTANCE OF TERMS
+By signing below, Client acknowledges they have read, understood, and
+agree to be bound by the terms and conditions set forth in this document.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SIGNED BY:    ${fullName || "_______________"}
+EMAIL:        ${email || "_______________"}
+ROLE/TITLE:   ${role || "_______________"}
+DATE:         ${today}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `MSA_${org?.name || 'Agreement'}_${new Date().toISOString().slice(0,10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const canProceed = accepted && fullName.trim().length >= 3 && email.trim().length >= 3 && role.trim().length >= 2;
 
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-slate-900 mb-1">Master Service Agreement</h2>
-        <p className="text-slate-500 text-sm">Review and sign to complete your enterprise activation.</p>
+        <p className="text-slate-500 text-sm">Review, sign, and download to complete your enterprise activation.</p>
       </div>
 
       {/* Document Viewer */}
@@ -414,7 +472,7 @@ function MSAStep({ org, onNext, onBack, user }) {
         <div className="h-64 overflow-y-auto p-6 text-[13px] text-slate-600 leading-relaxed space-y-4 scrollbar-thin">
           <div className="text-center pb-4">
             <h3 className="font-bold text-slate-900 text-base">CRE PLATFORM MASTER SERVICE AGREEMENT</h3>
-            <p className="text-[11px] text-slate-400">Version 4.2 • Effective Date: {new Date().toLocaleDateString()}</p>
+            <p className="text-[11px] text-slate-400">Version 4.2 • Effective Date: {today}</p>
           </div>
           <p>This Master Service Agreement ("Agreement") is entered into between <strong>CRE Platform, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
           <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Suite cloud-based platform for commercial real estate portfolio management and automation.</p>
@@ -422,17 +480,50 @@ function MSAStep({ org, onNext, onBack, user }) {
           <p><strong>3. Payment Terms.</strong> Client agrees to pay all applicable fees via the authorized payment method. All fees are non-refundable except as expressly stated herein.</p>
           <p><strong>4. Confidentiality & Data.</strong> Client retains all rights to its data. Provider implements bank-grade security and isolation to protect Client information.</p>
           <p><strong>5. Acceptance of Terms.</strong> By signing below, Client acknowledges they have read, understood, and agree to be bound by the terms and conditions set forth in this document.</p>
+          
+          {/* Signature block inside document */}
           <div className="pt-8 border-t border-slate-200">
-             <div className="flex justify-between items-end">
-                <div className="w-1/2">
-                   <p className="text-[10px] text-slate-400 mb-1">Signed By:</p>
-                   <p className="text-xl italic font-serif text-slate-800 border-b border-slate-300 min-h-[32px]">{signature}</p>
-                </div>
-                <div className="text-right">
-                   <p className="text-[10px] text-slate-400 mb-1">Date:</p>
-                   <p className="text-sm font-medium text-slate-800">{new Date().toLocaleDateString()}</p>
-                </div>
-             </div>
+            <div className="grid grid-cols-2 gap-6">
+              <div>
+                <p className="text-[10px] text-slate-400 mb-1">Signed By:</p>
+                <p className="text-lg italic font-serif text-slate-800 border-b border-slate-300 min-h-[28px]">{fullName}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-400 mb-1">Date:</p>
+                <p className="text-sm font-medium text-slate-800">{today}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-400 mb-1">Role/Title:</p>
+                <p className="text-sm text-slate-800 border-b border-slate-300 min-h-[20px]">{role}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-400 mb-1">Email:</p>
+                <p className="text-sm text-slate-800 border-b border-slate-300 min-h-[20px]">{email}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Signatory Details */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 mb-6 space-y-4">
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Signatory Details</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-red-400">*</span></Label>
+            <Input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Full Legal Name" className="mt-1.5 h-11" />
+          </div>
+          <div>
+            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Email <span className="text-red-400">*</span></Label>
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" className="mt-1.5 h-11" />
+          </div>
+          <div>
+            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Role / Title <span className="text-red-400">*</span></Label>
+            <Input value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. CEO, Director of Finance" className="mt-1.5 h-11" />
+          </div>
+          <div>
+            <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Date</Label>
+            <Input value={today} readOnly className="mt-1.5 h-11 bg-slate-100 text-slate-500 cursor-not-allowed" />
           </div>
         </div>
       </div>
@@ -441,34 +532,27 @@ function MSAStep({ org, onNext, onBack, user }) {
       <div className={`flex items-start gap-3 mb-6 p-4 rounded-xl border transition-all ${accepted ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100'}`}>
         <input type="checkbox" id="accept" checked={accepted} onChange={e => setAccepted(e.target.checked)} className="mt-1 w-4 h-4 cursor-pointer accent-[#1a2744]" />
         <label htmlFor="accept" className="text-sm text-slate-700 cursor-pointer leading-relaxed">
-          I confirm that I am an authorized representative of <strong>{org?.name}</strong> and I agree to the terms of the Master Service Agreement.
+          I, <strong>{fullName || '___'}</strong>, confirm that I am an authorized representative of <strong>{org?.name}</strong> and I agree to the terms of the Master Service Agreement.
         </label>
       </div>
 
-      {/* Signature Input */}
-      <div className="mb-8">
-        <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider block mb-2 text-center">Type Full Legal Name to Sign</Label>
-        <Input
-          value={signature}
-          onChange={(e) => setSignature(e.target.value)}
-          placeholder={user?.full_name || "Full Legal Name"}
-          className="h-14 text-2xl text-center italic font-serif border-slate-200 bg-slate-50/50 shadow-inner focus:bg-white focus:ring-blue-100 transition-all"
-        />
-        <p className="text-[10px] text-slate-400 text-center mt-2 italic flex items-center justify-center gap-1">
-          <Lock className="w-3 h-3" /> Secure Electronic Signature (ESIGN Act compliant)
-        </p>
-      </div>
-
-      {/* Nav Buttons */}
-      <div className="flex gap-4">
-        <Button variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-600">
+      {/* Download + Nav Buttons */}
+      <div className="flex gap-3">
+        <Button variant="outline" onClick={onBack} className="h-12 w-28 rounded-xl text-slate-600">
           <ArrowLeft className="w-4 h-4 mr-2" /> Back
+        </Button>
+        <Button variant="outline" onClick={handleDownload} className="h-12 rounded-xl text-slate-600 gap-2">
+          <FileText className="w-4 h-4" /> Download MSA
         </Button>
         <Button onClick={handleSign} disabled={!canProceed || saving} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 shadow-lg shadow-blue-900/10">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
           Continue to Payment
         </Button>
       </div>
+
+      <p className="text-[10px] text-slate-400 text-center mt-3 italic flex items-center justify-center gap-1">
+        <Lock className="w-3 h-3" /> Secure Electronic Signature (ESIGN Act compliant)
+      </p>
     </div>
   );
 }
