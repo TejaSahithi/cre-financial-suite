@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package } from "lucide-react";
+import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ALL_MODULE_KEYS, MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
@@ -172,6 +172,30 @@ export default function SuperAdmin() {
     },
   });
 
+  const deleteRequest = useMutation({
+    mutationFn: async (id) => {
+      const success = await AccessRequestService.delete(id);
+      if (!success) throw new Error('Deletion failed');
+      return id;
+    },
+    onMutate: (id) => {
+      setProcessingRequests(prev => new Set(prev).add(id));
+    },
+    onSettled: (data, error, id) => {
+      setProcessingRequests(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      if (error) {
+        import('sonner').then(({ toast }) => toast.error(error.message || 'Failed to delete request'));
+      } else {
+        import('sonner').then(({ toast }) => toast.success('Request deleted permanently'));
+      }
+      queryClient.invalidateQueries({ queryKey: ['access-requests'] });
+    },
+  });
+
   const pendingCount = requests.filter(r => r.status === 'pending_approval').length;
 
   if (!authChecked) {
@@ -324,6 +348,18 @@ export default function SuperAdmin() {
                                 Revoke
                               </Button>
                             )}
+                            <Button 
+                              size="sm" 
+                              variant="ghost"
+                              className="text-xs h-7 px-2 text-slate-400 hover:text-red-600 hover:bg-red-50 ml-1"
+                              disabled={processingRequests.has(r.id)}
+                              onClick={() => {
+                                if (window.confirm("Are you sure you want to permanently delete this request?")) {
+                                  deleteRequest.mutate(r.id);
+                                }
+                              }}>
+                              {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            </Button>
                           </div>
                         </TableCell>
                       </TableRow>
