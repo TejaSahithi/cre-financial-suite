@@ -115,7 +115,7 @@ const ROLE_PAGES = {
 };
 
 // Pages that don't require auth / are public
-const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "Onboarding", "RequestAccess", "Login", "Welcome", "DemoExperience"];
+const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "RequestAccess", "Login", "DemoExperience"];
 
 // Mandatory setup pages (require auth but accessible to all roles)
 const MANDATORY_SETUP_PAGES = ["SecurityQuestionsSetup", "Onboarding", "Welcome"];

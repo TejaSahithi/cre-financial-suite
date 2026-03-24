@@ -65,40 +65,41 @@ export default function Onboarding() {
     };
     init();
   }, [authUser]);
-
-
   const saveCompanyInfo = async () => {
     if (!form.name || !form.primary_contact_email) return;
     setSaving(true);
     try {
+      const { toast } = await import("sonner");
       let savedOrg;
       if (org) {
         savedOrg = await OrganizationService.update(org.id, { ...form, onboarding_step: 2 });
         console.log('[Onboarding] Updated org:', savedOrg?.id);
       } else {
+        // Fallback: This should rarely happen if first-login worked
+        console.warn('[Onboarding] Org missing, attempting fresh create');
         savedOrg = await OrganizationService.create({ ...form, status: "onboarding", onboarding_step: 2 });
         console.log('[Onboarding] Created org:', savedOrg?.id);
 
-        // Create a membership for the org creator as org_admin
         if (savedOrg?.id && authUser?.id && supabase) {
-          const { error: memErr } = await supabase.from('memberships').upsert({
+          await supabase.from('memberships').upsert({
             user_id: authUser.id,
             org_id: savedOrg.id,
             role: 'org_admin',
           }, { onConflict: 'user_id,org_id' });
-          if (memErr) console.error('[Onboarding] membership create error:', memErr);
-          else console.log('[Onboarding] Created org_admin membership for', authUser.email);
+          await refreshProfile();
         }
       }
       setOrg(savedOrg);
       setStep(2);
-      console.log('[Onboarding] Moving to step 2 (MSA)');
+      toast.success("Company information saved!");
     } catch (e) {
       console.error('[Onboarding] save error:', e);
+      const { toast } = await import("sonner");
+      toast.error(e.message || "Failed to save company information");
     } finally {
       setSaving(false);
     }
-  };  // Called when the final step (Confirmation) is reached
+  }; // Called when the final step (Confirmation) is reached
   const completeOnboarding = async () => {
     try {
       // Advance step visually
