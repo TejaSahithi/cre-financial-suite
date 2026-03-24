@@ -535,8 +535,9 @@ export default function SuperAdmin() {
                 <TableHeader>
                   <TableRow className="bg-slate-50">
                     <TableHead className="text-[11px]">ORGANIZATION & ADMIN</TableHead>
-                    <TableHead className="text-[11px]">PAYMENT PLAN & AMOUNT</TableHead>
-                    <TableHead className="text-[11px]">STATUS / SUBMITTED</TableHead>
+                    <TableHead className="text-[11px]">PLAN & AMOUNT</TableHead>
+                    <TableHead className="text-[11px]">STATUS</TableHead>
+                    <TableHead className="text-[11px]">SUBMITTED</TableHead>
                     <TableHead className="text-[11px]">ENABLED MODULES</TableHead>
                     <TableHead className="text-[11px]">ACTIONS</TableHead>
                   </TableRow>
@@ -562,15 +563,15 @@ export default function SuperAdmin() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-0.5 items-start">
-                          <Badge variant="secondary" className="text-[10px] capitalize bg-blue-50 text-blue-700 hover:bg-blue-100">{org.plan || 'Unknown'}</Badge>
+                          <Badge variant="secondary" className="text-[10px] capitalize bg-blue-50 text-blue-700 hover:bg-blue-100">{org.plan || 'Standard'}</Badge>
                           <span className="text-[11px] font-semibold text-slate-700 mt-1">{amount} paid</span>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-1.5 items-start">
-                          <Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge>
-                          <span className="text-[9px] text-slate-400">{new Date(org.created_at).toLocaleDateString()}</span>
-                        </div>
+                        <Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-[9px] text-slate-400">{new Date(org.created_at).toLocaleDateString()}</span>
                       </TableCell>
                       <TableCell>
                         {org.enabled_modules?.length > 0 ? (
@@ -581,7 +582,7 @@ export default function SuperAdmin() {
                             {org.enabled_modules.length > 4 && <Badge variant="outline" className="text-[9px]">+{org.enabled_modules.length - 4}</Badge>}
                           </div>
                         ) : (
-                          <span className="text-[10px] text-slate-400">All modules (unrestricted)</span>
+                          <span className="text-[10px] text-slate-400 italic">None (Pending Config)</span>
                         )}
                       </TableCell>
                       <TableCell>

@@ -81,6 +81,21 @@ export default function Onboarding() {
     };
     init();
   }, [authUser]);
+
+  // Status Polling: Automatically check for approval while on Step 4
+  useEffect(() => {
+    if (step !== 4) return;
+    console.log('[Onboarding] Status polling active (10s interval)');
+    const interval = setInterval(() => {
+      refreshProfile().then(p => {
+        if (p?.profile?.status === 'active') {
+          console.log('[Onboarding] Approval detected! Redirecting...');
+        }
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [step, refreshProfile]);
+
   const saveCompanyInfo = async () => {
     console.log('[Onboarding] saveCompanyInfo started', { name: !!form.name, email: !!form.primary_contact_email });
     if (!form.name || !form.primary_contact_email) {
