@@ -106,7 +106,29 @@ export default function SuperAdmin() {
 
   const { data: orgs = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => OrganizationService.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select(`
+          *,
+          memberships(
+            role,
+            profiles(
+              email
+            )
+          )
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      return data.map(org => ({
+        ...org,
+        // Helper to get the primary admin email
+        admin_email: org.memberships?.find(m => m.role === 'org_admin')?.profiles?.email || 
+                     org.memberships?.[0]?.profiles?.email || 
+                     org.primary_contact_email
+      }));
+    },
     enabled: authChecked && user?.role === 'admin',
   });
 
@@ -535,7 +557,7 @@ export default function SuperAdmin() {
                       <TableCell>
                         <div>
                           <p className="text-sm font-medium">{org.name}</p>
-                          <p className="text-[10px] text-slate-500 font-mono mt-0.5">{org.primary_contact_email || 'No admin email'}</p>
+                          <p className="text-[10px] text-slate-500 font-mono mt-0.5">{org.admin_email || 'No admin email'}</p>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -569,8 +591,9 @@ export default function SuperAdmin() {
                               variant="default" 
                               size="sm" 
                               className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-all"
-                              disabled={processingRequests.has(`org_${org.id}`)}
-                              onClick={async () => {
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                console.log('[SuperAdmin] Approve clicked for org:', org.id, org.name);
                                 setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
                                 try {
                                   const sessionRes = await supabase.auth.getSession();

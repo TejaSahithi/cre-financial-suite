@@ -58,11 +58,15 @@ serve(async (req) => {
     // 2. Find all org_admins (the founders/owners) for this org
     const { data: orgAdmins, error: adminsError } = await supabaseAdmin
       .from('memberships')
-      .select('user_id')
+      .select('user_id, profiles(email)')
       .eq('org_id', orgId);
+      
+    if (adminsError) throw adminsError;
 
     if (orgAdmins && orgAdmins.length > 0) {
       const userIds = orgAdmins.map(m => m.user_id);
+      // Get the email for the first admin to send the welcome email
+      const targetEmail = orgAdmins.find(m => m.profiles?.email)?.profiles?.email || org.primary_contact_email;
       
       // Update their profiles to active
       const { error: profileError } = await supabaseAdmin
@@ -72,6 +76,9 @@ serve(async (req) => {
         .in('status', ['under_review', 'pending_approval', 'onboarding']);
         
       if (profileError) throw profileError;
+
+      // Use the resolved email for the rest of the function
+      org.primary_contact_email = targetEmail;
     }
 
     // 3. Send Welcome Aboard Email
