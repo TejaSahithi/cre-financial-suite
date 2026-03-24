@@ -616,7 +616,11 @@ export default function SuperAdmin() {
 
                                   queryClient.invalidateQueries({ queryKey: ['organizations'] });
                                   const { toast } = await import("sonner");
-                                  toast.success("Organization approved successfully! Welcome email sent.");
+                                  if (data.warning) {
+                                    toast.warning("Organization approved, but: " + data.warning, { duration: 6000 });
+                                  } else {
+                                    toast.success("Organization approved successfully! Welcome email sent.");
+                                  }
                                 } catch (e) {
                                   console.error(e);
                                   const { toast } = await import("sonner");

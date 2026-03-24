@@ -81,10 +81,10 @@ serve(async (req) => {
       org.primary_contact_email = targetEmail;
     }
 
-    // 3. Send Welcome Aboard Email
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
     const frontendUrl = Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'http://localhost:5173';
     
+    let emailWarning = null;
     if (RESEND_API_KEY && org.primary_contact_email) {
       const loginLink = `${frontendUrl}/signin`;
       const html = `
@@ -140,16 +140,22 @@ serve(async (req) => {
         });
         
         if (!emailRes.ok) {
-          console.error(`[approve-org] Resend Error:`, await emailRes.text());
+          const errorText = await emailRes.text();
+          console.error(`[approve-org] Resend Error:`, errorText);
+          emailWarning = `Activation succeeded, but welcome email failed to send: ${errorText}`;
         } else {
           console.log(`[approve-org] Welcome email sent to ${org.primary_contact_email}`);
         }
       } catch (err) {
         console.error('[approve-org] Failed to send welcome email:', err);
+        emailWarning = `Activation succeeded, but welcome email failed: ${err.message}`;
       }
+    } else {
+      console.warn('[approve-org] Email skipped: RESEND_API_KEY or primary_contact_email missing');
+      emailWarning = 'Activation succeeded, but welcome email was skipped (check config).';
     }
 
-    return new Response(JSON.stringify({ success: true, message: 'Organization approved and activated' }), {
+    return new Response(JSON.stringify({ success: true, message: 'Organization approved and activated', warning: emailWarning }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
