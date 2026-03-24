@@ -42,19 +42,21 @@ serve(async (req) => {
     if (!orgId) throw new Error('orgId is required');
 
     // 1. Mark Organization Active
-    const { data: org, error: orgError } = await supabaseAdmin
+    const { data: orgs, error: orgError } = await supabaseAdmin
       .from('organizations')
       .update({ status: 'active', updated_at: new Date().toISOString() })
       .eq('id', orgId)
       .in('status', ['under_review', 'pending_approval', 'onboarding'])
-      .select()
-      .single();
+      .select();
 
-    if (orgError) throw orgError;
-    if (!org) throw new Error('Organization not found or not in a reviewable state');
+    if (orgError) throw new Error(`DB Error updating org: ${orgError.message}`);
+    if (!orgs || orgs.length === 0) {
+      throw new Error(`Organization ${orgId} not found or not in a reviewable state. Received: ${JSON.stringify(orgs)}`);
+    }
+    const org = orgs[0];
 
     // 2. Find all org_admins (the founders/owners) for this org
-    const { data: orgAdmins } = await supabaseAdmin
+    const { data: orgAdmins, error: adminsError } = await supabaseAdmin
       .from('memberships')
       .select('user_id')
       .eq('org_id', orgId);
@@ -145,6 +147,7 @@ serve(async (req) => {
     });
 
   } catch (err) {
+    console.error("[approve-org] Catch Error:", err);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

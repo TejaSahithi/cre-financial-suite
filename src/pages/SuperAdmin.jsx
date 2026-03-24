@@ -512,9 +512,9 @@ export default function SuperAdmin() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
-                    <TableHead className="text-[11px]">ORGANIZATION</TableHead>
-                    <TableHead className="text-[11px]">PLAN</TableHead>
-                    <TableHead className="text-[11px]">STATUS</TableHead>
+                    <TableHead className="text-[11px]">ORGANIZATION & ADMIN</TableHead>
+                    <TableHead className="text-[11px]">PAYMENT PLAN & AMOUNT</TableHead>
+                    <TableHead className="text-[11px]">STATUS / SUBMITTED</TableHead>
                     <TableHead className="text-[11px]">ENABLED MODULES</TableHead>
                     <TableHead className="text-[11px]">ACTIONS</TableHead>
                   </TableRow>
@@ -522,13 +522,34 @@ export default function SuperAdmin() {
                 <TableBody>
                   {orgs.length === 0 ? (
                     <TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
-                  ) : orgs.map(org => (
+                  ) : orgs.map(org => {
+                    // Determine amount based on plan
+                    const planLower = (org.plan || '').toLowerCase();
+                    let amount = "$0/mo";
+                    if (planLower === 'starter') amount = "$249/mo";
+                    if (planLower === 'professional') amount = "$499/mo";
+                    if (planLower === 'enterprise') amount = "$999/mo";
+                    
+                    return (
                     <TableRow key={org.id}>
                       <TableCell>
-                        <div><p className="text-sm font-medium">{org.name}</p><p className="text-[10px] text-slate-400">{org.primary_contact_email}</p></div>
+                        <div>
+                          <p className="text-sm font-medium">{org.name}</p>
+                          <p className="text-[10px] text-slate-500 font-mono mt-0.5">{org.primary_contact_email || 'No admin email'}</p>
+                        </div>
                       </TableCell>
-                      <TableCell><Badge variant="outline" className="text-[10px] capitalize">{org.plan}</Badge></TableCell>
-                      <TableCell><Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge></TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5 items-start">
+                          <Badge variant="secondary" className="text-[10px] capitalize bg-blue-50 text-blue-700 hover:bg-blue-100">{org.plan || 'Unknown'}</Badge>
+                          <span className="text-[11px] font-semibold text-slate-700 mt-1">{amount} paid</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge>
+                          <span className="text-[9px] text-slate-400">{new Date(org.created_at).toLocaleDateString()}</span>
+                        </div>
+                      </TableCell>
                       <TableCell>
                         {org.enabled_modules?.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -545,18 +566,29 @@ export default function SuperAdmin() {
                         <div className="flex items-center gap-1">
                           {(org.status === 'pending_approval' || org.status === 'under_review' || org.status === 'onboarding') && (
                             <Button 
-                              variant="outline" 
+                              variant="default" 
                               size="sm" 
-                              className="h-7 text-[10px] px-2 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                              className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-all"
                               disabled={processingRequests.has(`org_${org.id}`)}
                               onClick={async () => {
                                 setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
                                 try {
-                                  // Call edge function to activate org and send Welcome email
-                                  const { data: result, error: fnError } = await supabase.functions.invoke('approve-organization', {
-                                    body: { orgId: org.id }
+                                  const sessionRes = await supabase.auth.getSession();
+                                  const token = sessionRes.data.session?.access_token;
+                                  
+                                  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/approve-organization`, {
+                                    method: 'POST',
+                                    headers: {
+                                      'Content-Type': 'application/json',
+                                      'Authorization': `Bearer ${token}`
+                                    },
+                                    body: JSON.stringify({ orgId: org.id })
                                   });
-                                  if (fnError) throw new Error(fnError.message || 'Failed to approve organization');
+                                  
+                                  const data = await res.json();
+                                  if (!res.ok) {
+                                    throw new Error(data.error || JSON.stringify(data) || 'Failed to approve organization');
+                                  }
 
                                   queryClient.invalidateQueries({ queryKey: ['organizations'] });
                                   const { toast } = await import("sonner");
@@ -584,7 +616,8 @@ export default function SuperAdmin() {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
