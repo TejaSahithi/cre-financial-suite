@@ -70,7 +70,14 @@ export default function Onboarding() {
     init();
   }, [authUser]);
   const saveCompanyInfo = async () => {
-    if (!form.name || !form.primary_contact_email) return;
+    if (!form.name || !form.primary_contact_email) {
+      setSaving('val_error');
+      try {
+        const { toast } = await import("sonner");
+        toast.error("Please enter an Organization Name to continue.");
+      } catch (e) {}
+      return;
+    }
     setSaving(true);
     try {
       const { toast } = await import("sonner");
@@ -216,8 +223,16 @@ export default function Onboarding() {
               <div className="space-y-5">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Organization Name <span className="text-red-400">*</span></Label>
-                    <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Meridian Capital Group" className="mt-1.5 h-11" />
+                    <Label className={`text-xs font-semibold uppercase tracking-wider ${!form.name ? 'text-slate-700' : 'text-slate-700'}`}>
+                      Organization Name <span className="text-red-400">*</span>
+                    </Label>
+                    <Input 
+                      value={form.name} 
+                      onChange={e => setForm({...form, name: e.target.value})} 
+                      placeholder="e.g. Meridian Capital Group" 
+                      className={`mt-1.5 h-11 transition-all ${!form.name && saving === 'val_error' ? 'border-red-500 bg-red-50/20' : ''}`} 
+                    />
+                    {!form.name && saving === 'val_error' && <p className="text-[10px] text-red-500 mt-1">Organization name is required to continue.</p>}
                   </div>
                   <div className="col-span-2">
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Primary Contact Email <span className="text-red-400">*</span></Label>
@@ -271,8 +286,11 @@ export default function Onboarding() {
                   </div>
                 </div>
               </div>
-              <Button onClick={saveCompanyInfo} disabled={saving || !form.name} className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              <Button 
+                onClick={saveCompanyInfo} 
+                className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all shadow-lg active:scale-[0.98]"
+              >
+                {saving === true ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Continue to Agreement <ArrowRight className="w-4 h-4" />
               </Button>
             </div>
