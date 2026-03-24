@@ -122,18 +122,21 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
+          emailRedirectTo: window.location.origin,
           data: {
             full_name: fullName,
-            onboarding_type: 'owner'
+            onboarding_type: verifiedRole === "Admin (Owner)" ? 'owner' : 'member'
           }
         }
       });
       if (signUpError) throw signUpError;
       
+      // If we got a session (email confirmation is off), user is already logged in at aal1.
+      // We still show the success screen to inform them what's next.
       setRegistrationSuccess(true);
     } catch (err) {
       setError(err.message || "Failed to create account.");
@@ -157,15 +160,15 @@ export default function Login() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
         <div className="max-w-md w-full text-center">
-          <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-emerald-100 flex items-center justify-center">
-             <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+          <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-blue-100 flex items-center justify-center">
+             <Mail className="w-10 h-10 text-blue-600" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Account Created!</h2>
-          <p className="text-slate-500 text-sm mb-6">
-            Your account has been successfully created. You can now sign in with your credentials.
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Check your email!</h2>
+          <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+            We've sent a confirmation link to <strong>{email}</strong>. Once you click it, you'll be redirected back here to set up your security MFA.
           </p>
           <Button onClick={() => window.location.reload()} className="h-11 bg-[#1a2744] hover:bg-[#243b67] text-white">
-            Continue to Sign In <ArrowRight className="ml-2 w-4 h-4" />
+            Return to Sign In <ArrowRight className="ml-2 w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -374,10 +377,10 @@ export default function Login() {
                       <Input
                         type="text"
                         className="mt-1.5 h-11 bg-slate-50 text-slate-700 placeholder:text-slate-400"
-                        value={verifiedCompany ? "Admin (Owner)" : ""}
+                        value={verifiedRole || ""}
                         placeholder="Auto-detected"
                         readOnly
-                        disabled={!verifiedCompany}
+                        disabled={!verifiedRole}
                       />
                     </div>
                   </div>

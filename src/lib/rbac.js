@@ -117,6 +117,9 @@ const ROLE_PAGES = {
 // Pages that don't require auth / are public
 const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "Onboarding", "RequestAccess", "Login", "Welcome", "DemoExperience"];
 
+// Mandatory setup pages (require auth but accessible to all roles)
+const MANDATORY_SETUP_PAGES = ["SecurityQuestionsSetup", "Onboarding", "Welcome"];
+
 // SuperAdmin-only pages
 const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
 
@@ -129,6 +132,7 @@ const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
 export function canAccess(role, pageName) {
   if (!pageName) return true;
   if (PUBLIC_PAGES.includes(pageName)) return true;
+  if (MANDATORY_SETUP_PAGES.includes(pageName)) return true;
   // SuperAdmin sees everything — support both mapped 'admin' and raw 'super_admin'
   if (role === "admin" || role === "super_admin") return true;
   if (ADMIN_ONLY_PAGES.includes(pageName)) return false;

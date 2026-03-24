@@ -228,22 +228,23 @@ const AuthenticatedApp = () => {
       if (isSuperAdmin) return 'SuperAdmin';
 
       if (p.status === 'suspended' || org?.status === 'suspended') return 'Login';
-
-      // FORCE PASSWORD RESET: All newly created users must set their own password immediately
-      if (p.first_login) return 'Welcome';
-
       if (p.status === 'pending_approval') return 'PendingApproval';
 
-      // SECURITY QUESTIONS SETUP: Required after MFA, before Onboarding
+      // 1. SECURITY QUESTIONS SETUP: Required after MFA, before Onboarding
       if (!p.security_questions_setup) return 'SecurityQuestionsSetup';
       
-      // Under Review state natively utilizes Onboarding's Step 4 blocking view
+      // 2. ONBOARDING: Case 1 - Profile approved but Org not created yet -> Redirect to Onboarding
+      // Case 2 - status is 'onboarding' (Step 1-3)
+      // Case 3 - status is 'under_review' (Step 4)
       if (p.status === 'under_review' || org?.status === 'under_review') return 'Onboarding';
+      if (p.status === 'approved' || p.status === 'onboarding') return 'Onboarding';
 
-      if (p.status === 'approved' || p.status === 'onboarding') {
-        return 'Onboarding';
+      // 3. WELCOME PAGE: Show after onboarding completion but before Dashboard
+      if (p.first_login || p.onboarding_complete === true && org?.status === 'active' && !p.dashboard_viewed) {
+         return 'Welcome';
       }
 
+      // 4. DASHBOARD: Only when everything is active
       if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
 
       return 'Login'; // Fallback

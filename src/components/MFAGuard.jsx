@@ -33,13 +33,27 @@ export default function MFAGuard({ onVerified }) {
       const { data, error } = await supabase.auth.mfa.listFactors();
       if (error) throw error;
 
-      const totpFactor = data?.totp?.[0];
-      if (totpFactor && totpFactor.status === "verified") {
+      const totpFactors = data?.totp || [];
+      const verifiedFactor = totpFactors.find(f => f.status === "verified");
+      const unverifiedFactors = totpFactors.filter(f => f.status === "unverified");
+
+      if (verifiedFactor) {
         // Factor already enrolled and verified — just need to challenge
-        setFactorId(totpFactor.id);
+        setFactorId(verifiedFactor.id);
         setPhase("challenge");
       } else {
-        // No verified factor — need to enroll
+        // No verified factor — need to enroll.
+        // If ANY unverified factors exist, we must unenroll them all first to avoid "factor already exists" error.
+        if (unverifiedFactors.length > 0) {
+          console.log(`[MFAGuard] Removing ${unverifiedFactors.length} stale unverified factors`);
+          for (const f of unverifiedFactors) {
+             try {
+                await supabase.auth.mfa.unenroll({ factorId: f.id });
+             } catch (cleanErr) {
+                console.warn("[MFAGuard] Cleanup error for factor:", f.id, cleanErr);
+             }
+          }
+        }
         setPhase("enroll");
         await startEnrollment();
       }
@@ -53,9 +67,12 @@ export default function MFAGuard({ onVerified }) {
     setEnrolling(true);
     setError("");
     try {
+      // Use a unique friendly name to prevent "already exists" errors
+      const uniqueName = `Authenticator_${Date.now()}`;
       const { data, error } = await supabase.auth.mfa.enroll({
         factorType: "totp",
         issuer: "CRE Suite",
+        friendlyName: uniqueName
       });
       if (error) throw error;
 

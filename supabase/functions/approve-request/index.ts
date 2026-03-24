@@ -20,14 +20,13 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
-    const supabaseClient = createClient(
-      supabaseUrl,
-      supabaseAnonKey,
-      { global: { headers: { Authorization: authorization } } }
-    );
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(JSON.stringify({ error: 'Missing environment variables' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
 
     const supabaseAdmin = createClient(
       supabaseUrl,
@@ -35,20 +34,22 @@ Deno.serve(async (req: Request) => {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Verify caller JWT and get user
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    // Verify caller JWT and get user using the admin client for reliability
+    const token = authorization.replace(/^[Bb]earer\s+/, "");
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
     
     if (authError || !user) {
       console.error('[approve-request] Auth verification failed:', authError?.message);
       return new Response(JSON.stringify({ 
         error: 'Unauthorized', 
-        details: authError?.message || 'Invalid or expired token' 
+        details: authError?.message || 'Invalid or expired token',
+        received_header: authorization.substring(0, 15) + '...'
       }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    console.log('[approve-request] Authenticated user:', user.email, 'Role:', user.role);
+    console.log('[approve-request] Authenticated user:', user.email);
 
     // Verify caller is super_admin (admin in profiles/memberships)
     const { data: membership, error: memberError } = await supabaseAdmin
