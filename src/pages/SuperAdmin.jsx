@@ -19,6 +19,8 @@ export default function SuperAdmin() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [selectedModules, setSelectedModules] = useState([]);
+  const [inviteEmail, setInviteEmail] = useState("");
   const [processingRequests, setProcessingRequests] = useState(new Set());
   const [selectedRequests, setSelectedRequests] = useState(new Set());
   const [inviting, setInviting] = useState(false);
@@ -30,8 +32,6 @@ export default function SuperAdmin() {
   const [platformInviting, setPlatformInviting] = useState(false);
   
   const [editingOrgModules, setEditingOrgModules] = useState(null);
-  const [selectedModules, setSelectedModules] = useState([]);
-  const [inviteEmail, setInviteEmail] = useState(""); // Missing state!
   const authChecked = !!user || true;
 
   const { data: platformAdmins = [], isLoading: isLoadingAdmins } = useQuery({
@@ -381,10 +381,13 @@ export default function SuperAdmin() {
                             {r.status !== 'approved' && (
                               <Button 
                                 size="sm" 
-                                variant="outline"
-                                className="text-xs h-7 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                                className="text-xs h-7 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
                                 disabled={processingRequests.has(r.id)}
-                                onClick={() => updateRequest.mutate({ id: r.id, approved: true })}>
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  console.log('Approve clicked for:', r.id);
+                                  updateRequest.mutate({ id: r.id, approved: true });
+                                }}>
                                 {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
                                 Approve
                               </Button>
@@ -395,7 +398,10 @@ export default function SuperAdmin() {
                                 variant="outline"
                                 className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
                                 disabled={processingRequests.has(r.id)}
-                                onClick={() => updateRequest.mutate({ id: r.id, approved: false })}>
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateRequest.mutate({ id: r.id, approved: false });
+                                }}>
                                 {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
                                 Reject
                               </Button>
@@ -406,7 +412,10 @@ export default function SuperAdmin() {
                                 variant="outline"
                                 className="text-xs h-7 text-amber-600 border-amber-200 hover:bg-amber-50"
                                 disabled={processingRequests.has(r.id)}
-                                onClick={() => revokeRequest.mutate({ id: r.id, email: r.email })}>
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  revokeRequest.mutate({ id: r.id, email: r.email });
+                                }}>
                                 {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Shield className="w-3 h-3 mr-1" />}
                                 Revoke
                               </Button>

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { AccessRequestService } from "@/services/api";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Building2, Send, Loader2, CheckCircle2, ArrowRight,

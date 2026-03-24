@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
-import { Building2, ArrowRight, Video, FileText, CheckCircle2, Shield, BarChart3, Users, Zap } from "lucide-react";
+import { Building2, ArrowRight, Video, FileText, CheckCircle2, Shield, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { markDemoViewed } from "@/services/api";
