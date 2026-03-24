@@ -54,19 +54,26 @@ const AppRoutes = () => (
         <MainPage />
       </LayoutWrapper>
     } />
-    {Object.entries(Pages).map(([path, Page]) => (
-      <Route
-        key={path}
-        path={`/${path}`}
-        element={
-          <RbacGuard pageName={path}>
-            <LayoutWrapper currentPageName={path}>
-              <Page />
-            </LayoutWrapper>
-          </RbacGuard>
-        }
-      />
-    ))}
+    {Object.entries(Pages).map(([path, Page]) => {
+      const isMandatorySetup = ["SecurityQuestionsSetup", "Onboarding", "Welcome"].includes(path);
+      return (
+        <Route
+          key={path}
+          path={`/${path}`}
+          element={
+            <RbacGuard pageName={path}>
+              {isMandatorySetup ? (
+                <Page />
+              ) : (
+                <LayoutWrapper currentPageName={path}>
+                  <Page />
+                </LayoutWrapper>
+              )}
+            </RbacGuard>
+          }
+        />
+      );
+    })}
     <Route path="*" element={<PageNotFound />} />
   </Routes>
 );

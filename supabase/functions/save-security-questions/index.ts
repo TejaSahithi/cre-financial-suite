@@ -16,17 +16,29 @@ Deno.serve(async (req: any) => {
   }
 
   try {
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: 'No Authorization header' }), { 
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      });
+    }
+
     const supabaseClient = createClient(
       // @ts-ignore
       Deno.env.get('SUPABASE_URL') ?? '',
       // @ts-ignore
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+      { global: { headers: { Authorization: authHeader } } }
     );
 
     // 1. Verify caller
     const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) throw new Error('Unauthorized');
+    if (authError || !user) {
+      console.error('[save-security-questions] Auth Error:', authError?.message);
+      return new Response(JSON.stringify({ error: 'Unauthorized', details: authError?.message }), { 
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      });
+    }
 
     const body = await req.json();
     const { q1, a1, q2, a2, q3, a3 } = body;
@@ -86,3 +98,4 @@ Deno.serve(async (req: any) => {
     });
   }
 });
+
