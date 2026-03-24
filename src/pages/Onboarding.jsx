@@ -5,7 +5,7 @@ import { updateProfile, redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
 import { logAudit } from "@/services/audit";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Sparkles, Clock } from "lucide-react";
+import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Sparkles, Clock, Shield, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
