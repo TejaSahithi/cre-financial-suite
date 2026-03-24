@@ -571,10 +571,12 @@ export default function SuperAdmin() {
                         <Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge>
                       </TableCell>
                       <TableCell>
-                        <span className="text-[9px] text-slate-400">{new Date(org.created_at).toLocaleDateString()}</span>
+                        <span className="text-[9px] text-slate-400">
+                          {org.created_at ? new Date(org.created_at).toLocaleDateString() : '—'}
+                        </span>
                       </TableCell>
                       <TableCell>
-                        {org.enabled_modules?.length > 0 ? (
+                        {org.enabled_modules && org.enabled_modules.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
                             {org.enabled_modules.slice(0, 4).map(m => (
                               <Badge key={m} variant="outline" className="text-[9px]">{MODULE_DEFINITIONS[m]?.label || m}</Badge>

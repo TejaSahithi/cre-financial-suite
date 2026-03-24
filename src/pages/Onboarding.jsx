@@ -55,6 +55,7 @@ export default function Onboarding() {
           await new Promise(r => setTimeout(r, 600));
 
           const orgData = await OrganizationService.get(authUser.org_id);
+          console.log('[Onboarding] Org data fetched:', { found: !!orgData, status: orgData?.status, step: orgData?.onboarding_step });
           if (orgData) {
             setOrg(orgData);
             
@@ -947,15 +948,15 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
           <div className="space-y-1.5 text-sm">
             <div className="flex justify-between">
               <span className="text-slate-500">Plan</span>
-              <span className="font-semibold text-slate-900">{paymentInfo.plan}</span>
+              <span className="font-semibold text-slate-900">{info.plan || plan}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Billing</span>
-              <span className="font-semibold text-slate-900 capitalize">{paymentInfo.billingCycle}</span>
+              <span className="font-semibold text-slate-900 capitalize">{info.billingCycle || "monthly"}</span>
             </div>
             <div className="flex justify-between border-t border-slate-200 pt-2 mt-2">
               <span className="font-semibold text-slate-700">Amount</span>
-              <span className="font-black text-[#1a2744]">${paymentInfo.displayPrice}/mo</span>
+              <span className="font-black text-[#1a2744]">${info.displayPrice || "0"}/mo</span>
             </div>
           </div>
         </div>
