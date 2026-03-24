@@ -150,7 +150,7 @@ export default function Onboarding() {
          throw new Error('Failed to complete onboarding');
       }
 
-      // Audit log — onboarding completion
+      // Audit log â€” onboarding completion
       await logAudit({
         entityType: 'Profile',
         entityId: authUser?.id,
@@ -296,8 +296,8 @@ export default function Onboarding() {
                       <SelectContent>
                         <SelectItem value="USD">USD ($)</SelectItem>
                         <SelectItem value="CAD">CAD (C$)</SelectItem>
-                        <SelectItem value="EUR">EUR (€)</SelectItem>
-                        <SelectItem value="GBP">GBP (£)</SelectItem>
+                        <SelectItem value="EUR">EUR (â‚¬)</SelectItem>
+                        <SelectItem value="GBP">GBP (Â£)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -320,7 +320,7 @@ export default function Onboarding() {
               <MSAStep org={org} onNext={async (signatureData) => {
                 console.log('[Onboarding] MSA signed, updating org', org?.id);
                 
-                // 1. Update Org — fault-tolerant: don't block navigation on DB errors
+                // 1. Update Org â€” fault-tolerant: don't block navigation on DB errors
                 try {
                   await OrganizationService.update(org.id, {
                     onboarding_step: 3,
@@ -343,7 +343,7 @@ export default function Onboarding() {
                   console.error('[Onboarding] Document creation failed (non-blocking):', docErr);
                 }
 
-                // 3. ALWAYS advance to Payment — this is the critical line
+                // 3. ALWAYS advance to Payment â€” this is the critical line
                 console.log('[Onboarding] Moving to step 3 (Payment)');
                 setStep(3);
               }} onBack={() => setStep(1)} user={authUser} />
@@ -353,9 +353,24 @@ export default function Onboarding() {
           {/* Step 3: Payment */}
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
-              <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle) => {
+              <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle, paymentInfo) => {
                 console.log('[Onboarding] Payment confirmed, advancing to step 4');
+                // Store the payment info
+                setForm(prev => ({ ...prev, billing_cycle: billingCycle, paymentInfo }));
+                
                 // All DB calls are non-blocking — navigation must always succeed
+                try {
+                  const { supabase } = await import('@/lib/supabase');
+                  await supabase.from('invoices').insert({
+                    org_id: org.id,
+                    amount: paymentInfo.displayPrice,
+                    status: 'paid',
+                    issued_date: new Date().toISOString().split('T')[0]
+                  });
+                  console.log('[Onboarding] Invoice saved to database');
+                } catch (e) {
+                  console.error('[Onboarding] Invoice save failed (non-blocking):', e);
+                }
                 try {
                   await OrganizationService.update(org.id, {
                     status: "under_review",
@@ -385,7 +400,7 @@ export default function Onboarding() {
           {/* Step 4: Confirmation */}
           {step === 4 && (
             <div className="animate-in zoom-in duration-500">
-              <ConfirmationStep org={org} user={authUser} plan={form.plan} />
+              <ConfirmationStep org={org} user={authUser} plan={form.plan} paymentInfo={form.paymentInfo} />
             </div>
           )}
         </div>
@@ -394,7 +409,7 @@ export default function Onboarding() {
   );
 }
 
-// ─── MSA Step ──────────────────────────────────────────
+// â”€â”€â”€ MSA Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function MSAStep({ org, onNext, onBack, user }) {
   const [accepted, setAccepted] = useState(false);
   const [fullName, setFullName] = useState(user?.full_name || "");
@@ -418,8 +433,8 @@ function MSAStep({ org, onNext, onBack, user }) {
   const handleDownload = () => {
     const content = `
 CRE PLATFORM MASTER SERVICE AGREEMENT
-Version 4.2 • Effective Date: ${today}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Version 4.2 â€¢ Effective Date: ${today}
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 
 This Master Service Agreement ("Agreement") is entered into between
 CRE Platform, Inc. ("Provider") and the organization
@@ -446,14 +461,14 @@ security and isolation to protect Client information.
 By signing below, Client acknowledges they have read, understood, and
 agree to be bound by the terms and conditions set forth in this document.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 
 SIGNED BY:    ${fullName || "_______________"}
 EMAIL:        ${email || "_______________"}
 ROLE/TITLE:   ${role || "_______________"}
 DATE:         ${today}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 `;
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -478,13 +493,13 @@ DATE:         ${today}
       {/* Document Viewer */}
       <div className="border border-slate-200 rounded-xl bg-slate-50 mb-6 flex flex-col overflow-hidden">
         <div className="bg-slate-100/50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Document — MSA-2026-01</span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Document â€” MSA-2026-01</span>
           <FileText className="w-4 h-4 text-slate-300" />
         </div>
         <div className="h-64 overflow-y-auto p-6 text-[13px] text-slate-600 leading-relaxed space-y-4 scrollbar-thin">
           <div className="text-center pb-4">
             <h3 className="font-bold text-slate-900 text-base">CRE PLATFORM MASTER SERVICE AGREEMENT</h3>
-            <p className="text-[11px] text-slate-400">Version 4.2 • Effective Date: {today}</p>
+            <p className="text-[11px] text-slate-400">Version 4.2 â€¢ Effective Date: {today}</p>
           </div>
           <p>This Master Service Agreement ("Agreement") is entered into between <strong>CRE Platform, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
           <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Suite cloud-based platform for commercial real estate portfolio management and automation.</p>
@@ -569,7 +584,7 @@ DATE:         ${today}
   );
 }
 
-// ─── Payment Step ──────────────────────────────────────
+// â”€â”€â”€ Payment Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
   const [processing, setProcessing] = useState(false);
   const [cardName, setCardName] = useState(user?.full_name || "");
@@ -578,6 +593,13 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
   const [cvc, setCvc] = useState("");
   const [error, setError] = useState("");
   const [billingCycle, setBillingCycle] = useState("monthly");
+
+  // Billing address
+  const [billingAddress, setBillingAddress] = useState("");
+  const [billingCity, setBillingCity] = useState("");
+  const [billingState, setBillingState] = useState("");
+  const [billingZip, setBillingZip] = useState("");
+  const [billingCountry, setBillingCountry] = useState("US");
 
   const YEARLY_DISCOUNT = 0.25;
 
@@ -602,15 +624,14 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
     setError("");
     setProcessing(true);
     try {
-      // Simulate payment processing
       await new Promise(r => setTimeout(r, 2000));
-      // Always call onComplete — it handles errors internally
-      await onComplete(billingCycle);
+      await onComplete(billingCycle, {
+        cardName, plan: selectedPlan.name, displayPrice, billingCycle,
+        billingAddress: `${billingAddress}, ${billingCity}, ${billingState} ${billingZip}, ${billingCountry}`,
+      });
     } catch (err) {
-      // This catch should rarely fire since onComplete is fault-tolerant
       console.error('[Payment] Unexpected error:', err);
-      // Still advance — don't block user on payment simulation errors
-      await onComplete(billingCycle);
+      await onComplete(billingCycle, { cardName, plan: selectedPlan.name, displayPrice, billingCycle });
     } finally {
       setProcessing(false);
     }
@@ -625,65 +646,43 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
 
       {/* Billing Toggle */}
       <div className="flex items-center justify-center mb-6">
-        <div className="bg-slate-100 rounded-xl p-1 flex gap-1 relative">
-          <button
-            type="button"
-            onClick={() => setBillingCycle("monthly")}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${billingCycle === "monthly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-          >
+        <div className="bg-slate-100 rounded-xl p-1 flex gap-1">
+          <button type="button" onClick={() => setBillingCycle("monthly")}
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${billingCycle === "monthly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
             Monthly
           </button>
-          <button
-            type="button"
-            onClick={() => setBillingCycle("yearly")}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${billingCycle === "yearly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-          >
+          <button type="button" onClick={() => setBillingCycle("yearly")}
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${billingCycle === "yearly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
             Yearly
-            <span className="bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-tight">
-              Save 25%
-            </span>
+            <span className="bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-tight">Save 25%</span>
           </button>
         </div>
       </div>
 
       {/* Plan Grid */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
+      <div className="grid grid-cols-3 gap-3 mb-6">
         {plans.map(p => {
           const price = getPrice(p.price);
           return (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => setForm({...form, plan: p.key})}
-              className={`p-4 rounded-xl border-2 transition-all relative text-left ${form.plan === p.key ? "border-blue-600 bg-blue-50/50 shadow-md ring-4 ring-blue-50" : "border-slate-100 bg-slate-50 hover:border-slate-300"}`}
-            >
+            <button key={p.key} type="button" onClick={() => setForm({...form, plan: p.key})}
+              className={`p-4 rounded-xl border-2 transition-all relative text-left ${form.plan === p.key ? "border-blue-600 bg-blue-50/50 shadow-md ring-4 ring-blue-50" : "border-slate-100 bg-slate-50 hover:border-slate-300"}`}>
               {p.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter">Recommended</div>}
               <p className="text-xs font-bold text-slate-900 mb-1">{p.name}</p>
               {p.price ? (
                 <div>
-                  <div className="flex items-baseline gap-1">
-                    <p className="text-xl font-black text-[#1a2744]">${price}</p>
-                    <span className="text-[10px] uppercase font-bold text-slate-400">/{billingCycle === "yearly" ? "mo" : "mo"}</span>
-                  </div>
-                  {billingCycle === "yearly" && (
-                    <p className="text-[9px] text-emerald-600 font-bold mt-0.5">
-                      ${p.price}/mo → Save ${p.price - price}/mo
-                    </p>
-                  )}
+                  <p className="text-xl font-black text-[#1a2744]">${price}<span className="text-[10px] uppercase font-bold text-slate-400 ml-1">/mo</span></p>
+                  {billingCycle === "yearly" && <p className="text-[9px] text-emerald-600 font-bold mt-0.5">${p.price}/mo â†’ Save ${p.price - price}/mo</p>}
                 </div>
-              ) : (
-                <p className="text-xl font-black text-[#1a2744]">Custom</p>
-              )}
+              ) : <p className="text-xl font-black text-[#1a2744]">Custom</p>}
             </button>
           );
         })}
       </div>
 
-      {/* Yearly total callout */}
       {billingCycle === "yearly" && selectedPlan.price > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-6 flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold text-emerald-800">Annual billing — 25% savings applied</p>
+            <p className="text-sm font-semibold text-emerald-800">Annual billing â€” 25% savings applied</p>
             <p className="text-xs text-emerald-600">Billed as ${yearlyTotal.toLocaleString()}/year</p>
           </div>
           <div className="text-right">
@@ -693,48 +692,59 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
         </div>
       )}
 
-      {/* Stripe-like Form */}
-      <form onSubmit={handlePayment} className="space-y-6">
-        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-          <div className="space-y-4">
+      <form onSubmit={handlePayment} className="space-y-4">
+        {/* Card Details */}
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Card Details</p>
+          <div>
+            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Cardholder Name</Label>
+            <Input value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Full Name" className="bg-white border-slate-200 h-11" required />
+          </div>
+          <div>
+            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Card Number</Label>
+            <div className="relative">
+              <Input value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').substring(0, 16))}
+                placeholder="0000 0000 0000 0000" className="bg-white border-slate-200 h-11 pl-11 font-mono tracking-widest" required />
+              <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Cardholder Name</Label>
-              <Input value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Full Name" className="bg-white border-slate-200 h-11" required />
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Expiration</Label>
+              <Input value={expiry} onChange={e => setExpiry(e.target.value.substring(0, 5))} placeholder="MM / YY" className="bg-white border-slate-200 h-11 text-center" required />
             </div>
             <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Card Information</Label>
-              <div className="relative group">
-                <Input
-                  value={cardNumber}
-                  onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').substring(0, 16))}
-                  placeholder="0000 0000 0000 0000"
-                  className="bg-white border-slate-200 h-11 pl-11 font-mono tracking-widest"
-                  required
-                />
-                <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-blue-500 transition-colors" />
-              </div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">CVC</Label>
+              <Input value={cvc} onChange={e => setCvc(e.target.value.replace(/\D/g, '').substring(0, 4))} placeholder="123" className="bg-white border-slate-200 h-11 text-center" required />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Expiration</Label>
-                <Input
-                  value={expiry}
-                  onChange={e => setExpiry(e.target.value.substring(0, 5))}
-                  placeholder="MM / YY"
-                  className="bg-white border-slate-200 h-11 text-center"
-                  required
-                />
-              </div>
-              <div>
-                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">CVC</Label>
-                <Input
-                  value={cvc}
-                  onChange={e => setCvc(e.target.value.replace(/\D/g, '').substring(0, 4))}
-                  placeholder="123"
-                  className="bg-white border-slate-200 h-11 text-center"
-                  required
-                />
-              </div>
+          </div>
+        </div>
+
+        {/* Billing Address */}
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
+          <div>
+            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Street Address</Label>
+            <Input value={billingAddress} onChange={e => setBillingAddress(e.target.value)} placeholder="123 Main St" className="bg-white border-slate-200 h-11" required />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">City</Label>
+              <Input value={billingCity} onChange={e => setBillingCity(e.target.value)} placeholder="New York" className="bg-white border-slate-200 h-11" required />
+            </div>
+            <div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">State</Label>
+              <Input value={billingState} onChange={e => setBillingState(e.target.value)} placeholder="NY" className="bg-white border-slate-200 h-11" required />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">ZIP / Postal Code</Label>
+              <Input value={billingZip} onChange={e => setBillingZip(e.target.value)} placeholder="10001" className="bg-white border-slate-200 h-11" required />
+            </div>
+            <div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Country</Label>
+              <Input value={billingCountry} onChange={e => setBillingCountry(e.target.value)} placeholder="US" className="bg-white border-slate-200 h-11" required />
             </div>
           </div>
         </div>
@@ -743,53 +753,90 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
 
         <div className="flex gap-4">
           <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-500">Back</Button>
-          <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg shadow-blue-900/10">
+          <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
             {processing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
             {processing ? "Processing Securely..." : selectedPlan.price ? `Pay $${displayPrice} & Finalize Setup` : "Request Enterprise Access"}
           </Button>
         </div>
-
         <p className="text-center text-[10px] text-slate-400 flex items-center justify-center gap-1">
-          <Lock className="w-3 h-3" /> 256-bit SSL encryption · PCI DSS compliant
+          <Lock className="w-3 h-3" /> 256-bit SSL encryption Â· PCI DSS compliant
         </p>
       </form>
     </div>
   );
 }
 
-// ─── Review Step ─────────────────────────────────
-function ConfirmationStep({ org, user, plan }) {
+// â”€â”€â”€ Confirmation Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function ConfirmationStep({ org, user, plan, paymentInfo }) {
   const [checking, setChecking] = useState(false);
 
   const handleCheckStatus = async () => {
     setChecking(true);
     try {
-      const orgs = await OrganizationService.filter({ id: org?.id });
-      if (orgs.length > 0 && orgs[0].status === 'active') {
-        const { updateProfile } = await import('@/services/auth');
-        // Mark the user's profile as onboarding_complete and flag them for the Welcome screen
-        await updateProfile({ onboarding_complete: true, first_login: true });
-        // Audit log for unlocking platform
-        await logAudit({
-          entityType: 'Profile',
-          entityId: user?.id,
-          action: 'update',
-          fieldChanged: 'onboarding_complete',
-          oldValue: false,
-          newValue: true,
-          orgId: org?.id,
-          userId: user?.id,
-          userEmail: user?.email,
-        }).catch(() => {});
-        window.location.href = createPageUrl("Welcome");
+      const orgData = await OrganizationService.get(org?.id);
+      if (orgData?.status === 'active') {
+        try {
+          const { updateProfile } = await import('@/services/auth');
+          await updateProfile({ onboarding_complete: true });
+        } catch(e) { console.error(e); }
+        window.location.href = createPageUrl("WelcomeAboard");
       } else {
         const { toast } = await import("sonner");
-        toast.info("Your account is still under review.");
+        toast.info("Your account is still under review. We'll notify you by email once approved.");
       }
     } catch(e) {
       console.error(e);
     }
     setChecking(false);
+  };
+
+  const handleDownloadInvoice = () => {
+    const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const planName = paymentInfo?.plan || plan || "Professional";
+    const price = paymentInfo?.displayPrice || "â€”";
+    const cycle = paymentInfo?.billingCycle || "monthly";
+    const content = `
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+                CRE PLATFORM INVOICE
+                  ${invoiceId}
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+
+Date:            ${today}
+Status:          PENDING ACTIVATION
+
+BILLED TO:
+  ${user?.full_name || "â€”"}
+  ${user?.email || "â€”"}
+  ${org?.name || "â€”"}
+  ${paymentInfo?.billingAddress || "â€”"}
+
+SUBSCRIPTION:
+  Plan:          ${planName}
+  Billing:       ${cycle === "yearly" ? "Annual" : "Monthly"}
+  Amount:        $${price}${cycle === "yearly" ? "/mo (billed annually)" : "/mo"}
+
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+SUBTOTAL:                             $${price}
+DISCOUNT:                             ${cycle === "yearly" ? "25% Annual Discount Applied" : "None"}
+TOTAL DUE:                            $${cycle === "yearly" ? price * 12 : price}
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+
+Payment processed securely.
+Account is pending SuperAdmin activation.
+
+CRE Financial Suite Â· support@cresuite.org
+Â© ${new Date().getFullYear()} All rights reserved
+`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${invoiceId}_CRE_Suite.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -803,18 +850,42 @@ function ConfirmationStep({ org, user, plan }) {
       </div>
 
       <h2 className="text-2xl font-bold text-slate-900 mb-2">Account Under Review</h2>
-      <p className="text-slate-500 text-sm mb-2 max-w-md mx-auto">
-        Thank you for choosing CRE Suite, <strong>{user?.full_name}</strong>! Your payment was successful. Our team is currently reviewing your organization <strong>{org?.name}</strong>.
+      <p className="text-slate-500 text-sm mb-1 max-w-md mx-auto">
+        Thank you for choosing CRE Suite, <strong>{user?.full_name}</strong>! Your payment was received successfully.
       </p>
-      <p className="text-slate-400 text-xs mb-8 max-w-sm mx-auto">
-        You will be notified once approved, or you can check your status below.
+      <p className="text-slate-400 text-xs mb-6 max-w-sm mx-auto">
+        Our team is reviewing <strong>{org?.name}</strong>. You will receive a welcome email once your account is activated.
       </p>
 
+      {/* Payment Summary */}
+      {paymentInfo && (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 max-w-sm mx-auto text-left">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Payment Summary</p>
+          <div className="space-y-1.5 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Plan</span>
+              <span className="font-semibold text-slate-900">{paymentInfo.plan}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Billing</span>
+              <span className="font-semibold text-slate-900 capitalize">{paymentInfo.billingCycle}</span>
+            </div>
+            <div className="flex justify-between border-t border-slate-200 pt-2 mt-2">
+              <span className="font-semibold text-slate-700">Amount</span>
+              <span className="font-black text-[#1a2744]">${paymentInfo.displayPrice}/mo</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Action Buttons */}
-      <div className="flex gap-3 max-w-md mx-auto">
-        <Button onClick={handleCheckStatus} disabled={checking} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-11 rounded-xl font-semibold gap-2">
+      <div className="flex flex-col gap-3 max-w-sm mx-auto">
+        <Button onClick={handleDownloadInvoice} variant="outline" className="h-11 rounded-xl font-semibold gap-2 border-slate-300">
+          <FileText className="w-4 h-4" /> Download Invoice
+        </Button>
+        <Button onClick={handleCheckStatus} disabled={checking} className="h-11 bg-[#1a2744] hover:bg-[#243b67] rounded-xl font-semibold gap-2">
           {checking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-          Check Status
+          {checking ? "Checking..." : "Check Approval Status"}
         </Button>
       </div>
     </div>

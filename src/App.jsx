@@ -55,7 +55,7 @@ const AppRoutes = () => (
       </LayoutWrapper>
     } />
     {Object.entries(Pages).map(([path, Page]) => {
-      const isMandatorySetup = ["Onboarding", "Welcome"].includes(path);
+      const isMandatorySetup = ["Onboarding", "Welcome", "WelcomeAboard"].includes(path);
       return (
         <Route
           key={path}
@@ -240,16 +240,19 @@ const AuthenticatedApp = () => {
       
       // 2. ONBOARDING: Case 1 - Profile approved but Org not created yet -> Redirect to Onboarding
       // Case 2 - status is 'onboarding' (Step 1-3)
-      // Case 3 - status is 'under_review' (Step 4)
+      // Case 3 - status is 'under_review' (Step 4) - show Onboarding confirmation page
       if (p.status === 'under_review' || org?.status === 'under_review') return 'Onboarding';
       if (p.status === 'approved' || p.status === 'onboarding') return 'Onboarding';
 
-      // 3. WELCOME PAGE: Show after onboarding completion but before Dashboard
-      if (p.first_login || p.onboarding_complete === true && org?.status === 'active' && !p.dashboard_viewed) {
-         return 'Welcome';
+      // 3. FIRST LOGIN / PASSWORD RESET: only for invited users who need to set password
+      if (p.first_login && p.onboarding_type === 'invited') return 'Welcome';
+
+      // 4. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
+      if (org?.status === 'active' && p.status === 'active' && p.onboarding_complete && !p.dashboard_viewed) {
+        return 'WelcomeAboard';
       }
 
-      // 4. DASHBOARD: Only when everything is active
+      // 5. DASHBOARD: Only when everything is active and WelcomeAboard has been seen
       if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
 
       return 'Login'; // Fallback

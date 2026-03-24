@@ -543,7 +543,7 @@ export default function SuperAdmin() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
-                          {org.status === 'pending_approval' && (
+                          {(org.status === 'pending_approval' || org.status === 'under_review' || org.status === 'onboarding') && (
                             <Button 
                               variant="outline" 
                               size="sm" 
@@ -552,6 +552,7 @@ export default function SuperAdmin() {
                               onClick={async () => {
                                 setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
                                 try {
+                                  // Call edge function to activate org and send Welcome email
                                   const { data: result, error: fnError } = await supabase.functions.invoke('approve-organization', {
                                     body: { orgId: org.id }
                                   });
@@ -559,7 +560,7 @@ export default function SuperAdmin() {
 
                                   queryClient.invalidateQueries({ queryKey: ['organizations'] });
                                   const { toast } = await import("sonner");
-                                  toast.success("Organization approved successfully!");
+                                  toast.success("Organization approved successfully! Welcome email sent.");
                                 } catch (e) {
                                   console.error(e);
                                   const { toast } = await import("sonner");

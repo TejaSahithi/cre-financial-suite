@@ -97,6 +97,7 @@ import PortfolioInsights from './pages/PortfolioInsights';
 import RequestAccess from './pages/RequestAccess';
 import Login from './pages/Login';
 import Welcome from './pages/Welcome';
+import WelcomeAboard from './pages/WelcomeAboard';
 import UserManagement from './pages/UserManagement';
 import DemoExperience from './pages/DemoExperience';
 import SecurityQuestionsSetup from './pages/SecurityQuestionsSetup';
@@ -155,6 +156,7 @@ export const PAGES = {
     "RequestAccess": RequestAccess,
     "Login": Login,
     "Welcome": Welcome,
+    "WelcomeAboard": WelcomeAboard,
     "UserManagement": UserManagement,
     "DemoExperience": DemoExperience,
     "SecurityQuestionsSetup": SecurityQuestionsSetup,
