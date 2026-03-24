@@ -128,7 +128,13 @@ export default function SuperAdmin() {
         return next;
       });
       if (error) {
-        import('sonner').then(({ toast }) => toast.error(error.message || 'Action failed'));
+        console.error('Mutation error:', error);
+        import('sonner').then(({ toast }) => {
+          const msg = error.message || 'Action failed';
+          toast.error(msg, {
+            description: "Check console for more details if this persists."
+          });
+        });
       }
       queryClient.invalidateQueries({ queryKey: ['access-requests'] });
     },

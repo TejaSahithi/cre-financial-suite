@@ -19,33 +19,55 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    const supabaseClient = createClient(
+      supabaseUrl,
+      supabaseAnonKey,
+      { global: { headers: { Authorization: authorization } } }
+    );
+
     const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      supabaseUrl,
+      supabaseServiceKey,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Verify caller JWT
-    const token = authorization.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    // Verify caller JWT and get user
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    
     if (authError || !user) {
-      console.error('[approve-request] Auth error:', authError?.message);
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      console.error('[approve-request] Auth verification failed:', authError?.message);
+      return new Response(JSON.stringify({ 
+        error: 'Unauthorized', 
+        details: authError?.message || 'Invalid or expired token' 
+      }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    // Verify caller is super_admin
-    const { data: membership } = await supabaseAdmin
+    console.log('[approve-request] Authenticated user:', user.email, 'Role:', user.role);
+
+    // Verify caller is super_admin (admin in profiles/memberships)
+    const { data: membership, error: memberError } = await supabaseAdmin
       .from('memberships')
       .select('role')
       .eq('user_id', user.id)
       .eq('role', 'super_admin')
       .maybeSingle();
 
+    if (memberError) {
+      console.error('[approve-request] Membership check error:', memberError.message);
+    }
+
     if (!membership) {
-      console.error('[approve-request] Forbidden: not super_admin', user.id);
-      return new Response(JSON.stringify({ error: 'Forbidden: requires super_admin' }), {
+      console.error('[approve-request] Forbidden: not super_admin. Found memberships for user:', user.id);
+      return new Response(JSON.stringify({ 
+        error: 'Forbidden: requires super_admin role',
+        userId: user.id
+      }), {
         status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
