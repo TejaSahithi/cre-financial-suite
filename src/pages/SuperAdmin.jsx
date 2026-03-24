@@ -112,7 +112,7 @@ export default function SuperAdmin() {
 
   const updateRequest = useMutation({
     mutationFn: async ({ id, approved }) => {
-      const { data: result, error: fnError } = await supabase.functions.invoke('approve-request', {
+      const { data: result, error: fnError } = await supabase.functions.invoke('approve-request-v2', {
         body: { id, approved }
       });
       if (fnError) throw new Error(fnError.message || 'Action failed');

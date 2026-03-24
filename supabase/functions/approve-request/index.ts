@@ -34,16 +34,17 @@ Deno.serve(async (req: Request) => {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Verify caller JWT and get user using the admin client for reliability
+    // Verify caller JWT manually to bypass gated 401s
     const token = authorization.replace(/^[Bb]earer\s+/, "");
+    console.log('[approve-request] Token received, verifying user');
+    
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
     
     if (authError || !user) {
       console.error('[approve-request] Auth verification failed:', authError?.message);
       return new Response(JSON.stringify({ 
         error: 'Unauthorized', 
-        details: authError?.message || 'Invalid or expired token',
-        received_header: authorization.substring(0, 15) + '...'
+        details: authError?.message || 'Invalid or expired token'
       }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
