@@ -883,10 +883,6 @@ CRE Financial Suite Â· support@cresuite.org
         <Button onClick={handleDownloadInvoice} variant="outline" className="h-11 rounded-xl font-semibold gap-2 border-slate-300">
           <FileText className="w-4 h-4" /> Download Invoice
         </Button>
-        <Button onClick={handleCheckStatus} disabled={checking} className="h-11 bg-[#1a2744] hover:bg-[#243b67] rounded-xl font-semibold gap-2">
-          {checking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-          {checking ? "Checking..." : "Check Approval Status"}
-        </Button>
       </div>
     </div>
   );
