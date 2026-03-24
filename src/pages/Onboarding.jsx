@@ -766,77 +766,139 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
   );
 }
 
-// â”€â”€â”€ Confirmation Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Confirmation Step ──────────────────────────────────────────
 function ConfirmationStep({ org, user, plan, paymentInfo }) {
-  const [checking, setChecking] = useState(false);
+  const [dbInvoice, setDbInvoice] = useState(null);
 
-  const handleCheckStatus = async () => {
-    setChecking(true);
-    try {
-      const orgData = await OrganizationService.get(org?.id);
-      if (orgData?.status === 'active') {
+  useEffect(() => {
+    async function fetchInvoice() {
+      if (!paymentInfo) {
         try {
-          const { updateProfile } = await import('@/services/auth');
-          await updateProfile({ onboarding_complete: true });
+          const { supabase } = await import('@/services/supabaseClient');
+          const { data } = await supabase.from('invoices').select('*').eq('org_id', org?.id).order('created_at', { ascending: false }).limit(1).single();
+          if (data) {
+            setDbInvoice({ 
+              displayPrice: data.amount, 
+              plan: org?.plan || plan || "Professional", 
+              billingCycle: org?.billing_cycle || "monthly",
+              billingAddress: "—" // Fetched from db invoice implies address wasn't saved to profile, but payment was successful
+            });
+          }
         } catch(e) { console.error(e); }
-        window.location.href = createPageUrl("WelcomeAboard");
-      } else {
-        const { toast } = await import("sonner");
-        toast.info("Your account is still under review. We'll notify you by email once approved.");
       }
-    } catch(e) {
-      console.error(e);
     }
-    setChecking(false);
-  };
+    fetchInvoice();
+  }, [org?.id, paymentInfo, org?.plan, org?.billing_cycle, plan]);
 
-  const handleDownloadInvoice = () => {
-    const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const planName = paymentInfo?.plan || plan || "Professional";
-    const price = paymentInfo?.displayPrice || "â€”";
-    const cycle = paymentInfo?.billingCycle || "monthly";
-    const content = `
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-                CRE PLATFORM INVOICE
-                  ${invoiceId}
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+  const info = paymentInfo || dbInvoice;
 
-Date:            ${today}
-Status:          PENDING ACTIVATION
+  const handleDownloadInvoice = async () => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF();
+      
+      const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
+      const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      const planName = info?.plan || plan || "Professional";
+      const price = info?.displayPrice || "0";
+      const cycle = info?.billingCycle || "monthly";
+      const totalDue = cycle === "yearly" ? price * 12 : price;
 
-BILLED TO:
-  ${user?.full_name || "â€”"}
-  ${user?.email || "â€”"}
-  ${org?.name || "â€”"}
-  ${paymentInfo?.billingAddress || "â€”"}
+      // Colors
+      const primaryColor = '#1a2744';
+      const secondaryColor = '#64748b';
 
-SUBSCRIPTION:
-  Plan:          ${planName}
-  Billing:       ${cycle === "yearly" ? "Annual" : "Monthly"}
-  Amount:        $${price}${cycle === "yearly" ? "/mo (billed annually)" : "/mo"}
+      // Header
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(24);
+      doc.setTextColor(primaryColor);
+      doc.text("CRE PLATFORM", 20, 30);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(secondaryColor);
+      doc.text("support@cresuite.org", 20, 38);
+      
+      // INVOICE Title
+      doc.setFontSize(20);
+      doc.setTextColor(primaryColor);
+      doc.text("INVOICE", 150, 30, { align: "center" });
+      
+      // Invoice Details
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Invoice Number: ${invoiceId}`, 150, 45, { align: "center" });
+      doc.text(`Date: ${today}`, 150, 52, { align: "center" });
+      doc.text(`Status: PENDING ACTIVATION`, 150, 59, { align: "center" });
+      
+      // Line
+      doc.setDrawColor(200, 200, 200);
+      doc.line(20, 65, 190, 65);
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-SUBTOTAL:                             $${price}
-DISCOUNT:                             ${cycle === "yearly" ? "25% Annual Discount Applied" : "None"}
-TOTAL DUE:                            $${cycle === "yearly" ? price * 12 : price}
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+      // Billed To
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(primaryColor);
+      doc.text("Billed To:", 20, 80);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(secondaryColor);
+      doc.text(user?.full_name || "—", 20, 88);
+      doc.text(user?.email || "—", 20, 95);
+      doc.text(org?.name || "—", 20, 102);
+      if (info?.billingAddress) {
+        doc.text(info.billingAddress, 20, 109);
+      }
 
-Payment processed securely.
-Account is pending SuperAdmin activation.
+      // Subscription Details Table Header
+      doc.setFillColor(248, 250, 252);
+      doc.rect(20, 125, 170, 10, 'F');
+      
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(primaryColor);
+      doc.text("Description", 25, 132);
+      doc.text("Billing Cycle", 100, 132);
+      doc.text("Amount", 170, 132, { align: "right" });
 
-CRE Financial Suite Â· support@cresuite.org
-Â© ${new Date().getFullYear()} All rights reserved
-`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${invoiceId}_CRE_Suite.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      // Subscription Details Table Row
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(secondaryColor);
+      doc.text(`CRE Suite ${planName.charAt(0).toUpperCase() + planName.slice(1)} Plan`, 25, 145);
+      doc.text(cycle === "yearly" ? "Annual" : "Monthly", 100, 145);
+      doc.text(`$${price}${cycle === "yearly" ? "/mo" : ""}`, 170, 145, { align: "right" });
+
+      // Line
+      doc.line(20, 152, 190, 152);
+
+      // Totals
+      doc.text("Subtotal:", 130, 165);
+      doc.text(`$${price}`, 170, 165, { align: "right" });
+      
+      doc.text("Discount:", 130, 175);
+      doc.text(cycle === "yearly" ? "25% Annual" : "None", 170, 175, { align: "right" });
+
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(primaryColor);
+      doc.text("Total Due:", 130, 185);
+      doc.text(`$${totalDue}`, 170, 185, { align: "right" });
+
+      // Footer
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(secondaryColor);
+      doc.text("Payment processed securely. Account is pending SuperAdmin activation.", 105, 270, { align: "center" });
+      doc.text(`© ${new Date().getFullYear()} CRE Financial Suite. All rights reserved.`, 105, 275, { align: "center" });
+
+      const pdfBlob = doc.output('blob');
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${invoiceId}_CRE_Suite.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to generate PDF", err);
+    }
   };
 
   return (
@@ -858,7 +920,7 @@ CRE Financial Suite Â· support@cresuite.org
       </p>
 
       {/* Payment Summary */}
-      {paymentInfo && (
+      {info && (
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 max-w-sm mx-auto text-left">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Payment Summary</p>
           <div className="space-y-1.5 text-sm">
