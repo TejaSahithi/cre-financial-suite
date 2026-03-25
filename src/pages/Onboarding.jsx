@@ -5,7 +5,7 @@ import { updateProfile, redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
 import { logAudit } from "@/services/audit";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Clock, Shield, AlertCircle } from "lucide-react";
+import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Clock, Shield, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -87,15 +87,29 @@ export default function Onboarding() {
   useEffect(() => {
     if (step !== 4) return;
     console.log('[Onboarding] Status polling active (10s interval)');
-    const interval = setInterval(() => {
-      refreshProfile().then(p => {
-        if (p?.profile?.status === 'active') {
-          console.log('[Onboarding] Approval detected! Redirecting...');
+    const checkApproval = async () => {
+      try {
+        if (org?.id) {
+          const latestOrg = await OrganizationService.get(org.id);
+          if (latestOrg?.status === 'active') {
+            console.log('[Onboarding] Approval detected via org! Redirecting to Welcome...');
+            window.location.href = createPageUrl("Welcome");
+            return;
+          }
         }
-      });
-    }, 10000);
+        const p = await refreshProfile();
+        if (p?.profile?.status === 'active' || p?.status === 'active') {
+          console.log('[Onboarding] Approval detected via profile! Redirecting to Welcome...');
+          window.location.href = createPageUrl("Welcome");
+        }
+      } catch (e) {
+        console.error('[Onboarding] Poll error:', e);
+      }
+    };
+    checkApproval();
+    const interval = setInterval(checkApproval, 10000);
     return () => clearInterval(interval);
-  }, [step, refreshProfile]);
+  }, [step, refreshProfile, org?.id]);
 
   const saveCompanyInfo = async () => {
     console.log('[Onboarding] saveCompanyInfo started', { name: !!form.name, email: !!form.primary_contact_email });
@@ -402,11 +416,7 @@ export default function Onboarding() {
                 } catch (e) {
                   console.error('[Onboarding] Profile update failed (non-blocking):', e);
                 }
-                try {
-                  await completeOnboarding();
-                } catch (e) {
-                  console.error('[Onboarding] completeOnboarding failed (non-blocking):', e);
-                }
+                // completeOnboarding removed — profile & org status already updated above
                 // ALWAYS advance
                 setStep(4);
               }} onBack={() => setStep(2)} />
