@@ -167,9 +167,9 @@ export default function Login() {
           <p className="text-slate-500 text-sm mb-6 leading-relaxed">
             We've sent a confirmation link to <strong>{email}</strong>. Once you click it, you'll be redirected back here to set up your security MFA.
           </p>
-          <Button onClick={() => window.location.reload()} className="h-11 bg-[#1a2744] hover:bg-[#243b67] text-white">
-            Return to Sign In <ArrowRight className="ml-2 w-4 h-4" />
-          </Button>
+          <p className="text-slate-400 text-xs italic">
+            Please keep this window open while you verify your email.
+          </p>
         </div>
       </div>
     );

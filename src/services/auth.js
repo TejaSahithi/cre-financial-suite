@@ -116,7 +116,7 @@ async function buildUserObject(authUser) {
     onboarding_type: profile?.onboarding_type || 'owner',
     first_login: profile?.first_login ?? true,
     memberships,
-    profile,
+    profile: profile || { status: 'onboarding' },
     activeOrg,
   };
 }

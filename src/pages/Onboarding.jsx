@@ -391,42 +391,46 @@ export default function Onboarding() {
                 setForm(prev => ({ ...prev, billing_cycle: billingCycle, paymentInfo }));
                 
                 // All DB calls are non-blocking — navigation must always succeed
-                try {
-                  const { supabase } = await import('@/services/supabaseClient');
-                  // Strip non-numeric characters (like $) before inserting into numeric column
-                  const numericAmount = typeof paymentInfo.displayPrice === 'string' 
-                    ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
-                    : paymentInfo.displayPrice;
+                const proceedToStep4 = () => {
+                  console.log('[Onboarding] Advancing to step 4 UI');
+                  setStep(4);
+                };
 
-                  await supabase.from('invoices').insert({
-                    org_id: org.id,
-                    amount: numericAmount,
-                    status: 'paid',
-                    issued_date: new Date().toISOString().split('T')[0]
-                  });
-                  console.log('[Onboarding] Invoice saved to database');
+                // Trigger DB updates and profile refresh in background
+                (async () => {
+                  try {
+                    const { supabase } = await import('@/services/supabaseClient');
+                    const numericAmount = typeof paymentInfo.displayPrice === 'string' 
+                      ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
+                      : paymentInfo.displayPrice;
 
-                } catch (e) {
-                  console.error('[Onboarding] Invoice save failed (non-blocking):', e);
-                }
-                try {
-                  await OrganizationService.update(org.id, {
-                    status: "under_review",
-                    onboarding_step: 4,
-                    plan: form.plan,
-                    billing_cycle: billingCycle,
-                  });
-                } catch (e) {
-                  console.error('[Onboarding] Org update failed (non-blocking):', e);
-                }
-                try {
-                  await updateProfile({ status: "under_review" });
-                } catch (e) {
-                  console.error('[Onboarding] Profile update failed (non-blocking):', e);
-                }
-                // completeOnboarding removed — profile & org status already updated above
-                // ALWAYS advance
-                setStep(4);
+                    await supabase.from('invoices').insert({
+                      org_id: org.id,
+                      amount: numericAmount,
+                      status: 'paid',
+                      issued_date: new Date().toISOString().split('T')[0]
+                    });
+                    console.log('[Onboarding] Invoice saved to database');
+                  } catch (e) {
+                    console.error('[Onboarding] Invoice save failed:', e);
+                  }
+
+                  try {
+                    await OrganizationService.update(org.id, {
+                      status: "under_review",
+                      onboarding_step: 4,
+                      plan: form.plan,
+                      billing_cycle: billingCycle,
+                    });
+                    await updateProfile({ status: "under_review" });
+                    console.log('[Onboarding] Status updated to under_review');
+                  } catch (e) {
+                    console.error('[Onboarding] Status update failed:', e);
+                  }
+                })();
+
+                // Immediate transition
+                proceedToStep4();
               }} onBack={() => setStep(2)} />
             </div>
           )}
@@ -960,12 +964,12 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
         </div>
       </div>
 
-      <h2 className="text-2xl font-bold text-slate-900 mb-2">Account Under Review</h2>
-      <p className="text-slate-500 text-sm mb-1 max-w-md mx-auto">
-        Thank you for choosing CRE Suite, <strong>{user?.full_name}</strong>! Your payment was received successfully.
+      <h2 className="text-2xl font-bold text-emerald-600 mb-2">Payment Successful</h2>
+      <p className="text-slate-600 font-semibold mb-1 max-w-md mx-auto">
+        Your payment was received successfully! Our team is now reviewing your organization.
       </p>
       <p className="text-slate-400 text-xs mb-6 max-w-sm mx-auto">
-        Our team is reviewing <strong>{org?.name}</strong>. You will receive a welcome email once your account is activated.
+        Thank you for choosing CRE Suite, <strong>{user?.full_name}</strong>. We are processing <strong>{org?.name}</strong> and you will receive a welcome email once your account is activated.
       </p>
 
       {/* Payment Summary */}

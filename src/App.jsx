@@ -246,14 +246,14 @@ const AuthenticatedApp = () => {
         }
       }
 
-      // 3. FIRST LOGIN / PASSWORD RESET: only for users who need to set password
-      // Important: Allow /Welcome if they have first_login true
-      if (p.first_login) return 'Welcome';
-
-      // 4. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
+      // 3. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
+      // We prioritize this over the password reset (Welcome) so users see the module overview first.
       if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {
         return 'WelcomeAboard';
       }
+
+      // 4. FIRST LOGIN / PASSWORD RESET: only for users who need to set password
+      if (p.first_login) return 'Welcome';
 
       // 5. DASHBOARD: Only when everything is active and WelcomeAboard has been seen
       if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
