@@ -273,9 +273,9 @@ const AuthenticatedApp = () => {
 
     // 2. Strict Enforcement Rules
     
-    // Allow SuperAdmin to go anywhere. 
-    // The targetRoute 'SuperAdmin' is just their landing page.
-    if (isSuperAdmin && !isEntryPage) {
+    // Allow active users (or SuperAdmins) to access all permitted platform pages.
+    // The targetRoute 'Dashboard' (or 'SuperAdmin') represents they belong in the suite.
+    if ((isSuperAdmin || targetRoute === 'Dashboard') && !isEntryPage) {
       return <AppRoutes />;
     }
 
