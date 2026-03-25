@@ -79,6 +79,23 @@ export default function ContactSection() {
     setSending(true);
     try {
       const { sendEmail } = await import("@/services/integrations");
+      const { supabase } = await import("@/services/supabaseClient");
+      
+      // Save to Database
+      try {
+        await supabase.from("access_requests").insert({
+          full_name: form.name,
+          email: form.email,
+          phone: form.phone,
+          department: form.department,
+          message: form.message,
+          request_type: "contact",
+          status: "pending_approval"
+        });
+      } catch (e) {
+        console.error("Database save error:", e);
+      }
+
       // Notify internal team
       await sendEmail({
         to: form.department === "sales" ? "sales@cresuite.com" : "support@cresuite.com",

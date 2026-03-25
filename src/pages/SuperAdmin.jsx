@@ -11,8 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package, Trash2 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package, Trash2, Mail } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ALL_MODULE_KEYS, MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
@@ -389,7 +389,9 @@ export default function SuperAdmin() {
                         <TableCell>
                           {r.request_type === 'demo'
                             ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none">🎥 DEMO</Badge>
-                            : <Badge variant="outline" className="text-[10px] capitalize">ACCESS</Badge>
+                            : r.request_type === 'contact' 
+                              ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none">✉️ CONTACT</Badge>
+                              : <Badge variant="outline" className="text-[10px] capitalize">ACCESS</Badge>
                           }
                         </TableCell>
                         <TableCell className="text-sm">
@@ -407,47 +409,75 @@ export default function SuperAdmin() {
                         <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            {r.status !== 'approved' && (
-                              <Button 
-                                size="sm" 
-                                className="text-xs h-7 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
-                                disabled={processingRequests.has(r.id)}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  console.log('Approve clicked for:', r.id);
-                                  updateRequest.mutate({ id: r.id, approved: true });
-                                }}>
-                                {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-                                Approve
-                              </Button>
-                            )}
-                            {r.status !== 'rejected' && r.status !== 'approved' && (
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
-                                disabled={processingRequests.has(r.id)}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  updateRequest.mutate({ id: r.id, approved: false });
-                                }}>
-                                {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
-                                Reject
-                              </Button>
-                            )}
-                            {r.status === 'approved' && (
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                className="text-xs h-7 text-amber-600 border-amber-200 hover:bg-amber-50"
-                                disabled={processingRequests.has(r.id)}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  revokeRequest.mutate({ id: r.id, email: r.email });
-                                }}>
-                                {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Shield className="w-3 h-3 mr-1" />}
-                                Revoke
-                              </Button>
+                            {r.request_type === 'contact' ? (
+                              <Dialog>
+                                <DialogTrigger asChild>
+                                  <Button size="sm" variant="outline" className="text-xs h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
+                                    <Mail className="w-3 h-3 mr-1" />
+                                    Read
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Message from {r.full_name}</DialogTitle>
+                                  </DialogHeader>
+                                  <div className="space-y-4 py-4">
+                                    <div>
+                                      <Label className="text-xs text-slate-500">Department</Label>
+                                      <p className="font-medium capitalize">{r.department || '—'}</p>
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs text-slate-500">Message</Label>
+                                      <p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 mt-1 whitespace-pre-wrap">{r.message || 'No message provided.'}</p>
+                                    </div>
+                                  </div>
+                                </DialogContent>
+                              </Dialog>
+                            ) : (
+                              <>
+                                {r.status !== 'approved' && (
+                                  <Button 
+                                    size="sm" 
+                                    className="text-xs h-7 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
+                                    disabled={processingRequests.has(r.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      console.log('Approve clicked for:', r.id);
+                                      updateRequest.mutate({ id: r.id, approved: true });
+                                    }}>
+                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
+                                    Approve
+                                  </Button>
+                                )}
+                                {r.status !== 'rejected' && r.status !== 'approved' && (
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline"
+                                    className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
+                                    disabled={processingRequests.has(r.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateRequest.mutate({ id: r.id, approved: false });
+                                    }}>
+                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
+                                    Reject
+                                  </Button>
+                                )}
+                                {r.status === 'approved' && (
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline"
+                                    className="text-xs h-7 text-amber-600 border-amber-200 hover:bg-amber-50"
+                                    disabled={processingRequests.has(r.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      revokeRequest.mutate({ id: r.id, email: r.email });
+                                    }}>
+                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Shield className="w-3 h-3 mr-1" />}
+                                    Revoke
+                                  </Button>
+                                )}
+                              </>
                             )}
                             <Button 
                               size="sm" 

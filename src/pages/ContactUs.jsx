@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
+import { supabase } from "@/services/supabaseClient";
 
 export default function ContactUs() {
   const [form, setForm] = useState({ name: "", email: "", phone: "", company: "", message: "", department: "" });
@@ -40,6 +41,22 @@ export default function ContactUs() {
     if (!validate()) return;
     setSending(true);
     
+    // Save to database
+    try {
+      await supabase.from("access_requests").insert({
+        full_name: form.name,
+        email: form.email,
+        phone: form.phone,
+        company_name: form.company,
+        department: form.department,
+        message: form.message,
+        request_type: "contact",
+        status: "pending_approval"
+      });
+    } catch (e) {
+      console.error("Failed to log contact request in DB:", e);
+    }
+
     // Internal Notification
     await sendEmail({
       to: "support@cresuite.org",
