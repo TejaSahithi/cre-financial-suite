@@ -54,6 +54,7 @@ const AppRoutes = () => (
         <MainPage />
       </LayoutWrapper>
     } />
+    <Route path="/signin" element={<Navigate to="/Login" replace />} />
     {Object.entries(Pages).map(([path, Page]) => {
       const isMandatorySetup = ["Onboarding", "Welcome", "WelcomeAboard"].includes(path);
       return (

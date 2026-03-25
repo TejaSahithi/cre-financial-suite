@@ -3,10 +3,13 @@ import { CheckCircle2, Sparkles, ArrowRight, BarChart2, Building2, Users, FileTe
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { useAuth } from "@/lib/AuthContext";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { updateProfile } from "@/services/auth";
+import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
 export default function WelcomeAboard() {
   const { user, refreshProfile } = useAuth();
+  const { enabledModules, isModuleEnabled } = useModuleAccess();
   const firstName = user?.full_name?.split(" ")[0] || "there";
   const [loading, setLoading] = useState(false);
   const [dots, setDots] = useState([]);
@@ -37,12 +40,66 @@ export default function WelcomeAboard() {
     window.location.href = createPageUrl("Dashboard");
   };
 
-  const features = [
-    { icon: BarChart2, label: "Analytics & Reports", desc: "Real-time portfolio insights" },
-    { icon: Building2, label: "Portfolio Management", desc: "Track all properties & assets" },
-    { icon: Users, label: "Team Collaboration", desc: "Invite your team, assign roles" },
-    { icon: FileText, label: "Documents & Contracts", desc: "Centralized document hub" },
-  ];
+  // Map module keys to rich display info
+  const featureDisplayMap = {
+    dashboard:      { icon: BarChart2, desc: "High-level performance metrics" },
+    portfolio:      { icon: Building2, desc: "Track all properties & holdings" },
+    properties:     { icon: Building2, desc: "Detailed building/unit management" },
+    tenants:        { icon: Users,     desc: "Tenant leases & communications" },
+    leases:         { icon: FileText,  desc: "Digital lease tracking & review" },
+    cam:            { icon: Sparkles,  desc: "Automated expense reconciliation" },
+    budgets:        { icon: FileText,  desc: "Operational budgeting & control" },
+    analytics_reports: { icon: BarChart2, desc: "Real-time insights & reporting" },
+    expenses:       { icon: FileText,  desc: "Track and project expenditures" },
+    vendors:        { icon: Users,     desc: "Manage service providers" },
+    reconciliation: { icon: FileText,  desc: "Financial data reconciliation" },
+  };
+
+  const getDynamicFeatures = () => {
+    // If SuperAdmin, show a curated set of all major ones
+    if (user?._raw_role === 'super_admin') {
+      return [
+        { icon: BarChart2, label: "Analytics & Reports", desc: "Global platform insights" },
+        { icon: Sparkles,  label: "Budgeting & CAM",    desc: "Advanced financial control" },
+        { icon: Building2, label: "Organization Management", desc: "Configure all clients" },
+        { icon: Users,     label: "User Control",      desc: "Manage permissions centrally" },
+      ];
+    }
+
+    // Otherwise, filter by enabled modules
+    const modulesToShow = enabledModules?.length > 0 
+      ? enabledModules 
+      : ['dashboard', 'portfolio', 'analytics_reports', 'documents']; // fallback/default
+
+    let features = [];
+    const hasBudgets = modulesToShow.includes('budgets');
+    const hasCam = modulesToShow.includes('cam');
+
+    // Special case: Combine Budgets & CAM if both enabled for Org Admin
+    if (hasBudgets && hasCam) {
+      features.push({ icon: Sparkles, label: "Budgeting & CAM", desc: "Full financial engine access" });
+    }
+
+    modulesToShow.forEach(key => {
+      // Skip if already combined
+      if ((key === 'budgets' || key === 'cam') && hasBudgets && hasCam) return;
+      
+      const mod = MODULE_DEFINITIONS[key];
+      const display = featureDisplayMap[key];
+      if (!mod) return;
+      
+      features.push({
+        icon: display?.icon || Sparkles,
+        label: mod.label,
+        desc: display?.desc || "Full module access"
+      });
+    });
+
+    // Capping at 6 most relevant items
+    return features.slice(0, 6);
+  };
+
+  const features = getDynamicFeatures();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0f1c3a] via-[#1a2744] to-[#0f2553] flex items-center justify-center p-4 overflow-hidden relative">
