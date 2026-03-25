@@ -64,6 +64,19 @@ export default function WelcomeAboard() {
       ))}
 
       <div className="max-w-2xl w-full relative z-10">
+        {/* Logo */}
+        <div className="flex justify-center mb-12">
+          <div className="flex items-center gap-3">
+             <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-lg shadow-white/10">
+               <Building2 className="w-8 h-8 text-[#0f1c3a]" />
+             </div>
+             <div className="text-left">
+               <h2 className="text-white text-2xl font-black tracking-tighter leading-none whitespace-nowrap">CRE SUITE</h2>
+               <p className="text-blue-400 text-[10px] font-bold tracking-[0.2em] uppercase whitespace-nowrap">Budgeting & CAM</p>
+             </div>
+          </div>
+        </div>
+
         {/* Success Badge */}
         <div className="flex justify-center mb-8">
           <div className="relative">
