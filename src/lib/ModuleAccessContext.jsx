@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { OrganizationService } from "@/services/api";
 import { isPageInEnabledModules } from "./moduleConfig";
+import { MANDATORY_SETUP_PAGES } from "./rbac";
 
 const ModuleAccessContext = createContext({
   enabledModules: [],
@@ -54,6 +55,7 @@ export function ModuleAccessProvider({ children }) {
 
   const isPageEnabled = (pageName) => {
     if (isAdmin) return true;
+    if (MANDATORY_SETUP_PAGES.includes(pageName)) return true;
     if (!enabledModules || enabledModules.length === 0) return true; // no restrictions set
     return isPageInEnabledModules(pageName, enabledModules);
   };
