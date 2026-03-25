@@ -18,7 +18,7 @@ const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
 const MainPage = mainPageKey ? Pages[mainPageKey] : <></>;
 
-const publicPages = PUBLIC_PAGES;
+const publicPages = [...PUBLIC_PAGES, "AcceptInvite"];
 
 const LayoutWrapper = ({ children, currentPageName }) => Layout ?
   <Layout currentPageName={currentPageName}>{children}</Layout>
@@ -247,19 +247,23 @@ const AuthenticatedApp = () => {
         }
       }
 
-      // 3. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
-      // We prioritize this over the password reset (Welcome) so users see the module overview first.
+      // 3. INVITED / AWAITING ROLE: user is authenticated but has no role in any org
+      // This can happen if admin invited but hasn't assigned a role yet.
+      const hasOrgRole = members?.some((m) => m.role && m.role !== null && m.role !== "pending");
+      if (!hasOrgRole && !isSuperAdmin) return "AwaitingRole";
+
+      // 4. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
       if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {
         return 'WelcomeAboard';
       }
 
-      // 4. FIRST LOGIN / PASSWORD RESET: only for users who need to set password
+      // 5. FIRST LOGIN / PASSWORD RESET: only for users who need to set password
       if (p.first_login) return 'Welcome';
 
-      // 5. DASHBOARD: Only when everything is active and WelcomeAboard has been seen
+      // 6. DASHBOARD: Only when everything is active and WelcomeAboard has been seen
       if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
 
-      return 'Dashboard'; // Default to Dashboard if authenticated and active
+      return 'Dashboard';
 
     };
 
@@ -303,7 +307,7 @@ const AuthenticatedApp = () => {
       return <Navigate to={`/${targetRoute}`} replace />;
     }
     // The request said: "No page (Dashboard, Onboarding) is directly accessible. Routing must NEVER allow dashboard access before active."
-    const criticalLockStates = ['Onboarding', 'PendingApproval', 'Welcome'];
+    const criticalLockStates = ['Onboarding', 'PendingApproval', 'Welcome', 'AwaitingRole'];
     if (criticalLockStates.includes(targetRoute) && currentPath !== targetRoute) {
       console.log(`[App] Guard intercepted: Forcing target route /${targetRoute}`);
       return <Navigate to={`/${targetRoute}`} replace />;

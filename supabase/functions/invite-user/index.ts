@@ -6,10 +6,8 @@ const corsHeaders = {
 };
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const authorization = req.headers.get("Authorization");
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
 
   try {
     if (!authorization) {
@@ -24,156 +22,120 @@ Deno.serve(async (req: Request) => {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    const token = authorization.replace('Bearer ', '');
+    // Verify caller is org_admin or super_admin
+    const token = authorization.replace("Bearer ", "");
     const { data: { user: caller }, error: callerErr } = await adminClient.auth.getUser(token);
-    
     if (callerErr || !caller) {
       return new Response(JSON.stringify({ error: "Invalid token" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { data: callerMemberships } = await adminClient
-      .from("memberships")
-      .select("role, org_id")
-      .eq("user_id", caller.id);
-
-    const ALLOWED_ROLES = ["super_admin", "org_admin"];
-    const callerMembership = callerMemberships?.find((m: any) => ALLOWED_ROLES.includes(m.role));
-
+    const { data: callerMemberships } = await adminClient.from("memberships").select("role, org_id").eq("user_id", caller.id);
+    const callerMembership = callerMemberships?.find((m: any) => ["super_admin", "org_admin"].includes(m.role));
     if (!callerMembership) {
       return new Response(JSON.stringify({ error: "Forbidden: insufficient role" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Parse extended body including new fields
     const {
-      email, full_name, role, custom_role, org_id, onboarding_type,
-      phone, module_permissions, page_permissions
+      email, full_name, role, custom_role, org_id,
+      phone, module_permissions, page_permissions, capabilities
     } = await req.json();
 
-    if (!email || !role) {
-      return new Response(JSON.stringify({ error: "Missing required fields: email, role" }), {
+    if (!email || !role || !org_id) {
+      return new Response(JSON.stringify({ error: "Missing required fields: email, role, org_id" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const targetOnboardingType = onboarding_type || "invited";
-
-    if (role !== "super_admin" && targetOnboardingType === "invited" && !org_id) {
-      return new Response(JSON.stringify({ error: "org_id is required for invited staff" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (callerMembership.role === "org_admin" && org_id && callerMembership.org_id !== org_id) {
+    if (callerMembership.role === "org_admin" && callerMembership.org_id !== org_id) {
       return new Response(JSON.stringify({ error: "Forbidden: cannot invite to a different org" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // ── Check if user already exists ──────────────────────────────────────────
     const { data: existingUsers } = await adminClient.auth.admin.listUsers();
     const existingUser = existingUsers?.users?.find((u: any) => u.email === email);
 
-    let tempPassword = "";
+    const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
     let userId = existingUser?.id;
-    let isNewUser = false;
+    let isNewUser = !userId;
 
-    if (!userId) {
-      tempPassword = crypto.randomUUID().slice(0, 8) + 'X1!';
-      const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
-        email,
-        password: tempPassword,
-        email_confirm: true,
-        user_metadata: {
-          full_name: full_name || '',
+    if (isNewUser) {
+      // ── Use inviteUserByEmail for new users (magic link, time-limited, single-use) ──
+      const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(email, {
+        redirectTo: `${frontendUrl}/AcceptInvite`,
+        data: {
+          full_name: full_name || "",
           role,
-          onboarding_type: targetOnboardingType
-        }
+          org_id,
+          invited_by: caller.id,
+        },
       });
-      if (createError) throw createError;
-      userId = newUserData.user.id;
-      isNewUser = true;
+      if (inviteErr) throw inviteErr;
+      userId = inviteData.user.id;
     }
 
-    if (org_id && userId) {
-      // Build membership row with extended fields
+    // ── Upsert membership record (status: invited) ────────────────────────────
+    if (userId) {
       const membershipRow: any = {
         user_id: userId,
         org_id,
         role,
+        status: "invited",
       };
       if (custom_role) membershipRow.custom_role = custom_role;
       if (phone) membershipRow.phone = phone;
-      if (module_permissions && Object.keys(module_permissions).length > 0) {
-        membershipRow.module_permissions = module_permissions;
-      }
-      if (page_permissions && Object.keys(page_permissions).length > 0) {
-        membershipRow.page_permissions = page_permissions;
-      }
+      if (module_permissions && Object.keys(module_permissions).length > 0) membershipRow.module_permissions = module_permissions;
+      if (page_permissions && Object.keys(page_permissions).length > 0) membershipRow.page_permissions = page_permissions;
+      if (capabilities && Object.keys(capabilities).length > 0) membershipRow.capabilities = capabilities;
 
-      const { error: membershipErr } = await adminClient
-        .from('memberships')
-        .upsert(membershipRow, { onConflict: 'user_id,org_id' });
-      if (membershipErr) console.error('[invite-user] membership error:', membershipErr);
+      const { error: membershipErr } = await adminClient.from("memberships").upsert(membershipRow, { onConflict: "user_id,org_id" });
+      if (membershipErr) console.error("[invite-user] membership error:", membershipErr);
+
+      // ── Ensure profile row exists for invited user ────────────────────────
+      await adminClient.from("profiles").upsert({
+        id: userId,
+        email,
+        full_name: full_name || null,
+        status: "active",
+        onboarding_type: "invited",
+        first_login: true,
+      }, { onConflict: "id" }).catch((e: any) => console.error("[invite-user] profile upsert:", e));
     }
 
+    // ── Log invitation ────────────────────────────────────────────────────────
     await adminClient.from("invitations").insert({
-      email,
-      org_id: targetOnboardingType === 'invited' ? org_id : null,
-      role,
-      token: "direct-invite",
+      email, org_id, role,
+      token: "magic-link",
       status: "accepted",
-      expires_at: new Date(Date.now() + 86400000).toISOString()
-    }).catch((e: any) => console.error('[invite-user] invitation log err:', e));
+      expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
+    }).catch((e: any) => console.error("[invite-user] invitation log err:", e));
 
-    const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
-    const loginLink = `${frontendUrl}/Login`;
-    const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || Deno.env.get('VITE_RESEND_API_KEY');
-
-    if (RESEND_API_KEY) {
+    // ── If user already existed, send a notification email instead ────────────
+    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
+    if (!isNewUser && RESEND_API_KEY) {
       try {
-        const emailWrapper = (content: string) => `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CRE Suite</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;margin:0;padding:0;background:#f8fafc}.wrapper{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0}.header{background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);padding:32px 40px}.logo{display:flex;align-items:center;gap:10px}.logo-icon{width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center}.logo-text{color:#fff;font-size:18px;font-weight:700;letter-spacing:-0.3px}.body{padding:36px 40px}h1{font-size:24px;font-weight:700;color:#0f172a;margin:0 0 8px}p{color:#475569;font-size:15px;line-height:1.6;margin:0 0 16px}.cta{display:inline-block;background:#1a2744;color:#fff!important;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px;margin:8px 0 24px}.info-box{background:#f1f5f9;border-radius:10px;padding:16px 20px;margin:20px 0;border-left:4px solid #3b82f6}.code-block{background:#1e293b;color:#10b981;font-family:monospace;font-size:18px;padding:12px 16px;border-radius:8px;letter-spacing:1px;display:inline-block;margin-top:8px}.footer{background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0}.footer p{color:#94a3b8;font-size:12px;margin:0}</style></head><body><div class="wrapper"><div class="header"><div class="logo"><div class="logo-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></div><span class="logo-text">CRE Suite</span></div></div><div class="body">${content}</div><div class="footer"><p>CRE Suite &middot; onboarding@cresuite.com &middot; &copy; 2025 All rights reserved</p></div></div></body></html>`;
-
-        const htmlContent = isNewUser ? emailWrapper(`
-          <h1>You've Been Invited to CRE Suite 🎉</h1>
-          <p>Hi ${full_name || 'there'},</p>
-          <p>You have been invited to join your team on the <strong>CRE Suite</strong> platform as a <strong>${role.replace('_', ' ')}</strong>.</p>
-          <div class="info-box">
-            <p><strong>Your Temporary Credentials:</strong></p>
-            <p>Email: <strong>${email}</strong></p>
-            <p>Temporary Password:<br/><span class="code-block">${tempPassword}</span></p>
-          </div>
-          <a href="${loginLink}" class="cta">Sign In to Your Account</a>
-          <p>You will be required to change your password upon first login.</p>
-        `) : emailWrapper(`
-          <h1>You've Been Added to a Team 🎉</h1>
-          <p>Hi ${full_name || 'there'},</p>
-          <p>Your existing <strong>CRE Suite</strong> account has been added to a team as a <strong>${role.replace('_', ' ')}</strong>.</p>
-          <a href="${loginLink}" class="cta">Sign In to Your Account</a>
-          <p>Use your existing credentials to log in and access your new workspace.</p>
-        `);
-
-        const emailRes = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            from: 'CRE Suite <onboarding@cresuite.com>',
-            to: email,
-            subject: 'You have been invited to join your team on CRE Suite',
-            html: htmlContent
-          })
+        const loginLink = `${frontendUrl}/Login`;
+        const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f8fafc;padding:40px">
+          <div style="max-width:560px;margin:auto;background:#fff;border-radius:12px;padding:32px;border:1px solid #e2e8f0">
+            <h2 style="color:#0f172a">You've been added to a team</h2>
+            <p style="color:#475569">Hi ${full_name || "there"},<br/>Your existing CRE Suite account has been given access to a new organization as <strong>${role.replace("_"," ")}</strong>.</p>
+            <a href="${loginLink}" style="display:inline-block;background:#1a2744;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin-top:16px">Sign In</a>
+          </div></body></html>`;
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ from: "CRE Suite <onboarding@cresuite.com>", to: email, subject: "You've been added to a CRE Suite team", html }),
         });
-        if (!emailRes.ok) console.error('[invite-user] Resend send failed:', await emailRes.text());
-      } catch (emailErr: any) {
-        console.error('[invite-user] Email error:', emailErr.message);
-      }
+      } catch (e: any) { console.error("[invite-user] existing user email err:", e.message); }
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ success: true, isNewUser }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: any) {
     console.error("[invite-user] Error:", err.message);
