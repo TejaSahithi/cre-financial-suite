@@ -332,8 +332,8 @@ export default function SuperAdmin() {
               <TableHead className="text-[11px]">PHONE</TableHead>
               <TableHead className="text-[11px]">PORTFOLIOS</TableHead>
               <TableHead className="text-[11px]">PLAN</TableHead>
+              <TableHead className="text-[11px]">BILLING</TableHead>
               <TableHead className="text-[11px]">TYPE</TableHead>
-              <TableHead className="text-[11px]">DEMO VIEWED</TableHead>
               <TableHead className="text-[11px]">SUBMITTED</TableHead>
               <TableHead className="text-[11px]">STATUS</TableHead>
               <TableHead className="text-[11px]">ACTIONS</TableHead>
@@ -362,21 +362,19 @@ export default function SuperAdmin() {
                   <TableCell className="text-sm">{r.company_name}</TableCell>
                   <TableCell className="text-sm text-slate-500">{r.phone || '—'}</TableCell>
                   <TableCell className="text-sm">{r.portfolios || r.properties_count || '—'}</TableCell>
-                  <TableCell className="text-sm">{r.plan ? <Badge variant="outline" className="text-[10px] capitalize">{r.plan}</Badge> : '—'}</TableCell>
-                  <TableCell>
-                    {r.request_type === 'demo'
-                      ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none">🎥 DEMO</Badge>
-                      : r.request_type === 'contact' 
-                        ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none">✉️ CONTACT</Badge>
-                        : <Badge variant="outline" className="text-[10px] capitalize">ACCESS</Badge>
-                    }
+                  <TableCell className="text-sm">
+                    {r.plan ? <Badge variant="outline" className="text-[10px] capitalize bg-blue-50 text-blue-700 border-blue-100">{r.plan}</Badge> : '—'}
                   </TableCell>
                   <TableCell className="text-sm">
-                    {r.request_type === 'demo' ? (
-                      r.demo_viewed ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <span className="text-slate-300">—</span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
+                    {r.billing_cycle ? <Badge variant="outline" className="text-[10px] capitalize bg-slate-50 text-slate-700 border-slate-200">{r.billing_cycle}</Badge> : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {r.request_type === 'demo'
+                      ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none font-bold">🎥 DEMO</Badge>
+                      : r.request_type === 'contact' 
+                        ? <Badge className="bg-indigo-100 text-indigo-700 text-[10px] border-none font-bold">✉️ CONTACT</Badge>
+                        : <Badge className="bg-emerald-100 text-emerald-700 text-[10px] border-none font-bold italic">⚡ ACCESS</Badge>
+                    }
                   </TableCell>
                   <TableCell className="text-sm text-slate-500">
                     {r.created_at ? new Date(r.created_at).toLocaleString('en-US', {
