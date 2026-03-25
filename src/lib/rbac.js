@@ -190,4 +190,4 @@ export function filterNavForRole(navSections, role) {
     .filter(Boolean);
 }
 
-export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES };
+export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, MANDATORY_SETUP_PAGES };
