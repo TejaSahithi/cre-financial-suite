@@ -5,6 +5,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/services/supabaseClient";
+import { logAudit } from "@/services/audit";
+import { useAuth } from "@/lib/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +27,7 @@ const settingsTabs = [
 ];
 
 export default function OrgSettings() {
+  const { user } = useAuth();
   const { orgId } = useOrgId();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("org");
