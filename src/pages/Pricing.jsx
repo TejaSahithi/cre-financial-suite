@@ -21,9 +21,15 @@ export default function Pricing() {
     }).catch(() => {});
   }, []);
 
+  const handleSignIn = () => navigate(createPageUrl("Login"));
+
   return (
     <div className="min-h-screen bg-white">
-      <LandingNav onRequestAccess={() => setShowRequestAccess(true)} />
+      <LandingNav 
+        onSignIn={handleSignIn} 
+        onRequestAccess={() => navigate(createPageUrl("RequestAccess"))} 
+        onRequestDemo={() => navigate(createPageUrl("RequestDemo"))}
+      />
       <div className="pt-16">
         <PricingSection onRequestAccess={() => setShowRequestAccess(true)} onContactSales={handleContactSales} />
       </div>

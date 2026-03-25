@@ -15,16 +15,30 @@ import ContactSection from "@/components/landing/ContactSection";
 
 export default function Landing() {
   const navigate = useNavigate();
-  const handleRequestDemo = () => navigate(createPageUrl("RequestAccess") + "?tab=demo");
-  const handleRequestAccess = () => navigate(createPageUrl("RequestAccess") + "?tab=access");
+  const handleRequestAccess = () => {
+    navigate(createPageUrl("RequestAccess"));
+  };
+
+  const handleRequestDemo = () => {
+    navigate(createPageUrl("RequestDemo"));
+  };
+  const handleSignIn = () => navigate(createPageUrl("Login"));
 
   return (
     <div className="min-h-screen bg-white">
-      <LandingNav onRequestDemo={handleRequestDemo} />
+      <LandingNav 
+        onSignIn={handleSignIn} 
+        onRequestAccess={handleRequestAccess} 
+        onRequestDemo={handleRequestDemo} 
+      />
       <HeroSection onRequestAccess={handleRequestDemo} />
       <FeaturesSection />
       <DashboardPreview onRequestAccess={handleRequestAccess} />
-      <PricingSection onRequestAccess={handleRequestAccess} onContactSales={() => document.getElementById("contact-us")?.scrollIntoView({ behavior: "smooth" })} />
+      <PricingSection 
+        onRequestAccess={handleRequestAccess} 
+        onRequestDemo={handleRequestDemo}
+        onContactSales={() => document.getElementById("contact-us")?.scrollIntoView({ behavior: "smooth" })} 
+      />
       <FeatureComparisonTable />
       <FAQSection />
       <ContactSection />

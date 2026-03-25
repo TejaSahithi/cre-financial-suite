@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Building2, Menu, X } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
-export default function LandingNav({ onRequestDemo }) {
+export default function LandingNav({ onSignIn, onRequestAccess, onRequestDemo }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const navigate = useNavigate();
@@ -54,12 +54,18 @@ export default function LandingNav({ onRequestDemo }) {
           )}
         </div>
 
-        <div className="hidden lg:flex items-center gap-3">
-          <Button
-            onClick={onRequestDemo}
-            className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white text-sm font-semibold px-6 h-10 rounded-lg shadow-lg shadow-blue-500/25"
+        <div className="hidden lg:flex items-center gap-4">
+          <button
+            onClick={onSignIn}
+            className="text-white/80 hover:text-white text-[13px] font-medium transition-colors px-2"
           >
-            Request Demo
+            Sign in
+          </button>
+          <Button
+            onClick={onRequestAccess}
+            className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white text-[13px] font-semibold px-5 h-9 rounded-lg shadow-lg shadow-blue-500/25 transition-all hover:scale-[1.02]"
+          >
+            Request access
           </Button>
         </div>
 
@@ -81,9 +87,18 @@ export default function LandingNav({ onRequestDemo }) {
               </button>
             )
           )}
-          <div className="pt-4 border-t border-white/10 space-y-3">
-            <Button onClick={() => { onRequestDemo(); setMobileOpen(false); }} className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold h-10">
-              Request Demo
+          <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
+            <button
+              onClick={() => { onSignIn(); setMobileOpen(false); }}
+              className="w-full text-white/70 hover:text-white text-sm py-2.5 font-medium text-center border border-white/10 rounded-lg"
+            >
+              Sign in
+            </button>
+            <Button
+              onClick={() => { onRequestAccess(); setMobileOpen(false); }}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold h-10 rounded-lg"
+            >
+              Request access
             </Button>
           </div>
         </div>
