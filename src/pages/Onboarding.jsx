@@ -20,7 +20,7 @@ const steps = [
 ];
 
 export default function Onboarding() {
-  const { user: authUser, refreshProfile, logout } = useAuth();
+  const { user: authUser, refreshProfile, logout, isLoadingAuth } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const step = parseInt(searchParams.get('step') || '1', 10);
   const setStep = (newStep) => {
@@ -38,12 +38,21 @@ export default function Onboarding() {
   });
 
   useEffect(() => {
+    // Wait for auth context to finish loading before doing anything
+    if (isLoadingAuth) {
+      console.log('[Onboarding] Auth still loading, waiting...');
+      return;
+    }
+
     const init = async () => {
       try {
         if (!authUser) {
+          console.log('[Onboarding] No authenticated user, redirecting to login');
           redirectToLogin(createPageUrl("Onboarding"));
+          setLoading(false);
           return;
         }
+
         setUser(authUser);
         setForm(f => ({ ...f, primary_contact_email: authUser.email || "" }));
 
