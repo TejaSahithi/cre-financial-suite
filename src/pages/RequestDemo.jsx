@@ -288,8 +288,8 @@ export default function RequestDemo() {
                         <SelectValue placeholder="Select role..." />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl border-slate-100 shadow-2xl">
-                        {["Asset Manager", "Property Manager", "Portfolio Manager", "Finance Director", "CEO/Principal", "Analyst", "Other"].map(r => (
-                          <SelectItem key={r} value={r.toLowerCase()} className="py-2 rounded-lg text-[13px] text-slate-700 font-semibold">{r}</SelectItem>
+                        {["Owner", "Landlord", "Finance", "Asset Manager", "Property Manager", "Portfolio Manager", "Finance Director", "CEO/Principal", "Analyst", "Other"].map(r => (
+                          <SelectItem key={r} value={r} className="py-2 rounded-lg text-[13px] text-slate-700 font-semibold">{r}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

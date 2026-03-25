@@ -129,7 +129,7 @@ export default function Login() {
           emailRedirectTo: window.location.origin,
           data: {
             full_name: fullName,
-            onboarding_type: verifiedRole === "Admin (Owner)" ? 'owner' : 'member'
+            onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member'
           }
         }
       });
