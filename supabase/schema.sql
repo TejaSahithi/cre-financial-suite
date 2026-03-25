@@ -70,15 +70,17 @@ CREATE TABLE IF NOT EXISTS public.organizations (
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 
 -- Members of org can read their org
+DROP POLICY IF EXISTS "orgs_select_members" ON public.organizations;
 CREATE POLICY "orgs_select_members" ON public.organizations
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM public.memberships m
-      WHERE m.org_id = id AND m.user_id = auth.uid()
+      WHERE m.org_id = organizations.id AND m.user_id = auth.uid()
     )
   );
 
 -- Super admins can read all orgs
+DROP POLICY IF EXISTS "orgs_select_admin" ON public.organizations;
 CREATE POLICY "orgs_select_admin" ON public.organizations
   FOR SELECT USING (
     EXISTS (
@@ -88,11 +90,12 @@ CREATE POLICY "orgs_select_admin" ON public.organizations
   );
 
 -- Org admins can update their own org
+DROP POLICY IF EXISTS "orgs_update_admin" ON public.organizations;
 CREATE POLICY "orgs_update_admin" ON public.organizations
   FOR UPDATE USING (
     EXISTS (
       SELECT 1 FROM public.memberships m
-      WHERE m.org_id = id AND m.user_id = auth.uid()
+      WHERE m.org_id = organizations.id AND m.user_id = auth.uid()
         AND m.role IN ('org_admin', 'super_admin')
     )
   );

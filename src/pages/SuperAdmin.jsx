@@ -563,7 +563,12 @@ export default function SuperAdmin() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-0.5 items-start">
-                          <Badge variant="secondary" className="text-[10px] capitalize bg-blue-50 text-blue-700 hover:bg-blue-100">{org.plan || 'Standard'}</Badge>
+                          <Badge variant="secondary" className="text-[10px] uppercase bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold tracking-tight">
+                            {org.plan === 'starter' ? 'Starter' : 
+                             org.plan === 'professional' ? 'Professional' : 
+                             org.plan === 'enterprise' ? 'Enterprise' : 
+                             (org.plan || 'Standard')}
+                          </Badge>
                           <span className="text-[11px] font-semibold text-slate-700 mt-1">{amount} paid</span>
                         </div>
                       </TableCell>
@@ -581,7 +586,19 @@ export default function SuperAdmin() {
                             {org.enabled_modules.slice(0, 4).map(m => (
                               <Badge key={m} variant="outline" className="text-[9px]">{MODULE_DEFINITIONS[m]?.label || m}</Badge>
                             ))}
-                            {org.enabled_modules.length > 4 && <Badge variant="outline" className="text-[9px]">+{org.enabled_modules.length - 4}</Badge>}
+                            {org.enabled_modules.length > 4 && (
+                              <Badge 
+                                variant="outline" 
+                                className="text-[9px] cursor-pointer hover:bg-slate-100 active:scale-95 transition-all"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingOrgModules(org);
+                                  setSelectedModules(org.enabled_modules || []);
+                                }}
+                              >
+                                +{org.enabled_modules.length - 4}
+                              </Badge>
+                            )}
                           </div>
                         ) : (
                           <span className="text-[10px] text-slate-400 italic">None (Pending Config)</span>
