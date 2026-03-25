@@ -249,11 +249,15 @@ export default function SuperAdmin() {
     }
   };
 
-  const toggleSelectAll = (checked) => {
+  const toggleSelectAllList = (checked, list) => {
     if (checked) {
-      setSelectedRequests(new Set(requests.map(r => r.id)));
+      const next = new Set(selectedRequests);
+      list.forEach(r => next.add(r.id));
+      setSelectedRequests(next);
     } else {
-      setSelectedRequests(new Set());
+      const next = new Set(selectedRequests);
+      list.forEach(r => next.delete(r.id));
+      setSelectedRequests(next);
     }
   };
 
@@ -266,7 +270,14 @@ export default function SuperAdmin() {
     });
   };
 
+  const accessReqs = requests.filter(r => r.request_type !== 'demo' && r.request_type !== 'contact');
+  const demoReqs = requests.filter(r => r.request_type === 'demo');
+  const contactReqs = requests.filter(r => r.request_type === 'contact');
+
   const pendingCount = requests.filter(r => r.status === 'pending_approval').length;
+  const pendingAccessCount = accessReqs.filter(r => r.status === 'pending_approval').length;
+  const pendingDemoCount = demoReqs.filter(r => r.status === 'pending_approval').length;
+  const pendingContactCount = contactReqs.filter(r => r.status === 'pending_approval').length;
 
   if (!authChecked) {
     return (
@@ -287,6 +298,186 @@ export default function SuperAdmin() {
       </div>
     );
   }
+
+  const renderRequestTable = (list, title, countPending) => (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base">{title}</CardTitle>
+          <p className="text-xs text-slate-400">{countPending} pending</p>
+        </div>
+        <div className="flex gap-2">
+          {selectedRequests.size > 0 && (
+            <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
+              <Trash2 className="w-4 h-4 mr-1" />
+              Delete Selected ({selectedRequests.size})
+            </Button>
+          )}
+          <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
+          <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-slate-50">
+              <TableHead className="w-10">
+                <Checkbox 
+                  checked={list.length > 0 && list.every(r => selectedRequests.has(r.id))}
+                  onCheckedChange={(c) => toggleSelectAllList(c, list)}
+                />
+              </TableHead>
+              <TableHead className="text-[11px]">APPLICANT</TableHead>
+              <TableHead className="text-[11px]">COMPANY</TableHead>
+              <TableHead className="text-[11px]">PHONE</TableHead>
+              <TableHead className="text-[11px]">PORTFOLIOS</TableHead>
+              <TableHead className="text-[11px]">PLAN</TableHead>
+              <TableHead className="text-[11px]">TYPE</TableHead>
+              <TableHead className="text-[11px]">DEMO VIEWED</TableHead>
+              <TableHead className="text-[11px]">SUBMITTED</TableHead>
+              <TableHead className="text-[11px]">STATUS</TableHead>
+              <TableHead className="text-[11px]">ACTIONS</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow><TableCell colSpan={10} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></TableCell></TableRow>
+            ) : list.length === 0 ? (
+              <TableRow><TableCell colSpan={10} className="text-center py-8 text-slate-400">No requests</TableCell></TableRow>
+            ) : (
+              list.map(r => (
+                <TableRow key={r.id}>
+                  <TableCell>
+                    <Checkbox 
+                      checked={selectedRequests.has(r.id)}
+                      onCheckedChange={(c) => toggleSelect(r.id, c)}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{r.full_name?.substring(0, 2).toUpperCase()}</div>
+                      <div><p className="text-sm font-medium">{r.full_name}</p><p className="text-xs text-slate-400">{r.email}</p></div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm">{r.company_name}</TableCell>
+                  <TableCell className="text-sm text-slate-500">{r.phone || '—'}</TableCell>
+                  <TableCell className="text-sm">{r.portfolios || r.properties_count || '—'}</TableCell>
+                  <TableCell className="text-sm">{r.plan ? <Badge variant="outline" className="text-[10px] capitalize">{r.plan}</Badge> : '—'}</TableCell>
+                  <TableCell>
+                    {r.request_type === 'demo'
+                      ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none">🎥 DEMO</Badge>
+                      : r.request_type === 'contact' 
+                        ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none">✉️ CONTACT</Badge>
+                        : <Badge variant="outline" className="text-[10px] capitalize">ACCESS</Badge>
+                    }
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {r.request_type === 'demo' ? (
+                      r.demo_viewed ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <span className="text-slate-300">—</span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm text-slate-500">
+                    {r.created_at ? new Date(r.created_at).toLocaleString('en-US', {
+                      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
+                    }) : '—'}
+                  </TableCell>
+                  <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      {r.request_type === 'contact' ? (
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button size="sm" variant="outline" className="text-xs h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
+                              <Mail className="w-3 h-3 mr-1" />
+                              Read
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Message from {r.full_name}</DialogTitle>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                              <div>
+                                <Label className="text-xs text-slate-500">Department</Label>
+                                <p className="font-medium capitalize">{r.department || '—'}</p>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-slate-500">Message</Label>
+                                <p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 mt-1 whitespace-pre-wrap">{r.message || 'No message provided.'}</p>
+                              </div>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      ) : (
+                        <>
+                          {r.status !== 'approved' && (
+                            <Button 
+                              size="sm" 
+                              className="text-xs h-7 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
+                              disabled={processingRequests.has(r.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                console.log('Approve clicked for:', r.id);
+                                updateRequest.mutate({ id: r.id, approved: true });
+                              }}>
+                              {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
+                              Approve
+                            </Button>
+                          )}
+                          {r.status !== 'rejected' && r.status !== 'approved' && (
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
+                              disabled={processingRequests.has(r.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateRequest.mutate({ id: r.id, approved: false });
+                              }}>
+                              {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
+                              Reject
+                            </Button>
+                          )}
+                          {r.status === 'approved' && (
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="text-xs h-7 text-amber-600 border-amber-200 hover:bg-amber-50"
+                              disabled={processingRequests.has(r.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                revokeRequest.mutate({ id: r.id, email: r.email });
+                              }}>
+                              {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Shield className="w-3 h-3 mr-1" />}
+                              Revoke
+                            </Button>
+                          )}
+                        </>
+                      )}
+                      <Button 
+                        size="sm" 
+                        variant="ghost"
+                        className="text-xs h-7 px-2 text-slate-400 hover:text-red-600 hover:bg-red-50 ml-1"
+                        disabled={processingRequests.has(r.id)}
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to permanently delete this request?")) {
+                            deleteRequest.mutate(r.id);
+                          }
+                        }}>
+                        {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -315,191 +506,25 @@ export default function SuperAdmin() {
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">Requires review</p></CardContent></Card>
       </div>
 
-      <Tabs defaultValue="requests">
-        <TabsList>
-          <TabsTrigger value="requests">Access Requests {pendingCount > 0 && <Badge className="ml-1.5 bg-amber-500 text-white text-[10px] px-1.5">{pendingCount}</Badge>}</TabsTrigger>
+      <Tabs defaultValue="access">
+        <TabsList className="mb-4">
+          <TabsTrigger value="access">Access Requests {pendingAccessCount > 0 && <Badge className="ml-1.5 bg-amber-500 text-white text-[10px] px-1.5">{pendingAccessCount}</Badge>}</TabsTrigger>
+          <TabsTrigger value="demo">Demo Requests {pendingDemoCount > 0 && <Badge className="ml-1.5 bg-violet-500 text-white text-[10px] px-1.5">{pendingDemoCount}</Badge>}</TabsTrigger>
+          <TabsTrigger value="contact">Contact Us {pendingContactCount > 0 && <Badge className="ml-1.5 bg-blue-500 text-white text-[10px] px-1.5">{pendingContactCount}</Badge>}</TabsTrigger>
           <TabsTrigger value="users">User Management</TabsTrigger>
           <TabsTrigger value="orgs">Organizations</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="requests" className="mt-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-base">Access Request Queue</CardTitle>
-                <p className="text-xs text-slate-400">{pendingCount} pending</p>
-              </div>
-              <div className="flex gap-2">
-                {selectedRequests.size > 0 && (
-                  <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
-                    <Trash2 className="w-4 h-4 mr-1" />
-                    Delete Selected ({selectedRequests.size})
-                  </Button>
-                )}
-                <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search requests..." className="pl-9 w-48 h-8" /></div>
-                <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50">
-                    <TableHead className="w-10">
-                      <Checkbox 
-                        checked={requests.length > 0 && selectedRequests.size === requests.length}
-                        onCheckedChange={toggleSelectAll}
-                      />
-                    </TableHead>
-                    <TableHead className="text-[11px]">APPLICANT</TableHead>
-                    <TableHead className="text-[11px]">COMPANY</TableHead>
-                    <TableHead className="text-[11px]">PHONE</TableHead>
-                    <TableHead className="text-[11px]">PORTFOLIOS</TableHead>
-                    <TableHead className="text-[11px]">PLAN</TableHead>
-                    <TableHead className="text-[11px]">TYPE</TableHead>
-                    <TableHead className="text-[11px]">DEMO VIEWED</TableHead>
-                    <TableHead className="text-[11px]">SUBMITTED</TableHead>
-                    <TableHead className="text-[11px]">STATUS</TableHead>
-                    <TableHead className="text-[11px]">ACTIONS</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isLoading ? (
-                    <TableRow><TableCell colSpan={10} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></TableCell></TableRow>
-                  ) : requests.length === 0 ? (
-                    <TableRow><TableCell colSpan={10} className="text-center py-8 text-slate-400">No access requests</TableCell></TableRow>
-                  ) : (
-                    requests.map(r => (
-                      <TableRow key={r.id}>
-                        <TableCell>
-                          <Checkbox 
-                            checked={selectedRequests.has(r.id)}
-                            onCheckedChange={(c) => toggleSelect(r.id, c)}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{r.full_name?.substring(0, 2).toUpperCase()}</div>
-                            <div><p className="text-sm font-medium">{r.full_name}</p><p className="text-xs text-slate-400">{r.email}</p></div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm">{r.company_name}</TableCell>
-                        <TableCell className="text-sm text-slate-500">{r.phone || '—'}</TableCell>
-                        <TableCell className="text-sm">{r.portfolios || r.properties_count || '—'}</TableCell>
-                        <TableCell className="text-sm">{r.plan ? <Badge variant="outline" className="text-[10px] capitalize">{r.plan}</Badge> : '—'}</TableCell>
-                        <TableCell>
-                          {r.request_type === 'demo'
-                            ? <Badge className="bg-violet-100 text-violet-700 text-[10px] border-none">🎥 DEMO</Badge>
-                            : r.request_type === 'contact' 
-                              ? <Badge className="bg-blue-100 text-blue-700 text-[10px] border-none">✉️ CONTACT</Badge>
-                              : <Badge variant="outline" className="text-[10px] capitalize">ACCESS</Badge>
-                          }
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          {r.request_type === 'demo' ? (
-                            r.demo_viewed ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <span className="text-slate-300">—</span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm text-slate-500">
-                          {r.created_at ? new Date(r.created_at).toLocaleString('en-US', {
-                            month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
-                          }) : '—'}
-                        </TableCell>
-                        <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            {r.request_type === 'contact' ? (
-                              <Dialog>
-                                <DialogTrigger asChild>
-                                  <Button size="sm" variant="outline" className="text-xs h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
-                                    <Mail className="w-3 h-3 mr-1" />
-                                    Read
-                                  </Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Message from {r.full_name}</DialogTitle>
-                                  </DialogHeader>
-                                  <div className="space-y-4 py-4">
-                                    <div>
-                                      <Label className="text-xs text-slate-500">Department</Label>
-                                      <p className="font-medium capitalize">{r.department || '—'}</p>
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs text-slate-500">Message</Label>
-                                      <p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 mt-1 whitespace-pre-wrap">{r.message || 'No message provided.'}</p>
-                                    </div>
-                                  </div>
-                                </DialogContent>
-                              </Dialog>
-                            ) : (
-                              <>
-                                {r.status !== 'approved' && (
-                                  <Button 
-                                    size="sm" 
-                                    className="text-xs h-7 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
-                                    disabled={processingRequests.has(r.id)}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      console.log('Approve clicked for:', r.id);
-                                      updateRequest.mutate({ id: r.id, approved: true });
-                                    }}>
-                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-                                    Approve
-                                  </Button>
-                                )}
-                                {r.status !== 'rejected' && r.status !== 'approved' && (
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline"
-                                    className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
-                                    disabled={processingRequests.has(r.id)}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateRequest.mutate({ id: r.id, approved: false });
-                                    }}>
-                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
-                                    Reject
-                                  </Button>
-                                )}
-                                {r.status === 'approved' && (
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline"
-                                    className="text-xs h-7 text-amber-600 border-amber-200 hover:bg-amber-50"
-                                    disabled={processingRequests.has(r.id)}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      revokeRequest.mutate({ id: r.id, email: r.email });
-                                    }}>
-                                    {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Shield className="w-3 h-3 mr-1" />}
-                                    Revoke
-                                  </Button>
-                                )}
-                              </>
-                            )}
-                            <Button 
-                              size="sm" 
-                              variant="ghost"
-                              className="text-xs h-7 px-2 text-slate-400 hover:text-red-600 hover:bg-red-50 ml-1"
-                              disabled={processingRequests.has(r.id)}
-                              onClick={() => {
-                                if (window.confirm("Are you sure you want to permanently delete this request?")) {
-                                  deleteRequest.mutate(r.id);
-                                }
-                              }}>
-                              {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <TabsContent value="access" className="mt-4">
+          {renderRequestTable(accessReqs, "Access Requests", pendingAccessCount)}
+        </TabsContent>
+
+        <TabsContent value="demo" className="mt-4">
+          {renderRequestTable(demoReqs, "Demo Requests", pendingDemoCount)}
+        </TabsContent>
+
+        <TabsContent value="contact" className="mt-4">
+          {renderRequestTable(contactReqs, "Contact Messages", pendingContactCount)}
         </TabsContent>
 
         <TabsContent value="users" className="mt-4">
