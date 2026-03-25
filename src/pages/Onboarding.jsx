@@ -60,7 +60,6 @@ export default function Onboarding() {
         if (authUser.org_id) {
           console.log('[Onboarding] Initializing with Org:', authUser.org_id);
           
-          // Small delay to ensure DB propagation from previous steps
           await new Promise(r => setTimeout(r, 600));
 
           const orgData = await OrganizationService.get(authUser.org_id);
@@ -68,8 +67,6 @@ export default function Onboarding() {
           if (orgData) {
             setOrg(orgData);
             
-            // Sync step from server ONLY if the server is significantly ahead
-            // and we don't have a local step override in the URL.
             const serverStep = orgData.onboarding_step || 1;
             const currentUrlStep = parseInt(searchParams.get('step'), 10);
             
@@ -78,18 +75,19 @@ export default function Onboarding() {
               setStep(serverStep);
             }
             
-            if (orgData.status === "active") {
-              window.location.href = createPageUrl("Welcome");
-              return;
-            }
+            // If already active, we don't need to be here, but don't hard redirect 
+            // inside init as it leads to loops if the router isn't ready.
+            // App.jsx will handle the high-level redirection.
           }
         }
       } catch (e) {
         console.error('[Onboarding] init error:', e);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
     init();
+
   }, [authUser]);
 
   // Status Polling: Automatically check for approval while on Step 4
@@ -101,19 +99,20 @@ export default function Onboarding() {
         if (org?.id) {
           const latestOrg = await OrganizationService.get(org.id);
           if (latestOrg?.status === 'active') {
-            console.log('[Onboarding] Approval detected via org! Redirecting to Welcome...');
-            window.location.href = createPageUrl("Welcome");
+            console.log('[Onboarding] Approval detected via org! Refreshing profile...');
+            await refreshProfile();
             return;
           }
         }
         const p = await refreshProfile();
         if (p?.profile?.status === 'active' || p?.status === 'active') {
-          console.log('[Onboarding] Approval detected via profile! Redirecting to Welcome...');
-          window.location.href = createPageUrl("Welcome");
+          console.log('[Onboarding] Approval detected via profile! Redirecting...');
+          // Let App.jsx handle the specific target (WelcomeAboard or Dashboard)
         }
       } catch (e) {
         console.error('[Onboarding] Poll error:', e);
       }
+
     };
     checkApproval();
     const interval = setInterval(checkApproval, 10000);

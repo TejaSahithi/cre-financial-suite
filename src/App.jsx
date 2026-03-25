@@ -237,21 +237,29 @@ const AuthenticatedApp = () => {
       // 2. ONBOARDING: Case 1 - Profile approved but Org not created yet -> Redirect to Onboarding
       // Case 2 - status is 'onboarding' (Step 1-3)
       // Case 3 - status is 'under_review' (Step 4) - show Onboarding confirmation page
-      if (p.status === 'under_review' || org?.status === 'under_review') return 'Onboarding';
-      if (p.status === 'approved' || p.status === 'onboarding') return 'Onboarding';
+      if (p.status === 'under_review' || org?.status === 'under_review' || p.status === 'onboarding' || p.status === 'approved') {
+        // If the org is ALREADY active, we should move towards Welcome/Dashboard
+        if (org?.status === 'active') {
+          // Keep going to WelcomeAboard/Dashboard
+        } else {
+          return 'Onboarding';
+        }
+      }
 
-      // 3. FIRST LOGIN / PASSWORD RESET: only for invited users who need to set password
-      if (p.first_login && p.onboarding_type === 'invited') return 'Welcome';
+      // 3. FIRST LOGIN / PASSWORD RESET: only for users who need to set password
+      // Important: Allow /Welcome if they have first_login true
+      if (p.first_login) return 'Welcome';
 
       // 4. WELCOME ABOARD: Show after org is activated (post-SuperAdmin approval)
-      if (org?.status === 'active' && p.status === 'active' && p.onboarding_complete && !p.dashboard_viewed) {
+      if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {
         return 'WelcomeAboard';
       }
 
       // 5. DASHBOARD: Only when everything is active and WelcomeAboard has been seen
       if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
 
-      return 'Login'; // Fallback
+      return 'Dashboard'; // Default to Dashboard if authenticated and active
+
     };
 
     const targetRoute = getUserRoutingState(user, profile, activeOrg, memberships);
