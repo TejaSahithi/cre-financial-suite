@@ -26,7 +26,7 @@ export const MODULE_DEFINITIONS = {
   notifications:  { label: "Notifications",      pages: ["Notifications"] },
   documents:      { label: "Documents",          pages: ["Documents"] },
   integrations:   { label: "Integrations",       pages: ["Integrations"] },
-  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "AuditLog"] },
+  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "AuditLog", "UserManagement"] },
 };
 
 // All module keys
