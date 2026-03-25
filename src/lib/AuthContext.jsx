@@ -23,9 +23,9 @@ export const AuthProvider = ({ children }) => {
   const [appPublicSettings, setAppPublicSettings] = useState(null);
 
   // Fetch the user profile from auth service
-  const fetchProfile = useCallback(async () => {
+  const fetchProfile = useCallback(async (showLoading = true) => {
     try {
-      setIsLoadingAuth(true);
+      if (showLoading) setIsLoadingAuth(true);
       const currentUser = await me();
       if (currentUser) {
         setUser(currentUser);
@@ -44,20 +44,20 @@ export const AuthProvider = ({ children }) => {
         message: err.message || 'Authentication required',
       });
     } finally {
-      setIsLoadingAuth(false);
+      if (showLoading) setIsLoadingAuth(false);
     }
   }, []);
 
   useEffect(() => {
     // Initial profile fetch
-    fetchProfile();
+    fetchProfile(true);
 
     // Listen for auth state changes (sign in, sign out, token refresh)
     const unsubscribe = onAuthStateChange((event, session) => {
       console.log('[AuthContext] Auth event:', event);
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         resetProfileCache();
-        fetchProfile();
+        fetchProfile(true);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsAuthenticated(false);
@@ -105,9 +105,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const refreshProfile = async () => {
+  const refreshProfile = async (showLoading = true) => {
     resetProfileCache();
-    await fetchProfile();
+    await fetchProfile(showLoading);
   };
 
   const navigateToLogin = () => {
