@@ -192,7 +192,7 @@ function ModuleAccessTab({ enabledModules, modulePerms, setModulePerms, pagePerm
 
 // ── Invite / Edit Dialog ──────────────────────────────────────────────────────
 
-function UserDrawer({ open, onClose, member, orgId, currentUser, enabledModules, onSaved }) {
+function UserDrawer({ open, onClose, member, orgId, currentUser, enabledModules, onSaved, isSuperAdmin }) {
   const isEditing = !!member;
   const [tab, setTab] = useState("details");
   const [fullName, setFullName] = useState(member?.full_name || "");
@@ -203,6 +203,11 @@ function UserDrawer({ open, onClose, member, orgId, currentUser, enabledModules,
   const [modulePerms, setModulePerms] = useState(member?.module_permissions || {});
   const [pagePerms, setPagePerms] = useState(member?.page_permissions || {});
   const [saving, setSaving] = useState(false);
+
+  // Org admins cannot assign org_admin or super_admin; super admin can assign any role
+  const availableRoles = isSuperAdmin
+    ? PRIMARY_ROLES
+    : PRIMARY_ROLES.filter((r) => r.value !== "org_admin");
 
   const handleSave = async () => {
     if (!isEditing && (!email || !orgId)) return;
@@ -305,7 +310,7 @@ function UserDrawer({ open, onClose, member, orgId, currentUser, enabledModules,
               Primary role sets default access. You can fine-tune module and page access in the Access tab.
             </p>
             <div className="grid grid-cols-2 gap-3 mb-4">
-              {PRIMARY_ROLES.map((r) => (
+              {availableRoles.map((r) => (
                 <div
                   key={r.value}
                   onClick={() => setRole(r.value)}
@@ -408,6 +413,9 @@ export default function UserManagement() {
   const canManage =
     currentUser?.role === "admin" || currentUser?._raw_role === "super_admin" ||
     currentUser?._raw_role === "org_admin" || currentUser?.role === "org_admin";
+
+  const isSuperAdmin =
+    currentUser?.role === "admin" || currentUser?._raw_role === "super_admin";
 
   const filtered = useMemo(
     () => members.filter((m) => {
@@ -611,6 +619,7 @@ export default function UserManagement() {
           currentUser={currentUser}
           enabledModules={enabledModules}
           onSaved={() => queryClient.invalidateQueries({ queryKey: ["org-members"] })}
+          isSuperAdmin={isSuperAdmin}
         />
       )}
     </div>
