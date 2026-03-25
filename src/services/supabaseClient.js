@@ -17,6 +17,12 @@ try {
   const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
   if (supabaseUrl && supabaseKey) {
+    console.log('[supabase] Initializing client with URL:', supabaseUrl);
+    console.log('[supabase] Key presence check:', { 
+      url: !!supabaseUrl, 
+      key: !!supabaseKey,
+      keyPrefix: supabaseKey.substring(0, 10) + '...'
+    });
     supabase = createClient(supabaseUrl, supabaseKey, {
       auth: {
         autoRefreshToken: true,
@@ -24,9 +30,10 @@ try {
         detectSessionInUrl: true,
       },
     });
-    console.log('[supabase] Client initialized');
+    console.log('[supabase] Client initialized successfully');
   } else {
-    console.log('[supabase] No credentials — running in-memory mode');
+    console.warn('[supabase] Missing credentials — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
+    console.log('[supabase] Running in-memory mode');
   }
 } catch {
   console.log('[supabase] Client unavailable — running in-memory mode');

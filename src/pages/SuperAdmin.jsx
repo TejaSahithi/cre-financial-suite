@@ -599,21 +599,12 @@ export default function SuperAdmin() {
                                 console.log('[SuperAdmin] Approve clicked for org:', org.id, org.name);
                                 setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
                                 try {
-                                  const sessionRes = await supabase.auth.getSession();
-                                  const token = sessionRes.data.session?.access_token;
-                                  
-                                  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/approve-organization`, {
-                                    method: 'POST',
-                                    headers: {
-                                      'Content-Type': 'application/json',
-                                      'Authorization': `Bearer ${token}`
-                                    },
-                                    body: JSON.stringify({ orgId: org.id })
+                                  const { data, error } = await supabase.functions.invoke('approve-organization', {
+                                    body: { orgId: org.id }
                                   });
                                   
-                                  const data = await res.json();
-                                  if (!res.ok) {
-                                    throw new Error(data.error || JSON.stringify(data) || 'Failed to approve organization');
+                                  if (error || data?.error) {
+                                    throw new Error(error?.message || data?.error || 'Failed to approve organization');
                                   }
 
                                   queryClient.invalidateQueries({ queryKey: ['organizations'] });

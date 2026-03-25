@@ -174,19 +174,11 @@ export default function Onboarding() {
         await OrganizationService.update(org.id, { onboarding_step: 4 });
       }
 
-      console.log('[Onboarding] Trigerring complete-onboarding Edge Function');
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/complete-onboarding`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session?.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY
-        }
-      });
+      console.log('[Onboarding] Triggering complete-onboarding Edge Function');
+      const { data, error } = await supabase.functions.invoke('complete-onboarding');
       
-      if (!res.ok) {
-         throw new Error('Failed to complete onboarding');
+      if (error || data?.error) {
+         throw new Error(error?.message || data?.error || 'Failed to complete onboarding');
       }
 
       // Audit log â€” onboarding completion
@@ -810,8 +802,17 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       if (!paymentInfo) {
         try {
           const { supabase } = await import('@/services/supabaseClient');
-          const { data } = await supabase.from('invoices').select('*').eq('org_id', org?.id).order('created_at', { ascending: false }).limit(1).single();
-          if (data) {
+          const { data, error } = await supabase.from('invoices').select('*').eq('org_id', org?.id).order('created_at', { ascending: false }).limit(1).single();
+          if (error) {
+            console.error('[Onboarding] Error fetching invoice for confirmation:', error);
+            // Fallback UI data if DB fetch fails (e.g. 406 Not Acceptable)
+            setDbInvoice({
+              displayPrice: "...",
+              plan: org?.plan || plan || "Professional",
+              billingCycle: org?.billing_cycle || "monthly",
+              billingAddress: "Pending review"
+            });
+          } else if (data) {
             setDbInvoice({ 
               displayPrice: data.amount, 
               plan: org?.plan || plan || "Professional", 
