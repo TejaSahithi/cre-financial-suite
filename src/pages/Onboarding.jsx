@@ -366,12 +366,14 @@ export default function Onboarding() {
                     title: "Master Service Agreement (Signed)",
                     document_type: "Contract",
                     file_name: "MSA_Signed.pdf",
+                    storage_path: `onboarding/msa_${org.id}.pdf`, // Required field
                     uploaded_by: authUser?.id,
                     description: `Signed by ${signatureData.fullName}, ${signatureData.role}, on ${signatureData.date}`
                   });
                 } catch (docErr) {
                   console.error('[Onboarding] Document creation failed (non-blocking):', docErr);
                 }
+
 
                 // 3. ALWAYS advance to Payment â€” this is the critical line
                 console.log('[Onboarding] Moving to step 3 (Payment)');
@@ -391,13 +393,19 @@ export default function Onboarding() {
                 // All DB calls are non-blocking — navigation must always succeed
                 try {
                   const { supabase } = await import('@/services/supabaseClient');
+                  // Strip non-numeric characters (like $) before inserting into numeric column
+                  const numericAmount = typeof paymentInfo.displayPrice === 'string' 
+                    ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
+                    : paymentInfo.displayPrice;
+
                   await supabase.from('invoices').insert({
                     org_id: org.id,
-                    amount: paymentInfo.displayPrice,
+                    amount: numericAmount,
                     status: 'paid',
                     issued_date: new Date().toISOString().split('T')[0]
                   });
                   console.log('[Onboarding] Invoice saved to database');
+
                 } catch (e) {
                   console.error('[Onboarding] Invoice save failed (non-blocking):', e);
                 }

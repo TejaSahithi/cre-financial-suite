@@ -36,12 +36,13 @@ export async function logAudit(entry) {
     new_value:     entry.newValue != null ? String(entry.newValue) : null,
     user_email:    entry.userEmail || null,
     user_id:       entry.userId || null,
-    timestamp:     new Date().toISOString(),
+    created_at:    new Date().toISOString(),
   };
 
   try {
     if (supabase) {
       const { error } = await supabase.from('audit_logs').insert(row);
+
       if (error) throw error;
     } else {
       console.log('[audit]', row);
