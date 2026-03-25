@@ -119,6 +119,7 @@ export function createEntityService(entityName) {
    * Super-admins (orgId === null) bypass the filter.
    */
   async function applyOrgScope(query) {
+    if (!query) return query;
     if (isOrgExempt) return query;
     const orgId = await getCurrentOrgId();
     if (orgId && orgId !== '__none__') {
@@ -233,10 +234,15 @@ export function createEntityService(entityName) {
 
       try {
         if (supabase) {
-          let query = supabase.from(tableName).select('*');
-          query = await applyOrgScope(query);
-          for (const [key, value] of Object.entries(filters)) {
-            query = query.eq(key, value);
+          let baseQuery = supabase.from(tableName).select('*');
+          let query = await applyOrgScope(baseQuery);
+          
+          if (filters && typeof filters === 'object') {
+            for (const [key, value] of Object.entries(filters)) {
+              if (query && typeof query.eq === 'function') {
+                query = query.eq(key, value);
+              }
+            }
           }
           const { data, error } = await query;
           if (error) throw error;
