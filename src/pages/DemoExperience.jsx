@@ -26,7 +26,7 @@ export default function DemoExperience() {
           const { data, error } = await supabase
             .from('access_requests')
             .select('email, full_name, demo_viewed')
-            .eq('id', location.state.requestId)
+            .eq('id', requestId)
             .single();
             
           if (data && data.email && !sessionStorage.getItem(`demo_email_sent_${requestId}`)) {

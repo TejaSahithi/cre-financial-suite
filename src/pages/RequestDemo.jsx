@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/services/supabaseClient";
+import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 
 export default function RequestDemo() {
@@ -73,9 +74,46 @@ export default function RequestDemo() {
         p_properties: form.properties_count || "N/A",
         p_plan: form.plan || "N/A",
         p_billing_cycle: form.billing_cycle || "monthly",
-        p_request_type: "demo"
+        p_request_type: "demo",
+        p_notes: form.notes || null
       });
       if (error) throw error;
+
+      // Notify internal team
+      try {
+        await sendEmail({
+          to: "sales@cresuite.com",
+          subject: `[New Request] Demo: ${form.full_name} (${form.company_name})`,
+          body: `
+            A new demo request has been submitted.
+            
+            Name: ${form.full_name}
+            Email: ${form.email}
+            Company: ${form.company_name}
+            Role: ${form.role === "other" ? form.customRole : form.role}
+            Plan Interest: ${form.plan}
+            Notes: ${form.notes || "None"}
+          `
+        });
+      } catch (e) { console.error("Admin notification fail:", e); }
+
+      // Send auto-reply to user
+      try {
+        await sendEmail({
+          to: form.email,
+          subject: "CRE Suite - Your Demo Access",
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #334155;">
+              <h2 style="color: #1a2744;">Hi ${form.full_name.split(' ')[0]},</h2>
+              <p>Thank you for requesting a demo of CRE Suite.</p>
+              <p>You can now access our exclusive end-to-end platform demonstration and slide deck.</p>
+              <p>Someone from our sales team will also reach out shortly to discuss your specific needs.</p>
+              <br/>
+              <p>Best regards,<br/>The CRE Suite Team</p>
+            </div>
+          `
+        });
+      } catch (e) { console.error("Auto-reply fail:", e); }
 
       navigate(createPageUrl("DemoExperience"), {
         state: {
