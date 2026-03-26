@@ -6,6 +6,7 @@ import React, { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
@@ -185,16 +186,22 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
 
       {/* ── Step 1: Review & Assign Role per User ── */}
       {step === 1 && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-xs text-slate-600"><span className="font-bold text-emerald-600">{validRows.length}</span> valid</span>
-              {invalidCount > 0 && <span className="text-xs text-amber-600 font-semibold">{invalidCount} invalid (bad email, skipped)</span>}
+              <span className="text-[11px] text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded-full">
+                <span className="text-emerald-600 font-bold">{validRows.length}</span> Valid
+              </span>
+              {invalidCount > 0 && (
+                <span className="text-[11px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" /> {invalidCount} Invalid/Skipped
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-400">Add role to all:</span>
+              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-tight mr-1">Quick assign role:</span>
               {["viewer", "editor", "manager", "finance"].map((r) => (
-                <button key={r} onClick={() => bulkSetRole(r)} className="text-[11px] px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium capitalize flex items-center gap-1">
+                <button key={r} onClick={() => bulkSetRole(r)} className="text-[10px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold capitalize flex items-center gap-1.5 transition-colors">
                   <span className={`w-1.5 h-1.5 rounded-full ${ROLE_DEFINITIONS.find(d => d.value === r)?.color.replace("text-", "bg-").split(" ")[0]}`}></span>
                   {r}
                 </button>
@@ -202,74 +209,112 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
             </div>
           </div>
 
-          <div className="border border-slate-200 rounded-xl overflow-hidden">
-            {/* Header */}
-            <div className="grid grid-cols-[1.2fr_1.5fr_1fr_1.4fr_auto] gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              <span>Name</span><span>Email</span><span>Phone</span><span>Role</span><span></span>
+          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+            {/* Table Header */}
+            <div className="grid grid-cols-[1.28fr_1.5fr_1fr_1.4fr_auto] gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              <span>Member Info</span>
+              <span>Email Address</span>
+              <span>Phone</span>
+              <span>Roles & Access</span>
+              <span className="w-16"></span>
             </div>
-            <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-              {rows.filter((r) => r._valid).map((row) => (
-                <div key={row._id} className="grid grid-cols-[1.2fr_1.5fr_1fr_1.4fr_auto] gap-2 items-center px-3 py-2.5">
+
+            {/* Table Body */}
+            <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+              {rows.map((row) => (
+                <div key={row._id} className={`grid grid-cols-[1.28fr_1.5fr_1fr_1.4fr_auto] gap-2 items-center px-3 py-2.5 transition-colors ${!row._valid ? 'bg-amber-50/20 opacity-70' : 'hover:bg-slate-50/50'}`}>
+                  {/* Name */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    {!row._valid && <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+                    <Input
+                      value={row.full_name}
+                      onChange={(e) => updateRow(row._id, "full_name", e.target.value)}
+                      placeholder="Enter name..."
+                      className="h-8 text-xs border-0 bg-transparent px-0 focus-visible:ring-0 font-medium text-slate-700 hover:bg-slate-100/50 rounded-md transition-colors"
+                    />
+                  </div>
+
+                  {/* Email */}
+                  <span className="text-xs text-slate-500 truncate font-medium" title={row.email}>{row.email}</span>
+
+                  {/* Phone */}
                   <Input
-                    value={row.full_name}
-                    onChange={(e) => updateRow(row._id, "full_name", e.target.value)}
-                    placeholder="Name"
-                    className="h-7 text-xs border-0 bg-transparent px-0 focus-visible:ring-0 hover:bg-slate-50 rounded"
+                    value={row.phone}
+                    onChange={(e) => updateRow(row._id, "phone", e.target.value)}
+                    placeholder="—"
+                    className="h-8 text-xs border-0 bg-transparent px-0 focus-visible:ring-0 text-slate-500 hover:bg-slate-100/50 rounded-md transition-colors"
                   />
-                  <span className="text-xs text-slate-500 truncate">{row.email}</span>
-                  <div>
+
+                  {/* Roles Selector */}
+                  <div className="space-y-1">
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" className={`h-7 text-xs w-full justify-between items-center text-left font-normal px-2 ${!row.role ? 'text-slate-500' : ''}`}>
+                        <Button variant="outline" className={`h-8 text-xs w-full justify-between items-center text-left font-medium px-2.5 ${!row.role ? 'text-slate-400 border-dashed border-slate-300' : 'text-slate-700 border-slate-200'}`}>
                           <span className="truncate flex-1">
-                             {!row.role ? "— Assign roles —" : parseRoles(row.role).map(r => r === 'custom' ? 'Custom' : ROLE_DEFINITIONS.find(d => d.value === r)?.label || r).join(', ')}
+                             {!row.role ? "Select Roles" : parseRoles(row.role).map(r => ROLE_DEFINITIONS.find(d => d.value === r)?.label || r).join(', ')}
                           </span>
-                          <ChevronDown className="w-3 h-3 opacity-50 shrink-0 ml-1" />
+                          <ChevronDown className="w-3 h-3 opacity-30 shrink-0 ml-1.5" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-80 p-2" align="start">
-                        <div className="space-y-2">
+                      <PopoverContent className="w-56 p-2 shadow-xl border-slate-200" align="start">
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase px-2 py-1 tracking-tight">Assign Permissions</p>
                           {ROLE_DEFINITIONS.filter((r) => r.value !== "org_admin").map((r) => (
-                            <div key={r.value} className="flex flex-row items-center space-x-2">
+                            <div key={r.value} className="flex flex-row items-center space-x-2.5 px-2 py-1.5 hover:bg-blue-50/50 rounded-md transition-colors cursor-pointer group" 
+                                 onClick={(e) => { e.preventDefault(); handleRoleToggle(row._id, r.value, !parseRoles(row.role).includes(r.value)); }}>
                               <Checkbox id={`role-${row._id}-${r.value}`} checked={parseRoles(row.role).includes(r.value)} onCheckedChange={(c) => handleRoleToggle(row._id, r.value, c)} />
-                              <Label htmlFor={`role-${row._id}-${r.value}`} className="text-sm cursor-pointer flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className={`w-2 h-2 rounded-full shrink-0 ${r.color.replace("text-", "bg-").split(" ")[0]}`} />
-                                  <span className="font-semibold">{r.label}</span>
-                                </div>
+                              <Label htmlFor={`role-${row._id}-${r.value}`} className="text-xs cursor-pointer flex-1 flex items-center justify-between">
+                                <span className="flex items-center gap-2">
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.color.replace("text-", "bg-").split(" ")[0]}`} />
+                                  <span className="font-medium text-slate-700">{r.label}</span>
+                                </span>
                               </Label>
                             </div>
                           ))}
-                          <div className="flex flex-row items-center space-x-2 border-t pt-2">
-                              <Checkbox id={`role-${row._id}-custom`} checked={parseRoles(row.role).includes('custom')} onCheckedChange={(c) => handleRoleToggle(row._id, 'custom', c)} />
-                              <Label htmlFor={`role-${row._id}-custom`} className="text-sm font-semibold text-pink-600 cursor-pointer">Custom Role</Label>
-                          </div>
                         </div>
                       </PopoverContent>
                     </Popover>
 
                     {parseRoles(row.role).includes("custom") && (
-                      <Input value={row.custom_role} onChange={(e) => updateRow(row._id, "custom_role", e.target.value)}
-                        placeholder="e.g. Portfolio Analyst" className="h-6 text-[11px] mt-1" />
+                      <Input 
+                        value={row.custom_role} 
+                        onChange={(e) => updateRow(row._id, "custom_role", e.target.value)}
+                        placeholder="e.g. Portfolio Manager" 
+                        className="h-7 text-[10px] border-slate-200 focus:border-blue-300 transition-colors" 
+                      />
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => setAccessOverrideId(row._id)} title="Configure Access" className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${row.module_permissions !== null ? "bg-amber-100 text-amber-600 hover:bg-amber-200" : "text-slate-400 hover:text-blue-600 hover:bg-blue-50"}`}>
-                      <Settings className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => removeRow(row._id)} title="Remove Row" className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 w-16 justify-end">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => setAccessOverrideId(row._id)} 
+                      title="Advanced Permissions" 
+                      className={`h-8 w-8 p-0 rounded-lg transition-colors ${row.module_permissions !== null ? "bg-amber-100 text-amber-600 hover:bg-amber-200" : "text-slate-300 hover:text-blue-600 hover:bg-blue-50"}`}
+                    >
+                      <Settings className="w-4 h-4" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => removeRow(row._id)} 
+                      title="Remove Member" 
+                      className="h-8 w-8 p-0 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="flex gap-2 mt-4">
-            <Button variant="outline" size="sm" onClick={() => { setStep(0); setRows([]); }}>Re-upload</Button>
-            <Button size="sm" className="bg-[#1a2744] hover:bg-[#243b67] gap-1.5" onClick={() => setStep(2)} disabled={validRows.length === 0}>
-              <UserPlus className="w-4 h-4" />Review & Confirm ({validRows.length} user{validRows.length !== 1 ? "s" : ""})
+          <div className="flex gap-2 mt-4 pt-2 border-t border-slate-100">
+            <Button variant="outline" size="sm" onClick={() => { setStep(0); setRows([]); }} className="text-slate-500 hover:bg-slate-50 border-slate-200">Re-upload file</Button>
+            <Button size="sm" className="bg-[#1a2744] hover:bg-[#243b67] gap-2 px-5 ml-auto shadow-sm" onClick={() => setStep(2)} disabled={validRows.length === 0}>
+              <UserPlus className="w-4 h-4 text-blue-300" />Review & Confirm ({validRows.length} user{validRows.length !== 1 ? "s" : ""})
             </Button>
           </div>
 
