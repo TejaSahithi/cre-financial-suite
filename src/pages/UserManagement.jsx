@@ -219,7 +219,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   const [fullName, setFullName] = useState(member?.full_name || "");
   const [email, setEmail] = useState(member?.email || "");
   const [phone, setPhone] = useState(member?.phone || "");
-  const [role, setRole] = useState(member?.role || "");
+  const [role, setRole] = useState(member?.role || "__none__");
   const [customRole, setCustomRole] = useState(member?.custom_role || "");
   const [useDefaults, setUseDefaults] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -232,46 +232,49 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  const noRole = !role;
+  const noRole = !role || role === "__none__";
   const availableRoles = isSuperAdmin ? ROLE_DEFINITIONS : ROLE_DEFINITIONS.filter((r) => r.value !== "org_admin");
 
   // When role changes and useDefaults is on, reset permissions to role defaults
   const handleRoleChange = (val) => {
     setRole(val);
-    if (useDefaults) {
-      setModulePerms(getRoleDefaultModulePerms(val));
+    const actual = val === "__none__" ? "" : val;
+    if (useDefaults && actual) {
+      setModulePerms(getRoleDefaultModulePerms(actual));
       setPagePerms({});
     }
   };
 
   const handleUseDefaultsToggle = (val) => {
     setUseDefaults(val);
-    if (val && role) { setModulePerms(getRoleDefaultModulePerms(role)); setPagePerms({}); }
+    const actual = role === "__none__" ? "" : role;
+    if (val && actual) { setModulePerms(getRoleDefaultModulePerms(actual)); setPagePerms({}); }
     if (!val) setShowAdvanced(true);
   };
 
   const handleSave = async () => {
     if (!isEditing && !email) return;
     setSaving(true);
+    const actualRole = role === "__none__" ? "" : role;
     try {
-      const effectiveModulePerms = useDefaults ? {} : modulePerms;
-      const effectivePagePerms = useDefaults ? {} : pagePerms;
+      const effectiveModulePerms = useDefaults && actualRole ? getRoleDefaultModulePerms(actualRole) : modulePerms;
+      const effectivePagePerms = useDefaults && actualRole ? {} : pagePerms;
 
       if (isEditing) {
         const { error } = await supabase.from("memberships").update({
-          role: role || null, custom_role: role === "custom" ? customRole : null,
+          role: actualRole || null, custom_role: actualRole === "custom" ? customRole : null,
           phone, module_permissions: effectiveModulePerms, page_permissions: effectivePagePerms, capabilities,
         }).eq("user_id", member.id).eq("org_id", orgId);
         if (error) throw error;
         await logAudit({ entityType: "Membership", entityId: member.id, action: "update",
           orgId, userId: currentUser?.id, userEmail: currentUser?.email,
-          fieldChanged: "role/permissions", oldValue: member.role, newValue: role });
+          fieldChanged: "role/permissions", oldValue: member.role, newValue: actualRole });
         toast.success(`Updated ${fullName || email}`);
       } else {
         const resp = await supabase.functions.invoke("invite-user", {
           body: {
-            email, full_name: fullName || undefined, role: role || "viewer",
-            custom_role: role === "custom" ? customRole : undefined,
+            email, full_name: fullName || undefined, role: actualRole || "viewer",
+            custom_role: actualRole === "custom" ? customRole : undefined,
             phone: phone || undefined, org_id: orgId,
             module_permissions: effectiveModulePerms,
             page_permissions: effectivePagePerms, capabilities,
@@ -280,7 +283,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
         if (resp.error) throw new Error(resp.error.message);
         await logAudit({ entityType: "UserInvite", action: "create",
           orgId, userId: currentUser?.id, userEmail: currentUser?.email,
-          newValue: `${email} invited as ${role || "pending"}` });
+          newValue: `${email} invited as ${actualRole || "pending"}` });
         toast.success(noRole ? `${email} invited — pending role assignment` : `Invitation sent to ${email}`);
       }
       onSaved(); onClose();
@@ -292,7 +295,8 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
 
   // Preview modal
   if (showPreview) {
-    const effectiveModulePerms = useDefaults && role ? getRoleDefaultModulePerms(role) : modulePerms;
+    const actualRole = role === "__none__" ? "" : role;
+    const effectiveModulePerms = useDefaults && actualRole ? getRoleDefaultModulePerms(actualRole) : modulePerms;
     const byLevel = { full: [], read_only: [], none: [] };
     Object.entries(effectiveModulePerms).forEach(([k, v]) => { const m = MODULE_DEFINITIONS[k]; if (m) byLevel[v]?.push(m.label); });
     return (
@@ -300,7 +304,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Eye className="w-4 h-4" />Preview: {fullName || email}'s Access</DialogTitle></DialogHeader>
           <div className="space-y-3 text-sm">
-            {role && <div><span className="text-slate-500">Role:</span> <Badge className={`ml-1 text-[10px] ${ROLE_DEFINITIONS.find((r) => r.value === role)?.color || ""}`}>{role}</Badge></div>}
+            {actualRole && <div><span className="text-slate-500">Role:</span> <Badge className={`ml-1 text-[10px] ${ROLE_DEFINITIONS.find((r) => r.value === actualRole)?.color || ""}`}>{actualRole}</Badge></div>}
             {byLevel.full.length > 0 && <div><p className="text-xs font-semibold text-emerald-600 mb-1">Full Access</p><p className="text-xs text-slate-500">{byLevel.full.join(", ")}</p></div>}
             {byLevel.read_only.length > 0 && <div><p className="text-xs font-semibold text-blue-600 mb-1">Read Only</p><p className="text-xs text-slate-500">{byLevel.read_only.join(", ")}</p></div>}
             {byLevel.none.length > 0 && <div><p className="text-xs font-semibold text-slate-400 mb-1">No Access</p><p className="text-xs text-slate-400">{byLevel.none.join(", ")}</p></div>}
@@ -356,7 +360,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
                       <SelectValue placeholder="— Assign role (optional) —" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="" className="text-slate-400 text-sm italic">No role — pending access</SelectItem>
+                      <SelectItem value="__none__" className="text-slate-400 text-sm italic">No role — pending access</SelectItem>
                       {availableRoles.map((r) => (
                         <SelectItem key={r.value} value={r.value} className="text-sm">
                           <div className="flex items-center gap-2">
@@ -374,7 +378,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
                     <Input value={customRole} onChange={(e) => setCustomRole(e.target.value)}
                       placeholder="e.g. Portfolio Analyst" className="mt-1.5 h-8 text-xs" />
                   )}
-                  {role && ROLE_DEFINITIONS.find((r) => r.value === role)?.warning && (
+                  {role && role !== "__none__" && ROLE_DEFINITIONS.find((r) => r.value === role)?.warning && (
                     <p className="flex items-center gap-1 text-[11px] text-amber-600 mt-1">
                       <AlertTriangle className="w-3 h-3" />High-privilege role — grants full org control
                     </p>
@@ -394,7 +398,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
               )}
 
               {/* ── Use default permissions toggle ── */}
-              {role && role !== "custom" && (
+              {role && role !== "__none__" && role !== "custom" && (
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">Use default permissions</p>
@@ -405,7 +409,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
               )}
 
               {/* ── Advanced access (collapsible) ── */}
-              {role && !useDefaults && (
+              {role && role !== "__none__" && !useDefaults && (
                 <div>
                   <button type="button" onClick={() => setShowAdvanced((v) => !v)}
                     className="flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-blue-600 transition-colors">
