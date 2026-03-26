@@ -480,10 +480,6 @@ export default function UserManagement() {
     enabled: !!effectiveOrgId && effectiveOrgId !== "__none__",
   });
 
-  const filtered = useMemo(() => 
-    members.filter(m => (m.full_name || "").toLowerCase().includes(search.toLowerCase()) || m.email.toLowerCase().includes(search.toLowerCase())),
-    [members, search]
-  );
 
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleAll = (checked) => setSelectedIds(checked ? filtered.map(m => m.id) : []);
