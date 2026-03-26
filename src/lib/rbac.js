@@ -118,7 +118,7 @@ const ROLE_PAGES = {
 const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "AwaitingRole"];
 
 // Mandatory setup pages (require auth but accessible to all roles)
-const MANDATORY_SETUP_PAGES = ["SecurityQuestionsSetup", "Onboarding", "Welcome", "WelcomeAboard"];
+const MANDATORY_SETUP_PAGES = ["SecurityQuestionsSetup", "Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess"];
 
 // SuperAdmin-only pages
 const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];

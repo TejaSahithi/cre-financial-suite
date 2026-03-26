@@ -102,6 +102,7 @@ import UserManagement from './pages/UserManagement';
 import DemoExperience from './pages/DemoExperience';
 import RequestDemo from './pages/RequestDemo';
 import SecurityQuestionsSetup from './pages/SecurityQuestionsSetup';
+import PaymentSuccess from './pages/PaymentSuccess';
 
 import __Layout from './Layout.jsx';
 
@@ -162,6 +163,7 @@ export const PAGES = {
     "DemoExperience": DemoExperience,
     "RequestDemo": RequestDemo,
     "SecurityQuestionsSetup": SecurityQuestionsSetup,
+    "PaymentSuccess": PaymentSuccess,
 }
 
 export const pagesConfig = {

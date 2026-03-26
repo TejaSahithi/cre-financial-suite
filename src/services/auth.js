@@ -13,6 +13,48 @@
 import { supabase } from '@/services/supabaseClient';
 
 // ──────────────────────────────────────────────────────────────
+// GOOGLE OAUTH APPROVAL CHECK
+// After Google sign-in, we verify the user has either:
+//   a) a membership in any org, OR
+//   b) an approved access_request (request_type='access') for their email
+// If neither, we sign them out and redirect to RequestAccess.
+// ──────────────────────────────────────────────────────────────
+export async function checkGoogleUserApproval(authUser) {
+  if (!supabase || !authUser) return { approved: true };
+
+  try {
+    // Check for any membership
+    const { data: memberships } = await supabase
+      .from('memberships')
+      .select('id')
+      .eq('user_id', authUser.id)
+      .limit(1);
+
+    if (memberships && memberships.length > 0) {
+      return { approved: true };
+    }
+
+    // Check for an approved access request
+    const { data: requests } = await supabase
+      .from('access_requests')
+      .select('id, status')
+      .eq('email', authUser.email)
+      .in('status', ['approved', 'pending_approval'])
+      .limit(1);
+
+    if (requests && requests.length > 0) {
+      return { approved: true };
+    }
+
+    // No membership and no approved request — block this user
+    return { approved: false, reason: 'no_approval' };
+  } catch (err) {
+    console.error('[auth] checkGoogleUserApproval error:', err);
+    return { approved: true }; // Fail open on network error
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
 // DEV_MODE — auto-enabled ONLY when env vars are absent.
 // In production (env vars present), this is always false.
 // ──────────────────────────────────────────────────────────────
@@ -100,6 +142,17 @@ async function buildUserObject(authUser) {
     membershipCount: memberships.length,
   });
 
+  // Check if this is a Google/OAuth user with no memberships or approval
+  const isOAuthUser = authUser.app_metadata?.provider === 'google'
+    || authUser.app_metadata?.providers?.includes('google');
+  let _blocked = false;
+  if (isOAuthUser && memberships.length === 0) {
+    const approval = await checkGoogleUserApproval(authUser);
+    if (!approval.approved) {
+      _blocked = true;
+    }
+  }
+
   return {
     id: authUser.id,
     email: authUser.email,
@@ -118,6 +171,7 @@ async function buildUserObject(authUser) {
     memberships,
     profile: profile || { status: 'onboarding' },
     activeOrg,
+    _blocked,
   };
 }
 

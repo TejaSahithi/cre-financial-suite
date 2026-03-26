@@ -503,7 +503,7 @@ function DomainSettings({ orgId }) {
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
   const { enabledModules } = useModuleAccess();
-  const { orgId } = useOrgId();
+  const { orgId, orgName } = useOrgId();
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
@@ -511,22 +511,40 @@ export default function UserManagement() {
   const [showModal, setShowModal] = useState(false);
   const [editMember, setEditMember] = useState(null);
 
-  const { data: members = [], isLoading } = useQuery({
-    queryKey: ["org-members", orgId],
-    queryFn: () => fetchOrgMembers(orgId),
-    enabled: !!orgId && orgId !== "__none__",
+  const isSuperAdmin = currentUser?.role === "admin" || currentUser?._raw_role === "super_admin";
+  const isOrgAdmin = currentUser?._raw_role === "org_admin" || currentUser?.role === "org_admin";
+  const canManage = isSuperAdmin || isOrgAdmin ||
+    ["admin", "org_admin"].includes(currentUser?.role) ||
+    ["super_admin", "org_admin"].includes(currentUser?._raw_role);
+
+  // For SuperAdmin: allow selecting any org
+  const [selectedOrgId, setSelectedOrgId] = useState(null);
+
+  // Determine effective org ID to use
+  const effectiveOrgId = isSuperAdmin ? selectedOrgId : orgId;
+
+  // SuperAdmin: fetch all orgs for the selector
+  const { data: allOrgs = [] } = useQuery({
+    queryKey: ["all-orgs-for-selector"],
+    queryFn: async () => {
+      const { data } = await supabase.from("organizations").select("id,name,status").order("name");
+      return data || [];
+    },
+    enabled: isSuperAdmin,
   });
 
-  const canManage = ["admin", "org_admin"].includes(currentUser?.role) ||
-    ["super_admin", "org_admin"].includes(currentUser?._raw_role);
-  const isSuperAdmin = currentUser?.role === "admin" || currentUser?._raw_role === "super_admin";
+  const { data: members = [], isLoading } = useQuery({
+    queryKey: ["org-members", effectiveOrgId],
+    queryFn: () => fetchOrgMembers(effectiveOrgId),
+    enabled: !!effectiveOrgId && effectiveOrgId !== "__none__",
+  });
 
   const handleRemove = async (member) => {
     if (!confirm(`Remove ${member.full_name || member.email}?`)) return;
-    const { error } = await supabase.from("memberships").delete().eq("user_id", member.id).eq("org_id", orgId);
+    const { error } = await supabase.from("memberships").delete().eq("user_id", member.id).eq("org_id", effectiveOrgId);
     if (error) { toast.error("Failed to remove user"); return; }
     await logAudit({ entityType: "Membership", entityId: member.id, action: "delete",
-      orgId, userId: currentUser?.id, userEmail: currentUser?.email, oldValue: `${member.email} (${member.role})` });
+      orgId: effectiveOrgId, userId: currentUser?.id, userEmail: currentUser?.email, oldValue: `${member.email} (${member.role})` });
     toast.success(`Removed ${member.full_name || member.email}`);
     queryClient.invalidateQueries({ queryKey: ["org-members"] });
   };
@@ -543,19 +561,75 @@ export default function UserManagement() {
     </div>
   );
 
-  if (isLoading) return <div className="flex items-center justify-center h-96"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
+  const selectedOrgName = isSuperAdmin
+    ? (allOrgs.find(o => o.id === selectedOrgId)?.name || "Select an organization")
+    : orgName;
 
   return (
     <div className="p-6 space-y-5 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">User Management</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{members.length} team member{members.length !== 1 ? "s" : ""}</p>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {isSuperAdmin ? "Platform-wide user management" : `${members.length} team member${members.length !== 1 ? "s" : ""}`}
+          </p>
         </div>
-        <Button onClick={() => { setEditMember(null); setShowModal(true); }} className="bg-[#1a2744] hover:bg-[#243b67] gap-2">
+        <Button
+          onClick={() => { setEditMember(null); setShowModal(true); }}
+          disabled={isSuperAdmin && !selectedOrgId}
+          className="bg-[#1a2744] hover:bg-[#243b67] gap-2 disabled:opacity-40"
+        >
           <Plus className="w-4 h-4" />Invite Member
         </Button>
       </div>
+
+      {/* SuperAdmin: Org Selector */}
+      {isSuperAdmin && (
+        <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <Shield className="w-5 h-5 text-amber-600 shrink-0" />
+          <div className="flex-1">
+            <p className="text-xs font-bold text-amber-700 mb-1">SuperAdmin — Select Organization</p>
+            <Select value={selectedOrgId || ""} onValueChange={(v) => { setSelectedOrgId(v); queryClient.invalidateQueries({ queryKey: ["org-members"] }); }}>
+              <SelectTrigger className="w-80 h-9 text-sm bg-white border-amber-200">
+                <SelectValue placeholder="Choose an organization…" />
+              </SelectTrigger>
+              <SelectContent>
+                {allOrgs.map(org => (
+                  <SelectItem key={org.id} value={org.id} className="text-sm">
+                    {org.name}
+                    <span className={`ml-2 text-[10px] font-medium capitalize ${org.status === 'active' ? 'text-emerald-600' : 'text-slate-400'}`}>
+                      ({org.status})
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {selectedOrgId && (
+            <p className="text-xs text-amber-600 self-end">
+              Viewing <strong>{selectedOrgName}</strong> · {members.length} member{members.length !== 1 ? "s" : ""}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* If SuperAdmin hasn't selected an org yet */}
+      {isSuperAdmin && !selectedOrgId && (
+        <div className="flex flex-col items-center justify-center h-64 gap-3 bg-slate-50 rounded-2xl border border-slate-200">
+          <Users className="w-12 h-12 text-slate-200" />
+          <p className="text-sm text-slate-500 font-medium">Select an organization above to view its members</p>
+        </div>
+      )}
+
+      {/* Show loading for non-superadmin or when org is selected */}
+      {isLoading && effectiveOrgId && (
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        </div>
+      )}
+
+      {/* Show content when we have an effective org */}
+      {(!isSuperAdmin || selectedOrgId) && !isLoading && (
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
@@ -645,7 +719,7 @@ export default function UserManagement() {
           <Card>
             <CardHeader><CardTitle className="text-base flex items-center gap-2"><Upload className="w-4 h-4" />Bulk User Import via CSV</CardTitle></CardHeader>
             <CardContent>
-              <CsvImport orgId={orgId} currentUser={currentUser}
+              <CsvImport orgId={effectiveOrgId} currentUser={currentUser}
                 onClose={() => setActiveTab("team")}
                 onImported={() => queryClient.invalidateQueries({ queryKey: ["org-members"] })} />
             </CardContent>
@@ -653,13 +727,14 @@ export default function UserManagement() {
         </TabsContent>
 
         <TabsContent value="settings" className="mt-4">
-          <DomainSettings orgId={orgId} />
+          <DomainSettings orgId={effectiveOrgId} />
         </TabsContent>
       </Tabs>
+      )} {/* end: (!isSuperAdmin || selectedOrgId) && !isLoading */}
 
       {showModal && (
         <InviteModal open={showModal} onClose={() => { setShowModal(false); setEditMember(null); }}
-          member={editMember} orgId={orgId} currentUser={currentUser}
+          member={editMember} orgId={effectiveOrgId} currentUser={currentUser}
           enabledModules={enabledModules} isSuperAdmin={isSuperAdmin}
           onSaved={() => queryClient.invalidateQueries({ queryKey: ["org-members"] })} />
       )}

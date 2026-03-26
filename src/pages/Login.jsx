@@ -394,11 +394,20 @@ export default function Login() {
                 </div>
               )}
               
+              {/* Company not verified warning */}
+              {view === "create" && !verifiedCompany && email && !isValidatingEmail && !error && (
+                <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-600" />
+                  <span>Enter your approved email to auto-detect your company. Only approved applicants can create an account.</span>
+                </div>
+              )}
+
               <Button
                 type="submit"
-                disabled={loading || isValidatingEmail}
+                disabled={loading || isValidatingEmail || (view === "create" && !verifiedCompany)}
+                title={view === "create" && !verifiedCompany ? "Your email must be approved before creating an account" : undefined}
                 className={`w-full h-12 font-semibold rounded-xl shadow-sm gap-2 text-sm transition-colors mt-6 ${
-                  view === "create" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-[#1a2744] hover:bg-[#243b67] text-white"
+                  view === "create" ? "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40" : "bg-[#1a2744] hover:bg-[#243b67] text-white"
                 }`}
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}

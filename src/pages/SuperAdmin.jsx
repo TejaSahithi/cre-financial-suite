@@ -384,31 +384,75 @@ export default function SuperAdmin() {
                   <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      {r.request_type === 'contact' ? (
+                      {/* Demo & Contact — View Details only */}
+                      {(r.request_type === 'contact' || r.request_type === 'demo') ? (
                         <Dialog>
                           <DialogTrigger asChild>
                             <Button size="sm" variant="outline" className="text-xs h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
                               <Mail className="w-3 h-3 mr-1" />
-                              Read
+                              Details
                             </Button>
                           </DialogTrigger>
-                          <DialogContent>
+                          <DialogContent className="max-w-lg">
                             <DialogHeader>
-                              <DialogTitle>Message from {r.full_name}</DialogTitle>
+                              <DialogTitle className="flex items-center gap-2">
+                                {r.request_type === 'demo' ? '🎥' : '✉️'} {r.full_name}
+                              </DialogTitle>
                             </DialogHeader>
-                            <div className="space-y-4 py-4">
-                              <div>
-                                <Label className="text-xs text-slate-500">Department</Label>
-                                <p className="font-medium capitalize">{r.department || '—'}</p>
+                            <div className="space-y-4 py-2">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <Label className="text-xs text-slate-500">Email</Label>
+                                  <p className="font-medium text-sm">{r.email}</p>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-slate-500">Company</Label>
+                                  <p className="font-medium text-sm">{r.company_name || '—'}</p>
+                                </div>
+                                {r.phone && (
+                                  <div>
+                                    <Label className="text-xs text-slate-500">Phone</Label>
+                                    <p className="font-medium text-sm">{r.phone}</p>
+                                  </div>
+                                )}
+                                {r.department && (
+                                  <div>
+                                    <Label className="text-xs text-slate-500">Department</Label>
+                                    <p className="font-medium text-sm capitalize">{r.department}</p>
+                                  </div>
+                                )}
+                                {r.plan && (
+                                  <div>
+                                    <Label className="text-xs text-slate-500">Plan</Label>
+                                    <p className="font-medium text-sm capitalize">{r.plan}</p>
+                                  </div>
+                                )}
+                                {r.request_type === 'demo' && (
+                                  <div>
+                                    <Label className="text-xs text-slate-500">Demo Viewed</Label>
+                                    <p className={`font-semibold text-sm ${r.demo_viewed ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                      {r.demo_viewed ? '✓ Watched' : 'Not yet'}
+                                    </p>
+                                  </div>
+                                )}
+                                <div>
+                                  <Label className="text-xs text-slate-500">Submitted</Label>
+                                  <p className="font-medium text-sm">
+                                    {r.created_at ? new Date(r.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+                                  </p>
+                                </div>
                               </div>
-                              <div>
-                                <Label className="text-xs text-slate-500">Message</Label>
-                                <p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 mt-1 whitespace-pre-wrap">{r.message || 'No message provided.'}</p>
-                              </div>
+                              {r.message && (
+                                <div>
+                                  <Label className="text-xs text-slate-500 mb-1 block">Message</Label>
+                                  <p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 whitespace-pre-wrap">{r.message}</p>
+                                </div>
+                              )}
                             </div>
                           </DialogContent>
                         </Dialog>
                       ) : (
+                        /* Access requests — keep Approve / Reject / Revoke */
                         <>
                           {r.status !== 'approved' && (
                             <Button 
@@ -417,7 +461,6 @@ export default function SuperAdmin() {
                               disabled={processingRequests.has(r.id)}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                console.log('Approve clicked for:', r.id);
                                 updateRequest.mutate({ id: r.id, approved: true });
                               }}>
                               {processingRequests.has(r.id) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
@@ -468,6 +511,7 @@ export default function SuperAdmin() {
                       </Button>
                     </div>
                   </TableCell>
+
                 </TableRow>
               ))
             )}

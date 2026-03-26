@@ -28,6 +28,19 @@ export const AuthProvider = ({ children }) => {
       if (showLoading) setIsLoadingAuth(true);
       const currentUser = await me();
       if (currentUser) {
+        // Google OAuth approval check: if user is blocked, sign them out
+        if (currentUser._blocked) {
+          setUser(null);
+          setIsAuthenticated(false);
+          setAuthError({
+            type: 'oauth_not_approved',
+            message: 'Your Google account is not approved for access. Please request access first.',
+          });
+          // Sign out silently and redirect
+          await authLogout();
+          window.location.href = '/RequestAccess?error=google_not_approved';
+          return;
+        }
         setUser(currentUser);
         setIsAuthenticated(true);
       } else {
@@ -47,6 +60,7 @@ export const AuthProvider = ({ children }) => {
       if (showLoading) setIsLoadingAuth(false);
     }
   }, []);
+
 
   useEffect(() => {
     // Initial profile fetch

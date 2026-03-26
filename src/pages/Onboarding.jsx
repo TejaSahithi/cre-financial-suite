@@ -382,55 +382,48 @@ export default function Onboarding() {
             </div>
           )}
 
-          {/* Step 3: Payment */}
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
               <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle, paymentInfo) => {
-                console.log('[Onboarding] Payment confirmed, advancing to step 4');
-                // Store the payment info
-                setForm(prev => ({ ...prev, billing_cycle: billingCycle, paymentInfo }));
-                
-                // All DB calls are non-blocking — navigation must always succeed
-                const proceedToStep4 = () => {
-                  console.log('[Onboarding] Advancing to step 4 UI');
-                  setStep(4);
-                };
+                console.log('[Onboarding] Payment confirmed, navigating to PaymentSuccess');
 
-                // Trigger DB updates and profile refresh in background
+                // All DB calls are non-blocking — navigation must always succeed
+                const numericAmount = typeof paymentInfo.displayPrice === 'string' 
+                  ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
+                  : paymentInfo.displayPrice;
+
+                // Trigger DB updates in background
                 (async () => {
                   try {
-                    const { supabase } = await import('@/services/supabaseClient');
-                    const numericAmount = typeof paymentInfo.displayPrice === 'string' 
-                      ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
-                      : paymentInfo.displayPrice;
-
-                    await supabase.from('invoices').insert({
-                      org_id: org.id,
-                      amount: numericAmount,
-                      status: 'paid',
-                      issued_date: new Date().toISOString().split('T')[0]
-                    });
-                    console.log('[Onboarding] Invoice saved to database');
+                    if (org?.id) {
+                      await supabase.from('invoices').insert({
+                        org_id: org.id,
+                        amount: numericAmount,
+                        status: 'paid',
+                        issued_date: new Date().toISOString().split('T')[0]
+                      });
+                    }
                   } catch (e) {
                     console.error('[Onboarding] Invoice save failed:', e);
                   }
-
                   try {
-                    await OrganizationService.update(org.id, {
-                      status: "under_review",
-                      onboarding_step: 4,
-                      plan: form.plan,
-                      billing_cycle: billingCycle,
-                    });
-                    await updateProfile({ status: "under_review" });
-                    console.log('[Onboarding] Status updated to under_review');
+                    if (org?.id) {
+                      await OrganizationService.update(org.id, {
+                        status: "under_review",
+                        onboarding_step: 4,
+                        plan: form.plan,
+                        billing_cycle: billingCycle,
+                      });
+                      await updateProfile({ status: "under_review" });
+                    }
                   } catch (e) {
                     console.error('[Onboarding] Status update failed:', e);
                   }
                 })();
 
-                // Immediate transition
-                proceedToStep4();
+                // Navigate to PaymentSuccess page immediately
+                const url = createPageUrl("PaymentSuccess");
+                window.location.href = url + `?plan=${encodeURIComponent(paymentInfo.plan || form.plan)}&billing=${billingCycle}&amount=${numericAmount}&org=${encodeURIComponent(org?.name || '')}`;
               }} onBack={() => setStep(2)} />
             </div>
           )}
