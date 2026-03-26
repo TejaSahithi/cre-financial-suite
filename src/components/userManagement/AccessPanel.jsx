@@ -33,7 +33,7 @@ export function AccessPanel({ role, modulePerms, setModulePerms, pagePerms, setP
     if (mod?.pages) setPagePerms((p) => { const n = { ...p }; mod.pages.forEach((pg) => { n[pg] = level; }); return n; });
   };
   const bulkApply = (level) => {
-    const next = {}; Object.keys(modulePerms).forEach((k) => { next[k] = level; }); setModulePerms(next);
+    const next = {}; Object.keys(MODULE_DEFINITIONS).forEach((k) => { next[k] = level; }); setModulePerms(next);
     const pn = {}; Object.values(MODULE_DEFINITIONS).forEach((m) => { m?.pages?.forEach((pg) => { pn[pg] = level; }); }); setPagePerms(pn);
   };
 

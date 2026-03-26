@@ -22,7 +22,7 @@ function parseCSV(text) {
   if (lines.length < 2) return [];
   const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/\s+/g, "_"));
   return lines.slice(1).map((line, idx) => {
-    const vals = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+    const vals = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.trim().replace(/^"|"$/g, ""));
     const row = {};
     headers.forEach((h, i) => { row[h] = vals[i] || ""; });
     const email = row.email || "";
@@ -73,7 +73,9 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
     setRows(prev => prev.map(r => {
       if (r._id !== id) return r;
       let roles = parseRoles(r.role);
-      let next = checked ? [...roles, val] : roles.filter(x => x !== val);
+      let next = checked === true 
+        ? (roles.includes(val) ? roles : [...roles, val]) 
+        : roles.filter(x => x !== val);
       return { ...r, role: next.join(',') };
     }));
   };
@@ -89,10 +91,10 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
             email: row.email,
             full_name: row.full_name || undefined,
             phone: row.phone || undefined,
-            role: row.role,
-            custom_role: parseRoles(row.role).includes("custom") ? row.custom_role : undefined,
+            role: row.role || "viewer",
+            custom_role: parseRoles(row.role || "viewer").includes("custom") ? row.custom_role : undefined,
             org_id: orgId,
-            module_permissions: row.module_permissions || getRoleDefaultModulePerms(row.role),
+            module_permissions: row.module_permissions || getRoleDefaultModulePerms(row.role || "viewer"),
             page_permissions: row.page_permissions || {},
             onboarding_type: "invited",
           },

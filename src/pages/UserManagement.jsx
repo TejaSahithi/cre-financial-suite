@@ -35,6 +35,7 @@ import { AccessPanel } from "@/components/userManagement/AccessPanel";
 
 // ── Right summary panel ───────────────────────────────────────────────────────
 function SummaryPanel({ role, modulePerms, capabilities, fullName, noRole }) {
+  const roles = parseRoles(role);
   const roleDef = ROLE_DEFINITIONS.find((r) => r.value === role);
   const diffs = useMemo(() => getPermDiff(getRoleDefaultModulePerms(role), modulePerms), [role, modulePerms]);
   const activeCaps = CAPABILITY_DEFINITIONS.filter(({ key }) => {
@@ -149,7 +150,9 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   // When role changes and useDefaults is on, reset permissions to role defaults
   const handleRoleToggle = (val, checked) => {
     setRoles((prev) => {
-      let next = checked ? [...prev, val] : prev.filter(r => r !== val);
+      let next = checked === true 
+        ? (prev.includes(val) ? prev : [...prev, val]) 
+        : prev.filter(r => r !== val);
       if (useDefaults && next.length > 0) {
         setModulePerms(getRoleDefaultModulePerms(next.join(",")));
         setPagePerms({});
