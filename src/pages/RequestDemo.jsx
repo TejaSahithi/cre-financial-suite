@@ -105,7 +105,11 @@ export default function RequestDemo() {
             <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #334155;">
               <h2 style="color: #1a2744;">Hi ${form.full_name.split(' ')[0]},</h2>
               <p>Thank you for requesting a demo of CRE Suite.</p>
-              <p>You can now access our exclusive end-to-end platform demonstration and slide deck.</p>
+              <p>You can now access our exclusive end-to-end platform demonstration and slide deck using the links below:</p>
+              <ul>
+                <li><strong>Demo Video:</strong> <a href="https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/End-to-End_CRE_Budgeting_&_CAM.mp4">Watch Here</a></li>
+                <li><strong>Slide Deck:</strong> <a href="https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/Automated_CRE_Financial_Intelligence.pptx">Download Deck</a></li>
+              </ul>
               <p>Someone from our sales team will also reach out shortly to discuss your specific needs.</p>
               <br/>
               <p>Best regards,<br/>The CRE Suite Team</p>

@@ -90,20 +90,32 @@ export const ACCESS_LEVELS = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Get default module permissions for a role from ROLE_PAGES */
-export function getRoleDefaultModulePerms(role) {
-  if (role === "org_admin" || role === "super_admin" || role === "admin") {
+export function parseRoles(roleStr) {
+  if (!roleStr || roleStr === "__none__") return [];
+  return String(roleStr).split(",").map(r => r.trim()).filter(Boolean);
+}
+
+/** Get default module permissions for a role (or multiple roles via comma-separated string) */
+export function getRoleDefaultModulePerms(roleStr) {
+  const roles = parseRoles(roleStr);
+  
+  if (roles.includes("org_admin") || roles.includes("super_admin") || roles.includes("admin")) {
     const all = {};
     Object.keys(MODULE_DEFINITIONS).forEach((k) => { all[k] = "full"; });
     return all;
   }
-  const allowedPages = new Set(ROLE_PAGES[role] || []);
+
+  const allowedPages = new Set();
+  roles.forEach(role => {
+    (ROLE_PAGES[role] || []).forEach(p => allowedPages.add(p));
+  });
+
   const perms = {};
   Object.entries(MODULE_DEFINITIONS).forEach(([key, mod]) => {
     if (!mod?.pages) return;
     const hasAny = mod.pages.some((p) => allowedPages.has(p));
-    if (hasAny) perms[key] = "full";
-    else perms[key] = "none";
+    // Without full hierarchical merge, we just grant full if any page is allowed (v1 simplified logic)
+    perms[key] = hasAny ? "full" : "none";
   });
   return perms;
 }
@@ -138,11 +150,22 @@ export function getStatusBadge(status) {
   return map[status] || "bg-slate-100 text-slate-500";
 }
 
-/** Simulate what a user with given role+overrides sees */
-export function resolveEffectivePermissions(role, modulePerms, pagePerms, capabilities) {
-  const roleDefault = getRoleDefaultModulePerms(role);
+/** Simulate what a user with given role(s) + overrides sees */
+export function resolveEffectivePermissions(roleStr, modulePerms, pagePerms, capabilities) {
+  const roleDefault = getRoleDefaultModulePerms(roleStr);
   const effectiveModule = { ...roleDefault, ...modulePerms };
   const effectivePage = { ...pagePerms };
-  const effectiveCaps = { ...(getRoleDefinition(role)?.defaultCapabilities || {}), ...capabilities };
+  
+  // Merge capabilities across all assigned roles
+  const roles = parseRoles(roleStr);
+  const baseCaps = {};
+  roles.forEach(role => {
+    const def = getRoleDefinition(role)?.defaultCapabilities || {};
+    Object.keys(def).forEach(k => {
+      if (def[k]) baseCaps[k] = true;
+    });
+  });
+
+  const effectiveCaps = { ...baseCaps, ...capabilities };
   return { effectiveModule, effectivePage, effectiveCaps };
 }

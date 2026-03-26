@@ -261,7 +261,12 @@ export default function OrgSettings() {
               <CardContent>
                 <div className="space-y-3">
                   {users.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-8">No users found</p>
+                    <div className="text-center py-8">
+                      <p className="text-sm text-slate-400 mb-2">No users found</p>
+                      <Button variant="outline" size="sm" onClick={() => window.location.href = '/UserManagement'}>
+                        Go to User Management
+                      </Button>
+                    </div>
                   ) : users.map(u => (
                     <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                       <div className="flex items-center gap-3">
@@ -278,6 +283,13 @@ export default function OrgSettings() {
                       </Badge>
                     </div>
                   ))}
+                  {users.length > 0 && (
+                    <div className="pt-2">
+                       <Button variant="outline" className="w-full text-sm" onClick={() => window.location.href = '/UserManagement'}>
+                         Manage All Users & Roles
+                       </Button>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -8,8 +8,11 @@ import useOrgId from "@/hooks/useOrgId";
 import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 import {
   ROLE_DEFINITIONS, CAPABILITY_DEFINITIONS, MODULE_DOMAINS, ACCESS_LEVELS,
-  getInitials, getStatusBadge, getRoleDefaultModulePerms, getPermDiff
+  getInitials, getStatusBadge, getRoleDefaultModulePerms, getPermDiff, parseRoles
 } from "@/lib/userPermissions";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
 import CsvImport from "@/components/userManagement/CsvImport";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,108 +29,9 @@ import {
   AlertTriangle, Zap, Eye, Globe, Info
 } from "lucide-react";
 import { toast } from "sonner";
+import { AccessPanel } from "@/components/userManagement/AccessPanel";
 
-// ── Access chip ───────────────────────────────────────────────────────────────
-function AccessChip({ value, onChange }) {
-  return (
-    <div className="flex gap-1">
-      {ACCESS_LEVELS.map((lvl) => (
-        <button key={lvl.value} type="button" title={lvl.description}
-          onClick={() => onChange(lvl.value)}
-          className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold transition-all ${
-            value === lvl.value ? lvl.chipClass : "bg-white border-slate-200 text-slate-400 hover:border-slate-300"
-          }`}>{lvl.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
-// ── Access panel (collapsible) ────────────────────────────────────────────────
-function AccessPanel({ role, modulePerms, setModulePerms, pagePerms, setPagePerms }) {
-  const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState({});
-  const roleDefault = useMemo(() => getRoleDefaultModulePerms(role), [role]);
-  const diffs = useMemo(() => getPermDiff(roleDefault, modulePerms), [roleDefault, modulePerms]);
-
-  const setModuleLevel = (key, level) => {
-    setModulePerms((p) => ({ ...p, [key]: level }));
-    const mod = MODULE_DEFINITIONS[key];
-    if (mod?.pages) setPagePerms((p) => { const n = { ...p }; mod.pages.forEach((pg) => { n[pg] = level; }); return n; });
-  };
-  const bulkApply = (level) => {
-    const next = {}; Object.keys(modulePerms).forEach((k) => { next[k] = level; }); setModulePerms(next);
-    const pn = {}; Object.values(MODULE_DEFINITIONS).forEach((m) => { m?.pages?.forEach((pg) => { pn[pg] = level; }); }); setPagePerms(pn);
-  };
-
-  return (
-    <div>
-      {diffs.length > 0 && (
-        <div className="mb-2 px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-700 flex items-center gap-1.5">
-          <AlertTriangle className="w-3 h-3 shrink-0" />
-          <span><strong>{diffs.length} override{diffs.length !== 1 ? "s" : ""}</strong> from role default</span>
-        </div>
-      )}
-      <div className="flex items-center gap-2 mb-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search modules…" className="pl-7 h-7 text-xs" />
-        </div>
-        <span className="text-[11px] text-slate-400">Bulk:</span>
-        {["full", "read_only", "none"].map((lvl) => (
-          <button key={lvl} onClick={() => bulkApply(lvl)}
-            className="text-[11px] px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium capitalize">
-            {lvl === "read_only" ? "Read" : lvl.replace("_", " ")}
-          </button>
-        ))}
-      </div>
-      <div className="space-y-1 max-h-52 overflow-y-auto pr-0.5">
-        {Object.entries(MODULE_DOMAINS).map(([domain, keys]) => {
-          const visible = keys.filter((k) => MODULE_DEFINITIONS[k] && (!search || MODULE_DEFINITIONS[k].label.toLowerCase().includes(search.toLowerCase())));
-          if (!visible.length) return null;
-          return (
-            <div key={domain}>
-              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest px-1 mt-2 mb-1">{domain}</p>
-              {visible.map((key) => {
-                const mod = MODULE_DEFINITIONS[key];
-                if (!mod) return null;
-                const modLevel = modulePerms[key] || "none";
-                const isOverridden = modLevel !== (roleDefault[key] || "none");
-                const isExp = expanded[key];
-                return (
-                  <div key={key} className={`border rounded-lg overflow-hidden mb-1 ${isOverridden ? "border-amber-200" : "border-slate-200"}`}>
-                    <div className={`flex items-center justify-between px-2.5 py-2 ${isOverridden ? "bg-amber-50" : "bg-slate-50"}`}>
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {mod.pages?.length > 0 && (
-                          <button type="button" onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))} className="text-slate-400 hover:text-slate-600 shrink-0">
-                            {isExp ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                          </button>
-                        )}
-                        <span className="text-xs font-semibold text-slate-800 truncate">{mod.label}</span>
-                        {isOverridden && <span className="text-[8px] bg-amber-200 text-amber-700 rounded px-1 font-bold shrink-0">Override</span>}
-                      </div>
-                      <AccessChip value={modLevel} onChange={(v) => setModuleLevel(key, v)} />
-                    </div>
-                    {isExp && mod.pages && (
-                      <div className="divide-y divide-slate-50 border-t border-slate-100">
-                        {mod.pages.map((pg) => (
-                          <div key={pg} className="flex items-center justify-between px-5 py-1.5 bg-white">
-                            <span className="text-[11px] text-slate-500">{pg.replace(/([A-Z])/g, " $1").trim()}</span>
-                            <AccessChip value={pagePerms[pg] || modLevel} onChange={(v) => setPagePerms((p) => ({ ...p, [pg]: v }))} />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // ── Right summary panel ───────────────────────────────────────────────────────
 function SummaryPanel({ role, modulePerms, capabilities, fullName, noRole }) {
@@ -148,11 +52,18 @@ function SummaryPanel({ role, modulePerms, capabilities, fullName, noRole }) {
       <div>
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Summary</p>
         <p className="text-sm font-bold text-slate-900 truncate">{fullName || "New User"}</p>
-        {noRole ? (
-          <span className="text-[11px] bg-amber-100 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 font-semibold">Pending Access</span>
-        ) : roleDef ? (
-          <Badge className={`text-[10px] mt-1 ${roleDef.color}`}>{roleDef.label}</Badge>
-        ) : null}
+        <div className="flex flex-wrap gap-1 mt-1">
+          {noRole ? (
+            <span className="text-[11px] bg-amber-100 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 font-semibold">Pending Access</span>
+          ) : (
+            roles.map(r => {
+              const d = ROLE_DEFINITIONS.find((rd) => rd.value === r);
+              if (r === 'custom') return <Badge key="custom" className="text-[10px] bg-pink-100 text-pink-700">Custom</Badge>;
+              if (d) return <Badge key={d.value} className={`text-[10px] ${d.color}`}>{d.label}</Badge>;
+              return null;
+            })
+          )}
+        </div>
       </div>
 
       {!noRole && diffs.length > 0 && (
@@ -219,7 +130,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   const [fullName, setFullName] = useState(member?.full_name || "");
   const [email, setEmail] = useState(member?.email || "");
   const [phone, setPhone] = useState(member?.phone || "");
-  const [role, setRole] = useState(member?.role || "__none__");
+  const [roles, setRoles] = useState(parseRoles(member?.role));
   const [customRole, setCustomRole] = useState(member?.custom_role || "");
   const [useDefaults, setUseDefaults] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -232,22 +143,24 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  const noRole = !role || role === "__none__";
+  const noRole = roles.length === 0;
   const availableRoles = isSuperAdmin ? ROLE_DEFINITIONS : ROLE_DEFINITIONS.filter((r) => r.value !== "org_admin");
 
   // When role changes and useDefaults is on, reset permissions to role defaults
-  const handleRoleChange = (val) => {
-    setRole(val);
-    const actual = val === "__none__" ? "" : val;
-    if (useDefaults && actual) {
-      setModulePerms(getRoleDefaultModulePerms(actual));
-      setPagePerms({});
-    }
+  const handleRoleToggle = (val, checked) => {
+    setRoles((prev) => {
+      let next = checked ? [...prev, val] : prev.filter(r => r !== val);
+      if (useDefaults && next.length > 0) {
+        setModulePerms(getRoleDefaultModulePerms(next.join(",")));
+        setPagePerms({});
+      }
+      return next;
+    });
   };
 
   const handleUseDefaultsToggle = (val) => {
     setUseDefaults(val);
-    const actual = role === "__none__" ? "" : role;
+    const actual = roles.join(",");
     if (val && actual) { setModulePerms(getRoleDefaultModulePerms(actual)); setPagePerms({}); }
     if (!val) setShowAdvanced(true);
   };
@@ -255,14 +168,14 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
   const handleSave = async () => {
     if (!isEditing && !email) return;
     setSaving(true);
-    const actualRole = role === "__none__" ? "" : role;
+    const actualRole = roles.join(",");
     try {
       const effectiveModulePerms = useDefaults && actualRole ? getRoleDefaultModulePerms(actualRole) : modulePerms;
       const effectivePagePerms = useDefaults && actualRole ? {} : pagePerms;
 
       if (isEditing) {
         const { error } = await supabase.from("memberships").update({
-          role: actualRole || null, custom_role: actualRole === "custom" ? customRole : null,
+          role: actualRole || null, custom_role: roles.includes("custom") ? customRole : null,
           phone, module_permissions: effectiveModulePerms, page_permissions: effectivePagePerms, capabilities,
         }).eq("user_id", member.id).eq("org_id", orgId);
         if (error) throw error;
@@ -274,7 +187,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
         const resp = await supabase.functions.invoke("invite-user", {
           body: {
             email, full_name: fullName || undefined, role: actualRole || "viewer",
-            custom_role: actualRole === "custom" ? customRole : undefined,
+            custom_role: roles.includes("custom") ? customRole : undefined,
             phone: phone || undefined, org_id: orgId,
             module_permissions: effectiveModulePerms,
             page_permissions: effectivePagePerms, capabilities,
@@ -295,7 +208,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
 
   // Preview modal
   if (showPreview) {
-    const actualRole = role === "__none__" ? "" : role;
+    const actualRole = roles.join(",");
     const effectiveModulePerms = useDefaults && actualRole ? getRoleDefaultModulePerms(actualRole) : modulePerms;
     const byLevel = { full: [], read_only: [], none: [] };
     Object.entries(effectiveModulePerms).forEach(([k, v]) => { const m = MODULE_DEFINITIONS[k]; if (m) byLevel[v]?.push(m.label); });
@@ -304,7 +217,14 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Eye className="w-4 h-4" />Preview: {fullName || email}'s Access</DialogTitle></DialogHeader>
           <div className="space-y-3 text-sm">
-            {actualRole && <div><span className="text-slate-500">Role:</span> <Badge className={`ml-1 text-[10px] ${ROLE_DEFINITIONS.find((r) => r.value === actualRole)?.color || ""}`}>{actualRole}</Badge></div>}
+            {actualRole && (
+              <div>
+                <span className="text-slate-500">Role(s):</span> 
+                {parseRoles(actualRole).map(r => (
+                  <Badge key={r} className={`ml-1 text-[10px] ${ROLE_DEFINITIONS.find((rd) => rd.value === r)?.color || ""}`}>{r}</Badge>
+                ))}
+              </div>
+            )}
             {byLevel.full.length > 0 && <div><p className="text-xs font-semibold text-emerald-600 mb-1">Full Access</p><p className="text-xs text-slate-500">{byLevel.full.join(", ")}</p></div>}
             {byLevel.read_only.length > 0 && <div><p className="text-xs font-semibold text-blue-600 mb-1">Read Only</p><p className="text-xs text-slate-500">{byLevel.read_only.join(", ")}</p></div>}
             {byLevel.none.length > 0 && <div><p className="text-xs font-semibold text-slate-400 mb-1">No Access</p><p className="text-xs text-slate-400">{byLevel.none.join(", ")}</p></div>}
@@ -354,33 +274,46 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
                   <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1 (555) 000-0000" className="mt-1 h-9" />
                 </div>
                 <div>
-                  <Label className="text-xs">Role</Label>
-                  <Select value={role} onValueChange={handleRoleChange}>
-                    <SelectTrigger className="mt-1 h-9 text-sm">
-                      <SelectValue placeholder="— Assign role (optional) —" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__" className="text-slate-400 text-sm italic">No role — pending access</SelectItem>
-                      {availableRoles.map((r) => (
-                        <SelectItem key={r.value} value={r.value} className="text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${r.color.replace("text-", "bg-").split(" ")[0]}`} />
-                            <span className="font-semibold">{r.label}</span>
-                            <span className="text-slate-400 text-xs">— {r.description}</span>
-                            {r.warning && <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />}
+                  <Label className="text-xs">Role(s)</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className={`mt-1 h-9 flex w-full justify-between items-center text-left font-normal ${noRole ? 'text-slate-500' : ''}`}>
+                         <span className="truncate flex-1">
+                           {noRole ? "— Assign roles (optional) —" : roles.map(r => r === 'custom' ? 'Custom' : ROLE_DEFINITIONS.find(d => d.value === r)?.label || r).join(', ')}
+                         </span>
+                         <ChevronDown className="w-4 h-4 opacity-50 shrink-0" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-96 p-2" align="start">
+                      <div className="space-y-3">
+                        {availableRoles.map((r) => (
+                          <div key={r.value} className="flex flex-row items-start space-x-3">
+                            <Checkbox id={`role-${r.value}`} checked={roles.includes(r.value)} onCheckedChange={(c) => handleRoleToggle(r.value, c)} className="mt-1" />
+                            <Label htmlFor={`role-${r.value}`} className="text-sm cursor-pointer leading-tight flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${r.color.replace("text-", "bg-").split(" ")[0]}`} />
+                                <span className="font-semibold text-slate-900">{r.label}</span>
+                                {r.warning && <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />}
+                              </div>
+                              <p className="text-slate-500 text-xs mt-0.5">{r.description}</p>
+                            </Label>
                           </div>
-                        </SelectItem>
-                      ))}
-                      <SelectItem value="custom" className="text-sm font-semibold text-pink-600">Custom Role</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {role === "custom" && (
+                        ))}
+                        <div className="flex flex-row items-center space-x-3 border-t pt-2">
+                            <Checkbox id={`role-custom`} checked={roles.includes('custom')} onCheckedChange={(c) => handleRoleToggle('custom', c)} />
+                            <Label htmlFor={`role-custom`} className="text-sm font-semibold text-pink-600 cursor-pointer">Custom Role</Label>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+
+                  {roles.includes("custom") && (
                     <Input value={customRole} onChange={(e) => setCustomRole(e.target.value)}
-                      placeholder="e.g. Portfolio Analyst" className="mt-1.5 h-8 text-xs" />
+                      placeholder="e.g. Portfolio Analyst" className="mt-2 h-8 text-xs" />
                   )}
-                  {role && role !== "__none__" && ROLE_DEFINITIONS.find((r) => r.value === role)?.warning && (
-                    <p className="flex items-center gap-1 text-[11px] text-amber-600 mt-1">
-                      <AlertTriangle className="w-3 h-3" />High-privilege role — grants full org control
+                  {roles.some(r => ROLE_DEFINITIONS.find((rd) => rd.value === r)?.warning) && (
+                    <p className="flex items-center gap-1 text-[11px] text-amber-600 mt-2">
+                      <AlertTriangle className="w-3 h-3" />High-privilege role selected — grants full org control
                     </p>
                   )}
                 </div>
@@ -398,32 +331,32 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
               )}
 
               {/* ── Use default permissions toggle ── */}
-              {role && role !== "__none__" && role !== "custom" && (
+              {!noRole && !roles.includes("custom") && (
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">Use default permissions</p>
-                    <p className="text-xs text-slate-500">Apply standard access for the <strong>{ROLE_DEFINITIONS.find((r) => r.value === role)?.label || role}</strong> role</p>
+                    <p className="text-xs text-slate-500">Apply standard access for the selected roles</p>
                   </div>
                   <Switch checked={useDefaults} onCheckedChange={handleUseDefaultsToggle} />
                 </div>
               )}
 
               {/* ── Advanced access (collapsible) ── */}
-              {role && role !== "__none__" && !useDefaults && (
+              {!noRole && !useDefaults && (
                 <div>
                   <button type="button" onClick={() => setShowAdvanced((v) => !v)}
                     className="flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-blue-600 transition-colors">
                     {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     Advanced Access Configuration
-                    {getPermDiff(getRoleDefaultModulePerms(role), modulePerms).length > 0 && (
+                    {getPermDiff(getRoleDefaultModulePerms(roles.join(",")), modulePerms).length > 0 && (
                       <span className="text-[10px] bg-amber-100 text-amber-700 rounded px-1.5 py-0.5 font-bold">
-                        {getPermDiff(getRoleDefaultModulePerms(role), modulePerms).length} overrides
+                        {getPermDiff(getRoleDefaultModulePerms(roles.join(",")), modulePerms).length} overrides
                       </span>
                     )}
                   </button>
                   {showAdvanced && (
                     <div className="mt-3 pl-1 border-l-2 border-slate-100">
-                      <AccessPanel role={role} modulePerms={modulePerms} setModulePerms={setModulePerms}
+                      <AccessPanel role={roles.join(",")} modulePerms={modulePerms} setModulePerms={setModulePerms}
                         pagePerms={pagePerms} setPagePerms={setPagePerms} />
                     </div>
                   )}
@@ -454,7 +387,7 @@ function InviteModal({ open, onClose, member, orgId, currentUser, enabledModules
 
           {/* ── Summary sidebar ── */}
           <div className="w-52 bg-slate-50 border-l border-slate-100 p-4 overflow-y-auto">
-            <SummaryPanel role={role} modulePerms={useDefaults && role ? getRoleDefaultModulePerms(role) : modulePerms}
+            <SummaryPanel role={roles.join(",")} modulePerms={useDefaults ? getRoleDefaultModulePerms(roles.join(",")) : modulePerms}
               capabilities={capabilities} fullName={fullName} noRole={noRole} />
           </div>
         </div>
@@ -516,10 +449,10 @@ export default function UserManagement() {
   const [editMember, setEditMember] = useState(null);
 
   const isSuperAdmin = currentUser?.role === "admin" || currentUser?._raw_role === "super_admin";
-  const isOrgAdmin = currentUser?._raw_role === "org_admin" || currentUser?.role === "org_admin";
+  const isOrgAdmin = currentUser?._raw_role === "org_admin" || currentUser?.role?.includes("org_admin");
   const canManage = isSuperAdmin || isOrgAdmin ||
-    ["admin", "org_admin"].includes(currentUser?.role) ||
-    ["super_admin", "org_admin"].includes(currentUser?._raw_role);
+    currentUser?.role?.includes("admin") || currentUser?.role?.includes("org_admin") ||
+    currentUser?._raw_role?.includes("super_admin") || currentUser?._raw_role?.includes("org_admin");
 
   // For SuperAdmin: allow selecting any org
   const [selectedOrgId, setSelectedOrgId] = useState(null);
@@ -677,10 +610,17 @@ export default function UserManagement() {
                           {member.phone ? <p className="text-xs text-slate-500 flex items-center gap-1"><Phone className="w-3 h-3 shrink-0" />{member.phone}</p>
                             : <p className="text-xs text-slate-300">No phone</p>}
                         </div>
-                        <div>
-                          {roleDef ? <Badge className={`text-[10px] ${roleDef.color}`}>{roleDef.label}</Badge>
-                            : <Badge className="text-[10px] bg-amber-100 text-amber-600">Pending</Badge>}
-                          {overrides > 0 && <p className="text-[10px] text-blue-500 mt-0.5">{overrides} overrides</p>}
+                        <div className="flex flex-wrap gap-1">
+                          {parseRoles(member.role).length > 0 ? (
+                            parseRoles(member.role).map(r => {
+                               if(r === 'custom') return <Badge key={r} className="text-[10px] bg-pink-100 text-pink-700 text-center">Custom</Badge>;
+                               const rd = ROLE_DEFINITIONS.find((rd) => rd.value === r);
+                               if (rd) return <Badge key={rd.value} className={`text-[10px] ${rd.color}`}>{rd.label}</Badge>;
+                               return null;
+                            })
+                          ) : <Badge className="text-[10px] bg-amber-100 text-amber-600">Pending</Badge>}
+
+                          {overrides > 0 && <p className="text-[10px] text-blue-500 mt-1 w-full">{overrides} overrides</p>}
                         </div>
                         <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full capitalize ${getStatusBadge(member.status)}`}>
                           {member.status || "active"}

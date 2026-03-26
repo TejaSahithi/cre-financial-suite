@@ -169,7 +169,7 @@ export default function WelcomeAboard() {
   const [loading, setLoading] = useState(false);
 
   const isSuperAdmin = user?._raw_role === 'super_admin';
-  const isOrgAdmin = user?._raw_role === 'org_admin' || user?.role === 'org_admin';
+  const isOrgAdmin = user?._raw_role === 'org_admin' || user?.role?.includes('org_admin');
 
   const handleGoToDashboard = async () => {
     setLoading(true);
