@@ -125,7 +125,11 @@ export default function RequestAccess() {
 
       setSubmitted(true);
     } catch (err) {
-      console.error("Request failed:", err);
+      console.error("Access request submission failed:", err);
+      const { toast } = await import("sonner");
+      toast.error("Submission failed. Please check your connection and try again.", {
+        description: err?.message || "An unexpected error occurred."
+      });
     }
     setLoading(false);
   };

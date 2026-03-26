@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
-import { submitPublicAccessRequest } from "@/services/api";
+import { submitPublicDemoRequest } from "@/services/api";
 import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 
@@ -21,6 +21,7 @@ export default function RequestDemo() {
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
   const isOtherRole = form.role?.toLowerCase() === "other";
@@ -66,18 +67,14 @@ export default function RequestDemo() {
     if (!validate()) return;
     setLoading(true);
     try {
-      const request = await submitPublicAccessRequest({
+      // Submits ONLY to demo_requests table — never touches access_requests
+      const request = await submitPublicDemoRequest({
         full_name: form.full_name,
         email: form.email,
         phone: form.phone || null,
         company_name: form.company_name,
         role: isOtherRole ? form.customRole : form.role,
-        portfolios: form.portfolios_count || "N/A",
-        properties_count: form.properties_count || "N/A",
-        property_count: form.properties_count || "N/A",
-        plan: form.plan || "N/A",
-        billing_cycle: form.billing_cycle || "monthly",
-        request_type: "demo",
+        plan: form.plan || null,
         notes: form.notes || null
       });
 
@@ -85,7 +82,7 @@ export default function RequestDemo() {
       try {
         await sendEmail({
           to: "sales@cresuite.com",
-          subject: `[New Request] Demo: ${form.full_name} (${form.company_name})`,
+          subject: `[New Demo Request] ${form.full_name} (${form.company_name})`,
           body: `
             A new demo request has been submitted.
             
@@ -121,6 +118,7 @@ export default function RequestDemo() {
         });
       } catch (e) { console.error("Auto-reply fail:", e); }
 
+      // Navigate to DemoExperience with the request ID
       navigate(createPageUrl("DemoExperience"), {
         state: {
           requestId: request?.id,
@@ -129,7 +127,11 @@ export default function RequestDemo() {
         }
       });
     } catch (err) {
-      console.error("Request failed:", err);
+      console.error("Demo request submission failed:", err);
+      const { toast } = await import("sonner");
+      toast.error("Submission failed. Please check your connection and try again.", {
+        description: err?.message || "An unexpected error occurred."
+      });
     }
     setLoading(false);
   };

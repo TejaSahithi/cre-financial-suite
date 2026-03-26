@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { AccessRequestService, OrganizationService } from "@/services/api";
+import { AccessRequestService, OrganizationService, DemoRequestService } from "@/services/api";
 import { useAuth } from "@/lib/AuthContext";
 
 import { supabase } from "@/services/supabaseClient";
@@ -102,7 +102,30 @@ export default function SuperAdmin() {
 
   const { data: requests = [], isLoading } = useQuery({
     queryKey: ['access-requests'],
-    queryFn: () => AccessRequestService.list('-created_at'),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('access_requests')
+        .select('*')
+        .neq('request_type', 'demo') // Ensure demo requests never appear in this list
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: authChecked && user?.role === 'admin',
+    refetchOnWindowFocus: false,
+  });
+
+  // Fetch demo requests from the dedicated table — completely independent
+  const { data: demoRequests = [], isLoading: isLoadingDemo } = useQuery({
+    queryKey: ['demo-requests'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('demo_requests')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
     enabled: authChecked && user?.role === 'admin',
     refetchOnWindowFocus: false,
   });
@@ -272,9 +295,9 @@ export default function SuperAdmin() {
     });
   };
 
-  const accessReqs = requests.filter(r => r.request_type !== 'demo' && r.request_type !== 'contact');
-  const demoReqs = requests.filter(r => r.request_type === 'demo');
-  const contactReqs = requests.filter(r => r.request_type === 'contact');
+  const accessReqs   = requests.filter(r => r.request_type !== 'demo' && r.request_type !== 'contact');
+  const contactReqs  = requests.filter(r => r.request_type === 'contact');
+  // demoReqs comes from the dedicated demo_requests table (demoRequests state)
 
   const actionableReqs = requests.filter(r => r.request_type !== 'demo');
   const pendingCount = actionableReqs.filter(r => r.status === 'pending_approval').length;
@@ -551,7 +574,7 @@ export default function SuperAdmin() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Total Organizations</p><p className="text-2xl font-bold">{orgs.length}</p><p className="text-[10px] text-emerald-500">+3 this month</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{requests.filter(r => r.request_type === 'demo').length}</p><p className="text-[10px] text-violet-500">{requests.filter(r => r.request_type === 'demo' && r.demo_viewed).length} viewed</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{demoRequests.length}</p><p className="text-[10px] text-violet-500">{demoRequests.filter(r => r.demo_viewed).length} viewed</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">MRR</p><p className="text-2xl font-bold">$124,800</p><p className="text-[10px] text-emerald-500">+8.2% MoM</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">Access and contact only</p></CardContent></Card>
       </div>
@@ -570,7 +593,106 @@ export default function SuperAdmin() {
         </TabsContent>
 
         <TabsContent value="demo" className="mt-4">
-          {renderRequestTable(demoReqs, "Demo Requests", 0, "demo")}
+          {/* Demo requests come from the dedicated demo_requests table */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Demo Requests</CardTitle>
+                <p className="text-xs text-slate-400">{demoRequests.length} total · {demoRequests.filter(r => r.demo_viewed).length} viewed</p>
+              </div>
+              <div className="flex gap-2">
+                <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
+                <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50">
+                    <TableHead className="text-[11px]">APPLICANT</TableHead>
+                    <TableHead className="text-[11px]">COMPANY</TableHead>
+                    <TableHead className="text-[11px]">PHONE</TableHead>
+                    <TableHead className="text-[11px]">PLAN</TableHead>
+                    <TableHead className="text-[11px]">DEMO VIEWED</TableHead>
+                    <TableHead className="text-[11px]">SUBMITTED</TableHead>
+                    <TableHead className="text-[11px]">STATUS</TableHead>
+                    <TableHead className="text-[11px]">ACTIONS</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoadingDemo ? (
+                    <TableRow><TableCell colSpan={8} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></TableCell></TableRow>
+                  ) : demoRequests.length === 0 ? (
+                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-slate-400">No demo requests yet</TableCell></TableRow>
+                  ) : demoRequests.map(r => (
+                    <TableRow key={r.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center text-xs font-bold text-violet-700">{r.full_name?.substring(0, 2).toUpperCase()}</div>
+                          <div><p className="text-sm font-medium">{r.full_name}</p><p className="text-xs text-slate-400">{r.email}</p></div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">{r.company_name || '—'}</TableCell>
+                      <TableCell className="text-sm text-slate-500">{r.phone || '—'}</TableCell>
+                      <TableCell className="text-sm">
+                        {r.plan ? <Badge variant="outline" className="text-[10px] capitalize bg-violet-50 text-violet-700 border-violet-100">{r.plan}</Badge> : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={r.demo_viewed ? 'bg-emerald-100 text-emerald-700 border-none text-[10px]' : 'bg-slate-100 text-slate-500 border-none text-[10px]'}>
+                          {r.demo_viewed ? '✓ Watched' : 'Not yet'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-500">
+                        {r.created_at ? new Date(r.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className="bg-emerald-50 text-emerald-700 border-none text-[10px] uppercase">{r.status || 'new'}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button size="sm" variant="outline" className="text-xs h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
+                                <Mail className="w-3 h-3 mr-1" />Details
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-lg">
+                              <DialogHeader><DialogTitle className="flex items-center gap-2">🎥 {r.full_name}</DialogTitle></DialogHeader>
+                              <div className="space-y-4 py-2">
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div><Label className="text-xs text-slate-500">Email</Label><p className="font-medium text-sm">{r.email}</p></div>
+                                  <div><Label className="text-xs text-slate-500">Company</Label><p className="font-medium text-sm">{r.company_name || '—'}</p></div>
+                                  {r.phone && <div><Label className="text-xs text-slate-500">Phone</Label><p className="font-medium text-sm">{r.phone}</p></div>}
+                                  {r.plan && <div><Label className="text-xs text-slate-500">Plan Interest</Label><p className="font-medium text-sm capitalize">{r.plan}</p></div>}
+                                  <div><Label className="text-xs text-slate-500">Demo Viewed</Label><p className={`font-semibold text-sm ${r.demo_viewed ? 'text-emerald-600' : 'text-slate-500'}`}>{r.demo_viewed ? '✓ Watched' : 'Not yet'}</p></div>
+                                  <div><Label className="text-xs text-slate-500">Submitted</Label><p className="font-medium text-sm">{r.created_at ? new Date(r.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</p></div>
+                                </div>
+                                {r.notes && <div><Label className="text-xs text-slate-500 mb-1 block">Notes</Label><p className="bg-slate-50 p-3 rounded-md text-sm border border-slate-100 whitespace-pre-wrap">{r.notes}</p></div>}
+                              </div>
+                            </DialogContent>
+                          </Dialog>
+                          <Button
+                            size="sm" variant="ghost"
+                            className="text-xs h-7 px-2 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                            onClick={async () => {
+                              if (!window.confirm('Delete this demo request permanently?')) return;
+                              const { error } = await supabase.from('demo_requests').delete().eq('id', r.id);
+                              if (!error) {
+                                queryClient.invalidateQueries({ queryKey: ['demo-requests'] });
+                                import('sonner').then(({ toast }) => toast.success('Demo request deleted'));
+                              }
+                            }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="contact" className="mt-4">

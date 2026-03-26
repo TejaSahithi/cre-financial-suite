@@ -528,13 +528,31 @@ export const BillingEntityService      = createEntityService('Billing');
 export const RentProjectionService     = createEntityService('RentProjection');
 export const ExpenseProjectionService  = createEntityService('ExpenseProjection');
 export const UserService               = createEntityService('User');
+export const DemoRequestService        = createEntityService('DemoRequest');
 
+/**
+ * Submit a public-facing ACCESS REQUEST.
+ * Inserts ONLY into the `access_requests` table.
+ * Status defaults to 'pending_approval' so SuperAdmins can review.
+ */
 export async function submitPublicAccessRequest(payload) {
+  // Strict: ONLY inserts into access_requests. Never touches demo_requests.
   const requestPayload = {
-    ...payload,
-    status: payload.status || 'pending_approval',
-    created_at: payload.created_at || new Date().toISOString(),
-    updated_at: payload.updated_at || new Date().toISOString(),
+    full_name:        payload.full_name,
+    email:            payload.email,
+    phone:            payload.phone || null,
+    company_name:     payload.company_name,
+    role:             payload.role,
+    portfolios:       payload.portfolios || null,
+    properties_count: payload.properties_count || null,
+    property_count:   payload.property_count || null,
+    plan:             payload.plan || null,
+    billing_cycle:    payload.billing_cycle || 'monthly',
+    notes:            payload.notes || null,
+    request_type:     'access', // Always 'access' — enforced here, not by caller
+    status:           'pending_approval',
+    created_at:       new Date().toISOString(),
+    updated_at:       new Date().toISOString(),
   };
 
   if (!supabase) {
@@ -549,6 +567,44 @@ export async function submitPublicAccessRequest(payload) {
 
   if (error) {
     console.error('[api] submitPublicAccessRequest error:', error);
+    throw error;
+  }
+
+  return data;
+}
+
+/**
+ * Submit a public-facing DEMO REQUEST.
+ * Inserts ONLY into `demo_requests` — completely separate from access_requests.
+ * Status defaults to 'new'. There is NO pending_approval state for demo leads.
+ */
+export async function submitPublicDemoRequest(payload) {
+  const requestPayload = {
+    full_name:    payload.full_name,
+    email:        payload.email,
+    phone:        payload.phone || null,
+    company_name: payload.company_name || null,
+    role:         payload.role || null,
+    plan:         payload.plan || null,
+    notes:        payload.notes || null,
+    demo_viewed:  false,
+    status:       'new', // Demo requests are lead tracking only — no approval flow
+    created_at:   new Date().toISOString(),
+    updated_at:   new Date().toISOString(),
+  };
+
+  if (!supabase) {
+    return { id: `mem-demo-${Date.now()}`, ...requestPayload };
+  }
+
+  const { data, error } = await supabase
+    .from('demo_requests')
+    .insert(requestPayload)
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('[api] submitPublicDemoRequest error:', error);
     throw error;
   }
 

@@ -76,6 +76,15 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     setEnrolling(true);
     setError("");
     try {
+      // Before enrolling, clean up any stale unverified factors that may block new enrollment
+      const { data: existingFactors } = await supabase.auth.mfa.listFactors();
+      const staleUnverified = (existingFactors?.totp || []).filter(f => f.status === "unverified");
+      for (const f of staleUnverified) {
+        await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e =>
+          console.warn("[MFAGuard] Cleanup unenroll warning:", e)
+        );
+      }
+
       const uniqueName = `Authenticator_${Date.now()}`;
       const { data, error } = await supabase.auth.mfa.enroll({
         factorType: "totp",
@@ -259,9 +268,12 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-center py-6">
-                    <p className="text-sm text-red-500 mb-3">{error || "Failed to generate QR code."}</p>
-                    <Button variant="outline" size="sm" onClick={startEnrollment}><RefreshCw className="w-4 h-4 mr-2" />Retry</Button>
+                  <div className="text-center py-6 space-y-3">
+                    <p className="text-sm text-red-500">{error || "Failed to generate QR code."}</p>
+                    <p className="text-xs text-slate-400">This can happen if a previous setup was interrupted. Click below to try again.</p>
+                    <Button variant="outline" size="sm" onClick={startEnrollment} className="w-full">
+                      <RefreshCw className="w-4 h-4 mr-2" />Refresh QR Code
+                    </Button>
                   </div>
                 )}
 
