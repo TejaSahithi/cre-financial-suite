@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle } from "lucide-react";
+import { Building2, Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle, QrCode, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
  * Handles two states:
  *  1. ENROLLMENT — No TOTP factor enrolled yet → shows QR code to scan with Authenticator app
  *  2. CHALLENGE   — Factor already enrolled → prompts for 6-digit code
+ *                   + "Show QR" toggle to re-enroll if user lost access to their app
  *
  * Once aal2 is reached, calls onVerified() to proceed into the app.
  */
@@ -23,6 +24,8 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
+  const [showQrOnChallenge, setShowQrOnChallenge] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     initialize();
@@ -107,8 +110,36 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     }
   };
 
+  /** Unenroll existing verified factor and re-generate a fresh QR for re-scanning */
+  const handleResetAndShowQR = async () => {
+    setResetting(true);
+    setError("");
+    try {
+      // Unenroll the current verified factor
+      if (factorId) {
+        await supabase.auth.mfa.unenroll({ factorId }).catch(e => console.warn("[MFAGuard] Unenroll for reset:", e));
+      }
+      // Also clean up any other stale factors
+      const { data: listData } = await supabase.auth.mfa.listFactors();
+      for (const f of listData?.totp || []) {
+        await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(() => {});
+      }
+      // Switch to enroll mode with fresh QR
+      setQrCode(null);
+      setSecret(null);
+      setCode("");
+      setPhase("enroll");
+      await startEnrollment();
+      setShowQrOnChallenge(false);
+    } catch (err) {
+      setError("Failed to reset 2FA. Please try again.");
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const handleVerify = async (e) => {
-    e.preventDefault();
+    if (e?.preventDefault) e.preventDefault();
     if (!code || code.length !== 6) {
       setError("Please enter your 6-digit code.");
       return;
@@ -117,29 +148,15 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     setError("");
 
     try {
-      if (phase === "enroll") {
-        // During enrollment — challengeAndVerify
-        const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
-        if (challengeError) throw challengeError;
+      const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
+      if (challengeError) throw challengeError;
 
-        const { error: verifyError } = await supabase.auth.mfa.verify({
-          factorId,
-          challengeId: challengeData.id,
-          code,
-        });
-        if (verifyError) throw verifyError;
-      } else {
-        // Challenge existing factor
-        const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
-        if (challengeError) throw challengeError;
-
-        const { error: verifyError } = await supabase.auth.mfa.verify({
-          factorId,
-          challengeId: challengeData.id,
-          code,
-        });
-        if (verifyError) throw verifyError;
-      }
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId,
+        challengeId: challengeData.id,
+        code,
+      });
+      if (verifyError) throw verifyError;
 
       // Refresh session to get aal2
       await supabase.auth.refreshSession();
@@ -197,6 +214,7 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-8">
+            {/* ── ENROLL phase: QR code steps ── */}
             {phase === "enroll" && (
               <>
                 {enrolling ? (
@@ -217,7 +235,7 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
                     {/* Step 2 */}
                     <div className="flex items-start gap-3">
                       <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0 mt-0.5">2</div>
-                      <div>
+                      <div className="flex-1">
                         <p className="text-sm font-semibold text-slate-800">Scan This QR Code</p>
                         <div className="mt-3 flex flex-col items-center bg-slate-50 rounded-xl p-4 border border-slate-200">
                           <img src={qrCode} alt="TOTP QR Code" className="w-44 h-44" />
@@ -245,34 +263,69 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
                     <Button variant="outline" size="sm" onClick={startEnrollment}><RefreshCw className="w-4 h-4 mr-2" />Retry</Button>
                   </div>
                 )}
+
+                {/* Verification form for ENROLL phase */}
+                {qrCode && (
+                  <form onSubmit={handleVerify} className="space-y-4 mt-5 pt-5 border-t border-slate-100">
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      placeholder="000000"
+                      value={code}
+                      onChange={(e) => {
+                        setCode(e.target.value.replace(/\D/g, "").substring(0, 6));
+                        setError("");
+                      }}
+                      className="text-center text-2xl font-mono h-14 tracking-[0.5em]"
+                      autoComplete="one-time-code"
+                    />
+
+                    {error && (
+                      <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-lg p-3">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        {error}
+                      </div>
+                    )}
+
+                    <Button
+                      type="submit"
+                      className="w-full h-12 bg-[#1a2744] hover:bg-[#243b67] gap-2"
+                      disabled={verifying || code.length !== 6}
+                    >
+                      {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      {verifying ? "Verifying..." : "Complete Setup"}
+                    </Button>
+                  </form>
+                )}
               </>
             )}
 
-            {/* Verification form - shown for both enroll and challenge */}
-            {(phase === "challenge" || (phase === "enroll" && qrCode)) && (
-              <form onSubmit={handleVerify} className={`space-y-4 ${phase === "enroll" ? "mt-5 pt-5 border-t border-slate-100" : ""}`}>
-                {phase === "challenge" && (
-                  <div className="flex items-center gap-2 bg-blue-50 rounded-xl p-3 mb-2">
-                    <Smartphone className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <p className="text-xs text-blue-700">Open your Authenticator app and enter the current 6-digit code for <strong>CRE Suite</strong>.</p>
-                  </div>
-                )}
-                <div>
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={6}
-                    placeholder="000000"
-                    value={code}
-                    onChange={(e) => {
-                      setCode(e.target.value.replace(/\D/g, "").substring(0, 6));
-                      setError("");
-                    }}
-                    className="text-center text-2xl font-mono h-14 tracking-[0.5em] letter-spacing-wide"
-                    autoComplete="one-time-code"
-                  />
+            {/* ── CHALLENGE phase: code input + QR re-scan option ── */}
+            {phase === "challenge" && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 bg-blue-50 rounded-xl p-3">
+                  <Smartphone className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                  <p className="text-xs text-blue-700">Open your Authenticator app and enter the current 6-digit code for <strong>CRE Suite</strong>.</p>
                 </div>
+
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={code}
+                  onChange={(e) => {
+                    setCode(e.target.value.replace(/\D/g, "").substring(0, 6));
+                    setError("");
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleVerify(e); }}
+                  className="text-center text-2xl font-mono h-14 tracking-[0.5em]"
+                  autoComplete="one-time-code"
+                  autoFocus
+                />
 
                 {error && (
                   <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-lg p-3">
@@ -282,14 +335,50 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
                 )}
 
                 <Button
-                  type="submit"
+                  onClick={handleVerify}
                   className="w-full h-12 bg-[#1a2744] hover:bg-[#243b67] gap-2"
                   disabled={verifying || code.length !== 6}
                 >
                   {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  {verifying ? "Verifying..." : phase === "enroll" ? "Complete Setup" : "Verify & Sign In"}
+                  {verifying ? "Verifying..." : "Verify & Sign In"}
                 </Button>
-              </form>
+
+                {/* ── Re-scan QR accordion ── */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowQrOnChallenge(v => !v)}
+                    className="w-full flex items-center justify-between px-4 py-3 text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <QrCode className="w-4 h-4 text-slate-400" />
+                      Can't access your Authenticator app?
+                    </span>
+                    {showQrOnChallenge ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                  </button>
+
+                  {showQrOnChallenge && (
+                    <div className="px-4 pb-4 border-t border-slate-100 bg-slate-50/50">
+                      <p className="text-xs text-slate-500 mt-3 mb-3">
+                        If you've lost access to your authenticator app, you can reset your 2FA and scan a new QR code to re-link your account.
+                      </p>
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                        <p className="text-xs text-amber-700 font-medium">⚠️ This will unlink your current authenticator app. You'll need to scan a new QR code.</p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleResetAndShowQR}
+                        disabled={resetting}
+                        className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
+                      >
+                        {resetting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <QrCode className="w-3.5 h-3.5 mr-2" />}
+                        {resetting ? "Resetting..." : "Reset 2FA & Show New QR Code"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
