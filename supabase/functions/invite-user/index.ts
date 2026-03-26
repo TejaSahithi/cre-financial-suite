@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
         const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f8fafc;padding:40px">
           <div style="max-width:560px;margin:auto;background:#fff;border-radius:12px;padding:32px;border:1px solid #e2e8f0">
             <h2 style="color:#0f172a">You've been added to a team</h2>
-            <p style="color:#475569">Hi ${full_name || "there"},<br/>Your existing CRE Suite account has been given access to a new organization as <strong>${role.replace("_"," ")}</strong>.</p>
+            <p style="color:#475569">Hi ${full_name || "there"},<br/>Your existing CRE Suite account has been given access to a new organization as <strong>${role.replace("_", " ")}</strong>.</p>
             <a href="${loginLink}" style="display:inline-block;background:#1a2744;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin-top:16px">Sign In</a>
           </div></body></html>`;
         await fetch("https://api.resend.com/emails", {
