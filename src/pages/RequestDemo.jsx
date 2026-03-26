@@ -23,25 +23,28 @@ export default function RequestDemo() {
   const [loading, setLoading] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
+  const isOtherRole = form.role?.toLowerCase() === "other";
 
   const validate = () => {
     const errs = {};
     if (!form.full_name.trim()) errs.full_name = "Name is required";
 
     const emailResult = validateEmail(form.email);
-    if (!emailResult.valid) { errs.email = emailResult.message; setEmailVerified(false); }
-    else setEmailVerified(true);
+    const isEmailValid = emailResult.valid;
+    if (!isEmailValid) { errs.email = emailResult.message; }
 
     const phoneResult = validatePhone(form.phone);
-    if (!phoneResult.valid) { errs.phone = phoneResult.message; setPhoneVerified(false); }
-    else setPhoneVerified(true);
+    const isPhoneValid = phoneResult.valid;
+    if (!isPhoneValid) { errs.phone = phoneResult.message; }
 
     if (!form.company_name.trim()) errs.company_name = "Company name is required";
     if (!form.role) errs.role = "Role is required";
-    if (form.role === "other" && !form.customRole.trim()) errs.customRole = "Please specify your role";
+    if (isOtherRole && !form.customRole.trim()) errs.customRole = "Please specify your role";
 
+    setEmailVerified(isEmailValid);
+    setPhoneVerified(isPhoneValid);
     setErrors(errs);
-    return Object.keys(errs).length === 0 && emailVerified && phoneVerified;
+    return Object.keys(errs).length === 0 && isEmailValid && isPhoneValid;
   };
 
   const handleEmailBlur = () => {
@@ -68,7 +71,7 @@ export default function RequestDemo() {
         email: form.email,
         phone: form.phone || null,
         company_name: form.company_name,
-        role: form.role === "other" ? form.customRole : form.role,
+        role: isOtherRole ? form.customRole : form.role,
         portfolios: form.portfolios_count || "N/A",
         properties_count: form.properties_count || "N/A",
         property_count: form.properties_count || "N/A",
@@ -89,7 +92,7 @@ export default function RequestDemo() {
             Name: ${form.full_name}
             Email: ${form.email}
             Company: ${form.company_name}
-            Role: ${form.role === "other" ? form.customRole : form.role}
+            Role: ${isOtherRole ? form.customRole : form.role}
             Plan Interest: ${form.plan}
             Notes: ${form.notes || "None"}
           `
@@ -134,6 +137,8 @@ export default function RequestDemo() {
   const setField = (key, value) => {
     setForm({ ...form, [key]: value });
     if (errors[key]) setErrors({ ...errors, [key]: undefined });
+    if (key === "email") setEmailVerified(false);
+    if (key === "phone") setPhoneVerified(false);
   };
 
   const FieldError = ({ field }) => errors[field] ? (
@@ -297,7 +302,7 @@ export default function RequestDemo() {
                       </SelectContent>
                     </Select>
                     <AnimatePresence>
-                      {form.role === "other" && (
+                      {isOtherRole && (
                         <motion.div initial={{ height:0, opacity:0 }} animate={{ height:"auto", opacity:1 }} exit={{ height:0, opacity:0 }} className="pt-2">
                           <Input 
                             value={form.customRole} onChange={(e) => setField("customRole", e.target.value)}
