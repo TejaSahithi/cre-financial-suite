@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Building2, Send, Loader2, CheckCircle2, ArrowRight,
-  Shield, BarChart3, Zap, Users, AlertCircle, Phone, Mail, Globe, Sparkles
+  Building2, Loader2, CheckCircle2, ArrowRight,
+  Shield, Zap, Users, AlertCircle, Sparkles
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

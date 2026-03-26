@@ -5,7 +5,7 @@
  * or they are in pending status waiting for org admin approval.
  */
 import React from "react";
-import { Clock, RefreshCw, Mail, LogOut } from "lucide-react";
+import { Clock, RefreshCw, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/AuthContext";
 

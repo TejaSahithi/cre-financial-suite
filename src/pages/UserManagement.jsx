@@ -8,7 +8,7 @@ import useOrgId from "@/hooks/useOrgId";
 import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 import {
   ROLE_DEFINITIONS, CAPABILITY_DEFINITIONS, MODULE_DOMAINS, ACCESS_LEVELS,
-  getInitials, getStatusBadge, getRoleDefaultModulePerms, getPermDiff, resolveEffectivePermissions
+  getInitials, getStatusBadge, getRoleDefaultModulePerms, getPermDiff
 } from "@/lib/userPermissions";
 import CsvImport from "@/components/userManagement/CsvImport";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Users, Plus, Loader2, Trash2, Shield, Edit2, Phone,
   Search, Upload, Settings, ChevronDown, ChevronRight,
-  AlertTriangle, Zap, Eye, Globe, Check, Info, Lock
+  AlertTriangle, Zap, Eye, Globe, Info
 } from "lucide-react";
 import { toast } from "sonner";
 

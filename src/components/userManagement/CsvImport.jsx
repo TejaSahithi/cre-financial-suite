@@ -6,7 +6,7 @@ import React, { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Check, AlertTriangle, Loader2, ChevronRight, Upload, Trash2, UserPlus } from "lucide-react";
+import { Check, Loader2, ChevronRight, Upload, Trash2, UserPlus } from "lucide-react";
 import { supabase } from "@/services/supabaseClient";
 import { toast } from "sonner";
 import { ROLE_DEFINITIONS } from "@/lib/userPermissions";

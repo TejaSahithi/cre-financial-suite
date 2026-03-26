@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { CheckCircle2, Sparkles, ArrowRight, BarChart2, Building2, Users, FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
