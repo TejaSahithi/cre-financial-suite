@@ -1,0 +1,105 @@
+﻿
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\Layout.jsx
+  140:9  warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\ScenarioPlanner.jsx
+  34:11  warning  'adjRevenue' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\cam\CAMReviewTab.jsx
+  82:9  warning  'prevPool' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\comparison\ComparisonSummary.jsx
+  18:58  warning  'yearB' is defined but never used. Allowed unused args must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\dashboard\PropertyPerformanceTable.jsx
+  7:7  warning  'statusBadge' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\landing\LandingNav.jsx
+  9:9  warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\components\revenue\PropertyDrillDown.jsx
+  12:7  warning  'COLORS' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\BulkImport.jsx
+  17:9   warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  20:10  warning  'file' is assigned a value but never used. Allowed unused vars must match /^_/u      unused-imports/no-unused-vars
+  21:10  warning  'fileUrl' is assigned a value but never used. Allowed unused vars must match /^_/u   unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\ChartOfAccounts.jsx
+  49:32  warning  'isLoading' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Comparison.jsx
+  20:17  warning  'properties' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Dashboard.jsx
+  26:43  warning  'orgLoading' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\DemoExperience.jsx
+   3:72  error    'BarChart3' is defined but never used                                                unused-imports/no-unused-imports
+   3:90  error    'Zap' is defined but never used                                                      unused-imports/no-unused-imports
+  16:9   warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  22:25  warning  'error' is assigned a value but never used. Allowed unused vars must match /^_/u     unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\ExpenseProjection.jsx
+  41:9  warning  'prevBudget' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Expenses.jsx
+  37:9  warning  'getBuildingForProperty' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  47:9  warning  'currentYearExpenses' is assigned a value but never used. Allowed unused vars must match /^_/u     unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Integrations.jsx
+  31:10  warning  'exportTarget' is assigned a value but never used. Allowed unused vars must match /^_/u     unused-imports/no-unused-vars
+  31:24  warning  'setExportTarget' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\LeaseReview.jsx
+  27:9  warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\LeaseUpload.jsx
+   19:10  warning  'extracting' is assigned a value but never used. Allowed unused vars must match /^_/u         unused-imports/no-unused-vars
+  103:13  warning  'confidence_scores' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Login.jsx
+   1:27  error    'useEffect' is defined but never used                                                            unused-imports/no-unused-imports
+   3:80  error    'UserPlus' is defined but never used                                                             unused-imports/no-unused-imports
+  27:10  warning  'verifiedRole' is assigned a value but never used. Allowed unused vars must match /^_/u          unused-imports/no-unused-vars
+  30:10  warning  'loginVerifiedCompany' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  31:10  warning  'loginEmailChecked' is assigned a value but never used. Allowed unused vars must match /^_/u     unused-imports/no-unused-vars
+  87:14  warning  'err' is defined but never used                                                                  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Onboarding.jsx
+  104:9   warning  'completeOnboarding' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  403:24  warning  'org' is defined but never used. Allowed unused args must match /^_/u                          unused-imports/no-unused-vars
+  535:40  warning  'plan' is defined but never used. Allowed unused args must match /^_/u                         unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\OrgSettings.jsx
+  106:15  warning  'data' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\PendingApproval.jsx
+  31:14  warning  'e' is defined but never used  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\PropertyDetail.jsx
+  60:17  warning  'stakeholders' is assigned a value but never used. Allowed unused vars must match /^_/u   unused-imports/no-unused-vars
+  96:9   warning  'camEligibleSF' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\RentProjection.jsx
+  89:31  warning  'i' is defined but never used. Allowed unused args must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\RequestAccess.jsx
+  2:10  error  'AccessRequestService' is defined but never used  unused-imports/no-unused-imports
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\SuperAdmin.jsx
+   60:21  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+   83:21  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  540:49  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Tenants.jsx
+  27:17  warning  'units' is assigned a value but never used. Allowed unused vars must match /^_/u       unused-imports/no-unused-vars
+  28:17  warning  'properties' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+
+C:\Users\tejas\Downloads\cre-financial-suite-main (3)\cre-financial-suite-main\src\pages\Variance.jsx
+  24:9  warning  'totalBudgetedRevenue' is assigned a value but never used. Allowed unused vars must match /^_/u  unused-imports/no-unused-vars
+  26:9  warning  'variancePct' is assigned a value but never used. Allowed unused vars must match /^_/u           unused-imports/no-unused-vars
+
+Γ£û 47 problems (5 errors, 42 warnings)
+  5 errors and 0 warnings potentially fixable with the `--fix` option.
+

@@ -1,0 +1,154 @@
+﻿
+> cre-financial-suite@0.0.0 build
+> vite build
+
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+node.exe : [33m[plugin 
+vite:esbuild] 
+src/pages/Workflows.jsx: 
+[33mDuplicate key 
+"draft" in object 
+literal[33m
+At line:1 char:1
++ & "C:\Program 
+Files\nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (  
+  [33m[plugin vi...ct l   
+ iteral[33m:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+20 |    locked: { label: 
+"Locked", color: 
+"bg-slate-200 
+text-slate-800" },
+21 |    ai_generated: { 
+label: "AI Generated", 
+color: "bg-cyan-100 
+text-cyan-700" },
+22 |    draft: { label: 
+"Draft", color: 
+"bg-slate-100 
+text-slate-700" },
+   |    ^
+23 |    extracted: { 
+label: "Extracted", 
+color: "bg-blue-100 
+text-blue-700" },
+24 |    validated: { 
+label: "Validated", 
+color: "bg-emerald-100 
+text-emerald-700" },
+[39m
+[32mΓ£ô[39m 3185 modules transformed.
+[31mΓ£ù[39m Build 
+failed in 5.83s
+[31merror during build:
+[31msrc/pages/OrgSettings
+.jsx (2:9): "UserService" 
+is not exported by 
+"src/services/api.js", 
+imported by "src/pages/Org
+Settings.jsx".[31m
+file: [36mC:/Users/tejas/
+Downloads/cre-financial-su
+ite-main (3)/cre-financial
+-suite-main/src/pages/OrgS
+ettings.jsx:2:9[31m
+[33m
+1: import React, { 
+useState, useEffect } 
+from "react";
+2: import { UserService, 
+OrganizationService } 
+from "@/services/api";
+            ^
+3: 
+4: import { inviteUser } 
+from "@/services/users";
+[31m
+    at getRollupError (fil
+e:///C:/Users/tejas/Downlo
+ads/cre-financial-suite-ma
+in%20(3)/cre-financial-sui
+te-main/node_modules/rollu
+p/dist/es/shared/parseAst.
+js:402:41)
+    at error (file:///C:/U
+sers/tejas/Downloads/cre-f
+inancial-suite-main%20(3)/
+cre-financial-suite-main/n
+ode_modules/rollup/dist/es
+/shared/parseAst.js:398:42
+)
+    at Module.error (file:
+///C:/Users/tejas/Download
+s/cre-financial-suite-main
+%20(3)/cre-financial-suite
+-main/node_modules/rollup/
+dist/es/shared/node-entry.
+js:17040:16)
+    at 
+Module.traceVariable (file
+:///C:/Users/tejas/Downloa
+ds/cre-financial-suite-mai
+n%20(3)/cre-financial-suit
+e-main/node_modules/rollup
+/dist/es/shared/node-entry
+.js:17452:29)
+    at 
+ModuleScope.findVariable (
+file:///C:/Users/tejas/Dow
+nloads/cre-financial-suite
+-main%20(3)/cre-financial-
+suite-main/node_modules/ro
+llup/dist/es/shared/node-e
+ntry.js:15070:39)
+    at FunctionScope.findV
+ariable (file:///C:/Users/
+tejas/Downloads/cre-financ
+ial-suite-main%20(3)/cre-f
+inancial-suite-main/node_m
+odules/rollup/dist/es/shar
+ed/node-entry.js:5673:38)
+    at FunctionBodyScope.f
+indVariable (file:///C:/Us
+ers/tejas/Downloads/cre-fi
+nancial-suite-main%20(3)/c
+re-financial-suite-main/no
+de_modules/rollup/dist/es/
+shared/node-entry.js:5673:
+38)
+    at ReturnValueScope.fi
+ndVariable (file:///C:/Use
+rs/tejas/Downloads/cre-fin
+ancial-suite-main%20(3)/cr
+e-financial-suite-main/nod
+e_modules/rollup/dist/es/s
+hared/node-entry.js:5673:3
+8)
+    at FunctionBodyScope.f
+indVariable (file:///C:/Us
+ers/tejas/Downloads/cre-fi
+nancial-suite-main%20(3)/c
+re-financial-suite-main/no
+de_modules/rollup/dist/es/
+shared/node-entry.js:5673:
+38)
+    at 
+MemberExpression.bind (fil
+e:///C:/Users/tejas/Downlo
+ads/cre-financial-suite-ma
+in%20(3)/cre-financial-sui
+te-main/node_modules/rollu
+p/dist/es/shared/node-entr
+y.js:7392:49)[39m
