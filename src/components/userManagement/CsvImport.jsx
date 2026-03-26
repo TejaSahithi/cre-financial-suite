@@ -20,18 +20,27 @@ const STEPS = ["Upload CSV", "Review & Assign", "Confirm"];
 function parseCSV(text) {
   const lines = text.trim().split("\n").filter(Boolean);
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/\s+/g, "_"));
+  
+  // Normalize headers: lower case, remove spaces, remove quotes
+  const rawHeaders = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+  
   return lines.slice(1).map((line, idx) => {
     const vals = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.trim().replace(/^"|"$/g, ""));
     const row = {};
-    headers.forEach((h, i) => { row[h] = vals[i] || ""; });
-    const email = row.email || "";
+    rawHeaders.forEach((h, i) => { row[h] = vals[i] || ""; });
+    
+    // Header variants mapping
+    const email = row.email || row.email_address || row["email address"] || "";
+    const fullName = row.full_name || row["full name"] || row.name || row.customer_name || "";
+    const phone = row.phone || row.phone_number || row["phone number"] || row.mobile || "";
+    const roleString = row.role || row.roles || "viewer";
+
     return {
       _id: idx,
-      full_name: row.full_name || row.name || "",
+      full_name: fullName,
       email,
-      phone: row.phone || row.phone_number || "",
-      role: "viewer",           // default role per user
+      phone,
+      role: roleString,
       custom_role: "",
       module_permissions: null,
       page_permissions: null,
@@ -44,6 +53,7 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
   const [step, setStep] = useState(0);
   const [rows, setRows] = useState([]);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   const [dragOver, setDragOver] = useState(false);
   const [accessOverrideId, setAccessOverrideId] = useState(null);
   const fileRef = useRef();
@@ -80,41 +90,62 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
     }));
   };
   const handleImport = async () => {
-    setImporting(true);
+    setImportProgress({ current: 0, total: validRows.length });
     let successCount = 0;
     const failedEmails = [];
-
-    for (const row of validRows) {
+    for (const [idx, row] of validRows.entries()) {
       try {
-        const { error } = await supabase.functions.invoke("invite-user", {
+        setImportProgress({ current: idx + 1, total: validRows.length });
+        const { data, error } = await supabase.functions.invoke("invite-user", {
           body: {
             email: row.email,
-            full_name: row.full_name || undefined,
+            full_name: row.full_name || row.name || undefined,
             phone: row.phone || undefined,
             role: row.role || "viewer",
             custom_role: parseRoles(row.role || "viewer").includes("custom") ? row.custom_role : undefined,
             org_id: orgId,
             module_permissions: row.module_permissions || getRoleDefaultModulePerms(row.role || "viewer"),
             page_permissions: row.page_permissions || {},
-            onboarding_type: "invited",
           },
         });
-        if (error) throw new Error(error.message);
+        if (error) {
+          console.error(`[CsvImport] Invite failed for ${row.email}:`, error);
+          throw error;
+        }
+        if (data?.error) {
+           console.error(`[CsvImport] Invite error from function for ${row.email}:`, data.error);
+           throw new Error(data.error);
+        }
         successCount++;
-      } catch { failedEmails.push(row.email); }
+      } catch (err) { 
+        console.error(`[CsvImport] Exception during invite for ${row.email}:`, err);
+        failedEmails.push(row.email); 
+      }
     }
 
-    await supabase.from("bulk_import_logs").insert({
-      org_id: orgId, uploaded_by: currentUser?.id,
-      total_count: validRows.length, success_count: successCount,
-      failed_count: failedEmails.length, failed_emails: failedEmails,
-    }).catch(() => {});
+    const logEntry = {
+      org_id: orgId,
+      uploaded_by: currentUser?.id,
+      total_count: validRows.length,
+      success_count: successCount,
+      failed_count: failedEmails.length,
+      failed_emails: failedEmails,
+    };
+
+    const { error: logErr } = await supabase.from("bulk_import_logs").insert(logEntry);
+    if (logErr) console.error("[CsvImport] Failed to log import results:", logErr);
 
     setImporting(false);
-    toast.success(`Imported ${successCount} user${successCount !== 1 ? "s" : ""}`);
-    if (failedEmails.length) toast.warning(`${failedEmails.length} invitation(s) failed`);
-    onImported();
-    onClose();
+    
+    if (successCount > 0) {
+      toast.success(`Imported ${successCount} user${successCount !== 1 ? "s" : ""}`);
+      onImported();
+      onClose();
+    } else if (failedEmails.length > 0) {
+      toast.error(`Fail to import any users. Checked logs.`);
+    } else {
+      toast.info("No valid users to import.");
+    }
   };
 
   return (

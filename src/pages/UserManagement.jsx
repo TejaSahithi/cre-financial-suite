@@ -450,6 +450,7 @@ export default function UserManagement() {
   const [activeTab, setActiveTab] = useState("team");
   const [showModal, setShowModal] = useState(false);
   const [editMember, setEditMember] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
 
   const isSuperAdmin = currentUser?.role === "admin" || currentUser?._raw_role === "super_admin";
   const isOrgAdmin = currentUser?._raw_role === "org_admin" || currentUser?.role?.includes("org_admin");
@@ -478,6 +479,27 @@ export default function UserManagement() {
     queryFn: () => fetchOrgMembers(effectiveOrgId),
     enabled: !!effectiveOrgId && effectiveOrgId !== "__none__",
   });
+
+  const filtered = useMemo(() => 
+    members.filter(m => (m.full_name || "").toLowerCase().includes(search.toLowerCase()) || m.email.toLowerCase().includes(search.toLowerCase())),
+    [members, search]
+  );
+
+  const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = (checked) => setSelectedIds(checked ? filtered.map(m => m.id) : []);
+
+  const handleBulkDelete = async () => {
+    if (!selectedIds.length || !confirm("Delete all selected memberships? This action cannot be undone.")) return;
+    try {
+      const { error } = await supabase.from("memberships").delete().in("user_id", selectedIds).eq("org_id", effectiveOrgId);
+      if (error) throw error;
+      toast.success(`Deleted ${selectedIds.length} member${selectedIds.length !== 1 ? "s" : ""}`);
+      setSelectedIds([]);
+      queryClient.invalidateQueries({ queryKey: ["org-members"] });
+    } catch (err) {
+      toast.error("Bulk delete failed: " + err.message);
+    }
+  };
 
   const handleRemove = async (member) => {
     if (!confirm(`Remove ${member.full_name || member.email}?`)) return;
@@ -579,9 +601,20 @@ export default function UserManagement() {
         </TabsList>
 
         <TabsContent value="team" className="mt-4">
-          <div className="relative max-w-sm mb-4">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members…" className="pl-9" />
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative max-w-sm flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members…" className="pl-9" />
+            </div>
+            {selectedIds.length > 0 && (
+               <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg animate-in fade-in slide-in-from-top-2">
+                 <span className="text-xs font-bold text-blue-700">{selectedIds.length} selected</span>
+                 <div className="w-px h-4 bg-blue-200 mx-1" />
+                 <Button variant="ghost" size="sm" onClick={handleBulkDelete} className="h-7 text-[11px] font-bold text-red-600 hover:text-red-700 hover:bg-red-100 gap-1.5 px-2">
+                   <Trash2 className="w-3 h-3" />Delete Selected
+                 </Button>
+               </div>
+            )}
           </div>
           <Card>
             <CardContent className="p-0">
@@ -592,52 +625,69 @@ export default function UserManagement() {
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  <div className="grid grid-cols-[2fr_1.5fr_1fr_1fr_auto] gap-4 px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <div className="grid grid-cols-[auto_2fr_1.5fr_1fr_1fr_auto] gap-4 px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider bg-slate-50/50">
+                    <div className="w-4 h-4 flex items-center justify-center">
+                       <Checkbox checked={selectedIds.length === filtered.length && filtered.length > 0} onCheckedChange={(v) => toggleAll(!!v)} />
+                    </div>
                     <span>Member</span><span>Contact</span><span>Role</span><span>Status</span><span></span>
                   </div>
                   {filtered.map((member) => {
                     const roleDef = ROLE_DEFINITIONS.find((r) => r.value === member.role);
                     const overrides = Object.keys(member.module_permissions || {}).length;
+                    const isSelected = selectedIds.includes(member.id);
                     return (
-                      <div key={member.id} className="grid grid-cols-[2fr_1.5fr_1fr_1fr_auto] gap-4 items-center px-5 py-4 hover:bg-slate-50 transition-colors">
+                      <div key={member.id} className={`grid grid-cols-[auto_2fr_1.5fr_1fr_1fr_auto] gap-4 items-center px-5 py-4 hover:bg-slate-50 transition-colors ${isSelected ? "bg-blue-50/30" : ""}`}>
+                                   {/* Checkbox */}
+                        <div className="w-4 h-4 flex items-center justify-center">
+                           <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(member.id)} />
+                        </div>
+
+                        {/* Member Info */}
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
                             {getInitials(member.full_name || member.email)}
                           </div>
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 truncate">{member.full_name || "Unnamed"}</p>
-                            <p className="text-xs text-slate-400 truncate">{member.email}</p>
+                            <p className="text-sm font-semibold text-slate-900 truncate">{member.full_name || "New Member"}</p>
+                            {member.role === "admin" && <p className="text-[10px] text-blue-500 font-medium flex items-center gap-1"><Shield className="w-2.5 h-2.5" />Administrator</p>}
                           </div>
                         </div>
-                        <div>
-                          {member.phone ? <p className="text-xs text-slate-500 flex items-center gap-1"><Phone className="w-3 h-3 shrink-0" />{member.phone}</p>
-                            : <p className="text-xs text-slate-300">No phone</p>}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {parseRoles(member.role).length > 0 ? (
-                            parseRoles(member.role).map(r => {
-                               if(r === 'custom') return <Badge key={r} className="text-[10px] bg-pink-100 text-pink-700 text-center">Custom</Badge>;
-                               const rd = ROLE_DEFINITIONS.find((rd) => rd.value === r);
-                               if (rd) return <Badge key={rd.value} className={`text-[10px] ${rd.color}`}>{rd.label}</Badge>;
-                               return null;
-                            })
-                          ) : <Badge className="text-[10px] bg-amber-100 text-amber-600">Pending</Badge>}
 
-                          {overrides > 0 && <p className="text-[10px] text-blue-500 mt-1 w-full">{overrides} overrides</p>}
+                        {/* Contact */}
+                        <div className="min-w-0 text-xs text-slate-500">
+                          <p className="truncate font-medium">{member.email}</p>
+                          <p className="truncate text-[10px] text-slate-400">{member.phone || "No phone"}</p>
                         </div>
-                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full capitalize ${getStatusBadge(member.status)}`}>
-                          {member.status || "active"}
-                        </span>
-                        {member.id !== currentUser?.id && member.role !== "super_admin" ? (
-                          <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => { setEditMember(member); setShowModal(true); }} className="h-8 w-8 p-0 text-slate-400 hover:text-blue-600 hover:bg-blue-50">
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
+
+                        {/* Roles */}
+                        <div className="flex flex-wrap gap-1">
+                          {parseRoles(member.role).map((r) => {
+                            const def = ROLE_DEFINITIONS.find((rd) => rd.value === r);
+                            if (r === "custom") return <Badge key="custom" className="text-[10px] bg-pink-100 text-pink-700">Custom</Badge>;
+                            if (def) return <Badge key={def.value} className={`text-[10px] ${def.color}`}>{def.label}</Badge>;
+                            return null;
+                          })}
+                          {member.is_org_admin && <Badge className="text-[10px] bg-amber-100 text-amber-700">Org Admin</Badge>}
+                        </div>
+
+                        {/* Status */}
+                        <div>
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full capitalize border ${getStatusBadge(member.status)}`}>
+                            {member.status || "active"}
+                          </span>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => { setEditMember(member); setShowModal(true); }} className="h-8 w-8 p-0 text-slate-400 hover:text-blue-600 hover:bg-blue-50">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </Button>
+                          {member.id !== currentUser?.id && member.role !== "super_admin" ? (
                             <Button variant="ghost" size="sm" onClick={() => handleRemove(member)} className="h-8 w-8 p-0 text-slate-400 hover:text-red-500 hover:bg-red-50">
                               <Trash2 className="w-3.5 h-3.5" />
                             </Button>
-                          </div>
-                        ) : <div className="w-[72px]" />}
+                          ) : <div className="w-[32px]" />} {/* Adjusted width for alignment when delete button is not present */}
+                        </div>
                       </div>
                     );
                   })}

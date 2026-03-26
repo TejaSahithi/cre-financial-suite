@@ -116,16 +116,10 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     setError("");
     try {
       // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
-      const { data: session } = await supabase.auth.getSession();
-      const token = session?.session?.access_token;
+      const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa");
       
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reset-mfa`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
-      });
-      
-      const { error: resetErr } = await res.json();
-      if (!res.ok || resetErr) throw new Error(resetErr || "Failed to reset MFA");
+      if (invokeErr) throw invokeErr;
+      if (!data?.success) throw new Error(data?.error || "Failed to reset MFA");
 
       // Refresh session so local client clears the previous AAL requirement cache
       await supabase.auth.refreshSession();
@@ -138,7 +132,8 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
       await startEnrollment();
       setShowQrOnChallenge(false);
     } catch (err) {
-      setError("Failed to reset 2FA. Please try again.");
+      console.error("[MFAGuard] reset error:", err);
+      setError(err.message || "Failed to reset 2FA. Please try again.");
     } finally {
       setResetting(false);
     }
