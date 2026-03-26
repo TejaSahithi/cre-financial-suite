@@ -115,15 +115,21 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     setResetting(true);
     setError("");
     try {
-      // Unenroll the current verified factor
-      if (factorId) {
-        await supabase.auth.mfa.unenroll({ factorId }).catch(e => console.warn("[MFAGuard] Unenroll for reset:", e));
-      }
-      // Also clean up any other stale factors
-      const { data: listData } = await supabase.auth.mfa.listFactors();
-      for (const f of listData?.totp || []) {
-        await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(() => {});
-      }
+      // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reset-mfa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      
+      const { error: resetErr } = await res.json();
+      if (!res.ok || resetErr) throw new Error(resetErr || "Failed to reset MFA");
+
+      // Refresh session so local client clears the previous AAL requirement cache
+      await supabase.auth.refreshSession();
+
       // Switch to enroll mode with fresh QR
       setQrCode(null);
       setSecret(null);
