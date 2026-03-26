@@ -1,8 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": Deno.env.get('FRONTEND_URL') || 'http://localhost:5173',
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 Deno.serve(async (req: Request) => {
@@ -66,7 +67,7 @@ Deno.serve(async (req: Request) => {
   } catch (err: any) {
     console.error("[reset-mfa] Critical Error:", err.message);
     return new Response(JSON.stringify({ success: false, error: err.message }), {
-      status: 200, // Return 200 so the client can read the JSON error body easily
+      status: 400, // Return proper error status code
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
