@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
  * Once aal2 is reached, calls onVerified() to proceed into the app.
  */
 export default function MFAGuard({ onVerified, needsEnroll }) {
-  const [phase, setPhase] = useState("loading"); // loading | enroll | challenge
+  const [phase, setPhase] = useState(needsEnroll === false ? "challenge" : "loading"); // loading | enroll | challenge
   const [factorId, setFactorId] = useState(null);
   const [qrCode, setQrCode] = useState(null);
   const [secret, setSecret] = useState(null);
@@ -42,20 +42,22 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
 
       console.log("[MFAGuard] Existing factors:", { verified: verifiedFactor?.id, unverifiedCount: unverifiedFactors.length });
 
-      // The user specifically requested to generate a NEW QR code every time a user signs in.
-      // This means we must unenroll ANY existing factors on every sign in!
-      const allFactors = [...unverifiedFactors];
-      if (verifiedFactor) allFactors.push(verifiedFactor);
-
-      if (allFactors.length > 0) {
-        console.log(`[MFAGuard] Cleaning up ${allFactors.length} factors to provide fresh QR as requested...`);
-        for (const f of allFactors) {
+      if (verifiedFactor) {
+        setFactorId(verifiedFactor.id);
+        setPhase("challenge");
+      } else if (unverifiedFactors.length > 0) {
+        // We have unverified factors but no verified one.
+        // Try to UNENROLL them so we can start fresh.
+        console.log(`[MFAGuard] cleaning up ${unverifiedFactors.length} unverified factors...`);
+        for (const f of unverifiedFactors) {
           await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e => console.warn("[MFAGuard] Unenroll failed:", e));
         }
+        setPhase("enroll");
+        await startEnrollment();
+      } else {
+        setPhase("enroll");
+        await startEnrollment();
       }
-
-      setPhase("enroll");
-      await startEnrollment();
     } catch (err) {
       console.error("[MFAGuard] initialize error:", err);
       // If we can't even list factors, we might be offline or session is invalid.
