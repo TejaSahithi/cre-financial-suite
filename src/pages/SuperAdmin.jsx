@@ -26,6 +26,7 @@ export default function SuperAdmin() {
   const [selectedRequests, setSelectedRequests] = useState(new Set());
   const [inviting, setInviting] = useState(false);
   const [inviteSuccess, setInviteSuccess] = useState(false);
+  const [activeTab, setActiveTab] = useState("access");
   
   // Platform Admin Invite State
   const [showPlatformInviteModal, setShowPlatformInviteModal] = useState(false);
@@ -103,6 +104,7 @@ export default function SuperAdmin() {
     queryKey: ['access-requests'],
     queryFn: () => AccessRequestService.list('-created_at'),
     enabled: authChecked && user?.role === 'admin',
+    refetchOnWindowFocus: false,
   });
 
   const { data: orgs = [] } = useQuery({
@@ -274,9 +276,9 @@ export default function SuperAdmin() {
   const demoReqs = requests.filter(r => r.request_type === 'demo');
   const contactReqs = requests.filter(r => r.request_type === 'contact');
 
-  const pendingCount = requests.filter(r => r.status === 'pending_approval').length;
+  const actionableReqs = requests.filter(r => r.request_type !== 'demo');
+  const pendingCount = actionableReqs.filter(r => r.status === 'pending_approval').length;
   const pendingAccessCount = accessReqs.filter(r => r.status === 'pending_approval').length;
-  const pendingDemoCount = demoReqs.filter(r => r.status === 'pending_approval').length;
   const pendingContactCount = contactReqs.filter(r => r.status === 'pending_approval').length;
 
   if (!authChecked) {
@@ -299,12 +301,12 @@ export default function SuperAdmin() {
     );
   }
 
-  const renderRequestTable = (list, title, countPending) => (
+  const renderRequestTable = (list, title, countPending, type) => (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-base">{title}</CardTitle>
-          <p className="text-xs text-slate-400">{countPending} pending</p>
+          <p className="text-xs text-slate-400">{type === 'demo' ? `${list.length} total` : `${countPending} pending`}</p>
         </div>
         <div className="flex gap-2">
           {selectedRequests.size > 0 && (
@@ -381,7 +383,13 @@ export default function SuperAdmin() {
                       month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
                     }) : '—'}
                   </TableCell>
-                  <TableCell><Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>{r.status?.toUpperCase()}</Badge></TableCell>
+                  <TableCell>
+                    {type !== 'demo' && (
+                      <Badge className={r.status === 'pending_approval' ? 'bg-amber-100 text-amber-700' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}>
+                        {r.status?.toUpperCase()}
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
                       {/* Demo & Contact — View Details only */}
@@ -545,28 +553,28 @@ export default function SuperAdmin() {
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Total Organizations</p><p className="text-2xl font-bold">{orgs.length}</p><p className="text-[10px] text-emerald-500">+3 this month</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{requests.filter(r => r.request_type === 'demo').length}</p><p className="text-[10px] text-violet-500">{requests.filter(r => r.request_type === 'demo' && r.demo_viewed).length} viewed</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">MRR</p><p className="text-2xl font-bold">$124,800</p><p className="text-[10px] text-emerald-500">+8.2% MoM</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">Requires review</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">Access and contact only</p></CardContent></Card>
       </div>
 
-      <Tabs defaultValue="access">
+      <Tabs defaultValue="access" onValueChange={setActiveTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="access">Access Requests {pendingAccessCount > 0 && <Badge className="ml-1.5 bg-amber-500 text-white text-[10px] px-1.5">{pendingAccessCount}</Badge>}</TabsTrigger>
-          <TabsTrigger value="demo">Demo Requests {pendingDemoCount > 0 && <Badge className="ml-1.5 bg-violet-500 text-white text-[10px] px-1.5">{pendingDemoCount}</Badge>}</TabsTrigger>
+          <TabsTrigger value="demo">Demo Requests</TabsTrigger>
           <TabsTrigger value="contact">Contact Us {pendingContactCount > 0 && <Badge className="ml-1.5 bg-blue-500 text-white text-[10px] px-1.5">{pendingContactCount}</Badge>}</TabsTrigger>
           <TabsTrigger value="users">User Management</TabsTrigger>
           <TabsTrigger value="orgs">Organizations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="access" className="mt-4">
-          {renderRequestTable(accessReqs, "Access Requests", pendingAccessCount)}
+          {renderRequestTable(accessReqs, "Access Requests", pendingAccessCount, "access")}
         </TabsContent>
 
         <TabsContent value="demo" className="mt-4">
-          {renderRequestTable(demoReqs, "Demo Requests", pendingDemoCount)}
+          {renderRequestTable(demoReqs, "Demo Requests", 0, "demo")}
         </TabsContent>
 
         <TabsContent value="contact" className="mt-4">
-          {renderRequestTable(contactReqs, "Contact Messages", pendingContactCount)}
+          {renderRequestTable(contactReqs, "Contact Messages", pendingContactCount, "contact")}
         </TabsContent>
 
         <TabsContent value="users" className="mt-4">

@@ -529,6 +529,32 @@ export const RentProjectionService     = createEntityService('RentProjection');
 export const ExpenseProjectionService  = createEntityService('ExpenseProjection');
 export const UserService               = createEntityService('User');
 
+export async function submitPublicAccessRequest(payload) {
+  const requestPayload = {
+    ...payload,
+    status: payload.status || 'pending_approval',
+    created_at: payload.created_at || new Date().toISOString(),
+    updated_at: payload.updated_at || new Date().toISOString(),
+  };
+
+  if (!supabase) {
+    return { id: `mem-${Date.now()}`, ...requestPayload };
+  }
+
+  const { data, error } = await supabase
+    .from('access_requests')
+    .insert(requestPayload)
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('[api] submitPublicAccessRequest error:', error);
+    throw error;
+  }
+
+  return data;
+}
+
 export async function verifyAccessRequest(email) {
   if (!supabase) {
     // In-memory fallback

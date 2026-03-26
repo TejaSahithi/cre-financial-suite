@@ -27,6 +27,8 @@ export default function Login() {
   const [verifiedRole, setVerifiedRole] = useState(null);
   const [isValidatingEmail, setIsValidatingEmail] = useState(false);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [confirmationRequired, setConfirmationRequired] = useState(false);
+  const [resentConfirmation, setResentConfirmation] = useState(false);
   const [loginVerifiedCompany, setLoginVerifiedCompany] = useState(null);
   const [loginEmailChecked, setLoginEmailChecked] = useState(false);
 
@@ -38,6 +40,8 @@ export default function Login() {
     setEmail("");
     setVerifiedCompany(null);
     setVerifiedRole(null);
+    setConfirmationRequired(false);
+    setResentConfirmation(false);
     setLoginVerifiedCompany(null);
     setLoginEmailChecked(false);
   };
@@ -134,10 +138,13 @@ export default function Login() {
         }
       });
       if (signUpError) throw signUpError;
-      
-      // If we got a session (email confirmation is off), user is already logged in at aal1.
-      // We still show the success screen to inform them what's next.
+      const requiresConfirmation = !data?.session;
+      setConfirmationRequired(requiresConfirmation);
       setRegistrationSuccess(true);
+
+      if (!requiresConfirmation) {
+        navigate(createPageUrl("SecurityQuestionsSetup"));
+      }
     } catch (err) {
       setError(err.message || "Failed to create account.");
     }
@@ -163,13 +170,44 @@ export default function Login() {
           <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-blue-100 flex items-center justify-center">
              <Mail className="w-10 h-10 text-blue-600" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Check your email!</h2>
-          <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-            We've sent a confirmation link to <strong>{email}</strong>. Once you click it, you'll be redirected back here to set up your security MFA.
-          </p>
-          <p className="text-slate-400 text-xs italic">
-            Please keep this window open while you verify your email.
-          </p>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">{confirmationRequired ? "Check your email!" : "Account created"}</h2>
+          {confirmationRequired ? (
+            <>
+              <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+                We&apos;ve sent a confirmation link to <strong>{email}</strong>. Once you click it, you&apos;ll be redirected back here to finish setup.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={async () => {
+                  setError("");
+                  try {
+                    const { error: resendError } = await supabase.auth.resend({
+                      type: "signup",
+                      email,
+                      options: { emailRedirectTo: window.location.origin }
+                    });
+                    if (resendError) throw resendError;
+                    setResentConfirmation(true);
+                  } catch (err) {
+                    setError(err.message || "Failed to resend confirmation email.");
+                  }
+                }}
+              >
+                Resend confirmation email
+              </Button>
+              {resentConfirmation && <p className="text-xs text-emerald-600 mt-3">A new confirmation email has been sent.</p>}
+              <p className="text-slate-400 text-xs italic mt-3">
+                If you don&apos;t see it, check spam or confirm email delivery is enabled in Supabase Auth.
+              </p>
+            </>
+          ) : (
+            <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+              Your account is ready and you&apos;re being redirected to complete security setup.
+            </p>
+          )}
+          {error && <p className="text-red-500 text-xs mt-4">{error}</p>}
         </div>
       </div>
     );

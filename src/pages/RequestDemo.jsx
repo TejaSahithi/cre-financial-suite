@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
-import { supabase } from "@/services/supabaseClient";
+import { submitPublicAccessRequest } from "@/services/api";
 import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 
@@ -63,20 +63,20 @@ export default function RequestDemo() {
     if (!validate()) return;
     setLoading(true);
     try {
-      const { data: requestId, error } = await supabase.rpc('submit_access_request', {
-        p_full_name: form.full_name,
-        p_email: form.email,
-        p_phone: form.phone || null,
-        p_company_name: form.company_name,
-        p_role: form.role === "other" ? form.customRole : form.role,
-        p_portfolios: form.portfolios_count || "N/A",
-        p_properties: form.properties_count || "N/A",
-        p_plan: form.plan || "N/A",
-        p_billing_cycle: form.billing_cycle || "monthly",
-        p_request_type: "demo",
-        p_notes: form.notes || null
+      const request = await submitPublicAccessRequest({
+        full_name: form.full_name,
+        email: form.email,
+        phone: form.phone || null,
+        company_name: form.company_name,
+        role: form.role === "other" ? form.customRole : form.role,
+        portfolios: form.portfolios_count || "N/A",
+        properties_count: form.properties_count || "N/A",
+        property_count: form.properties_count || "N/A",
+        plan: form.plan || "N/A",
+        billing_cycle: form.billing_cycle || "monthly",
+        request_type: "demo",
+        notes: form.notes || null
       });
-      if (error) throw error;
 
       // Notify internal team
       try {
@@ -120,7 +120,7 @@ export default function RequestDemo() {
 
       navigate(createPageUrl("DemoExperience"), {
         state: {
-          requestId,
+          requestId: request?.id,
           demoVideoUrl: "https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/End-to-End_CRE_Budgeting_&_CAM.mp4",
           slideDeckUrl: "https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/Automated_CRE_Financial_Intelligence.pptx"
         }

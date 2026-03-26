@@ -11,19 +11,18 @@ export default function PaymentSuccess() {
   const state = location.state || {};
   const confettiRef = useRef(null);
 
-  // Read from state (when navigated via navigate()) or query params (from Onboarding redirect)
   const plan = state.plan || searchParams.get("plan") || "Professional";
-  const amount = state.amount || searchParams.get("amount") || null;
+  const rawAmount = state.amount || searchParams.get("amount") || null;
+  const amount = rawAmount && !isNaN(parseFloat(rawAmount)) ? parseFloat(rawAmount) : null;
   const billingCycle = state.billing_cycle || searchParams.get("billing") || "monthly";
   const invoiceId = state.invoice_id || `INV-${Date.now().toString().slice(-8)}`;
   const orgName = state.org_name || searchParams.get("org") || "Your Organization";
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
-
-  // Confetti-like particle animation on mount
   useEffect(() => {
     const container = confettiRef.current;
     if (!container) return;
+
     const colors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
     for (let i = 0; i < 40; i++) {
       const el = document.createElement("div");
@@ -41,56 +40,59 @@ export default function PaymentSuccess() {
       `;
       container.appendChild(el);
     }
+
     return () => {
       while (container.firstChild) container.removeChild(container.firstChild);
     };
   }, []);
 
-  const handleDownloadInvoice = () => {
-    // Build a simple printable invoice
-    const printContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Invoice ${invoiceId}</title>
-        <style>
-          body { font-family: 'Helvetica Neue', sans-serif; color: #1e293b; margin: 0; padding: 40px; }
-          .header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 40px; }
-          .logo { font-size: 20px; font-weight: 800; color: #0f1c3a; }
-          .logo span { color: #2563eb; }
-          .invoice-title { font-size: 28px; font-weight: 800; color: #0f1c3a; }
-          .meta { color: #64748b; font-size: 14px; }
-          .divider { border: none; border-top: 2px solid #e2e8f0; margin: 24px 0; }
-          .row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f1f5f9; font-size: 15px; }
-          .total-row { display: flex; justify-content: space-between; padding: 16px 0; font-size: 18px; font-weight: 800; color: #0f1c3a; }
-          .badge { display: inline-block; background: #d1fae5; color: #065f46; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; }
-          .footer { margin-top: 60px; text-align: center; color: #94a3b8; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="logo">CRE <span>Suite</span></div>
-          <div style="text-align:right">
-            <div class="invoice-title">Invoice</div>
-            <div class="meta">${invoiceId}</div>
-            <div class="meta">${date}</div>
-          </div>
-        </div>
-        <div class="meta">Billed to: <strong>${orgName}</strong></div>
-        <hr class="divider" />
-        <div class="row"><span>Plan</span><span>${plan} (${billingCycle})</span></div>
-        <div class="row"><span>Billing Period</span><span>${date}</span></div>
-        ${amount ? `<div class="total-row"><span>Total Due</span><span>$${Number(amount).toLocaleString()}</span></div>` : ""}
-        <div style="margin-top:20px"><span class="badge">✓ PAID</span></div>
-        <div class="footer">CRE Financial Suite · Thank you for your business.</div>
-      </body>
-      </html>
-    `;
-    const win = window.open("", "_blank");
-    if (win) {
-      win.document.write(printContent);
-      win.document.close();
-      win.print();
+  const handleDownloadInvoice = async () => {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF();
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(22);
+      doc.setTextColor("#0f1c3a");
+      doc.text("CRE Suite", 20, 24);
+      doc.setFontSize(20);
+      doc.text("Invoice", 190, 24, { align: "right" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor("#64748b");
+      doc.text(`Invoice ID: ${invoiceId}`, 20, 38);
+      doc.text(`Date: ${date}`, 20, 45);
+      doc.text(`Billed To: ${orgName}`, 20, 52);
+
+      doc.setDrawColor(226, 232, 240);
+      doc.line(20, 60, 190, 60);
+
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor("#0f1c3a");
+      doc.text("Subscription", 20, 74);
+      doc.text("Cycle", 120, 74);
+      doc.text("Amount", 190, 74, { align: "right" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor("#334155");
+      doc.text(plan, 20, 86);
+      doc.text(billingCycle, 120, 86);
+      doc.text(amount ? `$${Number(amount).toLocaleString()}` : "Paid", 190, 86, { align: "right" });
+
+      doc.line(20, 94, 190, 94);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor("#0f1c3a");
+      doc.text("Status: PAID", 20, 108);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor("#64748b");
+      doc.text("Thank you for choosing CRE Financial Suite.", 20, 122);
+
+      doc.save(`${invoiceId}.pdf`);
+    } catch (error) {
+      console.error("[PaymentSuccess] Invoice download failed:", error);
     }
   };
 
@@ -116,33 +118,28 @@ export default function PaymentSuccess() {
         .slide-2 { animation: slideUp 0.5s ease 0.55s both; }
         .slide-3 { animation: slideUp 0.5s ease 0.7s both; }
         .slide-4 { animation: slideUp 0.5s ease 0.85s both; }
-        .slide-5 { animation: slideUp 0.5s ease 1s both; }
       `}</style>
 
       <div ref={confettiRef} className="confetti-container" />
 
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-emerald-50 flex flex-col items-center justify-center p-6 relative z-10">
-        {/* Soft glows */}
         <div className="absolute top-20 left-1/2 -translate-x-1/2 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl pointer-events-none" />
 
         <div className="max-w-lg w-full text-center">
-          {/* Success icon */}
           <div className="check-icon inline-flex w-24 h-24 rounded-3xl bg-emerald-100 items-center justify-center mb-8 shadow-lg shadow-emerald-200/50">
             <CheckCircle2 className="w-12 h-12 text-emerald-600" strokeWidth={1.5} />
           </div>
 
-          {/* Heading */}
           <div className="slide-1">
             <div className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold mb-4">
               <Sparkles className="w-3 h-3" /> Payment Confirmed
             </div>
-            <h1 className="text-4xl font-black text-slate-900 mb-3">You're all set!</h1>
+            <h1 className="text-4xl font-black text-slate-900 mb-3">You&apos;re all set!</h1>
             <p className="text-slate-500 text-lg">
               Welcome to the <strong className="text-slate-800">{plan}</strong> plan.
             </p>
           </div>
 
-          {/* Invoice card */}
           <div className="slide-2 mt-8 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden text-left">
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -174,12 +171,11 @@ export default function PaymentSuccess() {
                 <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-700 px-2.5 py-0.5 rounded-full text-xs font-bold">
                   <CheckCircle2 className="w-3 h-3" /> PAID
                 </span>
-                <span className="text-xs text-slate-400">A confirmation email has been sent to your account.</span>
+                <span className="text-xs text-slate-400">Your payment has been recorded successfully.</span>
               </div>
             </div>
           </div>
 
-          {/* Actions */}
           <div className="slide-3 mt-6 flex flex-col sm:flex-row gap-3 justify-center">
             <Button
               onClick={handleDownloadInvoice}
@@ -198,7 +194,6 @@ export default function PaymentSuccess() {
             </Button>
           </div>
 
-          {/* Brand footer */}
           <div className="slide-4 mt-10 flex items-center justify-center gap-2 text-slate-400">
             <Building2 className="w-4 h-4" />
             <span className="text-xs font-medium">CRE Financial Suite · Enterprise Real Estate Intelligence</span>

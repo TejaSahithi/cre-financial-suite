@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
-import { supabase } from "@/services/supabaseClient";
+import { submitPublicAccessRequest } from "@/services/api";
 import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 
@@ -68,20 +68,20 @@ export default function RequestAccess() {
     if (!validate()) return;
     setLoading(true);
     try {
-      const { data: requestId, error } = await supabase.rpc('submit_access_request', {
-        p_full_name: form.full_name,
-        p_email: form.email,
-        p_phone: form.phone || null,
-        p_company_name: form.company_name,
-        p_role: form.role === "other" ? form.customRole : form.role,
-        p_portfolios: form.portfolios_count || "N/A",
-        p_properties: form.properties_count || "N/A",
-        p_plan: form.plan || "N/A",
-        p_billing_cycle: form.billing_cycle || "monthly",
-        p_request_type: "access",
-        p_notes: form.notes || null
+      await submitPublicAccessRequest({
+        full_name: form.full_name,
+        email: form.email,
+        phone: form.phone || null,
+        company_name: form.company_name,
+        role: form.role === "other" ? form.customRole : form.role,
+        portfolios: form.portfolios_count || "N/A",
+        properties_count: form.properties_count || "N/A",
+        property_count: form.properties_count || "N/A",
+        plan: form.plan || "N/A",
+        billing_cycle: form.billing_cycle || "monthly",
+        request_type: "access",
+        notes: form.notes || null
       });
-      if (error) throw error;
 
       // Notify internal team
       try {
