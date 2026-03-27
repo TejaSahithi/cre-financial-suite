@@ -171,7 +171,7 @@ export default function Login() {
         if (signUpError) throw signUpError;
         setConfirmationRequired(!data?.session);
         setRegistrationSuccess(true);
-        if (data?.session) navigate(createPageUrl("SecurityQuestionsSetup"));
+        if (data?.session) navigate(createPageUrl("Onboarding"));
       }
     } catch (err) {
       setError(err.message || "Failed to create account.");

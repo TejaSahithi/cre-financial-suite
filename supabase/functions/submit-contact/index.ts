@@ -46,15 +46,15 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
       <div class="logo">
         <div class="logo-icon">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5">
-            <rect x="2" y="7" width="20" height="14" rx="2"/>
-            <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
           </svg>
         </div>
-        <span class="logo-text">CRE Suite</span>
+        <span class="logo-text">CRE Platform</span>
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="ftr"><p>CRE Suite &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+    <div class="ftr"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
   </div>
 </body>
 </html>`;
@@ -76,7 +76,7 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
     const ADMIN_EMAIL = "support@cresuite.org";
-    const FROM = "CRE Suite <support@cresuite.org>";
+    const FROM = "CRE Platform <support@cresuite.org>";
 
     const { full_name, email, phone, company_name, department, message } = await req.json();
 
@@ -124,7 +124,7 @@ Deno.serve(async (req: Request) => {
     // ── 2. Admin notification email ───────────────────────────────────────────
     const adminHtml = emailWrapper(`
       <h1>📬 New Contact Form Submission</h1>
-      <p>A new message was received via the CRE Suite contact form.</p>
+      <p>A new message was received via the CRE Platform contact form.</p>
       <div class="box">
         <p><strong>Name:</strong> ${full_name}</p>
         <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
@@ -161,7 +161,7 @@ Deno.serve(async (req: Request) => {
         <p><strong>Reference:</strong> ${Date.now().toString(36).toUpperCase()}</p>
         <p><strong>Response time:</strong> Within 4 business hours</p>
       </div>
-      <p>In the meantime, you can explore our platform capabilities or learn more about CRE Suite.</p>
+      <p>In the meantime, you can explore our platform capabilities or learn more about CRE Platform.</p>
       <a href="${FRONTEND_URL}/RequestAccess" class="cta">Request Platform Access →</a>
       <p style="color:#94a3b8;font-size:13px;margin-top:24px">If your inquiry is urgent, reply directly to this email or call us at +1 (800) 555-0199.</p>
     `);
@@ -172,7 +172,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         from: FROM,
         to: [email],
-        subject: "We received your message — CRE Suite",
+        subject: "We received your message — CRE Platform",
         html: userHtml,
       }),
     });

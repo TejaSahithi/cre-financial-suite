@@ -49,15 +49,15 @@ const emailWrapper = (content: string) => `<!DOCTYPE html>
       <div class="logo">
         <div class="logo-icon">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5">
-            <rect x="2" y="7" width="20" height="14" rx="2"/>
-            <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
           </svg>
         </div>
-        <span class="logo-text">CRE Suite</span>
+        <span class="logo-text">CRE Platform</span>
       </div>
     </div>
     <div class="body">${content}</div>
-    <div class="ftr"><p>CRE Suite &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
+    <div class="ftr"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; 2025 All rights reserved</p></div>
   </div>
 </body>
 </html>`;
@@ -79,8 +79,8 @@ Deno.serve(async (req: Request) => {
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
     const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
     // After confirmation, land on a protected page so MFAGuard triggers enrollment
-    const POST_CONFIRM_URL = `${FRONTEND_URL}/SecurityQuestionsSetup`;
-    const FROM = "CRE Suite <support@cresuite.org>";
+    const POST_CONFIRM_URL = `${FRONTEND_URL}/Onboarding`;
+    const FROM = "CRE Platform <support@cresuite.org>";
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
       return new Response(JSON.stringify({ error: "Server misconfigured" }), {
@@ -246,7 +246,7 @@ async function sendConfirmEmail(
   const html = emailWrapper(`
     <h1>Confirm your email address</h1>
     <p>Hi ${firstName},</p>
-    <p>Thanks for signing up for CRE Suite! Click the button below to confirm your email and activate your account.</p>
+    <p>Thanks for signing up for CRE Platform! Click the button below to confirm your email and activate your account.</p>
     <a href="${confirmLink}" class="cta">Confirm Email Address →</a>
     <p class="note">This link expires in 24 hours. If you didn't create an account, you can safely ignore this email.</p>
   `);
@@ -257,7 +257,7 @@ async function sendConfirmEmail(
     body: JSON.stringify({
       from,
       to: [email],
-      subject: "Confirm your CRE Suite account",
+      subject: "Confirm your CRE Platform account",
       html,
     }),
   });
