@@ -101,6 +101,50 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // ── FORGOT PASSWORD flow ─────────────────────────────────────────────────
+    if (action === "forgot_password") {
+      const resetUrl = `${FRONTEND_URL}/ResetPassword`;
+      try {
+        const { data, error } = await admin.auth.admin.generateLink({
+          type: "recovery",
+          email,
+          options: { redirectTo: resetUrl },
+        });
+        const link = data?.properties?.action_link;
+        if (!link) {
+          console.error("[signup] recovery link generation failed:", error?.message);
+          return new Response(JSON.stringify({ error: "Could not generate reset link. Make sure this email has an account." }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        if (RESEND_API_KEY) {
+          const firstName = (full_name || email.split("@")[0]);
+          const html = emailWrapper(`
+            <h1>Reset your password</h1>
+            <p>Hi ${firstName},</p>
+            <p>We received a request to reset your CRE Platform password. Click the button below to choose a new password.</p>
+            <a href="${link}" class="cta">Reset Password →</a>
+            <p class="note">This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email — your password won't change.</p>
+          `);
+          const res = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ from: FROM, to: [email], subject: "Reset your CRE Platform password", html }),
+          });
+          if (!res.ok) console.error("[signup] Resend error (recovery):", await res.text());
+          else console.log("[signup] Password reset email sent to:", email);
+        }
+      } catch (e: any) {
+        console.error("[signup] forgot_password error:", e.message);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // ── RESEND flow ──────────────────────────────────────────────────────────
     if (action === "resend") {
       if (RESEND_API_KEY) {
