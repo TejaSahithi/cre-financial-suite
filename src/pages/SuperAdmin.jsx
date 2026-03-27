@@ -957,15 +957,19 @@ export default function SuperAdmin() {
                                   e.stopPropagation();
                                   setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
                                   const { toast } = await import("sonner");
+                                  // Optimistic update — show ACTIVE immediately
+                                  queryClient.setQueryData(['organizations'], (old) =>
+                                    (old || []).map(o => o.id === org.id ? { ...o, status: 'active' } : o)
+                                  );
                                   try {
-                                    // 1. Try edge function
+                                    // 1. Try edge function (CORS now fixed — should work after redeploy)
                                     let edgeFailed = false;
                                     try {
                                       const { data, error } = await supabase.functions.invoke('approve-organization', { body: { orgId: org.id } });
                                       if (error || data?.error) throw new Error(error?.message || data?.error || 'Edge function failed');
                                       queryClient.invalidateQueries({ queryKey: ['organizations'] });
                                       data.warning
-                                        ? toast.warning("Approved, but: " + data.warning, { duration: 6000 })
+                                        ? toast.warning("Approved! Note: " + data.warning, { duration: 6000 })
                                         : toast.success("Organization approved! Welcome email sent.");
                                     } catch (fnErr) {
                                       console.warn('[SuperAdmin] approve-organization edge fn failed, using direct DB:', fnErr.message);
@@ -973,7 +977,7 @@ export default function SuperAdmin() {
                                     }
 
                                     if (edgeFailed) {
-                                      // 2. Fallback: direct DB — set org + all its profiles to active
+                                      // 2. Fallback: direct DB — set org + admin profile to active
                                       const now = new Date().toISOString();
                                       const { error: orgErr } = await supabase
                                         .from('organizations')
@@ -981,24 +985,25 @@ export default function SuperAdmin() {
                                         .eq('id', org.id);
                                       if (orgErr) throw orgErr;
 
-                                      // Activate the admin's profile via membership user_id
                                       const adminMembership = org.memberships?.find(m => m.role === 'org_admin') || org.memberships?.[0];
                                       if (adminMembership?.user_id) {
-                                        await supabase
-                                          .from('profiles')
+                                        await supabase.from('profiles')
                                           .update({ status: 'active', updated_at: now })
                                           .eq('id', adminMembership.user_id);
                                       } else if (org.admin_email) {
-                                        await supabase
-                                          .from('profiles')
+                                        await supabase.from('profiles')
                                           .update({ status: 'active', updated_at: now })
                                           .eq('email', org.admin_email);
                                       }
 
                                       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-                                      toast.success("Organization approved! (Welcome email skipped — deploy edge function to enable emails.)");
+                                      toast.success("Organization approved! Redeploy edge functions to enable welcome emails.");
                                     }
                                   } catch (err) {
+                                    // Revert optimistic update on failure
+                                    queryClient.setQueryData(['organizations'], (old) =>
+                                      (old || []).map(o => o.id === org.id ? { ...o, status: org.status } : o)
+                                    );
                                     toast.error(err.message || "Failed to approve organization");
                                   } finally {
                                     setProcessingRequests(prev => { const n = new Set(prev); n.delete(`org_${org.id}`); return n; });
