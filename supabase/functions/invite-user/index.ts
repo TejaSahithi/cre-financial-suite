@@ -45,8 +45,9 @@ Deno.serve(async (req: Request) => {
       phone, module_permissions, page_permissions, capabilities
     } = await req.json();
 
-    if (!email || !role || !org_id) {
-      return new Response(JSON.stringify({ error: "Missing required fields: email, role, org_id" }), {
+    // role is optional: null/omitted means user is imported with no role (no_access)
+    if (!email || !org_id) {
+      return new Response(JSON.stringify({ error: "Missing required fields: email, org_id" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
