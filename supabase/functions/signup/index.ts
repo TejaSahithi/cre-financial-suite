@@ -78,6 +78,8 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
     const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
+    // After confirmation, land on a protected page so MFAGuard triggers enrollment
+    const POST_CONFIRM_URL = `${FRONTEND_URL}/SecurityQuestionsSetup`;
     const FROM = "CRE Suite <support@cresuite.org>";
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -102,7 +104,7 @@ Deno.serve(async (req: Request) => {
     // ── RESEND flow ──────────────────────────────────────────────────────────
     if (action === "resend") {
       if (RESEND_API_KEY) {
-        const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+        const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
         if (link) {
           await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
           console.log("[signup] Resend confirmation sent via Resend to:", email);
@@ -129,7 +131,7 @@ Deno.serve(async (req: Request) => {
       if (!existing.email_confirmed_at) {
         // Exists but unconfirmed — resend confirmation
         if (RESEND_API_KEY) {
-          const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+          const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
           if (link) {
             await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
             console.log("[signup] Resent confirmation for existing unconfirmed user:", email);
@@ -166,7 +168,7 @@ Deno.serve(async (req: Request) => {
 
     // Generate confirmation link and send via Resend
     if (RESEND_API_KEY) {
-      const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+      const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
       if (link) {
         await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
         console.log("[signup] Confirmation email sent via Resend to:", email);
