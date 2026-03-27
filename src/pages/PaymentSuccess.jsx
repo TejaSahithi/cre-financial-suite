@@ -20,19 +20,18 @@ export default function PaymentSuccess() {
   const orgName = state.org_name || state.org || searchParams.get("org") || "Your Organization";
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
-  // Auto-poll every 12 seconds for org activation.
+  // Auto-poll every 10 seconds for org activation.
   // When the SuperAdmin approves the org, profile + org status flip to 'active'.
-  // Calling refreshProfile() triggers App.jsx to re-evaluate routing and redirect
-  // to WelcomeAboard automatically — no manual action needed.
+  // Navigate directly to /WelcomeAboard to avoid a race with App.jsx's routing guard.
   useEffect(() => {
     const poll = setInterval(async () => {
       const freshUser = await refreshProfile();
-      if (freshUser?.profile?.status === 'active' || freshUser?.status === 'active') {
+      const isActive = freshUser?.profile?.status === 'active' || freshUser?.activeOrg?.status === 'active';
+      if (isActive) {
         clearInterval(poll);
-        // App.jsx routing state machine will redirect to WelcomeAboard or Dashboard
-        navigate('/');
+        navigate('/WelcomeAboard', { replace: true });
       }
-    }, 12000);
+    }, 10000);
     return () => clearInterval(poll);
   }, [refreshProfile, navigate]);
 
@@ -216,10 +215,9 @@ export default function PaymentSuccess() {
                 const { toast } = await import("sonner");
                 toast.info("Checking status...");
                 const freshUser = await refreshProfile();
-                const isActive = freshUser?.profile?.status === 'active' || freshUser?.status === 'active';
+                const isActive = freshUser?.profile?.status === 'active' || freshUser?.activeOrg?.status === 'active';
                 if (isActive) {
-                  // Let App.jsx routing state machine decide the target (WelcomeAboard or Dashboard)
-                  navigate('/');
+                  navigate('/WelcomeAboard', { replace: true });
                 } else {
                   toast.info("Account is still under review. You'll be notified once approved.");
                 }

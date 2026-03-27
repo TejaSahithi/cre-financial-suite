@@ -548,20 +548,21 @@ export default function Onboarding() {
                   if (error) throw error;
                   if (data?.error) throw new Error(data.error);
 
-                  // 3. Navigate to PaymentSuccess page
-                  console.log('[Onboarding] Payment and status updates complete! Redirecting...');
-                  // Refresh global auth context profile first so the guard knows we are 'under_review'
-                  const refreshedUser = await refreshProfile();
+                  // 3. Navigate to PaymentSuccess BEFORE refreshing profile.
+                  // Refreshing first causes App.jsx to redirect to /PaymentSuccess via <Navigate>
+                  // without the state payload, losing plan/amount/org name on that page.
                   navigate('/PaymentSuccess', {
                     replace: true,
                     state: {
                       plan: paymentInfo.plan || form.plan,
-                      billing: billingCycle,
+                      billing_cycle: billingCycle,
                       amount: numericAmount,
-                      org: org?.name || refreshedUser?.activeOrg?.name || form.name || '',
+                      org_name: org?.name || form.name || '',
                       billingAddress: paymentInfo.billingAddress,
                     }
                   });
+                  // Refresh auth context in the background so the guard stays consistent
+                  refreshProfile().catch(() => {});
                 } catch (e) {
                   console.error('[Onboarding] Payment completion failed:', e);
                   const { toast } = await import("sonner");
@@ -987,19 +988,7 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
 
         {/* Billing Address */}
         <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => runAddressValidation({ autoApplySingle: true })}
-              disabled={validatingAddress}
-              className="h-9 px-3 text-xs font-semibold border-slate-300"
-            >
-              {validatingAddress ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
-              {validatingAddress ? "Validating..." : "Validate with UPS"}
-            </Button>
-          </div>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
           <div>
             <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Street Address</Label>
             <Input value={billingAddress} onChange={e => updateAddressField(setBillingAddress, e.target.value)} placeholder="123 Main St" className="bg-white border-slate-200 h-11" required />
@@ -1047,45 +1036,13 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
             </div>
           </div>
 
-          {addressCandidates.length > 1 && (
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Validated Billing Address</Label>
-              <Select
-                value={selectedCandidateIndex}
-                onValueChange={(value) => {
-                  setSelectedCandidateIndex(value);
-                  const candidate = addressCandidates[Number(value)];
-                  if (candidate) {
-                    applyAddressCandidate(candidate, "Billing address verified and autofilled.");
-                  }
-                }}
-              >
-                <SelectTrigger className="bg-white border-slate-200 h-11">
-                  <SelectValue placeholder="Choose the UPS-validated address" />
-                </SelectTrigger>
-                <SelectContent>
-                  {addressCandidates.map((candidate, index) => (
-                    <SelectItem key={`${candidate.formattedAddress}-${index}`} value={`${index}`}>
-                      {candidate.formattedAddress}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {addressValidationMessage && (
-            <div className={`rounded-xl px-4 py-3 text-sm border ${addressValidated ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-blue-50 text-blue-700 border-blue-200"}`}>
-              {addressValidationMessage}
-            </div>
-          )}
         </div>
 
         {error && <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 flex items-center gap-2"><AlertCircle className="w-3.5 h-3.5" /> {error}</div>}
 
         <div className="flex gap-4">
           <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-500">Back</Button>
-          <Button type="submit" disabled={processing || validatingAddress} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
+          <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
             {processing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
             {processing ? "Processing Securely..." : selectedPlan.price ? `Pay $${displayPrice} & Finalize Setup` : "Request Enterprise Access"}
           </Button>
