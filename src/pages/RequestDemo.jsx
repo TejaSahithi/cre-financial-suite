@@ -117,7 +117,7 @@ export default function RequestDemo() {
       (async () => {
         try {
           await sendEmail({
-            to: "sales@cresuite.com",
+            to: "sales@cresuite.org",
             subject: `[New Demo Request] ${form.full_name} (${form.company_name})`,
             body: `
               A new demo request has been submitted.

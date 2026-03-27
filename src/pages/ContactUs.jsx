@@ -67,7 +67,7 @@ export default function ContactUs() {
     // Auto-reply to user
     await sendEmail({
       to: form.email,
-      subject: "We received your request",
+      subject: "Thanks for exploring CRE Suite",
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <p>Hi ${form.name},</p>

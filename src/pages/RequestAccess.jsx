@@ -116,7 +116,7 @@ export default function RequestAccess() {
       (async () => {
         try {
           await sendEmail({
-            to: "sales@cresuite.com",
+            to: "sales@cresuite.org",
             subject: `[New Request] Access: ${form.full_name} (${form.company_name})`,
             body: `
               A new access request has been submitted.

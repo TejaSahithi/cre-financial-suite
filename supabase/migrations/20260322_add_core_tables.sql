@@ -188,19 +188,50 @@ CREATE TABLE IF NOT EXISTS public.invoices (
   updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- RLS FOR ALL TABLES (Simplified for migration)
+-- RLS FOR ALL TABLES (Granular Policies)
 DO $$
 DECLARE
     t TEXT;
 BEGIN
-    FOR t IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' 
-    AND table_name NOT IN ('profiles', 'organizations', 'memberships', 'access_requests', 'invitations', 'notifications', 'audit_logs')
+    FOR t IN SELECT unnest(ARRAY[
+      'portfolios', 'properties', 'buildings', 'units',
+      'tenants', 'leases', 'expenses', 'budgets',
+      'vendors', 'invoices'
+    ])
     LOOP
+        -- Enable RLS
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-        EXECUTE format('DROP POLICY IF EXISTS "%s_select" ON public.%I', t, t);
-        EXECUTE format('CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id = ANY(public.get_my_org_ids()))', t, t);
+
+        -- Drop old/potentially insecure policies
         EXECUTE format('DROP POLICY IF EXISTS "%s_all" ON public.%I', t, t);
-        EXECUTE format('CREATE POLICY "%s_all" ON public.%I FOR ALL USING (org_id = ANY(public.get_my_org_ids()))', t, t);
+        EXECUTE format('DROP POLICY IF EXISTS "%s_select" ON public.%I', t, t);
+        EXECUTE format('DROP POLICY IF EXISTS "%s_insert" ON public.%I', t, t);
+        EXECUTE format('DROP POLICY IF EXISTS "%s_update" ON public.%I', t, t);
+        EXECUTE format('DROP POLICY IF EXISTS "%s_delete" ON public.%I', t, t);
+
+        -- SELECT policy: any org member can read
+        EXECUTE format(
+          'CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id = ANY(public.get_my_org_ids()))',
+          t, t
+        );
+
+        -- INSERT policy: only users with write permissions
+        EXECUTE format(
+          'CREATE POLICY "%s_insert" ON public.%I FOR INSERT WITH CHECK (public.can_write_org_data(org_id))',
+          t, t
+        );
+
+        -- UPDATE policy: only users with write permissions
+        EXECUTE format(
+          'CREATE POLICY "%s_update" ON public.%I FOR UPDATE USING (public.can_write_org_data(org_id))',
+          t, t
+        );
+
+        -- DELETE policy: only org admins or super admins
+        EXECUTE format(
+          'CREATE POLICY "%s_delete" ON public.%I FOR DELETE USING (public.is_org_admin(org_id))',
+          t, t
+        );
     END LOOP;
 END $$;
 

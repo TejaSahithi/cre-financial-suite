@@ -15,8 +15,8 @@ import { Input } from "@/components/ui/input";
  *
  * Once aal2 is reached, calls onVerified() to proceed into the app.
  */
-export default function MFAGuard({ onVerified, needsEnroll }) {
-  const [phase, setPhase] = useState(needsEnroll === false ? "challenge" : "loading"); // loading | enroll | challenge
+export default function MFAGuard({ onVerified }) {
+  const [phase, setPhase] = useState("loading"); // loading | enroll | challenge
   const [factorId, setFactorId] = useState(null);
   const [qrCode, setQrCode] = useState(null);
   const [secret, setSecret] = useState(null);
@@ -69,7 +69,7 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
   const cleanupUnverifiedFactors = async (factors) => {
     console.log(`[MFAGuard] Cleaning up ${factors.length} unverified factors...`);
     for (const f of factors) {
-      await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e => 
+      await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e =>
         console.warn("[MFAGuard] Cleanup failed for:", f.id, e)
       );
     }
@@ -86,7 +86,7 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
         issuer: "CRE Suite",
         friendlyName: `Auth_${Date.now().toString().slice(-4)}`
       });
-      
+
       if (error) {
         // Fallback: If enrollment fails because a factor was just created/exists
         if (error.message?.includes("Maximum number of verified factors") || error.status === 422) {
@@ -122,12 +122,12 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
       const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa", {
         method: 'POST', // Explicitly use POST
       });
-      
+
       if (invokeErr) {
         console.error("[MFAGuard] Edge function invocation error:", invokeErr);
         throw new Error("Unable to reach security service. Please contact support@cresuite.org to manually reset your 2FA.");
       }
-      
+
       if (!data?.success) {
         throw new Error(data?.error || "Failed to reset MFA. Please ensure you are logged in correctly.");
       }

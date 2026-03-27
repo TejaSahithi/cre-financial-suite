@@ -101,8 +101,9 @@ CREATE POLICY "orgs_update_admin" ON public.organizations
   );
 
 -- Allow insert (for onboarding)
-CREATE POLICY "orgs_insert" ON public.organizations
-  FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "orgs_insert" ON public.organizations;
+CREATE POLICY "orgs_insert_authenticated" ON public.organizations
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
 
 -- ============================================================
@@ -133,6 +134,17 @@ RETURNS BOOLEAN AS $$
     SELECT 1 FROM public.memberships
     WHERE user_id = auth.uid()
       AND (role = 'super_admin' OR (role = 'org_admin' AND org_id = check_org_id))
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- Returns TRUE if the caller can write to a given org's data
+CREATE OR REPLACE FUNCTION public.can_write_org_data(check_org_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.memberships
+    WHERE user_id = auth.uid()
+      AND org_id = check_org_id
+      AND role IN ('super_admin', 'org_admin', 'manager', 'editor')
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
@@ -170,10 +182,23 @@ CREATE POLICY "memberships_select_admin" ON public.memberships
 -- ── INSERT policy ───────────────────────────────────────────
 -- Org admins can add members to their own org; super admins to any org.
 -- Also allow users to insert their own first membership (for onboarding org creation).
-CREATE POLICY "memberships_insert" ON public.memberships
+DROP POLICY IF EXISTS "memberships_insert" ON public.memberships;
+
+CREATE POLICY "memberships_insert_secure" ON public.memberships
   FOR INSERT WITH CHECK (
-    user_id = auth.uid()   -- users can create their own membership
-    OR public.is_org_admin(org_id)
+    -- Case 1: Admin-initiated invite — org_admin or super_admin can assign any role
+    public.is_org_admin(org_id)
+    OR (
+      -- Case 2: Self-registration during onboarding — user creates their OWN membership
+      -- but ONLY with 'org_admin' role (the org creator role) and ONLY if they
+      -- don't already have a membership in that org.
+      user_id = auth.uid()
+      AND role = 'org_admin'
+      AND NOT EXISTS (
+        SELECT 1 FROM public.memberships m
+        WHERE m.user_id = auth.uid() AND m.org_id = memberships.org_id
+      )
+    )
   );
 
 -- ── UPDATE policy ───────────────────────────────────────────
