@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { OrganizationService } from "@/services/api";
 import { updateProfile, redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
@@ -21,6 +21,7 @@ const steps = [
 
 export default function Onboarding() {
   const { user: authUser, refreshProfile, logout, isLoadingAuth } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const step = parseInt(searchParams.get('step') || '1', 10);
   const setStep = (newStep) => {
@@ -68,7 +69,7 @@ export default function Onboarding() {
             setOrg(orgData);
             if (orgData.status === 'under_review') {
               console.log('[Onboarding] Org is under review, redirecting to success page');
-              window.location.href = createPageUrl("PaymentSuccess");
+              navigate('/PaymentSuccess', { replace: true });
               return;
             }
             
@@ -447,8 +448,17 @@ export default function Onboarding() {
 
                   // 3. Navigate to PaymentSuccess page
                   console.log('[Onboarding] Payment and status updates complete! Redirecting...');
-                  const url = createPageUrl("PaymentSuccess");
-                  window.location.href = url + `?plan=${encodeURIComponent(paymentInfo.plan || form.plan)}&billing=${billingCycle}&amount=${numericAmount}&org=${encodeURIComponent(org?.name || '')}`;
+                  // Refresh global auth context profile first so the guard knows we are 'under_review'
+                  await refreshProfile();
+                  navigate('/PaymentSuccess', { 
+                    replace: true,
+                    state: {
+                      plan: paymentInfo.plan || form.plan,
+                      billing: billingCycle,
+                      amount: numericAmount,
+                      org: org?.name || ''
+                    }
+                  });
                 } catch (e) {
                   console.error('[Onboarding] Payment completion failed:', e);
                   const { toast } = await import("sonner");

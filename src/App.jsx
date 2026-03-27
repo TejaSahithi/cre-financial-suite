@@ -311,7 +311,7 @@ const AuthenticatedApp = () => {
       return <Navigate to={`/${targetRoute}`} replace />;
     }
     // The request said: "No page (Dashboard, Onboarding) is directly accessible. Routing must NEVER allow dashboard access before active."
-    const criticalLockStates = ['Onboarding', 'PendingApproval', 'Welcome', 'AwaitingRole'];
+    const criticalLockStates = ['Onboarding', 'PaymentSuccess', 'PendingApproval', 'Welcome', 'AwaitingRole'];
     if (criticalLockStates.includes(targetRoute) && currentPath !== targetRoute) {
       console.log(`[App] Guard intercepted: Forcing target route /${targetRoute}`);
       return <Navigate to={`/${targetRoute}`} replace />;

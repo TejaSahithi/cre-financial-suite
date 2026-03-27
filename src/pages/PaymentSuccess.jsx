@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from "react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
-import { CheckCircle2, Download, ArrowRight, Receipt, Building2, Sparkles } from "lucide-react";
+import { CheckCircle2, Download, ArrowRight, Receipt, Building2, Sparkles, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function PaymentSuccess() {
   const navigate = useNavigate();
@@ -10,13 +11,14 @@ export default function PaymentSuccess() {
   const [searchParams] = useSearchParams();
   const state = location.state || {};
   const confettiRef = useRef(null);
+  const { refreshProfile } = useAuth();
 
   const plan = state.plan || searchParams.get("plan") || "Professional";
   const rawAmount = state.amount || searchParams.get("amount") || null;
   const amount = rawAmount && !isNaN(parseFloat(rawAmount)) ? parseFloat(rawAmount) : null;
   const billingCycle = state.billing_cycle || searchParams.get("billing") || "monthly";
   const invoiceId = state.invoice_id || `INV-${Date.now().toString().slice(-8)}`;
-  const orgName = state.org_name || searchParams.get("org") || "Your Organization";
+  const orgName = state.org_name || state.org || searchParams.get("org") || "Your Organization";
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
   useEffect(() => {
@@ -195,12 +197,20 @@ export default function PaymentSuccess() {
               Download Invoice
             </Button>
             <Button
-              disabled={true}
-              title="Awaiting administrator approval"
-              className="h-12 px-8 rounded-xl bg-slate-200 text-slate-400 font-bold gap-2 cursor-not-allowed"
+              onClick={async () => {
+                import("sonner").then(({ toast }) => toast.info("Checking status..."));
+                const freshUser = await refreshProfile();
+                if (freshUser?.profile?.status === 'active') {
+                  navigate('/Dashboard');
+                } else {
+                  import("sonner").then(({ toast }) => toast.info("Account is still under review."));
+                }
+              }}
+              title="Refresh access status"
+              className="h-12 px-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 shadow-sm"
             >
-              Go to Dashboard
-              <ArrowRight className="w-4 h-4" />
+              Refresh Status
+              <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
 
