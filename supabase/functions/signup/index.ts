@@ -101,12 +101,14 @@ Deno.serve(async (req: Request) => {
 
     // ── RESEND flow ──────────────────────────────────────────────────────────
     if (action === "resend") {
-      const confirmLink = await generateConfirmLink(admin, email, FRONTEND_URL);
-      if (RESEND_API_KEY && confirmLink) {
-        await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], confirmLink);
-      } else if (!confirmLink) {
-        // No unconfirmed user found — resend via Supabase as fallback
-        await admin.auth.admin.generateLink({ type: "signup", email });
+      if (RESEND_API_KEY) {
+        const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+        if (link) {
+          await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
+          console.log("[signup] Resend confirmation sent via Resend to:", email);
+        } else {
+          console.error("[signup] Could not generate any auth link for resend:", email);
+        }
       }
       return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -124,11 +126,14 @@ Deno.serve(async (req: Request) => {
     const { data: existingUsers } = await admin.auth.admin.listUsers();
     const existing = existingUsers?.users?.find((u: any) => u.email === email);
     if (existing) {
-      // Already exists — if not confirmed, resend; if confirmed, surface duplicate error
       if (!existing.email_confirmed_at) {
-        const confirmLink = await generateConfirmLink(admin, email, FRONTEND_URL);
-        if (RESEND_API_KEY && confirmLink) {
-          await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], confirmLink);
+        // Exists but unconfirmed — resend confirmation
+        if (RESEND_API_KEY) {
+          const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+          if (link) {
+            await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
+            console.log("[signup] Resent confirmation for existing unconfirmed user:", email);
+          }
         }
         return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -157,14 +162,19 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    console.log("[signup] Created user:", email, "id:", newUser?.user?.id);
+
     // Generate confirmation link and send via Resend
-    const confirmLink = await generateConfirmLink(admin, email, FRONTEND_URL);
-    if (RESEND_API_KEY && confirmLink) {
-      await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], confirmLink);
-      console.log("[signup] Confirmation email sent via Resend to:", email);
+    if (RESEND_API_KEY) {
+      const link = await getAnyAuthLink(admin, email, FRONTEND_URL);
+      if (link) {
+        await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
+        console.log("[signup] Confirmation email sent via Resend to:", email);
+      } else {
+        console.error("[signup] Failed to generate auth link for new user:", email);
+      }
     } else {
-      // Fallback: Supabase will send it (may be delayed on free tier)
-      console.warn("[signup] RESEND_API_KEY not set or link generation failed — Supabase will send confirmation email");
+      console.warn("[signup] RESEND_API_KEY not set — no confirmation email sent");
     }
 
     return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
@@ -181,22 +191,47 @@ Deno.serve(async (req: Request) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function generateConfirmLink(admin: any, email: string, frontendUrl: string): Promise<string | null> {
+/**
+ * Try to get a clickable auth link for email confirmation.
+ * 1st: generateLink type=signup (standard confirmation)
+ * 2nd: generateLink type=magiclink (direct login, also confirms email)
+ */
+async function getAnyAuthLink(admin: any, email: string, frontendUrl: string): Promise<string | null> {
+  // Try signup confirmation link first
   try {
     const { data, error } = await admin.auth.admin.generateLink({
       type: "signup",
       email,
       options: { redirectTo: frontendUrl },
     });
-    if (error || !data?.properties?.action_link) {
-      console.error("[signup] generateLink error:", error?.message);
-      return null;
+    const link = data?.properties?.action_link;
+    if (link) {
+      console.log("[signup] Got signup confirmation link for:", email);
+      return link;
     }
-    return data.properties.action_link;
+    console.warn("[signup] signup link failed:", error?.message, "— trying magic link");
   } catch (e: any) {
-    console.error("[signup] generateLink threw:", e.message);
-    return null;
+    console.warn("[signup] signup link threw:", e.message, "— trying magic link");
   }
+
+  // Fallback: magic link (logs user in directly, also confirms email)
+  try {
+    const { data, error } = await admin.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+      options: { redirectTo: frontendUrl },
+    });
+    const link = data?.properties?.action_link;
+    if (link) {
+      console.log("[signup] Got magic link for:", email);
+      return link;
+    }
+    console.error("[signup] magic link also failed:", error?.message);
+  } catch (e: any) {
+    console.error("[signup] magic link threw:", e.message);
+  }
+
+  return null;
 }
 
 async function sendConfirmEmail(
