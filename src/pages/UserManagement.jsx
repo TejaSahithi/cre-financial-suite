@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
@@ -18,63 +18,163 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import {
-  Plus, Upload, Search, Shield, Trash2, Mail, RefreshCw, CheckCircle2,
-  X, Loader2, Users, UserX, Building2, Download, Eye,
-  Settings2, Globe, AlertTriangle, UserCheck,
+  Plus, Upload, Search, Trash2, Mail, CheckCircle2,
+  X, Loader2, Users, UserX, Building2, Download,
+  Eye, Globe, AlertTriangle, UserCheck, PenLine, ChevronDown,
+  ChevronRight, FileText, DollarSign, BarChart2, Settings,
 } from "lucide-react";
 
-// ─── Module Definitions ──────────────────────────────────────────────────────
-const PERMISSION_MODULES = [
-  { key: "dashboard",   label: "Dashboard",        icon: "📊" },
-  { key: "properties",  label: "Properties",        icon: "🏢" },
-  { key: "leases",      label: "Leases",            icon: "📋" },
-  { key: "expenses",    label: "Expenses",          icon: "💰" },
-  { key: "cam",         label: "CAM Engine",        icon: "🔧" },
-  { key: "budget",      label: "Budget Studio",     icon: "📈" },
-  { key: "reports",     label: "Reports & Analytics", icon: "📑" },
-  { key: "users",       label: "User Management",   icon: "👥" },
+// ─── CRE Industry Roles ───────────────────────────────────────────────────────
+const CRE_ROLES = {
+  // Management
+  asset_manager:       { label: "Asset Manager",       category: "Management",   color: "violet",  description: "Oversees asset performance and value-add strategy" },
+  portfolio_manager:   { label: "Portfolio Manager",   category: "Management",   color: "violet",  description: "Manages entire property portfolio" },
+  operations_director: { label: "Operations Director", category: "Management",   color: "violet",  description: "Overall operations and team management" },
+  // Property Operations
+  property_manager:    { label: "Property Manager",    category: "Operations",   color: "blue",    description: "Day-to-day property operations and tenant relations" },
+  facility_manager:    { label: "Facility Manager",    category: "Operations",   color: "blue",    description: "Building systems, maintenance, and repairs" },
+  construction_manager:{ label: "Construction Mgr.",   category: "Operations",   color: "blue",    description: "Capital improvements and construction oversight" },
+  // Finance
+  cfo_controller:      { label: "CFO / Controller",    category: "Finance",      color: "emerald", description: "Financial controls, accounting, and reporting" },
+  financial_analyst:   { label: "Financial Analyst",   category: "Finance",      color: "emerald", description: "Financial modeling, analysis, and projections" },
+  accounts_manager:    { label: "Accounts Manager",    category: "Finance",      color: "emerald", description: "AR/AP management and reconciliations" },
+  investor_relations:  { label: "Investor Relations",  category: "Finance",      color: "emerald", description: "Investor communication and capital reporting" },
+  // Leasing
+  leasing_director:    { label: "Leasing Director",    category: "Leasing",      color: "amber",   description: "Leasing strategy and broker relationships" },
+  leasing_agent:       { label: "Leasing Agent",       category: "Leasing",      color: "amber",   description: "Tenant prospecting, tours, and lease execution" },
+  lease_admin:         { label: "Lease Administrator", category: "Leasing",      color: "amber",   description: "Lease abstracts, CAM, and compliance" },
+  // Acquisitions
+  acquisitions_mgr:    { label: "Acquisitions Mgr.",   category: "Acquisitions", color: "rose",    description: "Deal sourcing, underwriting, and due diligence" },
+  // Compliance
+  compliance_officer:  { label: "Compliance Officer",  category: "Compliance",   color: "slate",   description: "Regulatory compliance and risk management" },
+  internal_auditor:    { label: "Internal Auditor",    category: "Compliance",   color: "slate",   description: "Audit trail review and financial controls" },
+};
+
+const ROLE_CATEGORY_ORDER = ["Management", "Operations", "Finance", "Leasing", "Acquisitions", "Compliance"];
+
+const ROLE_COLOR_CLASSES = {
+  violet:  { badge: "bg-violet-100 text-violet-700 border-violet-200",  dot: "bg-violet-500" },
+  blue:    { badge: "bg-blue-100 text-blue-700 border-blue-200",        dot: "bg-blue-500" },
+  emerald: { badge: "bg-emerald-100 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" },
+  amber:   { badge: "bg-amber-100 text-amber-700 border-amber-200",     dot: "bg-amber-500" },
+  rose:    { badge: "bg-rose-100 text-rose-700 border-rose-200",        dot: "bg-rose-500" },
+  slate:   { badge: "bg-slate-100 text-slate-600 border-slate-200",     dot: "bg-slate-400" },
+};
+
+// ─── Page-Level Permission Groups ─────────────────────────────────────────────
+const PAGE_PERMISSION_GROUPS = [
+  {
+    key: "core", label: "Dashboard & Portfolio", icon: "📊",
+    pages: [
+      { key: "Dashboard",         label: "Dashboard" },
+      { key: "Portfolios",        label: "Portfolio Overview" },
+      { key: "PortfolioInsights", label: "Portfolio Insights" },
+    ],
+  },
+  {
+    key: "properties", label: "Properties", icon: "🏢",
+    pages: [
+      { key: "Properties",     label: "Properties List" },
+      { key: "BuildingsUnits", label: "Buildings & Units" },
+      { key: "PropertyDetail", label: "Property Detail" },
+    ],
+  },
+  {
+    key: "leases", label: "Leasing", icon: "📋",
+    pages: [
+      { key: "Leases",          label: "Leases" },
+      { key: "LeaseUpload",     label: "Lease Upload" },
+      { key: "LeaseReview",     label: "Lease Review" },
+      { key: "RentProjection",  label: "Rent Projection" },
+    ],
+  },
+  {
+    key: "tenants", label: "Tenants & Vendors", icon: "🤝",
+    pages: [
+      { key: "Tenants",      label: "Tenants" },
+      { key: "TenantDetail", label: "Tenant Detail" },
+      { key: "Vendors",      label: "Vendors" },
+      { key: "Billing",      label: "Billing" },
+    ],
+  },
+  {
+    key: "expenses", label: "Expenses", icon: "💰",
+    pages: [
+      { key: "Expenses",    label: "Expenses" },
+      { key: "AddExpense",  label: "Add Expense" },
+      { key: "BulkImport",  label: "Bulk Import" },
+    ],
+  },
+  {
+    key: "cam", label: "CAM Engine", icon: "🔧",
+    pages: [
+      { key: "CAMDashboard",    label: "CAM Dashboard" },
+      { key: "CAMCalculation",  label: "CAM Calculation" },
+      { key: "Reconciliation",  label: "Reconciliation" },
+    ],
+  },
+  {
+    key: "budget", label: "Budget & Financials", icon: "📈",
+    pages: [
+      { key: "BudgetDashboard",  label: "Budget Dashboard" },
+      { key: "CreateBudget",     label: "Create Budget" },
+      { key: "BudgetReview",     label: "Budget Review" },
+      { key: "Revenue",          label: "Revenue" },
+      { key: "ActualsVariance",  label: "Actuals & Variance" },
+      { key: "Comparison",       label: "YoY Comparison" },
+    ],
+  },
+  {
+    key: "reports", label: "Analytics & Reports", icon: "📑",
+    pages: [
+      { key: "AnalyticsReports", label: "Analytics Reports" },
+      { key: "Analytics",        label: "Analytics" },
+    ],
+  },
+  {
+    key: "admin", label: "Administration", icon: "⚙️",
+    pages: [
+      { key: "UserManagement", label: "User Management" },
+      { key: "OrgSettings",    label: "Org Settings" },
+      { key: "AuditLog",       label: "Audit Log" },
+      { key: "Documents",      label: "Documents" },
+      { key: "Workflows",      label: "Workflows" },
+    ],
+  },
 ];
 
-// ─── Access Level Definitions ─────────────────────────────────────────────────
+// ─── Access Levels ─────────────────────────────────────────────────────────────
 const ACCESS_LEVELS = {
-  full: { label: "Full Access", short: "Full",  color: "emerald", btnClass: "bg-emerald-600 text-white hover:bg-emerald-700",  chipClass: "bg-emerald-100 text-emerald-700 border-emerald-200" },
-  read: { label: "Read Only",   short: "Read",  color: "blue",    btnClass: "bg-blue-600 text-white hover:bg-blue-700",         chipClass: "bg-blue-100 text-blue-700 border-blue-200" },
-  none: { label: "No Access",   short: "None",  color: "slate",   btnClass: "bg-slate-100 text-slate-500 hover:bg-slate-200",   chipClass: "bg-slate-100 text-slate-400 border-slate-200" },
+  full: { label: "Full",  chipClass: "bg-emerald-100 text-emerald-700 border-emerald-200", btnActive: "bg-emerald-600 text-white border-transparent" },
+  read: { label: "Read",  chipClass: "bg-blue-100 text-blue-700 border-blue-200",         btnActive: "bg-blue-600 text-white border-transparent" },
+  none: { label: "None",  chipClass: "bg-slate-100 text-slate-400 border-slate-200",      btnActive: "bg-slate-200 text-slate-600 border-transparent" },
 };
 
-// ─── Role Templates ───────────────────────────────────────────────────────────
-const ROLE_TEMPLATES = {
-  org_admin: {
-    label: "Admin", badgeClass: "bg-violet-100 text-violet-700 border-violet-200",
-    description: "Full organization control",
-    modules: { dashboard: "full", properties: "full", leases: "full", expenses: "full", cam: "full", budget: "full", reports: "full", users: "full" },
-  },
-  manager: {
-    label: "Manager", badgeClass: "bg-blue-100 text-blue-700 border-blue-200",
-    description: "Manage properties, leases, expenses",
-    modules: { dashboard: "full", properties: "full", leases: "full", expenses: "read", cam: "read", budget: "read", reports: "read", users: "none" },
-  },
-  editor: {
-    label: "Editor", badgeClass: "bg-cyan-100 text-cyan-700 border-cyan-200",
-    description: "Data entry and financial reporting",
-    modules: { dashboard: "read", properties: "read", leases: "full", expenses: "full", cam: "read", budget: "full", reports: "read", users: "none" },
-  },
-  viewer: {
-    label: "Viewer", badgeClass: "bg-slate-100 text-slate-600 border-slate-200",
-    description: "Read-only across all modules",
-    modules: { dashboard: "read", properties: "read", leases: "read", expenses: "read", cam: "read", budget: "read", reports: "read", users: "none" },
-  },
-  auditor: {
-    label: "Auditor", badgeClass: "bg-amber-100 text-amber-700 border-amber-200",
-    description: "Audit and financial review",
-    modules: { dashboard: "read", properties: "none", leases: "none", expenses: "read", cam: "read", budget: "read", reports: "full", users: "none" },
-  },
-};
+// ─── Signing Privilege Levels ──────────────────────────────────────────────────
+const SIGNING_LEVELS = [
+  { level: 0, label: "No Authority",     short: "—",  color: "slate",   description: "Cannot initiate or approve",             badgeClass: "bg-slate-100 text-slate-400" },
+  { level: 1, label: "L1 · Initiator",   short: "L1", color: "sky",     description: "Can prepare and submit for review",       badgeClass: "bg-sky-100 text-sky-700" },
+  { level: 2, label: "L2 · Reviewer",    short: "L2", color: "blue",    description: "Can review and recommend approval",       badgeClass: "bg-blue-100 text-blue-700" },
+  { level: 3, label: "L3 · Approver",    short: "L3", color: "emerald", description: "Can approve and sign documents",          badgeClass: "bg-emerald-100 text-emerald-700" },
+  { level: 4, label: "L4 · Final Auth.", short: "L4", color: "violet",  description: "Final signatory, can override all levels", badgeClass: "bg-violet-100 text-violet-700" },
+];
 
-const DEFAULT_MODULES = { dashboard: "none", properties: "none", leases: "none", expenses: "none", cam: "none", budget: "none", reports: "none", users: "none" };
-const ROLE_OPTIONS = Object.entries(ROLE_TEMPLATES).map(([v, c]) => ({ value: v, label: c.label }));
+const DOCUMENT_TYPES = [
+  { key: "leases",           label: "Leases & Amendments",  Icon: FileText },
+  { key: "budgets",          label: "Budgets & Forecasts",  Icon: BarChart2 },
+  { key: "cam_reconciliation",label: "CAM Reconciliation",  Icon: Settings },
+  { key: "vendor_contracts", label: "Vendor Contracts",     Icon: PenLine },
+  { key: "acquisitions",     label: "Acquisition Docs",     Icon: Building2 },
+  { key: "capex",            label: "Capital Expenditure",  Icon: DollarSign },
+  { key: "financial_reports",label: "Financial Reports",    Icon: BarChart2 },
+];
+
+const DEFAULT_PAGE_PERMS = Object.fromEntries(
+  PAGE_PERMISSION_GROUPS.flatMap(g => g.pages.map(p => [p.key, "none"]))
+);
+const DEFAULT_SIGNING = Object.fromEntries(DOCUMENT_TYPES.map(d => [d.key, 0]));
+const DEFAULT_ROLES = [];
 
 const STATUS_CONFIG = {
   active:    { label: "Active",    badgeClass: "bg-emerald-100 text-emerald-700", Icon: CheckCircle2 },
@@ -105,69 +205,253 @@ function formatLastActive(ts) {
 
 function deriveStatus(member) {
   if (member.status === "invited") return "invited";
-  if (!member.role || member.role === "pending") return "no_access";
+  const roles = member.capabilities?.roles || [];
+  if (roles.length === 0 && !member.role) return "no_access";
   return "active";
 }
 
-function getModulePermissions(member) {
-  if (member.module_permissions && Object.keys(member.module_permissions).length > 0) {
-    return { ...DEFAULT_MODULES, ...member.module_permissions };
-  }
-  if (member.role && ROLE_TEMPLATES[member.role]) {
-    return { ...DEFAULT_MODULES, ...ROLE_TEMPLATES[member.role].modules };
-  }
-  return { ...DEFAULT_MODULES };
+function getMemberRoles(member) {
+  return member.capabilities?.roles || (member.role ? [member.role] : []);
 }
 
-function detectTemplate(permissions) {
-  for (const [key, tmpl] of Object.entries(ROLE_TEMPLATES)) {
-    if (Object.entries(tmpl.modules).every(([k, v]) => permissions[k] === v)) return key;
-  }
-  return "custom";
+function getMemberSigningPrivileges(member) {
+  return { ...DEFAULT_SIGNING, ...(member.capabilities?.signing_privileges || {}) };
+}
+
+function getMemberPagePerms(member) {
+  return { ...DEFAULT_PAGE_PERMS, ...(member.page_permissions || {}) };
+}
+
+function getHighestSigningLevel(signingPrivs) {
+  return Math.max(0, ...Object.values(signingPrivs));
 }
 
 function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
+  // Normalize headers
+  const rawHeaders = lines[0].split(",").map(h => h.trim().replace(/^["']|["']$/g, "").toLowerCase());
+  const headerMap = {};
+  rawHeaders.forEach((h, i) => {
+    const clean = h.replace(/[\s_-]+/g, "_");
+    if (/^(full_?name|name|first_?name|contact_?name)$/.test(clean)) headerMap.full_name = i;
+    else if (/^(email|email_?address)$/.test(clean)) headerMap.email = i;
+    else if (/^(phone|phone_?number|mobile|cell|telephone)$/.test(clean)) headerMap.phone = i;
+  });
+
   return lines.slice(1).map(line => {
-    const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] || ""; });
-    return obj;
-  }).filter(r => r.email);
+    // Handle quoted CSV values
+    const vals = [];
+    let cur = "", inQ = false;
+    for (const ch of line + ",") {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === "," && !inQ) { vals.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    return {
+      full_name: headerMap.full_name !== undefined ? vals[headerMap.full_name] || "" : "",
+      email:     headerMap.email     !== undefined ? vals[headerMap.email]     || "" : "",
+      phone:     headerMap.phone     !== undefined ? vals[headerMap.phone]     || "" : "",
+    };
+  }).filter(r => r.email && r.email.includes("@"));
 }
 
-// ─── ModuleMatrix Component ───────────────────────────────────────────────────
-function ModuleMatrix({ permissions, onChange, readonly = false, compact = false }) {
+// ─── RoleSelector Component ───────────────────────────────────────────────────
+function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameChange }) {
+  const [open, setOpen] = useState(false);
+  const grouped = ROLE_CATEGORY_ORDER.map(cat => ({
+    category: cat,
+    roles: Object.entries(CRE_ROLES).filter(([, r]) => r.category === cat),
+  }));
+
+  const toggle = (key) => {
+    if (selectedRoles.includes(key)) {
+      onChange(selectedRoles.filter(r => r !== key));
+    } else {
+      onChange([...selectedRoles, key]);
+    }
+  };
+
+  const hasCustom = selectedRoles.includes("custom");
+
   return (
-    <div className={`space-y-${compact ? "1.5" : "2"}`}>
-      {PERMISSION_MODULES.map(mod => {
-        const current = permissions[mod.key] || "none";
-        return (
-          <div key={mod.key} className={`flex items-center justify-between ${compact ? "py-1" : "py-2 px-3 rounded-lg hover:bg-slate-50"}`}>
-            <span className={`flex items-center gap-2 ${compact ? "text-xs text-slate-600" : "text-sm text-slate-700 font-medium"}`}>
-              <span>{mod.icon}</span> {mod.label}
-            </span>
-            {readonly ? (
-              <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ACCESS_LEVELS[current]?.chipClass}`}>
-                {ACCESS_LEVELS[current]?.short}
-              </span>
+    <div className="space-y-2">
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-left hover:border-slate-300 transition-colors"
+        >
+          <div className="flex flex-wrap gap-1 flex-1 min-w-0">
+            {selectedRoles.length === 0 ? (
+              <span className="text-slate-400">Select roles…</span>
             ) : (
-              <div className="flex gap-1">
-                {Object.entries(ACCESS_LEVELS).map(([level, cfg]) => (
-                  <button
-                    key={level}
-                    onClick={() => onChange(mod.key, level)}
-                    className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all border ${
-                      current === level
-                        ? cfg.btnClass + " border-transparent shadow-sm"
-                        : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
-                    }`}
-                  >
-                    {cfg.short}
-                  </button>
-                ))}
+              selectedRoles.slice(0, 3).map(r => {
+                const def = r === "custom" ? null : CRE_ROLES[r];
+                const color = def ? ROLE_COLOR_CLASSES[def.color] : ROLE_COLOR_CLASSES.violet;
+                return (
+                  <span key={r} className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${color.badge}`}>
+                    {r === "custom" ? (customRoleName || "Custom") : def?.label}
+                  </span>
+                );
+              })
+            )}
+            {selectedRoles.length > 3 && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+                +{selectedRoles.length - 3}
+              </span>
+            )}
+          </div>
+          <ChevronDown className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+
+        {open && (
+          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-80 overflow-y-auto">
+            <div className="p-2 space-y-1">
+              {grouped.map(({ category, roles: catRoles }) => (
+                <div key={category}>
+                  <div className="px-2 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">{category}</div>
+                  {catRoles.map(([key, def]) => {
+                    const isSelected = selectedRoles.includes(key);
+                    const colorCls = ROLE_COLOR_CLASSES[def.color];
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => toggle(key)}
+                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${isSelected ? "bg-slate-50" : "hover:bg-slate-50"}`}
+                      >
+                        <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${isSelected ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
+                          {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-800">{def.label}</span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold ${colorCls.badge}`}>{category}</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 truncate">{def.description}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {/* Custom Role Option */}
+              <div>
+                <div className="px-2 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Custom</div>
+                <button
+                  type="button"
+                  onClick={() => toggle("custom")}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors ${hasCustom ? "bg-slate-50" : "hover:bg-slate-50"}`}
+                >
+                  <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${hasCustom ? "bg-[#1a2744] border-[#1a2744]" : "border-slate-300"}`}>
+                    {hasCustom && <CheckCircle2 className="w-3 h-3 text-white" />}
+                  </div>
+                  <span className="text-sm font-medium text-slate-800">Custom Role…</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Custom role name input */}
+      {hasCustom && (
+        <Input
+          placeholder="Enter custom role title (e.g. Senior Deal Analyst)"
+          value={customRoleName}
+          onChange={e => onCustomNameChange(e.target.value)}
+          className="text-sm"
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── PagePermissionMatrix Component ───────────────────────────────────────────
+function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
+  const [expanded, setExpanded] = useState({ core: true, properties: true, leases: true });
+
+  const toggleGroup = (key) => setExpanded(e => ({ ...e, [key]: !e[key] }));
+
+  const groupAccess = (group) => {
+    const levels = group.pages.map(p => permissions[p.key] || "none");
+    if (levels.every(l => l === "full")) return "full";
+    if (levels.every(l => l === "none")) return "none";
+    return "mixed";
+  };
+
+  const setGroupAccess = (group, level) => {
+    const update = {};
+    group.pages.forEach(p => { update[p.key] = level; });
+    Object.entries(update).forEach(([k, v]) => onChange(k, v));
+  };
+
+  return (
+    <div className="space-y-1">
+      {PAGE_PERMISSION_GROUPS.map(group => {
+        const isOpen = expanded[group.key] !== false;
+        const groupLevel = groupAccess(group);
+        return (
+          <div key={group.key} className="border border-slate-200 rounded-xl overflow-hidden">
+            {/* Group header */}
+            <div
+              className="flex items-center justify-between px-3 py-2.5 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
+              onClick={() => toggleGroup(group.key)}
+            >
+              <div className="flex items-center gap-2">
+                {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+                <span className="text-xs font-semibold text-slate-700">{group.icon} {group.label}</span>
+                {groupLevel === "mixed" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-600 font-semibold">Mixed</span>}
+                {groupLevel === "full" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-600 font-semibold">Full</span>}
+              </div>
+              {!readonly && (
+                <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                  {Object.entries(ACCESS_LEVELS).map(([l, cfg]) => (
+                    <button
+                      key={l}
+                      onClick={() => setGroupAccess(group, l)}
+                      className={`text-[9px] px-2 py-0.5 rounded-lg font-semibold border transition-all ${
+                        groupLevel === l ? cfg.btnActive : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                      }`}
+                    >
+                      All {cfg.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Page rows */}
+            {isOpen && (
+              <div className="divide-y divide-slate-100">
+                {group.pages.map(page => {
+                  const current = permissions[page.key] || "none";
+                  return (
+                    <div key={page.key} className="flex items-center justify-between px-4 py-2">
+                      <span className="text-xs text-slate-600">{page.label}</span>
+                      {readonly ? (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${ACCESS_LEVELS[current]?.chipClass}`}>
+                          {ACCESS_LEVELS[current]?.label}
+                        </span>
+                      ) : (
+                        <div className="flex gap-1">
+                          {Object.entries(ACCESS_LEVELS).map(([l, cfg]) => (
+                            <button
+                              key={l}
+                              onClick={() => onChange(page.key, l)}
+                              className={`text-[9px] px-2 py-1 rounded-lg font-semibold border transition-all ${
+                                current === l ? cfg.btnActive : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                              }`}
+                            >
+                              {cfg.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -177,82 +461,169 @@ function ModuleMatrix({ permissions, onChange, readonly = false, compact = false
   );
 }
 
-// ─── ModuleAccessChips Component ──────────────────────────────────────────────
-function ModuleAccessChips({ permissions, maxVisible = 3 }) {
-  const active = PERMISSION_MODULES.filter(m => permissions[m.key] && permissions[m.key] !== "none");
+// ─── SigningPrivilegesMatrix Component ────────────────────────────────────────
+function SigningPrivilegesMatrix({ privileges, onChange, readonly = false }) {
+  return (
+    <div className="space-y-1.5">
+      {DOCUMENT_TYPES.map(({ key, label, Icon }) => {
+        const current = privileges[key] ?? 0;
+        const lvl = SIGNING_LEVELS[current];
+        return (
+          <div key={key} className="flex items-center gap-3 py-1.5">
+            <div className="flex items-center gap-2 w-44 flex-shrink-0">
+              <Icon className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-xs text-slate-700 font-medium">{label}</span>
+            </div>
+            {readonly ? (
+              <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${lvl.badgeClass}`}>
+                {lvl.short === "—" ? lvl.label : lvl.label}
+              </span>
+            ) : (
+              <div className="flex gap-1 flex-wrap">
+                {SIGNING_LEVELS.map(sl => (
+                  <button
+                    key={sl.level}
+                    onClick={() => onChange(key, sl.level)}
+                    title={sl.description}
+                    className={`text-[10px] px-2.5 py-1 rounded-lg font-semibold border transition-all ${
+                      current === sl.level
+                        ? sl.badgeClass + " border-transparent shadow-sm"
+                        : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                    }`}
+                  >
+                    {sl.short}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {/* Legend */}
+      <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-3">
+        {SIGNING_LEVELS.slice(1).map(sl => (
+          <div key={sl.level} className="flex items-center gap-1.5 text-[10px] text-slate-500">
+            <span className={`px-2 py-0.5 rounded-full font-semibold ${sl.badgeClass}`}>{sl.short}</span>
+            {sl.description}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── PageAccessChips Component ────────────────────────────────────────────────
+function PageAccessChips({ pagePerms, maxVisible = 4 }) {
+  const active = Object.entries(pagePerms)
+    .filter(([, v]) => v !== "none")
+    .map(([k, v]) => {
+      const page = PAGE_PERMISSION_GROUPS.flatMap(g => g.pages).find(p => p.key === k);
+      return { key: k, label: page?.label || k, level: v };
+    });
+  if (active.length === 0) return <span className="text-xs text-slate-400 italic">No access</span>;
   const visible = active.slice(0, maxVisible);
   const rest = active.length - maxVisible;
-  if (active.length === 0) return <span className="text-xs text-slate-400 italic">No access</span>;
   return (
     <div className="flex flex-wrap gap-1">
-      {visible.map(m => (
-        <span key={m.key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ACCESS_LEVELS[permissions[m.key]]?.chipClass}`}>
-          {m.icon} {m.label.split(" ")[0]}
+      {visible.map(p => (
+        <span key={p.key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ACCESS_LEVELS[p.level]?.chipClass}`}>
+          {p.label.split(" ")[0]}
         </span>
       ))}
-      {rest > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-200">+{rest}</span>}
+      {rest > 0 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-200">
+          +{rest}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── RoleBadges Component ──────────────────────────────────────────────────────
+function RoleBadges({ member, maxVisible = 2 }) {
+  const roles = getMemberRoles(member);
+  const customName = member.capabilities?.custom_role;
+  if (roles.length === 0) return <span className="text-xs text-slate-400 italic">No role</span>;
+  const visible = roles.slice(0, maxVisible);
+  const rest = roles.length - maxVisible;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {visible.map(r => {
+        if (r === "custom") {
+          return (
+            <span key="custom" className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-purple-100 text-purple-700 border-purple-200">
+              {customName || "Custom"}
+            </span>
+          );
+        }
+        const def = CRE_ROLES[r];
+        if (!def) return null;
+        const color = ROLE_COLOR_CLASSES[def.color];
+        return (
+          <span key={r} className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${color.badge}`}>
+            {def.label}
+          </span>
+        );
+      })}
+      {rest > 0 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+          +{rest}
+        </span>
+      )}
     </div>
   );
 }
 
 // ─── UserDetailDrawer Component ───────────────────────────────────────────────
-function UserDetailDrawer({ member, orgId, onClose, onSaved, isSuperAdmin }) {
+function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   const queryClient = useQueryClient();
-  const [permissions, setPermissions] = useState(getModulePermissions(member));
-  const [template, setTemplate] = useState(detectTemplate(getModulePermissions(member)));
+  const [activeTab, setActiveTab] = useState("roles");
+  const [selectedRoles, setSelectedRoles] = useState(getMemberRoles(member));
+  const [customRoleName, setCustomRoleName] = useState(member.capabilities?.custom_role || "");
+  const [pagePerms, setPagePerms] = useState(getMemberPagePerms(member));
+  const [signingPrivs, setSigningPrivs] = useState(getMemberSigningPrivileges(member));
   const [saving, setSaving] = useState(false);
-  const [removingUser, setRemovingUser] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const status = deriveStatus(member);
   const StatusIcon = STATUS_CONFIG[status]?.Icon || CheckCircle2;
+  const initials = (member.profiles?.full_name || member.profiles?.email || "?")
+    .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
-  const applyTemplate = (tmplKey) => {
-    setTemplate(tmplKey);
-    if (tmplKey !== "custom" && ROLE_TEMPLATES[tmplKey]) {
-      setPermissions({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES[tmplKey].modules });
-    }
-  };
-
-  const handleModuleChange = (moduleKey, level) => {
-    const next = { ...permissions, [moduleKey]: level };
-    setPermissions(next);
-    setTemplate(detectTemplate(next));
-  };
+  const TABS = [
+    { key: "roles",    label: "Roles" },
+    { key: "access",   label: "Page Access" },
+    { key: "signing",  label: "Signing" },
+  ];
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const effectiveRole = template !== "custom" ? template : (member.role || null);
-      const { error } = await supabase
-        .from("memberships")
-        .update({ role: effectiveRole, module_permissions: permissions, status: effectiveRole ? "active" : member.status })
-        .eq("user_id", member.user_id)
-        .eq("org_id", orgId);
+      const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
+      const { error } = await supabase.from("memberships").update({
+        role: primaryRole,
+        page_permissions: pagePerms,
+        status: selectedRoles.length > 0 ? "active" : member.status,
+        capabilities: {
+          ...(member.capabilities || {}),
+          roles: selectedRoles,
+          custom_role: customRoleName || null,
+          signing_privileges: signingPrivs,
+        },
+      }).eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
-      await logAudit({ action: "update_permissions", target_user_id: member.user_id, details: { template: effectiveRole, modules: permissions } });
+      await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, signing: signingPrivs } });
       toast.success("Permissions saved");
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
-      onSaved?.();
+      onClose();
     } catch (e) {
-      toast.error(e.message || "Failed to save permissions");
+      toast.error(e.message || "Failed to save");
     }
     setSaving(false);
   };
 
-  const handleResendInvite = async () => {
-    try {
-      const { error } = await supabase.functions.invoke("invite-user", {
-        body: { email: member.profiles?.email, full_name: member.profiles?.full_name, org_id: orgId, role: member.role || null, module_permissions: permissions },
-      });
-      if (error) throw error;
-      toast.success("Invite resent");
-    } catch (e) {
-      toast.error(e.message || "Failed to resend invite");
-    }
-  };
-
   const handleRemove = async () => {
     if (!confirm(`Remove ${member.profiles?.full_name || member.profiles?.email} from this organization?`)) return;
-    setRemovingUser(true);
+    setRemoving(true);
     try {
       const { error } = await supabase.from("memberships").delete().eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
@@ -263,125 +634,158 @@ function UserDetailDrawer({ member, orgId, onClose, onSaved, isSuperAdmin }) {
     } catch (e) {
       toast.error(e.message || "Failed to remove member");
     }
-    setRemovingUser(false);
+    setRemoving(false);
   };
-
-  const initials = (member.profiles?.full_name || member.profiles?.email || "?")
-    .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 h-full w-[480px] bg-white shadow-2xl z-50 flex flex-col overflow-hidden">
+      <div className="fixed right-0 top-0 h-full w-[520px] bg-white shadow-2xl z-50 flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50 flex-shrink-0">
           <h2 className="text-base font-bold text-slate-800">User Details</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 transition-colors">
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
-          {/* Profile Section */}
-          <div className="px-6 py-5 border-b border-slate-100">
-            <div className="flex items-start gap-4">
-              <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
-                style={{ backgroundColor: avatarColor(member.profiles?.email) }}
-              >
-                {initials}
+        {/* Profile */}
+        <div className="px-6 py-4 border-b border-slate-100 flex-shrink-0">
+          <div className="flex items-start gap-4">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
+              style={{ backgroundColor: avatarColor(member.profiles?.email) }}>
+              {initials}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-0.5">
+                <h3 className="font-bold text-slate-900 truncate">{member.profiles?.full_name || "—"}</h3>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STATUS_CONFIG[status]?.badgeClass}`}>
+                  <StatusIcon className="w-2.5 h-2.5 inline mr-0.5" />{STATUS_CONFIG[status]?.label}
+                </span>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-bold text-slate-900 truncate">{member.profiles?.full_name || "—"}</h3>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${STATUS_CONFIG[status]?.badgeClass}`}>
-                    <StatusIcon className="w-2.5 h-2.5 inline mr-1" />
-                    {STATUS_CONFIG[status]?.label}
-                  </span>
-                </div>
-                <p className="text-sm text-slate-500 truncate">{member.profiles?.email}</p>
-                {member.profiles?.phone && <p className="text-xs text-slate-400 mt-0.5">{member.profiles.phone}</p>}
-                <p className="text-xs text-slate-400 mt-1">Last active: {formatLastActive(member.profiles?.last_sign_in_at)}</p>
-              </div>
+              <p className="text-sm text-slate-500 truncate">{member.profiles?.email}</p>
+              {member.profiles?.phone && <p className="text-xs text-slate-400">{member.profiles.phone}</p>}
             </div>
           </div>
+          {isSuperAdmin && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-violet-700 bg-violet-50 rounded-lg px-3 py-1.5">
+              <Globe className="w-3 h-3" /> SuperAdmin — cross-org view enabled
+            </div>
+          )}
+        </div>
 
-          {/* Role Template */}
-          <div className="px-6 py-5 border-b border-slate-100">
-            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 block">Role Template</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {ROLE_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => applyTemplate(opt.value)}
-                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-left ${
-                    template === opt.value
-                      ? ROLE_TEMPLATES[opt.value].badgeClass + " shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
-                  }`}
-                >
-                  {opt.label}
-                  <div className="text-[10px] opacity-70 font-normal mt-0.5 truncate">{ROLE_TEMPLATES[opt.value].description}</div>
-                </button>
-              ))}
-              {template === "custom" && (
-                <div className="px-3 py-2 rounded-xl text-xs font-semibold border bg-purple-50 border-purple-200 text-purple-700">
-                  Custom
-                  <div className="text-[10px] opacity-70 font-normal mt-0.5">Modified</div>
+        {/* Tabs */}
+        <div className="flex border-b border-slate-100 px-6 flex-shrink-0">
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                activeTab === tab.key
+                  ? "border-[#1a2744] text-[#1a2744]"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {activeTab === "roles" && (
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">CRE Roles (Multi-select)</Label>
+                <RoleSelector
+                  selectedRoles={selectedRoles}
+                  onChange={setSelectedRoles}
+                  customRoleName={customRoleName}
+                  onCustomNameChange={setCustomRoleName}
+                />
+              </div>
+              {selectedRoles.length > 0 && (
+                <div>
+                  <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Selected Roles</Label>
+                  <div className="space-y-2">
+                    {selectedRoles.map(r => {
+                      if (r === "custom") return (
+                        <div key="custom" className="flex items-start gap-2 p-2.5 rounded-xl bg-purple-50 border border-purple-200">
+                          <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 flex-shrink-0" />
+                          <div>
+                            <p className="text-xs font-semibold text-purple-800">{customRoleName || "Custom Role"}</p>
+                            <p className="text-[10px] text-purple-600">Custom title</p>
+                          </div>
+                        </div>
+                      );
+                      const def = CRE_ROLES[r];
+                      if (!def) return null;
+                      const color = ROLE_COLOR_CLASSES[def.color];
+                      return (
+                        <div key={r} className={`flex items-start gap-2 p-2.5 rounded-xl border ${color.badge}`}>
+                          <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${color.dot}`} />
+                          <div>
+                            <p className="text-xs font-semibold">{def.label}</p>
+                            <p className="text-[10px] opacity-70">{def.description}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Module Permissions */}
-          <div className="px-6 py-5 border-b border-slate-100">
-            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 block">Module Access</Label>
-            <ModuleMatrix permissions={permissions} onChange={handleModuleChange} />
-          </div>
-
-          {/* Org Scope */}
-          <div className="px-6 py-5 border-b border-slate-100">
-            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Organization Scope</Label>
-            <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-50 rounded-xl p-3">
-              <Building2 className="w-4 h-4 text-slate-400" />
-              <span>Scoped to current organization only</span>
+          {activeTab === "access" && (
+            <div>
+              <p className="text-xs text-slate-500 mb-3">Set page-level access permissions. Changes apply immediately on save.</p>
+              <PagePermissionMatrix
+                permissions={pagePerms}
+                onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
+              />
             </div>
-            {isSuperAdmin && (
-              <div className="flex items-center gap-2 text-sm text-violet-700 bg-violet-50 rounded-xl p-3 mt-2">
-                <Globe className="w-4 h-4" />
-                <span className="text-xs font-medium">SuperAdmin: can view across all orgs</span>
+          )}
+
+          {activeTab === "signing" && (
+            <div>
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
+                <strong>Signing authority levels</strong> control who can initiate, review, approve, and finally sign each document type.
               </div>
-            )}
-          </div>
-
-          {/* Danger Zone */}
-          <div className="px-6 py-5">
-            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 block">Actions</Label>
-            <div className="space-y-2">
-              {status === "invited" && (
-                <Button variant="outline" size="sm" className="w-full justify-start gap-2 text-sm" onClick={handleResendInvite}>
-                  <Mail className="w-4 h-4 text-amber-500" /> Resend Invite Email
-                </Button>
-              )}
-              <Button
-                variant="outline" size="sm"
-                className="w-full justify-start gap-2 text-sm border-red-200 text-red-600 hover:bg-red-50"
-                onClick={handleRemove} disabled={removingUser}
-              >
-                {removingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                Remove from Organization
-              </Button>
+              <SigningPrivilegesMatrix
+                privileges={signingPrivs}
+                onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))}
+              />
             </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex-shrink-0 flex gap-3">
-          <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button className="flex-1 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Save Permissions
-          </Button>
+        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex-shrink-0">
+          <div className="flex gap-2 mb-3">
+            {status === "invited" && (
+              <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs"
+                onClick={async () => {
+                  const { error } = await supabase.functions.invoke("invite-user", {
+                    body: { email: member.profiles?.email, full_name: member.profiles?.full_name, org_id: orgId, role: getMemberRoles(member)[0] || null },
+                  });
+                  if (error) toast.error("Failed"); else toast.success("Invite resent");
+                }}>
+                <Mail className="w-3.5 h-3.5" /> Resend Invite
+              </Button>
+            )}
+            <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-red-200 text-red-600 hover:bg-red-50"
+              onClick={handleRemove} disabled={removing}>
+              {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              Remove
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+            <Button className="flex-1 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={handleSave} disabled={saving}>
+              {saving && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Save
+            </Button>
+          </div>
         </div>
       </div>
     </>
@@ -391,46 +795,61 @@ function UserDetailDrawer({ member, orgId, onClose, onSaved, isSuperAdmin }) {
 // ─── InviteDialog Component ───────────────────────────────────────────────────
 function InviteDialog({ open, onClose, orgId }) {
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState("info");
   const [form, setForm] = useState({ full_name: "", email: "", phone: "" });
-  const [template, setTemplate] = useState("viewer");
-  const [permissions, setPermissions] = useState({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES.viewer.modules });
+  const [selectedRoles, setSelectedRoles] = useState([]);
+  const [customRoleName, setCustomRoleName] = useState("");
+  const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
+  const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
 
-  const applyTemplate = (tmplKey) => {
-    setTemplate(tmplKey);
-    setPermissions({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES[tmplKey].modules });
-  };
+  const TABS = [
+    { key: "info",    label: "1. Contact" },
+    { key: "roles",   label: "2. Roles" },
+    { key: "access",  label: "3. Page Access" },
+    { key: "signing", label: "4. Signing" },
+  ];
 
   const validate = () => {
     const e = {};
-    if (!form.full_name.trim()) e.full_name = "Full name is required";
-    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Valid email is required";
-    if (!form.phone.trim()) e.phone = "Phone number is required";
+    if (!form.full_name.trim()) e.full_name = "Required";
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Valid email required";
+    if (!form.phone.trim()) e.phone = "Required";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
   const handleSubmit = async () => {
-    if (!validate()) return;
+    if (!validate()) { setActiveTab("info"); return; }
     setSubmitting(true);
     try {
+      const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       const { error } = await supabase.functions.invoke("invite-user", {
         body: {
           email: form.email.trim(),
           full_name: form.full_name.trim(),
           phone: form.phone.trim(),
-          role: template,
+          role: primaryRole,
           org_id: orgId,
-          module_permissions: permissions,
+          page_permissions: pagePerms,
+          capabilities: {
+            roles: selectedRoles,
+            custom_role: customRoleName || null,
+            signing_privileges: signingPrivs,
+          },
         },
       });
       if (error) throw error;
       toast.success(`Invite sent to ${form.email}`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
+      // Reset
       setForm({ full_name: "", email: "", phone: "" });
-      setTemplate("viewer");
-      setPermissions({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES.viewer.modules });
+      setSelectedRoles([]);
+      setCustomRoleName("");
+      setPagePerms({ ...DEFAULT_PAGE_PERMS });
+      setSigningPrivs({ ...DEFAULT_SIGNING });
+      setActiveTab("info");
       onClose();
     } catch (e) {
       toast.error(e.message || "Failed to send invite");
@@ -440,91 +859,111 @@ function InviteDialog({ open, onClose, orgId }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Invite Team Member</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5 py-2">
-          {/* Contact Info */}
-          <div>
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Contact Information</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2">
-                <Label className="text-sm font-medium mb-1.5 block">
-                  Full Name <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  placeholder="Jane Smith"
-                  value={form.full_name}
+        {/* Step tabs */}
+        <div className="flex border-b border-slate-100 flex-shrink-0 -mx-6 px-6">
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === tab.key
+                  ? "border-[#1a2744] text-[#1a2744]"
+                  : "border-transparent text-slate-400 hover:text-slate-600"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-4 space-y-4">
+          {activeTab === "info" && (
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm font-medium mb-1.5 block">Full Name <span className="text-red-500">*</span></Label>
+                <Input placeholder="Jane Smith" value={form.full_name}
                   onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))}
-                  className={errors.full_name ? "border-red-400" : ""}
-                />
+                  className={errors.full_name ? "border-red-400" : ""} />
                 {errors.full_name && <p className="text-xs text-red-500 mt-1">{errors.full_name}</p>}
               </div>
               <div>
-                <Label className="text-sm font-medium mb-1.5 block">
-                  Email Address <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  type="email" placeholder="jane@company.com"
-                  value={form.email}
+                <Label className="text-sm font-medium mb-1.5 block">Email Address <span className="text-red-500">*</span></Label>
+                <Input type="email" placeholder="jane@company.com" value={form.email}
                   onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
-                  className={errors.email ? "border-red-400" : ""}
-                />
+                  className={errors.email ? "border-red-400" : ""} />
                 {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email}</p>}
               </div>
               <div>
-                <Label className="text-sm font-medium mb-1.5 block">
-                  Phone Number <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  type="tel" placeholder="+1 (555) 000-0000"
-                  value={form.phone}
+                <Label className="text-sm font-medium mb-1.5 block">Phone Number <span className="text-red-500">*</span></Label>
+                <Input type="tel" placeholder="+1 (555) 000-0000" value={form.phone}
                   onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                  className={errors.phone ? "border-red-400" : ""}
-                />
+                  className={errors.phone ? "border-red-400" : ""} />
                 {errors.phone && <p className="text-xs text-red-500 mt-1">{errors.phone}</p>}
               </div>
+              <Button className="w-full bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold"
+                onClick={() => setActiveTab("roles")}>
+                Next: Assign Roles →
+              </Button>
             </div>
-          </div>
+          )}
 
-          <Separator />
-
-          {/* Role Template */}
-          <div>
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Role Template</h3>
-            <div className="grid grid-cols-5 gap-2">
-              {ROLE_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => applyTemplate(opt.value)}
-                  className={`px-3 py-2.5 rounded-xl text-xs font-semibold border transition-all text-center ${
-                    template === opt.value
-                      ? ROLE_TEMPLATES[opt.value].badgeClass + " shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+          {activeTab === "roles" && (
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm font-medium mb-2 block">CRE Roles (select one or more)</Label>
+                <RoleSelector
+                  selectedRoles={selectedRoles} onChange={setSelectedRoles}
+                  customRoleName={customRoleName} onCustomNameChange={setCustomRoleName}
+                />
+              </div>
+              {selectedRoles.length === 0 && (
+                <p className="text-xs text-amber-600 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  No roles selected — user will be created with No Access status.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("info")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("access")}>
+                  Next: Page Access →
+                </Button>
+              </div>
             </div>
-            <p className="text-xs text-slate-400 mt-2">{ROLE_TEMPLATES[template]?.description} — customize below</p>
-          </div>
+          )}
 
-          {/* Module Permissions */}
-          <div>
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Module Access</h3>
-            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-              <ModuleMatrix
-                permissions={permissions}
-                onChange={(k, v) => setPermissions(p => ({ ...p, [k]: v }))}
+          {activeTab === "access" && (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-500">Configure which pages this user can access and at what level.</p>
+              <PagePermissionMatrix
+                permissions={pagePerms}
+                onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
+              />
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("roles")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("signing")}>
+                  Next: Signing →
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "signing" && (
+            <div className="space-y-4">
+              <p className="text-xs text-slate-500">Set signing authority levels for each document type. L4 = Final Authority.</p>
+              <SigningPrivilegesMatrix
+                privileges={signingPrivs}
+                onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))}
               />
             </div>
-          </div>
+          )}
         </div>
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 flex-shrink-0 pt-2 border-t border-slate-100">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button className="bg-[#1a2744] hover:bg-[#1a2744]/90 text-white gap-2" onClick={handleSubmit} disabled={submitting}>
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
@@ -539,94 +978,114 @@ function InviteDialog({ open, onClose, orgId }) {
 // ─── CSVUploadDialog Component ────────────────────────────────────────────────
 function CSVUploadDialog({ open, onClose, orgId }) {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef(null);
   const [rows, setRows] = useState([]);
+  const [parseError, setParseError] = useState("");
   const [progress, setProgress] = useState(null);
   const [dragging, setDragging] = useState(false);
 
-  const handleFile = (file) => {
+  const processFile = (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setParseError("Please upload a .csv file");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
+      setParseError("");
       const parsed = parseCSV(e.target.result);
-      setRows(parsed.map(r => ({
-        full_name: r.full_name || r.name || r["full name"] || "",
-        email: r.email || "",
-        phone: r.phone || r["phone number"] || r.mobile || "",
-      })).filter(r => r.email));
+      if (parsed.length === 0) {
+        setParseError("No valid rows found. Check that your CSV has email, name, and phone columns.");
+        return;
+      }
+      setRows(parsed);
     };
+    reader.onerror = () => setParseError("Failed to read file");
     reader.readAsText(file);
   };
 
   const downloadTemplate = () => {
-    const csv = "full_name,email,phone\nJane Smith,jane@company.com,+1-555-0100\nJohn Doe,john@company.com,+1-555-0101";
+    const csv = [
+      "full_name,email,phone",
+      "Jane Smith,jane@company.com,+1-555-0100",
+      "John Doe,john@company.com,+1-555-0101",
+      "Sarah Lee,sarah@company.com,+1-555-0102",
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.href = URL.createObjectURL(blob);
     a.download = "user_import_template.csv";
     a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const handleImport = async () => {
-    if (rows.length === 0) return;
-    setProgress({ done: 0, total: rows.length, errors: [] });
-
+    if (!orgId) { toast.error("Select an organization first"); return; }
+    setProgress({ done: 0, total: rows.length, errors: [], success: 0 });
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         const { error } = await supabase.functions.invoke("invite-user", {
-          body: {
-            email: row.email,
-            full_name: row.full_name,
-            phone: row.phone,
-            org_id: orgId,
-            role: null, // No role — no_access until admin assigns
-          },
+          body: { email: row.email, full_name: row.full_name, phone: row.phone, org_id: orgId, role: null },
         });
         if (error) throw error;
-        setProgress(p => ({ ...p, done: p.done + 1 }));
+        setProgress(p => ({ ...p, done: p.done + 1, success: p.success + 1 }));
       } catch (e) {
-        setProgress(p => ({ ...p, done: p.done + 1, errors: [...p.errors, `${row.email}: ${e.message}`] }));
+        setProgress(p => ({ ...p, done: p.done + 1, errors: [...p.errors, { email: row.email, msg: e.message }] }));
       }
     }
-
     queryClient.invalidateQueries({ queryKey: ["org-members"] });
-    toast.success(`Imported ${rows.length} users. Assign roles in the user table.`);
   };
 
-  const done = progress?.done === progress?.total && progress !== null;
+  const isDone = progress && progress.done === progress.total;
+
+  const reset = () => { setRows([]); setProgress(null); setParseError(""); };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
+    <Dialog open={open} onOpenChange={v => { if (!v) { reset(); onClose(); } }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Import Users from CSV</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {/* Info Banner */}
-          <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-xl">
-            <AlertTriangle className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-blue-700">
-              <strong>Import only extracts: Name, Email, Phone.</strong> No roles are assigned.
-              Users are created with <strong>No Access</strong> status — assign roles individually after import.
-            </div>
+        <div className="flex-1 overflow-y-auto space-y-4 py-2">
+          {/* Info */}
+          <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500" />
+            <span>
+              <strong>CSV must contain: full_name, email, phone columns.</strong>{" "}
+              No roles are assigned during import. Users are created with <strong>No Access</strong> status — assign roles individually after import.
+            </span>
           </div>
 
           {/* Drop Zone */}
-          {rows.length === 0 && (
-            <div
-              onDragOver={e => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-              className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${dragging ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:border-slate-300"}`}
-            >
-              <Upload className="w-8 h-8 text-slate-300 mx-auto mb-3" />
-              <p className="text-sm font-medium text-slate-600 mb-1">Drop CSV file here</p>
-              <p className="text-xs text-slate-400 mb-4">or click to browse</p>
-              <label className="cursor-pointer">
-                <input type="file" accept=".csv" className="hidden" onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); }} />
-                <span className="text-xs font-medium px-4 py-2 rounded-lg border border-slate-200 bg-white hover:border-slate-300 transition-colors">
-                  Choose File
-                </span>
-              </label>
+          {rows.length === 0 && !progress && (
+            <div>
+              <div
+                onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={e => { e.preventDefault(); setDragging(false); processFile(e.dataTransfer.files[0]); }}
+                className={`border-2 border-dashed rounded-2xl p-10 text-center transition-colors ${
+                  dragging ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:border-slate-300 cursor-pointer"
+                }`}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-slate-600 mb-1">Drop your CSV file here</p>
+                <p className="text-xs text-slate-400">or click to browse — accepts .csv only</p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={e => processFile(e.target.files[0])}
+                />
+              </div>
+              {parseError && (
+                <p className="mt-2 text-xs text-red-600 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" /> {parseError}
+                </p>
+              )}
             </div>
           )}
 
@@ -634,69 +1093,86 @@ function CSVUploadDialog({ open, onClose, orgId }) {
           {rows.length > 0 && !progress && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-medium text-slate-700">{rows.length} users ready to import</p>
-                <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setRows([])}>Clear</button>
+                <p className="text-sm font-semibold text-slate-700">{rows.length} users ready to import</p>
+                <button className="text-xs text-slate-400 hover:text-slate-600 underline" onClick={reset}>
+                  Clear & re-upload
+                </button>
               </div>
-              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-52 overflow-y-auto">
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
                 <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-slate-500 font-medium">Name</th>
-                      <th className="px-3 py-2 text-left text-slate-500 font-medium">Email</th>
-                      <th className="px-3 py-2 text-left text-slate-500 font-medium">Phone</th>
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr className="border-b border-slate-200">
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">#</th>
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Full Name</th>
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Email</th>
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Phone</th>
+                      <th className="px-3 py-2.5 text-left text-slate-500 font-semibold">Status After Import</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {rows.map((r, i) => (
                       <tr key={i} className="hover:bg-slate-50">
-                        <td className="px-3 py-2 text-slate-700">{r.full_name || <span className="text-slate-400 italic">—</span>}</td>
-                        <td className="px-3 py-2 text-slate-700">{r.email}</td>
+                        <td className="px-3 py-2 text-slate-400">{i + 1}</td>
+                        <td className="px-3 py-2 text-slate-700 font-medium">{r.full_name || <span className="text-slate-400 italic">—</span>}</td>
+                        <td className="px-3 py-2 text-slate-600">{r.email}</td>
                         <td className="px-3 py-2 text-slate-500">{r.phone || <span className="text-slate-400 italic">—</span>}</td>
+                        <td className="px-3 py-2">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold">No Access</span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
+              <p className="text-[10px] text-amber-700 mt-2 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                Users will be invited with No Access. Roles must be assigned manually.
+                Roles must be assigned manually after import from the Users table.
               </p>
             </div>
           )}
 
           {/* Progress */}
           {progress && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-600 font-medium">Importing users…</span>
+                <span className="font-semibold text-slate-700">
+                  {isDone ? "Import complete!" : "Importing…"}
+                </span>
                 <span className="text-slate-500">{progress.done} / {progress.total}</span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-2">
+              <div className="w-full bg-slate-100 rounded-full h-2.5">
                 <div
-                  className="bg-[#1a2744] h-2 rounded-full transition-all"
+                  className="h-2.5 rounded-full transition-all bg-[#1a2744]"
                   style={{ width: `${(progress.done / progress.total) * 100}%` }}
                 />
               </div>
-              {done && (
-                <div className="flex items-center gap-2 text-emerald-700 text-sm font-medium">
-                  <CheckCircle2 className="w-4 h-4" /> Import complete!
+              {isDone && (
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-700 font-semibold">
+                    ✓ {progress.success} imported
+                  </div>
+                  <div className={`p-3 rounded-xl border font-semibold ${progress.errors.length > 0 ? "bg-red-50 border-red-100 text-red-700" : "bg-slate-50 border-slate-100 text-slate-500"}`}>
+                    {progress.errors.length > 0 ? `✗ ${progress.errors.length} failed` : "0 errors"}
+                  </div>
                 </div>
               )}
               {progress.errors.length > 0 && (
-                <div className="text-xs text-red-600 space-y-0.5 mt-2">
-                  {progress.errors.map((e, i) => <div key={i}>{e}</div>)}
+                <div className="text-xs text-red-600 space-y-1 max-h-32 overflow-y-auto bg-red-50 rounded-xl p-3">
+                  {progress.errors.map((e, i) => (
+                    <div key={i}><strong>{e.email}:</strong> {e.msg}</div>
+                  ))}
                 </div>
               )}
             </div>
           )}
         </div>
 
-        <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" className="gap-2" onClick={downloadTemplate}>
-            <Download className="w-3 h-3" /> Template
+        <DialogFooter className="gap-2 flex-shrink-0 pt-2 border-t border-slate-100">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate}>
+            <Download className="w-3.5 h-3.5" /> Download Template
           </Button>
-          <Button variant="outline" onClick={done ? onClose : onClose}>
-            {done ? "Done" : "Cancel"}
+          <Button variant="outline" onClick={() => { reset(); onClose(); }}>
+            {isDone ? "Close" : "Cancel"}
           </Button>
           {rows.length > 0 && !progress && (
             <Button className="bg-[#1a2744] hover:bg-[#1a2744]/90 text-white gap-2" onClick={handleImport}>
@@ -712,26 +1188,33 @@ function CSVUploadDialog({ open, onClose, orgId }) {
 // ─── BulkUpdateDialog Component ───────────────────────────────────────────────
 function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const queryClient = useQueryClient();
-  const [template, setTemplate] = useState("viewer");
-  const [permissions, setPermissions] = useState({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES.viewer.modules });
+  const [selectedRoles, setSelectedRoles] = useState([]);
+  const [customRoleName, setCustomRoleName] = useState("");
+  const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
+  const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
+  const [activeTab, setActiveTab] = useState("roles");
   const [saving, setSaving] = useState(false);
 
-  const applyTemplate = (tmplKey) => {
-    setTemplate(tmplKey);
-    setPermissions({ ...DEFAULT_MODULES, ...ROLE_TEMPLATES[tmplKey].modules });
-  };
+  const TABS = [{ key: "roles", label: "Roles" }, { key: "access", label: "Page Access" }, { key: "signing", label: "Signing" }];
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       for (const m of selectedMembers) {
-        await supabase
-          .from("memberships")
-          .update({ role: template, module_permissions: permissions, status: "active" })
-          .eq("user_id", m.user_id)
-          .eq("org_id", orgId);
+        await supabase.from("memberships").update({
+          role: primaryRole,
+          page_permissions: pagePerms,
+          status: selectedRoles.length > 0 ? "active" : m.status,
+          capabilities: {
+            ...(m.capabilities || {}),
+            roles: selectedRoles,
+            custom_role: customRoleName || null,
+            signing_privileges: signingPrivs,
+          },
+        }).eq("user_id", m.user_id).eq("org_id", orgId);
       }
-      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, template, modules: permissions } });
+      await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles } });
       toast.success(`Updated ${selectedMembers.length} users`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       onClose();
@@ -743,50 +1226,40 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-lg font-bold">Update {selectedMembers.length} Users</DialogTitle>
         </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-700">
-            This will overwrite the current role and module permissions for all selected users.
-          </div>
-
-          <div>
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Role Template</h3>
-            <div className="grid grid-cols-5 gap-2">
-              {ROLE_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => applyTemplate(opt.value)}
-                  className={`px-3 py-2.5 rounded-xl text-xs font-semibold border transition-all text-center ${
-                    template === opt.value
-                      ? ROLE_TEMPLATES[opt.value].badgeClass + " shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Module Access</h3>
-            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-              <ModuleMatrix
-                permissions={permissions}
-                onChange={(k, v) => setPermissions(p => ({ ...p, [k]: v }))}
-              />
-            </div>
-          </div>
+        <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-700 flex-shrink-0">
+          This will overwrite roles, page access, and signing privileges for all selected users.
         </div>
 
-        <DialogFooter className="gap-2">
+        <div className="flex border-b border-slate-100 flex-shrink-0">
+          {TABS.map(tab => (
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+              className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${activeTab === tab.key ? "border-[#1a2744] text-[#1a2744]" : "border-transparent text-slate-400 hover:text-slate-600"}`}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-4">
+          {activeTab === "roles" && (
+            <RoleSelector selectedRoles={selectedRoles} onChange={setSelectedRoles}
+              customRoleName={customRoleName} onCustomNameChange={setCustomRoleName} />
+          )}
+          {activeTab === "access" && (
+            <PagePermissionMatrix permissions={pagePerms} onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))} />
+          )}
+          {activeTab === "signing" && (
+            <SigningPrivilegesMatrix privileges={signingPrivs} onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))} />
+          )}
+        </div>
+
+        <DialogFooter className="gap-2 flex-shrink-0 pt-2 border-t border-slate-100">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button className="bg-[#1a2744] hover:bg-[#1a2744]/90 text-white gap-2" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
             Apply to {selectedMembers.length} Users
           </Button>
         </DialogFooter>
@@ -795,23 +1268,18 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   );
 }
 
-// ─── Main UserManagement Component ───────────────────────────────────────────
+// ─── Main UserManagement ──────────────────────────────────────────────────────
 export default function UserManagement() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-
   const isSuperAdmin = user?.memberships?.some(m => m.role === "super_admin");
   const defaultOrgId = user?.activeOrg?.id || user?.org_id;
 
-  // SuperAdmin org switcher state
   const [selectedOrgId, setSelectedOrgId] = useState(defaultOrgId);
   const [selectedOrgName, setSelectedOrgName] = useState(user?.activeOrg?.name || "My Organization");
-
-  // UI State
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
-  const [filterModule, setFilterModule] = useState("all");
-  const [filterTemplate, setFilterTemplate] = useState("all");
+  const [filterCategory, setFilterCategory] = useState("all");
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [drawerMember, setDrawerMember] = useState(null);
   const [showInvite, setShowInvite] = useState(false);
@@ -820,9 +1288,9 @@ export default function UserManagement() {
 
   const activeOrgId = selectedOrgId || defaultOrgId;
 
-  // ── Fetch all orgs (SuperAdmin only) ─────────────────────────────────────
+  // Fetch all orgs for SuperAdmin
   const { data: allOrgs = [] } = useQuery({
-    queryKey: ["all-orgs-for-sa"],
+    queryKey: ["all-orgs-sa"],
     queryFn: async () => {
       const { data, error } = await supabase.from("organizations").select("id, name, status").order("name");
       if (error) throw error;
@@ -831,7 +1299,7 @@ export default function UserManagement() {
     enabled: isSuperAdmin,
   });
 
-  // ── Fetch members for selected org ────────────────────────────────────────
+  // Fetch members
   const { data: members = [], isLoading } = useQuery({
     queryKey: ["org-members", activeOrgId],
     queryFn: async () => {
@@ -839,7 +1307,7 @@ export default function UserManagement() {
       const { data, error } = await supabase
         .from("memberships")
         .select(`
-          id, user_id, role, status, module_permissions, page_permissions,
+          id, user_id, role, status, module_permissions, page_permissions, capabilities,
           created_at, updated_at,
           profiles!inner(id, full_name, email, phone, status, last_sign_in_at, avatar_url)
         `)
@@ -851,16 +1319,15 @@ export default function UserManagement() {
     enabled: !!activeOrgId,
   });
 
-  // ── Derived Stats ──────────────────────────────────────────────────────────
-  const stats = useMemo(() => {
-    const total = members.length;
-    const active = members.filter(m => deriveStatus(m) === "active").length;
-    const invited = members.filter(m => deriveStatus(m) === "invited").length;
-    const noAccess = members.filter(m => deriveStatus(m) === "no_access").length;
-    return { total, active, invited, noAccess };
-  }, [members]);
+  // Stats
+  const stats = useMemo(() => ({
+    total: members.length,
+    active: members.filter(m => deriveStatus(m) === "active").length,
+    invited: members.filter(m => deriveStatus(m) === "invited").length,
+    noAccess: members.filter(m => deriveStatus(m) === "no_access").length,
+  }), [members]);
 
-  // ── Filtered Members ───────────────────────────────────────────────────────
+  // Filtered
   const filtered = useMemo(() => {
     return members.filter(m => {
       const name = (m.profiles?.full_name || "").toLowerCase();
@@ -868,84 +1335,61 @@ export default function UserManagement() {
       const q = searchQuery.toLowerCase();
       if (q && !name.includes(q) && !email.includes(q)) return false;
       if (filterStatus !== "all" && deriveStatus(m) !== filterStatus) return false;
-      if (filterTemplate !== "all" && m.role !== filterTemplate) return false;
-      if (filterModule !== "all") {
-        const perms = getModulePermissions(m);
-        if (perms[filterModule] === "none" || !perms[filterModule]) return false;
+      if (filterCategory !== "all") {
+        const roles = getMemberRoles(m);
+        const hasCategory = roles.some(r => r !== "custom" && CRE_ROLES[r]?.category === filterCategory);
+        if (!hasCategory) return false;
       }
       return true;
     });
-  }, [members, searchQuery, filterStatus, filterModule, filterTemplate]);
+  }, [members, searchQuery, filterStatus, filterCategory]);
 
   const selectedMembers = members.filter(m => selectedIds.has(m.user_id));
   const allSelected = filtered.length > 0 && filtered.every(m => selectedIds.has(m.user_id));
+  const hasFilters = searchQuery || filterStatus !== "all" || filterCategory !== "all";
 
-  const toggleSelect = (id) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
+  const toggleSelect = (id) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
   const toggleAll = () => {
-    if (allSelected) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filtered.map(m => m.user_id)));
-    }
+    if (allSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filtered.map(m => m.user_id)));
   };
 
-  const clearFilters = () => {
-    setSearchQuery("");
-    setFilterStatus("all");
-    setFilterModule("all");
-    setFilterTemplate("all");
-  };
-
-  const hasFilters = searchQuery || filterStatus !== "all" || filterModule !== "all" || filterTemplate !== "all";
-
-  // ── Bulk Remove ────────────────────────────────────────────────────────────
   const handleBulkRemove = async () => {
-    if (!confirm(`Remove ${selectedMembers.length} members from this organization?`)) return;
-    try {
-      for (const m of selectedMembers) {
-        await supabase.from("memberships").delete().eq("user_id", m.user_id).eq("org_id", activeOrgId);
-      }
-      await logAudit({ action: "bulk_remove_members", details: { count: selectedMembers.length } });
-      toast.success(`Removed ${selectedMembers.length} members`);
-      setSelectedIds(new Set());
-      queryClient.invalidateQueries({ queryKey: ["org-members"] });
-    } catch (e) {
-      toast.error("Failed to remove members");
+    if (!confirm(`Remove ${selectedMembers.length} members?`)) return;
+    for (const m of selectedMembers) {
+      await supabase.from("memberships").delete().eq("user_id", m.user_id).eq("org_id", activeOrgId);
     }
+    await logAudit({ action: "bulk_remove_members", details: { count: selectedMembers.length } });
+    toast.success(`Removed ${selectedMembers.length} members`);
+    setSelectedIds(new Set());
+    queryClient.invalidateQueries({ queryKey: ["org-members"] });
   };
 
-  // ── Bulk Resend ────────────────────────────────────────────────────────────
   const handleBulkResend = async () => {
-    const invitedMembers = selectedMembers.filter(m => deriveStatus(m) === "invited");
-    if (invitedMembers.length === 0) { toast.info("No invited users selected"); return; }
-    try {
-      for (const m of invitedMembers) {
-        await supabase.functions.invoke("invite-user", {
-          body: { email: m.profiles?.email, full_name: m.profiles?.full_name, org_id: activeOrgId, role: m.role || null },
-        });
-      }
-      toast.success(`Resent invites to ${invitedMembers.length} users`);
-    } catch (e) {
-      toast.error("Failed to resend some invites");
+    const targets = selectedMembers.filter(m => deriveStatus(m) === "invited");
+    if (!targets.length) { toast.info("No invited users selected"); return; }
+    for (const m of targets) {
+      await supabase.functions.invoke("invite-user", {
+        body: { email: m.profiles?.email, full_name: m.profiles?.full_name, org_id: activeOrgId, role: getMemberRoles(m)[0] || null },
+      });
     }
+    toast.success(`Resent ${targets.length} invites`);
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
 
-      {/* ─── Header ──────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-black text-slate-900">User Management</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {isSuperAdmin ? "Manage users across all organizations" : "Manage your team members and their access"}
+            {isSuperAdmin ? "Manage users across all organizations" : "Manage your team's roles, access, and signing authority"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -958,58 +1402,55 @@ export default function UserManagement() {
         </div>
       </div>
 
-      {/* ─── SuperAdmin Org Switcher ──────────────────────────────────────── */}
+      {/* SuperAdmin Org Switcher */}
       {isSuperAdmin && allOrgs.length > 0 && (
-        <Card className="border-violet-200 bg-violet-50/50">
+        <Card className="border-violet-200 bg-violet-50/40">
           <CardContent className="p-4">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-2 text-sm font-semibold text-violet-700">
-                <Globe className="w-4 h-4" />
-                SuperAdmin View
+              <div className="flex items-center gap-2 text-sm font-bold text-violet-700">
+                <Globe className="w-4 h-4" /> SuperAdmin View
               </div>
-              <div className="flex-1 max-w-sm">
-                <Select
-                  value={selectedOrgId || ""}
-                  onValueChange={(val) => {
-                    setSelectedOrgId(val);
-                    const org = allOrgs.find(o => o.id === val);
-                    setSelectedOrgName(org?.name || "Unknown Org");
-                    setSelectedIds(new Set());
-                  }}
-                >
-                  <SelectTrigger className="h-9 bg-white border-violet-200">
-                    <SelectValue placeholder="Select organization to manage" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allOrgs.map(org => (
-                      <SelectItem key={org.id} value={org.id}>
-                        <div className="flex items-center gap-2">
-                          <Building2 className="w-3 h-3 text-slate-400" />
-                          {org.name}
-                          <span className={`text-[10px] px-1.5 rounded-full ${org.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                            {org.status}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="text-xs text-violet-600 bg-violet-100 px-3 py-1.5 rounded-lg font-medium">
+              <Select
+                value={selectedOrgId || ""}
+                onValueChange={val => {
+                  setSelectedOrgId(val);
+                  const org = allOrgs.find(o => o.id === val);
+                  setSelectedOrgName(org?.name || "Unknown");
+                  setSelectedIds(new Set());
+                }}
+              >
+                <SelectTrigger className="h-9 w-72 bg-white border-violet-200">
+                  <SelectValue placeholder="Select organization to manage" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allOrgs.map(org => (
+                    <SelectItem key={org.id} value={org.id}>
+                      <div className="flex items-center gap-2">
+                        <Building2 className="w-3 h-3 text-slate-400" />
+                        {org.name}
+                        <span className={`text-[10px] px-1.5 rounded-full font-semibold ${org.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                          {org.status}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-xs bg-violet-100 text-violet-700 px-3 py-1.5 rounded-lg font-medium">
                 Viewing: <strong>{selectedOrgName}</strong>
-              </div>
+              </span>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* ─── Stats Cards ─────────────────────────────────────────────────── */}
+      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: "Total Members", value: stats.total, Icon: Users, color: "slate", bg: "bg-slate-50", iconColor: "text-slate-500" },
-          { label: "Active", value: stats.active, Icon: UserCheck, color: "emerald", bg: "bg-emerald-50", iconColor: "text-emerald-500" },
-          { label: "Invited", value: stats.invited, Icon: Mail, color: "amber", bg: "bg-amber-50", iconColor: "text-amber-500" },
-          { label: "No Access", value: stats.noAccess, Icon: UserX, color: "red", bg: "bg-red-50", iconColor: "text-red-500" },
+          { label: "Total Members", value: stats.total,    Icon: Users,      bg: "bg-slate-50",   iconColor: "text-slate-500" },
+          { label: "Active",        value: stats.active,   Icon: UserCheck,  bg: "bg-emerald-50", iconColor: "text-emerald-500" },
+          { label: "Invited",       value: stats.invited,  Icon: Mail,       bg: "bg-amber-50",   iconColor: "text-amber-500" },
+          { label: "No Access",     value: stats.noAccess, Icon: UserX,      bg: "bg-red-50",     iconColor: "text-red-500" },
         ].map(s => (
           <Card key={s.label} className={`border-0 shadow-sm ${s.bg}`}>
             <CardContent className="p-4 flex items-center gap-3">
@@ -1023,32 +1464,25 @@ export default function UserManagement() {
         ))}
       </div>
 
-      {/* ─── No Access Warning ────────────────────────────────────────────── */}
+      {/* No Access Warning */}
       {stats.noAccess > 0 && (
         <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
           <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
           <span className="text-amber-800">
-            <strong>{stats.noAccess} user{stats.noAccess > 1 ? "s" : ""}</strong> have no role assigned and cannot access the platform. Use the table below to assign permissions.
+            <strong>{stats.noAccess} user{stats.noAccess > 1 ? "s" : ""}</strong> have no roles assigned and cannot access the platform. Click their row to assign roles.
           </span>
         </div>
       )}
 
-      {/* ─── Filter Bar ───────────────────────────────────────────────────── */}
+      {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-xs">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input
-            placeholder="Search name or email…"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="pl-9 h-9 text-sm"
-          />
+          <Input placeholder="Search name or email…" value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-9 text-sm" />
         </div>
-
         <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="h-9 w-36 text-sm">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
+          <SelectTrigger className="h-9 w-36 text-sm"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
             <SelectItem value="active">Active</SelectItem>
@@ -1056,96 +1490,79 @@ export default function UserManagement() {
             <SelectItem value="no_access">No Access</SelectItem>
           </SelectContent>
         </Select>
-
-        <Select value={filterTemplate} onValueChange={setFilterTemplate}>
-          <SelectTrigger className="h-9 w-36 text-sm">
-            <SelectValue placeholder="Role" />
-          </SelectTrigger>
+        <Select value={filterCategory} onValueChange={setFilterCategory}>
+          <SelectTrigger className="h-9 w-44 text-sm"><SelectValue placeholder="Role Category" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Roles</SelectItem>
-            {ROLE_OPTIONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+            <SelectItem value="all">All Categories</SelectItem>
+            {ROLE_CATEGORY_ORDER.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
           </SelectContent>
         </Select>
-
-        <Select value={filterModule} onValueChange={setFilterModule}>
-          <SelectTrigger className="h-9 w-40 text-sm">
-            <SelectValue placeholder="Module" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Modules</SelectItem>
-            {PERMISSION_MODULES.map(m => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-
         {hasFilters && (
-          <Button variant="ghost" size="sm" className="h-9 text-xs text-slate-500 gap-1" onClick={clearFilters}>
+          <Button variant="ghost" size="sm" className="h-9 text-xs text-slate-500 gap-1"
+            onClick={() => { setSearchQuery(""); setFilterStatus("all"); setFilterCategory("all"); }}>
             <X className="w-3.5 h-3.5" /> Clear
           </Button>
         )}
-
-        <div className="ml-auto text-xs text-slate-400">
-          {filtered.length} of {members.length} members
-        </div>
+        <div className="ml-auto text-xs text-slate-400">{filtered.length} of {members.length} members</div>
       </div>
 
-      {/* ─── Bulk Action Bar ──────────────────────────────────────────────── */}
+      {/* Bulk Action Bar */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 px-5 py-3 bg-[#1a2744] rounded-xl shadow-lg">
-          <span className="text-sm text-white font-semibold mr-1">
-            {selectedIds.size} selected
-          </span>
-          <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5" onClick={() => setShowBulkUpdate(true)}>
-            <Settings2 className="w-3.5 h-3.5" /> Assign Role & Access
+        <div className="flex items-center gap-3 px-5 py-3 bg-[#1a2744] rounded-xl shadow-lg flex-wrap">
+          <span className="text-sm text-white font-bold">{selectedIds.size} selected</span>
+          <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5"
+            onClick={() => setShowBulkUpdate(true)}>
+            <Settings className="w-3.5 h-3.5" /> Assign Roles & Access
           </Button>
-          <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5" onClick={handleBulkResend}>
-            <RefreshCw className="w-3.5 h-3.5" /> Resend Invites
+          <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5"
+            onClick={handleBulkResend}>
+            <Mail className="w-3.5 h-3.5" /> Resend Invites
           </Button>
-          <Button size="sm" variant="ghost" className="h-8 text-xs text-red-300 hover:bg-white/10 gap-1.5 ml-auto" onClick={handleBulkRemove}>
+          <Button size="sm" variant="ghost"
+            className="h-8 text-xs text-red-300 hover:bg-white/10 gap-1.5 ml-auto"
+            onClick={handleBulkRemove}>
             <Trash2 className="w-3.5 h-3.5" /> Remove ({selectedIds.size})
           </Button>
-          <button className="text-white/60 hover:text-white ml-1" onClick={() => setSelectedIds(new Set())}>
+          <button className="text-white/50 hover:text-white" onClick={() => setSelectedIds(new Set())}>
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* ─── Table ────────────────────────────────────────────────────────── */}
+      {/* Table */}
       <div className="rounded-2xl border border-slate-200 shadow-sm overflow-hidden bg-white">
         <Table>
           <TableHeader>
             <TableRow className="bg-slate-50 hover:bg-slate-50">
               <TableHead className="w-10 px-4">
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={toggleAll}
-                  aria-label="Select all"
-                />
+                <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Select all" />
               </TableHead>
-              <TableHead className="font-semibold text-slate-600 text-xs uppercase tracking-wide">Member</TableHead>
-              <TableHead className="font-semibold text-slate-600 text-xs uppercase tracking-wide">Role</TableHead>
-              <TableHead className="font-semibold text-slate-600 text-xs uppercase tracking-wide">Module Access</TableHead>
-              <TableHead className="font-semibold text-slate-600 text-xs uppercase tracking-wide">Status</TableHead>
-              <TableHead className="font-semibold text-slate-600 text-xs uppercase tracking-wide">Last Active</TableHead>
-              <TableHead className="w-20" />
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Member</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">CRE Roles</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Page Access</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Signing Authority</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Status</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Last Active</TableHead>
+              <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-16 text-center">
+                <TableCell colSpan={8} className="py-16 text-center">
                   <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-300" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-16 text-center">
+                <TableCell colSpan={8} className="py-16 text-center">
                   <Users className="w-8 h-8 text-slate-200 mx-auto mb-2" />
                   <p className="text-sm text-slate-400 font-medium">
-                    {hasFilters ? "No members match your filters" : "No members yet"}
+                    {hasFilters ? "No members match your filters" : "No members yet — invite your first team member"}
                   </p>
                   {!hasFilters && (
                     <Button size="sm" className="mt-3 gap-1.5 bg-[#1a2744] text-white" onClick={() => setShowInvite(true)}>
-                      <Plus className="w-3.5 h-3.5" /> Invite First Member
+                      <Plus className="w-3.5 h-3.5" /> Invite Member
                     </Button>
                   )}
                 </TableCell>
@@ -1155,12 +1572,13 @@ export default function UserManagement() {
                 const status = deriveStatus(member);
                 const statusCfg = STATUS_CONFIG[status];
                 const StatusIcon = statusCfg?.Icon || CheckCircle2;
-                const perms = getModulePermissions(member);
-                const tmplKey = detectTemplate(perms);
-                const tmpl = ROLE_TEMPLATES[member.role] || ROLE_TEMPLATES[tmplKey];
+                const pagePerms = getMemberPagePerms(member);
+                const signingPrivs = getMemberSigningPrivileges(member);
+                const highestSigning = getHighestSigningLevel(signingPrivs);
+                const highestSlvl = SIGNING_LEVELS[highestSigning];
+                const isSelected = selectedIds.has(member.user_id);
                 const initials = (member.profiles?.full_name || member.profiles?.email || "?")
                   .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-                const isSelected = selectedIds.has(member.user_id);
 
                 return (
                   <TableRow
@@ -1169,26 +1587,20 @@ export default function UserManagement() {
                     onClick={() => setDrawerMember(member)}
                   >
                     <TableCell className="px-4" onClick={e => e.stopPropagation()}>
-                      <Checkbox
-                        checked={isSelected}
-                        onCheckedChange={() => toggleSelect(member.user_id)}
-                        aria-label="Select row"
-                      />
+                      <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(member.user_id)} />
                     </TableCell>
 
                     {/* Member */}
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <div
-                          className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-                          style={{ backgroundColor: avatarColor(member.profiles?.email) }}
-                        >
+                        <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                          style={{ backgroundColor: avatarColor(member.profiles?.email) }}>
                           {initials}
                         </div>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             <span className="text-sm font-semibold text-slate-800 truncate">
-                              {member.profiles?.full_name || <span className="text-slate-400 italic">Unnamed</span>}
+                              {member.profiles?.full_name || <span className="italic text-slate-400">Unnamed</span>}
                             </span>
                             {status === "no_access" && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold uppercase tracking-wide flex-shrink-0">
@@ -1196,55 +1608,54 @@ export default function UserManagement() {
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-400 truncate">{member.profiles?.email}</p>
+                          <p className="text-[11px] text-slate-400 truncate">{member.profiles?.email}</p>
                           {member.profiles?.phone && <p className="text-[10px] text-slate-300">{member.profiles.phone}</p>}
                         </div>
                       </div>
                     </TableCell>
 
-                    {/* Role */}
-                    <TableCell>
-                      {member.role ? (
-                        <span className={`text-xs px-2.5 py-1 rounded-full font-semibold border ${ROLE_TEMPLATES[member.role]?.badgeClass || "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                          {ROLE_TEMPLATES[member.role]?.label || member.role}
-                          {tmplKey === "custom" && <span className="ml-1 opacity-60">(custom)</span>}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">No role</span>
-                      )}
-                    </TableCell>
+                    {/* Roles */}
+                    <TableCell><RoleBadges member={member} maxVisible={2} /></TableCell>
 
-                    {/* Module Access */}
+                    {/* Page Access */}
+                    <TableCell><PageAccessChips pagePerms={pagePerms} maxVisible={3} /></TableCell>
+
+                    {/* Signing Authority */}
                     <TableCell>
-                      <ModuleAccessChips permissions={perms} maxVisible={4} />
+                      {highestSigning === 0 ? (
+                        <span className="text-xs text-slate-400 italic">None</span>
+                      ) : (
+                        <div className="space-y-1">
+                          <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${highestSlvl.badgeClass}`}>
+                            {highestSlvl.label}
+                          </span>
+                          <div className="flex gap-0.5">
+                            {DOCUMENT_TYPES.filter(d => (signingPrivs[d.key] || 0) > 0).slice(0, 3).map(d => (
+                              <span key={d.key} className="text-[9px] text-slate-400">{d.label.split(" ")[0]}</span>
+                            )).reduce((acc, el, i, arr) => [...acc, el, i < arr.length - 1 ? <span key={`sep-${i}`} className="text-slate-200"> · </span> : null], [])}
+                          </div>
+                        </div>
+                      )}
                     </TableCell>
 
                     {/* Status */}
                     <TableCell>
                       <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold ${statusCfg?.badgeClass}`}>
-                        <StatusIcon className="w-3 h-3" />
-                        {statusCfg?.label}
+                        <StatusIcon className="w-3 h-3" />{statusCfg?.label}
                       </span>
                     </TableCell>
 
                     {/* Last Active */}
                     <TableCell>
-                      <span className="text-xs text-slate-400">
-                        {formatLastActive(member.profiles?.last_sign_in_at)}
-                      </span>
+                      <span className="text-xs text-slate-400">{formatLastActive(member.profiles?.last_sign_in_at)}</span>
                     </TableCell>
 
                     {/* Actions */}
                     <TableCell onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                          title="View details"
-                          onClick={() => setDrawerMember(member)}
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                      </div>
+                      <button className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                        onClick={() => setDrawerMember(member)}>
+                        <Eye className="w-4 h-4" />
+                      </button>
                     </TableCell>
                   </TableRow>
                 );
@@ -1254,17 +1665,15 @@ export default function UserManagement() {
         </Table>
       </div>
 
-      {/* ─── Modals & Drawer ──────────────────────────────────────────────── */}
+      {/* Drawer & Dialogs */}
       {drawerMember && (
         <UserDetailDrawer
           member={drawerMember}
           orgId={activeOrgId}
           isSuperAdmin={isSuperAdmin}
           onClose={() => setDrawerMember(null)}
-          onSaved={() => setDrawerMember(null)}
         />
       )}
-
       <InviteDialog open={showInvite} onClose={() => setShowInvite(false)} orgId={activeOrgId} />
       <CSVUploadDialog open={showCSV} onClose={() => setShowCSV(false)} orgId={activeOrgId} />
       {showBulkUpdate && (
