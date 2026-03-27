@@ -888,6 +888,7 @@ export default function SuperAdmin() {
                     <TableHead className="text-[11px] text-center">PROPERTIES</TableHead>
                     <TableHead className="text-[11px]">ADDRESS</TableHead>
                     <TableHead className="text-[11px]">PLAN</TableHead>
+                    <TableHead className="text-[11px]">SUBMITTED</TableHead>
                     <TableHead className="text-[11px]">STATUS</TableHead>
                     <TableHead className="text-[11px]">ACTIONS</TableHead>
                   </TableRow>
@@ -907,12 +908,15 @@ export default function SuperAdmin() {
                     const isProcessing = processingRequests.has(`org_${org.id}`);
                     const address = [org.address, org.city, org.state].filter(Boolean).join(', ') || '—';
 
+                    const displayEmail = org.admin_email || org.primary_contact_email || '—';
+                    const displayName = org.admin_full_name || '—';
+
                     return (
                       <TableRow key={org.id}>
                         <TableCell>
                           <div>
-                            <p className="text-sm font-medium">{org.admin_full_name || '—'}</p>
-                            <p className="text-[10px] text-slate-400">{org.admin_email || 'No email'}</p>
+                            <p className="text-sm font-medium">{displayName}</p>
+                            <p className="text-[10px] text-slate-400">{displayEmail}</p>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -931,6 +935,14 @@ export default function SuperAdmin() {
                               <span className="text-[9px] text-slate-400 capitalize">{org.billing_cycle}</span>
                             )}
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-[10px] text-slate-500">
+                            {org.created_at ? new Date(org.created_at).toLocaleString('en-US', {
+                              month: 'short', day: 'numeric', year: 'numeric',
+                              hour: 'numeric', minute: '2-digit'
+                            }) : '—'}
+                          </span>
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-0.5 items-start">

@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
     // 1. Verify user profile status
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .select('status, onboarding_type')
+      .select('status, onboarding_type, full_name, email')
       .eq('id', user.id)
       .single();
 
@@ -63,7 +63,8 @@ Deno.serve(async (req) => {
       .insert({
         name: 'My Organization', // Default name until they fill it in onboarding
         status: 'onboarding',
-        onboarding_step: 1
+        onboarding_step: 1,
+        primary_contact_email: profile.email || user.email,
       })
       .select('id')
       .single();
