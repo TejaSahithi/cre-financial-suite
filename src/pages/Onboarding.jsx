@@ -90,12 +90,20 @@ function formatBillingAddress({ addressLine1, city, state, postalCode, countryCo
   ].filter(Boolean).join(", ");
 }
 
+function getOnboardingStepStorageKey(userId) {
+  return userId ? `cre:onboarding-step:${userId}` : null;
+}
+
 export default function Onboarding() {
   const { user: authUser, refreshProfile, logout, isLoadingAuth } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const step = parseInt(searchParams.get('step') || '1', 10);
+  const stepStorageKey = getOnboardingStepStorageKey(authUser?.id);
   const setStep = (newStep) => {
+    if (stepStorageKey) {
+      sessionStorage.setItem(stepStorageKey, newStep.toString());
+    }
     setSearchParams({ step: newStep.toString() });
   };
   const [user, setUser] = useState(null);
@@ -184,15 +192,23 @@ export default function Onboarding() {
 
             if (orgData.status === "under_review") {
               console.log("[Onboarding] Org is under review, redirecting to success page");
+              if (stepStorageKey) {
+                sessionStorage.setItem(stepStorageKey, "4");
+              }
               navigate("/PaymentSuccess", { replace: true });
               return;
             }
 
             const serverStep = orgData.onboarding_step || 1;
             const hasExplicitStepInUrl = !!new URLSearchParams(window.location.search).get("step");
-            if (!hasExplicitStepInUrl && serverStep > 1) {
-              console.log("[Onboarding] Syncing to server step:", serverStep);
-              setStep(serverStep);
+            const storedStep = stepStorageKey
+              ? parseInt(sessionStorage.getItem(stepStorageKey) || "1", 10)
+              : 1;
+            const desiredStep = Math.max(serverStep, storedStep || 1);
+
+            if (!hasExplicitStepInUrl && desiredStep > 1) {
+              console.log("[Onboarding] Syncing to onboarding step:", desiredStep);
+              setStep(desiredStep);
             }
           }
         } else if (step > 1 && !org?.id) {
