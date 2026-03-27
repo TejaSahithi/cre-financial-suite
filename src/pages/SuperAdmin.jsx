@@ -158,20 +158,22 @@ export default function SuperAdmin() {
           memberships(
             role,
             profiles(
-              email
+              email,
+              full_name
             )
           )
         `)
         .order('created_at', { ascending: false });
-      
+
       if (error) throw error;
-      return data.map(org => ({
-        ...org,
-        // Helper to get the primary admin email
-        admin_email: org.memberships?.find(m => m.role === 'org_admin')?.profiles?.email || 
-                     org.memberships?.[0]?.profiles?.email || 
-                     org.primary_contact_email
-      }));
+      return data.map(org => {
+        const adminMembership = org.memberships?.find(m => m.role === 'org_admin') || org.memberships?.[0];
+        return {
+          ...org,
+          admin_email: adminMembership?.profiles?.email || org.primary_contact_email || null,
+          admin_full_name: adminMembership?.profiles?.full_name || null,
+        };
+      });
     },
     enabled: authChecked && user?.role === 'admin',
   });
@@ -266,6 +268,56 @@ export default function SuperAdmin() {
         import('sonner').then(({ toast }) => toast.success('Request deleted permanently'));
       }
       queryClient.invalidateQueries({ queryKey: ['access-requests'] });
+    },
+  });
+
+  const rejectOrg = useMutation({
+    mutationFn: async ({ orgId, adminEmail }) => {
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('organizations')
+        .update({ status: 'rejected', updated_at: now })
+        .eq('id', orgId);
+      if (error) throw error;
+      if (adminEmail) {
+        await supabase.from('profiles')
+          .update({ status: 'pending_approval', updated_at: now })
+          .eq('email', adminEmail)
+          .then(() => {}).catch(() => {});
+      }
+      return orgId;
+    },
+    onMutate: ({ orgId }) => {
+      setProcessingRequests(prev => new Set(prev).add(`org_${orgId}`));
+    },
+    onSettled: (data, error, { orgId }) => {
+      setProcessingRequests(prev => { const n = new Set(prev); n.delete(`org_${orgId}`); return n; });
+      if (error) {
+        import('sonner').then(({ toast }) => toast.error(error.message || 'Failed to reject organization'));
+      } else {
+        import('sonner').then(({ toast }) => toast.success('Organization rejected.'));
+      }
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    },
+  });
+
+  const deleteOrg = useMutation({
+    mutationFn: async (orgId) => {
+      const { error } = await supabase.from('organizations').delete().eq('id', orgId);
+      if (error) throw error;
+      return orgId;
+    },
+    onMutate: (orgId) => {
+      setProcessingRequests(prev => new Set(prev).add(`org_${orgId}`));
+    },
+    onSettled: (data, error, orgId) => {
+      setProcessingRequests(prev => { const n = new Set(prev); n.delete(`org_${orgId}`); return n; });
+      if (error) {
+        import('sonner').then(({ toast }) => toast.error(error.message || 'Failed to delete organization'));
+      } else {
+        import('sonner').then(({ toast }) => toast.success('Organization deleted permanently'));
+      }
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
   });
 
@@ -778,25 +830,33 @@ export default function SuperAdmin() {
         </TabsContent>
         <TabsContent value="orgs" className="mt-4">
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Organizations & Module Access</CardTitle>
-              <p className="text-xs text-slate-400">Configure which modules each organization can access. Empty = all modules (admin/legacy).</p>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Organizations</CardTitle>
+                <p className="text-xs text-slate-400">{orgs.length} total · {pendingOrgCount} awaiting approval · Configure module access before approving</p>
+              </div>
+              <div className="flex gap-2">
+                <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
+                <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
-                    <TableHead className="text-[11px]">ORGANIZATION & ADMIN</TableHead>
-                    <TableHead className="text-[11px]">PLAN & AMOUNT</TableHead>
+                    <TableHead className="text-[11px]">FULL NAME</TableHead>
+                    <TableHead className="text-[11px]">COMPANY</TableHead>
+                    <TableHead className="text-[11px] text-center">PORTFOLIOS</TableHead>
+                    <TableHead className="text-[11px] text-center">PROPERTIES</TableHead>
+                    <TableHead className="text-[11px]">ADDRESS</TableHead>
+                    <TableHead className="text-[11px]">PLAN</TableHead>
                     <TableHead className="text-[11px]">STATUS</TableHead>
-                    <TableHead className="text-[11px]">SUBMITTED</TableHead>
-                    <TableHead className="text-[11px]">ENABLED MODULES</TableHead>
                     <TableHead className="text-[11px]">ACTIONS</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
                   ) : [...orgs].sort((a, b) => {
                     const pendingStatuses = ['under_review', 'pending_approval', 'onboarding'];
                     const aIsPending = pendingStatuses.includes(a.status);
@@ -805,124 +865,115 @@ export default function SuperAdmin() {
                     if (!aIsPending && bIsPending) return 1;
                     return 0;
                   }).map(org => {
-                    // Determine amount based on plan
-                    const planLower = (org.plan || '').toLowerCase();
-                    let amount = "$0/mo";
-                    if (planLower === 'starter') amount = "$249/mo";
-                    if (planLower === 'professional') amount = "$499/mo";
-                    if (planLower === 'enterprise') amount = "$999/mo";
-                    
+                    const isPending = ['under_review', 'pending_approval', 'onboarding'].includes(org.status);
+                    const isProcessing = processingRequests.has(`org_${org.id}`);
+                    const address = [org.address, org.city, org.state].filter(Boolean).join(', ') || '—';
+
                     return (
-                    <TableRow key={org.id}>
-                      <TableCell>
-                        <div>
+                      <TableRow key={org.id}>
+                        <TableCell>
+                          <div>
+                            <p className="text-sm font-medium">{org.admin_full_name || '—'}</p>
+                            <p className="text-[10px] text-slate-400">{org.admin_email || 'No email'}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
                           <p className="text-sm font-medium">{org.name}</p>
-                          <p className="text-[10px] text-slate-500 font-mono mt-0.5">{org.admin_email || 'No admin email'}</p>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5 items-start">
-                          <Badge variant="secondary" className="text-[10px] uppercase bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold tracking-tight">
-                            {org.plan === 'starter' ? 'Starter' : 
-                             org.plan === 'professional' ? 'Professional' : 
-                             org.plan === 'enterprise' ? 'Enterprise' : 
-                             (org.plan || 'Standard')}
-                          </Badge>
-                          <span className="text-[11px] font-semibold text-slate-700 mt-1">{amount} paid</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={`text-[9px] uppercase ${org.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{org.status}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-[9px] text-slate-400">
-                          {org.created_at ? new Date(org.created_at).toLocaleDateString() : '—'}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {org.enabled_modules && org.enabled_modules.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {org.enabled_modules.slice(0, 4).map(m => (
-                              <Badge key={m} variant="outline" className="text-[9px]">{MODULE_DEFINITIONS[m]?.label || m}</Badge>
-                            ))}
-                            {org.enabled_modules.length > 4 && (
-                              <Badge 
-                                variant="outline" 
-                                className="text-[9px] cursor-pointer hover:bg-slate-100 active:scale-95 transition-all"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingOrgModules(org);
-                                  setSelectedModules(org.enabled_modules || []);
-                                }}
-                              >
-                                +{org.enabled_modules.length - 4}
-                              </Badge>
+                          <p className="text-[10px] text-slate-400 font-mono">{org.id?.slice(0, 8)}…</p>
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-500 text-center">—</TableCell>
+                        <TableCell className="text-sm text-slate-500 text-center">—</TableCell>
+                        <TableCell className="text-sm text-slate-500 max-w-[130px] truncate" title={address}>{address}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5 items-start">
+                            {org.plan ? (
+                              <Badge variant="outline" className="text-[10px] capitalize bg-blue-50 text-blue-700 border-blue-100">{org.plan}</Badge>
+                            ) : <span className="text-[10px] text-slate-400">—</span>}
+                            {org.billing_cycle && (
+                              <span className="text-[9px] text-slate-400 capitalize">{org.billing_cycle}</span>
                             )}
                           </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 italic">None (Pending Config)</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          {(org.status === 'pending_approval' || org.status === 'under_review' || org.status === 'onboarding') && (
-                            <Button 
-                              variant="default" 
-                              size="sm" 
-                              className="h-8 text-xs px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-all"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                console.log('[SuperAdmin] Approve clicked for org:', org.id, org.name);
-                                setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
-                                try {
-                                  const { data, error } = await supabase.functions.invoke('approve-organization', {
-                                    body: { orgId: org.id }
-                                  });
-                                  
-                                  if (error || data?.error) {
-                                    throw new Error(error?.message || data?.error || 'Failed to approve organization');
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5 items-start">
+                            <Badge className={`text-[9px] uppercase w-fit ${
+                              org.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
+                              org.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                              'bg-amber-100 text-amber-700'
+                            }`}>{org.status}</Badge>
+                            {(org.plan || org.billing_cycle) && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-600">
+                                <CheckCircle2 className="w-2.5 h-2.5" /> PAID
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {isPending && (
+                              <Button
+                                size="sm"
+                                className="h-7 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                disabled={isProcessing}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  setProcessingRequests(prev => new Set(prev).add(`org_${org.id}`));
+                                  try {
+                                    const { data, error } = await supabase.functions.invoke('approve-organization', { body: { orgId: org.id } });
+                                    if (error || data?.error) throw new Error(error?.message || data?.error || 'Failed to approve');
+                                    queryClient.invalidateQueries({ queryKey: ['organizations'] });
+                                    const { toast } = await import("sonner");
+                                    data.warning
+                                      ? toast.warning("Approved, but: " + data.warning, { duration: 6000 })
+                                      : toast.success("Organization approved! Welcome email sent.");
+                                  } catch (err) {
+                                    const { toast } = await import("sonner");
+                                    toast.error(err.message || "Failed to approve organization");
+                                  } finally {
+                                    setProcessingRequests(prev => { const n = new Set(prev); n.delete(`org_${org.id}`); return n; });
                                   }
-
-                                  queryClient.invalidateQueries({ queryKey: ['organizations'] });
-                                  const { toast } = await import("sonner");
-                                  if (data.warning) {
-                                    toast.warning("Organization approved, but: " + data.warning, { duration: 6000 });
-                                  } else {
-                                    toast.success("Organization approved successfully! Welcome email sent.");
-                                  }
-                                } catch (e) {
-                                  console.error(e);
-                                  const { toast } = await import("sonner");
-                                  toast.error(e.message || "Failed to approve organization");
-                                } finally {
-                                  setProcessingRequests(prev => {
-                                    const next = new Set(prev);
-                                    next.delete(`org_${org.id}`);
-                                    return next;
-                                  });
+                                }}
+                              >
+                                {isProcessing ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                                Approve
+                              </Button>
+                            )}
+                            {isPending && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-[10px] px-2 text-red-600 border-red-200 hover:bg-red-50"
+                                disabled={isProcessing}
+                                onClick={() => rejectOrg.mutate({ orgId: org.id, adminEmail: org.admin_email })}
+                              >
+                                {isProcessing ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                Reject
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-[10px] px-2"
+                              onClick={(e) => { e.stopPropagation(); setEditingOrgModules(org); setSelectedModules(org.enabled_modules || []); }}
+                            >
+                              <Package className="w-3 h-3 mr-1" /> Modules
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              disabled={isProcessing}
+                              onClick={() => {
+                                if (window.confirm(`Permanently delete "${org.name}"? This cannot be undone.`)) {
+                                  deleteOrg.mutate(org.id);
                                 }
                               }}
                             >
-                              {processingRequests.has(`org_${org.id}`) ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-                              Approve
+                              {isProcessing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
                             </Button>
-                          )}
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-7 text-[10px] px-2" 
-                            onClick={(e) => { 
-                              e.stopPropagation();
-                              console.log('[SuperAdmin] Opening module config for org:', org.id, org.name);
-                              setEditingOrgModules(org); 
-                              setSelectedModules(org.enabled_modules || []); 
-                            }}
-                          >
-                            <Package className="w-3 h-3 mr-1" /> Modules
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
                 </TableBody>
