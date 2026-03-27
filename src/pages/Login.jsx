@@ -127,25 +127,18 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            full_name: fullName,
-            onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member'
-          }
-        }
+      const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
+        body: {
+          email,
+          password,
+          full_name: fullName,
+          onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
+        },
       });
-      if (signUpError) throw signUpError;
-      const requiresConfirmation = !data?.session;
-      setConfirmationRequired(requiresConfirmation);
+      if (fnError) throw fnError;
+      if (fnData?.error) throw new Error(fnData.error);
+      setConfirmationRequired(true);
       setRegistrationSuccess(true);
-
-      if (!requiresConfirmation) {
-        navigate(createPageUrl("SecurityQuestionsSetup"));
-      }
     } catch (err) {
       setError(err.message || "Failed to create account.");
     }
@@ -191,12 +184,11 @@ export default function Login() {
                 onClick={async () => {
                   setError("");
                   try {
-                    const { error: resendError } = await supabase.auth.resend({
-                      type: "signup",
-                      email,
-                      options: { emailRedirectTo: window.location.origin }
+                    const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
+                      body: { email, full_name: fullName, action: "resend" },
                     });
-                    if (resendError) throw resendError;
+                    if (fnError) throw fnError;
+                    if (fnData?.error) throw new Error(fnData.error);
                     setResentConfirmation(true);
                   } catch (err) {
                     setError(err.message || "Failed to resend confirmation email.");
