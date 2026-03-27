@@ -212,8 +212,7 @@ export default function Onboarding() {
             }
           }
         } else if (step > 1 && !org?.id) {
-          console.warn("[Onboarding] No organization found for later onboarding step, resetting to company setup");
-          setStep(1);
+          console.warn("[Onboarding] No organization resolved yet for a later onboarding step; preserving current step while auth state settles");
         }
       } catch (e) {
         console.error('[Onboarding] init error:', e);
@@ -289,8 +288,20 @@ export default function Onboarding() {
         }
       }
 
+      if (savedOrg?.id) {
+        const confirmedOrg = await OrganizationService.get(savedOrg.id);
+        savedOrg = confirmedOrg || savedOrg;
+      }
+
+      await refreshProfile(false).catch(() => null);
+
       console.log('[Onboarding] Save success, moving to step 2');
-      setOrg(savedOrg);
+      setOrg((prevOrg) => ({
+        ...prevOrg,
+        ...savedOrg,
+        ...form,
+        onboarding_step: 2,
+      }));
       setStep(2);
       toast.success("Company information saved!", { id: loadingToast });
     } catch (e) {

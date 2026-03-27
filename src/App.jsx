@@ -155,9 +155,20 @@ const AuthenticatedApp = () => {
     await refreshProfile();
   };
 
-  // Trigger first-login logic automatically based on state machine
+  // Trigger first-login only for owner accounts that truly do not have an org yet.
   useEffect(() => {
-    if (user?.profile?.status === 'approved' && !isInitializingOrg) {
+    const hasOrganizationContext = Boolean(
+      user?.org_id ||
+      user?.activeOrg?.id ||
+      user?.memberships?.some((membership) => membership?.org_id)
+    );
+
+    if (
+      user?.profile?.status === 'approved' &&
+      user?.onboarding_type === 'owner' &&
+      !hasOrganizationContext &&
+      !isInitializingOrg
+    ) {
       const initOrg = async () => {
         setIsInitializingOrg(true);
         try {
@@ -174,7 +185,7 @@ const AuthenticatedApp = () => {
       };
       initOrg();
     }
-  }, [user?.profile?.status]);
+  }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, refreshProfile]);
 
   // Determine if the current page is public
   const currentPath = location.pathname.substring(1); // remove leading /

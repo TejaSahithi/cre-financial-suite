@@ -38,3 +38,4 @@ supabase/.temp/
 # Misc
 *.tsbuildinfo
 add_demo_column.sql
+.vercel
