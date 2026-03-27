@@ -56,7 +56,7 @@ const AppRoutes = () => (
     } />
     <Route path="/signin" element={<Navigate to="/Login" replace />} />
     {Object.entries(Pages).map(([path, Page]) => {
-      const isMandatorySetup = ["Onboarding", "Welcome", "WelcomeAboard"].includes(path);
+      const isMandatorySetup = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess"].includes(path);
       return (
         <Route
           key={path}
@@ -243,6 +243,12 @@ const AuthenticatedApp = () => {
         if (org?.status === 'active') {
           // Keep going to WelcomeAboard/Dashboard
         } else {
+          // NEW: Allow viewing PaymentSuccess specifically if in under_review status
+          const isAtSuccessPage = currentPath === 'PaymentSuccess' || location.pathname === '/PaymentSuccess';
+          
+          if ((p.status === 'under_review' || org?.status === 'under_review') && isAtSuccessPage) {
+            return 'PaymentSuccess';
+          }
           return 'Onboarding';
         }
       }

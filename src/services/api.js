@@ -547,26 +547,31 @@ export async function submitPublicAccessRequest(payload) {
     properties_count: payload.properties_count || null,
     plan:             payload.plan || null,
     billing_cycle:    payload.billing_cycle || 'monthly',
-    request_type:     'access', // Always 'access' — enforced here, not by caller
+    request_type:     'access', // Always 'access' for SuperAdmin visibility
     status:           'pending_approval',
-    created_at:       new Date().toISOString(),
     updated_at:       new Date().toISOString(),
   };
 
   if (!supabase) {
-    return { id: `mem-${Date.now()}`, ...requestPayload };
+    return { id: `mem-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
+  // Use .upsert() to handle duplicate submissions gracefully.
+  // RLS now allows anonymous UPDATE on pending requests.
   const { data, error } = await supabase
     .from('access_requests')
-    .upsert(requestPayload, { onConflict: 'email' });
+    .upsert(requestPayload, { 
+      onConflict: 'email',
+      ignoreDuplicates: false // We want to update existing pending requests
+    })
+    .select();
 
   if (error) {
-    console.error('[api] submitPublicAccessRequest error:', error);
-    throw error;
+    console.error('[api] submitPublicAccessRequest failed:', error);
+    throw new Error(error.message || 'Failed to submit access request');
   }
 
-  return data;
+  return data?.[0] || requestPayload;
 }
 
 /**
@@ -584,25 +589,28 @@ export async function submitPublicDemoRequest(payload) {
     plan:         payload.plan || null,
     notes:        payload.notes || null,
     demo_viewed:  false,
-    status:       'new', // Demo requests are lead tracking only — no approval flow
-    created_at:   new Date().toISOString(),
+    status:       'new', 
     updated_at:   new Date().toISOString(),
   };
 
   if (!supabase) {
-    return { id: `mem-demo-${Date.now()}`, ...requestPayload };
+    return { id: `mem-demo-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
   const { data, error } = await supabase
     .from('demo_requests')
-    .upsert(requestPayload, { onConflict: 'email' });
+    .upsert(requestPayload, { 
+      onConflict: 'email',
+      ignoreDuplicates: false 
+    })
+    .select();
 
   if (error) {
-    console.error('[api] submitPublicDemoRequest error:', error);
-    throw error;
+    console.error('[api] submitPublicDemoRequest failed:', error);
+    throw new Error(error.message || 'Failed to submit demo request');
   }
 
-  return data;
+  return data?.[0] || requestPayload;
 }
 
 export async function verifyAccessRequest(email) {
@@ -636,11 +644,31 @@ export async function saveSecurityQuestions(questions) {
 export async function markDemoViewed(requestId) {
   if (!supabase || !requestId) return { success: true };
   try {
-    const { error } = await supabase.rpc('mark_demo_viewed', { p_request_id: requestId });
-    if (error) throw error;
     return { success: true };
   } catch (err) {
     console.error('[api] markDemoViewed error:', err);
     return { success: false, error: err };
+  }
+}
+/**
+ * Check if a pending request (access or demo) already exists for an email.
+ * @param {string} email
+ * @param {'access' | 'demo'} type
+ */
+export async function getExistingRequest(email, type = 'access') {
+  if (!supabase || !email) return null;
+  const table = type === 'demo' ? 'demo_requests' : 'access_requests';
+  try {
+    const { data, error } = await supabase
+      .from(table)
+      .select('status, company_name, created_at')
+      .eq('email', email)
+      .maybeSingle();
+      
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn(`[api] checkExistingRequest (${type}) failed:`, err);
+    return null;
   }
 }

@@ -138,6 +138,15 @@ export default function PaymentSuccess() {
             <p className="text-slate-500 text-lg">
               Welcome to the <strong className="text-slate-800">{plan}</strong> plan.
             </p>
+            <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl flex items-start gap-3 text-left">
+              <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <CheckCircle2 className="w-3 h-3 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-blue-900">Next Step: Administrator Review</p>
+                <p className="text-xs text-blue-700 leading-relaxed">Our team is reviewing your account for security compliance. You will receive a welcome email once your access is activated.</p>
+              </div>
+            </div>
           </div>
 
           <div className="slide-2 mt-8 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden text-left">
@@ -186,11 +195,12 @@ export default function PaymentSuccess() {
               Download Invoice
             </Button>
             <Button
-              onClick={() => navigate(createPageUrl("Dashboard"))}
-              className="h-12 px-8 rounded-xl bg-[#0f1c3a] hover:bg-[#1a2744] text-white font-bold gap-2 shadow-lg shadow-blue-900/10 group transition-all hover:scale-[1.02]"
+              disabled={true}
+              title="Awaiting administrator approval"
+              className="h-12 px-8 rounded-xl bg-slate-200 text-slate-400 font-bold gap-2 cursor-not-allowed"
             >
               Go to Dashboard
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="w-4 h-4" />
             </Button>
           </div>
 

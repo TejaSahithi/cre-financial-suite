@@ -8,6 +8,7 @@ import { createPageUrl } from "@/utils";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
 import { verifyAccessRequest } from "@/services/api";
+import { toast } from "sonner";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -157,7 +158,14 @@ export default function Login() {
     try {
       await loginWithGoogle();
     } catch (err) {
-      setError(err.message || "Failed to sign in with Google.");
+      if (err.message?.includes("Multiple accounts with the same email")) {
+        toast.error("Account Linking Required", {
+          description: "An account with this email already exists. Please use your original login method or contact support to link your Google account.",
+          duration: 10000
+        });
+      } else {
+        setError(err.message || "Failed to sign in with Google.");
+      }
       setLoading(false);
     }
   };

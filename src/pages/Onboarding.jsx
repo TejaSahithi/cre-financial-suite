@@ -385,45 +385,72 @@ export default function Onboarding() {
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
               <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle, paymentInfo) => {
-                console.log('[Onboarding] Payment confirmed, navigating to PaymentSuccess');
-
-                // All DB calls are non-blocking — navigation must always succeed
+                setSaving(true);
                 const numericAmount = typeof paymentInfo.displayPrice === 'string' 
                   ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
                   : paymentInfo.displayPrice;
 
-                // Trigger DB updates in background
-                (async () => {
-                  try {
-                    if (org?.id) {
-                      await supabase.from('invoices').insert({
-                        org_id: org.id,
-                        amount: numericAmount,
-                        status: 'paid',
-                        issued_date: new Date().toISOString().split('T')[0]
-                      });
-                    }
-                  } catch (e) {
-                    console.error('[Onboarding] Invoice save failed:', e);
+                try {
+                  // 1. Save Invoice
+                  if (org?.id) {
+                    await supabase.from('invoices').insert({
+                      org_id: org.id,
+                      amount: numericAmount,
+                      status: 'paid',
+                      issued_date: new Date().toISOString().split('T')[0]
+                    });
                   }
-                  try {
-                    if (org?.id) {
-                      await OrganizationService.update(org.id, {
-                        status: "under_review",
-                        onboarding_step: 4,
-                        plan: form.plan,
-                        billing_cycle: billingCycle,
-                      });
-                      await updateProfile({ status: "under_review" });
-                    }
-                  } catch (e) {
-                    console.error('[Onboarding] Status update failed:', e);
-                  }
-                })();
 
-                // Navigate to PaymentSuccess page immediately
-                const url = createPageUrl("PaymentSuccess");
-                window.location.href = url + `?plan=${encodeURIComponent(paymentInfo.plan || form.plan)}&billing=${billingCycle}&amount=${numericAmount}&org=${encodeURIComponent(org?.name || '')}`;
+                  // 2. Update Org and Profile status
+                  if (org?.id) {
+                    await OrganizationService.update(org.id, {
+                      status: "under_review",
+                      onboarding_step: 4,
+                      plan: form.plan,
+                      billing_cycle: billingCycle,
+                    });
+                    await updateProfile({ status: "under_review" });
+                    await refreshProfile();
+
+                    // NEW: Notify SuperAdmin about the payment
+                    try {
+                      console.log('[Onboarding] Notifying admin of payment...');
+                      await supabase.functions.invoke('send-email', {
+                        body: {
+                          to: "support@cresuite.org", // Main admin contact
+                          subject: `💰 Payment Received: ${org?.name || 'New Organization'}`,
+                          html: `
+                            <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
+                              <h2 style="color: #0f172a;">New Payment Received 💰</h2>
+                              <p>A new organization has completed their onboarding payment and is awaiting review.</p>
+                              <div style="background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                                <p style="margin: 0; font-size: 14px;"><strong>Organization:</strong> ${org?.name || 'N/A'}</p>
+                                <p style="margin: 4px 0; font-size: 14px;"><strong>Administrator:</strong> ${authUser?.email || 'N/A'}</p>
+                                <p style="margin: 4px 0; font-size: 14px;"><strong>Plan:</strong> ${paymentInfo.plan || form.plan}</p>
+                                <p style="margin: 4px 0; font-size: 14px;"><strong>Amount:</strong> $${numericAmount}</p>
+                              </div>
+                              <p>Please log in to the <a href="${window.location.origin}/SuperAdmin" style="color: #2563eb; text-decoration: none; font-weight: 600;">SuperAdmin Console</a> to approve this organization.</p>
+                            </div>
+                          `
+                        }
+                      });
+                    } catch (emailErr) {
+                      console.error('[Onboarding] Admin notification failed:', emailErr);
+                      // Don't fail the whole UI flow if just the notification email fails
+                    }
+                  }
+
+                  // 3. Navigate to PaymentSuccess page
+                  console.log('[Onboarding] Payment and status updates complete! Redirecting...');
+                  const url = createPageUrl("PaymentSuccess");
+                  window.location.href = url + `?plan=${encodeURIComponent(paymentInfo.plan || form.plan)}&billing=${billingCycle}&amount=${numericAmount}&org=${encodeURIComponent(org?.name || '')}`;
+                } catch (e) {
+                  console.error('[Onboarding] Payment completion failed:', e);
+                  const { toast } = await import("sonner");
+                  toast.error("Payment was processed, but we had trouble updating your account. Please contact support.");
+                } finally {
+                  setSaving(false);
+                }
               }} onBack={() => setStep(2)} />
             </div>
           )}

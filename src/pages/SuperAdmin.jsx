@@ -106,7 +106,21 @@ export default function SuperAdmin() {
       const { data, error } = await supabase
         .from('access_requests')
         .select('*')
-        .neq('request_type', 'demo') // Ensure demo requests never appear in this list
+        .neq('request_type', 'demo')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: authChecked && user?.role === 'admin',
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: contactRequests = [], isLoading: isLoadingContact } = useQuery({
+    queryKey: ['contact-requests'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('contact_requests')
+        .select('*')
         .order('created_at', { ascending: false });
       if (error) throw error;
       return data || [];
@@ -295,12 +309,11 @@ export default function SuperAdmin() {
     });
   };
 
-  const accessReqs   = requests.filter(r => r.request_type !== 'demo' && r.request_type !== 'contact');
-  const contactReqs  = requests.filter(r => r.request_type === 'contact');
+  const accessReqs   = requests.filter(r => r.request_type !== 'demo');
+  const contactReqs  = contactRequests;
   // demoReqs comes from the dedicated demo_requests table (demoRequests state)
 
-  const actionableReqs = requests.filter(r => r.request_type !== 'demo');
-  const pendingCount = actionableReqs.filter(r => r.status === 'pending_approval').length;
+  const pendingCount = accessReqs.filter(r => r.status === 'pending_approval').length + contactReqs.filter(r => r.status === 'pending_approval').length;
   const pendingAccessCount = accessReqs.filter(r => r.status === 'pending_approval').length;
   const pendingContactCount = contactReqs.filter(r => r.status === 'pending_approval').length;
 
@@ -425,11 +438,11 @@ export default function SuperAdmin() {
                             </Button>
                           </DialogTrigger>
                           <DialogContent className="max-w-lg">
-                            <DialogHeader>
-                              <DialogTitle className="flex items-center gap-2">
-                                {r.request_type === 'demo' ? '🎥' : '✉️'} {r.full_name}
-                              </DialogTitle>
-                            </DialogHeader>
+                          <DialogHeader>
+                            <DialogTitle className="flex items-center gap-2">
+                              {r.request_type === 'demo' ? '🎥' : (r.message ? '✉️' : '⚡')} {r.full_name}
+                            </DialogTitle>
+                          </DialogHeader>
                             <div className="space-y-4 py-2">
                               <div className="grid grid-cols-2 gap-4">
                                 <div>
@@ -696,7 +709,13 @@ export default function SuperAdmin() {
         </TabsContent>
 
         <TabsContent value="contact" className="mt-4">
-          {renderRequestTable(contactReqs, "Contact Messages", pendingContactCount, "contact")}
+          {isLoadingContact ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
+            </div>
+          ) : (
+            renderRequestTable(contactReqs, "Contact Messages", pendingContactCount, "contact")
+          )}
         </TabsContent>
 
         <TabsContent value="users" className="mt-4">

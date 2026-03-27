@@ -41,20 +41,20 @@ export default function ContactUs() {
     if (!validate()) return;
     setSending(true);
     
-    // Save to database
+    // Save to dedicated contact_requests table
     try {
-      await supabase.from("access_requests").insert({
+      const { error: dbError } = await supabase.from("contact_requests").insert({
         full_name: form.name,
         email: form.email,
         phone: form.phone,
         company_name: form.company,
         department: form.department,
         message: form.message,
-        request_type: "contact",
         status: "pending_approval"
       });
+      if (dbError) throw dbError;
     } catch (e) {
-      console.error("Failed to log contact request in DB:", e);
+      console.error("Failed to log contact request in contact_requests table:", e);
     }
 
     // Internal Notification

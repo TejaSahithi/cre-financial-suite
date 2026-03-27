@@ -15,7 +15,7 @@ const trustedFirms = [
   "CoreLink Capital", "Pacific Realty", "Landmark Partners",
 ];
 
-export default function HeroSection({ onRequestAccess }) {
+export default function HeroSection({ onRequestAccess, onRequestDemo }) {
   const scrollToFeatures = () => {
     document.getElementById("features")?.scrollIntoView({ behavior: "smooth" });
   };
@@ -55,14 +55,14 @@ export default function HeroSection({ onRequestAccess }) {
                 onClick={onRequestAccess}
                 className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold px-8 h-12 text-sm shadow-lg shadow-blue-500/25 rounded-lg"
               >
-                Request Demo <ArrowRight className="w-4 h-4 ml-2" />
+                Request Platform Access <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
               <Button
                 variant="outline"
-                onClick={scrollToFeatures}
+                onClick={onRequestDemo}
                 className="border-white/20 text-white hover:bg-white/10 bg-transparent font-medium px-8 h-12 text-sm rounded-lg gap-2"
               >
-                <Play className="w-4 h-4" /> See How It Works
+                <Play className="w-4 h-4" /> Request Video Demo
               </Button>
             </div>
 

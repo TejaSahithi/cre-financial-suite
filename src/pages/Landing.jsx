@@ -31,7 +31,7 @@ export default function Landing() {
         onRequestAccess={handleRequestAccess} 
         onRequestDemo={handleRequestDemo} 
       />
-      <HeroSection onRequestAccess={handleRequestDemo} />
+      <HeroSection onRequestAccess={handleRequestAccess} onRequestDemo={handleRequestDemo} />
       <FeaturesSection />
       <DashboardPreview onRequestAccess={handleRequestAccess} />
       <PricingSection 
