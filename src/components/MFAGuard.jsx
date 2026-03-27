@@ -117,12 +117,22 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
     setResetting(true);
     setError("");
     try {
+      console.log("[MFAGuard] Attempting MFA reset via Edge Function...");
       // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
-      const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa");
+      const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa", {
+        method: 'POST', // Explicitly use POST
+      });
       
-      if (invokeErr) throw invokeErr;
-      if (!data?.success) throw new Error(data?.error || "Failed to reset MFA");
+      if (invokeErr) {
+        console.error("[MFAGuard] Edge function invocation error:", invokeErr);
+        throw new Error("Unable to reach security service. Please contact support@cresuite.org to manually reset your 2FA.");
+      }
+      
+      if (!data?.success) {
+        throw new Error(data?.error || "Failed to reset MFA. Please ensure you are logged in correctly.");
+      }
 
+      console.log("[MFAGuard] MFA reset successful, refreshing session...");
       // Refresh session so local client clears the previous AAL requirement cache
       await supabase.auth.refreshSession();
 
@@ -135,7 +145,7 @@ export default function MFAGuard({ onVerified, needsEnroll }) {
       setShowQrOnChallenge(false);
     } catch (err) {
       console.error("[MFAGuard] reset error:", err);
-      setError(err.message || "Failed to reset 2FA. Please try again.");
+      setError(err.message || "Failed to reset 2FA. Our team has been notified.");
     } finally {
       setResetting(false);
     }

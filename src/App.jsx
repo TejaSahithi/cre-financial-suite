@@ -243,10 +243,8 @@ const AuthenticatedApp = () => {
         if (org?.status === 'active') {
           // Keep going to WelcomeAboard/Dashboard
         } else {
-          // NEW: Allow viewing PaymentSuccess specifically if in under_review status
-          const isAtSuccessPage = currentPath === 'PaymentSuccess' || location.pathname === '/PaymentSuccess';
-          
-          if ((p.status === 'under_review' || org?.status === 'under_review') && isAtSuccessPage) {
+          // If under_review, users should ONLY see the PaymentSuccess/Confirmation state
+          if (p.status === 'under_review' || org?.status === 'under_review') {
             return 'PaymentSuccess';
           }
           return 'Onboarding';

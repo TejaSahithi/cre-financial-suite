@@ -66,6 +66,11 @@ export default function Onboarding() {
           console.log('[Onboarding] Org data fetched:', { found: !!orgData, status: orgData?.status, step: orgData?.onboarding_step });
           if (orgData) {
             setOrg(orgData);
+            if (orgData.status === 'under_review') {
+              console.log('[Onboarding] Org is under review, redirecting to success page');
+              window.location.href = createPageUrl("PaymentSuccess");
+              return;
+            }
             
             const serverStep = orgData.onboarding_step || 1;
             const currentUrlStep = parseInt(searchParams.get('step'), 10);
