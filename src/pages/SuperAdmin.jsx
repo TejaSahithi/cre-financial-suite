@@ -123,7 +123,11 @@ export default function SuperAdmin() {
         .select('*')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return data || [];
+      return (data || []).map((request) => ({
+        ...request,
+        request_type: 'contact',
+        company_name: request.company_name || '—',
+      }));
     },
     enabled: authChecked && user?.role === 'admin',
     refetchOnWindowFocus: false,

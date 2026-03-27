@@ -136,14 +136,14 @@ export default function RequestAccess() {
         try {
           await sendEmail({
             to: form.email,
-            subject: "CRE Suite - We've received your access request",
+            subject: "CRE Platform - We've received your access request",
             html: `
               <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #334155;">
                 <h2 style="color: #1a2744;">Hi ${form.full_name.split(' ')[0]},</h2>
-                <p>Thank you for your interest in CRE Suite. We've received your request for platform access for <strong>${form.company_name}</strong>.</p>
+                <p>Thank you for your interest in CRE Platform. We've received your request for platform access for <strong>${form.company_name}</strong>.</p>
                 <p>Our team is currently reviewing your organization. You can expect to hear from us within 24-48 hours with the next steps.</p>
                 <br/>
-                <p>Best regards,<br/>The CRE Suite Team</p>
+                <p>Best regards,<br/>The CRE Platform Team</p>
               </div>
             `
           });
@@ -210,8 +210,8 @@ export default function RequestAccess() {
               <Building2 className="w-6 h-6 text-white" />
             </div>
             <div className="hidden sm:block">
-              <span className="text-slate-900 font-black text-sm tracking-tight block leading-tight uppercase">CRE Suite</span>
-              <span className="text-slate-400 text-[10px] font-bold tracking-[0.2em] leading-tight uppercase">Platform</span>
+              <span className="text-slate-900 font-black text-sm tracking-tight block leading-tight uppercase">CRE Platform</span>
+              <span className="text-slate-400 text-[10px] font-bold tracking-[0.2em] leading-tight uppercase">Commercial Real Estate</span>
             </div>
           </Link>
           <div className="flex items-center gap-8">
@@ -426,7 +426,7 @@ export default function RequestAccess() {
 
       <footer className="py-12 px-6 border-t border-slate-100">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.2em]">&copy; 2026 CRE Financial Suite</p>
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.2em]">&copy; 2026 CRE Platform</p>
           <div className="flex gap-8">
             {["Safety", "Terms", "Privacy"].map(t => (
               <a key={t} href="#" className="text-[11px] font-black text-slate-400 hover:text-slate-900 uppercase tracking-widest transition-colors">{t}</a>

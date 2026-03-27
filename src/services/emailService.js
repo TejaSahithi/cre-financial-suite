@@ -46,22 +46,23 @@ async function sendEmail({ to, subject, html }) {
 export async function sendInviteEmail(recipientEmail, recipientName, magicLink) {
   return sendEmail({
     to: recipientEmail,
-    subject: "You're invited to CRE Suite",
+    subject: "You're invited to CRE Platform",
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px;">
         <div style="text-align: center; margin-bottom: 32px;">
-          <div style="display: inline-block; background: #1a2744; border-radius: 12px; padding: 12px;">
-            <span style="color: white; font-size: 18px; font-weight: bold;">CRE Suite</span>
+          <div style="display: inline-flex; align-items: center; gap: 10px; background: #1a2744; border-radius: 16px; padding: 12px 16px;">
+            <span style="width: 34px; height: 34px; border-radius: 10px; background: #ffffff; color: #1a2744; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; letter-spacing: -0.04em;">CP</span>
+            <span style="color: white; font-size: 18px; font-weight: bold;">CRE Platform</span>
           </div>
         </div>
-        <h1 style="color: #1a2744; font-size: 24px; margin-bottom: 8px;">Welcome to CRE Suite</h1>
+        <h1 style="color: #1a2744; font-size: 24px; margin-bottom: 8px;">Welcome to CRE Platform</h1>
         <p style="color: #64748b; font-size: 14px; line-height: 1.6;">
           Hi ${recipientName || 'there'},<br/><br/>
-          Your access to CRE Suite has been approved! Click the button below to sign in and get started.
+          Your access to CRE Platform has been approved. Click the button below to sign in and get started.
         </p>
         <div style="text-align: center; margin: 32px 0;">
           <a href="${magicLink || '#'}" style="display: inline-block; background: #1a2744; color: white; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 14px;">
-            Sign In to CRE Suite
+            Sign In to CRE Platform
           </a>
         </div>
         <p style="color: #94a3b8; font-size: 12px;">

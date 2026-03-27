@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
+import { validateAddress } from "@/services/integrations";
 
 const steps = [
   { id: 1, label: "Company Setup", icon: Building2 },
@@ -18,6 +19,76 @@ const steps = [
   { id: 3, label: "Payment", icon: CreditCard },
   { id: 4, label: "Confirmation", icon: CheckCircle2 },
 ];
+
+const COUNTRY_OPTIONS = [
+  { value: "US", label: "United States" },
+  { value: "CA", label: "Canada" },
+];
+
+const STATE_OPTIONS = [
+  { value: "AL", label: "Alabama" },
+  { value: "AK", label: "Alaska" },
+  { value: "AZ", label: "Arizona" },
+  { value: "AR", label: "Arkansas" },
+  { value: "CA", label: "California" },
+  { value: "CO", label: "Colorado" },
+  { value: "CT", label: "Connecticut" },
+  { value: "DE", label: "Delaware" },
+  { value: "FL", label: "Florida" },
+  { value: "GA", label: "Georgia" },
+  { value: "HI", label: "Hawaii" },
+  { value: "ID", label: "Idaho" },
+  { value: "IL", label: "Illinois" },
+  { value: "IN", label: "Indiana" },
+  { value: "IA", label: "Iowa" },
+  { value: "KS", label: "Kansas" },
+  { value: "KY", label: "Kentucky" },
+  { value: "LA", label: "Louisiana" },
+  { value: "ME", label: "Maine" },
+  { value: "MD", label: "Maryland" },
+  { value: "MA", label: "Massachusetts" },
+  { value: "MI", label: "Michigan" },
+  { value: "MN", label: "Minnesota" },
+  { value: "MS", label: "Mississippi" },
+  { value: "MO", label: "Missouri" },
+  { value: "MT", label: "Montana" },
+  { value: "NE", label: "Nebraska" },
+  { value: "NV", label: "Nevada" },
+  { value: "NH", label: "New Hampshire" },
+  { value: "NJ", label: "New Jersey" },
+  { value: "NM", label: "New Mexico" },
+  { value: "NY", label: "New York" },
+  { value: "NC", label: "North Carolina" },
+  { value: "ND", label: "North Dakota" },
+  { value: "OH", label: "Ohio" },
+  { value: "OK", label: "Oklahoma" },
+  { value: "OR", label: "Oregon" },
+  { value: "PA", label: "Pennsylvania" },
+  { value: "RI", label: "Rhode Island" },
+  { value: "SC", label: "South Carolina" },
+  { value: "SD", label: "South Dakota" },
+  { value: "TN", label: "Tennessee" },
+  { value: "TX", label: "Texas" },
+  { value: "UT", label: "Utah" },
+  { value: "VT", label: "Vermont" },
+  { value: "VA", label: "Virginia" },
+  { value: "WA", label: "Washington" },
+  { value: "WV", label: "West Virginia" },
+  { value: "WI", label: "Wisconsin" },
+  { value: "WY", label: "Wyoming" },
+  { value: "DC", label: "District of Columbia" },
+];
+
+const US_ZIP_REGEX = /^\d{5}(?:-\d{4})?$/;
+const CA_POSTAL_REGEX = /^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$/;
+
+function formatBillingAddress({ addressLine1, city, state, postalCode, countryCode }) {
+  return [
+    addressLine1,
+    [city, state].filter(Boolean).join(", "),
+    [postalCode, countryCode].filter(Boolean).join(" "),
+  ].filter(Boolean).join(", ");
+}
 
 export default function Onboarding() {
   const { user: authUser, refreshProfile, logout, isLoadingAuth } = useAuth();
@@ -39,7 +110,6 @@ export default function Onboarding() {
   });
 
   useEffect(() => {
-    // Wait for auth context to finish loading before doing anything
     if (isLoadingAuth) {
       console.log('[Onboarding] Auth still loading, waiting...');
       return;
@@ -57,34 +127,76 @@ export default function Onboarding() {
         setUser(authUser);
         setForm(f => ({ ...f, primary_contact_email: authUser.email || "" }));
 
-        // Find existing org using the user's membership org_id
-        if (authUser.org_id) {
-          console.log('[Onboarding] Initializing with Org:', authUser.org_id);
+        const findMembershipOrgId = async () => {
+          const { data, error } = await supabase
+            .from("memberships")
+            .select("org_id, role, created_at")
+            .eq("user_id", authUser.id)
+            .order("created_at", { ascending: true });
 
-          await new Promise(r => setTimeout(r, 600));
+          if (error) {
+            console.error("[Onboarding] membership lookup failed:", error);
+            return null;
+          }
 
-          const orgData = await OrganizationService.get(authUser.org_id);
-          console.log('[Onboarding] Org data fetched:', { found: !!orgData, status: orgData?.status, step: orgData?.onboarding_step });
+          const memberships = data || [];
+          const primaryMembership = memberships.find((membership) => membership.role === "org_admin") || memberships[0];
+          return primaryMembership?.org_id || null;
+        };
+
+        let resolvedUser = authUser;
+        let resolvedOrgId = authUser.org_id || await findMembershipOrgId();
+
+        if (!resolvedOrgId && authUser.profile?.status === "approved" && authUser.onboarding_type === "owner") {
+          console.log("[Onboarding] No org found, attempting first-login recovery");
+          const { error: firstLoginError } = await supabase.functions.invoke("first-login");
+          if (firstLoginError) {
+            console.warn("[Onboarding] first-login recovery returned:", firstLoginError.message);
+          }
+
+          const refreshedUser = await refreshProfile(false);
+          if (refreshedUser) {
+            resolvedUser = refreshedUser;
+            setUser(refreshedUser);
+            setForm((prev) => ({ ...prev, primary_contact_email: refreshedUser.email || prev.primary_contact_email }));
+            resolvedOrgId = refreshedUser.org_id || await findMembershipOrgId();
+          }
+        }
+
+        if (resolvedOrgId) {
+          console.log("[Onboarding] Initializing with Org:", resolvedOrgId);
+          const orgData = await OrganizationService.get(resolvedOrgId);
+          console.log("[Onboarding] Org data fetched:", { found: !!orgData, status: orgData?.status, step: orgData?.onboarding_step });
+
           if (orgData) {
             setOrg(orgData);
-            if (orgData.status === 'under_review') {
-              console.log('[Onboarding] Org is under review, redirecting to success page');
-              navigate('/PaymentSuccess', { replace: true });
+            setForm((prev) => ({
+              ...prev,
+              name: orgData.name || prev.name,
+              address: orgData.address || prev.address,
+              phone: orgData.phone || prev.phone,
+              timezone: orgData.timezone || prev.timezone,
+              currency: orgData.currency || prev.currency,
+              primary_contact_email: orgData.primary_contact_email || resolvedUser.email || prev.primary_contact_email,
+              plan: orgData.plan || prev.plan,
+              industry: orgData.industry || prev.industry,
+            }));
+
+            if (orgData.status === "under_review") {
+              console.log("[Onboarding] Org is under review, redirecting to success page");
+              navigate("/PaymentSuccess", { replace: true });
               return;
             }
 
             const serverStep = orgData.onboarding_step || 1;
-            const currentUrlStep = parseInt(searchParams.get('step'), 10);
-
-            if (!currentUrlStep && serverStep > 1) {
-              console.log('[Onboarding] Syncing to server step:', serverStep);
+            if (!searchParams.get("step") && serverStep > 1) {
+              console.log("[Onboarding] Syncing to server step:", serverStep);
               setStep(serverStep);
             }
-
-            // If already active, we don't need to be here, but don't hard redirect 
-            // inside init as it leads to loops if the router isn't ready.
-            // App.jsx will handle the high-level redirection.
           }
+        } else if (step > 1) {
+          console.warn("[Onboarding] No organization found for later onboarding step, resetting to company setup");
+          setStep(1);
         }
       } catch (e) {
         console.error('[Onboarding] init error:', e);
@@ -94,7 +206,7 @@ export default function Onboarding() {
     };
     init();
 
-  }, [authUser]);
+  }, [authUser, isLoadingAuth, navigate, refreshProfile, searchParams, step]);
 
   // Status Polling: Automatically check for approval while on Step 4
   useEffect(() => {
@@ -225,7 +337,7 @@ export default function Onboarding() {
           <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
             <Building2 className="w-5 h-5 text-white" />
           </div>
-          <span className="text-white font-bold text-lg">CRE Suite</span>
+          <span className="text-white font-bold text-lg">CRE Platform</span>
           <div className="ml-auto flex items-center gap-4">
             <span className="text-white/50 text-sm">Account Setup</span>
             <Button variant="ghost" size="sm" className="text-white/70 hover:text-white hover:bg-white/10" onClick={() => logout(true)}>
@@ -397,34 +509,30 @@ export default function Onboarding() {
                   : paymentInfo.displayPrice;
 
                 try {
-                  if (org?.id) {
-                    // Update Org status, profile status, invoice, and notify SuperAdmin securely via Edge Function
-                    const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-                      body: {
-                        plan: paymentInfo.plan || form.plan,
-                        billingCycle,
-                        amount: numericAmount,
-                        orgName: org?.name || ''
-                      }
-                    });
+                  const { data, error } = await supabase.functions.invoke('complete-onboarding', {
+                    body: {
+                      plan: paymentInfo.plan || form.plan,
+                      billingCycle,
+                      amount: numericAmount,
+                      orgName: org?.name || form.name || '',
+                    }
+                  });
 
-                    if (error) throw error;
-                    if (data?.error) throw new Error(data.error);
-                  } else {
-                    throw new Error("Organization ID is missing. Cannot finalize setup.");
-                  }
+                  if (error) throw error;
+                  if (data?.error) throw new Error(data.error);
 
                   // 3. Navigate to PaymentSuccess page
                   console.log('[Onboarding] Payment and status updates complete! Redirecting...');
                   // Refresh global auth context profile first so the guard knows we are 'under_review'
-                  await refreshProfile();
+                  const refreshedUser = await refreshProfile();
                   navigate('/PaymentSuccess', {
                     replace: true,
                     state: {
                       plan: paymentInfo.plan || form.plan,
                       billing: billingCycle,
                       amount: numericAmount,
-                      org: org?.name || ''
+                      org: org?.name || refreshedUser?.activeOrg?.name || form.name || '',
+                      billingAddress: paymentInfo.billingAddress,
                     }
                   });
                 } catch (e) {
@@ -484,7 +592,7 @@ CRE Platform, Inc. ("Provider") and the organization
 ${org?.name || "The Client"} ("Client").
 
 1. SCOPE OF SERVICE
-Provider shall provide Client with access to the CRE Suite cloud-based
+Provider shall provide Client with access to the CRE Platform cloud-based
 platform for commercial real estate portfolio management and automation.
 
 2. SUBSCRIPTION TERM
@@ -545,7 +653,7 @@ DATE:         ${today}
             <p className="text-[11px] text-slate-400">Version 4.2 â€¢ Effective Date: {today}</p>
           </div>
           <p>This Master Service Agreement ("Agreement") is entered into between <strong>CRE Platform, Inc.</strong> ("Provider") and the organization <strong>{org?.name || "The Client"}</strong> ("Client").</p>
-          <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Suite cloud-based platform for commercial real estate portfolio management and automation.</p>
+          <p><strong>1. Scope of Service.</strong> Provider shall provide Client with access to the CRE Platform cloud-based platform for commercial real estate portfolio management and automation.</p>
           <p><strong>2. Subscription Term.</strong> The term of this Agreement shall begin on the date of execution and continue for the duration of the selected subscription plan, renewing automatically unless cancelled.</p>
           <p><strong>3. Payment Terms.</strong> Client agrees to pay all applicable fees via the authorized payment method. All fees are non-refundable except as expressly stated herein.</p>
           <p><strong>4. Confidentiality & Data.</strong> Client retains all rights to its data. Provider implements bank-grade security and isolation to protect Client information.</p>
@@ -628,8 +736,9 @@ DATE:         ${today}
 }
 
 // â”€â”€â”€ Payment Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
+function PaymentStep({ user, form, setForm, onComplete, onBack }) {
   const [processing, setProcessing] = useState(false);
+  const [validatingAddress, setValidatingAddress] = useState(false);
   const [cardName, setCardName] = useState(user?.full_name || "");
   const [cardNumber, setCardNumber] = useState("");
   const [expiry, setExpiry] = useState("");
@@ -643,6 +752,10 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
   const [billingState, setBillingState] = useState("");
   const [billingZip, setBillingZip] = useState("");
   const [billingCountry, setBillingCountry] = useState("US");
+  const [addressCandidates, setAddressCandidates] = useState([]);
+  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState("");
+  const [addressValidated, setAddressValidated] = useState(false);
+  const [addressValidationMessage, setAddressValidationMessage] = useState("");
 
   const YEARLY_DISCOUNT = 0.25;
 
@@ -662,15 +775,130 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
   const displayPrice = getPrice(selectedPlan.price);
   const yearlyTotal = displayPrice * 12;
 
+  const resetAddressValidation = () => {
+    setAddressValidated(false);
+    setAddressCandidates([]);
+    setSelectedCandidateIndex("");
+    setAddressValidationMessage("");
+  };
+
+  const updateAddressField = (setter, value) => {
+    setter(value);
+    setError("");
+    resetAddressValidation();
+  };
+
+  const applyAddressCandidate = (candidate, message) => {
+    setBillingAddress(candidate.addressLine1 || "");
+    setBillingCity(candidate.city || "");
+    setBillingState(candidate.state || "");
+    setBillingZip(candidate.postalCode || "");
+    setBillingCountry(candidate.countryCode || "US");
+    setAddressValidated(true);
+    setAddressCandidates([]);
+    setSelectedCandidateIndex("");
+    setAddressValidationMessage(message);
+  };
+
+  const runAddressValidation = async ({ autoApplySingle = true } = {}) => {
+    if (!billingAddress.trim() || !billingCity.trim() || !billingState.trim() || !billingZip.trim()) {
+      const message = "Enter the street address, city, state, and ZIP code before validating.";
+      setAddressValidated(false);
+      setAddressValidationMessage(message);
+      return { ok: false, requiresSelection: false, message };
+    }
+
+    setValidatingAddress(true);
+    setError("");
+
+    try {
+      const result = await validateAddress({
+        addressLine1: billingAddress.trim(),
+        city: billingCity.trim(),
+        state: billingState.trim(),
+        postalCode: billingZip.trim(),
+        countryCode: billingCountry,
+      });
+
+      const candidates = Array.isArray(result?.candidates)
+        ? result.candidates.filter((candidate) => candidate?.addressLine1)
+        : [];
+
+      if (!candidates.length) {
+        const message = result?.message || "UPS could not validate that billing address. Please review the fields and try again.";
+        setAddressValidated(false);
+        setAddressCandidates([]);
+        setSelectedCandidateIndex("");
+        setAddressValidationMessage(message);
+        return { ok: false, requiresSelection: false, message };
+      }
+
+      if (candidates.length === 1 && autoApplySingle) {
+        applyAddressCandidate(candidates[0], result?.message || "Billing address verified and autofilled.");
+        return { ok: true, requiresSelection: false };
+      }
+
+      const message = result?.message || "Select one of the validated billing addresses below to continue.";
+      setAddressValidated(false);
+      setAddressCandidates(candidates);
+      setSelectedCandidateIndex("");
+      setAddressValidationMessage(message);
+      return { ok: false, requiresSelection: true, message };
+    } finally {
+      setValidatingAddress(false);
+    }
+  };
+
+  const validatePaymentFields = () => {
+    if (!cardName.trim()) return "Cardholder name is required.";
+    if (cardNumber.length < 13) return "Enter a valid card number.";
+    if (!/^\d{2}\s*\/\s*\d{2}$/.test(expiry)) return "Enter a valid expiration date in MM / YY format.";
+    if (cvc.length < 3) return "Enter a valid CVC.";
+    if (!billingAddress.trim() || !billingCity.trim() || !billingState.trim() || !billingZip.trim()) {
+      return "Complete the billing address before submitting payment.";
+    }
+    if (billingCountry === "US" && !US_ZIP_REGEX.test(billingZip.trim())) {
+      return "Enter a valid US ZIP code.";
+    }
+    if (billingCountry === "CA" && !CA_POSTAL_REGEX.test(billingZip.trim())) {
+      return "Enter a valid Canadian postal code.";
+    }
+    return "";
+  };
+
   const handlePayment = async (e) => {
     e.preventDefault();
     setError("");
+
+    const fieldError = validatePaymentFields();
+    if (fieldError) {
+      setError(fieldError);
+      return;
+    }
+
     setProcessing(true);
     try {
-      await new Promise(r => setTimeout(r, 2000));
+      const validationResult = addressValidated
+        ? { ok: true, requiresSelection: false }
+        : await runAddressValidation({ autoApplySingle: true });
+
+      if (!validationResult.ok) {
+        setError(validationResult.requiresSelection
+          ? "Select one of the validated billing addresses to continue."
+          : validationResult.message || "Please validate the billing address before continuing.");
+        return;
+      }
+
+      await new Promise(r => setTimeout(r, 1200));
       await onComplete(billingCycle, {
         cardName, plan: selectedPlan.name, displayPrice, billingCycle,
-        billingAddress: `${billingAddress}, ${billingCity}, ${billingState} ${billingZip}, ${billingCountry}`,
+        billingAddress: formatBillingAddress({
+          addressLine1: billingAddress,
+          city: billingCity,
+          state: billingState,
+          postalCode: billingZip,
+          countryCode: billingCountry,
+        }),
       });
     } catch (err) {
       console.error('[Payment] onComplete callback failed:', err);
@@ -707,7 +935,7 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
         {plans.map(p => {
           const price = getPrice(p.price);
           return (
-            <button key={p.key} type="button" onClick={() => setForm({ ...form, plan: p.key })}
+            <button key={p.key} type="button" onClick={() => setForm((prev) => ({ ...prev, plan: p.key }))}
               className={`p-4 rounded-xl border-2 transition-all relative text-left ${form.plan === p.key ? "border-blue-600 bg-blue-50/50 shadow-md ring-4 ring-blue-50" : "border-slate-100 bg-slate-50 hover:border-slate-300"}`}>
               {p.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter">Recommended</div>}
               <p className="text-xs font-bold text-slate-900 mb-1">{p.name}</p>
@@ -725,7 +953,7 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
       {billingCycle === "yearly" && selectedPlan.price > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-6 flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold text-emerald-800">Annual billing â€” 25% savings applied</p>
+            <p className="text-sm font-semibold text-emerald-800">Annual billing: 25% savings applied</p>
             <p className="text-xs text-emerald-600">Billed as ${yearlyTotal.toLocaleString()}/year</p>
           </div>
           <div className="text-right">
@@ -765,44 +993,111 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
 
         {/* Billing Address */}
         <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => runAddressValidation({ autoApplySingle: true })}
+              disabled={validatingAddress}
+              className="h-9 px-3 text-xs font-semibold border-slate-300"
+            >
+              {validatingAddress ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+              {validatingAddress ? "Validating..." : "Validate with UPS"}
+            </Button>
+          </div>
           <div>
             <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Street Address</Label>
-            <Input value={billingAddress} onChange={e => setBillingAddress(e.target.value)} placeholder="123 Main St" className="bg-white border-slate-200 h-11" required />
+            <Input value={billingAddress} onChange={e => updateAddressField(setBillingAddress, e.target.value)} placeholder="123 Main St" className="bg-white border-slate-200 h-11" required />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">City</Label>
-              <Input value={billingCity} onChange={e => setBillingCity(e.target.value)} placeholder="New York" className="bg-white border-slate-200 h-11" required />
+              <Input value={billingCity} onChange={e => updateAddressField(setBillingCity, e.target.value)} placeholder="New York" className="bg-white border-slate-200 h-11" required />
             </div>
             <div>
               <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">State</Label>
-              <Input value={billingState} onChange={e => setBillingState(e.target.value)} placeholder="NY" className="bg-white border-slate-200 h-11" required />
+              {billingCountry === "US" ? (
+                <Select value={billingState} onValueChange={(value) => updateAddressField(setBillingState, value)}>
+                  <SelectTrigger className="bg-white border-slate-200 h-11">
+                    <SelectValue placeholder="Select state" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATE_OPTIONS.map((state) => (
+                      <SelectItem key={state.value} value={state.value}>{state.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input value={billingState} onChange={e => updateAddressField(setBillingState, e.target.value)} placeholder="Province / State" className="bg-white border-slate-200 h-11" required />
+              )}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">ZIP / Postal Code</Label>
-              <Input value={billingZip} onChange={e => setBillingZip(e.target.value)} placeholder="10001" className="bg-white border-slate-200 h-11" required />
+              <Input value={billingZip} onChange={e => updateAddressField(setBillingZip, e.target.value.toUpperCase())} placeholder={billingCountry === "CA" ? "A1A 1A1" : "10001"} className="bg-white border-slate-200 h-11" required />
             </div>
             <div>
               <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Country</Label>
-              <Input value={billingCountry} onChange={e => setBillingCountry(e.target.value)} placeholder="US" className="bg-white border-slate-200 h-11" required />
+              <Select value={billingCountry} onValueChange={(value) => updateAddressField(setBillingCountry, value)}>
+                <SelectTrigger className="bg-white border-slate-200 h-11">
+                  <SelectValue placeholder="Select country" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTRY_OPTIONS.map((country) => (
+                    <SelectItem key={country.value} value={country.value}>{country.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
+
+          {addressCandidates.length > 1 && (
+            <div>
+              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Validated Billing Address</Label>
+              <Select
+                value={selectedCandidateIndex}
+                onValueChange={(value) => {
+                  setSelectedCandidateIndex(value);
+                  const candidate = addressCandidates[Number(value)];
+                  if (candidate) {
+                    applyAddressCandidate(candidate, "Billing address verified and autofilled.");
+                  }
+                }}
+              >
+                <SelectTrigger className="bg-white border-slate-200 h-11">
+                  <SelectValue placeholder="Choose the UPS-validated address" />
+                </SelectTrigger>
+                <SelectContent>
+                  {addressCandidates.map((candidate, index) => (
+                    <SelectItem key={`${candidate.formattedAddress}-${index}`} value={`${index}`}>
+                      {candidate.formattedAddress}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {addressValidationMessage && (
+            <div className={`rounded-xl px-4 py-3 text-sm border ${addressValidated ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-blue-50 text-blue-700 border-blue-200"}`}>
+              {addressValidationMessage}
+            </div>
+          )}
         </div>
 
         {error && <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 flex items-center gap-2"><AlertCircle className="w-3.5 h-3.5" /> {error}</div>}
 
         <div className="flex gap-4">
           <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-500">Back</Button>
-          <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
+          <Button type="submit" disabled={processing || validatingAddress} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
             {processing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
             {processing ? "Processing Securely..." : selectedPlan.price ? `Pay $${displayPrice} & Finalize Setup` : "Request Enterprise Access"}
           </Button>
         </div>
         <p className="text-center text-[10px] text-slate-400 flex items-center justify-center gap-1">
-          <Lock className="w-3 h-3" /> 256-bit SSL encryption Â· PCI DSS compliant
+          <Lock className="w-3 h-3" /> 256-bit SSL encryption · PCI DSS compliant
         </p>
       </form>
     </div>
@@ -917,7 +1212,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       // Subscription Details Table Row
       doc.setFont("helvetica", "normal");
       doc.setTextColor(secondaryColor);
-      doc.text(`CRE Suite ${planName.charAt(0).toUpperCase() + planName.slice(1)} Plan`, 25, 145);
+      doc.text(`CRE Platform ${planName.charAt(0).toUpperCase() + planName.slice(1)} Plan`, 25, 145);
       doc.text(cycle === "yearly" ? "Annual" : "Monthly", 100, 145);
       doc.text(`$${price}${cycle === "yearly" ? "/mo" : ""}`, 170, 145, { align: "right" });
 
@@ -941,13 +1236,13 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       doc.setFontSize(8);
       doc.setTextColor(secondaryColor);
       doc.text("Payment processed securely. Account is pending SuperAdmin activation.", 105, 270, { align: "center" });
-      doc.text(`© ${new Date().getFullYear()} CRE Financial Suite. All rights reserved.`, 105, 275, { align: "center" });
+      doc.text(`© ${new Date().getFullYear()} CRE Platform. All rights reserved.`, 105, 275, { align: "center" });
 
       const pdfBlob = doc.output('blob');
       const url = URL.createObjectURL(pdfBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${invoiceId}_CRE_Suite.pdf`;
+      a.download = `${invoiceId}_CRE_Platform.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -974,7 +1269,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
         Your payment was received successfully! Our team is now reviewing your organization.
       </p>
       <p className="text-slate-400 text-xs mb-6 max-w-sm mx-auto">
-        Thank you for choosing CRE Suite, <strong>{user?.full_name}</strong>. We are processing <strong>{org?.name}</strong> and you will receive a welcome email once your account is activated.
+        Thank you for choosing CRE Platform, <strong>{user?.full_name}</strong>. We are processing <strong>{org?.name}</strong> and you will receive a welcome email once your account is activated.
       </p>
 
       {/* Payment Summary */}

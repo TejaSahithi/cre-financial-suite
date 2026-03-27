@@ -39,15 +39,18 @@ export const AuthProvider = ({ children }) => {
           // Sign out silently and redirect
           await authLogout();
           window.location.href = '/RequestAccess?error=google_not_approved';
-          return;
+          return null;
         }
         setUser(currentUser);
         setIsAuthenticated(true);
+        setAuthError(null);
+        return currentUser;
       } else {
         setUser(null);
         setIsAuthenticated(false);
+        setAuthError(null);
+        return null;
       }
-      setAuthError(null);
     } catch (err) {
       console.error('[AuthContext] fetchProfile error:', err);
       setUser(null);
@@ -56,6 +59,7 @@ export const AuthProvider = ({ children }) => {
         type: 'auth_required',
         message: err.message || 'Authentication required',
       });
+      return null;
     } finally {
       if (showLoading) setIsLoadingAuth(false);
     }
@@ -121,7 +125,7 @@ export const AuthProvider = ({ children }) => {
 
   const refreshProfile = async (showLoading = true) => {
     resetProfileCache();
-    await fetchProfile(showLoading);
+    return await fetchProfile(showLoading);
   };
 
   const navigateToLogin = () => {

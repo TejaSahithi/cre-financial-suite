@@ -6,34 +6,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Send, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { motion } from "framer-motion";
+import { supabase } from "@/services/supabaseClient";
 
-// ─── Validation Helpers ─────────────────────────────────
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-const PHONE_REGEX = /^\+?[\d]{7,15}$/; // E.164-ish: optional +, 7-15 digits
+const PHONE_REGEX = /^\+?[\d]{7,15}$/;
 
-/**
- * Validate email format. Replace body with API call when ready.
- * @param {string} email
- * @returns {{ valid: boolean, message?: string }}
- */
 export function validateEmail(email) {
   if (!email.trim()) return { valid: false, message: "Email is required" };
   if (!EMAIL_REGEX.test(email)) return { valid: false, message: "Enter a valid email address" };
-  // TODO: Hook in API validation (e.g., Abstract API, ZeroBounce)
-  // const res = await fetch(`https://api.example.com/validate?email=${email}`);
   return { valid: true };
 }
 
-/**
- * Validate phone in E.164 format. Replace body with API call when ready.
- * @param {string} phone
- * @returns {{ valid: boolean, message?: string }}
- */
 export function validatePhone(phone) {
   if (!phone.trim()) return { valid: false, message: "Phone number is required" };
   const cleaned = phone.replace(/[\s\-().]/g, "");
   if (!PHONE_REGEX.test(cleaned)) return { valid: false, message: "Enter a valid phone number (e.g., +1 555 123 4567)" };
-  // TODO: Hook in API validation (e.g., Twilio Lookup)
   return { valid: true };
 }
 
@@ -50,10 +37,16 @@ export default function ContactSection() {
     if (!form.name.trim()) errs.name = "Name is required";
 
     const emailResult = validateEmail(form.email);
-    if (!emailResult.valid) { errs.email = emailResult.message; setEmailVerified(false); }
+    if (!emailResult.valid) {
+      errs.email = emailResult.message;
+      setEmailVerified(false);
+    }
 
     const phoneResult = validatePhone(form.phone);
-    if (!phoneResult.valid) { errs.phone = phoneResult.message; setPhoneVerified(false); }
+    if (!phoneResult.valid) {
+      errs.phone = phoneResult.message;
+      setPhoneVerified(false);
+    }
 
     if (!form.message.trim()) errs.message = "Message is required";
     if (!form.department) errs.department = "Please select a department";
@@ -63,14 +56,24 @@ export default function ContactSection() {
 
   const handleEmailBlur = () => {
     const result = validateEmail(form.email);
-    if (result.valid) { setEmailVerified(true); setErrors(p => ({ ...p, email: undefined })); }
-    else { setEmailVerified(false); setErrors(p => ({ ...p, email: result.message })); }
+    if (result.valid) {
+      setEmailVerified(true);
+      setErrors((prev) => ({ ...prev, email: undefined }));
+    } else {
+      setEmailVerified(false);
+      setErrors((prev) => ({ ...prev, email: result.message }));
+    }
   };
 
   const handlePhoneBlur = () => {
     const result = validatePhone(form.phone);
-    if (result.valid) { setPhoneVerified(true); setErrors(p => ({ ...p, phone: undefined })); }
-    else { setPhoneVerified(false); setErrors(p => ({ ...p, phone: result.message })); }
+    if (result.valid) {
+      setPhoneVerified(true);
+      setErrors((prev) => ({ ...prev, phone: undefined }));
+    } else {
+      setPhoneVerified(false);
+      setErrors((prev) => ({ ...prev, phone: result.message }));
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -78,48 +81,17 @@ export default function ContactSection() {
     if (!validate()) return;
     setSending(true);
     try {
-      const { sendEmail } = await import("@/services/integrations");
-      const { supabase } = await import("@/services/supabaseClient");
-      
-      // Save to Database
-      try {
-        await supabase.from("access_requests").insert({
+      const { error } = await supabase.functions.invoke("submit-contact", {
+        body: {
           full_name: form.name,
           email: form.email,
           phone: form.phone,
+          company_name: null,
           department: form.department,
           message: form.message,
-          request_type: "contact",
-          status: "pending_approval"
-        });
-      } catch (e) {
-        console.error("Database save error:", e);
-      }
-
-      // Notify internal team
-      await sendEmail({
-        to: form.department === "sales" ? "sales@cresuite.com" : "support@cresuite.com",
-        subject: `[${form.department === "sales" ? "Sales" : "Support"}] Contact from ${form.name}`,
-        body: `Name: ${form.name}\nEmail: ${form.email}\nPhone: ${form.phone}\nDept: ${form.department}\n\n${form.message}`
+        },
       });
-      // Send auto-reply to user
-      try {
-        await sendEmail({
-          to: form.email,
-          subject: "CRE Suite - We received your message",
-          html: `
-            <div style="font-family: sans-serif; max-w: 600px; margin: 0 auto;">
-              <h2>Hi ${form.name.split(' ')[0]},</h2>
-              <p>Thank you for contacting CRE Suite. We have received your message to our ${form.department} team.</p>
-              <p>Someone will be in touch with you within 4 business hours.</p>
-              <br/>
-              <p>Best regards,<br/>The CRE Suite Team</p>
-            </div>
-          `
-        });
-      } catch (e) {
-        console.error("Auto-reply fail:", e);
-      }
+      if (error) throw error;
       setSent(true);
     } catch (err) {
       console.error("Contact form error:", err);
@@ -162,13 +134,13 @@ export default function ContactSection() {
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Full Name <span className="text-red-400">*</span></Label>
-                <Input value={form.name} onChange={e => setField("name", e.target.value)} placeholder="Jane Smith" className={`mt-1.5 h-11 bg-white ${errors.name ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
+                <Input value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="Jane Smith" className={`mt-1.5 h-11 bg-white ${errors.name ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
                 <FieldError field="name" />
               </div>
               <div>
                 <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Email <span className="text-red-400">*</span></Label>
                 <div className="relative mt-1.5">
-                  <Input type="email" value={form.email} onChange={e => setField("email", e.target.value)} onBlur={handleEmailBlur} placeholder="jane@company.com" className={`h-11 bg-white pr-10 ${errors.email ? "border-red-500 ring-1 ring-red-500 bg-red-50" : emailVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
+                  <Input type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} onBlur={handleEmailBlur} placeholder="jane@company.com" className={`h-11 bg-white pr-10 ${errors.email ? "border-red-500 ring-1 ring-red-500 bg-red-50" : emailVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
                   {emailVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />}
                   {errors.email && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                 </div>
@@ -179,7 +151,7 @@ export default function ContactSection() {
               <div>
                 <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Phone Number <span className="text-red-400">*</span></Label>
                 <div className="relative mt-1.5">
-                  <Input value={form.phone} onChange={e => setField("phone", e.target.value)} onBlur={handlePhoneBlur} placeholder="+1 555 123 4567" className={`h-11 bg-white pr-10 ${errors.phone ? "border-red-500 ring-1 ring-red-500 bg-red-50" : phoneVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
+                  <Input value={form.phone} onChange={(e) => setField("phone", e.target.value)} onBlur={handlePhoneBlur} placeholder="+1 555 123 4567" className={`h-11 bg-white pr-10 ${errors.phone ? "border-red-500 ring-1 ring-red-500 bg-red-50" : phoneVerified ? "border-emerald-400 ring-1 ring-emerald-400" : ""}`} />
                   {phoneVerified && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />}
                   {errors.phone && <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                 </div>
@@ -187,7 +159,7 @@ export default function ContactSection() {
               </div>
               <div>
                 <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Department <span className="text-red-400">*</span></Label>
-                <Select value={form.department} onValueChange={v => setField("department", v)}>
+                <Select value={form.department} onValueChange={(value) => setField("department", value)}>
                   <SelectTrigger className={`mt-1.5 h-11 bg-white ${errors.department ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`}>
                     <SelectValue placeholder="Select department..." />
                   </SelectTrigger>
@@ -201,7 +173,7 @@ export default function ContactSection() {
             </div>
             <div>
               <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Message <span className="text-red-400">*</span></Label>
-              <Textarea value={form.message} onChange={e => setField("message", e.target.value)} placeholder="How can we help you?" rows={4} className={`mt-1.5 bg-white ${errors.message ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
+              <Textarea value={form.message} onChange={(e) => setField("message", e.target.value)} placeholder="How can we help you?" rows={4} className={`mt-1.5 bg-white ${errors.message ? "border-red-500 ring-1 ring-red-500 bg-red-50" : ""}`} />
               <FieldError field="message" />
             </div>
             <Button type="submit" disabled={sending} className="w-full bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2">

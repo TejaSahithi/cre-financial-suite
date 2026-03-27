@@ -30,16 +30,13 @@ function withCrePlatformBranding(content) {
       <div class="header">
         <div class="brand">
           <div class="brand-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.4">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-              <path d="M9 22V12h6v10"></path>
-            </svg>
+            <span style="font-size: 13px; font-weight: 800; color: #1a2744; letter-spacing: -0.04em;">CP</span>
           </div>
           <span class="brand-name">CRE Platform</span>
         </div>
       </div>
       <div class="content">${content}</div>
-      <div class="footer">CRE Platform · support@cresuite.org</div>
+      <div class="footer">CRE Platform &middot; support@cresuite.org</div>
     </div>
   </body>
   </html>`;
@@ -123,6 +120,33 @@ export async function sendEmail(params) {
   } catch (err) {
     console.error('[integrations] sendEmail() error:', err.message || err);
     return { success: false };
+  }
+}
+
+/**
+ * Validate a billing address using the UPS-backed Edge Function.
+ * Returns normalized candidate addresses for dropdown autofill.
+ * @param {object} params - { addressLine1, city, state, postalCode, countryCode }
+ * @returns {Promise<object>}
+ */
+export async function validateAddress(params) {
+  try {
+    const { data, error } = await supabase.functions.invoke("validate-address-ups", {
+      body: params,
+    });
+
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    return data || { candidates: [], valid: false };
+  } catch (err) {
+    console.error("[integrations] validateAddress() error:", err.message || err);
+    return {
+      success: false,
+      valid: false,
+      candidates: [],
+      source: "error",
+      message: "Unable to validate the billing address right now. Please review the fields and try again.",
+    };
   }
 }
 
