@@ -81,30 +81,50 @@ serve(async (req) => {
       });
     if (invoiceError) throw invoiceError;
 
-    // 4. Notify admin (best effort, don't fail if it fails)
+    // 4. Notify admin via Resend directly (best effort, don't fail if it fails)
     try {
-      const frontendUrl = Deno.env.get('FRONTEND_URL') || 'http://localhost:5173';
-      await supabaseAdmin.functions.invoke('send-email', {
-        body: {
-          to: "support@cresuite.org",
-          subject: `💰 Payment Received: ${orgName || 'New Organization'}`,
-          html: `
-            <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
-              <h2 style="color: #0f172a;">New Payment Received 💰</h2>
-              <p>A new organization has completed their onboarding payment and is awaiting review.</p>
-              <div style="background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                <p style="margin: 0; font-size: 14px;"><strong>Organization:</strong> ${orgName || 'N/A'}</p>
-                <p style="margin: 4px 0; font-size: 14px;"><strong>Administrator:</strong> ${user.email || 'N/A'}</p>
-                <p style="margin: 4px 0; font-size: 14px;"><strong>Plan:</strong> ${plan || 'N/A'}</p>
-                <p style="margin: 4px 0; font-size: 14px;"><strong>Amount:</strong> $${numericAmount}</p>
+      const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
+      const frontendUrl = Deno.env.get('FRONTEND_URL') || 'https://cjwdwuqqdokblakheyjb.supabase.co';
+      if (RESEND_API_KEY) {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: 'CRE Platform <support@cresuite.org>',
+            to: 'support@cresuite.org',
+            subject: `💰 New Payment: ${orgName || 'New Organization'} — Action Required`,
+            html: `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f8fafc;margin:0;padding:0;">
+              <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:16px;border:1px solid #e2e8f0;overflow:hidden;">
+                <div style="background:linear-gradient(135deg,#1a2744,#2d4a8a);padding:28px 36px;">
+                  <span style="color:#fff;font-size:20px;font-weight:700;">CRE Platform</span>
+                </div>
+                <div style="padding:32px 36px;">
+                  <h2 style="color:#0f172a;margin-top:0;">New Payment Received 💰</h2>
+                  <p style="color:#475569;">A new organization has completed onboarding and is awaiting your review.</p>
+                  <div style="background:#f8fafc;padding:16px;border-radius:8px;border:1px solid #e2e8f0;margin:20px 0;">
+                    <p style="margin:0 0 6px;font-size:14px;color:#1e293b;"><strong>Organization:</strong> ${orgName || 'N/A'}</p>
+                    <p style="margin:0 0 6px;font-size:14px;color:#1e293b;"><strong>Admin Email:</strong> ${user.email || 'N/A'}</p>
+                    <p style="margin:0 0 6px;font-size:14px;color:#1e293b;"><strong>Plan:</strong> ${plan || 'N/A'} (${billingCycle || 'monthly'})</p>
+                    <p style="margin:0;font-size:14px;color:#1e293b;"><strong>Amount:</strong> $${numericAmount}</p>
+                  </div>
+                  <a href="${frontendUrl}/SuperAdmin" style="display:inline-block;background:#10b981;color:#fff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px;">
+                    Review in SuperAdmin Console →
+                  </a>
+                </div>
+                <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">
+                  CRE Platform · support@cresuite.org
+                </div>
               </div>
-              <p>Please log in to the <a href="${frontendUrl}/SuperAdmin" style="color: #2563eb; text-decoration: none; font-weight: 600;">SuperAdmin Console</a> to approve this organization.</p>
-            </div>
-          `
-        }
-      });
+            </body></html>`,
+          }),
+        });
+        console.log('[complete-onboarding] Admin notification sent');
+      }
     } catch (emailErr) {
-      console.error('[Onboarding] Admin notification failed:', emailErr);
+      console.error('[complete-onboarding] Admin notification failed:', emailErr);
     }
 
     return new Response(JSON.stringify({ success: true, message: 'Onboarding marked for review' }), {
