@@ -5,8 +5,8 @@
  * and persists the results.
  */
 
-import { ExpenseService, BudgetService, PropertyService } from '@/services/api';
-import { generateBudgetProjection, analyzeBudgetVariance } from '@/services/budgetEngine';
+import { ExpenseService, BudgetService, LeaseService, PropertyService } from '@/services/api';
+import { generateBudget, calculateVariance } from '@/services/budgetEngine';
 
 /**
  * Generate a budget projection for a property and fiscal year.
@@ -16,44 +16,49 @@ import { generateBudgetProjection, analyzeBudgetVariance } from '@/services/budg
  * @param {object} [options] - { inflationRate, lookbackYears }
  * @returns {Promise<{ projection: object, saved: object }>}
  */
-export async function generateBudget(propertyId, fiscalYear, options = {}) {
-  // 1. Fetch historical expenses (previous 2 years by default)
-  const lookbackYears = options.lookbackYears || 2;
-  const historicalExpenses = [];
+export async function generateBudgetForProperty(propertyId, fiscalYear, options = {}) {
+  // 1. Fetch prior-year expenses
+  const priorYearExpenses = await ExpenseService.filter({
+    property_id: propertyId,
+    fiscal_year: fiscalYear - 1,
+  });
 
-  for (let yr = fiscalYear - lookbackYears; yr < fiscalYear; yr++) {
-    const yearExpenses = await ExpenseService.filter({
-      property_id: propertyId,
-      fiscal_year: yr,
-    });
-    historicalExpenses.push(...yearExpenses);
-  }
+  // 2. Fetch active leases for revenue calculation
+  const allLeases = await LeaseService.filter({ property_id: propertyId });
+  const activeLeases = allLeases.filter(l => l.status === 'active');
 
-  // 2. Fetch property metadata
+  // 3. Fetch property metadata
   const properties = await PropertyService.filter({ id: propertyId });
   const property = properties[0] || {};
 
-  // 3. Run domain engine
-  const projection = generateBudgetProjection({
-    historicalExpenses,
-    propertyMeta: property,
-    targetYear: fiscalYear,
-    inflationRate: options.inflationRate,
+  // 4. Run domain engine
+  const budget = generateBudget({
+    propertyId,
+    year: fiscalYear,
+    leases: activeLeases,
+    expenses: priorYearExpenses,
+    adjustments: {
+      inflationPct: options.inflationRate || 3,
+      vacancyPct: options.vacancyPct || 5,
+    },
   });
 
-  // 4. Persist
+  // 5. Persist
   const saved = await BudgetService.create({
     property_id: propertyId,
     fiscal_year: fiscalYear,
     name: `${property.name || 'Property'} — FY${fiscalYear} Budget`,
-    total_amount: projection.totalProjected,
-    line_items: JSON.stringify(projection.lineItems || []),
-    assumptions: JSON.stringify(projection.assumptions || {}),
+    total_amount: budget.noi,
+    total_expenses: budget.total_expenses,
+    gross_rental_income: budget.grossRentalIncome,
+    effective_gross_income: budget.effectiveGrossIncome,
+    line_items: JSON.stringify(budget.lineItems || []),
+    assumptions: JSON.stringify(budget.assumptions || {}),
     status: 'draft',
     created_at: new Date().toISOString(),
   });
 
-  return { projection, saved };
+  return { budget, saved };
 }
 
 /**
@@ -75,10 +80,7 @@ export async function compareBudgetToActuals(budgetId) {
   });
 
   // 3. Run domain engine
-  const variance = analyzeBudgetVariance({
-    budget,
-    actuals,
-  });
+  const variance = calculateVariance(budget, actuals);
 
   return { variance };
 }

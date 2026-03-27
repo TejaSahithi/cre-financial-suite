@@ -7,7 +7,7 @@
 
 import { LeaseService, RentProjectionService } from '@/services/api';
 import { extractDataFromUploadedFile } from '@/services/integrations';
-import { calculateLeaseRevenue, projectRentSchedule } from '@/services/leaseEngine';
+import { projectRent } from '@/services/leaseEngine';
 
 /**
  * Process an uploaded lease file: extract data, validate, and persist.
@@ -70,32 +70,21 @@ export async function calculateRentProjection(leaseId) {
   const lease = leases[0];
   if (!lease) throw new Error(`Lease ${leaseId} not found`);
 
-  // 2. Run domain engine
-  const schedule = projectRentSchedule({
-    monthlyRent: lease.monthly_rent,
-    startDate: lease.start_date,
-    endDate: lease.end_date,
-    escalationRate: lease.escalation_rate || 0,
-    leaseType: lease.lease_type,
-  });
-
-  const revenue = calculateLeaseRevenue({
-    monthlyRent: lease.monthly_rent,
-    startDate: lease.start_date,
-    endDate: lease.end_date,
-    escalationRate: lease.escalation_rate || 0,
+  // 2. Run domain engine — projectRent returns per-year projections and totalProjected
+  const projection = projectRent(lease, {
+    escalationPct: lease.escalation_rate || 0,
   });
 
   // 3. Persist projection
   const saved = await RentProjectionService.create({
     lease_id: leaseId,
     property_id: lease.property_id,
-    total_revenue: revenue.totalRevenue,
-    monthly_schedule: JSON.stringify(schedule),
+    total_revenue: projection.totalProjected,
+    monthly_schedule: JSON.stringify(projection.projections),
     start_date: lease.start_date,
     end_date: lease.end_date,
     status: 'calculated',
   });
 
-  return { projection: { schedule, revenue }, saved };
+  return { projection, saved };
 }

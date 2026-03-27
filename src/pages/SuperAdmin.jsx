@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { AccessRequestService, OrganizationService, DemoRequestService } from "@/services/api";
+import { AccessRequestService, OrganizationService } from "@/services/api";
 import { useAuth } from "@/lib/AuthContext";
 
 import { supabase } from "@/services/supabaseClient";
@@ -313,9 +313,10 @@ export default function SuperAdmin() {
   const contactReqs  = contactRequests;
   // demoReqs comes from the dedicated demo_requests table (demoRequests state)
 
-  const pendingCount = accessReqs.filter(r => r.status === 'pending_approval').length + contactReqs.filter(r => r.status === 'pending_approval').length;
   const pendingAccessCount = accessReqs.filter(r => r.status === 'pending_approval').length;
   const pendingContactCount = contactReqs.filter(r => r.status === 'pending_approval').length;
+  const pendingOrgCount = orgs.filter(o => ['under_review', 'pending_approval', 'onboarding'].includes(o.status)).length;
+  const pendingCount = pendingAccessCount + pendingContactCount + pendingOrgCount;
 
   if (!authChecked) {
     return (
@@ -589,7 +590,7 @@ export default function SuperAdmin() {
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Total Organizations</p><p className="text-2xl font-bold">{orgs.length}</p><p className="text-[10px] text-emerald-500">+3 this month</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Demo Requests</p><p className="text-2xl font-bold">{demoRequests.length}</p><p className="text-[10px] text-violet-500">{demoRequests.filter(r => r.demo_viewed).length} viewed</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">MRR</p><p className="text-2xl font-bold">$124,800</p><p className="text-[10px] text-emerald-500">+8.2% MoM</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">Access and contact only</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Pending Approvals</p><p className="text-2xl font-bold">{pendingCount}</p><p className="text-[10px] text-slate-400">{pendingOrgCount > 0 ? `${pendingOrgCount} org${pendingOrgCount > 1 ? 's' : ''} awaiting activation` : 'Access and contact requests'}</p></CardContent></Card>
       </div>
 
       <Tabs defaultValue="access" onValueChange={setActiveTab}>
@@ -598,7 +599,7 @@ export default function SuperAdmin() {
           <TabsTrigger value="demo">Demo Requests</TabsTrigger>
           <TabsTrigger value="contact">Contact Us {pendingContactCount > 0 && <Badge className="ml-1.5 bg-blue-500 text-white text-[10px] px-1.5">{pendingContactCount}</Badge>}</TabsTrigger>
           <TabsTrigger value="users">User Management</TabsTrigger>
-          <TabsTrigger value="orgs">Organizations</TabsTrigger>
+          <TabsTrigger value="orgs">Organizations {pendingOrgCount > 0 && <Badge className="ml-1.5 bg-amber-500 text-white text-[10px] px-1.5">{pendingOrgCount}</Badge>}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="access" className="mt-4">
@@ -792,7 +793,14 @@ export default function SuperAdmin() {
                 <TableBody>
                   {orgs.length === 0 ? (
                     <TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
-                  ) : orgs.map(org => {
+                  ) : [...orgs].sort((a, b) => {
+                    const pendingStatuses = ['under_review', 'pending_approval', 'onboarding'];
+                    const aIsPending = pendingStatuses.includes(a.status);
+                    const bIsPending = pendingStatuses.includes(b.status);
+                    if (aIsPending && !bIsPending) return -1;
+                    if (!aIsPending && bIsPending) return 1;
+                    return 0;
+                  }).map(org => {
                     // Determine amount based on plan
                     const planLower = (org.plan || '').toLowerCase();
                     let amount = "$0/mo";

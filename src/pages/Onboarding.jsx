@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { OrganizationService } from "@/services/api";
-import { updateProfile, redirectToLogin } from "@/services/auth";
+import { redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
 import { logAudit } from "@/services/audit";
 import { supabase } from "@/services/supabaseClient";

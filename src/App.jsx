@@ -289,7 +289,7 @@ const AuthenticatedApp = () => {
     });
 
     // 2. Strict Enforcement Rules
-    
+
     // Allow active users (or SuperAdmins) to access all permitted platform pages.
     // The targetRoute 'Dashboard' (or 'SuperAdmin') represents they belong in the suite.
     if ((isSuperAdmin || targetRoute === 'Dashboard') && !isEntryPage) {
@@ -297,6 +297,15 @@ const AuthenticatedApp = () => {
     }
 
     if (currentPath === targetRoute) {
+      return <AppRoutes />;
+    }
+
+    // Guard: PaymentSuccess is a valid post-payment landing page.
+    // After submitting payment, the complete-onboarding edge function updates profile/org
+    // status asynchronously. Until the profile refresh propagates through the auth context,
+    // targetRoute may briefly read as 'Onboarding'. Forcing a redirect back would drop the
+    // user back to step 1. Allow PaymentSuccess whenever the user navigated there intentionally.
+    if (currentPath === 'PaymentSuccess' && ['Onboarding', 'PaymentSuccess'].includes(targetRoute)) {
       return <AppRoutes />;
     }
 

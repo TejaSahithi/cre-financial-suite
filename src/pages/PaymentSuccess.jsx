@@ -1,8 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
-import { CheckCircle2, Download, ArrowRight, Receipt, Building2, Sparkles, RefreshCw } from "lucide-react";
+import { CheckCircle2, Download, Receipt, Building2, Sparkles, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createPageUrl } from "@/utils";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function PaymentSuccess() {
@@ -20,6 +19,22 @@ export default function PaymentSuccess() {
   const invoiceId = state.invoice_id || `INV-${Date.now().toString().slice(-8)}`;
   const orgName = state.org_name || state.org || searchParams.get("org") || "Your Organization";
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+  // Auto-poll every 12 seconds for org activation.
+  // When the SuperAdmin approves the org, profile + org status flip to 'active'.
+  // Calling refreshProfile() triggers App.jsx to re-evaluate routing and redirect
+  // to WelcomeAboard automatically — no manual action needed.
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      const freshUser = await refreshProfile();
+      if (freshUser?.profile?.status === 'active' || freshUser?.status === 'active') {
+        clearInterval(poll);
+        // App.jsx routing state machine will redirect to WelcomeAboard or Dashboard
+        navigate('/');
+      }
+    }, 12000);
+    return () => clearInterval(poll);
+  }, [refreshProfile, navigate]);
 
   useEffect(() => {
     const container = confettiRef.current;
@@ -198,12 +213,15 @@ export default function PaymentSuccess() {
             </Button>
             <Button
               onClick={async () => {
-                import("sonner").then(({ toast }) => toast.info("Checking status..."));
+                const { toast } = await import("sonner");
+                toast.info("Checking status...");
                 const freshUser = await refreshProfile();
-                if (freshUser?.profile?.status === 'active') {
-                  navigate('/Dashboard');
+                const isActive = freshUser?.profile?.status === 'active' || freshUser?.status === 'active';
+                if (isActive) {
+                  // Let App.jsx routing state machine decide the target (WelcomeAboard or Dashboard)
+                  navigate('/');
                 } else {
-                  import("sonner").then(({ toast }) => toast.info("Account is still under review."));
+                  toast.info("Account is still under review. You'll be notified once approved.");
                 }
               }}
               title="Refresh access status"
