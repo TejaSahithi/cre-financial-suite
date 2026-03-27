@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 3. Parse and validate request body ──
-    const { to, subject, html, text, from = "CRE Suite <support@cresuite.org>" } = await req.json();
+    const { to, subject, html, text, from = "CRE Suite <support@cresuite.com>" } = await req.json();
 
     if (!to || !subject || (!html && !text)) {
       return new Response(JSON.stringify({ error: 'Missing required fields: to, subject, and html or text' }), {
@@ -94,7 +94,10 @@ Deno.serve(async (req) => {
       // Prevent open relay abuse by public users
       const toAddresses = Array.isArray(to) ? to : [to];
       const allInternal = toAddresses.every((email: string) => email.endsWith('@cresuite.com'));
-      const isAutoReply = subject.includes('CRE Suite - Your Demo Access') || subject.includes('CRE Suite - Access Request Received') || subject.includes('Thanks for exploring CRE Suite');
+      const isAutoReply = subject.includes('CRE Suite - Your Demo Access') || 
+                          subject.includes('CRE Suite - Access Request Received') || 
+                          subject.includes("CRE Suite - We've received your access request") ||
+                          subject.includes('Thanks for exploring CRE Suite');
       
       if (!allInternal && !isAutoReply) {
          return new Response(JSON.stringify({ error: 'Unauthorized email payload for anonymous key.' }), {
