@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { sendEmail } from "@/services/integrations";
 import { validateEmail, validatePhone } from "@/components/landing/ContactSection";
 import { supabase } from "@/services/supabaseClient";
 
@@ -41,50 +40,23 @@ export default function ContactUs() {
     if (!validate()) return;
     setSending(true);
     
-    // Save to dedicated contact_requests table
+    // Submit via edge function — saves to DB (bypasses RLS) + sends admin + user emails
     try {
-      const { error: dbError } = await supabase.from("contact_requests").insert({
-        full_name: form.name,
-        email: form.email,
-        phone: form.phone,
-        company_name: form.company,
-        department: form.department,
-        message: form.message,
-        status: "pending_approval"
+      const { error: fnError } = await supabase.functions.invoke("submit-contact", {
+        body: {
+          full_name: form.name,
+          email: form.email,
+          phone: form.phone,
+          company_name: form.company,
+          department: form.department,
+          message: form.message,
+        },
       });
-      if (dbError) throw dbError;
+      if (fnError) throw fnError;
     } catch (e) {
-      console.error("Failed to log contact request in contact_requests table:", e);
+      console.error("[ContactUs] submit-contact error:", e);
+      // Still show success to user — don't block on transient errors
     }
-
-    // Internal Notification
-    await sendEmail({
-      to: "support@cresuite.org",
-      subject: `[${form.department === "sales" ? "Sales" : "Support"}] Contact from ${form.name} @ ${form.company}`,
-      body: `Name: ${form.name}\nEmail: ${form.email}\nPhone: ${form.phone}\nCompany: ${form.company}\nDept: ${form.department}\n\nMessage:\n${form.message}`
-    });
-
-    // Auto-reply to user
-    await sendEmail({
-      to: form.email,
-      subject: "Thanks for exploring CRE Suite",
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <p>Hi ${form.name},</p>
-          <p>Thank you for reaching out to us.</p>
-          <p>Your request has been received and our team will get back to you shortly.</p>
-          <p>Request Type: ${form.department === "sales" ? "Sales" : "Technical Support"}</p>
-          <p>In the meantime, you can:</p>
-          <ul>
-            <li>Explore our demo</li>
-            <li>Learn more about the platform capabilities</li>
-          </ul>
-          <p>We appreciate your interest.</p>
-          <br/>
-          <p>Best regards,<br/>CRE Financial Suite Team</p>
-        </div>
-      `
-    });
 
     setSending(false);
     setSent(true);

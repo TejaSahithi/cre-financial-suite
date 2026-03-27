@@ -23,7 +23,7 @@ export async function checkGoogleUserApproval(authUser) {
   if (!supabase || !authUser) return { approved: true };
 
   try {
-    // Check for any membership
+    // 1. Check for any membership — already in an org → approved
     const { data: memberships } = await supabase
       .from('memberships')
       .select('id')
@@ -34,20 +34,43 @@ export async function checkGoogleUserApproval(authUser) {
       return { approved: true };
     }
 
-    // Check for an approved access request
+    // 2. Check own profile row (users can always read their own row via RLS auth.uid() = id).
+    //    If profile exists with any active/approved status → approved.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, status')
+      .eq('id', authUser.id)
+      .maybeSingle();
+
+    if (profile) {
+      const okStatuses = ['active', 'approved', 'onboarding', 'pending_approval', 'under_review'];
+      if (okStatuses.includes(profile.status)) return { approved: true };
+    }
+
+    // 3. Check access_requests table.
+    //    RLS may restrict reads — if it returns results we trust them;
+    //    if it returns empty (no policy) we fall through to step 4.
     const { data: requests } = await supabase
       .from('access_requests')
       .select('id, status')
       .eq('email', authUser.email)
-      .in('status', ['approved', 'pending_approval'])
+      .in('status', ['approved', 'pending_approval', 'active'])
       .limit(1);
 
     if (requests && requests.length > 0) {
       return { approved: true };
     }
 
-    // No membership and no approved request — block this user
-    return { approved: false, reason: 'no_approval' };
+    // 4. New Google user with no prior record — allow through so they can
+    //    request access via the normal flow (App.jsx will route them correctly).
+    //    We only hard-block users who have an EXPLICIT rejected/suspended status.
+    if (profile && ['suspended', 'rejected'].includes(profile.status)) {
+      return { approved: false, reason: 'suspended' };
+    }
+
+    // Unknown user — allow through; App.jsx routing will send them to RequestAccess
+    // if they have no valid profile or memberships.
+    return { approved: true };
   } catch (err) {
     console.error('[auth] checkGoogleUserApproval error:', err);
     return { approved: true }; // Fail open on network error
@@ -205,7 +228,7 @@ export async function loginWithGoogle() {
 
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: `${window.location.origin}/Dashboard` },
+    options: { redirectTo: `${window.location.origin}/` },
   });
   if (error) throw error;
 }
