@@ -39,24 +39,76 @@ serve(async (req) => {
     }
     const orgId = memberships[0].org_id;
 
+    let bodyData = {};
+    try {
+      bodyData = await req.json();
+    } catch(e) {}
+    
+    const { plan, billingCycle, amount, orgName } = bodyData;
+    const numericAmount = amount ? parseFloat(amount) : 0;
+
     // 2. Transact: update org and profile to 'under_review'
     const { error: orgError } = await supabaseAdmin
       .from('organizations')
-      .update({ status: 'under_review' })
+      .update({ 
+        status: 'under_review',
+        onboarding_step: 4,
+        plan: plan || 'professional',
+        billing_cycle: billingCycle || 'monthly',
+        updated_at: new Date().toISOString()
+      })
       .eq('id', orgId);
     if (orgError) throw orgError;
 
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
-      .update({ status: 'under_review' })
+      .update({ status: 'under_review', updated_at: new Date().toISOString() })
       .eq('id', user.id);
     if (profileError) throw profileError;
+
+    // 3. Create invoice record
+    const { error: invoiceError } = await supabaseAdmin
+      .from('invoices')
+      .insert({
+        org_id: orgId,
+        amount: numericAmount,
+        status: 'paid',
+        issued_date: new Date().toISOString().split('T')[0]
+      });
+    if (invoiceError) throw invoiceError;
+
+    // 4. Notify admin (best effort, don't fail if it fails)
+    try {
+      const frontendUrl = Deno.env.get('FRONTEND_URL') || 'http://localhost:5173';
+      await supabaseAdmin.functions.invoke('send-email', {
+        body: {
+          to: "support@cresuite.org",
+          subject: `💰 Payment Received: ${orgName || 'New Organization'}`,
+          html: `
+            <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
+              <h2 style="color: #0f172a;">New Payment Received 💰</h2>
+              <p>A new organization has completed their onboarding payment and is awaiting review.</p>
+              <div style="background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                <p style="margin: 0; font-size: 14px;"><strong>Organization:</strong> ${orgName || 'N/A'}</p>
+                <p style="margin: 4px 0; font-size: 14px;"><strong>Administrator:</strong> ${user.email || 'N/A'}</p>
+                <p style="margin: 4px 0; font-size: 14px;"><strong>Plan:</strong> ${plan || 'N/A'}</p>
+                <p style="margin: 4px 0; font-size: 14px;"><strong>Amount:</strong> $${numericAmount}</p>
+              </div>
+              <p>Please log in to the <a href="${frontendUrl}/SuperAdmin" style="color: #2563eb; text-decoration: none; font-weight: 600;">SuperAdmin Console</a> to approve this organization.</p>
+            </div>
+          `
+        }
+      });
+    } catch (emailErr) {
+      console.error('[Onboarding] Admin notification failed:', emailErr);
+    }
 
     return new Response(JSON.stringify({ success: true, message: 'Onboarding marked for review' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (err) {
+    console.error("[complete-onboarding] Error:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

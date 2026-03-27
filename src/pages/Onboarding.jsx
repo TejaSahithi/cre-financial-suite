@@ -397,53 +397,19 @@ export default function Onboarding() {
                   : paymentInfo.displayPrice;
 
                 try {
-                  // 1. Save Invoice
                   if (org?.id) {
-                    await supabase.from('invoices').insert({
-                      org_id: org.id,
-                      amount: numericAmount,
-                      status: 'paid',
-                      issued_date: new Date().toISOString().split('T')[0]
+                    // Update Org status, profile status, invoice, and notify SuperAdmin securely via Edge Function
+                    const { data, error } = await supabase.functions.invoke('complete-onboarding', {
+                      body: {
+                        plan: paymentInfo.plan || form.plan,
+                        billingCycle,
+                        amount: numericAmount,
+                        orgName: org?.name || ''
+                      }
                     });
-                  }
 
-                  // 2. Update Org and Profile status
-                  if (org?.id) {
-                    await OrganizationService.update(org.id, {
-                      status: "under_review",
-                      onboarding_step: 4,
-                      plan: form.plan,
-                      billing_cycle: billingCycle,
-                    });
-                    await updateProfile({ status: "under_review" });
-                    await refreshProfile();
-
-                    // NEW: Notify SuperAdmin about the payment
-                    try {
-                      console.log('[Onboarding] Notifying admin of payment...');
-                      await supabase.functions.invoke('send-email', {
-                        body: {
-                          to: "support@cresuite.org", // Main admin contact
-                          subject: `💰 Payment Received: ${org?.name || 'New Organization'}`,
-                          html: `
-                            <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
-                              <h2 style="color: #0f172a;">New Payment Received 💰</h2>
-                              <p>A new organization has completed their onboarding payment and is awaiting review.</p>
-                              <div style="background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                                <p style="margin: 0; font-size: 14px;"><strong>Organization:</strong> ${org?.name || 'N/A'}</p>
-                                <p style="margin: 4px 0; font-size: 14px;"><strong>Administrator:</strong> ${authUser?.email || 'N/A'}</p>
-                                <p style="margin: 4px 0; font-size: 14px;"><strong>Plan:</strong> ${paymentInfo.plan || form.plan}</p>
-                                <p style="margin: 4px 0; font-size: 14px;"><strong>Amount:</strong> $${numericAmount}</p>
-                              </div>
-                              <p>Please log in to the <a href="${window.location.origin}/SuperAdmin" style="color: #2563eb; text-decoration: none; font-weight: 600;">SuperAdmin Console</a> to approve this organization.</p>
-                            </div>
-                          `
-                        }
-                      });
-                    } catch (emailErr) {
-                      console.error('[Onboarding] Admin notification failed:', emailErr);
-                      // Don't fail the whole UI flow if just the notification email fails
-                    }
+                    if (error) throw error;
+                    if (data?.error) throw new Error(data.error);
                   }
 
                   // 3. Navigate to PaymentSuccess page
