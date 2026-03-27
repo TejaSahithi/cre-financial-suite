@@ -13,13 +13,25 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': Deno.env.get('FRONTEND_URL') || 'http://localhost:5173',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+const allowedOrigins = [
+  Deno.env.get('FRONTEND_URL'),
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean);
+
+const getCorsHeaders = (origin: string | null) => {
+  const allowOrigin = origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+  return {
+    'Access-Control-Allow-Origin': allowOrigin || '*',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  };
 };
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get('Origin');
+  const corsHeaders = getCorsHeaders(origin);
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -46,9 +58,16 @@ Deno.serve(async (req) => {
     );
 
     const token = authorization.replace(/^[Bb]earer\s+/, "");
+    
+    // We use getUser to determine if it's a real user.
+    // However, if the JWT is just the anonymous anon key, getUser will return an error (since there's no user).
+    // Let's decode the JWT first to see its role.
+    const tokenData = JSON.parse(atob(token.split('.')[1] || ""));
+    const isAnon = tokenData.role === 'anon';
+
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
 
-    if (authError || !user) {
+    if (!user && !isAnon) {
       return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -69,6 +88,19 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'Missing required fields: to, subject, and html or text' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+
+    if (isAnon) {
+      // Prevent open relay abuse by public users
+      const toAddresses = Array.isArray(to) ? to : [to];
+      const allInternal = toAddresses.every((email: string) => email.endsWith('@cresuite.com'));
+      const isAutoReply = subject.includes('CRE Suite - Your Demo Access') || subject.includes('CRE Suite - Access Request Received') || subject.includes('Thanks for exploring CRE Suite');
+      
+      if (!allInternal && !isAutoReply) {
+         return new Response(JSON.stringify({ error: 'Unauthorized email payload for anonymous key.' }), {
+           status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+         });
+      }
     }
 
     // ── 4. Send via Resend ──
@@ -96,7 +128,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`[send-email] Email sent to ${to} by ${user.email}`);
+    console.log(`[send-email] Email sent to ${to} by ${user?.email || 'anon'}`);
 
     return new Response(JSON.stringify({ success: true, id: data.id }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

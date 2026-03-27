@@ -545,10 +545,8 @@ export async function submitPublicAccessRequest(payload) {
     role:             payload.role,
     portfolios:       payload.portfolios || null,
     properties_count: payload.properties_count || null,
-    property_count:   payload.property_count || null,
     plan:             payload.plan || null,
     billing_cycle:    payload.billing_cycle || 'monthly',
-    notes:            payload.notes || null,
     request_type:     'access', // Always 'access' — enforced here, not by caller
     status:           'pending_approval',
     created_at:       new Date().toISOString(),
@@ -561,9 +559,7 @@ export async function submitPublicAccessRequest(payload) {
 
   const { data, error } = await supabase
     .from('access_requests')
-    .insert(requestPayload)
-    .select('id')
-    .single();
+    .insert(requestPayload);
 
   if (error) {
     console.error('[api] submitPublicAccessRequest error:', error);
@@ -599,9 +595,7 @@ export async function submitPublicDemoRequest(payload) {
 
   const { data, error } = await supabase
     .from('demo_requests')
-    .insert(requestPayload)
-    .select('id')
-    .single();
+    .insert(requestPayload);
 
   if (error) {
     console.error('[api] submitPublicDemoRequest error:', error);
