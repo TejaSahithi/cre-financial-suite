@@ -161,7 +161,7 @@ export default function Login() {
           email,
           password,
           options: {
-            emailRedirectTo: window.location.origin,
+            emailRedirectTo: `${window.location.origin}/Onboarding`,
             data: {
               full_name: fullName,
               onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
@@ -209,7 +209,7 @@ export default function Login() {
           {confirmationRequired ? (
             <>
               <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-                We&apos;ve sent a confirmation link to <strong>{email}</strong>. Once you click it, you&apos;ll be redirected back here to finish setup.
+                We&apos;ve sent a confirmation link to <strong>{email}</strong>. Once you click it, you&apos;ll be redirected into the secure setup flow and prompted for MFA.
               </p>
               <Button
                 type="button"
@@ -230,7 +230,7 @@ export default function Login() {
                       const { error: resendError } = await supabase.auth.resend({
                         type: "signup",
                         email,
-                        options: { emailRedirectTo: window.location.origin },
+                        options: { emailRedirectTo: `${window.location.origin}/Onboarding` },
                       });
                       if (resendError) throw resendError;
                     }

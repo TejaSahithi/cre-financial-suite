@@ -122,16 +122,41 @@ Deno.serve(async (req: Request) => {
     if (!isNewUser && RESEND_API_KEY) {
       try {
         const loginLink = `${frontendUrl}/Login`;
-        const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f8fafc;padding:40px">
-          <div style="max-width:560px;margin:auto;background:#fff;border-radius:12px;padding:32px;border:1px solid #e2e8f0">
-            <h2 style="color:#0f172a">You've been added to a team</h2>
-            <p style="color:#475569">Hi ${full_name || "there"},<br/>Your existing CRE Suite account has been given access to a new organization as <strong>${role.replace("_", " ")}</strong>.</p>
-            <a href="${loginLink}" style="display:inline-block;background:#1a2744;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin-top:16px">Sign In</a>
-          </div></body></html>`;
+        const roleLabel = role ? role.replaceAll("_", " ") : "team member";
+        const html = `<!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>CRE Platform</title>
+            </head>
+            <body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+                <div style="padding:28px 36px;background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:36px;height:36px;border-radius:10px;background:#ffffff;display:flex;align-items:center;justify-content:center;">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                      </svg>
+                    </div>
+                    <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:-0.3px;">CRE Platform</span>
+                  </div>
+                </div>
+                <div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;">
+                  <h2 style="margin:0 0 12px;color:#0f172a;font-size:24px;">You've been added to a team</h2>
+                  <p style="margin:0 0 16px;">Hi ${full_name || "there"},</p>
+                  <p style="margin:0 0 20px;">Your existing CRE Platform account has been given access to a new organization as <strong>${roleLabel}</strong>.</p>
+                  <a href="${loginLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;">Sign In</a>
+                </div>
+                <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">CRE Platform · support@cresuite.org</div>
+              </div>
+            </body>
+          </html>`;
         await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ from: "CRE Suite <onboarding@cresuite.com>", to: email, subject: "You've been added to a CRE Suite team", html }),
+          body: JSON.stringify({ from: "CRE Platform <support@cresuite.org>", to: email, subject: "You've been added to a CRE Platform team", html }),
         });
       } catch (e: any) { console.error("[invite-user] existing user email err:", e.message); }
     }

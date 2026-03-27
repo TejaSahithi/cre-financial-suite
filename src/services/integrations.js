@@ -5,6 +5,46 @@
  */
 import { supabase } from "@/services/supabaseClient";
 
+function withCrePlatformBranding(content) {
+  return `<!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #334155; }
+      .wrapper { max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
+      .header { background: linear-gradient(135deg, #1a2744 0%, #2d4a8a 100%); padding: 28px 32px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .brand-icon { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: #ffffff; border-radius: 10px; }
+      .brand-name { color: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+      .content { padding: 32px; }
+      .footer { padding: 18px 32px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; }
+      .content h1, .content h2, .content h3 { color: #0f172a; margin-top: 0; }
+      .content p { line-height: 1.6; }
+      .content a { color: #1d4ed8; }
+    </style>
+  </head>
+  <body>
+    <div class="wrapper">
+      <div class="header">
+        <div class="brand">
+          <div class="brand-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.4">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              <path d="M9 22V12h6v10"></path>
+            </svg>
+          </div>
+          <span class="brand-name">CRE Platform</span>
+        </div>
+      </div>
+      <div class="content">${content}</div>
+      <div class="footer">CRE Platform · support@cresuite.org</div>
+    </div>
+  </body>
+  </html>`;
+}
+
 /**
  * Invoke an LLM with the given parameters.
  * @param {object} params - { prompt, response_json_schema, ... }
@@ -63,12 +103,16 @@ export async function uploadFile(params) {
  */
 export async function sendEmail(params) {
   try {
+    const brandedHtml = params.html
+      ? (params.html.includes("<html") ? params.html : withCrePlatformBranding(params.html))
+      : undefined;
+
     const { data, error } = await supabase.functions.invoke('send-email', {
       body: {
         to: params.to,
         subject: params.subject,
         text: params.body,
-        html: params.html
+        html: brandedHtml
       }
     });
     

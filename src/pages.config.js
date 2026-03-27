@@ -103,7 +103,6 @@ import WelcomeAboard from './pages/WelcomeAboard';
 import UserManagement from './pages/UserManagement';
 import DemoExperience from './pages/DemoExperience';
 import RequestDemo from './pages/RequestDemo';
-import SecurityQuestionsSetup from './pages/SecurityQuestionsSetup';
 import PaymentSuccess from './pages/PaymentSuccess';
 
 import __Layout from './Layout.jsx';
@@ -166,7 +165,6 @@ export const PAGES = {
     "UserManagement": UserManagement,
     "DemoExperience": DemoExperience,
     "RequestDemo": RequestDemo,
-    "SecurityQuestionsSetup": SecurityQuestionsSetup,
     "PaymentSuccess": PaymentSuccess,
 }
 

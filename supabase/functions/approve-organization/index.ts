@@ -92,7 +92,7 @@ serve(async (req) => {
       <html lang="en">
       <head>
         <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-        <title>Welcome to CRE Suite</title>
+        <title>Welcome to CRE Platform</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
           .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
@@ -109,7 +109,7 @@ serve(async (req) => {
       <body>
         <div class="wrapper">
           <div class="header">
-            <span class="logo-text">CRE Suite</span>
+            <span class="logo-text">CRE Platform</span>
           </div>
           <div class="body">
             <h1>Welcome Aboard! 🎉</h1>
@@ -121,7 +121,7 @@ serve(async (req) => {
             </div>
             <p style="margin-bottom:0;">Welcome to the future of Commercial Real Estate Management.</p>
           </div>
-          <div class="footer"><p>CRE Suite &middot; support@cresuite.org &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
+          <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
         </div>
       </body>
       </html>
@@ -132,9 +132,9 @@ serve(async (req) => {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'CRE Suite <support@cresuite.org>',
+            from: 'CRE Platform <support@cresuite.org>',
             to: org.primary_contact_email,
-            subject: 'Welcome to CRE Suite! Your account is active 🎉',
+            subject: 'Welcome to CRE Platform! Your account is active!',
             html: html
           })
         });
