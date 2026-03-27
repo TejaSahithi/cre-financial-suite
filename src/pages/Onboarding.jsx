@@ -552,11 +552,24 @@ export default function Onboarding() {
                     try {
                       if (supabase && org?.id) {
                         await supabase.from('organizations')
-                          .update({ status: 'under_review', onboarding_step: 4, plan, billing_cycle: billingCycle, updated_at: now })
+                          .update({
+                            name: orgName || org.name,
+                            status: 'under_review',
+                            onboarding_step: 4,
+                            plan,
+                            billing_cycle: billingCycle,
+                            primary_contact_email: authUser?.email || org.primary_contact_email,
+                            address: paymentInfo.billingAddress || form.address || org.address,
+                            updated_at: now,
+                          })
                           .eq('id', org.id);
                         if (authUser?.id) {
                           await supabase.from('profiles')
-                            .update({ status: 'under_review', updated_at: now })
+                            .update({
+                              status: 'under_review',
+                              full_name: authUser.full_name || authUser.profile?.full_name,
+                              updated_at: now,
+                            })
                             .eq('id', authUser.id);
                         }
                         await supabase.from('invoices').insert({
