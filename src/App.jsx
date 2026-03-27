@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Toaster } from "@/components/ui/toaster"
+import { useState, useEffect } from 'react';
+import { Toaster } from "@/components/ui/sonner"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { pagesConfig } from './pages.config'
@@ -286,18 +286,6 @@ const AuthenticatedApp = () => {
     const isEntryPage = currentPath === 'Login' || currentPath === 'RequestAccess' || currentPath === '';
     
     const isSuperAdmin = memberships?.some(m => m.role === 'super_admin');
-
-    console.log('[DEBUG AUTH STATE]:', {
-      isAuthenticated,
-      hasUser: !!user,
-      hasProfile: !!profile,
-      profileStatus: profile?.status,
-      memberships,
-      isSuperAdmin,
-      activeOrgStatus: activeOrg?.status,
-      currentPath,
-      targetRoute
-    });
 
     // 2. Strict Enforcement Rules
 

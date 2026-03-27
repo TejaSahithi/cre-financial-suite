@@ -208,7 +208,7 @@ export default function Layout({ children, currentPageName }) {
           <aside className="relative w-[250px] h-full bg-[#1a2744] flex flex-col">
             <div className="h-14 flex items-center gap-2.5 px-4 border-b border-white/10">
               <Building2 className="w-5 h-5 text-white" />
-              <span className="text-white font-bold text-sm">NEXUS CRE</span>
+              <span className="text-white font-bold text-sm">CRE PLATFORM</span>
               <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/40"><X className="w-5 h-5" /></button>
             </div>
             <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">

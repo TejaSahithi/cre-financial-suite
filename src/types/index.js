@@ -36,6 +36,8 @@ export const ENTITIES = {
   Billing:           'billings',
   RentProjection:    'rent_projections',
   ExpenseProjection: 'expense_projections',
+  User:              'users',
+  DemoRequest:       'demo_requests',
 };
 
 /**
@@ -67,6 +69,8 @@ export const ORG_EXEMPT_TABLES = new Set([
   'organizations',
   'access_requests',
   'audit_logs',
+  'users',
+  'demo_requests',
 ]);
 
 // ─── Standardised service response shape ───────────────────────────────
