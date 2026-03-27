@@ -64,7 +64,8 @@ export default function PaymentSuccess() {
 
   const handleDownloadInvoice = async () => {
     try {
-      const { jsPDF } = await import("jspdf");
+      const jsPDFModule = await import("jspdf");
+      const jsPDF = jsPDFModule.jsPDF ?? jsPDFModule.default;
       const doc = new jsPDF();
 
       doc.setFont("helvetica", "bold");

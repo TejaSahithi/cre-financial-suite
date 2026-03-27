@@ -34,6 +34,7 @@ export default function SuperAdmin() {
   const [platformInviting, setPlatformInviting] = useState(false);
   
   const [editingOrgModules, setEditingOrgModules] = useState(null);
+  const [selectedOrgs, setSelectedOrgs] = useState(new Set());
   const authChecked = !!user || true;
 
   const { data: platformAdmins = [], isLoading: isLoadingAdmins } = useQuery({
@@ -874,6 +875,22 @@ export default function SuperAdmin() {
                 <p className="text-xs text-slate-400">{orgs.length} total · {pendingOrgCount} awaiting approval · Configure module access before approving</p>
               </div>
               <div className="flex gap-2">
+                {selectedOrgs.size > 0 && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={async () => {
+                      if (!window.confirm(`Permanently delete ${selectedOrgs.size} organization(s)? This cannot be undone.`)) return;
+                      const ids = Array.from(selectedOrgs);
+                      await Promise.all(ids.map(id => supabase.from('organizations').delete().eq('id', id)));
+                      setSelectedOrgs(new Set());
+                      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+                      import('sonner').then(({ toast }) => toast.success(`Deleted ${ids.length} organizations`));
+                    }}
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />Delete Selected ({selectedOrgs.size})
+                  </Button>
+                )}
                 <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
                 <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
               </div>
@@ -882,6 +899,15 @@ export default function SuperAdmin() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={orgs.length > 0 && orgs.every(o => selectedOrgs.has(o.id))}
+                        onCheckedChange={(checked) => {
+                          if (checked) setSelectedOrgs(new Set(orgs.map(o => o.id)));
+                          else setSelectedOrgs(new Set());
+                        }}
+                      />
+                    </TableHead>
                     <TableHead className="text-[11px]">FULL NAME</TableHead>
                     <TableHead className="text-[11px]">COMPANY</TableHead>
                     <TableHead className="text-[11px] text-center">PORTFOLIOS</TableHead>
@@ -895,7 +921,7 @@ export default function SuperAdmin() {
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={9} className="text-center py-8 text-sm text-slate-400">No organizations</TableCell></TableRow>
                   ) : [...orgs].sort((a, b) => {
                     const pendingStatuses = ['under_review', 'pending_approval', 'onboarding'];
                     const aIsPending = pendingStatuses.includes(a.status);
@@ -912,7 +938,19 @@ export default function SuperAdmin() {
                     const displayName = org.admin_full_name || '—';
 
                     return (
-                      <TableRow key={org.id}>
+                      <TableRow key={org.id} className={selectedOrgs.has(org.id) ? 'bg-blue-50/40' : ''}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedOrgs.has(org.id)}
+                            onCheckedChange={(checked) => {
+                              setSelectedOrgs(prev => {
+                                const next = new Set(prev);
+                                if (checked) next.add(org.id); else next.delete(org.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        </TableCell>
                         <TableCell>
                           <div>
                             <p className="text-sm font-medium">{displayName}</p>

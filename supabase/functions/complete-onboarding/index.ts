@@ -48,15 +48,19 @@ serve(async (req) => {
     const numericAmount = amount ? parseFloat(amount) : 0;
 
     // 2. Transact: update org and profile to 'under_review'
+    const orgUpdate: Record<string, unknown> = {
+      status: 'under_review',
+      onboarding_step: 4,
+      plan: plan || 'professional',
+      billing_cycle: billingCycle || 'monthly',
+      primary_contact_email: user.email,
+      updated_at: new Date().toISOString(),
+    };
+    if (orgName) orgUpdate.name = orgName;
+
     const { error: orgError } = await supabaseAdmin
       .from('organizations')
-      .update({ 
-        status: 'under_review',
-        onboarding_step: 4,
-        plan: plan || 'professional',
-        billing_cycle: billingCycle || 'monthly',
-        updated_at: new Date().toISOString()
-      })
+      .update(orgUpdate)
       .eq('id', orgId);
     if (orgError) throw orgError;
 
