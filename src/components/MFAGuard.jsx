@@ -97,6 +97,22 @@ export default function MFAGuard({ onVerified }) {
             setPhase("challenge");
             return;
           }
+          // No verified factor visible at aal1 but max is reached — force reset via edge fn
+          const { data: resetData, error: resetErr } = await supabase.functions.invoke("reset-mfa");
+          if (!resetErr && resetData?.success) {
+            await supabase.auth.refreshSession();
+            // Retry enrollment once after reset
+            const { data: retryData, error: retryErr } = await supabase.auth.mfa.enroll({
+              factorType: "totp", issuer: "CRE Suite",
+              friendlyName: `Auth_${Date.now().toString().slice(-4)}`
+            });
+            if (!retryErr) {
+              setFactorId(retryData.id);
+              setQrCode(retryData.totp.qr_code);
+              setSecret(retryData.totp.secret);
+              return;
+            }
+          }
         }
         throw error;
       }
@@ -272,10 +288,19 @@ export default function MFAGuard({ onVerified }) {
                   </div>
                 ) : (
                   <div className="text-center py-6 space-y-3">
-                    <p className="text-sm text-red-500">{error || "Failed to generate QR code."}</p>
+                    <p className="text-sm text-red-500">
+                      {error?.includes("Maximum number") ? "Maximum number of verified factors reached, unenroll to continue" : (error || "Failed to generate QR code.")}
+                    </p>
                     <p className="text-xs text-slate-400">This can happen if a previous setup was interrupted. Click below to try again.</p>
-                    <Button variant="outline" size="sm" onClick={startEnrollment} className="w-full">
-                      <RefreshCw className="w-4 h-4 mr-2" />Refresh QR Code
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={resetting}
+                      onClick={error?.includes("Maximum number") ? handleResetAndShowQR : startEnrollment}
+                      className="w-full"
+                    >
+                      {resetting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                      {resetting ? "Resetting..." : "Refresh QR Code"}
                     </Button>
                   </div>
                 )}
