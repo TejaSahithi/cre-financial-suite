@@ -127,18 +127,52 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
-        body: {
+      // Try edge function first (sends confirmation via Resend, no rate limits).
+      // If not yet deployed, fall back to supabase.auth.signUp() so signup still works.
+      let usedEdgeFunction = false;
+      try {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
+          body: {
+            email,
+            password,
+            full_name: fullName,
+            onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
+          },
+        });
+        if (!fnError && !fnData?.error) {
+          usedEdgeFunction = true;
+          setConfirmationRequired(true);
+          setRegistrationSuccess(true);
+        } else if (fnData?.error) {
+          // Business-level error (e.g. duplicate account) — surface it
+          throw new Error(fnData.error);
+        }
+        // fnError means function unreachable — fall through to native signUp
+      } catch (edgeErr) {
+        if (edgeErr.message && !edgeErr.message.includes("Failed to send a request")) {
+          throw edgeErr; // Re-throw real errors (duplicate account, etc.)
+        }
+        // Edge function not deployed — fall back silently
+      }
+
+      if (!usedEdgeFunction) {
+        // Fallback: native Supabase signUp (uses Supabase's email service)
+        const { data, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
-          full_name: fullName,
-          onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
-        },
-      });
-      if (fnError) throw fnError;
-      if (fnData?.error) throw new Error(fnData.error);
-      setConfirmationRequired(true);
-      setRegistrationSuccess(true);
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              full_name: fullName,
+              onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
+            },
+          },
+        });
+        if (signUpError) throw signUpError;
+        setConfirmationRequired(!data?.session);
+        setRegistrationSuccess(true);
+        if (data?.session) navigate(createPageUrl("SecurityQuestionsSetup"));
+      }
     } catch (err) {
       setError(err.message || "Failed to create account.");
     }
@@ -184,11 +218,22 @@ export default function Login() {
                 onClick={async () => {
                   setError("");
                   try {
-                    const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
-                      body: { email, full_name: fullName, action: "resend" },
-                    });
-                    if (fnError) throw fnError;
-                    if (fnData?.error) throw new Error(fnData.error);
+                    let sent = false;
+                    try {
+                      const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
+                        body: { email, full_name: fullName, action: "resend" },
+                      });
+                      if (!fnError && !fnData?.error) sent = true;
+                    } catch { /* edge function not deployed — fall back */ }
+
+                    if (!sent) {
+                      const { error: resendError } = await supabase.auth.resend({
+                        type: "signup",
+                        email,
+                        options: { emailRedirectTo: window.location.origin },
+                      });
+                      if (resendError) throw resendError;
+                    }
                     setResentConfirmation(true);
                   } catch (err) {
                     setError(err.message || "Failed to resend confirmation email.");
