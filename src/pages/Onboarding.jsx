@@ -189,12 +189,13 @@ export default function Onboarding() {
             }
 
             const serverStep = orgData.onboarding_step || 1;
-            if (!searchParams.get("step") && serverStep > 1) {
+            const hasExplicitStepInUrl = !!new URLSearchParams(window.location.search).get("step");
+            if (!hasExplicitStepInUrl && serverStep > 1) {
               console.log("[Onboarding] Syncing to server step:", serverStep);
               setStep(serverStep);
             }
           }
-        } else if (step > 1) {
+        } else if (step > 1 && !org?.id) {
           console.warn("[Onboarding] No organization found for later onboarding step, resetting to company setup");
           setStep(1);
         }
@@ -206,7 +207,7 @@ export default function Onboarding() {
     };
     init();
 
-  }, [authUser, isLoadingAuth, navigate, refreshProfile, searchParams, step]);
+  }, [authUser, isLoadingAuth, navigate, refreshProfile]);
 
   // Status Polling: Automatically check for approval while on Step 4
   useEffect(() => {
