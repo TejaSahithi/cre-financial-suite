@@ -21,7 +21,9 @@ export default function RequestAccess() {
     customRole: "", portfolios_count: "", properties_count: "", plan: "professional", billing_cycle: "monthly", notes: "",
   });
   const [errors, setErrors] = useState({});
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(() => {
+    return localStorage.getItem("has_requested_access") === "true";
+  });
   const [loading, setLoading] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
@@ -123,6 +125,7 @@ export default function RequestAccess() {
         });
       } catch (e) { console.error("Auto-reply fail:", e); }
 
+      localStorage.setItem("has_requested_access", "true");
       setSubmitted(true);
     } catch (err) {
       console.error("Access request submission failed:", err);

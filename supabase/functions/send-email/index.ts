@@ -13,16 +13,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 
-const allowedOrigins = [
-  Deno.env.get('FRONTEND_URL'),
-  'http://localhost:5173',
-  'http://localhost:3000',
-].filter(Boolean);
-
 const getCorsHeaders = (origin: string | null) => {
-  const allowOrigin = origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
   return {
-    'Access-Control-Allow-Origin': allowOrigin || '*',
+    // Dynamically allow the request's origin (Vercel previews, localhost, etc)
+    // Security relies on the backend payload checks (`isAnon`, `allInternal`, `isAutoReply`), not CORS.
+    'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
   };

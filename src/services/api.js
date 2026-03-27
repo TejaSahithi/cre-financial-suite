@@ -559,7 +559,7 @@ export async function submitPublicAccessRequest(payload) {
 
   const { data, error } = await supabase
     .from('access_requests')
-    .insert(requestPayload);
+    .upsert(requestPayload, { onConflict: 'email' });
 
   if (error) {
     console.error('[api] submitPublicAccessRequest error:', error);
@@ -595,7 +595,7 @@ export async function submitPublicDemoRequest(payload) {
 
   const { data, error } = await supabase
     .from('demo_requests')
-    .insert(requestPayload);
+    .upsert(requestPayload, { onConflict: 'email' });
 
   if (error) {
     console.error('[api] submitPublicDemoRequest error:', error);

@@ -21,7 +21,9 @@ export default function RequestDemo() {
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(() => {
+    return localStorage.getItem("has_requested_demo") === "true";
+  });
   const [emailVerified, setEmailVerified] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
   const isOtherRole = form.role?.toLowerCase() === "other";
@@ -118,6 +120,8 @@ export default function RequestDemo() {
         });
       } catch (e) { console.error("Auto-reply fail:", e); }
 
+      localStorage.setItem("has_requested_demo", "true");
+      setSubmitted(true);
       // Navigate to DemoExperience with the request ID
       navigate(createPageUrl("DemoExperience"), {
         state: {
