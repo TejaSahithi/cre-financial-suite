@@ -538,65 +538,55 @@ export default function Onboarding() {
                 try {
                   const plan = paymentInfo.plan || form.plan;
                   const orgName = org?.name || form.name || '';
+                  const now = new Date().toISOString();
 
-                  // Try edge function first; fall back to direct DB writes if unreachable.
-                  let edgeFailed = false;
+                  // 1. Try edge function (best effort — never blocks navigation)
                   try {
                     const { data, error } = await supabase.functions.invoke('complete-onboarding', {
                       body: { plan, billingCycle, amount: numericAmount, orgName }
                     });
                     if (error || data?.error) throw new Error(error?.message || data?.error);
                   } catch (fnErr) {
-                    console.warn('[Onboarding] Edge function unavailable, falling back to direct DB:', fnErr.message);
-                    edgeFailed = true;
-                  }
-
-                  if (edgeFailed && supabase && org?.id) {
-                    const now = new Date().toISOString();
-                    // Update org to under_review
-                    const { error: orgErr } = await supabase
-                      .from('organizations')
-                      .update({ status: 'under_review', onboarding_step: 4, plan, billing_cycle: billingCycle, updated_at: now })
-                      .eq('id', org.id);
-                    if (orgErr) throw orgErr;
-
-                    // Update profile to under_review
-                    if (authUser?.id) {
-                      await supabase
-                        .from('profiles')
-                        .update({ status: 'under_review', updated_at: now })
-                        .eq('id', authUser.id);
+                    console.warn('[Onboarding] Edge fn unavailable, trying direct DB:', fnErr.message);
+                    // 2. Fallback: direct DB writes (best effort — never blocks navigation)
+                    try {
+                      if (supabase && org?.id) {
+                        await supabase.from('organizations')
+                          .update({ status: 'under_review', onboarding_step: 4, plan, billing_cycle: billingCycle, updated_at: now })
+                          .eq('id', org.id);
+                        if (authUser?.id) {
+                          await supabase.from('profiles')
+                            .update({ status: 'under_review', updated_at: now })
+                            .eq('id', authUser.id);
+                        }
+                        await supabase.from('invoices').insert({
+                          org_id: org.id, amount: numericAmount || 0, status: 'paid',
+                          issued_date: now.split('T')[0],
+                        }).then(() => {}).catch(() => {});
+                      }
+                    } catch (dbErr) {
+                      // Log only — still navigate so the user isn't stuck
+                      console.warn('[Onboarding] Direct DB fallback failed:', dbErr.message);
                     }
-
-                    // Create invoice record (best-effort)
-                    await supabase.from('invoices').insert({
-                      org_id: org.id,
-                      amount: numericAmount || 0,
-                      status: 'paid',
-                      issued_date: now.split('T')[0],
-                    }).then(() => {}).catch(() => {});
                   }
 
-                  // 3. Navigate to PaymentSuccess BEFORE refreshing profile.
-                  // Refreshing first causes App.jsx to redirect to /PaymentSuccess via <Navigate>
-                  // without the state payload, losing plan/amount/org name on that page.
+                  // 3. Always navigate to PaymentSuccess regardless of DB outcome.
+                  // Navigate BEFORE refreshProfile so App.jsx doesn't redirect without state.
                   navigate('/PaymentSuccess', {
                     replace: true,
                     state: {
-                      plan: paymentInfo.plan || form.plan,
+                      plan,
                       billing_cycle: billingCycle,
                       amount: numericAmount,
-                      org_name: org?.name || form.name || '',
+                      org_name: orgName,
                       billingAddress: paymentInfo.billingAddress,
                     }
                   });
-                  // Refresh auth context in the background so the guard stays consistent
                   refreshProfile().catch(() => {});
                 } catch (e) {
                   console.error('[Onboarding] Payment completion failed:', e);
                   const { toast } = await import("sonner");
-                  toast.error("Failed to update your account. Please contact support.", { description: e.message });
-                  // Re-throw to allow child component to catch and display inline error
+                  toast.error("Something went wrong. Please try again.", { description: e.message });
                   throw e;
                 } finally {
                   setSaving(false);
