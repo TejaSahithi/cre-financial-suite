@@ -536,17 +536,46 @@ export default function Onboarding() {
                   : paymentInfo.displayPrice;
 
                 try {
-                  const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-                    body: {
-                      plan: paymentInfo.plan || form.plan,
-                      billingCycle,
-                      amount: numericAmount,
-                      orgName: org?.name || form.name || '',
-                    }
-                  });
+                  const plan = paymentInfo.plan || form.plan;
+                  const orgName = org?.name || form.name || '';
 
-                  if (error) throw error;
-                  if (data?.error) throw new Error(data.error);
+                  // Try edge function first; fall back to direct DB writes if unreachable.
+                  let edgeFailed = false;
+                  try {
+                    const { data, error } = await supabase.functions.invoke('complete-onboarding', {
+                      body: { plan, billingCycle, amount: numericAmount, orgName }
+                    });
+                    if (error || data?.error) throw new Error(error?.message || data?.error);
+                  } catch (fnErr) {
+                    console.warn('[Onboarding] Edge function unavailable, falling back to direct DB:', fnErr.message);
+                    edgeFailed = true;
+                  }
+
+                  if (edgeFailed && supabase && org?.id) {
+                    const now = new Date().toISOString();
+                    // Update org to under_review
+                    const { error: orgErr } = await supabase
+                      .from('organizations')
+                      .update({ status: 'under_review', onboarding_step: 4, plan, billing_cycle: billingCycle, updated_at: now })
+                      .eq('id', org.id);
+                    if (orgErr) throw orgErr;
+
+                    // Update profile to under_review
+                    if (authUser?.id) {
+                      await supabase
+                        .from('profiles')
+                        .update({ status: 'under_review', updated_at: now })
+                        .eq('id', authUser.id);
+                    }
+
+                    // Create invoice record (best-effort)
+                    await supabase.from('invoices').insert({
+                      org_id: org.id,
+                      amount: numericAmount || 0,
+                      status: 'paid',
+                      issued_date: now.split('T')[0],
+                    }).then(() => {}).catch(() => {});
+                  }
 
                   // 3. Navigate to PaymentSuccess BEFORE refreshing profile.
                   // Refreshing first causes App.jsx to redirect to /PaymentSuccess via <Navigate>
