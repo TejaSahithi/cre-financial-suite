@@ -60,7 +60,7 @@ export default function Onboarding() {
         // Find existing org using the user's membership org_id
         if (authUser.org_id) {
           console.log('[Onboarding] Initializing with Org:', authUser.org_id);
-          
+
           await new Promise(r => setTimeout(r, 600));
 
           const orgData = await OrganizationService.get(authUser.org_id);
@@ -72,15 +72,15 @@ export default function Onboarding() {
               navigate('/PaymentSuccess', { replace: true });
               return;
             }
-            
+
             const serverStep = orgData.onboarding_step || 1;
             const currentUrlStep = parseInt(searchParams.get('step'), 10);
-            
+
             if (!currentUrlStep && serverStep > 1) {
               console.log('[Onboarding] Syncing to server step:', serverStep);
               setStep(serverStep);
             }
-            
+
             // If already active, we don't need to be here, but don't hard redirect 
             // inside init as it leads to loops if the router isn't ready.
             // App.jsx will handle the high-level redirection.
@@ -132,14 +132,14 @@ export default function Onboarding() {
       try {
         const { toast } = await import("sonner");
         toast.error("Organization Name and Primary Email are required to continue.");
-      } catch (e) {}
+      } catch (e) { }
       return;
     }
-    
+
     setSaving(true);
     const { toast } = await import("sonner");
     const loadingToast = toast.loading("Saving company information...");
-    
+
     try {
       let savedOrg;
       if (org) {
@@ -149,7 +149,7 @@ export default function Onboarding() {
         // Fallback: This should rarely happen if first-login worked
         console.warn('[Onboarding] Org missing, attempting fresh create');
         savedOrg = await OrganizationService.create({ ...form, status: "onboarding", onboarding_step: 2 });
-        
+
         if (savedOrg?.id && authUser?.id && supabase) {
           await supabase.from('memberships').upsert({
             user_id: authUser.id,
@@ -159,7 +159,7 @@ export default function Onboarding() {
           await refreshProfile();
         }
       }
-      
+
       console.log('[Onboarding] Save success, moving to step 2');
       setOrg(savedOrg);
       setStep(2);
@@ -171,7 +171,7 @@ export default function Onboarding() {
       setSaving(false);
     }
   };
- // Called when the final step (Confirmation) is reached
+  // Called when the final step (Confirmation) is reached
   const completeOnboarding = async () => {
     try {
       // Advance step visually
@@ -181,9 +181,9 @@ export default function Onboarding() {
 
       console.log('[Onboarding] Triggering complete-onboarding Edge Function');
       const { data, error } = await supabase.functions.invoke('complete-onboarding');
-      
+
       if (error || data?.error) {
-         throw new Error(error?.message || data?.error || 'Failed to complete onboarding');
+        throw new Error(error?.message || data?.error || 'Failed to complete onboarding');
       }
 
       // Audit log â€” onboarding completion
@@ -197,7 +197,7 @@ export default function Onboarding() {
         orgId: org?.id,
         userId: authUser?.id,
         userEmail: authUser?.email,
-      }).catch(() => {});
+      }).catch(() => { });
 
       // Refresh the auth context so App.jsx picks up `under_review`
       await refreshProfile();
@@ -279,29 +279,29 @@ export default function Onboarding() {
                     <Label className={`text-xs font-semibold uppercase tracking-wider ${!form.name ? 'text-slate-700' : 'text-slate-700'}`}>
                       Organization Name <span className="text-red-400">*</span>
                     </Label>
-                    <Input 
-                      value={form.name} 
-                      onChange={e => setForm({...form, name: e.target.value})} 
-                      placeholder="e.g. Meridian Capital Group" 
-                      className={`mt-1.5 h-11 transition-all ${!form.name && saving === 'val_error' ? 'border-red-500 bg-red-50/20' : ''}`} 
+                    <Input
+                      value={form.name}
+                      onChange={e => setForm({ ...form, name: e.target.value })}
+                      placeholder="e.g. Meridian Capital Group"
+                      className={`mt-1.5 h-11 transition-all ${!form.name && saving === 'val_error' ? 'border-red-500 bg-red-50/20' : ''}`}
                     />
                     {!form.name && saving === 'val_error' && <p className="text-[10px] text-red-500 mt-1">Organization name is required to continue.</p>}
                   </div>
                   <div className="col-span-2">
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Primary Contact Email <span className="text-red-400">*</span></Label>
-                    <Input type="email" value={form.primary_contact_email} onChange={e => setForm({...form, primary_contact_email: e.target.value})} className="mt-1.5 h-11" />
+                    <Input type="email" value={form.primary_contact_email} onChange={e => setForm({ ...form, primary_contact_email: e.target.value })} className="mt-1.5 h-11" />
                   </div>
                   <div className="col-span-2">
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">HQ Address</Label>
-                    <Input value={form.address} onChange={e => setForm({...form, address: e.target.value})} placeholder="123 Main St, New York, NY 10001" className="mt-1.5 h-11" />
+                    <Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, New York, NY 10001" className="mt-1.5 h-11" />
                   </div>
                   <div>
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Phone</Label>
-                    <Input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="+1 (555) 000-0000" className="mt-1.5 h-11" />
+                    <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+1 (555) 000-0000" className="mt-1.5 h-11" />
                   </div>
                   <div>
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Industry</Label>
-                    <Select value={form.industry} onValueChange={v => setForm({...form, industry: v})}>
+                    <Select value={form.industry} onValueChange={v => setForm({ ...form, industry: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="commercial_re">Commercial Real Estate</SelectItem>
@@ -314,7 +314,7 @@ export default function Onboarding() {
                   </div>
                   <div>
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Timezone</Label>
-                    <Select value={form.timezone} onValueChange={v => setForm({...form, timezone: v})}>
+                    <Select value={form.timezone} onValueChange={v => setForm({ ...form, timezone: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="America/New_York">Eastern (ET)</SelectItem>
@@ -327,7 +327,7 @@ export default function Onboarding() {
                   </div>
                   <div>
                     <Label className="text-slate-700 text-xs font-semibold uppercase tracking-wider">Currency</Label>
-                    <Select value={form.currency} onValueChange={v => setForm({...form, currency: v})}>
+                    <Select value={form.currency} onValueChange={v => setForm({ ...form, currency: v })}>
                       <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="USD">USD ($)</SelectItem>
@@ -339,8 +339,8 @@ export default function Onboarding() {
                   </div>
                 </div>
               </div>
-              <Button 
-                onClick={saveCompanyInfo} 
+              <Button
+                onClick={saveCompanyInfo}
                 disabled={saving === true || !form.name || !form.primary_contact_email}
                 className="w-full mt-8 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl font-semibold gap-2 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -355,7 +355,7 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
               <MSAStep org={org} onNext={async (signatureData) => {
                 console.log('[Onboarding] MSA signed, updating org', org?.id);
-                
+
                 // 1. Update Org â€” fault-tolerant: don't block navigation on DB errors
                 try {
                   await OrganizationService.update(org.id, {
@@ -392,7 +392,7 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
               <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle, paymentInfo) => {
                 setSaving(true);
-                const numericAmount = typeof paymentInfo.displayPrice === 'string' 
+                const numericAmount = typeof paymentInfo.displayPrice === 'string'
                   ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
                   : paymentInfo.displayPrice;
 
@@ -410,13 +410,15 @@ export default function Onboarding() {
 
                     if (error) throw error;
                     if (data?.error) throw new Error(data.error);
+                  } else {
+                    throw new Error("Organization ID is missing. Cannot finalize setup.");
                   }
 
                   // 3. Navigate to PaymentSuccess page
                   console.log('[Onboarding] Payment and status updates complete! Redirecting...');
                   // Refresh global auth context profile first so the guard knows we are 'under_review'
                   await refreshProfile();
-                  navigate('/PaymentSuccess', { 
+                  navigate('/PaymentSuccess', {
                     replace: true,
                     state: {
                       plan: paymentInfo.plan || form.plan,
@@ -428,7 +430,9 @@ export default function Onboarding() {
                 } catch (e) {
                   console.error('[Onboarding] Payment completion failed:', e);
                   const { toast } = await import("sonner");
-                  toast.error("Payment was processed, but we had trouble updating your account. Please contact support.");
+                  toast.error("Failed to update your account. Please contact support.", { description: e.message });
+                  // Re-throw to allow child component to catch and display inline error
+                  throw e;
                 } finally {
                   setSaving(false);
                 }
@@ -513,7 +517,7 @@ DATE:         ${today}
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `MSA_${org?.name || 'Agreement'}_${new Date().toISOString().slice(0,10)}.txt`;
+    a.download = `MSA_${org?.name || 'Agreement'}_${new Date().toISOString().slice(0, 10)}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -546,7 +550,7 @@ DATE:         ${today}
           <p><strong>3. Payment Terms.</strong> Client agrees to pay all applicable fees via the authorized payment method. All fees are non-refundable except as expressly stated herein.</p>
           <p><strong>4. Confidentiality & Data.</strong> Client retains all rights to its data. Provider implements bank-grade security and isolation to protect Client information.</p>
           <p><strong>5. Acceptance of Terms.</strong> By signing below, Client acknowledges they have read, understood, and agree to be bound by the terms and conditions set forth in this document.</p>
-          
+
           {/* Signature block inside document */}
           <div className="pt-8 border-t border-slate-200">
             <div className="grid grid-cols-2 gap-6">
@@ -669,8 +673,8 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
         billingAddress: `${billingAddress}, ${billingCity}, ${billingState} ${billingZip}, ${billingCountry}`,
       });
     } catch (err) {
-      console.error('[Payment] Unexpected error:', err);
-      await onComplete(billingCycle, { cardName, plan: selectedPlan.name, displayPrice, billingCycle });
+      console.error('[Payment] onComplete callback failed:', err);
+      setError(err.message || "An unexpected error occurred. Your payment was not processed, please try again.");
     } finally {
       setProcessing(false);
     }
@@ -703,7 +707,7 @@ function PaymentStep({ org, user, form, setForm, onComplete, onBack }) {
         {plans.map(p => {
           const price = getPrice(p.price);
           return (
-            <button key={p.key} type="button" onClick={() => setForm({...form, plan: p.key})}
+            <button key={p.key} type="button" onClick={() => setForm({ ...form, plan: p.key })}
               className={`p-4 rounded-xl border-2 transition-all relative text-left ${form.plan === p.key ? "border-blue-600 bg-blue-50/50 shadow-md ring-4 ring-blue-50" : "border-slate-100 bg-slate-50 hover:border-slate-300"}`}>
               {p.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter">Recommended</div>}
               <p className="text-xs font-bold text-slate-900 mb-1">{p.name}</p>
@@ -825,14 +829,14 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
               billingAddress: "Pending review"
             });
           } else if (data) {
-            setDbInvoice({ 
-              displayPrice: data.amount, 
-              plan: org?.plan || plan || "Professional", 
+            setDbInvoice({
+              displayPrice: data.amount,
+              plan: org?.plan || plan || "Professional",
               billingCycle: org?.billing_cycle || "monthly",
               billingAddress: "—" // Fetched from db invoice implies address wasn't saved to profile, but payment was successful
             });
           }
-        } catch(e) { console.error(e); }
+        } catch (e) { console.error(e); }
       }
     }
     fetchInvoice();
@@ -846,9 +850,9 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       console.log("[Onboarding] Starting invoice download...", { info, plan });
       const { jsPDF } = await import('jspdf');
       if (!jsPDF) throw new Error("jsPDF library failed to load");
-      
+
       const doc = new jsPDF();
-      
+
       const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
       const planName = info?.plan || plan || "Professional";
@@ -865,23 +869,23 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       doc.setFontSize(24);
       doc.setTextColor(primaryColor);
       doc.text("CRE PLATFORM", 20, 30);
-      
+
       doc.setFontSize(10);
       doc.setTextColor(secondaryColor);
       doc.text("support@cresuite.org", 20, 38);
-      
+
       // INVOICE Title
       doc.setFontSize(20);
       doc.setTextColor(primaryColor);
       doc.text("INVOICE", 150, 30, { align: "center" });
-      
+
       // Invoice Details
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       doc.text(`Invoice Number: ${invoiceId}`, 150, 45, { align: "center" });
       doc.text(`Date: ${today}`, 150, 52, { align: "center" });
       doc.text(`Status: PENDING ACTIVATION`, 150, 59, { align: "center" });
-      
+
       // Line
       doc.setDrawColor(200, 200, 200);
       doc.line(20, 65, 190, 65);
@@ -890,7 +894,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       doc.setFont("helvetica", "bold");
       doc.setTextColor(primaryColor);
       doc.text("Billed To:", 20, 80);
-      
+
       doc.setFont("helvetica", "normal");
       doc.setTextColor(secondaryColor);
       doc.text(user?.full_name || "—", 20, 88);
@@ -903,7 +907,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       // Subscription Details Table Header
       doc.setFillColor(248, 250, 252);
       doc.rect(20, 125, 170, 10, 'F');
-      
+
       doc.setFont("helvetica", "bold");
       doc.setTextColor(primaryColor);
       doc.text("Description", 25, 132);
@@ -923,7 +927,7 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
       // Totals
       doc.text("Subtotal:", 130, 165);
       doc.text(`$${price}`, 170, 165, { align: "right" });
-      
+
       doc.text("Discount:", 130, 175);
       doc.text(cycle === "yearly" ? "25% Annual" : "None", 170, 175, { align: "right" });
 
@@ -996,18 +1000,18 @@ function ConfirmationStep({ org, user, plan, paymentInfo }) {
 
       {/* Action Buttons */}
       <div className="flex flex-col gap-3 max-w-sm mx-auto">
-        <Button 
-          onClick={handleDownloadInvoice} 
-          variant="outline" 
+        <Button
+          onClick={handleDownloadInvoice}
+          variant="outline"
           className="h-11 rounded-xl font-semibold gap-2 border-slate-300"
         >
           <FileText className="w-4 h-4" /> Download Invoice
         </Button>
-        <Button 
+        <Button
           onClick={() => {
             refreshProfile();
             import("sonner").then(({ toast }) => toast.info("Checking status..."));
-          }} 
+          }}
           className="h-11 rounded-xl font-bold bg-[#1a2744] hover:bg-[#243b67]"
         >
           <RefreshCw className="w-4 h-4 mr-2" /> Refresh Status
