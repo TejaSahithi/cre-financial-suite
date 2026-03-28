@@ -556,17 +556,19 @@ export async function submitPublicAccessRequest(payload) {
     return { id: `mem-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
-  // Use .upsert() to handle duplicate submissions gracefully.
-  // RLS now allows anonymous UPDATE on pending requests.
+  // Use .insert() — upsert requires UPDATE privilege even for fresh rows,
+  // which RLS blocks for anon users when existing rows have non-pending statuses.
   const { data, error } = await supabase
     .from('access_requests')
-    .upsert(requestPayload, { 
-      onConflict: 'email',
-      ignoreDuplicates: false // We want to update existing pending requests
-    })
+    .insert(requestPayload)
     .select();
 
   if (error) {
+    // 23505 = unique_violation (duplicate email) — treat as success so user isn't stuck
+    if (error.code === '23505') {
+      console.warn('[api] submitPublicAccessRequest: duplicate email, returning gracefully');
+      return { ...requestPayload, created_at: new Date().toISOString() };
+    }
     console.error('[api] submitPublicAccessRequest failed:', error);
     throw new Error(error.message || 'Failed to submit access request');
   }
@@ -599,13 +601,14 @@ export async function submitPublicDemoRequest(payload) {
 
   const { data, error } = await supabase
     .from('demo_requests')
-    .upsert(requestPayload, { 
-      onConflict: 'email',
-      ignoreDuplicates: false 
-    })
+    .insert(requestPayload)
     .select();
 
   if (error) {
+    if (error.code === '23505') {
+      console.warn('[api] submitPublicDemoRequest: duplicate email, returning gracefully');
+      return { ...requestPayload, created_at: new Date().toISOString() };
+    }
     console.error('[api] submitPublicDemoRequest failed:', error);
     throw new Error(error.message || 'Failed to submit demo request');
   }
