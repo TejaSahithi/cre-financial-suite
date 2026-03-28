@@ -89,6 +89,30 @@ const AuthenticatedApp = () => {
   const [mfaChecked, setMfaChecked] = useState(false);   // true = check complete
   const [mfaNeedsEnroll, setMfaNeedsEnroll] = useState(false); // true = user has no TOTP factor, needs enrollment
 
+  // Detect Supabase auth errors in the URL hash (e.g. expired OTP link)
+  // and redirect to Login with a toast before anything else runs.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash) return;
+    const params = new URLSearchParams(hash.replace('#', ''));
+    const errorCode = params.get('error_code');
+    const errorDesc = params.get('error_description');
+    if (errorCode) {
+      // Clear the hash so the error doesn't persist on reload
+      window.history.replaceState(null, '', window.location.pathname);
+      let message = 'Authentication failed. Please sign in again.';
+      if (errorCode === 'otp_expired') {
+        message = 'Your confirmation link has expired. Please sign in again — we\'ll send you a new one.';
+      } else if (errorCode === 'otp_disabled') {
+        message = 'This link has already been used. Please sign in.';
+      } else if (errorDesc) {
+        message = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
+      }
+      import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
+      navigateToLogin();
+    }
+  }, [navigateToLogin]);
+
   // Check MFA (Authenticator Assurance Level) whenever auth state or user changes
   // Rule: Google OAuth users SKIP MFA. Magic link / email users MUST have MFA.
   useEffect(() => {
@@ -174,8 +198,13 @@ const AuthenticatedApp = () => {
         try {
           console.log('[App] Triggering first-login initialization');
           const { data, error } = await supabase.functions.invoke('first-login');
+          // 401 = no valid session (e.g. expired OTP link) — don't throw, just bail silently
+          if (error?.message?.includes('401') || error?.message?.includes('Unauthorized') || error?.status === 401) {
+            console.warn('[App] first-login: no valid session, skipping');
+            return;
+          }
           if (error || data?.error) throw new Error(error?.message || data?.error || 'Failed to initialize organization');
-          
+
           await refreshProfile(); // Refresh auth state to pull down the newly minted Org and `onboarding` status
         } catch(e) {
           console.error('[App] First login init error:', e);

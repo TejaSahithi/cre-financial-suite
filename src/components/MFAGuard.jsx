@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
  * Once aal2 is reached, calls onVerified() to proceed into the app.
  */
 export default function MFAGuard({ onVerified }) {
-  const [phase, setPhase] = useState("loading"); // loading | enroll | challenge
+  const [phase, setPhase] = useState("loading"); // loading | enroll | challenge | session_error
   const [factorId, setFactorId] = useState(null);
   const [qrCode, setQrCode] = useState(null);
   const [secret, setSecret] = useState(null);
@@ -38,6 +38,13 @@ export default function MFAGuard({ onVerified }) {
     if (isInitializing.current) return;
     isInitializing.current = true;
     try {
+      // Guard: if there's no valid session, redirect to login immediately
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) {
+        setPhase("session_error");
+        return;
+      }
+
       const { data, error } = await supabase.auth.mfa.listFactors();
       if (error) throw error;
 
@@ -99,6 +106,11 @@ export default function MFAGuard({ onVerified }) {
           }
           // No verified factor visible at aal1 but max is reached — force reset via edge fn
           const { data: resetData, error: resetErr } = await supabase.functions.invoke("reset-mfa");
+          if (resetErr?.message?.includes('401') || resetErr?.status === 401) {
+            // Session invalid — redirect to login
+            setPhase("session_error");
+            return;
+          }
           if (!resetErr && resetData?.success) {
             await supabase.auth.refreshSession();
             // Retry enrollment once after reset
@@ -207,6 +219,28 @@ export default function MFAGuard({ onVerified }) {
         <div className="text-center">
           <Loader2 className="w-8 h-8 animate-spin text-slate-400 mx-auto mb-3" />
           <p className="text-sm text-slate-500">Setting up security...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "session_error") {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center px-4">
+        <div className="max-w-sm w-full text-center bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
+          <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-7 h-7 text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Session Expired</h2>
+          <p className="text-slate-500 text-sm mb-6">
+            Your session has expired or the link you used is no longer valid. Please sign in again to continue.
+          </p>
+          <Button
+            className="w-full bg-[#1a2744] hover:bg-[#243460] text-white font-semibold rounded-xl h-11"
+            onClick={() => { supabase.auth.signOut().finally(() => { window.location.href = '/Login'; }); }}
+          >
+            Sign In Again
+          </Button>
         </div>
       </div>
     );
