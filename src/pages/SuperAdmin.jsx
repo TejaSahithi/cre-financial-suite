@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
-import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package, Trash2, Mail } from "lucide-react";
+import { Shield, Users, Search, Download, CheckCircle2, X, Loader2, Package, Trash2, Mail, RefreshCw } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ALL_MODULE_KEYS, MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
@@ -151,6 +151,7 @@ export default function SuperAdmin() {
 
   const { data: orgs = [] } = useQuery({
     queryKey: ['organizations'],
+    refetchInterval: 20000, // poll every 20s so new under_review submissions appear automatically
     queryFn: async () => {
       // Step 1: fetch orgs + memberships (include user_id for fallback lookup)
       const { data, error } = await supabase
@@ -342,7 +343,7 @@ export default function SuperAdmin() {
 
   const deleteOrg = useMutation({
     mutationFn: async (orgId) => {
-      const { error } = await supabase.from('organizations').delete().eq('id', orgId);
+      const { error } = await supabase.rpc('delete_organization_admin', { target_org_id: orgId });
       if (error) throw error;
       return orgId;
     },
@@ -882,15 +883,30 @@ export default function SuperAdmin() {
                     onClick={async () => {
                       if (!window.confirm(`Permanently delete ${selectedOrgs.size} organization(s)? This cannot be undone.`)) return;
                       const ids = Array.from(selectedOrgs);
-                      await Promise.all(ids.map(id => supabase.from('organizations').delete().eq('id', id)));
+                      const results = await Promise.all(
+                        ids.map(id => supabase.rpc('delete_organization_admin', { target_org_id: id }))
+                      );
+                      const failed = results.filter(r => r.error).length;
                       setSelectedOrgs(new Set());
                       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-                      import('sonner').then(({ toast }) => toast.success(`Deleted ${ids.length} organizations`));
+                      const { toast } = await import('sonner');
+                      if (failed > 0) {
+                        toast.warning(`Deleted ${ids.length - failed} of ${ids.length} organizations. ${failed} failed.`);
+                      } else {
+                        toast.success(`Deleted ${ids.length} organization${ids.length > 1 ? 's' : ''}`);
+                      }
                     }}
                   >
                     <Trash2 className="w-4 h-4 mr-1" />Delete Selected ({selectedOrgs.size})
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ['organizations'] })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1" />Refresh
+                </Button>
                 <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><Input placeholder="Search..." className="pl-9 w-48 h-8" /></div>
                 <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1" />Export</Button>
               </div>
