@@ -12,13 +12,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Search, Download, Upload, Loader2, Home, Building2, CheckCircle2, XCircle, MapPin, ChevronRight, ArrowRight, ArrowLeft } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 
 export default function Properties() {
+  const navigate = useNavigate();
+  const portfolioId = new URLSearchParams(window.location.search).get("portfolio");
   const [showCreate, setShowCreate] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [showBulk, setShowBulk] = useState(false);
@@ -34,7 +36,8 @@ export default function Properties() {
   const defaultForm = {
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
-    total_sf: "", total_buildings: 1, total_units: 0, year_built: ""
+    total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
+    portfolio_id: portfolioId || ""
   };
   const [form, setForm] = useState(defaultForm);
 
@@ -44,11 +47,14 @@ export default function Properties() {
 
   const createMutation = useMutation({
     mutationFn: (data) => propertyService.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['properties'] });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['Property'] });
       setShowCreate(false);
       setForm(defaultForm);
       setCurrentStep(1);
+      if (data && data.id) {
+        navigate(createPageUrl("PropertyDetail") + "?id=" + data.id);
+      }
     }
   });
 

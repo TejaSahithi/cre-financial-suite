@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { 
-  MapPin, Home, Upload, DollarSign, Calculator, ClipboardCheck, Pencil, Plus, Loader2, AlertTriangle, CheckCircle2 
+import {
+  MapPin, Home, Upload, DollarSign, Calculator, ClipboardCheck, Pencil, Plus, Loader2, AlertTriangle, CheckCircle2, BarChart2
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -358,12 +358,15 @@ export default function PropertyDetail() {
                     <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">{b.name} <Badge variant="secondary" className="text-[10px] uppercase font-semibold text-slate-500 bg-slate-100">Building</Badge></h3>
                     <p className="text-xs text-slate-500 mt-1">{b.total_sf?.toLocaleString() || 0} RSV SF · {b.floors} Floors · Built {b.year_built || 'Unknown'}</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <Link to={createPageUrl("AddExpense") + `?property=${propertyId}&building=${b.id}`}>
                       <Button size="sm" variant="outline" className="text-xs h-8"><DollarSign className="w-3 h-3 mr-1" />Log Expense</Button>
                     </Link>
                     <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&building=${b.id}`}>
                       <Button size="sm" variant="outline" className="text-xs h-8"><Upload className="w-3 h-3 mr-1" />Upload Lease</Button>
+                    </Link>
+                    <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&building=${b.id}`}>
+                      <Button size="sm" variant="outline" className="text-xs h-8 text-emerald-700 border-emerald-200 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Generate Budget</Button>
                     </Link>
                     <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => { setSelectedBuildingId(b.id); setShowAddUnit(true); }}><Plus className="w-3 h-3 mr-1" />Add Unit</Button>
                   </div>
@@ -398,6 +401,9 @@ export default function PropertyDetail() {
                                 <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50">Add Lease</Button>
                               </Link>
                             ) : null}
+                            <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&unit=${u.id}`}>
+                              <Button size="sm" variant="outline" className="h-7 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Budget</Button>
+                            </Link>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -500,7 +506,7 @@ export default function PropertyDetail() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddBuilding(false)}>Cancel</Button>
-            <Button onClick={() => createBuildingMutation.mutate({ ...buildingForm, total_sf: parseInt(buildingForm.total_sf) || 0, year_built: parseInt(buildingForm.year_built) || null, property_id: propertyId, org_id: property.org_id || "default" })} disabled={!buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            <Button onClick={() => createBuildingMutation.mutate({ ...buildingForm, total_sf: parseInt(buildingForm.total_sf) || 0, year_built: parseInt(buildingForm.year_built) || null, property_id: propertyId, org_id: property.org_id })} disabled={!buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createBuildingMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Building
             </Button>
           </DialogFooter>
@@ -524,11 +530,11 @@ export default function PropertyDetail() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Unit ID *</Label><Input value={unitForm.unit_id_code} onChange={e => setUnitForm({...unitForm, unit_id_code: e.target.value})} placeholder="e.g. A-101" /></div>
+              <div><Label>Unit ID *</Label><Input value={unitForm.unit_number} onChange={e => setUnitForm({...unitForm, unit_number: e.target.value})} placeholder="e.g. A-101" /></div>
               <div><Label>Floor</Label><Input value={unitForm.floor} onChange={e => setUnitForm({...unitForm, floor: e.target.value})} placeholder="Floor 1" /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Square Feet</Label><Input type="number" value={unitForm.square_feet} onChange={e => setUnitForm({...unitForm, square_feet: e.target.value})} /></div>
+              <div><Label>Square Feet</Label><Input type="number" value={unitForm.square_footage} onChange={e => setUnitForm({...unitForm, square_footage: e.target.value})} /></div>
               <div>
                 <Label>Status</Label>
                 <Select value={unitForm.occupancy_status} onValueChange={v => setUnitForm({...unitForm, occupancy_status: v})}>
@@ -551,13 +557,13 @@ export default function PropertyDetail() {
             <Button variant="outline" onClick={() => setShowAddUnit(false)}>Cancel</Button>
             <Button onClick={() => createUnitMutation.mutate({
               ...unitForm,
-              square_feet: parseInt(unitForm.square_feet) || 0,
+              square_footage: parseInt(unitForm.square_footage) || 0,
               building_id: selectedBuildingId,
               property_id: propertyId,
-              org_id: property.org_id || "default",
+              org_id: property.org_id,
               exclude_from_cam: unitForm.occupancy_status === 'under_construction',
               internal_expense_tracking: unitForm.occupancy_status === 'owner_occupied'
-            })} disabled={!unitForm.unit_id_code || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            })} disabled={!unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createUnitMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Unit
             </Button>
           </DialogFooter>

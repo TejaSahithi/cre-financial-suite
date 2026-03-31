@@ -34,13 +34,13 @@ export default function Portfolios() {
 
   const createMutation = useMutation({
     mutationFn: (data) => PortfolioService.create(data),
-    onSuccess: (data) => { 
-      queryClient.invalidateQueries({ queryKey: ['portfolios'] }); 
-      setShowCreate(false); 
-      setForm(defaultForm); 
-      // Redirect to Portfolio Dashboard
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['Portfolio'] });
+      setShowCreate(false);
+      setForm(defaultForm);
+      // Redirect to Properties filtered by this portfolio so user can add properties
       if (data && data.id) {
-        navigate(createPageUrl("Dashboard") + "?portfolio=" + data.id);
+        navigate(createPageUrl("Properties") + "?portfolio=" + data.id);
       }
     }
   });
