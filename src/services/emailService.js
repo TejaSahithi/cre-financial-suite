@@ -26,6 +26,7 @@ async function sendEmail({ to, subject, html }) {
 
     const { data, error } = await supabase.functions.invoke('send-email', {
       body: { to, subject, html },
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     });
 
     if (error) {

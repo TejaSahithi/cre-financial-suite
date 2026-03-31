@@ -46,8 +46,10 @@ export default function LeaseUpload() {
     // AI extraction via Supabase Edge Function (if available), else manual entry scaffold
     setExtracting(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const { data, error } = await supabase.functions.invoke('extract-lease', {
-        body: { file_url: uploadedUrl, file_name: selectedFile.name }
+        body: { file_url: uploadedUrl, file_name: selectedFile.name },
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
       if (!error && data && Object.keys(data).length > 0) {
         setExtractedData(data);

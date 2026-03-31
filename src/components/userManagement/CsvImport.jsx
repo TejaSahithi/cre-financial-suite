@@ -97,6 +97,7 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
     for (const [idx, row] of validRows.entries()) {
       try {
         setImportProgress({ current: idx + 1, total: validRows.length });
+        const { data: { session } } = await supabase.auth.getSession();
         const { data, error } = await supabase.functions.invoke("invite-user", {
           body: {
             email: row.email,
@@ -108,6 +109,7 @@ export default function CsvImport({ orgId, currentUser, onClose, onImported }) {
             module_permissions: row.module_permissions || getRoleDefaultModulePerms(row.role || "viewer"),
             page_permissions: row.page_permissions || {},
           },
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
         });
         if (error) {
           console.error(`[CsvImport] Invite failed for ${row.email}:`, error);

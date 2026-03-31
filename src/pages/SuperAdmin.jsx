@@ -220,8 +220,10 @@ export default function SuperAdmin() {
 
   const updateRequest = useMutation({
     mutationFn: async ({ id, approved }) => {
+      const { data: { session } } = await supabase.auth.getSession();
       const { data: result, error: fnError } = await supabase.functions.invoke('approve-request-v2', {
-        body: { id, approved }
+        body: { id, approved },
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
       if (fnError) throw new Error(fnError.message || 'Action failed');
       return result;
@@ -1028,10 +1030,16 @@ export default function SuperAdmin() {
                                     (old || []).map(o => o.id === org.id ? { ...o, status: 'active' } : o)
                                   );
                                   try {
-                                    // 1. Try edge function (CORS now fixed — should work after redeploy)
+                                    // 1. Try edge function — explicitly pass session token to avoid 401
                                     let edgeFailed = false;
                                     try {
-                                      const { data, error } = await supabase.functions.invoke('approve-organization', { body: { orgId: org.id } });
+                                      const { data: { session } } = await supabase.auth.getSession();
+                                      const { data, error } = await supabase.functions.invoke('approve-organization', {
+                                        body: { orgId: org.id },
+                                        headers: session?.access_token
+                                          ? { Authorization: `Bearer ${session.access_token}` }
+                                          : {},
+                                      });
                                       if (error || data?.error) throw new Error(error?.message || data?.error || 'Edge function failed');
                                       queryClient.invalidateQueries({ queryKey: ['organizations'] });
                                       data.warning

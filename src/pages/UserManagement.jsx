@@ -766,8 +766,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
             {status === "invited" && (
               <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs"
                 onClick={async () => {
+                  const { data: { session } } = await supabase.auth.getSession();
                   const { error } = await supabase.functions.invoke("invite-user", {
                     body: { email: member.profiles?.email, full_name: member.profiles?.full_name, org_id: orgId, role: getMemberRoles(member)[0] || null },
+                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
                   });
                   if (error) toast.error("Failed"); else toast.success("Invite resent");
                 }}>
@@ -825,6 +827,7 @@ function InviteDialog({ open, onClose, orgId }) {
     setSubmitting(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
+      const { data: { session } } = await supabase.auth.getSession();
       const { error } = await supabase.functions.invoke("invite-user", {
         body: {
           email: form.email.trim(),
@@ -839,6 +842,7 @@ function InviteDialog({ open, onClose, orgId }) {
             signing_privileges: signingPrivs,
           },
         },
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
       if (error) throw error;
       toast.success(`Invite sent to ${form.email}`);
@@ -1025,8 +1029,10 @@ function CSVUploadDialog({ open, onClose, orgId }) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
+        const { data: { session } } = await supabase.auth.getSession();
         const { error } = await supabase.functions.invoke("invite-user", {
           body: { email: row.email, full_name: row.full_name, phone: row.phone, org_id: orgId, role: null },
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
         });
         if (error) throw error;
         setProgress(p => ({ ...p, done: p.done + 1, success: p.success + 1 }));

@@ -104,13 +104,15 @@ export async function sendEmail(params) {
       ? (params.html.includes("<html") ? params.html : withCrePlatformBranding(params.html))
       : undefined;
 
+    const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke('send-email', {
       body: {
         to: params.to,
         subject: params.subject,
         text: params.body,
         html: brandedHtml
-      }
+      },
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     });
     
     if (error) throw error;
@@ -131,8 +133,10 @@ export async function sendEmail(params) {
  */
 export async function validateAddress(params) {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke("validate-address-ups", {
       body: params,
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     });
 
     if (error) throw error;

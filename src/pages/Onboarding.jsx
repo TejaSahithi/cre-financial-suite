@@ -324,7 +324,10 @@ export default function Onboarding() {
       }
 
       console.log('[Onboarding] Triggering complete-onboarding Edge Function');
-      const { data, error } = await supabase.functions.invoke('complete-onboarding');
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data, error } = await supabase.functions.invoke('complete-onboarding', {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
 
       if (error || data?.error) {
         throw new Error(error?.message || data?.error || 'Failed to complete onboarding');
@@ -547,8 +550,10 @@ export default function Onboarding() {
 
                   // 1. Try edge function (best effort — never blocks navigation)
                   try {
+                    const { data: { session } } = await supabase.auth.getSession();
                     const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-                      body: { plan, billingCycle, amount: numericAmount, orgName }
+                      body: { plan, billingCycle, amount: numericAmount, orgName },
+                      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
                     });
                     if (error || data?.error) throw new Error(error?.message || data?.error);
                   } catch (fnErr) {

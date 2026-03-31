@@ -105,7 +105,10 @@ export default function MFAGuard({ onVerified }) {
             return;
           }
           // No verified factor visible at aal1 but max is reached — force reset via edge fn
-          const { data: resetData, error: resetErr } = await supabase.functions.invoke("reset-mfa");
+          const { data: { session } } = await supabase.auth.getSession();
+          const { data: resetData, error: resetErr } = await supabase.functions.invoke("reset-mfa", {
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+          });
           if (resetErr?.message?.includes('401') || resetErr?.status === 401) {
             // Session invalid — redirect to login
             setPhase("session_error");
@@ -147,8 +150,10 @@ export default function MFAGuard({ onVerified }) {
     try {
       console.log("[MFAGuard] Attempting MFA reset via Edge Function...");
       // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
+      const { data: { session } } = await supabase.auth.getSession();
       const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa", {
         method: 'POST', // Explicitly use POST
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
 
       if (invokeErr) {

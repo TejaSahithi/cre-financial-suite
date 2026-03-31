@@ -107,12 +107,14 @@ export default function OrgSettings() {
     if (!inviteEmail || !orgId) return;
     setInviting(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const { data, error } = await supabase.functions.invoke('invite-user', {
         body: { 
           email: inviteEmail, 
           role: inviteRole, 
           org_id: orgId 
-        }
+        },
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
 
       if (error) throw new Error(error.message || "Invitation failed");
