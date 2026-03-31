@@ -22,7 +22,7 @@ export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
-  const defaultForm = { name: "", description: "", owner_entity: "", type: "commercial", geography: "", fiscal_year: "jan_dec", intent: "asset_management" };
+  const defaultForm = { name: "", description: "", owner_entity: "", type: "commercial", geography: "", fiscal_year: "jan_dec", intent: "asset_management", notes: "" };
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -260,6 +260,7 @@ export default function Portfolios() {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2"><Label>Portfolio Name *</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Southwest Commercial Portfolio" /></div>
+              <div className="col-span-2"><Label>Description</Label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="e.g. Mixed-use assets across the Southwest" /></div>
               <div className="col-span-2"><Label>Owner / Legal Entity</Label><Input value={form.owner_entity} onChange={e => setForm({...form, owner_entity: e.target.value})} placeholder="e.g. MCG Capital Holdings LLC" /></div>
               
               <div>
@@ -305,7 +306,25 @@ export default function Portfolios() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate({ ...form, status: "active", ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}) })} disabled={!form.name || createMutation.isPending || !orgId || orgId === '__none__'} className="bg-gradient-to-r from-blue-600 to-indigo-700">
+            <Button onClick={() => {
+              // Only send columns that exist in the portfolios table.
+              // Extra form fields (type, geography, fiscal_year, intent, owner_entity)
+              // are folded into the description so no schema error is thrown.
+              const extras = [
+                form.owner_entity && `Entity: ${form.owner_entity}`,
+                form.type && `Type: ${form.type}`,
+                form.geography && `Region: ${form.geography}`,
+                form.fiscal_year && `FY: ${form.fiscal_year}`,
+                form.intent && `Intent: ${form.intent}`,
+              ].filter(Boolean).join(' | ');
+              const description = [form.description, extras].filter(Boolean).join(' — ') || undefined;
+              createMutation.mutate({
+                name: form.name,
+                ...(description ? { description } : {}),
+                status: "active",
+                ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
+              });
+            }} disabled={!form.name || createMutation.isPending || !orgId || orgId === '__none__'} className="bg-gradient-to-r from-blue-600 to-indigo-700">
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}Create
             </Button>
           </DialogFooter>
