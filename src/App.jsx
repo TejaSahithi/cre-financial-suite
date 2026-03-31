@@ -123,6 +123,7 @@ const AuthenticatedApp = () => {
   const location = useLocation();
 
   const [isInitializingOrg, setIsInitializingOrg] = useState(false);
+  const [firstLoginAttempted, setFirstLoginAttempted] = useState(false); // prevent retry loop
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaChecked, setMfaChecked] = useState(false);
   const [mfaNeedsEnroll, setMfaNeedsEnroll] = useState(false);
@@ -241,6 +242,7 @@ const AuthenticatedApp = () => {
       user?.onboarding_type === 'owner' &&
       !hasOrganizationContext &&
       !isInitializingOrg &&
+      !firstLoginAttempted &&
       mfaChecked &&
       !mfaRequired
     ) {
@@ -253,11 +255,16 @@ const AuthenticatedApp = () => {
         }
 
         setIsInitializingOrg(true);
+        setFirstLoginAttempted(true); // mark as attempted — no more retries
         try {
           console.log('[App] Triggering first-login initialization');
-          const { data, error } = await supabase.functions.invoke('first-login');
+          const { data, error } = await supabase.functions.invoke('first-login', {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          });
           if (error?.message?.includes('401') || error?.message?.includes('Unauthorized') || error?.status === 401) {
-            console.warn('[App] first-login: 401 — session not ready, will retry on next render');
+            console.warn('[App] first-login: 401 — session not ready');
             return;
           }
           if (error || data?.error) throw new Error(error?.message || data?.error || 'Failed to initialize organization');
@@ -270,7 +277,7 @@ const AuthenticatedApp = () => {
       };
       initOrg();
     }
-  }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, mfaChecked, mfaRequired, refreshProfile]);
+  }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, firstLoginAttempted, mfaChecked, mfaRequired, refreshProfile]);
 
   // Determine if the current page is public
   const currentPath = location.pathname.substring(1);
