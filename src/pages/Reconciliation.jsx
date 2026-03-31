@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { ReconciliationService, CAMCalculationService, LeaseService, ExpenseService, BudgetService } from "@/services/api";
-
+import { ReconciliationService } from "@/services/api";
+import useOrgQuery from "@/hooks/useOrgQuery";
+import useOrgId from "@/hooks/useOrgId";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,31 +16,13 @@ export default function Reconciliation() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [showCreate, setShowCreate] = useState(false);
   const queryClient = useQueryClient();
+  const { orgId } = useOrgId();
 
-  const { data: reconciliations = [] } = useQuery({
-    queryKey: ['reconciliations'],
-    queryFn: () => ReconciliationService.list('-fiscal_year'),
-  });
-
-  const { data: budgets = [] } = useQuery({
-    queryKey: ['budgets-recon'],
-    queryFn: () => BudgetService.list(),
-  });
-
-  const { data: expenses = [] } = useQuery({
-    queryKey: ['expenses-recon'],
-    queryFn: () => ExpenseService.list(),
-  });
-
-  const { data: camCalcs = [] } = useQuery({
-    queryKey: ['cam-recon'],
-    queryFn: () => CAMCalculationService.list(),
-  });
-
-  const { data: leases = [] } = useQuery({
-    queryKey: ['leases-recon'],
-    queryFn: () => LeaseService.list(),
-  });
+  const { data: reconciliations = [] } = useOrgQuery("Reconciliation");
+  const { data: budgets = [] } = useOrgQuery("Budget");
+  const { data: expenses = [] } = useOrgQuery("Expense");
+  const { data: camCalcs = [] } = useOrgQuery("CAMCalculation");
+  const { data: leases = [] } = useOrgQuery("Lease");
 
   const currentRecon = reconciliations.find(r => r.fiscal_year === selectedYear);
   const yearBudgets = budgets.filter(b => b.budget_year === selectedYear);
@@ -404,7 +387,7 @@ export default function Reconciliation() {
                 const defaultDeadline = new Date(yearEnd);
                 defaultDeadline.setDate(defaultDeadline.getDate() + 90);
                 createMutation.mutate({
-                  org_id: 'default',
+                  org_id: orgId || "",
                   property_id: 'all',
                   fiscal_year: selectedYear,
                   budgeted_cam_pool: budgetedCAMPool,

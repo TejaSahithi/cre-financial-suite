@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Component } from 'react';
 import { Toaster } from "@/components/ui/sonner"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -13,6 +13,44 @@ import { ModuleAccessProvider, useModuleAccess } from '@/lib/ModuleAccessContext
 import DevModeBanner from '@/components/DevModeBanner';
 import { supabase } from '@/services/supabaseClient';
 import MFAGuard from '@/components/MFAGuard';
+
+// ─── Error Boundary ───────────────────────────────────────────────────
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.error('[ErrorBoundary] Caught error:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+          <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
+            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <span className="text-2xl">⚠️</span>
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">Something went wrong</h2>
+            <p className="text-sm text-slate-500 mb-6">
+              {this.state.error?.message || 'An unexpected error occurred. Please refresh the page.'}
+            </p>
+            <button
+              onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+              className="w-full h-11 bg-[#1a2744] hover:bg-[#243b67] text-white font-semibold rounded-xl transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -381,16 +419,20 @@ function App() {
   return (
     <>
       <DevModeBanner />
-      <AuthProvider>
-        <QueryClientProvider client={queryClientInstance}>
-          <ModuleAccessProvider>
-            <Router>
-              <AuthenticatedApp />
-            </Router>
-          </ModuleAccessProvider>
-          <Toaster />
-        </QueryClientProvider>
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <QueryClientProvider client={queryClientInstance}>
+            <ModuleAccessProvider>
+              <Router>
+                <ErrorBoundary>
+                  <AuthenticatedApp />
+                </ErrorBoundary>
+              </Router>
+            </ModuleAccessProvider>
+            <Toaster />
+          </QueryClientProvider>
+        </AuthProvider>
+      </ErrorBoundary>
     </>
   )
 }

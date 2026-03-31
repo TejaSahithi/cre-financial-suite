@@ -1,6 +1,7 @@
 import React from "react";
+import useOrgQuery from "@/hooks/useOrgQuery";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { notificationService } from "@/services/notificationService";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,10 +24,7 @@ const typeColors = {
 export default function Notifications() {
   const queryClient = useQueryClient();
 
-  const { data: notifications = [] } = useQuery({
-    queryKey: ['notifications'],
-    queryFn: () => notificationService.list('-created_date', 50),
-  });
+  const { data: notifications = [], orgId } = useOrgQuery("Notification");
 
   const unread = notifications.filter(n => !n.is_read).length;
   const warnings = notifications.filter(n => ['warning', 'cam_variance', 'lease_expiry'].includes(n.type)).length;
@@ -34,7 +32,7 @@ export default function Notifications() {
 
   const markRead = useMutation({
     mutationFn: (id) => notificationService.update(id, { is_read: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['Notification', orgId] }),
   });
 
   const markAllRead = useMutation({
@@ -44,12 +42,12 @@ export default function Notifications() {
         await notificationService.update(n.id, { is_read: true });
       }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['Notification', orgId] }),
   });
 
   const deleteNotif = useMutation({
     mutationFn: (id) => notificationService.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['Notification', orgId] }),
   });
 
   return (

@@ -1,6 +1,5 @@
 import React from "react";
-import { budgetService } from "@/services/budgetService";
-import { useQuery } from "@tanstack/react-query";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,10 +8,7 @@ import { createPageUrl } from "@/utils";
 import { Plus, Download, Mail, Loader2, CheckCircle2, X } from "lucide-react";
 
 export default function BudgetDashboard() {
-  const { data: budgets = [], isLoading } = useQuery({
-    queryKey: ['budgets'],
-    queryFn: () => budgetService.list('-created_date'),
-  });
+  const { data: budgets = [], isLoading } = useOrgQuery("Budget");
 
   const statusColors = {
     draft: "bg-slate-100 text-slate-600", ai_generated: "bg-blue-100 text-blue-700",

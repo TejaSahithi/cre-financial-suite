@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import { AuditLogService, PropertyService } from "@/services/api";
-import { useQuery } from "@tanstack/react-query";
-
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,15 +36,8 @@ export default function AuditLog() {
   const [actionFilter, setActionFilter] = useState("all");
   const [propertyFilter, setPropertyFilter] = useState("all");
 
-  const { data: logs = [], isLoading } = useQuery({
-    queryKey: ['audit-logs'],
-    queryFn: () => AuditLogService.list('-created_date', 100),
-  });
-
-  const { data: properties = [] } = useQuery({
-    queryKey: ['props-audit'],
-    queryFn: () => PropertyService.list(),
-  });
+  const { data: logs = [], isLoading } = useOrgQuery("AuditLog");
+  const { data: properties = [] } = useOrgQuery("Property");
 
   const filtered = (logs || []).filter(log => {
     const matchSearch = !search ||

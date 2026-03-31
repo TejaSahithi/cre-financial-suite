@@ -53,11 +53,30 @@ export default function Dashboard() {
   const rentPerSF = leasedSF > 0 ? totalAnnualRent / leasedSF : null;
   const noiMargin = totalRevenue > 0 ? (noi / totalRevenue * 100) : null;
 
-  // YoY proxies
-  const revChange = totalRevenue > 0 ? 4.2 : 0;
-  const expChange = totalExpenses > 0 ? 2.8 : 0;
-  const noiChange = noi > 0 ? 5.1 : 0;
-  const occChange = occupancyPct > 0 ? 1.5 : 0;
+  const currentYear = new Date().getFullYear();
+  const prevYear = currentYear - 1;
+
+  // Prior-year data for real YoY calculations
+  const prevLeases = fl.filter(l => {
+    if (!l.end_date) return false;
+    const end = new Date(l.end_date);
+    return end.getFullYear() >= prevYear && new Date(l.start_date || 0).getFullYear() <= prevYear;
+  });
+  const prevAnnualRent = prevLeases.reduce((s, l) => s + (l.annual_rent || (l.base_rent || 0) * 12), 0);
+  const prevExpenses = fe.filter(e => e.fiscal_year === prevYear);
+  const prevExpenseTotal = prevExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const prevCAMs = fc.filter(c => c.fiscal_year === prevYear);
+  const prevCAMRecovery = prevCAMs.reduce((s, c) => s + (c.annual_cam || 0), 0);
+  const prevRevenue = prevAnnualRent + prevCAMRecovery;
+  const prevNOI = prevRevenue - prevExpenseTotal;
+  const prevOccupiedSF = fp.reduce((s, p) => s + (p.prev_leased_sf || p.leased_sf || 0), 0);
+  const prevOccupancyPct = totalSF > 0 ? (prevOccupiedSF / totalSF * 100) : 0;
+
+  // Real YoY changes (fall back to 0 if no prior data)
+  const revChange = prevRevenue > 0 ? parseFloat(((totalRevenue - prevRevenue) / prevRevenue * 100).toFixed(1)) : 0;
+  const expChange = prevExpenseTotal > 0 ? parseFloat(((totalExpenses - prevExpenseTotal) / prevExpenseTotal * 100).toFixed(1)) : 0;
+  const noiChange = prevNOI > 0 ? parseFloat(((noi - prevNOI) / prevNOI * 100).toFixed(1)) : 0;
+  const occChange = prevOccupancyPct > 0 ? parseFloat((occupancyPct - prevOccupancyPct).toFixed(1)) : 0;
 
   // Breakdowns with property-level drill-down links
   const revenueBreakdown = [

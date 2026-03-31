@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import { PropertyService, ExpenseService, LeaseService, UnitService, BuildingService, CAMCalculationService, BudgetService } from "@/services/api";
-import { useQuery } from "@tanstack/react-query";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -46,13 +45,13 @@ const expenseCategories = [
 ];
 
 export default function CAMDashboard() {
-  const { data: camCalcs = [] } = useQuery({ queryKey: ['cam-all'], queryFn: () => CAMCalculationService.list() });
-  const { data: budgets = [] } = useQuery({ queryKey: ['budgets-cam'], queryFn: () => BudgetService.list() });
-  const { data: leaseList = [] } = useQuery({ queryKey: ['leases-cam'], queryFn: () => LeaseService.list() });
-  const { data: properties = [] } = useQuery({ queryKey: ['properties-cam'], queryFn: () => PropertyService.list() });
-  const { data: allBuildings = [] } = useQuery({ queryKey: ['buildings-cam'], queryFn: () => BuildingService.list() });
-  const { data: allUnits = [] } = useQuery({ queryKey: ['units-cam'], queryFn: () => UnitService.list() });
-  const { data: expenses = [] } = useQuery({ queryKey: ['expenses-cam'], queryFn: () => ExpenseService.list() });
+  const { data: camCalcs = [] } = useOrgQuery("CAMCalculation");
+  const { data: budgets = [] } = useOrgQuery("Budget");
+  const { data: leaseList = [] } = useOrgQuery("Lease");
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: allBuildings = [] } = useOrgQuery("Building");
+  const { data: allUnits = [] } = useOrgQuery("Unit");
+  const { data: expenses = [] } = useOrgQuery("Expense");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
 
