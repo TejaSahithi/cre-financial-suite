@@ -223,7 +223,7 @@ const AuthenticatedApp = () => {
     setMfaRequired(false);
     setMfaNeedsEnroll(false);
     setMfaChecked(true);
-    await refreshProfile();
+    await refreshProfile(false); // never show global spinner after MFA
   };
 
   // Trigger first-login only for owner accounts that truly do not have an org yet.
@@ -267,36 +267,43 @@ const AuthenticatedApp = () => {
   }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, mfaChecked, mfaRequired, refreshProfile]);
 
   // Determine if the current page is public
-  const currentPath = location.pathname.substring(1); // remove leading /
+  const currentPath = location.pathname.substring(1);
   const isPublicPage = publicPages.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
-  // Pages that must never be blocked by the loading spinner
-  const neverBlockPages = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess", "AcceptInvite", "PendingApproval", "AwaitingRole"];
-  const isNeverBlockPage = neverBlockPages.includes(currentPath);
+  // While auth is loading on initial app boot, show spinner (except public pages)
+  if (isLoadingAuth || isLoadingPublicSettings) {
+    if (isPublicPage) return <AppRoutes />;
+    return (
+      <div className="fixed inset-0 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
-  // Show loading spinner while checking auth or initializing org.
-  // After MFA is verified (mfaVerifiedThisSession), never show spinner for setup pages.
-  if (isLoadingPublicSettings || isLoadingAuth || isInitializingOrg || (isAuthenticated && !mfaChecked)) {
-    // Always let public pages and setup pages through — never block them with a spinner
-    if ((isPublicPage || isNeverBlockPage) && !isInitializingOrg) {
-      return <AppRoutes />;
-    }
-    // If MFA was just verified, don't show spinner — let routing proceed
-    if (mfaVerifiedThisSession && mfaChecked) {
-      // fall through to routing logic below
-    } else {
-      return (
-        <div className="fixed inset-0 flex items-center justify-center">
-          <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
-        </div>
-      );
-    }
+  // While org is initializing, show spinner (except public pages)
+  if (isInitializingOrg) {
+    if (isPublicPage) return <AppRoutes />;
+    return (
+      <div className="fixed inset-0 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  // While MFA check is pending for an authenticated user, always show spinner.
+  // This ensures MFA page is shown BEFORE Onboarding — even on setup pages.
+  if (isAuthenticated && !mfaChecked) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+      </div>
+    );
   }
 
   // ─── MFA Guard ────────────────────────────────────────────────────────
-  // MFA is required for ALL authenticated non-public pages, INCLUDING Onboarding.
+  // mfaChecked is true here. If MFA is required, show it before anything else.
   // Flow: Confirm Email → MFA Setup → Onboarding → Payment → WelcomeAboard → Dashboard
-  // Only AcceptInvite and PendingApproval bypass MFA (they have their own auth flows).
+  // Only truly public pages and specific bypass pages skip MFA.
   const mfaBypassPages = ["AcceptInvite", "PendingApproval", "ResetPassword", "SecurityQuestionsSetup"];
   const isMfaBypassPage = mfaBypassPages.includes(currentPath);
 
@@ -321,9 +328,8 @@ const AuthenticatedApp = () => {
   if (isAuthenticated && user) {
     const { profile, activeOrg, memberships } = user;
 
-    // Loading guard: If authenticated but profile data hasn't arrived yet, stay on loading
-    // Exception: if MFA was just verified, let routing proceed even if profile is still loading
-    if ((!profile || !memberships) && !mfaVerifiedThisSession) {
+    // Loading guard: if profile data hasn't arrived yet, show spinner briefly
+    if (!profile || !memberships) {
       return (
         <div className="fixed inset-0 flex items-center justify-center">
           <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>

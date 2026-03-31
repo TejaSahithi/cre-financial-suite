@@ -117,8 +117,9 @@ export default function Onboarding() {
   });
 
   useEffect(() => {
-    if (isLoadingAuth) {
-      // Still loading auth — keep waiting, don't set loading=false yet
+    // Only block if we have no user AND auth is still loading
+    // If we already have authUser, proceed even if isLoadingAuth is true
+    if (isLoadingAuth && !authUser) {
       return;
     }
 

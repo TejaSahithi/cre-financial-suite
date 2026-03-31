@@ -67,15 +67,16 @@ export const AuthProvider = ({ children }) => {
 
 
   useEffect(() => {
-    // Initial profile fetch
+    // Initial profile fetch — show loading spinner only on first load
     fetchProfile(true);
 
     // Listen for auth state changes (sign in, sign out, token refresh)
+    // Use showLoading=false so subsequent auth events don't trigger the full-page spinner
     const unsubscribe = onAuthStateChange((event, session) => {
       console.log('[AuthContext] Auth event:', event);
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         resetProfileCache();
-        fetchProfile(true);
+        fetchProfile(false); // ← false: don't set isLoadingAuth=true for subsequent sign-ins
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsAuthenticated(false);
@@ -123,7 +124,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const refreshProfile = async (showLoading = true) => {
+  const refreshProfile = async (showLoading = false) => {
     resetProfileCache();
     return await fetchProfile(showLoading);
   };
