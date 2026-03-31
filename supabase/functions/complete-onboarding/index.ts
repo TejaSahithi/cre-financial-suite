@@ -85,6 +85,17 @@ serve(async (req) => {
     try {
       const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
       const frontendUrl = Deno.env.get('FRONTEND_URL') || 'https://cjwdwuqqdokblakheyjb.supabase.co';
+      
+      const { data: adminMembers } = await supabaseAdmin
+        .from('memberships')
+        .select('profiles(email)')
+        .eq('role', 'super_admin');
+        
+      let toEmails = adminMembers?.map((m: any) => m.profiles?.email).filter(Boolean) || [];
+      if (toEmails.length === 0) {
+        toEmails = ['support@cresuite.org'];
+      }
+
       if (RESEND_API_KEY) {
         await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -94,7 +105,7 @@ serve(async (req) => {
           },
           body: JSON.stringify({
             from: 'CRE Platform <support@cresuite.org>',
-            to: 'support@cresuite.org',
+            to: toEmails,
             subject: `💰 New Payment: ${orgName || 'New Organization'} — Action Required`,
             html: `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f8fafc;margin:0;padding:0;">
               <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:16px;border:1px solid #e2e8f0;overflow:hidden;">

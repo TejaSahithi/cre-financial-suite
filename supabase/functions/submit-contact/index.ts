@@ -136,12 +136,22 @@ Deno.serve(async (req: Request) => {
       <a href="${FRONTEND_URL}/SuperAdmin" class="cta">View in SuperAdmin →</a>
     `);
 
+    let toEmails = [ADMIN_EMAIL];
+    if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+      const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      const { data: adminMembers } = await admin.from("memberships").select("profiles(email)").eq("role", "super_admin");
+      const fetchedEmails = adminMembers?.map((m: any) => m.profiles?.email).filter(Boolean) || [];
+      if (fetchedEmails.length > 0) toEmails = fetchedEmails;
+    }
+
     const adminRes = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: FROM,
-        to: [ADMIN_EMAIL],
+        to: toEmails,
         subject: `[${deptLabel}] Contact from ${full_name}${company_name ? ` @ ${company_name}` : ""}`,
         html: adminHtml,
       }),
