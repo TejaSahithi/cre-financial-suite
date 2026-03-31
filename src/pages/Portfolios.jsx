@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PortfolioService } from "@/services/api";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,11 +39,14 @@ export default function Portfolios() {
       queryClient.invalidateQueries({ queryKey: ['Portfolio'] });
       setShowCreate(false);
       setForm(defaultForm);
-      // Redirect to Properties filtered by this portfolio so user can add properties
+      toast.success("Portfolio created successfully");
       if (data && data.id) {
         navigate(createPageUrl("Properties") + "?portfolio=" + data.id);
       }
-    }
+    },
+    onError: (err) => {
+      toast.error("Failed to create portfolio: " + (err?.message || "Unknown error"));
+    },
   });
 
   // Enrich portfolios with real-time aggregated data
@@ -301,7 +305,7 @@ export default function Portfolios() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate({ ...form, status: "active", org_id: orgId || "" })} disabled={!form.name || createMutation.isPending} className="bg-gradient-to-r from-blue-600 to-indigo-700">
+            <Button onClick={() => createMutation.mutate({ ...form, status: "active", ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}) })} disabled={!form.name || createMutation.isPending || !orgId || orgId === '__none__'} className="bg-gradient-to-r from-blue-600 to-indigo-700">
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}Create
             </Button>
           </DialogFooter>

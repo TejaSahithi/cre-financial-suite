@@ -330,7 +330,7 @@ export function createEntityService(entityName) {
         return newRecord;
       } catch (err) {
         console.error(`[api] ${entityName}.create() error:`, err);
-        return { id: `error-${Date.now()}`, ...data };
+        throw err;
       }
     },
     // ── UPSERT ──────────────────────────────────────────────────────

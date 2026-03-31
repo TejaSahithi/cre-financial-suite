@@ -3,6 +3,7 @@ import { propertyService } from "@/services/propertyService";
 import { invokeLLM, uploadFile, extractDataFromUploadedFile } from "@/services/integrations";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,10 +53,14 @@ export default function Properties() {
       setShowCreate(false);
       setForm(defaultForm);
       setCurrentStep(1);
+      toast.success("Property created successfully");
       if (data && data.id) {
         navigate(createPageUrl("PropertyDetail") + "?id=" + data.id);
       }
-    }
+    },
+    onError: (err) => {
+      toast.error("Failed to create property: " + (err?.message || "Unknown error"));
+    },
   });
 
   const filtered = properties.filter(p => {
@@ -540,7 +545,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                 total_sf: parseInt(form.total_sf) || 0,
                 year_built: parseInt(form.year_built) || null,
                 property_id_code: generatePropertyId(),
-                org_id: orgId || "",
+                ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
                 status: "active",
                 address_verified: form.address_verified || false
               })} disabled={!form.name || createMutation.isPending} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
