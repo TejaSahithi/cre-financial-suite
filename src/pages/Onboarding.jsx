@@ -165,20 +165,11 @@ export default function Onboarding() {
         let resolvedUser = authUser;
         let resolvedOrgId = authUser.org_id || await findMembershipOrgId();
 
-        if (!resolvedOrgId && authUser.profile?.status === "approved" && authUser.onboarding_type === "owner") {
-          console.log("[Onboarding] No org found, attempting first-login recovery");
-          const { error: firstLoginError } = await supabase.functions.invoke("first-login");
-          if (firstLoginError) {
-            console.warn("[Onboarding] first-login recovery returned:", firstLoginError.message);
-          }
-
-          const refreshedUser = await refreshProfile(false);
-          if (refreshedUser) {
-            resolvedUser = refreshedUser;
-            setUser(refreshedUser);
-            setForm((prev) => ({ ...prev, primary_contact_email: refreshedUser.email || prev.primary_contact_email }));
-            resolvedOrgId = refreshedUser.org_id || await findMembershipOrgId();
-          }
+        // Note: first-login org initialization is handled by App.jsx.
+        // Onboarding just waits for the org to be available.
+        // If no org yet, render step 1 and let the user fill in company info.
+        if (!resolvedOrgId) {
+          console.log("[Onboarding] No org found yet — rendering step 1 for user to fill in");
         }
 
         if (resolvedOrgId) {

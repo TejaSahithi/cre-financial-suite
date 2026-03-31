@@ -228,6 +228,7 @@ const AuthenticatedApp = () => {
 
   // Trigger first-login only for owner accounts that truly do not have an org yet.
   // Only runs after MFA is verified (mfaChecked=true and mfaRequired=false).
+  // Verifies session is valid before invoking the edge function.
   useEffect(() => {
     const hasOrganizationContext = Boolean(
       user?.org_id ||
@@ -241,21 +242,26 @@ const AuthenticatedApp = () => {
       !hasOrganizationContext &&
       !isInitializingOrg &&
       mfaChecked &&
-      !mfaRequired  // Don't run first-login until MFA is complete
+      !mfaRequired
     ) {
       const initOrg = async () => {
+        // Verify we have a valid session before calling the edge function
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          console.warn('[App] first-login: no valid session yet, skipping');
+          return;
+        }
+
         setIsInitializingOrg(true);
         try {
           console.log('[App] Triggering first-login initialization');
           const { data, error } = await supabase.functions.invoke('first-login');
-          // 401 = no valid session (e.g. expired OTP link) — don't throw, just bail silently
           if (error?.message?.includes('401') || error?.message?.includes('Unauthorized') || error?.status === 401) {
-            console.warn('[App] first-login: no valid session, skipping');
+            console.warn('[App] first-login: 401 — session not ready, will retry on next render');
             return;
           }
           if (error || data?.error) throw new Error(error?.message || data?.error || 'Failed to initialize organization');
-
-          await refreshProfile(); // Refresh auth state to pull down the newly minted Org and `onboarding` status
+          await refreshProfile(false);
         } catch(e) {
           console.error('[App] First login init error:', e);
         } finally {
@@ -280,9 +286,9 @@ const AuthenticatedApp = () => {
     );
   }
 
-  // While org is initializing, show spinner (except public pages)
+  // While org is initializing, show spinner (except public pages and Onboarding)
   if (isInitializingOrg) {
-    if (isPublicPage) return <AppRoutes />;
+    if (isPublicPage || currentPath === 'Onboarding') return <AppRoutes />;
     return (
       <div className="fixed inset-0 flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
