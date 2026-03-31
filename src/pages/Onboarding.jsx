@@ -118,9 +118,19 @@ export default function Onboarding() {
 
   useEffect(() => {
     if (isLoadingAuth) {
-      console.log('[Onboarding] Auth still loading, waiting...');
+      // Still loading auth — keep waiting, don't set loading=false yet
       return;
     }
+
+    let cancelled = false;
+
+    // Safety timeout — if init takes more than 8s, unblock the page anyway
+    const safetyTimer = setTimeout(() => {
+      if (!cancelled) {
+        console.warn('[Onboarding] Init timeout — unblocking page');
+        setLoading(false);
+      }
+    }, 8000);
 
     const init = async () => {
       try {
@@ -216,10 +226,13 @@ export default function Onboarding() {
       } catch (e) {
         console.error('[Onboarding] init error:', e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
+        clearTimeout(safetyTimer);
       }
     };
     init();
+
+    return () => { cancelled = true; clearTimeout(safetyTimer); };
 
   }, [authUser, isLoadingAuth, navigate, refreshProfile]);
 
