@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { expenseService } from "@/services/expenseService";
-import { uploadFile, extractDataFromUploadedFile } from "@/services/integrations";
 import { useQueryClient } from "@tanstack/react-query";
+import useOrgId from "@/hooks/useOrgId";
+import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,7 @@ const systemFields = ["expense_date", "category", "amount", "vendor", "recoverab
 export default function BulkImport() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { orgId } = useOrgId();
   const [step, setStep] = useState(1);
   const [file, setFile] = useState(null);
   const [fileUrl, setFileUrl] = useState("");
@@ -29,35 +31,54 @@ export default function BulkImport() {
     if (!f) return;
     setFile(f);
     setUploading(true);
-    const { file_url } = await uploadFile({ file: f });
-    setFileUrl(file_url);
 
-    const result = await extractDataFromUploadedFile({
-      file_url,
-      json_schema: {
-        type: "object",
-        properties: {
-          columns: { type: "array", items: { type: "string" } },
-          rows: { type: "array", items: { type: "object" } }
-        }
+    // Upload to Supabase Storage
+    let uploadedUrl = "";
+    try {
+      const fileName = `bulk-imports/${Date.now()}-${f.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(fileName, f, { upsert: true });
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        uploadedUrl = urlData?.publicUrl || "";
       }
-    });
-
-    if (result.output) {
-      const cols = result.output.columns || Object.keys(result.output.rows?.[0] || {});
-      const autoMap = {};
-      cols.forEach(c => {
-        const lower = c.toLowerCase();
-        if (lower.includes('date')) autoMap[c] = 'expense_date';
-        else if (lower.includes('category') || lower.includes('type')) autoMap[c] = 'category';
-        else if (lower.includes('amount') || lower.includes('cost')) autoMap[c] = 'amount';
-        else if (lower.includes('vendor') || lower.includes('supplier')) autoMap[c] = 'vendor';
-        else if (lower.includes('recover') || lower.includes('class')) autoMap[c] = 'recoverable_flag';
-        else if (lower.includes('desc') || lower.includes('note')) autoMap[c] = 'description';
-      });
-      setColumnMap(autoMap);
-      setExtractedRows(result.output.rows || (Array.isArray(result.output) ? result.output : []));
+    } catch {
+      // fallback to local blob URL for dev
+      uploadedUrl = URL.createObjectURL(f);
     }
+    setFileUrl(uploadedUrl);
+
+    // Parse CSV/Excel client-side
+    try {
+      const text = await f.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length > 0) {
+        const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+        const rows = lines.slice(1).map(line => {
+          const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+          const obj = {};
+          headers.forEach((h, i) => { obj[h] = vals[i] || ""; });
+          return obj;
+        }).filter(r => Object.values(r).some(v => v));
+
+        const autoMap = {};
+        headers.forEach(c => {
+          const lower = c.toLowerCase();
+          if (lower.includes('date')) autoMap[c] = 'expense_date';
+          else if (lower.includes('category') || lower.includes('type')) autoMap[c] = 'category';
+          else if (lower.includes('amount') || lower.includes('cost')) autoMap[c] = 'amount';
+          else if (lower.includes('vendor') || lower.includes('supplier')) autoMap[c] = 'vendor';
+          else if (lower.includes('recover') || lower.includes('class')) autoMap[c] = 'recoverable_flag';
+          else if (lower.includes('desc') || lower.includes('note')) autoMap[c] = 'description';
+        });
+        setColumnMap(autoMap);
+        setExtractedRows(rows);
+      }
+    } catch (err) {
+      console.error('[BulkImport] CSV parse error:', err);
+    }
+
     setUploading(false);
     setStep(2);
   };
@@ -91,7 +112,7 @@ export default function BulkImport() {
         description: row.description || "",
         classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
         source: "import",
-        org_id: "default",
+        org_id: orgId || "",
         fiscal_year: new Date().getFullYear()
       });
     }

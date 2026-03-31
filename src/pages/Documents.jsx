@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { documentService } from "@/services/documentService";
-import { leaseService } from "@/services/leaseService";
-import { propertyService } from "@/services/propertyService";
-import { vendorService } from "@/services/vendorService";
 import { uploadFile } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import useOrgQuery from "@/hooks/useOrgQuery";
+import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,15 +22,12 @@ export default function Documents() {
   const [uploadForm, setUploadForm] = useState({ name: "", type: "other", description: "", property_id: "", tenant_name: "", vendor_name: "" });
   const [tagFilter, setTagFilter] = useState("all");
   const queryClient = useQueryClient();
+  const { orgId } = useOrgId();
 
-  const { data: documents = [] } = useQuery({
-    queryKey: ['documents'],
-    queryFn: () => documentService.list('-created_date'),
-  });
-
-  const { data: leases = [] } = useQuery({ queryKey: ['leases-docs'], queryFn: () => leaseService.list() });
-  const { data: properties = [] } = useQuery({ queryKey: ['props-docs'], queryFn: () => propertyService.list() });
-  const { data: vendors = [] } = useQuery({ queryKey: ['vendors-docs'], queryFn: () => vendorService.list() });
+  const { data: documents = [] } = useOrgQuery("Document");
+  const { data: leases = [] } = useOrgQuery("Lease");
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: vendors = [] } = useOrgQuery("Vendor");
 
   // Combine uploaded documents with lease PDFs
   const leaseDocuments = leases.filter(l => l.pdf_url).map(l => ({
@@ -66,21 +63,35 @@ export default function Documents() {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
-    const { file_url } = await uploadFile({ file });
+    let file_url = "";
+    try {
+      const fileName = `documents/${Date.now()}-${file.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(fileName, file, { upsert: true });
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        file_url = urlData?.publicUrl || "";
+      }
+    } catch {
+      const result = await uploadFile({ file });
+      file_url = result.file_url;
+    }
     await documentService.create({
       ...uploadForm,
       name: uploadForm.name || file.name,
       file_url,
+      org_id: orgId || "",
     });
-    queryClient.invalidateQueries({ queryKey: ['documents'] });
+    queryClient.invalidateQueries({ queryKey: ['Document', orgId] });
     setUploading(false);
     setShowUpload(false);
-    setUploadForm({ name: "", type: "other", description: "" });
+    setUploadForm({ name: "", type: "other", description: "", property_id: "", tenant_name: "", vendor_name: "" });
   };
 
   const deleteMutation = useMutation({
     mutationFn: (id) => documentService.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['documents'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['Document', orgId] }),
   });
 
   return (

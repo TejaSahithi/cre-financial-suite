@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { leaseService } from "@/services/leaseService";
-import { invokeLLM, uploadFile } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,70 +24,65 @@ export default function LeaseUpload() {
     if (!selectedFile) return;
     setFile(selectedFile);
     setUploading(true);
-    const { file_url } = await uploadFile({ file: selectedFile });
-    setFileUrl(file_url);
+
+    // Upload to Supabase Storage
+    let uploadedUrl = "";
+    try {
+      const fileName = `leases/${Date.now()}-${selectedFile.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(fileName, selectedFile, { upsert: true });
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        uploadedUrl = urlData?.publicUrl || "";
+      }
+    } catch {
+      uploadedUrl = URL.createObjectURL(selectedFile);
+    }
+    setFileUrl(uploadedUrl);
     setUploading(false);
     setStep(2);
-    
-    // Start AI extraction
+
+    // AI extraction via Supabase Edge Function (if available), else manual entry scaffold
     setExtracting(true);
-    const result = await invokeLLM({
-      prompt: `Extract all lease terms from this commercial lease document. Be thorough and extract every possible field. Include confidence_scores (0-100) for each extracted field. Also extract:
-- escalation_timing: "lease_anniversary" or "calendar_year"
-- renewal_type: "new_lease", "option_letter", "auto_renew", or "none"
-- renewal_notice_months: number of months notice required
-- management_fee_basis: "cam_pool", "tenant_annual_rent", or "pro_rata_sf"
-- percentage_rent_breakpoint: sales threshold before percentage rent applies
-- sales_reporting_frequency: "monthly", "quarterly", or "annual"
-- hvac_responsibility: "tenant", "landlord", or "shared"
-- hvac_landlord_limit: max dollar amount landlord pays for HVAC
-- lease_scope: "property" or "building"
-- recon_deadline_days: days after year-end for reconciliation (default 90)
-- recon_collection_limit_months: months landlord has to collect underpayments (default 12)
-- cpi_index: CPI index source (e.g. CPI-U, CPI-W)`,
-      file_urls: [file_url],
-      response_json_schema: {
-        type: "object",
-        properties: {
-          tenant_name: { type: "string" },
-          lease_type: { type: "string" },
-          start_date: { type: "string" },
-          end_date: { type: "string" },
-          base_rent: { type: "number" },
-          rent_per_sf: { type: "number" },
-          total_sf: { type: "number" },
-          annual_rent: { type: "number" },
-          escalation_type: { type: "string" },
-          escalation_rate: { type: "number" },
-          escalation_timing: { type: "string" },
-          renewal_options: { type: "string" },
-          renewal_type: { type: "string" },
-          renewal_notice_months: { type: "number" },
-          cam_cap_type: { type: "string" },
-          cam_cap_rate: { type: "number" },
-          cpi_index: { type: "string" },
-          base_year: { type: "number" },
-          gross_up_clause: { type: "boolean" },
-          admin_fee_allowed: { type: "boolean" },
-          admin_fee_pct: { type: "number" },
-          management_fee_pct: { type: "number" },
-          management_fee_basis: { type: "string" },
-          free_rent_months: { type: "string" },
-          ti_allowance: { type: "number" },
-          percentage_rent: { type: "boolean" },
-          percentage_rent_rate: { type: "number" },
-          percentage_rent_breakpoint: { type: "number" },
-          sales_reporting_frequency: { type: "string" },
-          hvac_responsibility: { type: "string" },
-          hvac_landlord_limit: { type: "number" },
-          lease_scope: { type: "string" },
-          recon_deadline_days: { type: "number" },
-          recon_collection_limit_months: { type: "number" },
-          confidence_scores: { type: "object" }
-        }
+    try {
+      const { data, error } = await supabase.functions.invoke('extract-lease', {
+        body: { file_url: uploadedUrl, file_name: selectedFile.name }
+      });
+      if (!error && data && Object.keys(data).length > 0) {
+        setExtractedData(data);
+      } else {
+        // No AI backend — provide empty scaffold for manual entry
+        setExtractedData({
+          tenant_name: "",
+          lease_type: "triple_net",
+          start_date: "",
+          end_date: "",
+          base_rent: 0,
+          rent_per_sf: 0,
+          total_sf: 0,
+          annual_rent: 0,
+          escalation_type: "fixed",
+          escalation_rate: 3,
+          cam_cap_type: "none",
+          cam_cap_rate: 5,
+          gross_up_clause: false,
+          admin_fee_allowed: true,
+          admin_fee_pct: 10,
+          management_fee_pct: 5,
+          confidence_scores: {}
+        });
       }
-    });
-    setExtractedData(result);
+    } catch {
+      setExtractedData({
+        tenant_name: "",
+        lease_type: "triple_net",
+        start_date: "",
+        end_date: "",
+        base_rent: 0,
+        confidence_scores: {}
+      });
+    }
     setExtracting(false);
     setStep(3);
   };
