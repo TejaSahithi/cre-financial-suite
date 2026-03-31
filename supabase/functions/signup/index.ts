@@ -74,7 +74,7 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-    const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
+    const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "https://cre-financial-suite-main.vercel.app";
     // After confirmation, land on a protected page so MFAGuard triggers enrollment
     const POST_CONFIRM_URL = `${FRONTEND_URL}/Onboarding`;
     const FROM = "CRE Platform <support@cresuite.org>";
@@ -234,30 +234,8 @@ Deno.serve(async (req: Request) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Try to get a clickable auth link for email confirmation.
- * 1st: generateLink type=signup (standard confirmation)
- * 2nd: generateLink type=magiclink (direct login, also confirms email)
- */
 async function getAnyAuthLink(admin: any, email: string, frontendUrl: string): Promise<string | null> {
-  // Try signup confirmation link first
-  try {
-    const { data, error } = await admin.auth.admin.generateLink({
-      type: "signup",
-      email,
-      options: { redirectTo: frontendUrl },
-    });
-    const link = data?.properties?.action_link;
-    if (link) {
-      console.log("[signup] Got signup confirmation link for:", email);
-      return link;
-    }
-    console.warn("[signup] signup link failed:", error?.message, "— trying magic link");
-  } catch (e: any) {
-    console.warn("[signup] signup link threw:", e.message, "— trying magic link");
-  }
-
-  // Fallback: magic link (logs user in directly, also confirms email)
+  // Generate a magiclink because it logs the user in directly AND confirms their email
   try {
     const { data, error } = await admin.auth.admin.generateLink({
       type: "magiclink",
@@ -269,7 +247,7 @@ async function getAnyAuthLink(admin: any, email: string, frontendUrl: string): P
       console.log("[signup] Got magic link for:", email);
       return link;
     }
-    console.error("[signup] magic link also failed:", error?.message);
+    console.error("[signup] magic link failed:", error?.message);
   } catch (e: any) {
     console.error("[signup] magic link threw:", e.message);
   }
