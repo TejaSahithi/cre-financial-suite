@@ -180,6 +180,7 @@ const AuthenticatedApp = () => {
   };
 
   // Trigger first-login only for owner accounts that truly do not have an org yet.
+  // Only runs after MFA is verified (mfaChecked=true and mfaRequired=false).
   useEffect(() => {
     const hasOrganizationContext = Boolean(
       user?.org_id ||
@@ -191,7 +192,9 @@ const AuthenticatedApp = () => {
       user?.profile?.status === 'approved' &&
       user?.onboarding_type === 'owner' &&
       !hasOrganizationContext &&
-      !isInitializingOrg
+      !isInitializingOrg &&
+      mfaChecked &&
+      !mfaRequired  // Don't run first-login until MFA is complete
     ) {
       const initOrg = async () => {
         setIsInitializingOrg(true);
@@ -214,7 +217,7 @@ const AuthenticatedApp = () => {
       };
       initOrg();
     }
-  }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, refreshProfile]);
+  }, [user?.activeOrg?.id, user?.memberships, user?.onboarding_type, user?.org_id, user?.profile?.status, isInitializingOrg, mfaChecked, mfaRequired, refreshProfile]);
 
   // Determine if the current page is public
   const currentPath = location.pathname.substring(1); // remove leading /
@@ -232,8 +235,14 @@ const AuthenticatedApp = () => {
     );
   }
 
-  // ─── MFA Guard: intercept aal1 sessions on protected pages ───────────
-  if (isAuthenticated && mfaRequired && !isPublicPage) {
+  // ─── MFA Guard ────────────────────────────────────────────────────────
+  // MFA is required for ALL authenticated non-public pages, INCLUDING Onboarding.
+  // Flow: Confirm Email → MFA Setup → Onboarding → Payment → WelcomeAboard → Dashboard
+  // Only AcceptInvite and PendingApproval bypass MFA (they have their own auth flows).
+  const mfaBypassPages = ["AcceptInvite", "PendingApproval", "ResetPassword", "SecurityQuestionsSetup"];
+  const isMfaBypassPage = mfaBypassPages.includes(currentPath);
+
+  if (isAuthenticated && mfaRequired && !isPublicPage && !isMfaBypassPage) {
     return <MFAGuard onVerified={handleMfaVerified} needsEnroll={mfaNeedsEnroll} />;
   }
 
