@@ -149,6 +149,9 @@ const AuthenticatedApp = () => {
       }
       import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
       navigateToLogin();
+    } else {
+      // No error — just clean up the hash fragment left by Supabase auth redirects
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
   }, [navigateToLogin]);
 
@@ -267,16 +270,27 @@ const AuthenticatedApp = () => {
   const currentPath = location.pathname.substring(1); // remove leading /
   const isPublicPage = publicPages.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
-  // Show loading spinner while checking auth or initializing the strict backend state (org creation)
+  // Pages that must never be blocked by the loading spinner
+  const neverBlockPages = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess", "AcceptInvite", "PendingApproval", "AwaitingRole"];
+  const isNeverBlockPage = neverBlockPages.includes(currentPath);
+
+  // Show loading spinner while checking auth or initializing org.
+  // After MFA is verified (mfaVerifiedThisSession), never show spinner for setup pages.
   if (isLoadingPublicSettings || isLoadingAuth || isInitializingOrg || (isAuthenticated && !mfaChecked)) {
-    if (isPublicPage && !isInitializingOrg) {
+    // Always let public pages and setup pages through — never block them with a spinner
+    if ((isPublicPage || isNeverBlockPage) && !isInitializingOrg) {
       return <AppRoutes />;
     }
-    return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
-      </div>
-    );
+    // If MFA was just verified, don't show spinner — let routing proceed
+    if (mfaVerifiedThisSession && mfaChecked) {
+      // fall through to routing logic below
+    } else {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center">
+          <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+        </div>
+      );
+    }
   }
 
   // ─── MFA Guard ────────────────────────────────────────────────────────
@@ -307,8 +321,9 @@ const AuthenticatedApp = () => {
   if (isAuthenticated && user) {
     const { profile, activeOrg, memberships } = user;
 
-    // Loading guard: If authenticated but data hasn't arrived yet, stay on loading
-    if (!profile || !memberships) {
+    // Loading guard: If authenticated but profile data hasn't arrived yet, stay on loading
+    // Exception: if MFA was just verified, let routing proceed even if profile is still loading
+    if ((!profile || !memberships) && !mfaVerifiedThisSession) {
       return (
         <div className="fixed inset-0 flex items-center justify-center">
           <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
