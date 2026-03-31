@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { documentService } from "@/services/documentService";
 import { uploadFile } from "@/services/integrations";
 import { supabase } from "@/services/supabaseClient";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent } from "@/components/ui/card";
