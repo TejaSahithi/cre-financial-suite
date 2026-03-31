@@ -123,9 +123,10 @@ const AuthenticatedApp = () => {
   const location = useLocation();
 
   const [isInitializingOrg, setIsInitializingOrg] = useState(false);
-  const [mfaRequired, setMfaRequired] = useState(false); // true = show MFA screen
-  const [mfaChecked, setMfaChecked] = useState(false);   // true = check complete
-  const [mfaNeedsEnroll, setMfaNeedsEnroll] = useState(false); // true = user has no TOTP factor, needs enrollment
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaChecked, setMfaChecked] = useState(false);
+  const [mfaNeedsEnroll, setMfaNeedsEnroll] = useState(false);
+  const [mfaVerifiedThisSession, setMfaVerifiedThisSession] = useState(false); // skip re-check after verify
 
   // Detect Supabase auth errors in the URL hash (e.g. expired OTP link)
   // and redirect to Login with a toast before anything else runs.
@@ -151,8 +152,8 @@ const AuthenticatedApp = () => {
     }
   }, [navigateToLogin]);
 
-  // Check MFA (Authenticator Assurance Level) whenever auth state or user changes
-  // Rule: Google OAuth users SKIP MFA. Magic link / email users MUST have MFA.
+  // Check MFA whenever auth state or user changes.
+  // Skipped if MFA was already verified this session to prevent re-check loop.
   useEffect(() => {
     const checkMFA = async () => {
       if (!isAuthenticated) {
@@ -161,12 +162,19 @@ const AuthenticatedApp = () => {
         setMfaChecked(true);
         return;
       }
+
+      // If MFA was already verified this session, skip re-check entirely
+      if (mfaVerifiedThisSession) {
+        setMfaRequired(false);
+        setMfaNeedsEnroll(false);
+        setMfaChecked(true);
+        return;
+      }
+
       try {
-        // Determine the auth provider from the session
         const { data: { session } } = await supabase.auth.getSession();
         const provider = session?.user?.app_metadata?.provider || 'email';
 
-        // Google OAuth users skip MFA entirely
         if (provider === 'google') {
           setMfaRequired(false);
           setMfaNeedsEnroll(false);
@@ -174,30 +182,25 @@ const AuthenticatedApp = () => {
           return;
         }
 
-        // For magic link / email users: check MFA enrollment and level
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
         const currentLevel = data?.currentLevel;
         const nextLevel = data?.nextLevel;
 
-        // List enrolled factors to see if user has TOTP set up
         const { data: factorsData } = await supabase.auth.mfa.listFactors();
         const totpFactors = (factorsData?.totp || []);
         const verifiedFactors = totpFactors.filter(f => f.status === 'verified');
 
         if (totpFactors.length === 0) {
-          // User has no TOTP enrolled at all → force enrollment
           setMfaNeedsEnroll(true);
           setMfaRequired(true);
         } else if (verifiedFactors.length > 0 && currentLevel === 'aal1' && nextLevel === 'aal2') {
-          // TOTP exists and is verified, but session is aal1 → force verification challenge
           setMfaNeedsEnroll(false);
           setMfaRequired(true);
         } else if (verifiedFactors.length === 0 && totpFactors.length > 0) {
-          // User has an unverified factor → MFAGuard will clean it up and re-enroll
           setMfaNeedsEnroll(true);
           setMfaRequired(true);
         } else {
-          // aal2 reached
+          // aal2 reached — MFA is satisfied
           setMfaRequired(false);
           setMfaNeedsEnroll(false);
         }
@@ -209,11 +212,14 @@ const AuthenticatedApp = () => {
       setMfaChecked(true);
     };
     checkMFA();
-  }, [isAuthenticated, user?.id]);
+  }, [isAuthenticated, user?.id, mfaVerifiedThisSession]);
 
   const handleMfaVerified = async () => {
+    // Mark MFA as verified immediately — prevents re-check loop when profile refreshes
+    setMfaVerifiedThisSession(true);
     setMfaRequired(false);
     setMfaNeedsEnroll(false);
+    setMfaChecked(true);
     await refreshProfile();
   };
 
