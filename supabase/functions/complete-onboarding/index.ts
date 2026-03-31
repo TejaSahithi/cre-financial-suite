@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -19,30 +19,33 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
-
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) throw new Error('Unauthorized');
+    const token = authHeader.replace('Bearer ', '');
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // 1. Fetch user's primary active org_admin membership
-    const { data: memberships } = await supabaseAdmin
+    // 1. Verify caller manually to bypass verify_jwt issues
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      console.error('[complete-onboarding] Auth verification failed:', authError?.message);
+      return new Response(JSON.stringify({ error: 'Unauthorized', details: authError?.message }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 2. Fetch user's primary active org_admin membership
+    const { data: memberships, error: memError } = await supabaseAdmin
       .from('memberships')
       .select('org_id')
       .eq('user_id', user.id)
       .eq('role', 'org_admin');
     
-    if (!memberships || memberships.length === 0) {
-      return new Response(JSON.stringify({ error: 'Caller must be an org_admin' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (memError || !memberships || memberships.length === 0) {
+      console.error('[complete-onboarding] Caller is not an org_admin for any org:', memError?.message);
+      return new Response(JSON.stringify({ error: 'Forbidden: Caller must be an org_admin' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
     const orgId = memberships[0].org_id;
 
@@ -54,7 +57,9 @@ serve(async (req) => {
     const { plan, billingCycle, amount, orgName } = bodyData;
     const numericAmount = amount ? parseFloat(amount) : 0;
 
-    // 2. Transact: update org and profile to 'under_review'
+    console.log(`[complete-onboarding] Processing ${orgName || orgId} for user ${user.id}`);
+
+    // 3. Transact: update org and profile to 'under_review'
     const orgUpdate: Record<string, unknown> = {
       status: 'under_review',
       onboarding_step: 4,
@@ -69,15 +74,15 @@ serve(async (req) => {
       .from('organizations')
       .update(orgUpdate)
       .eq('id', orgId);
-    if (orgError) throw orgError;
+    if (orgError) throw new Error(`DB Layout Error (org): ${orgError.message}`);
 
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
       .update({ status: 'under_review', updated_at: new Date().toISOString() })
       .eq('id', user.id);
-    if (profileError) throw profileError;
+    if (profileError) throw new Error(`DB Layout Error (profile): ${profileError.message}`);
 
-    // 3. Create invoice record
+    // 4. Create invoice record
     const { error: invoiceError } = await supabaseAdmin
       .from('invoices')
       .insert({
@@ -86,12 +91,12 @@ serve(async (req) => {
         status: 'paid',
         issued_date: new Date().toISOString().split('T')[0]
       });
-    if (invoiceError) throw invoiceError;
+    if (invoiceError) throw new Error(`DB Layout Error (invoice): ${invoiceError.message}`);
 
-    // 4. Notify admin via Resend directly (best effort, don't fail if it fails)
+    // 5. Notify admin via Resend directly (best effort, don't fail if it fails)
     try {
       const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-      const frontendUrl = Deno.env.get('FRONTEND_URL') || 'https://cjwdwuqqdokblakheyjb.supabase.co';
+      const frontendUrl = Deno.env.get('FRONTEND_URL') || 'https://cre-financial-suite-n9be.vercel.app';
       
       const { data: adminMembers } = await supabaseAdmin
         .from('memberships')
@@ -104,7 +109,7 @@ serve(async (req) => {
       }
 
       if (RESEND_API_KEY) {
-        await fetch('https://api.resend.com/emails', {
+        const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${RESEND_API_KEY}`,
@@ -139,7 +144,10 @@ serve(async (req) => {
             </body></html>`,
           }),
         });
-        console.log('[complete-onboarding] Admin notification sent');
+        if (!emailRes.ok) console.error('[complete-onboarding] Resend notification failed:', await emailRes.text());
+        else console.log('[complete-onboarding] Admin notification sent to:', toEmails);
+      } else {
+        console.warn('[complete-onboarding] Skipping notify: RESEND_API_KEY missing');
       }
     } catch (emailErr) {
       console.error('[complete-onboarding] Admin notification failed:', emailErr);
@@ -150,7 +158,7 @@ serve(async (req) => {
     });
 
   } catch (err) {
-    console.error("[complete-onboarding] Error:", err.message);
+    console.error("[complete-onboarding] Catch Error:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

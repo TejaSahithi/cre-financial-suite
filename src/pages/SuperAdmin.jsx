@@ -1029,26 +1029,33 @@ export default function SuperAdmin() {
                                   queryClient.setQueryData(['organizations'], (old) =>
                                     (old || []).map(o => o.id === org.id ? { ...o, status: 'active' } : o)
                                   );
-                                  try {
-                                    // 1. Try edge function — explicitly pass session token to avoid 401
-                                    let edgeFailed = false;
                                     try {
-                                      const { data: { session } } = await supabase.auth.getSession();
-                                      const { data, error } = await supabase.functions.invoke('approve-organization', {
-                                        body: { orgId: org.id },
-                                        headers: session?.access_token
-                                          ? { Authorization: `Bearer ${session.access_token}` }
-                                          : {},
-                                      });
-                                      if (error || data?.error) throw new Error(error?.message || data?.error || 'Edge function failed');
-                                      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-                                      data.warning
-                                        ? toast.warning("Approved! Note: " + data.warning, { duration: 6000 })
-                                        : toast.success("Organization approved! Welcome email sent.");
-                                    } catch (fnErr) {
-                                      console.warn('[SuperAdmin] approve-organization edge fn failed, using direct DB:', fnErr.message);
-                                      edgeFailed = true;
-                                    }
+                                      // 1. Try edge function — explicitly pass session token to avoid 401
+                                      let edgeFailed = false;
+                                      try {
+                                        const { data: { session } } = await supabase.auth.getSession();
+                                        console.log(`[SuperAdmin] Invoking approve-organization for ${org.id}`);
+                                        const { data, error } = await supabase.functions.invoke('approve-organization', {
+                                          body: { orgId: org.id },
+                                          headers: session?.access_token
+                                            ? { Authorization: `Bearer ${session.access_token}` }
+                                            : {},
+                                        });
+
+                                        if (error || data?.error) {
+                                          console.error('[SuperAdmin] Edge function error response:', error || data?.error);
+                                          throw new Error(error?.message || data?.error || 'Edge function failed');
+                                        }
+
+                                        console.log('[SuperAdmin] Edge function success:', data);
+                                        await queryClient.invalidateQueries({ queryKey: ['organizations'] });
+                                        data.warning
+                                          ? toast.warning("Approved! Note: " + data.warning, { duration: 6000 })
+                                          : toast.success("Organization approved! Welcome email sent.");
+                                      } catch (fnErr) {
+                                        console.warn('[SuperAdmin] approve-organization edge fn failed, using direct DB fallback:', fnErr.message);
+                                        edgeFailed = true;
+                                      }
 
                                     if (edgeFailed) {
                                       // 2. Fallback: direct DB — set org + admin profile to active

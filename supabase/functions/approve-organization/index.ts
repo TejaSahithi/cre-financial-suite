@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -19,36 +19,43 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
-
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) throw new Error('Unauthorized');
+    const token = authHeader.replace('Bearer ', '');
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Verify caller is super_admin
-    const { data: memberships } = await supabaseAdmin
+    // 1. Verify caller manually to bypass verify_jwt issues
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      console.error('[approve-org] Auth verification failed:', authError?.message);
+      return new Response(JSON.stringify({ error: 'Unauthorized', details: authError?.message }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 2. Verify caller is super_admin
+    const { data: memberships, error: memError } = await supabaseAdmin
       .from('memberships')
       .select('role')
       .eq('user_id', user.id)
       .eq('role', 'super_admin');
       
-    if (!memberships || memberships.length === 0) {
-      return new Response(JSON.stringify({ error: 'Forbidden: Requires super_admin' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (memError || !memberships || memberships.length === 0) {
+      console.error('[approve-org] Permission denied. user_id:', user.id, 'role check error:', memError?.message);
+      return new Response(JSON.stringify({ error: 'Forbidden: Requires super_admin role' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const { orgId } = await req.json();
-    if (!orgId) throw new Error('orgId is required');
+    // 3. Parse request body
+    const body = await req.json();
+    const { orgId } = body;
+    if (!orgId) throw new Error('orgId is required in request body');
 
-    // 1. Mark Organization Active
+    console.log(`[approve-org] Approving organization: ${orgId}`);
+
+    // 4. Mark Organization Active
     const { data: orgs, error: orgError } = await supabaseAdmin
       .from('organizations')
       .update({ status: 'active', updated_at: new Date().toISOString() })
@@ -58,38 +65,40 @@ serve(async (req) => {
 
     if (orgError) throw new Error(`DB Error updating org: ${orgError.message}`);
     if (!orgs || orgs.length === 0) {
-      throw new Error(`Organization ${orgId} not found or not in a reviewable state. Received: ${JSON.stringify(orgs)}`);
+      // Check current status to provide better error
+      const { data: currentOrg } = await supabaseAdmin.from('organizations').select('status').eq('id', orgId).single();
+      throw new Error(`Organization ${orgId} not found or not in a reviewable state (Current status: ${currentOrg?.status || 'unknown'})`);
     }
     const org = orgs[0];
 
-    // 2. Find all org_admins (the founders/owners) for this org
-    const { data: orgAdmins, error: adminsError } = await supabaseAdmin
+    // 5. Find all users associated with this org to update their profiles
+    const { data: orgUsers, error: usersError } = await supabaseAdmin
       .from('memberships')
       .select('user_id, profiles(email)')
       .eq('org_id', orgId);
       
-    if (adminsError) throw adminsError;
+    if (usersError) throw new Error(`DB Error fetching memberships: ${usersError.message}`);
 
-    if (orgAdmins && orgAdmins.length > 0) {
-      const userIds = orgAdmins.map(m => m.user_id);
+    if (orgUsers && orgUsers.length > 0) {
+      const userIds = orgUsers.map(m => m.user_id);
       // Get the email for the first admin to send the welcome email
-      const targetEmail = orgAdmins.find(m => m.profiles?.email)?.profiles?.email || org.primary_contact_email;
+      const targetEmail = orgUsers.find(m => m.profiles?.email)?.profiles?.email || org.primary_contact_email;
       
       // Update their profiles to active
       const { error: profileError } = await supabaseAdmin
         .from('profiles')
         .update({ status: 'active', onboarding_complete: true })
         .in('id', userIds)
-        .in('status', ['under_review', 'pending_approval', 'onboarding']);
+        .in('status', ['under_review', 'pending_approval', 'onboarding', 'pending_verification']);
         
-      if (profileError) throw profileError;
+      if (profileError) throw new Error(`DB Error updating profiles: ${profileError.message}`);
 
       // Use the resolved email for the rest of the function
-      org.primary_contact_email = targetEmail;
+      if (targetEmail) org.primary_contact_email = targetEmail;
     }
 
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    const frontendUrl = Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'http://localhost:5173';
+    const frontendUrl = Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'https://cre-financial-suite-n9be.vercel.app';
     
     let emailWarning = null;
     if (RESEND_API_KEY && org.primary_contact_email) {
@@ -167,7 +176,7 @@ serve(async (req) => {
     });
 
   } catch (err) {
-    console.error("[approve-org] Catch Error:", err);
+    console.error("[approve-org] Catch Error:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
