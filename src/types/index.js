@@ -38,6 +38,8 @@ export const ENTITIES = {
   ExpenseProjection: 'expense_projections',
   User:              'users',
   DemoRequest:       'demo_requests',
+  UploadedFile:      'uploaded_files',
+  ComputationSnapshot: 'computation_snapshots',
 };
 
 /**

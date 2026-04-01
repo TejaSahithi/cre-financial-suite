@@ -603,6 +603,8 @@ export const RentProjectionService     = createEntityService('RentProjection');
 export const ExpenseProjectionService  = createEntityService('ExpenseProjection');
 export const UserService               = createEntityService('User');
 export const DemoRequestService        = createEntityService('DemoRequest');
+export const UploadedFileService       = createEntityService('UploadedFile');
+export const ComputationSnapshotService = createEntityService('ComputationSnapshot');
 
 /**
  * Submit a public-facing ACCESS REQUEST.
