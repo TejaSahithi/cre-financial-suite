@@ -35,7 +35,6 @@ export async function logAudit(entry) {
     old_value:     entry.oldValue != null ? String(entry.oldValue) : null,
     new_value:     entry.newValue != null ? String(entry.newValue) : null,
     user_email:    entry.userEmail || null,
-    user_id:       entry.userId || null,
     created_at:    new Date().toISOString(),
   };
 
