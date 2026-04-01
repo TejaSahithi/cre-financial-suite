@@ -118,6 +118,101 @@ export const SEED_NOTIFICATIONS = [
   { id: id(), org_id: ORG, title: "Expense Pending Review", message: "2 expenses await your approval", type: "info", read: false, created_at: new Date(Date.now() - 172800000).toISOString() },
 ];
 
+// ─── Stakeholders ──────────────────────────────────────
+export const SEED_STAKEHOLDERS = [
+  { id: id(), org_id: ORG, name: "Patricia Chen", email: "p.chen@meridiangroup.com", role: "owner", notify_lease_expiry: true, notify_budget_approval: true, notify_cam_variance: true, notify_reconciliation: true, notify_audit_anomaly: false },
+  { id: id(), org_id: ORG, name: "Marcus Reynolds", email: "m.reynolds@meridiangroup.com", role: "property_manager", notify_lease_expiry: true, notify_budget_approval: false, notify_cam_variance: true, notify_reconciliation: false, notify_audit_anomaly: false },
+  { id: id(), org_id: ORG, name: "Sandra Lee", email: "s.lee@meridiangroup.com", role: "finance", notify_lease_expiry: false, notify_budget_approval: true, notify_cam_variance: true, notify_reconciliation: true, notify_audit_anomaly: true },
+  { id: id(), org_id: ORG, name: "James Whitfield", email: "j.whitfield@meridiangroup.com", role: "asset_manager", notify_lease_expiry: true, notify_budget_approval: true, notify_cam_variance: false, notify_reconciliation: false, notify_audit_anomaly: false },
+];
+
+// ─── GL Accounts ───────────────────────────────────────
+export const SEED_GL_ACCOUNTS = [
+  { id: id(), org_id: ORG, code: "5010", name: "Utilities", category: "Operating Expenses", type: "expense", description: "Electric, gas, water, sewer" },
+  { id: id(), org_id: ORG, code: "5020", name: "Maintenance & Repairs", category: "Operating Expenses", type: "expense", description: "Routine and preventive maintenance" },
+  { id: id(), org_id: ORG, code: "5030", name: "Property Insurance", category: "Operating Expenses", type: "expense", description: "Property and liability insurance premiums" },
+  { id: id(), org_id: ORG, code: "5040", name: "Property Tax", category: "Operating Expenses", type: "expense", description: "Real property tax assessments" },
+  { id: id(), org_id: ORG, code: "5050", name: "Janitorial Services", category: "Operating Expenses", type: "expense", description: "Cleaning and janitorial contracts" },
+  { id: id(), org_id: ORG, code: "5060", name: "Security", category: "Operating Expenses", type: "expense", description: "Security personnel and systems" },
+  { id: id(), org_id: ORG, code: "5070", name: "Landscaping", category: "Operating Expenses", type: "expense", description: "Grounds maintenance and landscaping" },
+  { id: id(), org_id: ORG, code: "5080", name: "Management Fee", category: "Management", type: "expense", description: "Property management fees" },
+  { id: id(), org_id: ORG, code: "4010", name: "Base Rent", category: "Revenue", type: "revenue", description: "Tenant base rent collections" },
+  { id: id(), org_id: ORG, code: "4020", name: "CAM Recoveries", category: "Revenue", type: "revenue", description: "Common area maintenance recoveries" },
+  { id: id(), org_id: ORG, code: "4030", name: "Late Fees", category: "Revenue", type: "revenue", description: "Tenant late payment fees" },
+];
+
+// ─── Revenues ──────────────────────────────────────────
+export const SEED_REVENUES = [
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 1, type: "base_rent", amount: 59500, created_at: "2025-01-31" },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 2, type: "base_rent", amount: 59500, created_at: "2025-02-28" },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 3, type: "base_rent", amount: 59500, created_at: "2025-03-31" },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2025, month: 1, type: "base_rent", amount: 20500, created_at: "2025-01-31" },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2025, month: 2, type: "base_rent", amount: 20500, created_at: "2025-02-28" },
+  { id: id(), org_id: ORG, property_id: p3, fiscal_year: 2025, month: 1, type: "base_rent", amount: 35000, created_at: "2025-01-31" },
+  { id: id(), org_id: ORG, property_id: p4, fiscal_year: 2025, month: 1, type: "base_rent", amount: 14000, created_at: "2025-01-31" },
+  { id: id(), org_id: ORG, property_id: p5, fiscal_year: 2025, month: 1, type: "base_rent", amount: 16500, created_at: "2025-01-31" },
+];
+
+// ─── Actuals ───────────────────────────────────────────
+export const SEED_ACTUALS = [
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 1, category: "utilities", amount: 42000, source: "invoice" },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 2, category: "maintenance", amount: 18500, source: "invoice" },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, month: 1, category: "insurance", amount: 67000, source: "invoice" },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2025, month: 1, category: "property_tax", amount: 89000, source: "tax_bill" },
+  { id: id(), org_id: ORG, property_id: p3, fiscal_year: 2025, month: 1, category: "maintenance", amount: 14200, source: "invoice" },
+];
+
+// ─── Variances ─────────────────────────────────────────
+export const SEED_VARIANCES = [
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, category: "utilities", budget_amount: 48000, actual_amount: 42000, variance_amount: -6000, variance_pct: -12.5 },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, category: "maintenance", budget_amount: 20000, actual_amount: 18500, variance_amount: -1500, variance_pct: -7.5 },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2025, category: "property_tax", budget_amount: 85000, actual_amount: 89000, variance_amount: 4000, variance_pct: 4.7 },
+  { id: id(), org_id: ORG, property_id: p3, fiscal_year: 2025, category: "maintenance", budget_amount: 10000, actual_amount: 14200, variance_amount: 4200, variance_pct: 42.0 },
+];
+
+// ─── Rent Projections ──────────────────────────────────
+export const SEED_RENT_PROJECTIONS = [
+  { id: id(), org_id: ORG, property_id: p1, lease_id: null, fiscal_year: 2026, projected_annual_rent: 228660, growth_rate: 3, method: "escalation", base_year: 2025, created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, property_id: p2, lease_id: null, fiscal_year: 2026, projected_annual_rent: 250000, growth_rate: 2.5, method: "escalation", base_year: 2025, created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, property_id: p3, lease_id: null, fiscal_year: 2026, projected_annual_rent: 430500, growth_rate: 2.5, method: "escalation", base_year: 2025, created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, property_id: p4, lease_id: null, fiscal_year: 2026, projected_annual_rent: 173040, growth_rate: 3, method: "escalation", base_year: 2025, created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, property_id: p5, lease_id: null, fiscal_year: 2026, projected_annual_rent: 202950, growth_rate: 2.5, method: "escalation", base_year: 2025, created_at: "2025-01-01" },
+];
+
+// ─── Expense Projections ───────────────────────────────
+export const SEED_EXPENSE_PROJECTIONS = [
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2026, category: "utilities", projected_amount: 168000, growth_rate: 3, base_year: 2025 },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2026, category: "maintenance", projected_amount: 76000, growth_rate: 2, base_year: 2025 },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2026, category: "property_tax", projected_amount: 185000, growth_rate: 2, base_year: 2025 },
+  { id: id(), org_id: ORG, property_id: p3, fiscal_year: 2026, category: "utilities", projected_amount: 58000, growth_rate: 3, base_year: 2025 },
+];
+
+// ─── Reconciliations ───────────────────────────────────
+export const SEED_RECONCILIATIONS = [
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2024, status: "completed", total_recoverable: 182000, total_billed: 178500, variance: -3500, completed_at: "2025-02-01" },
+  { id: id(), org_id: ORG, property_id: p2, fiscal_year: 2024, status: "completed", total_recoverable: 96000, total_billed: 97200, variance: 1200, completed_at: "2025-02-15" },
+  { id: id(), org_id: ORG, property_id: p1, fiscal_year: 2025, status: "in_progress", total_recoverable: 0, total_billed: 0, variance: 0, completed_at: null },
+];
+
+// ─── Integration Configs ───────────────────────────────
+export const SEED_INTEGRATION_CONFIGS = [
+  { id: id(), org_id: ORG, provider: "yardi", status: "inactive", label: "Yardi Voyager", description: "Sync properties and leases from Yardi", last_synced: null },
+  { id: id(), org_id: ORG, provider: "mri", status: "inactive", label: "MRI Software", description: "Import GL data from MRI", last_synced: null },
+  { id: id(), org_id: ORG, provider: "quickbooks", status: "inactive", label: "QuickBooks Online", description: "Sync expenses and invoices", last_synced: null },
+];
+
+// ─── Billings ──────────────────────────────────────────
+export const SEED_BILLINGS = [
+  { id: id(), org_id: ORG, plan: "professional", status: "active", billing_cycle: "monthly", amount: 299, currency: "USD", next_billing_date: "2025-05-01", created_at: "2024-11-01" },
+];
+
+// ─── Workflows ─────────────────────────────────────────
+export const SEED_WORKFLOWS = [
+  { id: id(), org_id: ORG, name: "Lease Expiry Alert", type: "notification", status: "active", trigger: "lease_expiry", description: "Sends alerts 12, 6, 3, and 1 month before lease expiration", created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, name: "Budget Approval", type: "approval", status: "active", trigger: "budget_submit", description: "Routes budget submissions for org admin review", created_at: "2025-01-01" },
+  { id: id(), org_id: ORG, name: "Expense Variance Alert", type: "notification", status: "active", trigger: "variance_threshold", description: "Alerts when actuals exceed budget by 10%+", created_at: "2025-01-01" },
+];
+
 /**
  * Master map of entity name → seed records.
  * Keys must match the entity names used in createEntityService().
@@ -134,6 +229,17 @@ export const ALL_SEED_DATA = {
   Building: SEED_BUILDINGS,
   Unit: SEED_UNITS,
   Notification: SEED_NOTIFICATIONS,
+  Stakeholder: SEED_STAKEHOLDERS,
+  GLAccount: SEED_GL_ACCOUNTS,
+  Revenue: SEED_REVENUES,
+  Actual: SEED_ACTUALS,
+  Variance: SEED_VARIANCES,
+  RentProjection: SEED_RENT_PROJECTIONS,
+  ExpenseProjection: SEED_EXPENSE_PROJECTIONS,
+  Reconciliation: SEED_RECONCILIATIONS,
+  IntegrationConfig: SEED_INTEGRATION_CONFIGS,
+  Billing: SEED_BILLINGS,
+  Workflow: SEED_WORKFLOWS,
   AuditLog: [
     { id: 'a1', org_id: ORG, entity_type: 'Property', entity_id: p1, action: 'create', user_name: 'Demo Admin', user_email: 'admin@demo.com', timestamp: new Date(Date.now() - 3600000).toISOString(), property_name: 'Camelback Commerce Center' },
     { id: 'a2', org_id: ORG, entity_type: 'Lease', entity_id: 'l1', action: 'upload', user_name: 'Tejas', user_email: 'tejas@demo.com', timestamp: new Date(Date.now() - 7200000).toISOString(), property_name: 'Scottsdale Retail Plaza', tenant_name: 'CoreFit Athletics' },
@@ -147,7 +253,5 @@ export const ALL_SEED_DATA = {
   ],
   Document: [],
   Invoice: [],
-  Reconciliation: [],
-  Workflow: [],
   ChartOfAccount: [],
 };

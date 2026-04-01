@@ -35,6 +35,9 @@ export default function LeaseUpload() {
       if (!uploadError && uploadData) {
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         uploadedUrl = urlData?.publicUrl || "";
+      } else {
+        // Storage bucket unavailable — fall back to local blob URL
+        uploadedUrl = URL.createObjectURL(selectedFile);
       }
     } catch {
       uploadedUrl = URL.createObjectURL(selectedFile);

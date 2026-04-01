@@ -105,6 +105,20 @@ export function clearCache() {
   queryCache.clear();
 }
 
+// ─── Table-not-found detection ─────────────────────────────────────────
+/**
+ * Returns true if the error indicates the table doesn't exist in Supabase.
+ * PGRST205 = relation not found in schema cache
+ * 42P01    = undefined_table (Postgres error)
+ */
+function isTableNotFound(err) {
+  return (
+    err?.code === 'PGRST205' ||
+    err?.code === '42P01' ||
+    (typeof err?.message === 'string' && err.message.includes('does not exist'))
+  );
+}
+
 // ─── Generic Entity Service Factory ────────────────────────────────────
 /**
  * Create a CRUD service for a given entity.
@@ -160,6 +174,12 @@ export function createEntityService(entityName) {
         const record = getStore(entityName).find(r => r.id === id);
         return record || null;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — using in-memory fallback`);
+          seedMemoryStore();
+          const record = getStore(entityName).find(r => r.id === id);
+          return record || null;
+        }
         console.error(`[api] ${entityName}.get() error:`, err);
         return null;
       }
@@ -215,6 +235,22 @@ export function createEntityService(entityName) {
         setCached(cacheKey, items);
         return items;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — using in-memory fallback`);
+          seedMemoryStore();
+          let items = [...getStore(entityName)];
+          if (sortField) {
+            const desc = sortField.startsWith('-');
+            const field = desc ? sortField.slice(1) : sortField;
+            items.sort((a, b) => {
+              if (a[field] < b[field]) return desc ? 1 : -1;
+              if (a[field] > b[field]) return desc ? -1 : 1;
+              return 0;
+            });
+          }
+          if (limit) items = items.slice(0, limit);
+          return items;
+        }
         console.error(`[api] ${entityName}.list() error:`, err);
         return [];
       }
@@ -258,6 +294,15 @@ export function createEntityService(entityName) {
         setCached(cacheKey, items);
         return items;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — using in-memory fallback`);
+          seedMemoryStore();
+          // Skip org_id when filtering seed data — seed records use 'demo-org', not the real UUID
+          const { org_id: _skip, ...nonOrgFilters } = filters;
+          return getStore(entityName).filter(record =>
+            Object.entries(nonOrgFilters).every(([key, value]) => record[key] === value)
+          );
+        }
         console.error(`[api] ${entityName}.filter() error:`, err);
         return [];
       }
@@ -329,6 +374,16 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return newRecord;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — creating in-memory`);
+          seedMemoryStore();
+          const now = new Date().toISOString();
+          const enriched = { ...data, created_at: data.created_at || now, updated_at: data.updated_at || now };
+          const newRecord = { id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...enriched };
+          getStore(entityName).push(newRecord);
+          invalidateEntity(entityName);
+          return newRecord;
+        }
         console.error(`[api] ${entityName}.create() error:`, err);
         throw err;
       }
@@ -443,6 +498,16 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return updated;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — updating in-memory`);
+          seedMemoryStore();
+          const store = getStore(entityName);
+          const enriched = { ...data, updated_at: new Date().toISOString() };
+          const idx = store.findIndex(r => r.id === id);
+          if (idx !== -1) store[idx] = { ...store[idx], ...enriched };
+          invalidateEntity(entityName);
+          return idx !== -1 ? store[idx] : { id, ...enriched };
+        }
         console.error(`[api] ${entityName}.update() error:`, err);
         return { id, ...data };
       }
@@ -492,6 +557,15 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return true;
       } catch (err) {
+        if (isTableNotFound(err)) {
+          console.warn(`[api] ${entityName} table not found in Supabase — deleting in-memory`);
+          seedMemoryStore();
+          const delStore = getStore(entityName);
+          const delIdx = delStore.findIndex(r => r.id === id);
+          if (delIdx !== -1) delStore.splice(delIdx, 1);
+          invalidateEntity(entityName);
+          return true;
+        }
         console.error(`[api] ${entityName}.delete() error:`, err);
         return false;
       }

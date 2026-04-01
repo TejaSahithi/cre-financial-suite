@@ -42,6 +42,9 @@ export default function BulkImport() {
       if (!uploadError && uploadData) {
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         uploadedUrl = urlData?.publicUrl || "";
+      } else {
+        // Storage bucket missing or unavailable — use local blob URL
+        uploadedUrl = URL.createObjectURL(f);
       }
     } catch {
       // fallback to local blob URL for dev

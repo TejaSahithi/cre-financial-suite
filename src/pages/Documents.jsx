@@ -72,6 +72,10 @@ export default function Documents() {
       if (!uploadError && uploadData) {
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         file_url = urlData?.publicUrl || "";
+      } else if (uploadError) {
+        // Storage bucket missing or unavailable — fall back to integration service
+        const result = await uploadFile({ file });
+        file_url = result.file_url;
       }
     } catch {
       const result = await uploadFile({ file });
