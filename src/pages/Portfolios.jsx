@@ -56,12 +56,12 @@ export default function Portfolios() {
     const portBuildings = buildings.filter(b => propIds.includes(b.property_id));
     const portUnits = units.filter(u => propIds.includes(u.property_id));
     const portLeases = leases.filter(l => propIds.includes(l.property_id));
-    const totalSF = portProperties.reduce((s, pr) => s + (pr.total_sf || 0), 0);
-    const leasedUnits = portUnits.filter(u => u.occupancy_status === 'leased');
-    const leasedSF = leasedUnits.reduce((s, u) => s + (u.square_feet || 0), 0);
-    const occupancy = totalSF > 0 ? ((leasedSF / totalSF) * 100) : (p.occupancy_pct || 0);
-    const annualRent = portLeases.filter(l => l.status !== 'expired').reduce((s, l) => s + (l.annual_rent || 0), 0);
-    const verifiedCount = portProperties.filter(pr => pr.address_verified).length;
+    const totalSF = portProperties.reduce((s, pr) => s + (pr.total_sqft || 0), 0);
+    const leasedUnits = portUnits.filter(u => u.status === 'leased');
+    const leasedSF = leasedUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
+    const occupancy = totalSF > 0 ? ((leasedSF / totalSF) * 100) : 0;
+    const annualRent = portLeases.filter(l => l.status !== 'expired').reduce((s, l) => s + ((l.monthly_rent || 0) * 12), 0);
+    const verifiedCount = 0; // address_verified not in DB schema
 
     return {
       ...p,
@@ -82,7 +82,7 @@ export default function Portfolios() {
     properties: properties.length,
     buildings: buildings.length,
     units: units.length,
-    totalSF: properties.reduce((s, p) => s + (p.total_sf || 0), 0),
+    totalSF: properties.reduce((s, p) => s + (p.total_sqft || 0), 0),
   };
 
   return (
@@ -126,9 +126,7 @@ export default function Portfolios() {
                     </div>
                     <div>
                       <h3 className="text-base font-bold text-slate-900">{p.name}</h3>
-                      <Badge className={`text-[10px] mt-1 ${p.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                        {p.status || 'draft'}
-                      </Badge>
+                      <Badge className="text-[10px] mt-1 bg-emerald-100 text-emerald-700">Active</Badge>
                     </div>
                   </div>
                 </div>
@@ -187,9 +185,7 @@ export default function Portfolios() {
                   <div className="text-center"><p className="font-bold text-sm">{p._occupancy.toFixed(0)}%</p><p className="text-slate-400">Occ.</p></div>
                   <div className="text-center"><p className="font-bold text-sm">${(p._annualRent / 1000).toFixed(0)}K</p><p className="text-slate-400">Rent/yr</p></div>
                 </div>
-                <Badge className={`flex-shrink-0 ${p.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                  {p.status || 'draft'}
-                </Badge>
+                <Badge className="flex-shrink-0 bg-emerald-100 text-emerald-700">Active</Badge>
                 <Link to={createPageUrl("Properties") + `?portfolio=${p.id}`}>
                   <Button variant="outline" size="sm" className="text-xs flex-shrink-0">View <ChevronRight className="w-3 h-3 ml-1" /></Button>
                 </Link>
@@ -228,7 +224,7 @@ export default function Portfolios() {
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell><Badge className={p.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}>{p.status || 'draft'}</Badge></TableCell>
+                  <TableCell><Badge className="bg-emerald-100 text-emerald-700">Active</Badge></TableCell>
                   <TableCell className="text-sm font-medium">{p._propCount}</TableCell>
                   <TableCell className="text-sm">{p._buildingCount}</TableCell>
                   <TableCell className="text-sm">{p._unitCount}</TableCell>
@@ -321,7 +317,6 @@ export default function Portfolios() {
               createMutation.mutate({
                 name: form.name,
                 ...(description ? { description } : {}),
-                status: "active",
                 ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
               });
             }} disabled={!form.name || createMutation.isPending || !orgId || orgId === '__none__'} className="bg-gradient-to-r from-blue-600 to-indigo-700">

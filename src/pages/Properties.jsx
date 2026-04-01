@@ -37,7 +37,7 @@ export default function Properties() {
   const defaultForm = {
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
-    total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
+    total_sqft: "", total_buildings: 1, total_units: 0, year_built: "",
     portfolio_id: portfolioId || ""
   };
   const [form, setForm] = useState(defaultForm);
@@ -79,7 +79,7 @@ export default function Properties() {
   };
 
   const downloadTemplate = () => {
-    const csv = "name,address,city,state,zip,property_type,structure_type,total_sf,total_buildings,total_units\nSingle Tenant Office,123 Main St,Phoenix,AZ,85001,office,single,50000,1,1\nMulti Building Complex,456 Park Ave,Scottsdale,AZ,85251,retail,multi,285000,3,24";
+    const csv = "name,address,city,state,zip,property_type,structure_type,total_sqft,total_buildings,total_units\nSingle Tenant Office,123 Main St,Phoenix,AZ,85001,office,single,50000,1,1\nMulti Building Complex,456 Park Ave,Scottsdale,AZ,85251,retail,multi,285000,3,24";
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -152,7 +152,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                 zip: { type: "string" },
                 property_type: { type: "string" },
                 structure_type: { type: "string" },
-                total_sf: { type: "number" },
+                total_sqft: { type: "number" },
                 total_buildings: { type: "number" },
                 total_units: { type: "number" }
               }
@@ -174,18 +174,19 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
     setBulkImporting(true);
     for (const prop of bulkData) {
       await propertyService.create({
-        ...prop,
+        name: prop.name,
+        address: prop.address,
+        city: prop.city,
+        state: prop.state,
+        zip: prop.zip,
         property_type: prop.property_type || "office",
-        structure_type: prop.structure_type || (prop.total_buildings > 1 ? "multi" : "single"),
-        total_sf: prop.total_sf || 0,
-        total_buildings: prop.total_buildings || 1,
-        total_units: prop.total_units || 0,
-        org_id: orgId || "",
+        total_sqft: Number(prop.total_sqft || prop.total_sf || 0),
+        year_built: prop.year_built ? Number(prop.year_built) : null,
+        ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
         status: "active",
-        property_id_code: `MCG-${(prop.state || "XX").substring(0, 2).toUpperCase()}-${String(Math.floor(Math.random() * 999)).padStart(3, "0")}`
       });
     }
-    queryClient.invalidateQueries({ queryKey: ['properties'] });
+    queryClient.invalidateQueries({ queryKey: ['Property'] });
     setBulkData(null);
     setBulkImporting(false);
     setShowBulk(false);
@@ -215,7 +216,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
         <div onClick={() => setStructureFilter("multi")} className={`cursor-pointer`}>
           <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-purple-50 text-purple-600" className={structureFilter === 'multi' ? 'ring-2 ring-purple-500' : ''} />
         </div>
-        <MetricCard label="Total SF" value={`${(properties.reduce((s, p) => s + (p.total_sf || 0), 0) / 1000000).toFixed(1)}M`} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
+        <MetricCard label="Total SF" value={`${(properties.reduce((s, p) => s + (p.total_sqft || 0), 0) / 1000000).toFixed(1)}M`} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Verified" value={`${properties.filter(p => p.address_verified).length}/${properties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 
@@ -258,7 +259,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                     {[
                       { label: "Bldgs", value: propBuildings.length || p.total_buildings || 1 },
                       { label: "Units", value: propUnits.length || p.total_units || 0 },
-                      { label: "SF", value: `${((p.total_sf || 0) / 1000).toFixed(0)}K` },
+                      { label: "SF", value: `${((p.total_sqft || 0) / 1000).toFixed(0)}K` },
                       { label: "Occ.", value: `${p.occupancy_pct || 0}%` },
                     ].map((m, i) => (
                       <div key={i} className="bg-slate-50 rounded px-2 py-1.5 text-center">
@@ -304,7 +305,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
                     <div className="text-center"><p className="font-bold text-sm">{propBuildings.length || p.total_buildings || 1}</p><p className="text-slate-400">Bldgs</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{propUnits.length || p.total_units || 0}</p><p className="text-slate-400">Units</p></div>
-                    <div className="text-center"><p className="font-bold text-sm">{((p.total_sf || 0) / 1000).toFixed(0)}K</p><p className="text-slate-400">SF</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{((p.total_sqft || 0) / 1000).toFixed(0)}K</p><p className="text-slate-400">SF</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{p.occupancy_pct || 0}%</p><p className="text-slate-400">Occ.</p></div>
                   </div>
                   <Badge className={`flex-shrink-0 text-[10px] ${p.structure_type === 'multi' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
@@ -367,7 +368,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                       </TableCell>
                       <TableCell className="text-sm">{propBuildings.length || p.total_buildings || 1}</TableCell>
                       <TableCell className="text-sm">{propUnits.length || p.total_units || 0}</TableCell>
-                      <TableCell className="text-sm font-mono">{(p.total_sf || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm font-mono">{(p.total_sqft || 0).toLocaleString()}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.occupancy_pct || 0}%</span>
@@ -508,7 +509,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                 </div>
                 <div>
                   <Label>Total Rentable Square Feet (RSF)</Label>
-                  <Input className="mt-1.5 font-mono" type="number" value={form.total_sf} onChange={e => setForm({...form, total_sf: e.target.value})} placeholder="e.g. 150000" />
+                  <Input className="mt-1.5 font-mono" type="number" value={form.total_sqft} onChange={e => setForm({...form, total_sqft: e.target.value})} placeholder="e.g. 150000" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -541,13 +542,17 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
               </Button>
             ) : (
               <Button onClick={() => createMutation.mutate({
-                ...form,
-                total_sf: parseInt(form.total_sf) || 0,
+                name: form.name,
+                address: form.address,
+                city: form.city,
+                state: form.state,
+                zip: form.zip,
+                property_type: form.property_type,
+                total_sqft: parseInt(form.total_sqft) || 0,
                 year_built: parseInt(form.year_built) || null,
-                property_id_code: generatePropertyId(),
+                ...(form.portfolio_id ? { portfolio_id: form.portfolio_id } : {}),
                 ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
                 status: "active",
-                address_verified: form.address_verified || false
               })} disabled={!form.name || createMutation.isPending} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
                 {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Property
               </Button>
@@ -607,7 +612,7 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
                           {(p.structure_type === 'multi' || p.total_buildings > 1) ? 'Multi' : 'Single'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-xs font-mono">{(p.total_sf || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-xs font-mono">{(p.total_sqft || 0).toLocaleString()}</TableCell>
                       <TableCell className="text-xs">{p.total_buildings || 1}</TableCell>
                       <TableCell className="text-xs">{p.total_units || 0}</TableCell>
                     </TableRow>

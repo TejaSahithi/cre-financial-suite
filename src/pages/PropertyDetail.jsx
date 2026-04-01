@@ -29,8 +29,8 @@ export default function PropertyDetail() {
   const [showAddBuilding, setShowAddBuilding] = useState(false);
   const [showAddUnit, setShowAddUnit] = useState(false);
   const [selectedBuildingId, setSelectedBuildingId] = useState(null);
-  const [buildingForm, setBuildingForm] = useState({ name: "", total_sf: "", floors: 1, year_built: "" });
-  const [unitForm, setUnitForm] = useState({ unit_number: "", floor: "", square_footage: "", occupancy_status: "vacant", tenant_name: "" });
+  const [buildingForm, setBuildingForm] = useState({ name: "", total_sqft: "", floors: 1 });
+  const [unitForm, setUnitForm] = useState({ unit_number: "", square_footage: "", status: "vacant" });
 
   const { data: property, isLoading } = useQuery({
     queryKey: ['property', propertyId],
@@ -71,24 +71,24 @@ export default function PropertyDetail() {
 
   const createBuildingMutation = useMutation({
     mutationFn: (data) => BuildingService.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1, year_built: "" }); }
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sqft: "", floors: 1 }); }
   });
 
   const createUnitMutation = useMutation({
     mutationFn: (data) => UnitService.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", floor: "", square_footage: "", occupancy_status: "vacant", tenant_name: "" }); }
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); }
   });
 
   if (isLoading) return <div className="flex items-center justify-center h-96"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
   if (!property) return <div className="p-6 text-center text-slate-400">Property not found</div>;
 
-  const leasedUnits = units.filter(u => u.occupancy_status === 'leased');
-  const vacantUnits = units.filter(u => u.occupancy_status === 'vacant');
-  const preLeaseUnits = units.filter(u => u.occupancy_status === 'pre_lease');
-  const ownerOccUnits = units.filter(u => u.occupancy_status === 'owner_occupied');
-  const underConstUnits = units.filter(u => u.occupancy_status === 'under_construction');
+  const leasedUnits = units.filter(u => u.status === 'leased');
+  const vacantUnits = units.filter(u => u.status === 'vacant');
+  const preLeaseUnits = units.filter(u => u.status === 'pre_lease');
+  const ownerOccUnits = units.filter(u => u.status === 'owner_occupied');
+  const underConstUnits = units.filter(u => u.status === 'under_construction');
   const leasedSF = leasedUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
-  const totalSF = units.reduce((s, u) => s + (u.square_footage || 0), 0) || property.total_sf || 0;
+  const totalSF = units.reduce((s, u) => s + (u.square_footage || 0), 0) || property.total_sqft || 0;
   const vacantSF = vacantUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
   const preLeasesSF = preLeaseUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
   const ownerOccSF = ownerOccUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
@@ -356,7 +356,7 @@ export default function PropertyDetail() {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">{b.name} <Badge variant="secondary" className="text-[10px] uppercase font-semibold text-slate-500 bg-slate-100">Building</Badge></h3>
-                    <p className="text-xs text-slate-500 mt-1">{b.total_sf?.toLocaleString() || 0} RSV SF · {b.floors} Floors · Built {b.year_built || 'Unknown'}</p>
+                    <p className="text-xs text-slate-500 mt-1">{b.total_sqft?.toLocaleString() || 0} RSV SF · {b.floors || 1} Floors</p>
                   </div>
                   <div className="flex gap-2 flex-wrap">
                     <Link to={createPageUrl("AddExpense") + `?property=${propertyId}&building=${b.id}`}>
@@ -389,14 +389,14 @@ export default function PropertyDetail() {
                         <TableCell className="text-sm font-medium text-blue-600">{u.unit_number}</TableCell>
                         <TableCell className="text-sm">{u.floor}</TableCell>
                         <TableCell className="text-sm">{u.square_footage?.toLocaleString()}</TableCell>
-                        <TableCell><Badge className={`${statusColors[u.occupancy_status] || 'bg-slate-100'} text-[10px] uppercase`}>{u.occupancy_status?.replace('_', ' ')}</Badge></TableCell>
-                        <TableCell className="text-sm">{u.tenant_name || '—'}</TableCell>
+                        <TableCell><Badge className={`${statusColors[u.status] || 'bg-slate-100'} text-[10px] uppercase`}>{u.status?.replace('_', ' ') || 'vacant'}</Badge></TableCell>
+                        <TableCell className="text-sm">—</TableCell>
                         <TableCell><Badge className={`${leaseStatusColors[u.lease_status] || 'bg-slate-100 text-slate-400'} text-[10px] uppercase font-semibold`}>{u.lease_status?.replace('_', '-') || '—'}</Badge></TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
                             {u.lease_id ? (
                               <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50">View Lease</Button>
-                            ) : u.occupancy_status === 'vacant' ? (
+                            ) : u.status === 'vacant' ? (
                               <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&unit=${u.id}`}>
                                 <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50">Add Lease</Button>
                               </Link>
@@ -499,14 +499,13 @@ export default function PropertyDetail() {
           <div className="space-y-4">
             <div><Label>Building Name *</Label><Input value={buildingForm.name} onChange={e => setBuildingForm({...buildingForm, name: e.target.value})} placeholder="e.g. Building A" /></div>
             <div className="grid grid-cols-3 gap-3">
-              <div><Label>Total SF</Label><Input type="number" value={buildingForm.total_sf} onChange={e => setBuildingForm({...buildingForm, total_sf: e.target.value})} /></div>
+              <div><Label>Total SF</Label><Input type="number" value={buildingForm.total_sqft} onChange={e => setBuildingForm({...buildingForm, total_sqft: e.target.value})} /></div>
               <div><Label>Floors</Label><Input type="number" value={buildingForm.floors} onChange={e => setBuildingForm({...buildingForm, floors: parseInt(e.target.value) || 1})} /></div>
-              <div><Label>Year Built</Label><Input type="number" value={buildingForm.year_built} onChange={e => setBuildingForm({...buildingForm, year_built: e.target.value})} placeholder="2006" /></div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddBuilding(false)}>Cancel</Button>
-            <Button onClick={() => createBuildingMutation.mutate({ ...buildingForm, total_sf: parseInt(buildingForm.total_sf) || 0, year_built: parseInt(buildingForm.year_built) || null, property_id: propertyId, org_id: property.org_id })} disabled={!buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            <Button onClick={() => createBuildingMutation.mutate({ name: buildingForm.name, total_sqft: parseInt(buildingForm.total_sqft) || 0, floors: buildingForm.floors || 1, property_id: propertyId, org_id: property.org_id })} disabled={!buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createBuildingMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Building
             </Button>
           </DialogFooter>
@@ -531,13 +530,13 @@ export default function PropertyDetail() {
             )}
             <div className="grid grid-cols-2 gap-3">
               <div><Label>Unit ID *</Label><Input value={unitForm.unit_number} onChange={e => setUnitForm({...unitForm, unit_number: e.target.value})} placeholder="e.g. A-101" /></div>
-              <div><Label>Floor</Label><Input value={unitForm.floor} onChange={e => setUnitForm({...unitForm, floor: e.target.value})} placeholder="Floor 1" /></div>
+              <div><Label>Floor</Label><Input value={unitForm.floor || ""} onChange={e => setUnitForm({...unitForm, floor: e.target.value})} placeholder="Floor 1" /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>Square Feet</Label><Input type="number" value={unitForm.square_footage} onChange={e => setUnitForm({...unitForm, square_footage: e.target.value})} /></div>
               <div>
                 <Label>Status</Label>
-                <Select value={unitForm.occupancy_status} onValueChange={v => setUnitForm({...unitForm, occupancy_status: v})}>
+                <Select value={unitForm.status} onValueChange={v => setUnitForm({...unitForm, status: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="vacant">Vacant</SelectItem>
@@ -549,20 +548,19 @@ export default function PropertyDetail() {
                 </Select>
               </div>
             </div>
-            {unitForm.occupancy_status !== 'vacant' && (
-              <div><Label>Tenant Name</Label><Input value={unitForm.tenant_name} onChange={e => setUnitForm({...unitForm, tenant_name: e.target.value})} /></div>
+            {unitForm.status !== 'vacant' && (
+              <div><Label>Tenant Name (optional)</Label><Input value={unitForm.tenant_name || ""} onChange={e => setUnitForm({...unitForm, tenant_name: e.target.value})} /></div>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddUnit(false)}>Cancel</Button>
             <Button onClick={() => createUnitMutation.mutate({
-              ...unitForm,
+              unit_number: unitForm.unit_number,
               square_footage: parseInt(unitForm.square_footage) || 0,
-              building_id: selectedBuildingId,
+              status: unitForm.status,
+              building_id: selectedBuildingId || null,
               property_id: propertyId,
               org_id: property.org_id,
-              exclude_from_cam: unitForm.occupancy_status === 'under_construction',
-              internal_expense_tracking: unitForm.occupancy_status === 'owner_occupied'
             })} disabled={!unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createUnitMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Unit
             </Button>

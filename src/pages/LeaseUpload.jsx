@@ -91,25 +91,34 @@ export default function LeaseUpload() {
 
   const saveLease = async () => {
     if (!extractedData) return;
-    // Check for low confidence fields - block budget if any field < 70%
-    const scores = extractedData.confidence_scores || {};
-    const hasLowConf = Object.values(scores).some(s => typeof s === 'number' && s < 70);
-    const avgConf = Object.values(scores).filter(s => typeof s === 'number');
-    const overallConf = avgConf.length > 0 ? Math.round(avgConf.reduce((a, b) => a + b, 0) / avgConf.length) : 85;
+    try {
+      // Only send columns that exist in the leases table:
+      // tenant_name, start_date, end_date, monthly_rent, square_footage,
+      // status, lease_type, created_by, property_id, unit_id, org_id
+      const urlParams = new URLSearchParams(window.location.search);
+      const monthlyRent = extractedData.annual_rent
+        ? Math.round(extractedData.annual_rent / 12)
+        : (extractedData.base_rent || extractedData.monthly_rent || 0);
 
-    const { confidence_scores, ...leaseFields } = extractedData;
-    const newLease = await leaseService.create({
-      ...leaseFields,
-      pdf_url: fileUrl,
-      status: "extracted",
-      confidence_score: overallConf,
-      low_confidence_block: hasLowConf,
-      extraction_data: { confidence_scores: scores },
-      version: 1,
-      org_id: orgId || ""
-    });
-    setSavedLeaseId(newLease.id);
-    setStep(4);
+      const newLease = await leaseService.create({
+        tenant_name: extractedData.tenant_name || "",
+        lease_type: extractedData.lease_type || null,
+        start_date: extractedData.start_date || null,
+        end_date: extractedData.end_date || null,
+        monthly_rent: monthlyRent,
+        square_footage: extractedData.total_sf || extractedData.square_footage || 0,
+        status: "active",
+        created_by: "lease_upload",
+        ...(urlParams.get("property") ? { property_id: urlParams.get("property") } : {}),
+        ...(urlParams.get("unit") ? { unit_id: urlParams.get("unit") } : {}),
+        ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
+      });
+      setSavedLeaseId(newLease.id);
+      setStep(4);
+    } catch (err) {
+      console.error("[LeaseUpload] saveLease error:", err);
+      alert("Failed to save lease: " + (err?.message || "Unknown error"));
+    }
   };
 
   const steps = [
