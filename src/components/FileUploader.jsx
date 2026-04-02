@@ -21,7 +21,7 @@ const ALL_FILE_TYPES = [
   { value: "revenue", label: "Revenue" },
 ];
 
-const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx"];
+const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".tsv"];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 function formatFileSize(bytes) {
@@ -162,16 +162,16 @@ export default function FileUploader({
       setUploadState("success");
       toast.success("File uploaded successfully.");
 
-      // Auto-trigger parse
+      // Auto-trigger ingestion (routes to correct parser based on file type)
       if (data?.file_id) {
         try {
-          await supabase.functions.invoke("parse-file", {
-            body: { file_id: data.file_id },
+          await supabase.functions.invoke("ingest-file", {
+            body: { file_id: data.file_id, module_type: fileType },
           });
-          toast.info("File parsing started.");
+          toast.info("File processing started.");
         } catch (parseErr) {
-          console.error("[FileUploader] parse-file invocation failed:", parseErr);
-          toast.warning("Upload succeeded but parsing could not be started.");
+          console.error("[FileUploader] ingest-file invocation failed:", parseErr);
+          toast.warning("Upload succeeded but processing could not be started.");
         }
       }
 
@@ -241,12 +241,12 @@ export default function FileUploader({
             Drag and drop a file here, or click to select
           </p>
           <p className="text-xs text-slate-400">
-            Accepted: .csv, .xls, .xlsx &mdash; Max 50 MB
+            Accepted: .csv, .xls, .xlsx, .pdf, .txt &mdash; Max 50 MB
           </p>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xls,.xlsx"
+            accept=".csv,.xls,.xlsx,.pdf,.txt,.tsv"
             className="hidden"
             onChange={onInputChange}
           />

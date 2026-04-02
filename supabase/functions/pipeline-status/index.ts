@@ -17,6 +17,7 @@ const STATUS_PROGRESS: Record<string, number> = {
   uploaded: 10,
   parsing: 30,
   parsed: 40,
+  pdf_parsed: 45,   // PDF extraction done, normalisation pending
   validating: 50,
   validated: 60,
   storing: 80,

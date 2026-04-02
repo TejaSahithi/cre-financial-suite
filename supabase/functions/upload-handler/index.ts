@@ -13,8 +13,13 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
 const ALLOWED_MIME_TYPES = [
   'text/csv',
+  'application/csv',
+  'text/plain',
   'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/pdf',
+  // browsers sometimes send octet-stream for unknown types
+  'application/octet-stream',
 ];
 
 Deno.serve(async (req: Request) => {
@@ -69,12 +74,17 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Validate file format (Requirement 1.5)
-    if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+    // Validate file format — accept CSV, Excel, PDF, plain text
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const allowedExtensions = ['csv', 'xls', 'xlsx', 'pdf', 'txt', 'tsv'];
+    const mimeAllowed = ALLOWED_MIME_TYPES.includes(file.type);
+    const extAllowed = allowedExtensions.includes(ext);
+
+    if (!mimeAllowed && !extAllowed) {
       return new Response(
         JSON.stringify({ 
           error: true, 
-          message: `Unsupported file format. Supported formats: CSV, Excel (.xls, .xlsx)` 
+          message: `Unsupported file format. Supported formats: CSV, Excel (.xls, .xlsx), PDF, plain text (.txt, .tsv)` 
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
