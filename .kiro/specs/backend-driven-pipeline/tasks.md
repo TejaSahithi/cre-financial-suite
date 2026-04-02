@@ -49,7 +49,7 @@ Key constraints:
     - Test storage failure handling
     - _Requirements: 1.4, 1.6_
 
-- [ ] 3. Build Parsing Engine (Step 2)
+- [x] 3. Build Parsing Engine (Step 2)
   - [x] 3.1 Create parse-file Edge Function with CSV parser
     - Read file from Supabase Storage by file_id
     - Parse CSV into structured JSON with column headers
@@ -81,19 +81,19 @@ Key constraints:
     - Handle revenue line item fields
     - _Requirements: 2.2_
 
-  - [-] 3.6 Write property test for parser round-trip
+  - [x] 3.6 Write property test for parser round-trip
     - **Property 4: Parser Round-Trip Preservation**
     - **Validates: Requirements 2.8**
 
-  - [ ] 3.7 Write property test for parsing status transitions
+  - [x] 3.7 Write property test for parsing status transitions
     - **Property 5: Parsing Status Transitions**
     - **Validates: Requirements 2.1, 2.3, 2.4**
 
-  - [ ] 3.8 Write property test for column preservation
+  - [x] 3.8 Write property test for column preservation
     - **Property 6: Column and Type Preservation**
     - **Validates: Requirements 2.5, 2.6**
 
-  - [ ] 3.9 Write unit tests for parser edge cases
+  - [x] 3.9 Write unit tests for parser edge cases
     - Test empty file (0 rows)
     - Test file with only headers
     - Test malformed CSV with mismatched columns
@@ -101,11 +101,11 @@ Key constraints:
     - Test international currency formats (€, £, $)
     - _Requirements: 2.4, 2.5, 2.6_
 
-- [ ] 4. Checkpoint - Ensure parsing tests pass
+- [x] 4. Checkpoint - Ensure parsing tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Build Validation Layer (Step 3)
-  - [ ] 5.1 Create validate-data Edge Function
+- [x] 5. Build Validation Layer (Step 3)
+  - [x] 5.1 Create validate-data Edge Function
     - Read parsed_data from uploaded_files table
     - Validate required fields are present and non-empty
     - Validate data types match schema
@@ -114,57 +114,57 @@ Key constraints:
     - Store validation_errors in uploaded_files table
     - _Requirements: 3.1, 3.2, 3.4, 15.2_
 
-  - [ ] 5.2 Implement date normalization
+  - [x] 5.2 Implement date normalization
     - Convert all date formats to ISO 8601 (YYYY-MM-DD)
     - Handle MM/DD/YYYY, M/D/YYYY, YYYY-MM-DD formats
     - Validate leap years
     - _Requirements: 3.5_
 
-  - [ ] 5.3 Implement currency normalization
+  - [x] 5.3 Implement currency normalization
     - Remove currency symbols ($, €, £)
     - Remove commas and spaces
     - Convert to numeric format
     - _Requirements: 3.6_
 
-  - [ ] 5.4 Implement referential integrity validation
+  - [x] 5.4 Implement referential integrity validation
     - Verify property_id exists in properties table
     - Verify org_id matches authenticated user
     - Verify foreign key relationships
     - _Requirements: 3.7, 3.8_
 
-  - [ ] 5.5 Write property test for required field validation
+  - [x] 5.5 Write property test for required field validation
     - **Property 7: Required Field Validation**
     - **Validates: Requirements 3.1, 3.4**
 
-  - [ ] 5.6 Write property test for type validation
+  - [x] 5.6 Write property test for type validation
     - **Property 8: Type Validation**
     - **Validates: Requirements 3.2, 3.4**
 
-  - [ ] 5.7 Write property test for date normalization
+  - [x] 5.7 Write property test for date normalization
     - **Property 9: Date Normalization**
     - **Validates: Requirements 3.5**
 
-  - [ ] 5.8 Write property test for currency normalization
+  - [x] 5.8 Write property test for currency normalization
     - **Property 10: Currency Normalization**
     - **Validates: Requirements 3.6**
 
-  - [ ] 5.9 Write property test for referential integrity
+  - [x] 5.9 Write property test for referential integrity
     - **Property 11: Referential Integrity Validation**
     - **Validates: Requirements 3.8**
 
-  - [ ] 5.10 Write property test for validation completeness
+  - [x] 5.10 Write property test for validation completeness
     - **Property 12: Validation Completeness**
     - **Validates: Requirements 15.2**
 
-  - [ ] 5.11 Write unit tests for validation edge cases
+  - [x] 5.11 Write unit tests for validation edge cases
     - Test empty required fields
     - Test wrong data types
     - Test invalid org_id
     - Test missing property_id reference
     - _Requirements: 3.1, 3.2, 3.7, 3.8_
 
-- [ ] 6. Build Storage Layer (Step 4)
-  - [ ] 6.1 Create store-data Edge Function
+- [x] 6. Build Storage Layer (Step 4)
+  - [x] 6.1 Create store-data Edge Function
     - Read validated parsed_data from uploaded_files table
     - Insert records into appropriate tables based on file_type
     - Enforce org_id isolation on all inserts
@@ -174,57 +174,57 @@ Key constraints:
     - Return inserted record IDs
     - _Requirements: 4.1, 4.2, 4.3, 4.5_
 
-  - [ ] 6.2 Implement automatic timestamp population
+  - [x] 6.2 Implement automatic timestamp population
     - Set created_at and updated_at on all inserts
     - _Requirements: 4.6_
 
-  - [ ] 6.3 Implement audit logging
+  - [x] 6.3 Implement audit logging
     - Log all create/update/delete operations to audit_logs table
     - Capture user_id, entity_type, entity_id, action, timestamp, org_id
     - Capture before/after values for updates
     - Enforce audit log immutability
     - _Requirements: 12.1, 12.2, 12.4_
 
-  - [ ] 6.4 Write property test for valid data storage
+  - [x] 6.4 Write property test for valid data storage
     - **Property 13: Valid Data Storage**
     - **Validates: Requirements 4.1, 4.4**
 
-  - [ ] 6.5 Write property test for referential integrity enforcement
+  - [x] 6.5 Write property test for referential integrity enforcement
     - **Property 14: Referential Integrity Enforcement**
     - **Validates: Requirements 4.3, 4.5**
 
-  - [ ] 6.6 Write property test for transaction rollback
+  - [x] 6.6 Write property test for transaction rollback
     - **Property 15: Transaction Rollback on Error**
     - **Validates: Requirements 4.5, 15.3**
 
-  - [ ] 6.7 Write property test for automatic timestamps
+  - [x] 6.7 Write property test for automatic timestamps
     - **Property 16: Automatic Timestamp Population**
     - **Validates: Requirements 4.6**
 
-  - [ ] 6.8 Write property test for audit log creation
+  - [x] 6.8 Write property test for audit log creation
     - **Property 38: Audit Log Creation**
     - **Validates: Requirements 12.1**
 
-  - [ ] 6.9 Write property test for audit log before/after capture
+  - [x] 6.9 Write property test for audit log before/after capture
     - **Property 39: Audit Log Before/After Capture**
     - **Validates: Requirements 12.2**
 
-  - [ ] 6.10 Write property test for audit log immutability
+  - [x] 6.10 Write property test for audit log immutability
     - **Property 40: Audit Log Immutability**
     - **Validates: Requirements 12.4**
 
-  - [ ] 6.11 Write unit tests for storage edge cases
+  - [x] 6.11 Write unit tests for storage edge cases
     - Test constraint violation handling
     - Test duplicate key handling
     - Test database connection failure with retry
     - Test foreign key violation
     - _Requirements: 4.5, 15.3_
 
-- [ ] 7. Checkpoint - Ensure storage tests pass
+- [x] 7. Checkpoint - Ensure storage tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 8. Build Lease Computation Engine (Step 5a)
-  - [ ] 8.1 Create compute-lease Edge Function
+  - [x] 8.1 Create compute-lease Edge Function
     - Read lease data from leases table by lease_id
     - Read property_config and lease_config for business rules
     - Calculate monthly rent based on lease_type
@@ -232,27 +232,27 @@ Key constraints:
     - Store results in computation_snapshots table
     - _Requirements: 5.1, 5.6, 5.7_
 
-  - [ ] 8.2 Implement fixed escalation calculation
+  - [x] 8.2 Implement fixed escalation calculation
     - Apply escalation_rate annually on escalation_date
     - _Requirements: 5.2_
 
-  - [ ] 8.3 Implement CPI escalation calculation
+  - [x] 8.3 Implement CPI escalation calculation
     - Apply CPI-based escalation using specified index
     - _Requirements: 5.3_
 
-  - [ ] 8.4 Implement CAM cap enforcement in lease engine
+  - [x] 8.4 Implement CAM cap enforcement in lease engine
     - Limit CAM charges to cap amount per lease terms
     - _Requirements: 5.4_
 
-  - [ ] 8.5 Implement base year expense recovery
+  - [x] 8.5 Implement base year expense recovery
     - Calculate recovery based on expenses exceeding base year
     - _Requirements: 5.5_
 
-  - [ ] 8.6 Write property test for lease rent calculation
+  - [-] 8.6 Write property test for lease rent calculation
     - **Property 17: Lease Rent Calculation by Type**
     - **Validates: Requirements 5.1**
 
-  - [ ] 8.7 Write property test for fixed escalation
+  - [-] 8.7 Write property test for fixed escalation
     - **Property 18: Fixed Escalation Application**
     - **Validates: Requirements 5.2**
 

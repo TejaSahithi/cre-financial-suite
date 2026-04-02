@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import PipelineActions, { REVENUE_ACTIONS } from "@/components/PipelineActions";
 import { PropertyService, LeaseService, CAMCalculationService, UnitService, BuildingService } from "@/services/api";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -14,6 +15,7 @@ import TenantDrillDown from "@/components/revenue/TenantDrillDown";
 export default function Revenue() {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedTenant, setSelectedTenant] = useState(null);
+  const [selectedPropertyId] = useState(null);
 
   const { data: properties = [], isLoading: loadingProps } = useQuery({
     queryKey: ['revenue-properties'],
@@ -126,6 +128,8 @@ export default function Revenue() {
         <h1 className="text-2xl font-bold text-slate-900">Revenue Analytics</h1>
         <p className="text-sm text-slate-500">Portfolio revenue breakdown, property drill-down, and tenant analysis</p>
       </div>
+
+      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={REVENUE_ACTIONS} />
 
       {/* KPI Strip */}
       <RevenueKPIStrip

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 
+import PipelineActions, { EXPENSE_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ export default function Expenses() {
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
+  const [selectedPropertyId] = useState(null);
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
   const { data: budgets = [] } = useOrgQuery("Budget");
@@ -82,6 +84,8 @@ export default function Expenses() {
           </RoleGuard>
         </div>
       </PageHeader>
+
+      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={EXPENSE_ACTIONS} />
 
       <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} selectedUnit={scopeUnit} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} onUnitChange={setScopeUnit} />
 

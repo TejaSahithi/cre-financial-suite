@@ -1,4 +1,5 @@
 import React from "react";
+import PipelineActions, { BUDGET_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

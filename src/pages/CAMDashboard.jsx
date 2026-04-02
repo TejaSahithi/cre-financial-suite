@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import PipelineActions, { CAM_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ export default function CAMDashboard() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [selectedPropertyId] = useState(null);
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
@@ -108,6 +110,8 @@ export default function CAMDashboard() {
           <Button variant="outline" size="sm">Budget Studio <ArrowRight className="w-4 h-4 ml-1" /></Button>
         </Link>
       </PageHeader>
+
+      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={CAM_ACTIONS} />
 
       <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} showUnit={false} />
 

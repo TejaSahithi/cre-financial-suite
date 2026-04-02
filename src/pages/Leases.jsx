@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import PipelineActions, { LEASE_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { differenceInDays } from "date-fns";
 export default function Leases() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [selectedPropertyId] = useState(null);
 
   const { data: leases = [], isLoading } = useOrgQuery("Lease");
 
@@ -48,6 +50,8 @@ export default function Leases() {
           <Button className="bg-[#1a2744] hover:bg-[#243b67]"><Upload className="w-4 h-4 mr-2" />Upload Lease</Button>
         </Link>
       </div>
+
+      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={LEASE_ACTIONS} />
 
       {/* Status summary cards */}
       <div className="grid grid-cols-4 gap-4">
