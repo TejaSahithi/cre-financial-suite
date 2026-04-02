@@ -224,38 +224,54 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 9. Call the appropriate downstream function
+    // 9. Call the appropriate downstream function(s)
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    // Use the service role key so the downstream function has full access
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
     console.log(
       `[ingest-file] Routing file_id=${file_id} (${detection.fileFormat}/${detection.moduleType}) → ${routing.route}`,
     );
 
-    const downstreamResult = await callEdgeFunction(
-      supabaseUrl,
-      routing.route,
-      { file_id },
-      serviceKey,
-    );
+    const detectionSummary = {
+      file_format: detection.fileFormat,
+      module_type: detection.moduleType,
+      format_source: detection.formatSource,
+      module_source: detection.moduleSource,
+      confidence: detection.confidence,
+    };
 
-    // 10. Return combined result: detection + routing + downstream response
+    // PDF: two-step — Docling extraction then normalization
+    if (routing.route === "parse-pdf-docling") {
+      const doclingResult = await callEdgeFunction(supabaseUrl, "parse-pdf-docling", { file_id }, serviceKey);
+      if (!doclingResult.ok) {
+        return new Response(
+          JSON.stringify({ error: true, file_id, detection: detectionSummary, routing: { routed_to: routing.route, reason: routing.reason }, result: doclingResult.data }),
+          { status: doclingResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const normalizeResult = await callEdgeFunction(supabaseUrl, "normalize-pdf-output", { file_id }, serviceKey);
+      return new Response(
+        JSON.stringify({
+          error: !normalizeResult.ok,
+          file_id,
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          steps: { extraction: doclingResult.data, normalization: normalizeResult.data },
+        }),
+        { status: normalizeResult.ok ? 200 : normalizeResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // CSV / Excel / text: single step
+    const downstreamResult = await callEdgeFunction(supabaseUrl, routing.route, { file_id }, serviceKey);
+
+    // 10. Return combined result
     return new Response(
       JSON.stringify({
         error: !downstreamResult.ok,
         file_id,
-        detection: {
-          file_format: detection.fileFormat,
-          module_type: detection.moduleType,
-          format_source: detection.formatSource,
-          module_source: detection.moduleSource,
-          confidence: detection.confidence,
-        },
-        routing: {
-          routed_to: routing.route,
-          reason: routing.reason,
-        },
+        detection: detectionSummary,
+        routing: { routed_to: routing.route, reason: routing.reason },
         result: downstreamResult.data,
       }),
       {

@@ -4,40 +4,115 @@ This directory contains Supabase Edge Functions that implement the backend-drive
 
 ## Architecture
 
-The pipeline follows this flow:
+### Multi-Format Ingestion Pipeline
+
 ```
-Upload → Parse → Validate → Store → Compute → Export
+Any File (CSV / Excel / PDF / Text)
+         │
+         ▼
+  upload-handler          ← accepts all formats, stores to Storage
+         │
+         ▼
+   ingest-file            ← detects format + module, routes to correct parser
+    ├── CSV/Excel/Text → parse-file          → status: parsed
+    └── PDF            → parse-pdf-docling  → status: pdf_parsed
+                                │
+                                ▼
+                       normalize-pdf-output  → status: parsed
+                                │
+                                ▼ (same from here for ALL formats)
+                        validate-data        → status: validated
+                                │
+                                ▼
+                         store-data          → status: stored
+                                │
+                                ▼
+                      compute-* engines      → computation_snapshots
+                                │
+                                ▼
+                         export-data         → CSV/Excel download
 ```
+
+### Shared Modules (`_shared/`)
+
+| Module | Purpose |
+|--------|---------|
+| `file-detector.ts` | Detects file format (csv/xlsx/pdf/text) and module type (leases/expenses/etc.) from MIME, extension, magic bytes, and content keywords |
+| `normalizer.ts` | Converts Docling PDF output, plain text, or CSV rows into canonical row format for the module parsers |
+| `cors.ts` | CORS headers |
+| `supabase.ts` | Auth helpers |
+| `config-helper.ts` | Business rule configuration |
+| `error-handler.ts` | Standardized error formatting |
 
 ## Edge Functions
 
-### Pipeline Functions
+### Ingestion Functions
 
-1. **upload-handler** (Task 2.1)
-   - Receives file uploads (CSV/Excel)
-   - Stores files in Supabase Storage
-   - Creates `uploaded_files` record with status='uploaded'
-   - Enforces 50MB file size limit
+1. **upload-handler**
+   - Accepts CSV, Excel, PDF, plain text (up to 50MB)
+   - Stores to `financial-uploads/{org_id}/{file_id}`
+   - Creates `uploaded_files` record with status=`uploaded`
 
-2. **parse-file** (Task 3.1)
-   - Reads file from Supabase Storage
-   - Parses CSV/Excel into structured JSON
-   - Updates processing_status to 'parsed' or 'failed'
-   - Stores parsed_data in uploaded_files table
+2. **ingest-file** ← NEW unified entry point
+   - Detects file format and module type automatically
+   - Routes to `parse-file` (CSV/Excel/text) or `parse-pdf-docling` + `normalize-pdf-output` (PDF)
+   - Returns detection result + routing decision
 
-3. **validate-data** (Task 5.1)
-   - Validates parsed JSON against schema
-   - Normalizes dates and currency values
-   - Checks referential integrity
-   - Returns all validation errors at once
-   - Updates processing_status to 'validated' or 'failed'
+3. **parse-file**
+   - Handles CSV, Excel, plain text
+   - Applies module-specific parser (lease/expense/property/revenue)
+   - Sets status=`parsed`
 
-4. **store-data** (Task 6.1)
-   - Inserts validated records into appropriate tables
-   - Enforces org_id isolation
-   - Maintains referential integrity
-   - Uses transactions with rollback on error
-   - Logs audit trail
+4. **parse-pdf-docling** ← PDF OCR
+   - Downloads PDF from Storage
+   - Calls Docling API for structured extraction
+   - Stores raw output in `docling_raw` column
+   - Sets status=`pdf_parsed`
+
+5. **normalize-pdf-output** ← PDF normalization
+   - Reads `docling_raw` from uploaded_files
+   - Normalizes Docling fields/tables into canonical rows
+   - Runs through existing module parser
+   - Sets status=`parsed` (same as CSV from here)
+
+### Validation & Storage
+
+6. **validate-data** — validates parsed_data, sets status=`validated`
+7. **store-data** — inserts validated rows into business tables, sets status=`stored`
+
+### Computation Engines
+
+8. **compute-lease** — rent schedules, escalations
+9. **compute-expense** — expense classification, tenant allocation
+10. **compute-cam** — CAM charges per tenant
+11. **compute-revenue** — monthly revenue projections
+12. **compute-budget** — budget generation and approval workflow
+13. **compute-reconciliation** — variance analysis
+
+### Utilities
+
+14. **export-data** — CSV/Excel export from computation results
+15. **pipeline-status** — query processing status for any file
+
+## Status Flow
+
+```
+uploaded → parsing → parsed → validating → validated → storing → stored → processed
+                  ↗
+         pdf_parsed (PDF only, intermediate)
+```
+
+Any step can transition to `failed` with an `error_message`.
+
+## Environment Variables
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Service role key for admin operations |
+| `SUPABASE_ANON_KEY` | Yes | Anon key for inter-function calls |
+| `DOCLING_API_URL` | No | Docling service URL (mock used if absent) |
+| `DOCLING_API_KEY` | No | Optional auth token for Docling |
    - Updates processing_status to 'stored'
 
 ### Computation Functions

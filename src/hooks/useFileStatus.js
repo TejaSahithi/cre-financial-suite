@@ -7,6 +7,7 @@ import { supabase } from "@/services/supabaseClient";
 const ACTIVE_STATUSES = new Set([
   "uploading",
   "parsing",
+  "pdf_parsed",   // PDF extracted, normalization pending
   "validating",
   "storing",
 ]);

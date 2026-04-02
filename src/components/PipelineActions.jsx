@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Calculator, Download, Loader2, CheckCircle, Lock } from "lucide-react";
+import { Calculator, Download, Loader2, CheckCircle, Lock, FileSearch } from "lucide-react";
 import { toast } from "sonner";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +13,7 @@ const ICON_MAP = {
   CheckCircle,
   Lock,
   Loader2,
+  FileSearch,
 };
 
 // ---------------------------------------------------------------------------
