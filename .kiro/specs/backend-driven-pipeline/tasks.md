@@ -71,17 +71,17 @@ Key constraints:
     - Convert data types appropriately
     - _Requirements: 2.2_
 
-  - [ ] 3.4 Implement property parser module
+  - [x] 3.4 Implement property parser module
     - Map property columns (name, address, square_footage, property_type)
     - Handle portfolio/building/unit hierarchy fields
     - _Requirements: 2.2_
 
-  - [-] 3.5 Implement revenue parser module
+  - [x] 3.5 Implement revenue parser module
     - Map revenue columns (revenue_type, amount, period, property_id)
     - Handle revenue line item fields
     - _Requirements: 2.2_
 
-  - [ ] 3.6 Write property test for parser round-trip
+  - [-] 3.6 Write property test for parser round-trip
     - **Property 4: Parser Round-Trip Preservation**
     - **Validates: Requirements 2.8**
 
