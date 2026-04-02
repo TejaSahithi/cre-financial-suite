@@ -30,10 +30,10 @@ export default function LeaseUpload() {
     try {
       const fileName = `leases/${Date.now()}-${selectedFile.name}`;
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('documents')
+        .from('financial-uploads')
         .upload(fileName, selectedFile, { upsert: true });
       if (!uploadError && uploadData) {
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        const { data: urlData } = supabase.storage.from('financial-uploads').getPublicUrl(fileName);
         uploadedUrl = urlData?.publicUrl || "";
       } else {
         // Storage bucket unavailable — fall back to local blob URL
@@ -46,18 +46,19 @@ export default function LeaseUpload() {
     setUploading(false);
     setStep(2);
 
-    // AI extraction via Supabase Edge Function (if available), else manual entry scaffold
+    // AI extraction via Supabase Edge Function
     setExtracting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
       const { data, error } = await supabase.functions.invoke('extract-lease', {
         body: { file_url: uploadedUrl, file_name: selectedFile.name },
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
       });
-      if (!error && data && Object.keys(data).length > 0) {
+      if (!error && data && !data.error && Object.keys(data).length > 0) {
         setExtractedData(data);
       } else {
-        // No AI backend — provide empty scaffold for manual entry
+        // No AI backend or extraction failed — provide empty scaffold for manual entry
         setExtractedData({
           tenant_name: "",
           lease_type: "triple_net",

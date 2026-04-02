@@ -40,7 +40,7 @@ export default function LeaseReview() {
     select: data => data?.[0],
   });
 
-  const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
+  const { data: stakeholders = [] } = useOrgQuery("Stakeholder", { silent: true });
 
   const updateLeaseMutation = useMutation({
     mutationFn: ({ id, data }) => leaseService.update(id, data),

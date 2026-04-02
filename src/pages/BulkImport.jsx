@@ -37,10 +37,10 @@ export default function BulkImport() {
     try {
       const fileName = `bulk-imports/${Date.now()}-${f.name}`;
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('documents')
+        .from('financial-uploads')
         .upload(fileName, f, { upsert: true });
       if (!uploadError && uploadData) {
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        const { data: urlData } = supabase.storage.from('financial-uploads').getPublicUrl(fileName);
         uploadedUrl = urlData?.publicUrl || "";
       } else {
         // Storage bucket missing or unavailable — use local blob URL
