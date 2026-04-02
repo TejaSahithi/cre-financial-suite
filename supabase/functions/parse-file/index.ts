@@ -4,6 +4,7 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { parseLeases } from "../_shared/parsers/lease-parser.ts";
 import { parseExpenses } from "../_shared/parsers/expense-parser.ts";
 import { parseProperties } from "../_shared/parsers/property-parser.ts";
+import { parseRevenues } from "../_shared/parsers/revenue-parser.ts";
 
 /**
  * Parse File Edge Function
@@ -180,6 +181,9 @@ Deno.serve(async (req: Request) => {
       } else if (fileRecord.module_type === 'properties') {
         const propertyParseResult = parseProperties(parseResult.rows);
         finalParsedData = propertyParseResult.rows;
+      } else if (fileRecord.module_type === 'revenue') {
+        const revenueParseResult = parseRevenues(parseResult.rows);
+        finalParsedData = revenueParseResult.rows;
       }
 
       // Update uploaded_files with parsed data and status='parsed'

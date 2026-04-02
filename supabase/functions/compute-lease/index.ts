@@ -5,40 +5,382 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 /**
  * Compute Lease Edge Function
  * Calculates rent schedules, escalations, CAM charges per lease
- * 
+ *
  * Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7
  * Task: 8.1
  */
+
+interface RentScheduleEntry {
+  month: string;
+  base_rent: number;
+  escalated_rent: number;
+  cam_charge: number;
+  total_rent: number;
+}
+
+interface LeaseSummary {
+  total_rent: number;
+  avg_monthly_rent: number;
+  term_months: number;
+  escalation_count: number;
+}
+
+interface LeaseResult {
+  error: boolean;
+  lease_id: string;
+  rent_schedule?: RentScheduleEntry[];
+  summary?: LeaseSummary;
+  message?: string;
+}
+
+/**
+ * Generates an array of "YYYY-MM" strings for each month from start to end (inclusive).
+ */
+function generateMonthRange(startDate: string, endDate: string): string[] {
+  const months: string[] = [];
+  const start = new Date(startDate + "T00:00:00Z");
+  const end = new Date(endDate + "T00:00:00Z");
+
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const endCursor = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+
+  while (cursor <= endCursor) {
+    const yyyy = cursor.getUTCFullYear();
+    const mm = String(cursor.getUTCMonth() + 1).padStart(2, "0");
+    months.push(`${yyyy}-${mm}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return months;
+}
+
+/**
+ * Determines how many full years have elapsed since the lease start for a given month,
+ * used to decide when annual escalations kick in.
+ */
+function getLeaseYear(startDate: string, currentMonth: string): number {
+  const start = new Date(startDate + "T00:00:00Z");
+  const current = new Date(currentMonth + "-01T00:00:00Z");
+
+  const yearDiff = current.getUTCFullYear() - start.getUTCFullYear();
+  const monthDiff = current.getUTCMonth() - start.getUTCMonth();
+
+  // If we haven't yet reached the anniversary month this calendar year, subtract one
+  if (monthDiff < 0) {
+    return yearDiff - 1;
+  }
+  return yearDiff;
+}
+
+/**
+ * Computes the rent schedule for a single lease.
+ */
+function computeLeaseSchedule(
+  lease: Record<string, any>,
+  leaseConfig: Record<string, any> | null,
+  propertyConfig: Record<string, any> | null
+): LeaseResult {
+  if (!lease.start_date || !lease.end_date) {
+    return {
+      error: true,
+      lease_id: lease.id,
+      message: `Lease ${lease.id} is missing start_date or end_date`,
+    };
+  }
+
+  const months = generateMonthRange(lease.start_date, lease.end_date);
+  if (months.length === 0) {
+    return {
+      error: true,
+      lease_id: lease.id,
+      message: `Lease ${lease.id} has an invalid date range (start_date: ${lease.start_date}, end_date: ${lease.end_date})`,
+    };
+  }
+
+  const baseRent = Number(lease.monthly_rent) || 0;
+  const squareFootage = Number(lease.square_footage) || 0;
+
+  // Extract escalation config from lease_config.config_values
+  const configValues = leaseConfig?.config_values ?? {};
+  const escalationType: string = configValues.escalation_type ?? "none";
+  let escalationRate: number;
+
+  if (escalationType === "cpi") {
+    escalationRate = Number(configValues.cpi_rate ?? 3) / 100;
+  } else if (escalationType === "fixed") {
+    escalationRate = Number(configValues.escalation_rate ?? 0) / 100;
+  } else {
+    escalationRate = 0;
+  }
+
+  // CAM configuration
+  const camCap = leaseConfig?.cam_cap != null ? Number(leaseConfig.cam_cap) : null;
+  const propConfigValues = propertyConfig?.config_values ?? {};
+  const camPerSf = Number(propConfigValues.cam_per_sf ?? 0);
+  const rawMonthlyCam = squareFootage * camPerSf;
+
+  // Base year expense recovery
+  const baseYear = leaseConfig?.base_year ?? null;
+  const expenseRecoveryMethod = propertyConfig?.expense_recovery_method ?? "none";
+  const baseYearAmount = Number(configValues.base_year_amount ?? 0);
+
+  const rentSchedule: RentScheduleEntry[] = [];
+  let escalationCount = 0;
+  let totalRent = 0;
+
+  // Track escalated rent by lease year so we compound annually
+  const escalatedRentByYear: Map<number, number> = new Map();
+
+  for (const month of months) {
+    const leaseYear = getLeaseYear(lease.start_date, month);
+
+    // Determine the escalated base rent for this lease year
+    let escalatedRent: number;
+    if (escalationRate === 0 || leaseYear <= 0) {
+      escalatedRent = baseRent;
+    } else {
+      if (escalatedRentByYear.has(leaseYear)) {
+        escalatedRent = escalatedRentByYear.get(leaseYear)!;
+      } else {
+        // Compound from the previous year's rent
+        const previousYearRent = escalatedRentByYear.get(leaseYear - 1) ?? baseRent;
+        escalatedRent = Math.round(previousYearRent * (1 + escalationRate) * 100) / 100;
+        escalatedRentByYear.set(leaseYear, escalatedRent);
+      }
+    }
+
+    // Store year 0 rent for reference
+    if (!escalatedRentByYear.has(0)) {
+      escalatedRentByYear.set(0, baseRent);
+    }
+
+    // Count escalation events (first month of each new lease year > 0)
+    if (leaseYear > 0 && escalationRate > 0) {
+      const prevMonth = months[months.indexOf(month) - 1];
+      if (prevMonth) {
+        const prevLeaseYear = getLeaseYear(lease.start_date, prevMonth);
+        if (leaseYear > prevLeaseYear) {
+          escalationCount++;
+        }
+      }
+    }
+
+    // CAM charge calculation
+    let camCharge = rawMonthlyCam;
+    if (camCap != null && camCharge > camCap) {
+      camCharge = camCap;
+    }
+
+    // Base year expense recovery adjustment
+    let recoveryAdjustment = 0;
+    if (baseYear != null && expenseRecoveryMethod === "base_year" && baseYearAmount > 0) {
+      // Simplified: current year expenses come from config_values.current_year_expenses
+      // or we assume a simple model where recovery = current - base prorated monthly
+      const currentYearExpenses = Number(configValues.current_year_expenses ?? 0);
+      if (currentYearExpenses > baseYearAmount) {
+        recoveryAdjustment = Math.round(((currentYearExpenses - baseYearAmount) / 12) * 100) / 100;
+      }
+    }
+
+    const monthTotal = Math.round((escalatedRent + camCharge + recoveryAdjustment) * 100) / 100;
+    totalRent += monthTotal;
+
+    rentSchedule.push({
+      month,
+      base_rent: baseRent,
+      escalated_rent: Math.round(escalatedRent * 100) / 100,
+      cam_charge: Math.round(camCharge * 100) / 100,
+      total_rent: monthTotal,
+    });
+  }
+
+  totalRent = Math.round(totalRent * 100) / 100;
+  const avgMonthlyRent = months.length > 0 ? Math.round((totalRent / months.length) * 100) / 100 : 0;
+
+  return {
+    error: false,
+    lease_id: lease.id,
+    rent_schedule: rentSchedule,
+    summary: {
+      total_rent: totalRent,
+      avg_monthly_rent: avgMonthlyRent,
+      term_months: months.length,
+      escalation_count: escalationCount,
+    },
+  };
+}
+
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin);
 
-    // TODO: Implement lease computation in Task 8.1-8.5
-    // - Read lease data from leases table by lease_id
-    // - Read property_config and lease_config for business rules
-    // - Calculate monthly rent based on lease_type
-    // - Generate rent schedule for entire lease term
-    // - Store results in computation_snapshots table
+    const body = await req.json();
+    const { lease_id, property_id } = body;
 
-    return new Response(
-      JSON.stringify({ 
-        error: false,
-        message: 'Compute lease not yet implemented',
-        todo: 'Task 8.1-8.5'
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    if (!lease_id && !property_id) {
+      throw new Error("Request must include lease_id or property_id");
+    }
 
+    // ----------------------------------------------------------------
+    // 1. Fetch lease(s) scoped to the user's organization
+    // ----------------------------------------------------------------
+    let leases: Record<string, any>[] = [];
+
+    if (lease_id) {
+      const { data, error } = await supabaseAdmin
+        .from("leases")
+        .select("*")
+        .eq("id", lease_id)
+        .eq("org_id", orgId);
+
+      if (error) throw new Error(`Failed to fetch lease: ${error.message}`);
+      if (!data || data.length === 0) throw new Error(`Lease ${lease_id} not found`);
+      leases = data;
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from("leases")
+        .select("*")
+        .eq("property_id", property_id)
+        .eq("org_id", orgId);
+
+      if (error) throw new Error(`Failed to fetch leases: ${error.message}`);
+      if (!data || data.length === 0) throw new Error(`No leases found for property ${property_id}`);
+      leases = data;
+    }
+
+    // ----------------------------------------------------------------
+    // 2. Fetch lease_config for all leases (batch)
+    // ----------------------------------------------------------------
+    const leaseIds = leases.map((l) => l.id);
+    const { data: leaseConfigs } = await supabaseAdmin
+      .from("lease_config")
+      .select("*")
+      .in("lease_id", leaseIds)
+      .eq("org_id", orgId);
+
+    const leaseConfigMap: Record<string, Record<string, any>> = {};
+    if (leaseConfigs) {
+      for (const lc of leaseConfigs) {
+        leaseConfigMap[lc.lease_id] = lc;
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // 3. Fetch property_config for the relevant properties
+    // ----------------------------------------------------------------
+    const propertyIds = [...new Set(leases.map((l) => l.property_id).filter(Boolean))];
+    let propertyConfigMap: Record<string, Record<string, any>> = {};
+
+    if (propertyIds.length > 0) {
+      const { data: propertyConfigs } = await supabaseAdmin
+        .from("property_config")
+        .select("*")
+        .in("property_id", propertyIds)
+        .eq("org_id", orgId);
+
+      if (propertyConfigs) {
+        for (const pc of propertyConfigs) {
+          propertyConfigMap[pc.property_id] = pc;
+        }
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // 4. Compute each lease
+    // ----------------------------------------------------------------
+    const results: LeaseResult[] = [];
+
+    for (const lease of leases) {
+      const leaseConf = leaseConfigMap[lease.id] ?? null;
+      const propConf = lease.property_id ? (propertyConfigMap[lease.property_id] ?? null) : null;
+      const result = computeLeaseSchedule(lease, leaseConf, propConf);
+      results.push(result);
+
+      // ----------------------------------------------------------------
+      // 5. Store snapshot for successfully computed leases
+      // ----------------------------------------------------------------
+      if (!result.error) {
+        const inputPayload = {
+          lease_id: lease.id,
+          lease: {
+            tenant_name: lease.tenant_name,
+            start_date: lease.start_date,
+            end_date: lease.end_date,
+            monthly_rent: lease.monthly_rent,
+            square_footage: lease.square_footage,
+            lease_type: lease.lease_type,
+            status: lease.status,
+          },
+          lease_config: leaseConf,
+          property_config: propConf
+            ? {
+                cam_calculation_method: propConf.cam_calculation_method,
+                expense_recovery_method: propConf.expense_recovery_method,
+                config_values: propConf.config_values,
+              }
+            : null,
+        };
+
+        // Deterministic hash of inputs for idempotency
+        const encoder = new TextEncoder();
+        const hashBuffer = await crypto.subtle.digest(
+          "SHA-256",
+          encoder.encode(JSON.stringify(inputPayload))
+        );
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const inputHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
+        const startDate = new Date(lease.start_date + "T00:00:00Z");
+        const fiscalYear = startDate.getUTCFullYear();
+        const month = startDate.getUTCMonth() + 1;
+
+        await supabaseAdmin.from("computation_snapshots").insert({
+          org_id: orgId,
+          property_id: lease.property_id || null,
+          engine_type: "lease",
+          fiscal_year: fiscalYear,
+          month: month,
+          input_hash: inputHash,
+          inputs: inputPayload,
+          outputs: {
+            rent_schedule: result.rent_schedule,
+            summary: result.summary,
+          },
+          status: "completed",
+          computed_at: new Date().toISOString(),
+          computed_by: user.email ?? user.id,
+        });
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // 6. Build response
+    // ----------------------------------------------------------------
+    if (lease_id) {
+      // Single lease mode — return flat object
+      const result = results[0];
+      return new Response(JSON.stringify(result), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Multi-lease mode (property_id) — return array
+    return new Response(JSON.stringify({ error: false, property_id, results }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (err) {
     console.error("[compute-lease] Error:", err.message);
     return new Response(
       JSON.stringify({ error: true, message: err.message }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
     );
   }
 });
