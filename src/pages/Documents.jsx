@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { documentService } from "@/services/documentService";
-import { uploadFile } from "@/services/integrations";
 import { supabase } from "@/services/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -73,13 +72,11 @@ export default function Documents() {
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         file_url = urlData?.publicUrl || "";
       } else if (uploadError) {
-        // Storage bucket missing or unavailable — fall back to integration service
-        const result = await uploadFile({ file });
-        file_url = result.file_url;
+        // Storage bucket missing or unavailable — fall back to local blob URL
+        file_url = URL.createObjectURL(file);
       }
     } catch {
-      const result = await uploadFile({ file });
-      file_url = result.file_url;
+      file_url = URL.createObjectURL(file);
     }
     await documentService.create({
       ...uploadForm,

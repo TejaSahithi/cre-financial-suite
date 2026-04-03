@@ -44,13 +44,18 @@ export default function RentProjection() {
   // Calculate monthly rent per tenant
   const tenantRentData = useMemo(() => {
     return activeLeases.map(lease => {
-      const monthlyBase = (lease.annual_rent || 0) / 12;
+      // Support both monthly_rent (pipeline schema) and annual_rent (legacy)
+      const monthlyBase = lease.monthly_rent
+        ? (lease.monthly_rent || 0)
+        : (lease.annual_rent || 0) / 12;
       const monthlyCAM = lease.cam_per_month || 0;
       const totalMonthly = monthlyBase + monthlyCAM;
 
       // Find historical lease for same tenant
       const prevLease = historicalLeases.find(h => h.tenant_name === lease.tenant_name);
-      const prevMonthlyBase = prevLease ? (prevLease.annual_rent || 0) / 12 : 0;
+      const prevMonthlyBase = prevLease
+        ? (prevLease.monthly_rent || (prevLease.annual_rent || 0) / 12)
+        : 0;
       const prevMonthlyCAM = prevLease ? (prevLease.cam_per_month || 0) : 0;
       const prevTotal = prevMonthlyBase + prevMonthlyCAM;
 
@@ -62,12 +67,16 @@ export default function RentProjection() {
         projectedMonthly = monthlyBase * 1.03; // Assume 3% CPI
       }
 
+      // rent_per_sf: derive if not stored
+      const rentPerSF = lease.rent_per_sf
+        || (lease.square_footage ? (monthlyBase * 12) / lease.square_footage : 0);
+
       return {
         tenant: lease.tenant_name,
         unit: lease.unit_id,
         leaseType: lease.lease_type,
-        sf: lease.total_sf || 0,
-        rentPerSF: lease.rent_per_sf || 0,
+        sf: lease.square_footage || lease.total_sf || 0,
+        rentPerSF,
         monthlyBase,
         monthlyCAM,
         totalMonthly,
@@ -247,7 +256,7 @@ export default function RentProjection() {
                   <TableRow className="bg-slate-50 font-bold">
                     <TableCell className="text-sm">TOTAL</TableCell>
                     <TableCell />
-                    <TableCell className="text-sm font-mono text-right">{tenantRentData.reduce((s, t) => s + t.sf, 0).toLocaleString()}</TableCell>
+                    <TableCell className="text-sm font-mono text-right">{tenantRentData.reduce((s, t) => s + (t.sf || 0), 0).toLocaleString()}</TableCell>
                     <TableCell />
                     <TableCell className="text-sm font-mono text-right">${tenantRentData.reduce((s, t) => s + t.monthlyBase, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
                     <TableCell className="text-sm font-mono text-right">${tenantRentData.reduce((s, t) => s + t.monthlyCAM, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>

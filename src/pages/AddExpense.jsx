@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { expenseService } from "@/services/expenseService";
 import { vendorService } from "@/services/vendorService";
-import { uploadFile } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -77,7 +77,19 @@ export default function AddExpense() {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
-    const { file_url } = await uploadFile({ file });
+    let file_url = "";
+    try {
+      const fileName = `expenses/${Date.now()}-${file.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('financial-uploads')
+        .upload(fileName, file, { upsert: true });
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('financial-uploads').getPublicUrl(fileName);
+        file_url = urlData?.publicUrl || "";
+      }
+    } catch {
+      file_url = URL.createObjectURL(file);
+    }
     setAttachmentUrl(file_url);
     setUploading(false);
   };

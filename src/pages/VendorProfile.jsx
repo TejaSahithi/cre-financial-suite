@@ -3,7 +3,7 @@ import { documentService } from "@/services/documentService";
 import { expenseService } from "@/services/expenseService";
 import { propertyService } from "@/services/propertyService";
 import { vendorService } from "@/services/vendorService";
-import { uploadFile } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -101,7 +101,21 @@ export default function VendorProfile() {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
-    const { file_url } = await uploadFile({ file });
+    let file_url = "";
+    try {
+      const fileName = `vendor-docs/${Date.now()}-${file.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('financial-uploads')
+        .upload(fileName, file, { upsert: true });
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('financial-uploads').getPublicUrl(fileName);
+        file_url = urlData?.publicUrl || "";
+      } else {
+        file_url = URL.createObjectURL(file);
+      }
+    } catch {
+      file_url = URL.createObjectURL(file);
+    }
     await createDocMutation.mutateAsync({
       org_id: vendor.org_id || "default",
       vendor_name: vendor.name,

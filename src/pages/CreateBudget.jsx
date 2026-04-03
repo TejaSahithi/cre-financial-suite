@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { invokeLLM } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
 import { createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
 
@@ -76,22 +76,28 @@ export default function CreateBudget() {
   const handleGenerate = async () => {
     setGenerating(true);
     const scopeLabel = selectedUnit ? `Unit ${selectedUnit.unit_id_code}` : selectedBuilding ? `Building ${selectedBuilding.name}` : selectedProperty ? selectedProperty.name : form.name || 'Property';
-    const result = await invokeLLM({
-      prompt: `Generate a commercial real estate budget for ${scopeLabel}, year ${form.budget_year}, scope ${form.scope}, period ${form.period}, method ${method}. 
-      ${scopeLeases.length > 0 ? `Active leases: ${scopeLeases.map(l => `${l.tenant_name} - $${l.annual_rent}/yr`).join(', ')}` : ''}
-      Provide realistic CRE budget numbers.`,
-      response_json_schema: {
-        type: "object",
-        properties: {
-          total_revenue: { type: "number" },
-          total_expenses: { type: "number" },
-          cam_total: { type: "number" },
-          noi: { type: "number" },
-          ai_insights: { type: "string" }
-        }
+
+    let data = {};
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      const { data: result, error } = await supabase.functions.invoke('generate-budget', {
+        body: {
+          scope_label: scopeLabel,
+          budget_year: form.budget_year,
+          scope: form.scope,
+          period: form.period,
+          method,
+          leases: scopeLeases.map(l => ({ tenant_name: l.tenant_name, annual_rent: l.annual_rent })),
+        },
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      });
+      if (!error && result && !result.error) {
+        data = result;
       }
-    });
-    const data = typeof result === 'string' ? JSON.parse(result || '{}') : result;
+    } catch (err) {
+      console.error("[CreateBudget] generate-budget error:", err);
+    }
 
     createMutation.mutate({
       name: form.name,

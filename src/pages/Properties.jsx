@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { propertyService } from "@/services/propertyService";
-import { invokeLLM, uploadFile, extractDataFromUploadedFile } from "@/services/integrations";
+import { validateAddress } from "@/services/integrations";
+import { supabase } from "@/services/supabaseClient";
+import useOrgId from "@/hooks/useOrgId";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { toast } from "sonner";
@@ -43,6 +45,7 @@ export default function Properties() {
   const [form, setForm] = useState(defaultForm);
 
   const { data: properties = [], isLoading, orgId } = useOrgQuery("Property");
+  const { orgId: currentOrgId } = useOrgId();
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
 
@@ -90,41 +93,38 @@ export default function Properties() {
   const verifyAddress = async () => {
     if (!form.address) return;
     setVerifyingAddress(true);
-    const result = await invokeLLM({
-      prompt: `Verify and standardize this US commercial real estate address. Return the verified/corrected address components.
-Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
-      add_context_from_internet: true,
-      response_json_schema: {
-        type: "object",
-        properties: {
-          address: { type: "string" },
-          city: { type: "string" },
-          state: { type: "string" },
-          zip: { type: "string" },
-          verified: { type: "boolean" },
-          formatted_address: { type: "string" },
-          note: { type: "string" }
-        }
-      }
-    });
-    const data = typeof result === 'string' ? JSON.parse(result || '{}') : result;
+    try {
+      const data = await validateAddress({
+        addressLine1: form.address,
+        city: form.city,
+        state: form.state,
+        postalCode: form.zip,
+        countryCode: "US",
+      });
 
-    if (data.verified) {
-      setForm(f => ({
-        ...f,
-        address: data.address || f.address,
-        city: data.city || f.city,
-        state: data.state || f.state,
-        zip: data.zip || f.zip,
-        address_verified: true,
-        address_verification_note: data.note || ""
-      }));
-    } else {
-      // Failed verification — allow manual override
+      if (data.valid && data.candidates?.length > 0) {
+        const best = data.candidates[0];
+        setForm(f => ({
+          ...f,
+          address: best.addressLine1 || best.address || f.address,
+          city: best.city || f.city,
+          state: best.state || f.state,
+          zip: best.postalCode || best.zip || f.zip,
+          address_verified: true,
+          address_verification_note: ""
+        }));
+      } else {
+        setForm(f => ({
+          ...f,
+          address_verified: false,
+          address_verification_note: data.message || "Address could not be verified. Manual override available."
+        }));
+      }
+    } catch {
       setForm(f => ({
         ...f,
         address_verified: false,
-        address_verification_note: data.note || "Address could not be verified. Manual override available."
+        address_verification_note: "Address verification service unavailable. Manual override available."
       }));
     }
     setVerifyingAddress(false);
@@ -134,37 +134,21 @@ Address: ${form.address}, ${form.city}, ${form.state} ${form.zip}`,
     const file = e.target.files[0];
     if (!file) return;
     setBulkLoading(true);
-    const { file_url } = await uploadFile({ file });
-    const result = await extractDataFromUploadedFile({
-      file_url,
-      json_schema: {
-        type: "object",
-        properties: {
-          properties: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                address: { type: "string" },
-                city: { type: "string" },
-                state: { type: "string" },
-                zip: { type: "string" },
-                property_type: { type: "string" },
-                structure_type: { type: "string" },
-                total_sqft: { type: "number" },
-                total_buildings: { type: "number" },
-                total_units: { type: "number" }
-              }
-            }
-          }
-        }
-      }
-    });
-    if (result.output?.properties) {
-      setBulkData(result.output.properties);
-    } else if (Array.isArray(result.output)) {
-      setBulkData(result.output);
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { setBulkLoading(false); return; }
+      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
+      const rows = lines.slice(1).map(line => {
+        const values = line.split(",").map(v => v.trim());
+        const row = {};
+        headers.forEach((h, i) => { row[h] = values[i] || ""; });
+        return row;
+      });
+      setBulkData(rows);
+    } catch (err) {
+      console.error("[Properties] CSV parse error:", err);
+      toast.error("Failed to parse CSV file");
     }
     setBulkLoading(false);
   };

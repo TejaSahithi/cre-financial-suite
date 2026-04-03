@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { expenseService } from "@/services/expenseService";
 import { leaseService } from "@/services/leaseService";
 import { propertyService } from "@/services/propertyService";
-import { uploadFile, extractDataFromUploadedFile } from "@/services/integrations";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,41 +38,35 @@ export default function Integrations() {
     const file = e.target.files[0];
     if (!file) return;
     setImporting(true);
-    const { file_url } = await uploadFile({ file });
-    const result = await extractDataFromUploadedFile({
-      file_url,
-      json_schema: {
-        type: "object",
-        properties: {
-          expenses: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                date: { type: "string" },
-                category: { type: "string" },
-                amount: { type: "number" },
-                vendor: { type: "string" },
-                description: { type: "string" },
-                classification: { type: "string" },
-              }
-            }
-          }
-        }
-      }
-    });
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { setImporting(false); return; }
+      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
+      const items = lines.slice(1).map(line => {
+        const values = line.split(",").map(v => v.trim());
+        const row = {};
+        headers.forEach((h, i) => { row[h] = values[i] || ""; });
+        return row;
+      });
 
-    const items = result.output?.expenses || (Array.isArray(result.output) ? result.output : []);
-    if (items.length > 0) {
-      await expenseService.bulkCreate(items.map(e => ({
-        ...e,
-        org_id: 'default',
-        property_id: properties[0]?.id || 'default',
-        source: 'import',
-        fiscal_year: new Date().getFullYear(),
-        classification: e.classification || 'recoverable',
-      })));
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      if (items.length > 0) {
+        await expenseService.bulkCreate(items.map(item => ({
+          date: item.date || null,
+          category: item.category || item.expense_category || "",
+          amount: parseFloat(item.amount) || 0,
+          vendor: item.vendor || "",
+          description: item.description || "",
+          classification: item.classification || "recoverable",
+          org_id: "default",
+          property_id: properties[0]?.id || "default",
+          source: "import",
+          fiscal_year: new Date().getFullYear(),
+        })));
+        queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      }
+    } catch (err) {
+      console.error("[Integrations] CSV import error:", err);
     }
     setImporting(false);
     setShowImport(false);
