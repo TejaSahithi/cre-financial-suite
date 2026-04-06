@@ -104,6 +104,8 @@ import UserManagement from './pages/UserManagement';
 import DemoExperience from './pages/DemoExperience';
 import RequestDemo from './pages/RequestDemo';
 import PaymentSuccess from './pages/PaymentSuccess';
+import FileHistoryPage from './pages/FileHistoryPage';
+import PipelineUpload from './pages/PipelineUpload';
 
 import __Layout from './Layout.jsx';
 
