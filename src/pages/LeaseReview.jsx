@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { leaseService } from "@/services/leaseService";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,9 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX } from "lucide-react";
+import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { toast } from "sonner";
 
 const confidenceColor = (score) => {
   if (score >= 90) return "bg-emerald-100 text-emerald-700";
@@ -43,9 +45,51 @@ export default function LeaseReview() {
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
 
   const updateLeaseMutation = useMutation({
-    mutationFn: ({ id, data }) => leaseService.update(id, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['lease', leaseId] }),
+    mutationFn: async ({ id, data }) => {
+      // Call Supabase directly so we get the real error — leaseService swallows errors silently
+      const { data: updated, error } = await supabase
+        .from("leases")
+        .update({ ...data, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      return updated;
+    },
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["leases"] });
+      toast.success("Lease updated successfully");
+      // Trigger recomputation in the background (fire-and-forget)
+      if (updated?.property_id) {
+        triggerRecompute(updated.property_id).catch(() => {});
+      }
+    },
+    onError: (err) => {
+      console.error("[LeaseReview] update failed:", err);
+      toast.error(`Update failed: ${err?.message ?? "Unknown error"}`);
+    },
   });
+
+  // Fire compute-lease for the property after a lease edit
+  async function triggerRecompute(propertyId) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/compute-lease`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ property_id: propertyId, fiscal_year: new Date().getFullYear() }),
+      });
+      console.log("[LeaseReview] Recompute triggered for property", propertyId);
+    } catch (err) {
+      console.warn("[LeaseReview] Recompute trigger failed (non-fatal):", err.message);
+    }
+  }
 
   // No lease ID or lease not found
   if (!leaseId) {
@@ -147,8 +191,12 @@ export default function LeaseReview() {
   const passCount = validationChecks.filter(v => v.pass).length;
 
   const handleApprove = async () => {
-    await updateLeaseMutation.mutateAsync({ id: lease.id, data: { status: "budget_ready" } });
-    setShowApproval(false);
+    try {
+      await updateLeaseMutation.mutateAsync({ id: lease.id, data: { status: "budget_ready" } });
+      setShowApproval(false);
+    } catch {
+      // error already toasted by onError
+    }
   };
 
   const handleFieldEdit = (field) => {
@@ -160,16 +208,30 @@ export default function LeaseReview() {
 
   const handleFieldSave = async () => {
     if (!editingField) return;
-    let val = editValue;
-    // Try to parse numbers
-    if (["rent_per_sf", "total_sf", "annual_rent", "escalation_rate", "admin_fee_pct", "ti_allowance", "hvac_landlord_limit", "renewal_notice_months", "recon_deadline_days", "recon_collection_limit_months", "percentage_rent_rate", "percentage_rent_breakpoint", "management_fee_pct", "base_rent", "cam_cap_rate"].includes(editingField.key)) {
-      val = parseFloat(val) || 0;
+    let val = editValue.trim();
+
+    // Coerce to correct type based on field key
+    const numericFields = [
+      "rent_per_sf", "total_sf", "annual_rent", "escalation_rate", "admin_fee_pct",
+      "ti_allowance", "hvac_landlord_limit", "renewal_notice_months", "recon_deadline_days",
+      "recon_collection_limit_months", "percentage_rent_rate", "percentage_rent_breakpoint",
+      "management_fee_pct", "base_rent", "cam_cap_rate", "monthly_rent", "square_footage",
+    ];
+    const boolFields = ["gross_up_clause", "percentage_rent", "admin_fee_allowed"];
+
+    if (numericFields.includes(editingField.key)) {
+      const n = parseFloat(val.replace(/[$,]/g, ""));
+      val = isNaN(n) ? null : n;
+    } else if (boolFields.includes(editingField.key)) {
+      val = ["true", "yes", "1", "y"].includes(val.toLowerCase());
     }
-    if (["gross_up_clause", "percentage_rent", "admin_fee_allowed"].includes(editingField.key)) {
-      val = val === "true" || val === "Yes" || val === "yes";
+
+    try {
+      await updateLeaseMutation.mutateAsync({ id: lease.id, data: { [editingField.key]: val } });
+      setEditingField(null); // only close on success
+    } catch {
+      // error already toasted by onError — keep dialog open so user can retry
     }
-    await updateLeaseMutation.mutateAsync({ id: lease.id, data: { [editingField.key]: val } });
-    setEditingField(null);
   };
 
   return (
