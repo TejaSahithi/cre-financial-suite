@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { saveSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Lease Edge Function
@@ -490,21 +491,16 @@ Deno.serve(async (req: Request) => {
           },
         };
 
-        // Upsert property-level snapshot
-        await supabaseAdmin.from("computation_snapshots").upsert(
-          {
-            org_id: orgId,
-            property_id,
-            engine_type: "lease",
-            fiscal_year: fiscalYear,
-            inputs: { property_id, lease_count: leases.length },
-            outputs: aggregateOutputs,
-            status: "completed",
-            computed_at: new Date().toISOString(),
-            computed_by: user.email ?? user.id,
-          },
-          { onConflict: "org_id,property_id,engine_type,fiscal_year" }
-        );
+        // Save property-level snapshot (preserves history)
+        await saveSnapshot(supabaseAdmin, {
+          org_id: orgId,
+          property_id,
+          engine_type: "lease",
+          fiscal_year: fiscalYear,
+          computed_by: user.email ?? user.id,
+          inputs: { property_id, lease_count: leases.length },
+          outputs: aggregateOutputs,
+        });
       }
     }
 
