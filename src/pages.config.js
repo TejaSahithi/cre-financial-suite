@@ -168,6 +168,8 @@ export const PAGES = {
     "DemoExperience": DemoExperience,
     "RequestDemo": RequestDemo,
     "PaymentSuccess": PaymentSuccess,
+    "FileHistoryPage": FileHistoryPage,
+    "PipelineUpload": PipelineUpload,
 }
 
 export const pagesConfig = {

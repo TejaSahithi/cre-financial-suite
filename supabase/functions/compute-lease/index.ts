@@ -359,7 +359,157 @@ Deno.serve(async (req: Request) => {
     }
 
     // ----------------------------------------------------------------
-    // 6. Build response
+    // 6. Build property-level aggregate snapshot (for RentProjection UI)
+    //    Only when called with property_id (multi-lease mode)
+    // ----------------------------------------------------------------
+    if (property_id) {
+      const successResults = results.filter((r) => !r.error);
+
+      if (successResults.length > 0) {
+        const fiscalYear = body.fiscal_year ?? new Date().getFullYear();
+
+        // Build tenant_schedules — one entry per lease
+        const tenantSchedules = successResults.map((r) => {
+          const lease = leases.find((l) => l.id === r.lease_id)!;
+          const summary = r.summary!;
+          // Find the current-year monthly rent from the schedule
+          const currentYearMonths = (r.rent_schedule ?? []).filter((m) =>
+            m.month.startsWith(String(fiscalYear))
+          );
+          const avgMonthly =
+            currentYearMonths.length > 0
+              ? Math.round(
+                  currentYearMonths.reduce((s, m) => s + m.escalated_rent, 0) /
+                    currentYearMonths.length
+                )
+              : Math.round(summary.avg_monthly_rent);
+
+          const nextYearMonths = (r.rent_schedule ?? []).filter((m) =>
+            m.month.startsWith(String(fiscalYear + 1))
+          );
+          const projectedMonthly =
+            nextYearMonths.length > 0
+              ? Math.round(
+                  nextYearMonths.reduce((s, m) => s + m.escalated_rent, 0) /
+                    nextYearMonths.length
+                )
+              : Math.round(avgMonthly * 1.03); // fallback: 3% escalation
+
+          const leaseConf = leaseConfigMap[lease.id] ?? null;
+          const escalationType =
+            leaseConf?.config_values?.escalation_type ?? "none";
+          const escalationRate =
+            leaseConf?.config_values?.escalation_rate ?? 0;
+
+          // CAM charge: average of current-year cam_charge entries
+          const avgCam =
+            currentYearMonths.length > 0
+              ? Math.round(
+                  currentYearMonths.reduce((s, m) => s + m.cam_charge, 0) /
+                    currentYearMonths.length
+                )
+              : 0;
+
+          return {
+            lease_id: lease.id,
+            tenant_name: lease.tenant_name ?? "Unknown",
+            lease_type: lease.lease_type ?? "unknown",
+            square_footage: Number(lease.square_footage) || 0,
+            rent_per_sf:
+              Number(lease.square_footage) > 0
+                ? Math.round((avgMonthly / Number(lease.square_footage)) * 12 * 100) / 100
+                : 0,
+            monthly_rent: avgMonthly,
+            cam_charge: avgCam,
+            total_rent: avgMonthly + avgCam,
+            projected_monthly: projectedMonthly,
+            escalation_type: escalationType,
+            escalation_rate: escalationRate,
+          };
+        });
+
+        // Build monthly_projections — aggregate across all leases for each month 1–12
+        const monthlyProjections = Array.from({ length: 12 }, (_, i) => {
+          const monthNum = i + 1;
+          const monthStr = `${fiscalYear}-${String(monthNum).padStart(2, "0")}`;
+          const prevMonthStr = `${fiscalYear - 1}-${String(monthNum).padStart(2, "0")}`;
+          const nextMonthStr = `${fiscalYear + 1}-${String(monthNum).padStart(2, "0")}`;
+
+          let baseRent = 0;
+          let projectedRent = 0;
+          let previousRent = 0;
+
+          for (const r of successResults) {
+            const schedule = r.rent_schedule ?? [];
+            const cur = schedule.find((m) => m.month === monthStr);
+            const nxt = schedule.find((m) => m.month === nextMonthStr);
+            const prv = schedule.find((m) => m.month === prevMonthStr);
+            if (cur) {
+              baseRent += cur.escalated_rent;
+              projectedRent += nxt ? nxt.escalated_rent : cur.escalated_rent * 1.03;
+              previousRent += prv ? prv.escalated_rent : 0;
+            }
+          }
+
+          return {
+            month: monthNum,
+            base_rent: Math.round(baseRent),
+            projected_rent: Math.round(projectedRent),
+            previous_rent: Math.round(previousRent),
+            budget_rent: 0, // filled by compute-budget
+          };
+        });
+
+        // Build summary
+        const totalCurrentAnnual = monthlyProjections.reduce(
+          (s, m) => s + m.base_rent,
+          0
+        );
+        const totalProjectedAnnual = monthlyProjections.reduce(
+          (s, m) => s + m.projected_rent,
+          0
+        );
+        const totalPrevAnnual = monthlyProjections.reduce(
+          (s, m) => s + m.previous_rent,
+          0
+        );
+        const avgMonthlyRent = Math.round(totalCurrentAnnual / 12);
+        const avgProjectedMonthly = Math.round(totalProjectedAnnual / 12);
+        const avgPreviousMonthly = Math.round(totalPrevAnnual / 12);
+
+        const aggregateOutputs = {
+          tenant_schedules: tenantSchedules,
+          monthly_projections: monthlyProjections,
+          summary: {
+            total_rent: totalCurrentAnnual,
+            total_projected_rent: totalProjectedAnnual,
+            avg_monthly_rent: avgMonthlyRent,
+            avg_projected_monthly: avgProjectedMonthly,
+            avg_previous_monthly: avgPreviousMonthly,
+            lease_count: successResults.length,
+          },
+        };
+
+        // Upsert property-level snapshot
+        await supabaseAdmin.from("computation_snapshots").upsert(
+          {
+            org_id: orgId,
+            property_id,
+            engine_type: "lease",
+            fiscal_year: fiscalYear,
+            inputs: { property_id, lease_count: leases.length },
+            outputs: aggregateOutputs,
+            status: "completed",
+            computed_at: new Date().toISOString(),
+            computed_by: user.email ?? user.id,
+          },
+          { onConflict: "org_id,property_id,engine_type,fiscal_year" }
+        );
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // 7. Build response
     // ----------------------------------------------------------------
     if (lease_id) {
       // Single lease mode — return flat object
