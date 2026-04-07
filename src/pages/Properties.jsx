@@ -20,19 +20,17 @@ import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 export default function Properties() {
   const navigate = useNavigate();
   const portfolioId = new URLSearchParams(window.location.search).get("portfolio");
   const [showCreate, setShowCreate] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
-  const [showBulk, setShowBulk] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("details");
   const [structureFilter, setStructureFilter] = useState("all");
-  const [bulkData, setBulkData] = useState(null);
-  const [bulkLoading, setBulkLoading] = useState(false);
-  const [bulkImporting, setBulkImporting] = useState(false);
   const [verifyingAddress, setVerifyingAddress] = useState(false);
   const queryClient = useQueryClient();
 
@@ -81,15 +79,6 @@ export default function Properties() {
     return `MCG-${prefix}-${num}`;
   };
 
-  const downloadTemplate = () => {
-    const csv = "name,address,city,state,zip,property_type,structure_type,total_sqft,total_buildings,total_units\nSingle Tenant Office,123 Main St,Phoenix,AZ,85001,office,single,50000,1,1\nMulti Building Complex,456 Park Ave,Scottsdale,AZ,85251,retail,multi,285000,3,24";
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "property_template.csv"; a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const verifyAddress = async () => {
     if (!form.address) return;
     setVerifyingAddress(true);
@@ -130,54 +119,6 @@ export default function Properties() {
     setVerifyingAddress(false);
   };
 
-  const handleBulkUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setBulkLoading(true);
-    try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) { setBulkLoading(false); return; }
-      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
-      const rows = lines.slice(1).map(line => {
-        const values = line.split(",").map(v => v.trim());
-        const row = {};
-        headers.forEach((h, i) => { row[h] = values[i] || ""; });
-        return row;
-      });
-      setBulkData(rows);
-    } catch (err) {
-      console.error("[Properties] CSV parse error:", err);
-      toast.error("Failed to parse CSV file");
-    }
-    setBulkLoading(false);
-  };
-
-  const importBulkData = async () => {
-    if (!bulkData) return;
-    setBulkImporting(true);
-    for (const prop of bulkData) {
-      await propertyService.create({
-        name: prop.name,
-        address: prop.address,
-        city: prop.city,
-        state: prop.state,
-        zip: prop.zip,
-        property_type: prop.property_type || "office",
-        structure_type: prop.structure_type || "single",
-        total_sqft: Number(prop.total_sqft || prop.total_sf || 0),
-        total_buildings: Number(prop.total_buildings || 1),
-        total_units: Number(prop.total_units || 0),
-        year_built: prop.year_built ? Number(prop.year_built) : null,
-        ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
-        status: "active",
-      });
-    }
-    queryClient.invalidateQueries({ queryKey: ['Property'] });
-    setBulkData(null);
-    setBulkImporting(false);
-    setShowBulk(false);
-  };
 
   // Get building/unit counts per property
   const getPropBuildings = (pid) => buildings.filter(b => b.property_id === pid);
@@ -188,8 +129,7 @@ export default function Properties() {
       <PageHeader icon={Home} title="Properties" subtitle={`${properties.length} properties · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(properties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
-          <Button variant="outline" size="sm" onClick={downloadTemplate}><Download className="w-4 h-4 mr-1" />Template</Button>
-          <Button variant="outline" size="sm" onClick={() => setShowBulk(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
           <Button size="sm" onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
       </PageHeader>
@@ -553,75 +493,11 @@ export default function Properties() {
         </DialogContent>
       </Dialog>
 
-      {/* Bulk Upload Dialog - with preview */}
-      <Dialog open={showBulk} onOpenChange={v => { setShowBulk(v); if (!v) setBulkData(null); }}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Bulk Property Upload</DialogTitle><DialogDescription>Upload CSV or Excel file to import properties</DialogDescription></DialogHeader>
-          
-          {!bulkData ? (
-            <div className="space-y-4">
-              <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center">
-                <Upload className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="text-sm font-medium text-slate-700 mb-1">Upload CSV or Excel file</p>
-                <p className="text-xs text-slate-400 mb-4">System will extract all properties with their details</p>
-                {bulkLoading ? (
-                  <div className="flex items-center justify-center gap-2"><Loader2 className="w-5 h-5 animate-spin text-blue-600" /><span className="text-sm text-slate-500">Extracting properties...</span></div>
-                ) : (
-                  <label>
-                    <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleBulkUpload} />
-                    <Button asChild className="bg-blue-600 hover:bg-blue-700 cursor-pointer"><span>Browse Files</span></Button>
-                  </label>
-                )}
-              </div>
-              <Button variant="outline" className="w-full" onClick={downloadTemplate}><Download className="w-4 h-4 mr-2" />Download Template</Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-700">{bulkData.length} properties extracted</p>
-                <Badge className="bg-emerald-100 text-emerald-700">Ready to Import</Badge>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50">
-                    <TableHead className="text-[11px]">NAME</TableHead>
-                    <TableHead className="text-[11px]">ADDRESS</TableHead>
-                    <TableHead className="text-[11px]">TYPE</TableHead>
-                    <TableHead className="text-[11px]">STRUCTURE</TableHead>
-                    <TableHead className="text-[11px]">SF</TableHead>
-                    <TableHead className="text-[11px]">BLDGS</TableHead>
-                    <TableHead className="text-[11px]">UNITS</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {bulkData.map((p, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="text-sm font-medium">{p.name}</TableCell>
-                      <TableCell className="text-xs">{p.address}{p.city ? `, ${p.city}` : ''}{p.state ? `, ${p.state}` : ''} {p.zip}</TableCell>
-                      <TableCell className="text-xs capitalize">{p.property_type?.replace('_', ' ') || 'office'}</TableCell>
-                      <TableCell>
-                        <Badge className={`text-[10px] ${(p.structure_type === 'multi' || p.total_buildings > 1) ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
-                          {(p.structure_type === 'multi' || p.total_buildings > 1) ? 'Multi' : 'Single'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs font-mono">{(p.total_sqft || 0).toLocaleString()}</TableCell>
-                      <TableCell className="text-xs">{p.total_buildings || 1}</TableCell>
-                      <TableCell className="text-xs">{p.total_units || 0}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="flex gap-3 justify-end">
-                <Button variant="outline" onClick={() => setBulkData(null)}>Re-Upload</Button>
-                <Button onClick={importBulkData} disabled={bulkImporting} className="bg-emerald-600 hover:bg-emerald-700">
-                  {bulkImporting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Import {bulkData.length} Properties
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="property" 
+      />
     </div>
   );
 }
