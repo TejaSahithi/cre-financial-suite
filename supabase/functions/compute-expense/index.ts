@@ -249,17 +249,26 @@ Deno.serve(async (req: Request) => {
 
     const { error: snapErr } = await supabaseAdmin
       .from("computation_snapshots")
-      .insert({
-        org_id: orgId,
-        property_id,
-        engine_type: "expense",
-        fiscal_year,
-        inputs,
-        outputs,
-      });
+      .upsert(
+        {
+          org_id: orgId,
+          property_id,
+          engine_type: "expense",
+          fiscal_year,
+          computed_at: new Date().toISOString(),
+          computed_by: user.email ?? user.id,
+          inputs,
+          outputs,
+          status: "completed",
+        },
+        { onConflict: "org_id,property_id,engine_type,fiscal_year" }
+      );
 
     if (snapErr) {
-      console.error("[compute-expense] Snapshot save error:", snapErr.message);
+      console.error("[compute-expense] Snapshot upsert error:", snapErr.message);
+      await supabaseAdmin.from("computation_snapshots").insert({
+        org_id: orgId, property_id, engine_type: "expense", fiscal_year, inputs, outputs,
+      }).catch(() => {});
     }
 
     // ---------------------------------------------------------------

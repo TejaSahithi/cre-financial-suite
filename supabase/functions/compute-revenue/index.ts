@@ -347,13 +347,24 @@ Deno.serve(async (req: Request) => {
 
     const { error: snapErr } = await supabaseAdmin
       .from("computation_snapshots")
-      .insert(snapshotPayload);
+      .upsert(
+        {
+          org_id: orgId,
+          property_id,
+          engine_type: "revenue",
+          fiscal_year,
+          computed_at: new Date().toISOString(),
+          computed_by: user.email ?? user.id,
+          inputs: snapshotPayload.inputs,
+          outputs: snapshotPayload.outputs,
+          status: "completed",
+        },
+        { onConflict: "org_id,property_id,engine_type,fiscal_year" }
+      );
 
     if (snapErr) {
-      console.error(
-        "[compute-revenue] computation_snapshots insert error:",
-        snapErr.message
-      );
+      console.error("[compute-revenue] computation_snapshots upsert error:", snapErr.message);
+      await supabaseAdmin.from("computation_snapshots").insert(snapshotPayload).catch(() => {});
     }
 
     // ---------------------------------------------------------------

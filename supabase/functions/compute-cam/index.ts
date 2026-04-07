@@ -304,11 +304,42 @@ Deno.serve(async (req: Request) => {
       await supabaseAdmin.from("cam_calculations").insert(camCalcPayload);
     }
 
+    // ---------------------------------------------------------------
+    // Fetch prior-year CAM total and budgeted CAM for dashboard metrics
+    // ---------------------------------------------------------------
+    let prevYearTotal = 0;
+    const { data: prevSnap } = await supabaseAdmin
+      .from("computation_snapshots")
+      .select("outputs")
+      .eq("property_id", property_id)
+      .eq("engine_type", "cam")
+      .eq("fiscal_year", fiscal_year - 1)
+      .order("computed_at", { ascending: false })
+      .limit(1);
+    if (prevSnap && prevSnap.length > 0) {
+      prevYearTotal = Number(prevSnap[0].outputs?.total_cam ?? 0);
+    }
+
+    let budgetedCam = 0;
+    const { data: budgetSnap } = await supabaseAdmin
+      .from("computation_snapshots")
+      .select("outputs")
+      .eq("property_id", property_id)
+      .eq("engine_type", "budget")
+      .eq("fiscal_year", fiscal_year)
+      .order("computed_at", { ascending: false })
+      .limit(1);
+    if (budgetSnap && budgetSnap.length > 0) {
+      budgetedCam = Number(budgetSnap[0].outputs?.line_items?.revenue?.cam_recovery ?? 0);
+    }
+
     const snapshotPayload = {
       org_id: orgId,
       property_id,
       engine_type: "cam",
       fiscal_year,
+      computed_at: new Date().toISOString(),
+      computed_by: user.email ?? user.id,
       inputs: {
         property_id,
         fiscal_year,
@@ -324,22 +355,25 @@ Deno.serve(async (req: Request) => {
       outputs: {
         total_cam: roundedTotalCam,
         cam_per_sf: roundedCamPerSf,
+        prev_year_total: Math.round(prevYearTotal * 100) / 100,
+        budgeted_cam: Math.round(budgetedCam * 100) / 100,
+        total_billed: Math.round(totalBilled * 100) / 100,
         method: camMethod,
         admin_fee_pct: adminFeePct,
         tenant_charges: tenantCharges,
         reconciliation,
       },
+      status: "completed",
     };
 
     const { error: snapErr } = await supabaseAdmin
       .from("computation_snapshots")
-      .insert(snapshotPayload);
+      .upsert(snapshotPayload, { onConflict: "org_id,property_id,engine_type,fiscal_year" });
 
     if (snapErr) {
-      console.error(
-        "[compute-cam] computation_snapshots insert error:",
-        snapErr.message
-      );
+      console.error("[compute-cam] computation_snapshots upsert error:", snapErr.message);
+      // Fallback to insert if upsert fails (e.g. unique index not yet applied)
+      await supabaseAdmin.from("computation_snapshots").insert(snapshotPayload).catch(() => {});
     }
 
     // ---------------------------------------------------------------
