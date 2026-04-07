@@ -17,7 +17,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 // ─── Component ─────────────────────────────────────────────────────────────
 export default function RentProjection() {
-  const urlParams = new URLSearchParams(window.location.search);
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
   const initProperty = urlParams.get("property") || "";
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
   const currentYear = new Date().getFullYear();

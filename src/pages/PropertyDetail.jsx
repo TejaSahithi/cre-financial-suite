@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   MapPin, Home, Upload, DollarSign, Calculator, ClipboardCheck, Pencil, Plus, Loader2, AlertTriangle, CheckCircle2, BarChart2
 } from "lucide-react";
@@ -22,7 +22,8 @@ import PropertyCAMTab from "@/components/property/PropertyCAMTab";
 import PropertyBudgetsTab from "@/components/property/PropertyBudgetsTab";
 
 export default function PropertyDetail() {
-  const urlParams = new URLSearchParams(window.location.search);
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
   const propertyId = urlParams.get("id");
   const queryClient = useQueryClient();
 

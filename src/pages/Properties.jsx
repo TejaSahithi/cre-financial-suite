@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Search, Download, Upload, Loader2, Home, Building2, CheckCircle2, XCircle, MapPin, ChevronRight, ArrowRight, ArrowLeft } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
@@ -24,7 +24,8 @@ import BulkImportModal from "@/components/property/BulkImportModal";
 
 export default function Properties() {
   const navigate = useNavigate();
-  const portfolioId = new URLSearchParams(window.location.search).get("portfolio");
+  const location = useLocation();
+  const portfolioId = new URLSearchParams(location.search).get("portfolio");
   const [showCreate, setShowCreate] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [showImport, setShowImport] = useState(false);
