@@ -4,16 +4,10 @@ import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
 /**
  * Compute Orchestrator
  *
- * Triggers the appropriate compute engines after store-data completes.
- * Called fire-and-forget — errors are logged but never break the pipeline.
- *
- * Module → compute engines mapping:
- *   leases    → compute-lease, compute-revenue, compute-budget
- *   expenses  → compute-expense, compute-cam, compute-budget
- *   revenue   → compute-revenue, compute-budget
- *   properties → (no compute needed — properties are reference data)
- *   cam       → compute-cam, compute-budget
- *   budgets   → compute-budget
+ * Triggers compute engines after store-data completes.
+ * - Retries each failed job up to MAX_RETRIES times with exponential backoff
+ * - Logs failure reason in uploaded_files.failed_step
+ * - Does NOT mark pipeline as completed if any compute job fails after all retries
  */
 
 export type ModuleType =
@@ -29,11 +23,17 @@ interface ComputeJob {
   body: Record<string, unknown>;
 }
 
-function getComputeJobs(
-  moduleType: ModuleType,
-  propertyIds: string[],
-  fiscalYear: number,
-): ComputeJob[] {
+interface JobResult {
+  job: ComputeJob;
+  ok: boolean;
+  attempts: number;
+  lastError: string;
+}
+
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000; // 1s, 2s, 4s
+
+function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYear: number): ComputeJob[] {
   const jobs: ComputeJob[] = [];
   if (propertyIds.length === 0) return jobs;
 
@@ -61,20 +61,20 @@ function getComputeJobs(
         jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
         break;
       case "properties":
-        // Reference data — no compute needed immediately
-        break;
+        break; // reference data — no compute needed
     }
   }
 
   return jobs;
 }
 
-async function callEdgeFunction(
+/** Single HTTP call to an Edge Function. Returns ok + error text. */
+async function callOnce(
   supabaseUrl: string,
   functionName: string,
   body: Record<string, unknown>,
   serviceKey: string,
-): Promise<{ ok: boolean; status: number; error?: string }> {
+): Promise<{ ok: boolean; error: string }> {
   try {
     const res = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
       method: "POST",
@@ -85,23 +85,59 @@ async function callEdgeFunction(
       },
       body: JSON.stringify(body),
     });
+
     if (!res.ok) {
-      const text = await res.text().catch(() => "unknown error");
-      return { ok: false, status: res.status, error: text };
+      const text = await res.text().catch(() => "no response body");
+      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
     }
-    return { ok: true, status: res.status };
+
+    return { ok: true, error: "" };
   } catch (err) {
-    return { ok: false, status: 0, error: err.message };
+    return { ok: false, error: err.message ?? "network error" };
   }
 }
 
 /**
- * Resolve property_ids for the compute pipeline using a priority chain:
- *
- * 1. fileRecord.property_id  — set at upload time (most reliable)
- * 2. validData rows          — rows that contain a property_id column
- * 3. DB lookup               — query the relevant table for recently stored rows
- * 4. Org fallback            — all properties in the org (last resort)
+ * Call an Edge Function with up to MAX_RETRIES attempts.
+ * Uses exponential backoff: 1s, 2s, 4s between attempts.
+ * Returns the final result and total attempts made.
+ */
+async function callWithRetry(
+  supabaseUrl: string,
+  functionName: string,
+  body: Record<string, unknown>,
+  serviceKey: string,
+): Promise<{ ok: boolean; attempts: number; lastError: string }> {
+  let lastError = "";
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const result = await callOnce(supabaseUrl, functionName, body, serviceKey);
+
+    if (result.ok) {
+      console.log(`[compute-orchestrator] ${functionName} OK (attempt ${attempt})`);
+      return { ok: true, attempts: attempt, lastError: "" };
+    }
+
+    lastError = result.error;
+    console.warn(`[compute-orchestrator] ${functionName} failed (attempt ${attempt}/${MAX_RETRIES}): ${lastError}`);
+
+    if (attempt < MAX_RETRIES) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[compute-orchestrator] Retrying ${functionName} in ${delayMs}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  console.error(`[compute-orchestrator] ${functionName} exhausted all ${MAX_RETRIES} retries. Last error: ${lastError}`);
+  return { ok: false, attempts: MAX_RETRIES, lastError };
+}
+
+/**
+ * Resolve property_ids using a 4-level priority chain:
+ * 1. fileRecord.property_id  (set at upload time)
+ * 2. validData rows
+ * 3. DB lookup on the just-stored table
+ * 4. Org-level fallback
  */
 export async function resolvePropertyIds(
   fileRecord: Record<string, any>,
@@ -110,13 +146,10 @@ export async function resolvePropertyIds(
   orgId: string,
   supabaseAdmin: any,
 ): Promise<string[]> {
-  // 1. Explicit property_id stored on the file record
   if (fileRecord.property_id && typeof fileRecord.property_id === "string") {
-    console.log(`[compute-orchestrator] property_id from file record: ${fileRecord.property_id}`);
     return [fileRecord.property_id];
   }
 
-  // 2. Extract from valid_data rows
   const fromRows = [
     ...new Set(
       validData
@@ -124,12 +157,8 @@ export async function resolvePropertyIds(
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
   ];
-  if (fromRows.length > 0) {
-    console.log(`[compute-orchestrator] property_ids from rows: ${fromRows.join(",")}`);
-    return fromRows;
-  }
+  if (fromRows.length > 0) return fromRows;
 
-  // 3. DB lookup — query the table that was just populated
   const tableMap: Partial<Record<ModuleType, string>> = {
     leases: "leases",
     expenses: "expenses",
@@ -147,28 +176,26 @@ export async function resolvePropertyIds(
 
     if (data && data.length > 0) {
       const ids = [...new Set(data.map((r: any) => r.property_id).filter(Boolean))];
-      if (ids.length > 0) {
-        console.log(`[compute-orchestrator] property_ids from ${table} table: ${ids.join(",")}`);
-        return ids as string[];
-      }
+      if (ids.length > 0) return ids as string[];
     }
   }
 
-  // 4. Org-level fallback — all properties (max 20)
   const { data: props } = await supabaseAdmin
     .from("properties")
     .select("id")
     .eq("org_id", orgId)
     .limit(20);
 
-  const fallback = props?.map((p: any) => p.id) ?? [];
-  console.log(`[compute-orchestrator] property_ids from org fallback: ${fallback.join(",")}`);
-  return fallback;
+  return props?.map((p: any) => p.id) ?? [];
 }
 
 /**
- * Main orchestration entry point.
- * Called fire-and-forget after store-data succeeds.
+ * Main orchestration entry point. Called fire-and-forget after store-data.
+ *
+ * Behaviour:
+ * - Each job is retried up to MAX_RETRIES times with exponential backoff
+ * - If ALL jobs succeed → status = "completed"
+ * - If ANY job fails after all retries → status = "failed", failed_step records which functions failed
  */
 export async function triggerComputePipeline(opts: {
   fileId: string;
@@ -208,32 +235,45 @@ export async function triggerComputePipeline(opts: {
       return;
     }
 
-    const results = await Promise.allSettled(
-      jobs.map((job) => callEdgeFunction(supabaseUrl, job.functionName, job.body, serviceKey)),
+    // Run all jobs sequentially so retries don't flood the system.
+    // Each job is independent — a failure in one does not skip others.
+    const results: JobResult[] = [];
+
+    for (const job of jobs) {
+      const result = await callWithRetry(supabaseUrl, job.functionName, job.body, serviceKey);
+      results.push({ job, ...result });
+    }
+
+    // Separate successes from permanent failures
+    const failed = results.filter((r) => !r.ok);
+    const succeeded = results.filter((r) => r.ok);
+
+    console.log(
+      `[compute-orchestrator] Done. ${succeeded.length}/${jobs.length} succeeded, ${failed.length} failed.`,
     );
 
-    const errors: string[] = [];
-    results.forEach((result, i) => {
-      const job = jobs[i];
-      if (result.status === "rejected") {
-        errors.push(`${job.functionName}: ${result.reason}`);
-        console.error(`[compute-orchestrator] ${job.functionName} rejected:`, result.reason);
-      } else if (!result.value.ok) {
-        errors.push(`${job.functionName}: HTTP ${result.value.status} — ${result.value.error}`);
-        console.error(`[compute-orchestrator] ${job.functionName} failed:`, result.value.error);
-      } else {
-        console.log(`[compute-orchestrator] ${job.functionName} OK`);
-      }
-    });
+    if (failed.length === 0) {
+      // All jobs succeeded
+      await setStatus(supabaseAdmin, fileId, "completed", {
+        processing_completed_at: new Date().toISOString(),
+      });
+    } else {
+      // One or more jobs failed after all retries — mark as failed
+      const failedNames = failed.map((r) => r.job.functionName).join(", ");
+      const failedDetails = failed
+        .map((r) => `${r.job.functionName} (${r.attempts} attempts): ${r.lastError}`)
+        .join(" | ");
 
-    const errorNote = errors.length > 0 ? `Compute warnings: ${errors.slice(0, 3).join("; ")}` : null;
+      console.error(`[compute-orchestrator] Permanent failures: ${failedDetails}`);
 
-    await setStatus(supabaseAdmin, fileId, "completed", {
-      processing_completed_at: new Date().toISOString(),
-      ...(errorNote ? { error_message: errorNote } : {}),
-    });
-
-    console.log(`[compute-orchestrator] Done. ${jobs.length} jobs, ${errors.length} errors.`);
+      await setFailed(
+        supabaseAdmin,
+        fileId,
+        `Compute failed after ${MAX_RETRIES} retries: ${failedDetails.slice(0, 500)}`,
+        `computing:${failedNames}`,
+        STATUS_PROGRESS.computing,
+      );
+    }
 
   } catch (err) {
     console.error("[compute-orchestrator] Unexpected error:", err.message);
