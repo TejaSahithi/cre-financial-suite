@@ -229,13 +229,20 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
   // ── Merge extracted rows with full field template ─────────────────────────
   const buildRows = useCallback((extractedRows) => {
     const defaultRow = Object.fromEntries(fieldDefs.map(f => [f.key, null]));
-    return extractedRows.map((extracted, idx) => ({
-      ...defaultRow,
-      ...Object.fromEntries(
-        Object.entries(extracted).filter(([k]) => k !== '_row' && !['org_id','id','created_at','updated_at'].includes(k))
-      ),
-      _row: idx + 1,
-    }));
+    const allowedKeys = new Set(fieldDefs.map(f => f.key));
+    
+    return extractedRows.map((extracted, idx) => {
+      // STRICT FILTER: Only keep fields explicitly defined in MODULE_FIELDS for this specific module
+      const filteredExtracted = Object.fromEntries(
+        Object.entries(extracted).filter(([k]) => allowedKeys.has(k))
+      );
+      
+      return {
+        ...defaultRow,
+        ...filteredExtracted,
+        _row: idx + 1,
+      };
+    });
   }, [fieldDefs]);
 
   // ── File upload ───────────────────────────────────────────────────────────
