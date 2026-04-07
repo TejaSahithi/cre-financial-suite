@@ -843,6 +843,24 @@ export function parseGeneric(text) {
 }
 
 /**
+ * Map of moduleType → parser function.
+ * Used by documentExtractor.js to route CSV/Excel files to the right parser.
+ */
+export const PARSER_MAP = {
+  property:   parseProperties,
+  building:   parseBuildings,
+  unit:       parseUnits,
+  lease:      parseLeases,
+  tenant:     parseTenants,
+  revenue:    parseRevenue,
+  expense:    parseExpenses,
+  gl_account: parseGLAccounts,
+  gl:         parseGLAccounts,
+  invoice:    parseGeneric,
+  vendor:     parseGeneric,
+};
+
+/**
  * Export template CSV strings for each module, so users know what headers to use.
  */
 export const CSV_TEMPLATES = {
