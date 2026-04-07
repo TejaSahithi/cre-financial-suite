@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
+
 /**
  * Compute Orchestrator
  *
@@ -15,7 +16,7 @@ import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
  *   budgets   → compute-budget
  */
 
-import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
+export type ModuleType =
   | "leases"
   | "expenses"
   | "properties"
@@ -28,83 +29,46 @@ interface ComputeJob {
   body: Record<string, unknown>;
 }
 
-/**
- * Returns the list of compute jobs to run for a given module type.
- * Each job specifies which Edge Function to call and what body to send.
- */
 function getComputeJobs(
   moduleType: ModuleType,
   propertyIds: string[],
-  orgId: string,
   fiscalYear: number,
 ): ComputeJob[] {
   const jobs: ComputeJob[] = [];
+  if (propertyIds.length === 0) return jobs;
 
-  // For modules that operate per-property, fan out one job per property.
-  // If no property_ids were found in the stored data, skip property-scoped engines.
-  const hasProperties = propertyIds.length > 0;
-
-  switch (moduleType) {
-    case "leases":
-      // Compute rent schedules for each property that has leases
-      if (hasProperties) {
-        for (const pid of propertyIds) {
-          jobs.push({ functionName: "compute-lease", body: { property_id: pid } });
-          jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
-          jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
-        }
-      }
-      break;
-
-    case "expenses":
-      if (hasProperties) {
-        for (const pid of propertyIds) {
-          jobs.push({ functionName: "compute-expense", body: { property_id: pid, fiscal_year: fiscalYear } });
-          jobs.push({ functionName: "compute-cam", body: { property_id: pid, fiscal_year: fiscalYear } });
-          jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
-        }
-      }
-      break;
-
-    case "revenue":
-      if (hasProperties) {
-        for (const pid of propertyIds) {
-          jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
-          jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
-        }
-      }
-      break;
-
-    case "cam":
-      if (hasProperties) {
-        for (const pid of propertyIds) {
-          jobs.push({ functionName: "compute-cam", body: { property_id: pid, fiscal_year: fiscalYear } });
-          jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
-        }
-      }
-      break;
-
-    case "budgets":
-      if (hasProperties) {
-        for (const pid of propertyIds) {
-          jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
-        }
-      }
-      break;
-
-    case "properties":
-      // Properties are reference data — no compute needed immediately.
-      // Compute will be triggered when leases/expenses are uploaded for these properties.
-      break;
+  for (const pid of propertyIds) {
+    switch (moduleType) {
+      case "leases":
+        jobs.push({ functionName: "compute-lease",   body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        break;
+      case "expenses":
+        jobs.push({ functionName: "compute-expense", body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-cam",     body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        break;
+      case "revenue":
+        jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        break;
+      case "cam":
+        jobs.push({ functionName: "compute-cam",    body: { property_id: pid, fiscal_year: fiscalYear } });
+        jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        break;
+      case "budgets":
+        jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        break;
+      case "properties":
+        // Reference data — no compute needed immediately
+        break;
+    }
   }
 
   return jobs;
 }
 
-/**
- * Calls a single Edge Function via internal HTTP.
- * Uses the service role key so the compute function has full DB access.
- */
 async function callEdgeFunction(
   supabaseUrl: string,
   functionName: string,
@@ -121,12 +85,10 @@ async function callEdgeFunction(
       },
       body: JSON.stringify(body),
     });
-
     if (!res.ok) {
       const text = await res.text().catch(() => "unknown error");
       return { ok: false, status: res.status, error: text };
     }
-
     return { ok: true, status: res.status };
   } catch (err) {
     return { ok: false, status: 0, error: err.message };
@@ -134,16 +96,27 @@ async function callEdgeFunction(
 }
 
 /**
- * Extract unique property_ids from the stored rows.
- * Falls back to querying the DB for properties in the org if rows have no property_id.
+ * Resolve property_ids for the compute pipeline using a priority chain:
+ *
+ * 1. fileRecord.property_id  — set at upload time (most reliable)
+ * 2. validData rows          — rows that contain a property_id column
+ * 3. DB lookup               — query the relevant table for recently stored rows
+ * 4. Org fallback            — all properties in the org (last resort)
  */
-async function resolvePropertyIds(
+export async function resolvePropertyIds(
+  fileRecord: Record<string, any>,
   validData: Record<string, any>[],
   moduleType: ModuleType,
   orgId: string,
   supabaseAdmin: any,
 ): Promise<string[]> {
-  // Try to get property_ids directly from the stored rows
+  // 1. Explicit property_id stored on the file record
+  if (fileRecord.property_id && typeof fileRecord.property_id === "string") {
+    console.log(`[compute-orchestrator] property_id from file record: ${fileRecord.property_id}`);
+    return [fileRecord.property_id];
+  }
+
+  // 2. Extract from valid_data rows
   const fromRows = [
     ...new Set(
       validData
@@ -151,91 +124,94 @@ async function resolvePropertyIds(
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
   ];
+  if (fromRows.length > 0) {
+    console.log(`[compute-orchestrator] property_ids from rows: ${fromRows.join(",")}`);
+    return fromRows;
+  }
 
-  if (fromRows.length > 0) return fromRows;
-
-  // For leases: look up properties via the leases table (just stored)
-  if (moduleType === "leases") {
+  // 3. DB lookup — query the table that was just populated
+  const tableMap: Partial<Record<ModuleType, string>> = {
+    leases: "leases",
+    expenses: "expenses",
+    revenue: "revenues",
+  };
+  const table = tableMap[moduleType];
+  if (table) {
     const { data } = await supabaseAdmin
-      .from("leases")
+      .from(table)
       .select("property_id")
       .eq("org_id", orgId)
       .not("property_id", "is", null)
+      .order("created_at", { ascending: false })
       .limit(50);
 
     if (data && data.length > 0) {
-      return [...new Set(data.map((r: any) => r.property_id).filter(Boolean))];
+      const ids = [...new Set(data.map((r: any) => r.property_id).filter(Boolean))];
+      if (ids.length > 0) {
+        console.log(`[compute-orchestrator] property_ids from ${table} table: ${ids.join(",")}`);
+        return ids as string[];
+      }
     }
   }
 
-  // Last resort: get all properties for this org
+  // 4. Org-level fallback — all properties (max 20)
   const { data: props } = await supabaseAdmin
     .from("properties")
     .select("id")
     .eq("org_id", orgId)
     .limit(20);
 
-  return props?.map((p: any) => p.id) ?? [];
+  const fallback = props?.map((p: any) => p.id) ?? [];
+  console.log(`[compute-orchestrator] property_ids from org fallback: ${fallback.join(",")}`);
+  return fallback;
 }
 
 /**
  * Main orchestration entry point.
- *
- * Call this AFTER store-data succeeds. It:
- * 1. Resolves which property_ids are affected
- * 2. Determines which compute engines to run
- * 3. Fires them all in parallel (fire-and-forget)
- * 4. Updates uploaded_files.status to 'computing' then 'processed'
- * 5. Never throws — all errors are caught and logged
+ * Called fire-and-forget after store-data succeeds.
  */
 export async function triggerComputePipeline(opts: {
   fileId: string;
   moduleType: ModuleType;
   orgId: string;
   validData: Record<string, any>[];
+  fileRecord: Record<string, any>;
   supabaseAdmin: any;
 }): Promise<void> {
-  const { fileId, moduleType, orgId, validData, supabaseAdmin } = opts;
+  const { fileId, moduleType, orgId, validData, fileRecord, supabaseAdmin } = opts;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
   if (!supabaseUrl || !serviceKey) {
-    console.warn("[compute-orchestrator] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — skipping compute");
+    console.warn("[compute-orchestrator] Missing env vars — skipping compute");
     return;
   }
 
   try {
-    // Mark as computing
     await setStatus(supabaseAdmin, fileId, "computing");
 
-    // Resolve property_ids and fiscal year
-    const propertyIds = await resolvePropertyIds(validData, moduleType, orgId, supabaseAdmin);
+    const propertyIds = await resolvePropertyIds(fileRecord, validData, moduleType, orgId, supabaseAdmin);
     const fiscalYear = new Date().getFullYear();
 
     console.log(
-      `[compute-orchestrator] file_id=${fileId} module=${moduleType} properties=${propertyIds.join(",")} fiscal_year=${fiscalYear}`,
+      `[compute-orchestrator] file_id=${fileId} module=${moduleType} properties=[${propertyIds.join(",")}] fy=${fiscalYear}`,
     );
 
-    // Build job list
-    const jobs = getComputeJobs(moduleType, propertyIds, orgId, fiscalYear);
+    const jobs = getComputeJobs(moduleType, propertyIds, fiscalYear);
 
     if (jobs.length === 0) {
-      console.log(`[compute-orchestrator] No compute jobs for module_type=${moduleType}`);
+      console.log(`[compute-orchestrator] No compute jobs for module=${moduleType}`);
       await setStatus(supabaseAdmin, fileId, "completed", {
         processing_completed_at: new Date().toISOString(),
       });
       return;
     }
 
-    // Fire all jobs in parallel — errors are collected but don't stop others
     const results = await Promise.allSettled(
-      jobs.map((job) =>
-        callEdgeFunction(supabaseUrl, job.functionName, job.body, serviceKey)
-      ),
+      jobs.map((job) => callEdgeFunction(supabaseUrl, job.functionName, job.body, serviceKey)),
     );
 
-    // Log results
     const errors: string[] = [];
     results.forEach((result, i) => {
       const job = jobs[i];
@@ -250,10 +226,7 @@ export async function triggerComputePipeline(opts: {
       }
     });
 
-    // Mark as completed (even if some compute jobs failed — data is stored)
-    const errorNote = errors.length > 0
-      ? `Compute warnings: ${errors.slice(0, 3).join("; ")}`
-      : null;
+    const errorNote = errors.length > 0 ? `Compute warnings: ${errors.slice(0, 3).join("; ")}` : null;
 
     await setStatus(supabaseAdmin, fileId, "completed", {
       processing_completed_at: new Date().toISOString(),
@@ -263,7 +236,6 @@ export async function triggerComputePipeline(opts: {
     console.log(`[compute-orchestrator] Done. ${jobs.length} jobs, ${errors.length} errors.`);
 
   } catch (err) {
-    // Never let orchestration errors break the pipeline
     console.error("[compute-orchestrator] Unexpected error:", err.message);
     await setFailed(supabaseAdmin, fileId, err.message, "computing", STATUS_PROGRESS.computing);
   }

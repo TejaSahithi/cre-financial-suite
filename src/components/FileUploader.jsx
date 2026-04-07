@@ -43,11 +43,13 @@ function getFileExtension(name) {
  * @param {Function} props.onUploadComplete  - called with the upload result object
  * @param {string}   [props.defaultFileType] - pre-selected file type
  * @param {string[]} [props.allowedFileTypes] - restrict dropdown options (default: all)
+ * @param {string}   [props.propertyId]      - pre-selected property_id (passed to upload-handler)
  */
 export default function FileUploader({
   onUploadComplete,
   defaultFileType,
   allowedFileTypes,
+  propertyId,
 }) {
   const { orgId } = useOrgId();
   const fileInputRef = useRef(null);
@@ -149,6 +151,9 @@ export default function FileUploader({
       formData.append("file_type", fileType);
       if (orgId && orgId !== "__none__") {
         formData.append("org_id", orgId);
+      }
+      if (propertyId) {
+        formData.append("property_id", propertyId);
       }
 
       const { data, error } = await supabase.functions.invoke(

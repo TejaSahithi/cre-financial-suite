@@ -35,6 +35,7 @@ Deno.serve(async (req: Request) => {
     const formData = await req.formData();
     const file = formData.get('file') as File;
     const fileType = formData.get('file_type') as string;
+    const propertyId = (formData.get('property_id') as string) || null;
 
     // Validate required parameters
     if (!file) {
@@ -131,6 +132,7 @@ Deno.serve(async (req: Request) => {
         file_size: file.size,
         mime_type: file.type,
         uploaded_by: user.email,
+        property_id: propertyId,   // stored at upload time — used by compute pipeline
         status: 'uploaded',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -163,6 +165,7 @@ Deno.serve(async (req: Request) => {
         storage_path: storagePath,
         file_name: file.name,
         file_size: file.size,
+        property_id: propertyId,
         processing_status: 'uploaded',
         created_at: uploadRecord.created_at
       }),

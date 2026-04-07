@@ -164,10 +164,21 @@ Deno.serve(async (req: Request) => {
       const moduleType: string = fileRecord.module_type;
       const tableName = getTableName(moduleType);
 
-      // 7. Map each row to the correct table columns
-      const mappedRows = validData.map((row) =>
-        mapRow(row, moduleType, orgId, userEmail)
-      );
+      // Resolve the canonical property_id for this file.
+      // Priority: fileRecord.property_id → first row with property_id → null
+      const filePropertyId: string | null =
+        fileRecord.property_id ??
+        validData.find((r) => r.property_id)?.property_id ??
+        null;
+
+      // 7. Map each row to the correct table columns.
+      // If a row is missing property_id but the file has one, inject it.
+      const mappedRows = validData.map((row) => {
+        const enriched = filePropertyId && !row.property_id
+          ? { ...row, property_id: filePropertyId }
+          : row;
+        return mapRow(enriched, moduleType, orgId, userEmail);
+      });
 
       // 8. Insert rows in batch
       const { data: insertedData, error: insertError } = await supabaseAdmin
@@ -203,14 +214,12 @@ Deno.serve(async (req: Request) => {
       });
 
       // 11. Fire compute pipeline asynchronously (fire-and-forget).
-      //     This updates status: stored → computing → processed.
-      //     Errors inside triggerComputePipeline are caught internally and never
-      //     propagate here — the store-data response is always returned first.
       triggerComputePipeline({
         fileId: file_id,
         moduleType: moduleType as any,
         orgId,
         validData,
+        fileRecord,
         supabaseAdmin,
       }).catch((err) => {
         console.error("[store-data] compute pipeline trigger error:", err.message);
