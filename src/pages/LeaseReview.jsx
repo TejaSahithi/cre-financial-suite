@@ -3,6 +3,7 @@ import { leaseService } from "@/services/leaseService";
 import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ export default function LeaseReview() {
   const leaseId = urlParams.get("id");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { trigger: triggerCompute } = useComputeTrigger();
   const [showSignature, setShowSignature] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
   const [allocationModel, setAllocationModel] = useState("pro_rata");
@@ -62,7 +64,15 @@ export default function LeaseReview() {
       toast.success("Lease updated successfully");
       // Trigger recomputation in the background (fire-and-forget)
       if (updated?.property_id) {
-        triggerRecompute(updated.property_id).catch(() => {});
+        triggerCompute(
+          "compute-lease",
+          { property_id: updated.property_id, fiscal_year: new Date().getFullYear() },
+          { silent: true }
+        ).then(() => {
+          // Invalidate snapshot queries so dashboards auto-refresh
+          queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
+          queryClient.invalidateQueries({ queryKey: ["snapshot", "revenue"] });
+        }).catch(() => {});
       }
     },
     onError: (err) => {
@@ -70,26 +80,6 @@ export default function LeaseReview() {
       toast.error(`Update failed: ${err?.message ?? "Unknown error"}`);
     },
   });
-
-  // Fire compute-lease for the property after a lease edit
-  async function triggerRecompute(propertyId) {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/compute-lease`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ property_id: propertyId, fiscal_year: new Date().getFullYear() }),
-      });
-      console.log("[LeaseReview] Recompute triggered for property", propertyId);
-    } catch (err) {
-      console.warn("[LeaseReview] Recompute trigger failed (non-fatal):", err.message);
-    }
-  }
 
   // No lease ID or lease not found
   if (!leaseId) {

@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { propertyService } from "@/services/propertyService";
-import { ComputationSnapshotService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
+import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,44 +15,11 @@ import { toast } from "sonner";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// ─── Snapshot fetcher ──────────────────────────────────────────────────────
-async function fetchLeaseSnapshot(propertyId, fiscalYear) {
-  if (!supabase) return null;
-  const query = supabase
-    .from("computation_snapshots")
-    .select("*")
-    .eq("engine_type", "lease")
-    .eq("fiscal_year", fiscalYear)
-    .order("computed_at", { ascending: false })
-    .limit(1);
-
-  if (propertyId) query.eq("property_id", propertyId);
-
-  const { data, error } = await query;
-  if (error || !data || data.length === 0) return null;
-  return data[0];
-}
-
-async function triggerCompute(propertyId, fiscalYear, authToken) {
-  if (!supabase || !propertyId) return;
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  await fetch(`${supabaseUrl}/functions/v1/compute-lease`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${authToken}`,
-      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-    },
-    body: JSON.stringify({ property_id: propertyId }),
-  });
-}
-
 // ─── Component ─────────────────────────────────────────────────────────────
 export default function RentProjection() {
   const urlParams = new URLSearchParams(window.location.search);
   const initProperty = urlParams.get("property") || "";
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
-  const [isTriggering, setIsTriggering] = useState(false);
   const currentYear = new Date().getFullYear();
 
   const { data: properties = [] } = useQuery({
@@ -59,23 +27,16 @@ export default function RentProjection() {
     queryFn: () => propertyService.list(),
   });
 
-  // Read from computation_snapshots — no client-side math
-  const {
-    data: snapshot,
-    isLoading,
-    isFetching,
-    refetch,
-  } = useQuery({
-    queryKey: ["lease-snapshot", selectedProperty, currentYear],
-    queryFn: () => fetchLeaseSnapshot(selectedProperty || null, currentYear),
-    refetchInterval: (data) => {
-      // Auto-refresh every 5s if no snapshot yet (compute may still be running)
-      return data ? false : 5000;
-    },
+  // Read from computation_snapshots via shared hook — no client-side math
+  const { snapshot, outputs, isLoading, isFetching, refetch } = useSnapshotQuery({
+    engineType: "lease",
+    propertyId: selectedProperty || null,
+    fiscalYear: currentYear,
   });
 
+  const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
+
   // Outputs come directly from the snapshot — no derivation
-  const outputs = snapshot?.outputs ?? null;
   const tenantRentData = outputs?.tenant_schedules ?? [];
   const summary = outputs?.summary ?? {};
   const monthlyProjections = outputs?.monthly_projections ?? [];
