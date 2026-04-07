@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
 import { parseLeases } from "../_shared/parsers/lease-parser.ts";
 import { parseExpenses } from "../_shared/parsers/expense-parser.ts";
 import { parseProperties } from "../_shared/parsers/property-parser.ts";
@@ -142,14 +143,9 @@ Deno.serve(async (req: Request) => {
     }
 
     // Update status to 'parsing'
-    await supabaseAdmin
-      .from('uploaded_files')
-      .update({ 
-        status: 'parsing',
-        processing_started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', file_id);
+    await setStatus(supabaseAdmin, file_id, "parsing", {
+      processing_started_at: new Date().toISOString(),
+    });
 
     try {
       // Read file from Supabase Storage
@@ -190,17 +186,18 @@ Deno.serve(async (req: Request) => {
       const { error: updateError } = await supabaseAdmin
         .from('uploaded_files')
         .update({
-          status: 'parsed',
           parsed_data: finalParsedData,
           row_count: finalParsedData.length,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
         })
         .eq('id', file_id);
 
       if (updateError) {
         throw new Error(`Failed to update file record: ${updateError.message}`);
       }
+
+      await setStatus(supabaseAdmin, file_id, "parsed", {
+        processing_completed_at: new Date().toISOString(),
+      });
 
       return new Response(
         JSON.stringify({
@@ -215,17 +212,7 @@ Deno.serve(async (req: Request) => {
       );
 
     } catch (parseError) {
-      // Update status to 'failed' with error message
-      await supabaseAdmin
-        .from('uploaded_files')
-        .update({
-          status: 'failed',
-          error_message: parseError.message,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', file_id);
-
+      await setFailed(supabaseAdmin, file_id, parseError.message, "parsing", STATUS_PROGRESS.parsing);
       throw parseError;
     }
 

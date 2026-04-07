@@ -14,34 +14,30 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 // Progress percentage mapping based on pipeline status
 // ---------------------------------------------------------------------------
 const STATUS_PROGRESS: Record<string, number> = {
-  uploaded: 10,
-  parsing: 30,
-  parsed: 40,
-  pdf_parsed: 45,   // PDF extraction done, normalisation pending
-  validating: 50,
-  validated: 60,
-  storing: 80,
-  stored: 90,
-  computing: 95,    // Compute engines running in background
-  processed: 100,
+  uploaded:   5,
+  parsing:    15,
+  parsed:     30,
+  pdf_parsed: 35,
+  validating: 45,
+  validated:  60,
+  storing:    70,
+  stored:     80,
+  computing:  90,
+  completed:  100,
+  processed:  100,  // legacy alias
 };
 
 /**
  * Calculate progress_percentage for a file record.
- * For "failed" status, the progress stays at whatever stage it reached before
- * failing. For known statuses, return the mapped value. Default to 0.
+ * Prefer the stored progress_percentage column (set by pipeline-status.ts helper).
+ * Fall back to the status map for older rows.
  */
 function getProgressPercentage(record: Record<string, any>): number {
-  const status: string = record.status;
-
-  if (status === "failed") {
-    // Use progress_percentage already stored on the record if available,
-    // otherwise fall back to 0.
-    return typeof record.progress_percentage === "number"
-      ? record.progress_percentage
-      : 0;
+  if (typeof record.progress_percentage === "number" && record.progress_percentage > 0) {
+    return record.progress_percentage;
   }
-
+  const status: string = record.status;
+  if (status === "failed") return 0;
   return STATUS_PROGRESS[status] ?? 0;
 }
 
@@ -59,6 +55,7 @@ function formatFileRecord(record: Record<string, any>) {
     valid_count: record.valid_count ?? null,
     error_count: record.error_count ?? null,
     error_message: record.error_message ?? null,
+    failed_step: record.failed_step ?? null,
     created_at: record.created_at,
     updated_at: record.updated_at,
     processing_started_at: record.processing_started_at ?? null,
@@ -75,6 +72,7 @@ const SELECT_COLUMNS = [
   "module_type",
   "status",
   "progress_percentage",
+  "failed_step",
   "error_message",
   "row_count",
   "valid_count",

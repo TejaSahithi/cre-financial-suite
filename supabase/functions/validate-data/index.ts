@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
 
 /**
  * Validate Data Edge Function
@@ -328,14 +329,9 @@ Deno.serve(async (req: Request) => {
     }
 
     // Update status to 'validating'
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({
-        status: "validating",
-        processing_started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", file_id);
+    await setStatus(supabaseAdmin, file_id, "validating", {
+      processing_started_at: new Date().toISOString(),
+    });
 
     try {
       // Read parsed data
@@ -404,31 +400,25 @@ Deno.serve(async (req: Request) => {
       // -----------------------------------------------------------------------
       // Persist results
       // -----------------------------------------------------------------------
-      const { error: updateError } = await supabaseAdmin
+      await supabaseAdmin
         .from("uploaded_files")
         .update({
-          status: finalStatus,
           valid_data: validRows,
           validation_errors: allErrors,
           valid_count: validCount,
           error_count: errorCount,
-          error_message: finalStatus === "failed"
-            ? "All rows failed validation"
-            : null,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          error_message: finalStatus === "failed" ? "All rows failed validation" : null,
         })
         .eq("id", file_id);
 
-      if (updateError) {
-        throw new Error(
-          `Failed to update file record: ${updateError.message}`,
-        );
+      if (finalStatus === "failed") {
+        await setFailed(supabaseAdmin, file_id, "All rows failed validation", "validating", STATUS_PROGRESS.validating);
+      } else {
+        await setStatus(supabaseAdmin, file_id, "validated", {
+          processing_completed_at: new Date().toISOString(),
+        });
       }
 
-      // -----------------------------------------------------------------------
-      // Response
-      // -----------------------------------------------------------------------
       return new Response(
         JSON.stringify({
           error: false,
@@ -443,17 +433,7 @@ Deno.serve(async (req: Request) => {
         },
       );
     } catch (validationError) {
-      // Update status to 'failed' with error message
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "failed",
-          error_message: validationError.message,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
-
+      await setFailed(supabaseAdmin, file_id, validationError.message, "validating", STATUS_PROGRESS.validating);
       throw validationError;
     }
   } catch (err) {
