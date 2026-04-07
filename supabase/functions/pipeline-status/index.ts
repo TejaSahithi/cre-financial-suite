@@ -22,6 +22,7 @@ const STATUS_PROGRESS: Record<string, number> = {
   validated: 60,
   storing: 80,
   stored: 90,
+  computing: 95,    // Compute engines running in background
   processed: 100,
 };
 

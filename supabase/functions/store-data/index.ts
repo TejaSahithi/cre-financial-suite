@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { triggerComputePipeline } from "../_shared/compute-orchestrator.ts";
 
 /**
  * Store Data Edge Function
@@ -211,7 +212,21 @@ Deno.serve(async (req: Request) => {
         })
         .eq("id", file_id);
 
-      // 11. Return success response
+      // 11. Fire compute pipeline asynchronously (fire-and-forget).
+      //     This updates status: stored → computing → processed.
+      //     Errors inside triggerComputePipeline are caught internally and never
+      //     propagate here — the store-data response is always returned first.
+      triggerComputePipeline({
+        fileId: file_id,
+        moduleType: moduleType as any,
+        orgId,
+        validData,
+        supabaseAdmin,
+      }).catch((err) => {
+        console.error("[store-data] compute pipeline trigger error:", err.message);
+      });
+
+      // 12. Return success response immediately (compute runs in background)
       return new Response(
         JSON.stringify({
           error: false,
@@ -219,6 +234,7 @@ Deno.serve(async (req: Request) => {
           processing_status: "stored",
           inserted_count: insertedCount,
           table: tableName,
+          compute_triggered: true,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
