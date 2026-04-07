@@ -170,7 +170,7 @@ export default function CAMDashboard() {
         <MetricCard label={`CAM Pool (${currentYear})`} value={`$${currentTotal.toLocaleString()}`} icon={Calculator} color="bg-teal-50 text-teal-600" trend={prevTotal > 0 ? parseFloat(((currentTotal - prevTotal) / prevTotal * 100).toFixed(1)) : undefined} />
         <MetricCard label={`Prior Year (${prevYear})`} value={`$${prevTotal.toLocaleString()}`} icon={DollarSign} color="bg-slate-100 text-slate-500" sub="Historical baseline" />
         <MetricCard label={`Budgeted CAM`} value={`$${camBudgeted.toLocaleString()}`} icon={TrendingUp} color="bg-blue-50 text-blue-600" sub={`FY ${currentYear}`} />
-        <MetricCard label="Lease CAM Revenue" value={`$${leaseCAMTotal.toLocaleString()}`} icon={DollarSign} color="bg-amber-50 text-amber-600" sub={`From ${scopedLeases.length} leases`} />
+        <MetricCard label="Lease CAM Revenue" value={`$${leaseCAMTotal.toLocaleString()}`} icon={DollarSign} color="bg-amber-50 text-amber-600" sub="From active leases" />
       </div>
 
       <Tabs defaultValue="rules">
