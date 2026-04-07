@@ -9,12 +9,17 @@
  *   .docx        → Mammoth.js → raw text → Vertex AI (Gemini)
  *   .pdf         → PDF.js → raw text → Vertex AI (Gemini)
  *
+ * ALL rows from ALL sources pass through normalizeAndCalculate() so that
+ * derived fields (annual_rent, rent_per_sf, lease_term_months, cap_rate, etc.)
+ * are always computed correctly regardless of file format.
+ *
  * Returns: { rows, method, warning? }
- *   rows   — array of parsed record objects (canonical field names)
+ *   rows   — fully normalized array of record objects
  *   method — 'csv_parser' | 'excel_parser' | 'ai_gemini' | 'text_parser'
  */
 
 import * as parsers from "@/services/parsingEngine";
+import { normalizeAndCalculate } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 
 // ── Excel / SheetJS ──────────────────────────────────────────────────────────
@@ -24,14 +29,12 @@ async function extractExcel(file) {
   const buf = await file.arrayBuffer();
   const workbook = read(buf, { type: "array" });
 
-  // Take the first sheet
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error("Excel file contains no sheets.");
 
   const sheet = workbook.Sheets[sheetName];
-  // Convert to CSV string, then let parsingEngine handle it
-  const csv = utils.sheet_to_csv(sheet, { blankrows: false });
-  return csv;
+  // Convert to CSV, then let parsingEngine handle column mapping
+  return utils.sheet_to_csv(sheet, { blankrows: false });
 }
 
 // ── Word / Mammoth ───────────────────────────────────────────────────────────
@@ -41,7 +44,9 @@ async function extractDocx(file) {
   const buf = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer: buf });
   if (!result.value || result.value.trim().length < 10) {
-    throw new Error("Could not extract text from Word document. The file may be empty or encrypted.");
+    throw new Error(
+      "Could not extract text from this Word document. It may be empty or password-protected."
+    );
   }
   return result.value;
 }
@@ -49,10 +54,8 @@ async function extractDocx(file) {
 // ── PDF / PDF.js ─────────────────────────────────────────────────────────────
 
 async function extractPdf(file) {
-  // Dynamically import PDF.js (lazy-loaded to keep bundle small)
   const pdfjsLib = await import("pdfjs-dist");
 
-  // PDF.js needs a worker — use the CDN worker for simplicity
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -63,18 +66,27 @@ async function extractPdf(file) {
 
   const pageTexts = [];
   for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
+    const page    = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items.map((item) => item.str).join(" ");
-    pageTexts.push(pageText);
+    // Preserve line breaks by grouping items with significant y-gaps
+    let lastY = null;
+    const parts = [];
+    for (const item of content.items) {
+      if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+        parts.push("\n");
+      }
+      parts.push(item.str);
+      lastY = item.transform[5];
+    }
+    pageTexts.push(parts.join(" "));
   }
 
-  const fullText = pageTexts.join("\n\n").trim();
+  const fullText = pageTexts.join("\n\n").replace(/\s{3,}/g, "  ").trim();
 
   if (fullText.length < 50) {
     throw new Error(
-      "This PDF appears to be a scanned image with no text layer. " +
-      "Please use a text-based PDF or convert it using Adobe Acrobat / Google Drive OCR first."
+      "This PDF has no selectable text — it appears to be a scanned image. " +
+      "Please open it in Adobe Acrobat or Google Drive and use 'Make Searchable PDF' / OCR, then re-upload."
     );
   }
   return fullText;
@@ -90,7 +102,10 @@ async function extractWithAI(rawText, moduleType, fileName) {
   if (error) throw new Error(`AI extraction failed: ${error.message}`);
   if (data?.error) throw new Error(`AI extraction error: ${data.error}`);
   if (!data?.rows || data.rows.length === 0) {
-    throw new Error("AI could not find any structured data in this document. Try a different file.");
+    throw new Error(
+      "Gemini could not find structured data in this document. " +
+      "Make sure the document contains identifiable fields."
+    );
   }
 
   return { rows: data.rows, method: "ai_gemini", model: data.model };
@@ -100,75 +115,93 @@ async function extractWithAI(rawText, moduleType, fileName) {
 
 /**
  * Extract structured records from a File object for a given CRE module.
+ * ALL rows pass through normalizeAndCalculate() before being returned.
  *
  * @param {File}   file        — The uploaded File
  * @param {string} moduleType  — 'property' | 'lease' | 'tenant' | 'unit' | ...
  * @returns {{ rows: object[], method: string, warning?: string }}
  */
 export async function extractFromFile(file, moduleType) {
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const parserFn = parsers.PARSER_MAP?.[moduleType];
+  const ext    = (file.name.split(".").pop() ?? "").toLowerCase();
+  const parser = parsers.PARSER_MAP?.[moduleType];
 
-  // ── CSV / TXT → fast local parser ─────────────────────────────────────────
+  let rawRows;
+  let method;
+
+  // ── CSV / TXT ─────────────────────────────────────────────────────────────
   if (ext === "csv" || ext === "txt") {
     const text = await file.text();
 
-    if (parserFn) {
-      const result = parserFn(text);
+    if (parser) {
+      const result = parser(text);
       if (result.rows.length > 0) {
-        return { rows: result.rows, method: "csv_parser" };
+        rawRows = result.rows;
+        method  = "csv_parser";
       }
     }
 
-    // Fallback: if CSV parser found nothing useful, try AI
-    console.warn("[documentExtractor] CSV parser found 0 rows — trying AI fallback");
-    return await extractWithAI(text, moduleType, file.name);
+    // If CSV parser found nothing, try AI as fallback
+    if (!rawRows) {
+      console.warn("[documentExtractor] CSV parser found 0 rows — trying AI");
+      const aiResult = await extractWithAI(text, moduleType, file.name);
+      rawRows = aiResult.rows;
+      method  = aiResult.method;
+    }
   }
 
-  // ── Excel (.xlsx / .xls) → SheetJS → CSV → local parser ──────────────────
-  if (ext === "xlsx" || ext === "xls") {
+  // ── Excel (.xlsx / .xls) ──────────────────────────────────────────────────
+  else if (ext === "xlsx" || ext === "xls") {
     const csvText = await extractExcel(file);
 
-    if (parserFn) {
-      const result = parserFn(csvText);
+    if (parser) {
+      const result = parser(csvText);
       if (result.rows.length > 0) {
-        return { rows: result.rows, method: "excel_parser" };
+        rawRows = result.rows;
+        method  = "excel_parser";
       }
     }
 
-    // If local parser found nothing, send the CSV text to AI
-    return await extractWithAI(csvText, moduleType, file.name);
-  }
-
-  // ── Word DOCX → Mammoth → raw text → AI ───────────────────────────────────
-  if (ext === "docx" || ext === "doc") {
-    const rawText = await extractDocx(file);
-    return await extractWithAI(rawText, moduleType, file.name);
-  }
-
-  // ── PDF → PDF.js → raw text → AI ──────────────────────────────────────────
-  if (ext === "pdf") {
-    let rawText;
-    let warning;
-    try {
-      rawText = await extractPdf(file);
-    } catch (pdfErr) {
-      // Scanned PDF fallback — show descriptive error
-      throw new Error(pdfErr.message);
+    // If local parser found nothing, send to AI
+    if (!rawRows) {
+      const aiResult = await extractWithAI(csvText, moduleType, file.name);
+      rawRows = aiResult.rows;
+      method  = aiResult.method;
     }
-    const result = await extractWithAI(rawText, moduleType, file.name);
-    if (warning) result.warning = warning;
-    return result;
   }
 
-  throw new Error(
-    `Unsupported file type: .${ext}. Please upload CSV, Excel (.xlsx), Word (.docx), PDF, or plain text (.txt).`
-  );
+  // ── Word DOCX ─────────────────────────────────────────────────────────────
+  else if (ext === "docx" || ext === "doc") {
+    const rawText  = await extractDocx(file);
+    const aiResult = await extractWithAI(rawText, moduleType, file.name);
+    rawRows = aiResult.rows;
+    method  = aiResult.method;
+  }
+
+  // ── PDF ───────────────────────────────────────────────────────────────────
+  else if (ext === "pdf") {
+    const rawText  = await extractPdf(file);
+    const aiResult = await extractWithAI(rawText, moduleType, file.name);
+    rawRows = aiResult.rows;
+    method  = aiResult.method;
+  }
+
+  // ── Unsupported ───────────────────────────────────────────────────────────
+  else {
+    throw new Error(
+      `Unsupported file type: .${ext}. ` +
+      `Accepted formats: CSV, Excel (.xlsx/.xls), Word (.docx), PDF, plain text (.txt).`
+    );
+  }
+
+  // ── CRITICAL: Run all calculations on every row regardless of source ───────
+  const normalizedRows = normalizeAndCalculate(moduleType, rawRows);
+
+  return { rows: normalizedRows, method };
 }
 
-/**
- * Returns a human-readable label for the extraction method.
- */
+// ── UI Helper exports ─────────────────────────────────────────────────────────
+
+/** Human-readable label for the extraction method. */
 export function methodLabel(method) {
   switch (method) {
     case "csv_parser":    return "CSV Parser";
@@ -179,18 +212,13 @@ export function methodLabel(method) {
   }
 }
 
-/**
- * Returns the badge color class for the extraction method.
- */
+/** Tailwind badge class for the extraction method. */
 export function methodBadgeClass(method) {
   switch (method) {
     case "csv_parser":
     case "excel_parser":
-    case "text_parser":
-      return "bg-slate-100 text-slate-700";
-    case "ai_gemini":
-      return "bg-violet-100 text-violet-700";
-    default:
-      return "bg-slate-100 text-slate-500";
+    case "text_parser":   return "bg-slate-100 text-slate-700";
+    case "ai_gemini":     return "bg-violet-100 text-violet-700";
+    default:              return "bg-slate-100 text-slate-500";
   }
 }
