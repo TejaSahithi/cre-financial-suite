@@ -1,349 +1,377 @@
-import React, { useState, useMemo } from "react";
-import { budgetService } from "@/services/budgetService";
-import { leaseService } from "@/services/leaseService";
+import React, { useState } from "react";
 import { propertyService } from "@/services/propertyService";
+import { ComputationSnapshotService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw, AlertCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { toast } from "sonner";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+// ─── Snapshot fetcher ──────────────────────────────────────────────────────
+async function fetchLeaseSnapshot(propertyId, fiscalYear) {
+  if (!supabase) return null;
+  const query = supabase
+    .from("computation_snapshots")
+    .select("*")
+    .eq("engine_type", "lease")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1);
+
+  if (propertyId) query.eq("property_id", propertyId);
+
+  const { data, error } = await query;
+  if (error || !data || data.length === 0) return null;
+  return data[0];
+}
+
+async function triggerCompute(propertyId, fiscalYear, authToken) {
+  if (!supabase || !propertyId) return;
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  await fetch(`${supabaseUrl}/functions/v1/compute-lease`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${authToken}`,
+      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ property_id: propertyId }),
+  });
+}
+
+// ─── Component ─────────────────────────────────────────────────────────────
 export default function RentProjection() {
   const urlParams = new URLSearchParams(window.location.search);
   const initProperty = urlParams.get("property") || "";
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
+  const [isTriggering, setIsTriggering] = useState(false);
   const currentYear = new Date().getFullYear();
 
   const { data: properties = [] } = useQuery({
-    queryKey: ['properties-rent'],
+    queryKey: ["properties-rent"],
     queryFn: () => propertyService.list(),
   });
 
-  const { data: leases = [], isLoading: leasesLoading } = useQuery({
-    queryKey: ['leases-rent', selectedProperty],
-    queryFn: () => selectedProperty 
-      ? leaseService.filter({ property_id: selectedProperty })
-      : leaseService.list(),
+  // Read from computation_snapshots — no client-side math
+  const {
+    data: snapshot,
+    isLoading,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey: ["lease-snapshot", selectedProperty, currentYear],
+    queryFn: () => fetchLeaseSnapshot(selectedProperty || null, currentYear),
+    refetchInterval: (data) => {
+      // Auto-refresh every 5s if no snapshot yet (compute may still be running)
+      return data ? false : 5000;
+    },
   });
 
-  const { data: budgets = [] } = useQuery({
-    queryKey: ['budgets-rent', selectedProperty],
-    queryFn: () => selectedProperty
-      ? budgetService.filter({ property_id: selectedProperty })
-      : budgetService.list(),
+  // Outputs come directly from the snapshot — no derivation
+  const outputs = snapshot?.outputs ?? null;
+  const tenantRentData = outputs?.tenant_schedules ?? [];
+  const summary = outputs?.summary ?? {};
+  const monthlyProjections = outputs?.monthly_projections ?? [];
+
+  // Build chart data from snapshot monthly_projections
+  const monthlyChart = MONTHS.map((month, i) => {
+    const proj = monthlyProjections.find((p) => p.month === i + 1) ?? {};
+    return {
+      month,
+      current: Math.round(proj.base_rent ?? 0),
+      projected: Math.round(proj.projected_rent ?? 0),
+      previous: Math.round(proj.previous_rent ?? 0),
+      budget: Math.round(proj.budget_rent ?? 0),
+    };
   });
 
-  // Separate active vs expired/historical leases
-  const activeLeases = leases.filter(l => l.status !== 'expired');
-  const historicalLeases = leases.filter(l => l.status === 'expired');
+  const totalCurrentMonthly = summary.avg_monthly_rent ?? 0;
+  const totalProjectedMonthly = summary.avg_projected_monthly ?? 0;
+  const totalPrevMonthly = summary.avg_previous_monthly ?? 0;
+  const totalCurrentAnnual = summary.total_rent ?? 0;
+  const totalProjectedAnnual = summary.total_projected_rent ?? 0;
+  const yoyChange = totalPrevMonthly > 0
+    ? ((totalCurrentMonthly - totalPrevMonthly) / totalPrevMonthly * 100).toFixed(1)
+    : null;
 
-  // Calculate monthly rent per tenant
-  const tenantRentData = useMemo(() => {
-    return activeLeases.map(lease => {
-      // Support both monthly_rent (pipeline schema) and annual_rent (legacy)
-      const monthlyBase = lease.monthly_rent
-        ? (lease.monthly_rent || 0)
-        : (lease.annual_rent || 0) / 12;
-      const monthlyCAM = lease.cam_per_month || 0;
-      const totalMonthly = monthlyBase + monthlyCAM;
+  const handleTriggerCompute = async () => {
+    if (!selectedProperty) {
+      toast.error("Select a property first");
+      return;
+    }
+    setIsTriggering(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      await triggerCompute(selectedProperty, currentYear, session?.access_token);
+      toast.success("Computation started — results will appear shortly");
+      setTimeout(() => refetch(), 3000);
+    } catch (err) {
+      toast.error("Failed to trigger computation");
+    } finally {
+      setIsTriggering(false);
+    }
+  };
 
-      // Find historical lease for same tenant
-      const prevLease = historicalLeases.find(h => h.tenant_name === lease.tenant_name);
-      const prevMonthlyBase = prevLease
-        ? (prevLease.monthly_rent || (prevLease.annual_rent || 0) / 12)
-        : 0;
-      const prevMonthlyCAM = prevLease ? (prevLease.cam_per_month || 0) : 0;
-      const prevTotal = prevMonthlyBase + prevMonthlyCAM;
-
-      // Projected rent with escalation
-      let projectedMonthly = monthlyBase;
-      if (lease.escalation_type === 'fixed' || lease.escalation_type === 'percentage') {
-        projectedMonthly = monthlyBase * (1 + (lease.escalation_rate || 0) / 100);
-      } else if (lease.escalation_type === 'cpi') {
-        projectedMonthly = monthlyBase * 1.03; // Assume 3% CPI
-      }
-
-      // rent_per_sf: derive if not stored
-      const rentPerSF = lease.rent_per_sf
-        || (lease.square_footage ? (monthlyBase * 12) / lease.square_footage : 0);
-
-      return {
-        tenant: lease.tenant_name,
-        unit: lease.unit_id,
-        leaseType: lease.lease_type,
-        sf: lease.square_footage || lease.total_sf || 0,
-        rentPerSF,
-        monthlyBase,
-        monthlyCAM,
-        totalMonthly,
-        prevMonthlyBase,
-        prevMonthlyCAM,
-        prevTotal,
-        projectedMonthly: projectedMonthly + monthlyCAM,
-        escalationType: lease.escalation_type || 'none',
-        escalationRate: lease.escalation_rate || 0,
-        startDate: lease.start_date,
-        endDate: lease.end_date,
-        change: prevTotal > 0 ? ((totalMonthly - prevTotal) / prevTotal * 100).toFixed(1) : null,
-      };
-    });
-  }, [activeLeases, historicalLeases]);
-
-  // Monthly projection chart data
-  const monthlyChart = useMemo(() => {
-    return MONTHS.map((month, i) => {
-      let currentRent = 0;
-      let projectedRent = 0;
-      let prevRent = 0;
-
-      tenantRentData.forEach(t => {
-        currentRent += t.totalMonthly;
-        projectedRent += t.projectedMonthly;
-        prevRent += t.prevTotal;
-      });
-
-      // Budget revenue if available
-      const currentBudget = budgets.find(b => b.budget_year === currentYear);
-      const budgetMonthly = currentBudget ? (currentBudget.total_revenue || 0) / 12 : 0;
-
-      return {
-        month,
-        current: Math.round(currentRent),
-        projected: Math.round(projectedRent),
-        previous: Math.round(prevRent),
-        budget: Math.round(budgetMonthly),
-      };
-    });
-  }, [tenantRentData, budgets, currentYear]);
-
-  const totalCurrentMonthly = tenantRentData.reduce((s, t) => s + t.totalMonthly, 0);
-  const totalProjectedMonthly = tenantRentData.reduce((s, t) => s + t.projectedMonthly, 0);
-  const totalPrevMonthly = tenantRentData.reduce((s, t) => s + t.prevTotal, 0);
-  const totalCurrentAnnual = totalCurrentMonthly * 12;
-  const totalProjectedAnnual = totalProjectedMonthly * 12;
+  const noSnapshot = !isLoading && !snapshot;
 
   return (
     <div className="p-6 space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Rent Roll & Projection</h1>
-          <p className="text-sm text-slate-500 mt-1">Monthly rent calculation, projected vs previous rent from historical leases & budgets</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Computed rent schedules, escalations, and projections
+            {snapshot && (
+              <span className="ml-2 text-slate-400">
+                · Last computed {new Date(snapshot.computed_at).toLocaleString()}
+              </span>
+            )}
+          </p>
         </div>
-        <Select value={selectedProperty} onValueChange={setSelectedProperty}>
-          <SelectTrigger className="w-64">
-            <SelectValue placeholder="All Properties" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={null}>All Properties</SelectItem>
-            {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={selectedProperty} onValueChange={setSelectedProperty}>
+            <SelectTrigger className="w-56">
+              <SelectValue placeholder="All Properties" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">All Properties</SelectItem>
+              {properties.map((p) => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleTriggerCompute}
+            disabled={isTriggering || !selectedProperty}
+            className="bg-[#1a2744] hover:bg-[#243b67]"
+          >
+            {isTriggering ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+            Run Computation
+          </Button>
+        </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-l-4 border-l-blue-500">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Current Monthly Rent</p>
-            <p className="text-2xl font-bold text-slate-900">${totalCurrentMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-            <p className="text-[10px] text-slate-400">${totalCurrentAnnual.toLocaleString(undefined, { maximumFractionDigits: 0 })} annual</p>
+      {/* No snapshot state */}
+      {noSnapshot && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="p-6 flex items-center gap-4">
+            <AlertCircle className="w-8 h-8 text-amber-500 shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">No computation results yet</p>
+              <p className="text-xs text-amber-600 mt-1">
+                Select a property and click "Run Computation" to generate rent schedules.
+                Results are automatically computed after uploading lease data.
+              </p>
+            </div>
           </CardContent>
         </Card>
-        <Card className="border-l-4 border-l-emerald-500">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Projected Monthly (Next Yr)</p>
-            <p className="text-2xl font-bold text-emerald-600">${totalProjectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-            <p className="text-[10px] text-emerald-500">${totalProjectedAnnual.toLocaleString(undefined, { maximumFractionDigits: 0 })} annual</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-slate-400">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Previous Monthly Rent</p>
-            <p className="text-2xl font-bold text-slate-500">${totalPrevMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-            <p className="text-[10px] text-slate-400">From historical leases</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-amber-500">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">YoY Change</p>
-            <p className="text-2xl font-bold">
-              {totalPrevMonthly > 0 ? (
-                <span className={(totalCurrentMonthly - totalPrevMonthly) >= 0 ? 'text-emerald-600' : 'text-red-500'}>
-                  {((totalCurrentMonthly - totalPrevMonthly) / totalPrevMonthly * 100).toFixed(1)}%
-                </span>
-              ) : '—'}
-            </p>
-            <p className="text-[10px] text-slate-400">Current vs Previous</p>
-          </CardContent>
-        </Card>
-      </div>
+      )}
 
-      {/* Chart */}
-      <Card>
-        <CardHeader><CardTitle className="text-base">Monthly Rent — Current vs Projected vs Previous vs Budget</CardTitle></CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={monthlyChart}>
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}K`} />
-              <Tooltip formatter={v => `$${v.toLocaleString()}`} />
-              <Legend />
-              <Bar dataKey="current" name="Current Rent" fill="#1a2744" radius={[2, 2, 0, 0]} barSize={18} />
-              <Bar dataKey="projected" name="Projected (Next Yr)" fill="#10b981" radius={[2, 2, 0, 0]} barSize={18} />
-              <Bar dataKey="previous" name="Previous Rent" fill="#94a3b8" radius={[2, 2, 0, 0]} barSize={18} />
-              <Bar dataKey="budget" name="Budget Revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} barSize={18} />
-            </BarChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
+      {/* Loading */}
+      {isLoading && (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
+          <span className="ml-3 text-slate-500">Loading computation results…</span>
+        </div>
+      )}
 
-      {/* Per-tenant summary */}
-      <Card>
-        <CardHeader><CardTitle className="text-base">Tenant Rent Summary</CardTitle></CardHeader>
-        <CardContent>
-          {leasesLoading ? (
-            <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50">
-                  <TableHead className="text-[11px]">TENANT</TableHead>
-                  <TableHead className="text-[11px]">TYPE</TableHead>
-                  <TableHead className="text-[11px] text-right">SF</TableHead>
-                  <TableHead className="text-[11px] text-right">RENT/SF</TableHead>
-                  <TableHead className="text-[11px] text-right">BASE RENT/MO</TableHead>
-                  <TableHead className="text-[11px] text-right">CAM/MO</TableHead>
-                  <TableHead className="text-[11px] text-right">TOTAL/MO</TableHead>
-                  <TableHead className="text-[11px] text-right">PREV TOTAL/MO</TableHead>
-                  <TableHead className="text-[11px] text-right">PROJECTED/MO</TableHead>
-                  <TableHead className="text-[11px]">ESCALATION</TableHead>
-                  <TableHead className="text-[11px] text-right">CHANGE</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tenantRentData.length > 0 ? tenantRentData.map((t, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="text-sm font-medium">{t.tenant}</TableCell>
-                    <TableCell><Badge variant="outline" className="text-[10px]">{t.leaseType}</Badge></TableCell>
-                    <TableCell className="text-sm font-mono text-right">{t.sf.toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${t.rentPerSF.toFixed(2)}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${t.monthlyBase.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${t.monthlyCAM.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right font-bold">${t.totalMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-slate-400">${t.prevTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-emerald-600">${t.projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-[10px] capitalize">
-                        {t.escalationType}{t.escalationRate > 0 ? ` ${t.escalationRate}%` : ''}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {t.change !== null ? (
-                        <span className={`text-xs font-medium ${parseFloat(t.change) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                          {parseFloat(t.change) >= 0 ? '+' : ''}{t.change}%
-                        </span>
-                      ) : <span className="text-xs text-slate-300">—</span>}
-                    </TableCell>
-                  </TableRow>
-                )) : (
-                  <TableRow><TableCell colSpan={11} className="text-center py-8 text-sm text-slate-400">No lease data available</TableCell></TableRow>
-                )}
-                {tenantRentData.length > 0 && (
-                  <TableRow className="bg-slate-50 font-bold">
-                    <TableCell className="text-sm">TOTAL</TableCell>
-                    <TableCell />
-                    <TableCell className="text-sm font-mono text-right">{tenantRentData.reduce((s, t) => s + (t.sf || 0), 0).toLocaleString()}</TableCell>
-                    <TableCell />
-                    <TableCell className="text-sm font-mono text-right">${tenantRentData.reduce((s, t) => s + t.monthlyBase, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${tenantRentData.reduce((s, t) => s + t.monthlyCAM, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">${totalCurrentMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-slate-400">${totalPrevMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell className="text-sm font-mono text-right text-emerald-600">${totalProjectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
-                    <TableCell />
-                    <TableCell />
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* Results */}
+      {snapshot && (
+        <>
+          {/* Summary cards — values from snapshot.outputs.summary */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card className="border-l-4 border-l-blue-500">
+              <CardContent className="p-4">
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">Current Monthly Rent</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  ${totalCurrentMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                  ${totalCurrentAnnual.toLocaleString(undefined, { maximumFractionDigits: 0 })} annual
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-emerald-500">
+              <CardContent className="p-4">
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">Projected Monthly (Next Yr)</p>
+                <p className="text-2xl font-bold text-emerald-600">
+                  ${totalProjectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </p>
+                <p className="text-[10px] text-emerald-500">
+                  ${totalProjectedAnnual.toLocaleString(undefined, { maximumFractionDigits: 0 })} annual
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-slate-400">
+              <CardContent className="p-4">
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">Previous Monthly Rent</p>
+                <p className="text-2xl font-bold text-slate-500">
+                  ${totalPrevMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </p>
+                <p className="text-[10px] text-slate-400">From historical leases</p>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-amber-500">
+              <CardContent className="p-4">
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">YoY Change</p>
+                <p className="text-2xl font-bold">
+                  {yoyChange !== null ? (
+                    <span className={parseFloat(yoyChange) >= 0 ? "text-emerald-600" : "text-red-500"}>
+                      {parseFloat(yoyChange) >= 0 ? "+" : ""}{yoyChange}%
+                    </span>
+                  ) : "—"}
+                </p>
+                <p className="text-[10px] text-slate-400">Current vs Previous</p>
+              </CardContent>
+            </Card>
+          </div>
 
-      {/* Jan-Dec Monthly Rent Schedule */}
-      <Card>
-        <CardHeader><CardTitle className="text-base">Monthly Rent Schedule — Jan to Dec {currentYear}</CardTitle></CardHeader>
-        <CardContent className="overflow-x-auto">
-          {tenantRentData.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50">
-                  <TableHead className="text-[11px] sticky left-0 bg-slate-50 z-10">TENANT</TableHead>
-                  {MONTHS.map(m => <TableHead key={m} className="text-[11px] text-right min-w-[80px]">{m}</TableHead>)}
-                  <TableHead className="text-[11px] text-right font-bold min-w-[90px]">ANNUAL</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tenantRentData.map((t, i) => {
-                  const startDate = t.startDate ? new Date(t.startDate) : null;
-                  const endDate = t.endDate ? new Date(t.endDate) : null;
-                  return (
-                    <TableRow key={i}>
-                      <TableCell className="text-sm font-medium sticky left-0 bg-white z-10">{t.tenant}</TableCell>
-                      {MONTHS.map((m, mi) => {
-                        const monthDate = new Date(currentYear, mi, 15);
-                        const isActive = (!startDate || monthDate >= startDate) && (!endDate || monthDate <= endDate);
-                        const rent = isActive ? t.totalMonthly : 0;
-                        return (
-                          <TableCell key={m} className={`text-xs font-mono text-right ${isActive ? 'text-slate-700' : 'text-slate-300'}`}>
-                            {isActive ? `$${rent.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-                          </TableCell>
-                        );
-                      })}
-                      <TableCell className="text-xs font-mono text-right font-bold text-blue-600">
-                        ${(MONTHS.reduce((sum, m, mi) => {
-                          const monthDate = new Date(currentYear, mi, 15);
-                          const isActive = (!startDate || monthDate >= startDate) && (!endDate || monthDate <= endDate);
-                          return sum + (isActive ? t.totalMonthly : 0);
-                        }, 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                      </TableCell>
+          {/* Chart — from snapshot monthly_projections */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Monthly Rent — Current vs Projected vs Previous vs Budget
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={monthlyChart}>
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(v) => `$${v.toLocaleString()}`} />
+                  <Legend />
+                  <Bar dataKey="current" name="Current Rent" fill="#1a2744" radius={[2, 2, 0, 0]} barSize={18} />
+                  <Bar dataKey="projected" name="Projected (Next Yr)" fill="#10b981" radius={[2, 2, 0, 0]} barSize={18} />
+                  <Bar dataKey="previous" name="Previous Rent" fill="#94a3b8" radius={[2, 2, 0, 0]} barSize={18} />
+                  <Bar dataKey="budget" name="Budget Revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} barSize={18} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Per-tenant table — from snapshot tenant_schedules */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Tenant Rent Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {tenantRentData.length === 0 ? (
+                <p className="text-center py-8 text-sm text-slate-400">No tenant data in snapshot</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-slate-50">
+                      <TableHead className="text-[11px]">TENANT</TableHead>
+                      <TableHead className="text-[11px]">TYPE</TableHead>
+                      <TableHead className="text-[11px] text-right">SF</TableHead>
+                      <TableHead className="text-[11px] text-right">RENT/SF</TableHead>
+                      <TableHead className="text-[11px] text-right">BASE RENT/MO</TableHead>
+                      <TableHead className="text-[11px] text-right">CAM/MO</TableHead>
+                      <TableHead className="text-[11px] text-right">TOTAL/MO</TableHead>
+                      <TableHead className="text-[11px] text-right">PROJECTED/MO</TableHead>
+                      <TableHead className="text-[11px]">ESCALATION</TableHead>
                     </TableRow>
-                  );
-                })}
-                <TableRow className="bg-slate-50 font-bold">
-                  <TableCell className="text-sm sticky left-0 bg-slate-50 z-10">TOTAL</TableCell>
-                  {MONTHS.map((m, mi) => {
-                    const monthTotal = tenantRentData.reduce((sum, t) => {
-                      const startDate = t.startDate ? new Date(t.startDate) : null;
-                      const endDate = t.endDate ? new Date(t.endDate) : null;
-                      const monthDate = new Date(currentYear, mi, 15);
-                      const isActive = (!startDate || monthDate >= startDate) && (!endDate || monthDate <= endDate);
-                      return sum + (isActive ? t.totalMonthly : 0);
-                    }, 0);
-                    return <TableCell key={m} className="text-xs font-mono text-right font-bold">${monthTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>;
-                  })}
-                  <TableCell className="text-xs font-mono text-right font-bold text-blue-600">
-                    ${tenantRentData.reduce((sum, t) => {
-                      const startDate = t.startDate ? new Date(t.startDate) : null;
-                      const endDate = t.endDate ? new Date(t.endDate) : null;
-                      return sum + MONTHS.reduce((mSum, m, mi) => {
-                        const monthDate = new Date(currentYear, mi, 15);
-                        const isActive = (!startDate || monthDate >= startDate) && (!endDate || monthDate <= endDate);
-                        return mSum + (isActive ? t.totalMonthly : 0);
-                      }, 0);
-                    }, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          ) : (
-            <p className="text-center py-8 text-sm text-slate-400">No lease data available</p>
+                  </TableHeader>
+                  <TableBody>
+                    {tenantRentData.map((t, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="text-sm font-medium">{t.tenant_name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px]">{t.lease_type}</Badge>
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          {(t.square_footage || 0).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(t.rent_per_sf || 0).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(t.monthly_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(t.cam_charge || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right font-bold">
+                          ${(t.total_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right text-emerald-600">
+                          ${(t.projected_monthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px] capitalize">
+                            {t.escalation_type || "none"}
+                            {t.escalation_rate > 0 ? ` ${t.escalation_rate}%` : ""}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Monthly rent schedule — from snapshot rent_schedule */}
+          {outputs?.rent_schedule && outputs.rent_schedule.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Monthly Rent Schedule — Jan to Dec {currentYear}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-slate-50">
+                      <TableHead className="text-[11px] sticky left-0 bg-slate-50 z-10">MONTH</TableHead>
+                      <TableHead className="text-[11px] text-right">BASE RENT</TableHead>
+                      <TableHead className="text-[11px] text-right">ESCALATED RENT</TableHead>
+                      <TableHead className="text-[11px] text-right">CAM CHARGE</TableHead>
+                      <TableHead className="text-[11px] text-right font-bold">TOTAL RENT</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {outputs.rent_schedule.map((row, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="text-sm sticky left-0 bg-white z-10">{row.month}</TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(row.base_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(row.escalated_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right">
+                          ${(row.cam_charge || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm font-mono text-right font-bold text-blue-600">
+                          ${(row.total_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </>
+      )}
     </div>
   );
 }

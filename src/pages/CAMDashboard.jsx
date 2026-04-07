@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import PipelineActions, { CAM_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { supabase } from "@/services/supabaseClient";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +14,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Calculator, ArrowRight, Plus, Trash2, DollarSign, TrendingUp } from "lucide-react";
+import { Calculator, ArrowRight, Plus, Trash2, DollarSign, TrendingUp, RefreshCw, AlertCircle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ScopeSelector from "@/components/ScopeSelector";
@@ -45,9 +48,24 @@ const expenseCategories = [
   { name: "Management Fee", controllable: true },
 ];
 
+// ─── Snapshot fetcher ──────────────────────────────────────────────────────
+async function fetchCAMSnapshot(propertyId, fiscalYear) {
+  if (!supabase) return null;
+  const query = supabase
+    .from("computation_snapshots")
+    .select("*")
+    .eq("engine_type", "cam")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1);
+  if (propertyId && propertyId !== "all") query.eq("property_id", propertyId);
+  const { data, error } = await query;
+  if (error || !data || data.length === 0) return null;
+  return data[0];
+}
+
 export default function CAMDashboard() {
   const { data: camCalcs = [] } = useOrgQuery("CAMCalculation");
-  const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: leaseList = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
@@ -55,18 +73,51 @@ export default function CAMDashboard() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
-  const [selectedPropertyId] = useState(null);
+  const [selectedPropertyId, setSelectedPropertyId] = useState(null);
+  const [isTriggering, setIsTriggering] = useState(false);
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
-  const scopedCAMs = scopeProperty !== "all" ? camCalcs.filter(c => c.property_id === scopeProperty) : camCalcs;
-  const scopedLeases = scopeProperty !== "all" ? leaseList.filter(l => l.property_id === scopeProperty) : leaseList;
-  const currentCAMs = scopedCAMs.filter(c => c.fiscal_year === currentYear);
-  const prevCAMs = scopedCAMs.filter(c => c.fiscal_year === prevYear);
-  const currentTotal = currentCAMs.reduce((s, c) => s + (c.annual_cam || 0), 0);
-  const prevTotal = prevCAMs.reduce((s, c) => s + (c.annual_cam || 0), 0);
-  const camBudgeted = budgets.filter(b => b.budget_year === currentYear).reduce((s, b) => s + (b.cam_total || 0), 0);
-  const leaseCAMTotal = scopedLeases.reduce((s, l) => s + ((l.cam_per_month || 0) * 12), 0);
+
+  // Read CAM metrics from computation_snapshots — no client-side math
+  const {
+    data: camSnapshot,
+    isLoading: snapshotLoading,
+    refetch: refetchSnapshot,
+  } = useQuery({
+    queryKey: ["cam-snapshot", scopeProperty, currentYear],
+    queryFn: () => fetchCAMSnapshot(scopeProperty, currentYear),
+    refetchInterval: (data) => (data ? false : 5000),
+  });
+
+  const snapshotOutputs = camSnapshot?.outputs ?? {};
+  const currentTotal = snapshotOutputs.total_cam ?? 0;
+  const prevTotal = snapshotOutputs.prev_year_total ?? 0;
+  const camBudgeted = snapshotOutputs.budgeted_cam ?? 0;
+  const leaseCAMTotal = snapshotOutputs.total_billed ?? 0;
+  const camPerSF = snapshotOutputs.cam_per_sf ?? 0;
+
+  const handleTriggerCompute = async () => {
+    const pid = scopeProperty !== "all" ? scopeProperty : null;
+    if (!pid) { toast.error("Select a property first"); return; }
+    setIsTriggering(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      await fetch(`${supabaseUrl}/functions/v1/compute-cam`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ property_id: pid, fiscal_year: currentYear }),
+      });
+      toast.success("CAM computation started");
+      setTimeout(() => refetchSnapshot(), 3000);
+    } catch { toast.error("Failed to trigger CAM computation"); }
+    finally { setIsTriggering(false); }
+  };
 
   const [camRules, setCamRules] = useState(DEFAULT_CAM_RULES);
   const [showAddRule, setShowAddRule] = useState(false);
