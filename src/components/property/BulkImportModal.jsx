@@ -1,59 +1,30 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import {
-  Upload, Download, CheckCircle2, Loader2, AlertCircle,
-  FileText, X, Sparkles, FileSpreadsheet, FileType2, Pencil,
+  Upload, CheckCircle2, Loader2, AlertCircle,
+  FileText, Sparkles, FileSpreadsheet, FileType2, X,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CSV_TEMPLATES } from "@/services/parsingEngine";
 import { extractFromFile, methodLabel, methodBadgeClass } from "@/services/documentExtractor";
-import useOrgId from "@/hooks/useOrgId";
+import { supabase } from "@/services/supabaseClient";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
   PropertyService, LeaseService, TenantService, GLAccountService,
 } from "@/services/api";
 
-// ── Service map ─────────────────────────────────────────────────────────────
+// ── Service map ──────────────────────────────────────────────────────────────
 const SERVICE_MAP = {
-  building:   BuildingService,  unit:       UnitService,
-  revenue:    RevenueService,   expense:    ExpenseService,
-  property:   PropertyService,  lease:      LeaseService,
-  tenant:     TenantService,    gl_account: GLAccountService,
-  gl:         GLAccountService,
-};
-
-// ── Human-readable labels for every known field ─────────────────────────────
-const FIELD_LABELS = {
-  name: 'Name', property_name: 'Property', address: 'Address',
-  city: 'City', state: 'State', zip: 'Zip', property_type: 'Type',
-  total_sqft: 'Total SQFT', year_built: 'Year Built', total_units: 'Units',
-  floors: 'Floors', status: 'Status', purchase_price: 'Purchase Price',
-  market_value: 'Market Value', noi: 'NOI', cap_rate: 'Cap Rate %',
-  manager: 'Manager', owner: 'Owner', notes: 'Notes',
-  tenant_name: 'Tenant', unit_number: 'Unit', start_date: 'Start Date',
-  end_date: 'End Date', lease_term_months: 'Term (mo)', monthly_rent: 'Monthly Rent',
-  annual_rent: 'Annual Rent', rent_per_sf: 'Rent/SF', square_footage: 'SF',
-  lease_type: 'Lease Type', security_deposit: 'Deposit', cam_amount: 'CAM',
-  escalation_rate: 'Escalation %', renewal_options: 'Renewal', ti_allowance: 'TI',
-  free_rent_months: 'Free Rent (mo)', effective_rent: 'Effective Rent',
-  email: 'Email', phone: 'Phone', company: 'Company',
-  industry: 'Industry', contact_name: 'Contact', credit_rating: 'Credit Rating',
-  date: 'Date', amount: 'Amount', category: 'Category', vendor: 'Vendor',
-  description: 'Description', classification: 'Classification', gl_code: 'GL Code',
-  month: 'Month', fiscal_year: 'Fiscal Year', invoice_number: 'Invoice #',
-  type: 'Revenue Type', code: 'Account Code', normal_balance: 'Normal Balance',
-  is_active: 'Active', is_recoverable: 'Recoverable', floor: 'Floor',
-  unit_type: 'Unit Type', building_id: 'Building', property_id: 'Property ID',
+  building: BuildingService, unit: UnitService,
+  revenue: RevenueService,   expense: ExpenseService,
+  property: PropertyService, lease: LeaseService,
+  tenant: TenantService,     gl_account: GLAccountService, gl: GLAccountService,
 };
 
 const MODULE_TITLES = {
@@ -62,26 +33,115 @@ const MODULE_TITLES = {
   expense: 'Expenses', gl_account: 'GL Accounts', gl: 'GL Accounts',
 };
 
-// Fields that MUST NOT be blank before import (per module)
-const REQUIRED_FIELDS = {
-  property:   ['name'],
-  building:   ['name'],
-  unit:       ['unit_number'],
-  lease:      ['tenant_name', 'start_date', 'end_date'],
-  tenant:     ['name'],
-  revenue:    ['amount'],
-  expense:    ['amount', 'date'],
-  gl_account: ['code', 'name'],
-  gl:         ['code', 'name'],
+// ── All fields per module — shown in the edit grid ──────────────────────────
+// { key, label, required, placeholder }
+const MODULE_FIELDS = {
+  property: [
+    { key: 'name',           label: 'Property Name',  required: true,  placeholder: 'e.g. Sunset Plaza' },
+    { key: 'address',        label: 'Address',         required: false, placeholder: '123 Main St' },
+    { key: 'city',           label: 'City',            required: false, placeholder: 'Phoenix' },
+    { key: 'state',          label: 'State',           required: false, placeholder: 'AZ' },
+    { key: 'zip',            label: 'ZIP',             required: false, placeholder: '85001' },
+    { key: 'property_type',  label: 'Type',            required: false, placeholder: 'office / retail / industrial…' },
+    { key: 'total_sqft',     label: 'Total SQFT',      required: false, placeholder: '50000' },
+    { key: 'total_units',    label: 'Units',           required: false, placeholder: '10' },
+    { key: 'floors',         label: 'Floors',          required: false, placeholder: '5' },
+    { key: 'year_built',     label: 'Year Built',      required: false, placeholder: '1998' },
+    { key: 'status',         label: 'Status',          required: false, placeholder: 'active' },
+    { key: 'purchase_price', label: 'Purchase Price',  required: false, placeholder: '5000000' },
+    { key: 'market_value',   label: 'Market Value',    required: false, placeholder: '6000000' },
+    { key: 'noi',            label: 'NOI (Annual)',     required: false, placeholder: '350000' },
+    { key: 'cap_rate',       label: 'Cap Rate %',      required: false, placeholder: '5.5' },
+    { key: 'manager',        label: 'Property Manager',required: false, placeholder: 'Manager name' },
+    { key: 'notes',          label: 'Notes',           required: false, placeholder: 'Additional info…' },
+  ],
+  building: [
+    { key: 'name',       label: 'Building Name', required: true,  placeholder: 'Building A' },
+    { key: 'address',    label: 'Address',       required: false, placeholder: '123 Main St' },
+    { key: 'total_sqft', label: 'Total SQFT',    required: false, placeholder: '50000' },
+    { key: 'floors',     label: 'Floors',        required: false, placeholder: '5' },
+    { key: 'year_built', label: 'Year Built',    required: false, placeholder: '1998' },
+    { key: 'status',     label: 'Status',        required: false, placeholder: 'active' },
+  ],
+  unit: [
+    { key: 'unit_number',    label: 'Unit #',        required: true,  placeholder: '101' },
+    { key: 'floor',          label: 'Floor',         required: false, placeholder: '1' },
+    { key: 'square_footage', label: 'Square Feet',   required: false, placeholder: '1200' },
+    { key: 'unit_type',      label: 'Unit Type',     required: false, placeholder: 'office' },
+    { key: 'status',         label: 'Status',        required: false, placeholder: 'vacant / occupied' },
+    { key: 'monthly_rent',   label: 'Monthly Rent',  required: false, placeholder: '2500' },
+    { key: 'tenant_name',    label: 'Tenant Name',   required: false, placeholder: 'Acme Corp' },
+  ],
+  lease: [
+    { key: 'tenant_name',      label: 'Tenant Name',    required: true,  placeholder: 'Acme Corp' },
+    { key: 'property_name',    label: 'Property',       required: false, placeholder: 'Sunset Plaza' },
+    { key: 'unit_number',      label: 'Unit / Suite',   required: false, placeholder: '101' },
+    { key: 'start_date',       label: 'Start Date',     required: true,  placeholder: 'YYYY-MM-DD' },
+    { key: 'end_date',         label: 'End Date',       required: true,  placeholder: 'YYYY-MM-DD' },
+    { key: 'lease_term_months',label: 'Term (months)',  required: false, placeholder: '60' },
+    { key: 'monthly_rent',     label: 'Monthly Rent',   required: false, placeholder: '5000' },
+    { key: 'annual_rent',      label: 'Annual Rent',    required: false, placeholder: '60000' },
+    { key: 'rent_per_sf',      label: 'Rent/SF (ann.)', required: false, placeholder: '25.00' },
+    { key: 'square_footage',   label: 'Square Feet',    required: false, placeholder: '2400' },
+    { key: 'lease_type',       label: 'Lease Type',     required: false, placeholder: 'nnn / gross / modified_gross' },
+    { key: 'security_deposit', label: 'Security Dep.',  required: false, placeholder: '10000' },
+    { key: 'cam_amount',       label: 'CAM (Annual)',   required: false, placeholder: '5000' },
+    { key: 'escalation_rate',  label: 'Escalation %',  required: false, placeholder: '3' },
+    { key: 'renewal_options',  label: 'Renewal Options',required: false, placeholder: '2×5yr options' },
+    { key: 'ti_allowance',     label: 'TI Allowance',  required: false, placeholder: '25000' },
+    { key: 'status',           label: 'Status',         required: false, placeholder: 'active' },
+    { key: 'notes',            label: 'Notes',          required: false, placeholder: '' },
+  ],
+  tenant: [
+    { key: 'name',         label: 'Tenant Name',  required: true,  placeholder: 'Acme Corp' },
+    { key: 'company',      label: 'Company',      required: false, placeholder: 'Acme Inc.' },
+    { key: 'contact_name', label: 'Contact',      required: false, placeholder: 'John Smith' },
+    { key: 'email',        label: 'Email',        required: false, placeholder: 'john@acme.com' },
+    { key: 'phone',        label: 'Phone',        required: false, placeholder: '555-0100' },
+    { key: 'industry',     label: 'Industry',     required: false, placeholder: 'Technology' },
+    { key: 'credit_rating',label: 'Credit Rating',required: false, placeholder: 'A+' },
+    { key: 'status',       label: 'Status',       required: false, placeholder: 'active' },
+    { key: 'notes',        label: 'Notes',        required: false, placeholder: '' },
+  ],
+  expense: [
+    { key: 'date',          label: 'Date',           required: true,  placeholder: 'YYYY-MM-DD' },
+    { key: 'amount',        label: 'Amount ($)',      required: true,  placeholder: '1250.00' },
+    { key: 'category',      label: 'Category',       required: false, placeholder: 'maintenance' },
+    { key: 'vendor',        label: 'Vendor',         required: false, placeholder: 'ABC Services' },
+    { key: 'description',   label: 'Description',    required: false, placeholder: '' },
+    { key: 'classification',label: 'Classification', required: false, placeholder: 'recoverable / non_recoverable' },
+    { key: 'gl_code',       label: 'GL Code',        required: false, placeholder: '5100' },
+    { key: 'property_name', label: 'Property',       required: false, placeholder: '' },
+    { key: 'invoice_number',label: 'Invoice #',      required: false, placeholder: '' },
+    { key: 'fiscal_year',   label: 'Fiscal Year',    required: false, placeholder: '2024' },
+    { key: 'month',         label: 'Month (1–12)',   required: false, placeholder: '3' },
+  ],
+  revenue: [
+    { key: 'amount',        label: 'Amount ($)',    required: true,  placeholder: '5000.00' },
+    { key: 'date',          label: 'Date',          required: false, placeholder: 'YYYY-MM-DD' },
+    { key: 'type',          label: 'Revenue Type',  required: false, placeholder: 'base_rent / cam_recovery…' },
+    { key: 'property_name', label: 'Property',      required: false, placeholder: '' },
+    { key: 'tenant_name',   label: 'Tenant',        required: false, placeholder: '' },
+    { key: 'fiscal_year',   label: 'Fiscal Year',   required: false, placeholder: '2024' },
+    { key: 'month',         label: 'Month (1–12)',  required: false, placeholder: '3' },
+    { key: 'notes',         label: 'Notes',         required: false, placeholder: '' },
+  ],
+  gl_account: [
+    { key: 'code',          label: 'Account Code',    required: true,  placeholder: '5100' },
+    { key: 'name',          label: 'Account Name',    required: true,  placeholder: 'Maintenance Expense' },
+    { key: 'type',          label: 'Type',            required: false, placeholder: 'income / expense / asset…' },
+    { key: 'category',      label: 'Category',        required: false, placeholder: '' },
+    { key: 'normal_balance',label: 'Normal Balance',  required: false, placeholder: 'debit / credit' },
+    { key: 'is_active',     label: 'Active?',         required: false, placeholder: 'true / false' },
+    { key: 'is_recoverable',label: 'Recoverable?',    required: false, placeholder: 'true / false' },
+    { key: 'notes',         label: 'Notes',           required: false, placeholder: '' },
+  ],
 };
+MODULE_FIELDS.gl = MODULE_FIELDS.gl_account;
 
-// Fields to hide from the edit grid (internal/system)
-const HIDDEN_FIELDS = new Set(['_row', 'org_id', 'id', 'created_at', 'updated_at', 'total_cam']);
-
-// Accepted file extensions
 const ACCEPT_ATTR = '.csv,.xlsx,.xls,.pdf,.docx,.doc,.txt';
 
-// ── Template download ────────────────────────────────────────────────────────
+// ── Template download ─────────────────────────────────────────────────────────
 function downloadTemplate(moduleType) {
   const content = CSV_TEMPLATES?.[moduleType];
   if (!content) { toast.info('No CSV template for this module.'); return; }
@@ -92,45 +152,96 @@ function downloadTemplate(moduleType) {
   URL.revokeObjectURL(url);
 }
 
-// ── Row validation ───────────────────────────────────────────────────────────
-function validateRows(rows, moduleType) {
-  const required = REQUIRED_FIELDS[moduleType] ?? [];
-  const errors = [];
-  rows.forEach(row => {
-    required.forEach(field => {
-      if (!row[field] && row[field] !== 0) {
-        errors.push(`Row ${row._row}: "${FIELD_LABELS[field] ?? field}" is required.`);
-      }
-    });
-  });
-  return errors;
+// ── Resolve org_id directly from Supabase (most reliable) ────────────────────
+async function resolveOrgId() {
+  try {
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) return null;
+
+    // Check app_metadata first (set by backend on invite/approval)
+    if (authUser.app_metadata?.org_id) return authUser.app_metadata.org_id;
+
+    // Query memberships table directly
+    const { data: mem } = await supabase
+      .from('memberships')
+      .select('org_id')
+      .eq('user_id', authUser.id)
+      .limit(1)
+      .maybeSingle();
+
+    return mem?.org_id ?? null;
+  } catch {
+    return null;
+  }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// EditableCell — uses defaultValue + onBlur to avoid focus-loss on keystroke
+// ─────────────────────────────────────────────────────────────────────────────
+const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onChange }) => {
+  const inputRef = useRef(null);
+
+  // Sync external value changes (e.g. new file loaded)
+  useEffect(() => {
+    if (inputRef.current && document.activeElement !== inputRef.current) {
+      inputRef.current.value = value ?? '';
+    }
+  }, [value]);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      defaultValue={value ?? ''}
+      placeholder={isRequired && isEmpty ? 'Required…' : (placeholder || '—')}
+      onBlur={e => onChange(e.target.value)}
+      className={[
+        'w-full text-xs px-2 py-1.5 rounded border transition-colors outline-none',
+        'focus:ring-1 focus:ring-blue-400 focus:border-blue-400',
+        isRequired && isEmpty
+          ? 'border-red-400 bg-red-50 placeholder-red-400 text-red-800'
+          : 'border-transparent bg-transparent hover:border-slate-300 hover:bg-white focus:bg-white',
+      ].join(' ')}
+    />
+  );
+});
+EditableCell.displayName = 'EditableCell';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
 export default function BulkImportModal({ isOpen, onClose, moduleType, propertyId }) {
-  const queryClient     = useQueryClient();
-  const { orgId }       = useOrgId();  // ← live org_id from AuthContext
-  const [file, setFile]           = useState(null);
-  const [loading, setLoading]     = useState(false);
+  const queryClient = useQueryClient();
+  const [file, setFile]       = useState(null);
+  const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [rows, setRows]           = useState(null);   // editable rows
-  const [method, setMethod]       = useState(null);
-  const [tab, setTab]             = useState('edit'); // 'edit' | 'fields'
+  // rows: array of plain objects keyed by field key
+  const [rows, setRows]       = useState(null);
+  const [method, setMethod]   = useState(null);
 
   const title   = MODULE_TITLES[moduleType] || moduleType;
   const service = SERVICE_MAP[moduleType];
+  const fieldDefs = MODULE_FIELDS[moduleType] ?? [];
+  const requiredFields = fieldDefs.filter(f => f.required).map(f => f.key);
 
-  const reset = () => {
-    setRows(null); setFile(null); setMethod(null); setTab('edit');
-  };
+  const reset = () => { setRows(null); setFile(null); setMethod(null); };
 
-  // ── File upload handler ────────────────────────────────────────────────────
+  // ── Merge extracted rows with full field template ─────────────────────────
+  const buildRows = useCallback((extractedRows) => {
+    const defaultRow = Object.fromEntries(fieldDefs.map(f => [f.key, null]));
+    return extractedRows.map((extracted, idx) => ({
+      ...defaultRow,
+      ...Object.fromEntries(
+        Object.entries(extracted).filter(([k]) => k !== '_row' && !['org_id','id','created_at','updated_at'].includes(k))
+      ),
+      _row: idx + 1,
+    }));
+  }, [fieldDefs]);
+
+  // ── File upload ───────────────────────────────────────────────────────────
   const handleFileUpload = async (e) => {
-    const f = e.target.files[0];
+    const f = e.target.files?.[0];
     if (!f) return;
-    // Reset the input so the same file can be re-selected
     e.target.value = '';
     setFile(f);
     setLoading(true);
@@ -138,388 +249,293 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
 
     try {
       const result = await extractFromFile(f, moduleType);
-      if (!result.rows || result.rows.length === 0) {
-        toast.warning('No records found in this file. Check the content and try again.');
+      if (!result.rows?.length) {
+        toast.warning('No records found. Try a different file or format.');
         return;
       }
-      setRows(result.rows);
+      setRows(buildRows(result.rows));
       setMethod(result.method);
-      if (result.warning) toast.warning(result.warning);
-      toast.success(`${result.rows.length} records extracted — review & edit below.`);
+      toast.success(`${result.rows.length} record${result.rows.length !== 1 ? 's' : ''} extracted — review and edit below.`);
     } catch (err) {
-      console.error('[BulkImportModal] extract error:', err);
       toast.error(err.message || 'Failed to process file.');
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Inline cell edit ──────────────────────────────────────────────────────
-  const handleCellChange = useCallback((rowIndex, field, value) => {
+  // ── Cell change (called on blur) ──────────────────────────────────────────
+  const handleCellChange = useCallback((rowIndex, fieldKey, value) => {
     setRows(prev => {
+      if (!prev) return prev;
       const next = [...prev];
-      next[rowIndex] = { ...next[rowIndex], [field]: value };
+      next[rowIndex] = { ...next[rowIndex], [fieldKey]: value === '' ? null : value };
       return next;
     });
   }, []);
 
-  // Add a blank row
   const addRow = () => {
-    setRows(prev => [...(prev || []), { _row: (prev?.length ?? 0) + 1 }]);
+    const defaultRow = Object.fromEntries(fieldDefs.map(f => [f.key, null]));
+    setRows(prev => [...(prev ?? []), { ...defaultRow, _row: (prev?.length ?? 0) + 1 }]);
   };
 
-  // Remove a row
-  const removeRow = (rowIndex) => {
-    setRows(prev => prev.filter((_, i) => i !== rowIndex)
-      .map((r, i) => ({ ...r, _row: i + 1 })));
+  const removeRow = (idx) => {
+    setRows(prev => prev.filter((_, i) => i !== idx).map((r, i) => ({ ...r, _row: i + 1 })));
   };
+
+  // ── Validation ────────────────────────────────────────────────────────────
+  const getRowErrors = (row) => {
+    return requiredFields.filter(f => !row[f] && row[f] !== 0);
+  };
+
+  const allErrors = rows ? rows.flatMap((row, i) =>
+    getRowErrors(row).map(f => `Row ${i + 1}: "${fieldDefs.find(d => d.key === f)?.label ?? f}" is required`)
+  ) : [];
+
+  const canImport = rows && rows.length > 0 && allErrors.length === 0 && !importing;
 
   // ── Import execution ──────────────────────────────────────────────────────
   const executeImport = async () => {
-    if (!rows?.length) return;
-    if (!service) { toast.error(`No import service configured for "${moduleType}".`); return; }
-
-    const validationErrors = validateRows(rows, moduleType);
-    if (validationErrors.length > 0) {
-      toast.error(`Fix validation errors before importing:\n${validationErrors.slice(0, 3).join('\n')}`);
-      return;
-    }
+    if (!canImport) return;
 
     setImporting(true);
+    // Resolve org_id fresh — bypasses any stale cache
+    const orgId = await resolveOrgId();
+
     let count = 0, skipped = 0;
 
     for (const row of rows) {
-      const { _row, ...cleanData } = row;
+      const { _row, ...data } = row;
 
-      // ── Inject required context fields ────────────────────────────────────
-      // Always explicitly set org_id — do NOT rely on the api.js cache
-      if (orgId && orgId !== '__none__') {
-        cleanData.org_id = orgId;
-      }
-      if (propertyId && !cleanData.property_id) {
-        cleanData.property_id = propertyId;
-      }
+      // Inject context fields
+      if (orgId) data.org_id = orgId;
+      if (propertyId && !data.property_id) data.property_id = propertyId;
 
-      // Remove internal/empty fields
-      Object.keys(cleanData).forEach(k => {
-        if (cleanData[k] === undefined || cleanData[k] === null || cleanData[k] === '') {
-          delete cleanData[k];
-        }
+      // Strip empty values
+      Object.keys(data).forEach(k => {
+        if (data[k] === null || data[k] === undefined || data[k] === '') delete data[k];
       });
 
       try {
-        await service.create(cleanData);
+        await service.create(data);
         count++;
-      } catch (rowErr) {
-        console.warn(`[BulkImportModal] Row ${_row} failed:`, rowErr.message);
+      } catch (err) {
+        console.warn(`[BulkImportModal] Row ${_row} failed:`, err.message);
         skipped++;
       }
     }
 
-    const msg = skipped > 0
-      ? `Imported ${count} records. ${skipped} rows skipped (errors).`
-      : `Successfully imported ${count} ${title}.`;
-    skipped > 0 ? toast.warning(msg) : toast.success(msg);
+    if (skipped > 0) {
+      toast.warning(`Imported ${count}. ${skipped} rows failed — check console for details.`);
+    } else {
+      toast.success(`Successfully imported ${count} ${title}!`);
+    }
 
     queryClient.invalidateQueries();
-    onClose(); reset();
     setImporting(false);
+    onClose(); reset();
   };
-
-  // ── Derive column keys from extracted rows ────────────────────────────────
-  const colKeys = rows?.length > 0
-    ? Object.keys(rows[0]).filter(k => !HIDDEN_FIELDS.has(k))
-    : [];
-
-  const validationErrors = rows ? validateRows(rows, moduleType) : [];
-  const requiredFields   = REQUIRED_FIELDS[moduleType] ?? [];
 
   const isAI = method === 'ai_gemini';
 
-  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <Dialog open={isOpen} onOpenChange={v => { if (!v) { onClose(); reset(); } }}>
-      <DialogContent className="max-w-6xl max-h-[92vh] overflow-hidden flex flex-col p-0">
+      <DialogContent className="max-w-6xl max-h-[94vh] overflow-hidden flex flex-col p-0 gap-0">
 
-        {/* ── Header ──────────────────────────────────────────────── */}
-        <DialogHeader className="p-5 pb-3 border-b bg-gradient-to-r from-slate-50 to-white shrink-0">
+        {/* ── Header ──────────────────────────────────────────── */}
+        <DialogHeader className="px-6 py-4 border-b bg-gradient-to-r from-slate-50 to-white shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <DialogTitle className="text-base font-semibold">Bulk Import — {title}</DialogTitle>
-              <DialogDescription className="text-xs mt-0.5 text-slate-500">
-                Upload any format: CSV, Excel, PDF, Word, or text. Review and edit extracted data before importing.
+              <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                Upload any format · Review & edit extracted fields · Import
               </DialogDescription>
             </div>
             {CSV_TEMPLATES?.[moduleType] && (
-              <Button variant="outline" size="sm" onClick={() => downloadTemplate(moduleType)} className="text-xs">
-                <FileText className="w-3.5 h-3.5 mr-1.5 text-blue-500" /> CSV Template
+              <Button variant="outline" size="sm" onClick={() => downloadTemplate(moduleType)} className="text-xs h-8">
+                <FileText className="w-3.5 h-3.5 mr-1.5 text-blue-500" />CSV Template
               </Button>
             )}
           </div>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 min-h-0">
+        {/* ── Body ────────────────────────────────────────────── */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
 
-          {/* ── Upload zone (no data yet) ────────────────────────── */}
+          {/* Upload Zone */}
           {!rows && !loading && (
-            <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center bg-slate-50/50 hover:border-blue-300 hover:bg-blue-50/20 transition-colors">
-              <Upload className="w-11 h-11 text-slate-300 mx-auto mb-3" />
-              <h3 className="text-sm font-semibold text-slate-800 mb-1">Upload Your Document</h3>
-              <p className="text-xs text-slate-400 mb-5">
-                CSV, Excel (.xlsx), PDF, Word (.docx), or plain text
-              </p>
+            <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center bg-slate-50/50 hover:border-blue-300 transition-colors">
+              <Upload className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-semibold text-slate-700 mb-1">Upload Your Document</p>
+              <p className="text-xs text-slate-400 mb-5">CSV · Excel · PDF · Word (.docx) · Plain text</p>
               <div className="flex justify-center flex-wrap gap-2 mb-6">
-                {[
-                  { label: 'CSV',   color: 'text-emerald-600', Icon: FileText },
-                  { label: 'Excel', color: 'text-green-700',   Icon: FileSpreadsheet },
-                  { label: 'PDF',   color: 'text-red-500',     Icon: FileType2 },
-                  { label: 'Word',  color: 'text-blue-600',    Icon: FileType2 },
-                  { label: 'TXT',   color: 'text-slate-500',   Icon: FileText },
-                ].map(({ label, color, Icon }) => (
-                  <span key={label} className="flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-slate-200 shadow-sm">
-                    <Icon className={`w-3 h-3 ${color}`} /> {label}
+                {[{l:'CSV',c:'text-emerald-600',I:FileText},{l:'Excel',c:'text-green-700',I:FileSpreadsheet},
+                  {l:'PDF',c:'text-red-500',I:FileType2},{l:'Word',c:'text-blue-600',I:FileType2},{l:'TXT',c:'text-slate-500',I:FileText}
+                ].map(({l,c,I})=>(
+                  <span key={l} className="flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-slate-200 shadow-sm">
+                    <I className={`w-3 h-3 ${c}`}/>{l}
                   </span>
                 ))}
               </div>
-              <label className="inline-block cursor-pointer">
+              <label className="cursor-pointer">
                 <input type="file" accept={ACCEPT_ATTR} className="hidden" onChange={handleFileUpload} />
                 <Button asChild className="bg-blue-600 hover:bg-blue-700 h-9">
-                  <span><Upload className="w-4 h-4 mr-2" />Browse Files</span>
+                  <span><Upload className="w-4 h-4 mr-2"/>Browse Files</span>
                 </Button>
               </label>
               <p className="text-[10px] text-slate-400 mt-4 flex items-center justify-center gap-1">
-                <Sparkles className="w-3 h-3 text-violet-400" />
-                PDF & Word files are processed by Google Gemini 1.5 Pro
+                <Sparkles className="w-3 h-3 text-violet-400"/>PDF & Word → Google Gemini 1.5 Pro extraction
               </p>
             </div>
           )}
 
-          {/* ── Loading spinner ──────────────────────────────────── */}
+          {/* Loading */}
           {loading && (
-            <div className="flex flex-col items-center justify-center py-16 gap-4">
-              {isAI || file?.name?.match(/\.(pdf|docx|doc)$/i)
-                ? <Sparkles className="w-8 h-8 text-violet-500 animate-pulse" />
-                : <Loader2 className="w-8 h-8 animate-spin text-blue-600" />}
-              <p className="text-sm text-slate-600 font-medium">
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              {file?.name?.match(/\.(pdf|docx|doc)$/i)
+                ? <Sparkles className="w-8 h-8 text-violet-500 animate-pulse"/>
+                : <Loader2 className="w-8 h-8 animate-spin text-blue-600"/>}
+              <p className="text-sm font-medium text-slate-600">
                 {file?.name?.match(/\.(pdf|docx|doc)$/i)
-                  ? 'Gemini 1.5 Pro is reading your document…'
+                  ? 'Gemini 1.5 Pro analyzing document…'
                   : 'Parsing file…'}
               </p>
               <p className="text-xs text-slate-400">{file?.name}</p>
             </div>
           )}
 
-          {/* ── Data edit grid ───────────────────────────────────── */}
+          {/* Edit Grid */}
           {rows && !loading && (
             <div className="space-y-3">
+
               {/* Status bar */}
-              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0"/>
                   <span className="text-sm font-semibold text-emerald-800">
-                    {rows.length} records from <span className="italic">{file?.name}</span>
+                    {rows.length} record{rows.length !== 1 ? 's' : ''} from <span className="italic">{file?.name}</span>
                   </span>
                   {method && (
-                    <Badge className={`text-[9px] font-semibold px-1.5 ${methodBadgeClass(method)}`}>
-                      {isAI && <Sparkles className="w-2.5 h-2.5 mr-0.5" />}
+                    <Badge className={`text-[9px] font-bold px-1.5 py-0.5 ${methodBadgeClass(method)}`}>
+                      {isAI && <Sparkles className="w-2.5 h-2.5 mr-0.5"/>}
                       {methodLabel(method)}
                     </Badge>
                   )}
-                  {validationErrors.length > 0 && (
-                    <Badge className="text-[9px] bg-red-100 text-red-700 font-semibold px-1.5">
-                      <AlertCircle className="w-2.5 h-2.5 mr-0.5" />
-                      {validationErrors.length} field{validationErrors.length > 1 ? 's' : ''} required
+                  {allErrors.length > 0 && (
+                    <Badge className="text-[9px] font-bold px-1.5 py-0.5 bg-red-100 text-red-700">
+                      <AlertCircle className="w-2.5 h-2.5 mr-0.5"/>
+                      {allErrors.length} required field{allErrors.length > 1 ? 's' : ''} empty
                     </Badge>
                   )}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <label className="cursor-pointer">
-                    <input type="file" accept={ACCEPT_ATTR} className="hidden" onChange={handleFileUpload} />
-                    <Button variant="ghost" size="sm" asChild className="text-slate-500 hover:text-slate-800 h-7 px-2 text-xs">
-                      <span><X className="w-3.5 h-3.5 mr-1" />Change</span>
-                    </Button>
-                  </label>
-                </div>
+                <label className="cursor-pointer shrink-0">
+                  <input type="file" accept={ACCEPT_ATTR} className="hidden" onChange={handleFileUpload}/>
+                  <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs text-slate-500">
+                    <span><X className="w-3 h-3 mr-1"/>Change File</span>
+                  </Button>
+                </label>
               </div>
 
-              {/* Validation errors summary */}
-              {validationErrors.length > 0 && (
+              {/* Validation banner */}
+              {allErrors.length > 0 && (
                 <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
+                  <AlertCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 shrink-0"/>
                   <div>
-                    <p className="text-xs font-bold text-red-700 mb-1">Required fields missing — fill them in the table below</p>
-                    {validationErrors.slice(0, 4).map((e, i) => (
-                      <p key={i} className="text-[11px] text-red-600">{e}</p>
-                    ))}
-                    {validationErrors.length > 4 && (
-                      <p className="text-[11px] text-red-400">…and {validationErrors.length - 4} more</p>
-                    )}
+                    <p className="text-xs font-bold text-red-700">Fill required fields (shown in red) before importing</p>
+                    {allErrors.slice(0, 4).map((e, i) => <p key={i} className="text-[11px] text-red-600">{e}</p>)}
+                    {allErrors.length > 4 && <p className="text-[11px] text-red-400">…and {allErrors.length - 4} more</p>}
                   </div>
                 </div>
               )}
 
-              {/* Tabs */}
-              <div className="flex border-b gap-1">
-                {[
-                  { key: 'edit',   label: `Edit Data (${rows.length} rows)` },
-                  { key: 'fields', label: 'Field Map' },
-                ].map(t => (
-                  <button key={t.key} onClick={() => setTab(t.key)}
-                    className={`px-4 py-1.5 text-xs font-semibold border-b-2 transition-colors ${
-                      tab === t.key
-                        ? 'border-blue-600 text-blue-700'
-                        : 'border-transparent text-slate-500 hover:text-slate-700'
-                    }`}>
-                    {t.label}
+              {/* Inline edit table */}
+              <div className="border rounded-lg overflow-hidden shadow-sm">
+                <div className="overflow-auto" style={{ maxHeight: '55vh' }}>
+                  <table className="border-collapse text-xs w-full" style={{ minWidth: `${fieldDefs.length * 130 + 60}px` }}>
+                    <thead className="sticky top-0 z-10 bg-slate-100">
+                      <tr>
+                        <th className="text-[10px] font-bold text-slate-400 px-2 py-2 text-left w-8 border-b border-r border-slate-200 sticky left-0 bg-slate-100">#</th>
+                        {fieldDefs.map(f => (
+                          <th key={f.key}
+                            className="text-[10px] font-bold text-slate-600 uppercase px-2 py-2 text-left border-b border-r border-slate-200 whitespace-nowrap min-w-[120px]">
+                            {f.label}
+                            {f.required && <span className="text-red-500 ml-0.5">*</span>}
+                          </th>
+                        ))}
+                        <th className="text-[10px] font-bold text-slate-400 px-2 py-2 border-b border-slate-200 w-8"/>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, rIdx) => {
+                        const rowErrors = getRowErrors(row);
+                        const hasError  = rowErrors.length > 0;
+                        return (
+                          <tr key={rIdx}
+                            className={[
+                              'border-b border-slate-100 transition-colors',
+                              hasError ? 'bg-red-50/40' : rIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30',
+                            ].join(' ')}>
+                            <td className="px-2 py-1 text-[10px] text-slate-400 font-mono border-r border-slate-200 sticky left-0 bg-inherit">{row._row}</td>
+                            {fieldDefs.map(f => {
+                              const isEmpty    = !row[f.key] && row[f.key] !== 0;
+                              const isBad      = f.required && isEmpty;
+                              return (
+                                <td key={f.key} className="p-0.5 border-r border-slate-100">
+                                  <EditableCell
+                                    value={row[f.key]}
+                                    placeholder={f.placeholder}
+                                    isRequired={f.required}
+                                    isEmpty={isEmpty}
+                                    isBad={isBad}
+                                    onChange={val => handleCellChange(rIdx, f.key, val)}
+                                  />
+                                </td>
+                              );
+                            })}
+                            <td className="px-1 py-1 text-center">
+                              <button onClick={() => removeRow(rIdx)}
+                                title="Delete row"
+                                className="text-slate-300 hover:text-red-500 text-base leading-none px-1 transition-colors">
+                                ×
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Add row */}
+                <div className="px-3 py-2 border-t bg-slate-50 flex items-center gap-3">
+                  <button onClick={addRow}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 transition-colors">
+                    + Add Row Manually
                   </button>
-                ))}
-                <div className="ml-auto flex items-center gap-2 pb-1">
-                  <span className="text-[10px] text-slate-400">
-                    <Pencil className="w-2.5 h-2.5 inline mr-0.5" />Click any cell to edit
-                  </span>
+                  <span className="text-[10px] text-slate-400 ml-auto">{rows.length} total</span>
                 </div>
               </div>
 
-              {/* ── Edit table ─────────────────────────────────── */}
-              {tab === 'edit' && (
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-auto max-h-[52vh]">
-                    <Table className="text-xs min-w-max">
-                      <TableHeader className="sticky top-0 z-10">
-                        <TableRow className="bg-slate-100">
-                          <TableHead className="text-[10px] font-bold text-slate-400 w-8 sticky left-0 bg-slate-100">#</TableHead>
-                          {colKeys.map(key => {
-                            const isRequired = requiredFields.includes(key);
-                            return (
-                              <TableHead key={key}
-                                className="text-[10px] font-bold uppercase whitespace-nowrap min-w-[110px]">
-                                {FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}
-                                {isRequired && <span className="text-red-500 ml-0.5">*</span>}
-                              </TableHead>
-                            );
-                          })}
-                          <TableHead className="text-[10px] font-bold text-slate-400 w-10">Del</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {rows.map((row, rIdx) => {
-                          const rowHasError = validationErrors.some(e => e.startsWith(`Row ${row._row}:`));
-                          return (
-                            <TableRow key={rIdx}
-                              className={rowHasError ? 'bg-red-50/60' : rIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}>
-                              <TableCell className="text-[10px] text-slate-400 py-1 sticky left-0 bg-inherit font-mono">
-                                {row._row}
-                              </TableCell>
-                              {colKeys.map(key => {
-                                const isRequired = requiredFields.includes(key);
-                                const isEmpty    = !row[key] && row[key] !== 0;
-                                const isError    = isRequired && isEmpty;
-                                return (
-                                  <TableCell key={key} className="p-0.5">
-                                    <input
-                                      type="text"
-                                      value={row[key] ?? ''}
-                                      placeholder={isRequired ? `Required…` : '—'}
-                                      onChange={e => handleCellChange(rIdx, key, e.target.value)}
-                                      className={`w-full text-xs px-2 py-1 rounded border transition-colors
-                                        focus:outline-none focus:ring-1 focus:ring-blue-400
-                                        ${isError
-                                          ? 'border-red-400 bg-red-50 placeholder-red-300'
-                                          : isEmpty
-                                            ? 'border-slate-200 bg-white placeholder-slate-300'
-                                            : 'border-transparent bg-transparent hover:border-slate-300'
-                                        }`}
-                                    />
-                                  </TableCell>
-                                );
-                              })}
-                              <TableCell className="p-0.5 text-center">
-                                <button onClick={() => removeRow(rIdx)}
-                                  className="text-slate-300 hover:text-red-500 transition-colors text-sm leading-none">
-                                  ×
-                                </button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  {/* Add row button */}
-                  <div className="border-t p-2 bg-slate-50 flex items-center gap-2">
-                    <button onClick={addRow}
-                      className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1">
-                      + Add Row Manually
-                    </button>
-                    <span className="text-[10px] text-slate-400 ml-auto">
-                      {rows.length} record{rows.length !== 1 ? 's' : ''} total
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Field map ──────────────────────────────────── */}
-              {tab === 'fields' && rows.length > 0 && (
-                <div className="border rounded-lg overflow-hidden">
-                  <Table className="text-xs">
-                    <TableHeader>
-                      <TableRow className="bg-slate-50">
-                        <TableHead className="text-[10px] font-bold uppercase">Field Key</TableHead>
-                        <TableHead className="text-[10px] font-bold uppercase">Label</TableHead>
-                        <TableHead className="text-[10px] font-bold uppercase">Required</TableHead>
-                        <TableHead className="text-[10px] font-bold uppercase">Row 1 Value</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {colKeys.map((key, i) => (
-                        <TableRow key={i}>
-                          <TableCell className="font-mono text-blue-700 py-1.5">{key}</TableCell>
-                          <TableCell className="text-slate-600 py-1.5">
-                            {FIELD_LABELS[key] ?? <span className="text-slate-400 italic">unmapped</span>}
-                          </TableCell>
-                          <TableCell className="py-1.5">
-                            {requiredFields.includes(key)
-                              ? <span className="text-red-600 font-bold">Yes</span>
-                              : <span className="text-slate-400">—</span>}
-                          </TableCell>
-                          <TableCell className="text-slate-500 py-1.5 max-w-[200px] truncate">
-                            {rows[0][key] != null && rows[0][key] !== ''
-                              ? String(rows[0][key])
-                              : <span className="text-slate-300">null</span>}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
             </div>
           )}
         </div>
 
-        {/* ── Footer ────────────────────────────────────────────────── */}
-        <DialogFooter className="p-4 border-t bg-slate-50/80 flex items-center gap-2 shrink-0">
-          <Button variant="outline" onClick={() => { onClose(); reset(); }} disabled={importing}>
-            Cancel
-          </Button>
+        {/* ── Footer ──────────────────────────────────────────── */}
+        <DialogFooter className="px-6 py-3 border-t bg-slate-50 flex items-center gap-3 shrink-0">
+          <Button variant="outline" onClick={() => { onClose(); reset(); }} disabled={importing}>Cancel</Button>
           {rows && (
             <>
-              {validationErrors.length > 0 && (
-                <span className="text-[11px] text-red-600 flex-1 text-right mr-2">
-                  <AlertCircle className="w-3 h-3 inline mr-0.5" />
-                  Fill required fields marked with * before importing
+              {allErrors.length > 0 && (
+                <span className="text-[11px] text-red-600 flex-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3"/>Fill fields marked <span className="font-bold text-red-700">*</span> before importing
                 </span>
               )}
               <Button
                 onClick={executeImport}
-                disabled={importing || !service || validationErrors.length > 0}
-                className={`min-w-[160px] ${validationErrors.length > 0
-                  ? 'bg-slate-400 cursor-not-allowed'
-                  : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                disabled={!canImport}
+                className={`min-w-[160px] ${canImport ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-300 cursor-not-allowed text-slate-500'}`}
               >
                 {importing
-                  ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Importing…</>
-                  : <><Download className="w-4 h-4 mr-2" />Import {rows.length} Records</>}
+                  ? <><Loader2 className="w-4 h-4 animate-spin mr-2"/>Importing…</>
+                  : <><span className="mr-1">↓</span>Import {rows.length} Record{rows.length !== 1 ? 's' : ''}</>}
               </Button>
             </>
           )}
