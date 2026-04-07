@@ -12,7 +12,8 @@ export default function PendingApproval() {
 
   useEffect(() => {
     // Try to get email from URL params or local storage
-    const params = new URLSearchParams(window.location.search);
+    const location = useLocation();
+  const params = new URLSearchParams(location.search);
     const email = params.get("email") || localStorage.getItem("cre_pending_email") || "";
     setUserEmail(email);
 

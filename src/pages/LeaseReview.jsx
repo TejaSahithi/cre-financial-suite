@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX, RefreshCw } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import {  Link, useNavigate , useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
@@ -25,7 +25,8 @@ const confidenceColor = (score) => {
 };
 
 export default function LeaseReview() {
-  const urlParams = new URLSearchParams(window.location.search);
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
   const leaseId = urlParams.get("id");
   const navigate = useNavigate();
   const queryClient = useQueryClient();

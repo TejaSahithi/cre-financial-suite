@@ -7,13 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, Building2, FileText, DollarSign, Calculator, Receipt, ChevronRight } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useLocation, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import AuditTrailPanel from "@/components/AuditTrailPanel";
 import ModuleLink from "@/components/ModuleLink";
 
 export default function TenantDetail() {
-  const params = new URLSearchParams(window.location.search);
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
   const tenantName = params.get("name") || "";
 
   const { data: leases = [] } = useQuery({

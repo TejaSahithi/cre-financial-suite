@@ -12,12 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Search, Loader2, Upload } from "lucide-react";
-import { Link } from "react-router-dom";
+import {  Link , useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
 export default function VendorProfile() {
-  const urlParams = new URLSearchParams(window.location.search);
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
   const vendorId = urlParams.get("id");
   const [expSearch, setExpSearch] = useState("");
   const [uploading, setUploading] = useState(false);

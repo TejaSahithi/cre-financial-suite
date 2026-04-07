@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle } from "lucide-react";
-import { Link } from "react-router-dom";
+import {  Link , useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 
 export default function LeaseUpload() {
@@ -99,7 +99,8 @@ export default function LeaseUpload() {
       // Only send columns that exist in the leases table:
       // tenant_name, start_date, end_date, monthly_rent, square_footage,
       // status, lease_type, created_by, property_id, unit_id, org_id
-      const urlParams = new URLSearchParams(window.location.search);
+      const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
       const monthlyRent = extractedData.annual_rent
         ? Math.round(extractedData.annual_rent / 12)
         : (extractedData.base_rent || extractedData.monthly_rent || 0);
