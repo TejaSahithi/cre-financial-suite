@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { saveSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Budget Edge Function
@@ -296,27 +297,15 @@ async function handleGenerate(
     },
   };
 
-  const { error: snapErr } = await supabaseAdmin
-    .from("computation_snapshots")
-    .upsert(
-      {
-        org_id: orgId,
-        property_id: propertyId,
-        engine_type: "budget",
-        fiscal_year: fiscalYear,
-        computed_at: new Date().toISOString(),
-        computed_by: userId,
-        inputs: snapshotPayload.inputs,
-        outputs: snapshotPayload.outputs,
-        status: "completed",
-      },
-      { onConflict: "org_id,property_id,engine_type,fiscal_year" }
-    );
-
-  if (snapErr) {
-    console.error("[compute-budget] computation_snapshots upsert error:", snapErr.message);
-    await supabaseAdmin.from("computation_snapshots").insert(snapshotPayload).catch(() => {});
-  }
+  await saveSnapshot(supabaseAdmin, {
+    org_id: orgId,
+    property_id: propertyId,
+    engine_type: "budget",
+    fiscal_year: fiscalYear,
+    computed_by: userId,
+    inputs: snapshotPayload.inputs,
+    outputs: snapshotPayload.outputs,
+  });
 
   // ---------------------------------------------------------------
   // Response

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { saveSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Expense Edge Function
@@ -247,29 +248,15 @@ Deno.serve(async (req: Request) => {
       monthly_breakdown: monthlyBreakdown,
     };
 
-    const { error: snapErr } = await supabaseAdmin
-      .from("computation_snapshots")
-      .upsert(
-        {
-          org_id: orgId,
-          property_id,
-          engine_type: "expense",
-          fiscal_year,
-          computed_at: new Date().toISOString(),
-          computed_by: user.email ?? user.id,
-          inputs,
-          outputs,
-          status: "completed",
-        },
-        { onConflict: "org_id,property_id,engine_type,fiscal_year" }
-      );
-
-    if (snapErr) {
-      console.error("[compute-expense] Snapshot upsert error:", snapErr.message);
-      await supabaseAdmin.from("computation_snapshots").insert({
-        org_id: orgId, property_id, engine_type: "expense", fiscal_year, inputs, outputs,
-      }).catch(() => {});
-    }
+    await saveSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id,
+      engine_type: "expense",
+      fiscal_year,
+      computed_by: user.email ?? user.id,
+      inputs,
+      outputs,
+    });
 
     // ---------------------------------------------------------------
     // 10. Respond

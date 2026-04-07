@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { saveSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute CAM Edge Function
@@ -366,15 +367,15 @@ Deno.serve(async (req: Request) => {
       status: "completed",
     };
 
-    const { error: snapErr } = await supabaseAdmin
-      .from("computation_snapshots")
-      .upsert(snapshotPayload, { onConflict: "org_id,property_id,engine_type,fiscal_year" });
-
-    if (snapErr) {
-      console.error("[compute-cam] computation_snapshots upsert error:", snapErr.message);
-      // Fallback to insert if upsert fails (e.g. unique index not yet applied)
-      await supabaseAdmin.from("computation_snapshots").insert(snapshotPayload).catch(() => {});
-    }
+    await saveSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id,
+      engine_type: "cam",
+      fiscal_year,
+      computed_by: user.email ?? user.id,
+      inputs: snapshotPayload.inputs,
+      outputs: snapshotPayload.outputs,
+    });
 
     // ---------------------------------------------------------------
     // Response
