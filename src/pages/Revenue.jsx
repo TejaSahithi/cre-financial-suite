@@ -2,7 +2,11 @@ import React, { useState } from "react";
 import PipelineActions, { REVENUE_ACTIONS } from "@/components/PipelineActions";
 import { PropertyService, LeaseService, CAMCalculationService, UnitService, BuildingService } from "@/services/api";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, TrendingUp, Plus, Download, Upload } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { downloadCSV } from "@/utils";
+import PageHeader from "@/components/PageHeader";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 import RevenueKPIStrip from "@/components/revenue/RevenueKPIStrip";
 import MonthlyRevenueTrend from "@/components/revenue/MonthlyRevenueTrend";
@@ -16,6 +20,7 @@ export default function Revenue() {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [selectedPropertyId] = useState(null);
+  const [showImport, setShowImport] = useState(false);
 
   const { data: properties = [], isLoading: loadingProps } = useQuery({
     queryKey: ['revenue-properties'],
@@ -123,11 +128,15 @@ export default function Revenue() {
   // Global portfolio view
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Revenue Analytics</h1>
-        <p className="text-sm text-slate-500">Portfolio revenue breakdown, property drill-down, and tenant analysis</p>
-      </div>
+      <BulkImportModal isOpen={showImport} onClose={() => setShowImport(false)} moduleType="revenue" />
+      
+      <PageHeader icon={TrendingUp} title="Revenue Analytics" subtitle="Portfolio revenue breakdown, property drill-down, and tenant analysis" iconColor="from-emerald-500 to-emerald-700">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(propertyData, 'revenue.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Import</Button>
+          <Button size="sm" className="bg-gradient-to-r from-emerald-600 to-emerald-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Revenue</Button>
+        </div>
+      </PageHeader>
 
       <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={REVENUE_ACTIONS} />
 

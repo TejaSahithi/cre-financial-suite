@@ -8,17 +8,24 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Building2, Search, Loader2, Home, Users, Layers, ChevronRight, DoorOpen } from "lucide-react";
+import { Building2, Search, Loader2, Home, Users, Layers, ChevronRight, DoorOpen, Plus, Download, Upload } from "lucide-react";
 import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
+import CreateBuildingModal from "@/components/property/CreateBuildingModal";
+import CreateUnitModal from "@/components/property/CreateUnitModal";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 export default function BuildingsUnits() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
   const [propertyFilter, setPropertyFilter] = useState("all");
+  const [showCreateBuilding, setShowCreateBuilding] = useState(false);
+  const [showCreateUnit, setShowCreateUnit] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importType, setImportType] = useState("building");
 
   const { data: properties = [] } = useQuery({ queryKey: ['bu-properties'], queryFn: () => PropertyService.list() });
   const { data: buildings = [], isLoading } = useQuery({ queryKey: ['bu-buildings'], queryFn: () => BuildingService.list() });
@@ -40,7 +47,14 @@ export default function BuildingsUnits() {
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Building2} title="Buildings & Units" subtitle={`${buildings.length} buildings · ${totalUnits} units across ${properties.length} properties`} iconColor="from-purple-500 to-purple-700" />
+      <PageHeader icon={Building2} title="Buildings & Units" subtitle={`${buildings.length} buildings · ${totalUnits} units across ${properties.length} properties`} iconColor="from-purple-500 to-purple-700">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(buildings, 'buildings.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => { setImportType("building"); setShowImport(true); }}><Upload className="w-4 h-4 mr-1" />Import</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowCreateBuilding(true)} className="border-purple-200 text-purple-700 hover:bg-purple-50"><Plus className="w-4 h-4 mr-1" />Add Building</Button>
+          <Button size="sm" onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
+        </div>
+      </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <MetricCard label="Buildings" value={buildings.length} icon={Building2} color="bg-purple-50 text-purple-600" />
@@ -204,6 +218,25 @@ export default function BuildingsUnits() {
           </Table>
         </Card>
       )}
+
+      {/* Modals */}
+      <CreateBuildingModal 
+        isOpen={showCreateBuilding} 
+        onClose={() => setShowCreateBuilding(false)} 
+        properties={properties} 
+      />
+
+      <CreateUnitModal 
+        isOpen={showCreateUnit} 
+        onClose={() => setShowCreateUnit(false)} 
+        buildings={buildings} 
+      />
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType={importType} 
+      />
     </div>
   );
 }

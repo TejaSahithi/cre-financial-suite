@@ -10,7 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, BookOpen, Pencil, Trash2 } from "lucide-react";
+import { Search, Plus, BookOpen, Pencil, Trash2, Download, Upload } from "lucide-react";
+import PageHeader from "@/components/PageHeader";
+import { downloadCSV } from "@/utils/index";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 const EXPENSE_CATEGORIES = [
   "property_tax","insurance","utilities","landscaping","snow_removal","parking_lot_maintenance",
@@ -42,6 +45,7 @@ export default function ChartOfAccounts() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [showDialog, setShowDialog] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [form, setForm] = useState({ code: "", name: "", type: "expense", category: "", description: "" });
   const queryClient = useQueryClient();
@@ -100,16 +104,14 @@ export default function ChartOfAccounts() {
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2"><BookOpen className="w-5 h-5 text-blue-600" /><h1 className="text-xl font-bold text-slate-900">Chart of Accounts</h1></div>
-          <p className="text-xs text-slate-500 mt-0.5">{accounts.length} GL accounts · Map expense categories to general ledger codes</p>
-        </div>
+      <PageHeader icon={BookOpen} title="Chart of Accounts" subtitle={`${accounts.length} GL accounts · Map expense categories to general ledger codes`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(accounts, 'chart_of_accounts.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
           {accounts.length === 0 && <Button variant="outline" size="sm" onClick={seedDefaults}>Seed Defaults</Button>}
-          <Button size="sm" onClick={openNew} className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3.5 h-3.5 mr-1" />Add Account</Button>
+          <Button size="sm" onClick={openNew} className="bg-blue-600 hover:bg-blue-700 shadow-sm"><Plus className="w-3.5 h-3.5 mr-1" />Add Account</Button>
         </div>
-      </div>
+      </PageHeader>
 
       <div className="grid grid-cols-3 gap-3">
         <Card><CardContent className="p-3 text-center"><p className="text-2xl font-bold text-slate-900">{accounts.length}</p><p className="text-[10px] text-slate-500 uppercase font-semibold">Total Accounts</p></CardContent></Card>
@@ -193,6 +195,12 @@ export default function ChartOfAccounts() {
           <DialogFooter><Button onClick={handleSave} disabled={!form.code || !form.name} className="bg-blue-600 hover:bg-blue-700">{editItem ? 'Update' : 'Create'} Account</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="glAccount" 
+      />
     </div>
   );
 }

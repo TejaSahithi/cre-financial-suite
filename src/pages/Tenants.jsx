@@ -12,13 +12,17 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Users, FileText, DollarSign, Receipt, ChevronRight } from "lucide-react";
+import { Search, Plus, Users, FileText, DollarSign, Receipt, ChevronRight, Download, Upload } from "lucide-react";
 import ModuleLink from "@/components/ModuleLink";
+import { downloadCSV } from "@/utils/index";
+import PageHeader from "@/components/PageHeader";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 export default function Tenants() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [form, setForm] = useState({ name: "", contact_name: "", contact_email: "", contact_phone: "", industry: "", status: "active" });
   const queryClient = useQueryClient();
 
@@ -72,16 +76,14 @@ export default function Tenants() {
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Tenants</h1>
-          <p className="text-xs text-slate-500">{Object.keys(tenantMap).length} tenants · Linked to leases, units, properties, and billing</p>
-        </div>
+      <PageHeader icon={Users} title="Tenants" subtitle={`${Object.keys(tenantMap).length} tenants · Linked to leases, units, properties, and billing`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(tenants, 'tenants.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
           <ModuleLink page="Billing"><Button variant="outline" size="sm"><Receipt className="w-3.5 h-3.5 mr-1" />Billing</Button></ModuleLink>
-          <Button size="sm" onClick={() => setShowAdd(true)} className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3.5 h-3.5 mr-1" />Add Tenant</Button>
+          <Button size="sm" onClick={() => setShowAdd(true)} className="bg-blue-600 hover:bg-blue-700 shadow-sm"><Plus className="w-3.5 h-3.5 mr-1" />Add Tenant</Button>
         </div>
-      </div>
+      </PageHeader>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
@@ -169,6 +171,12 @@ export default function Tenants() {
           <DialogFooter><Button onClick={() => createMutation.mutate(form)} disabled={!form.name} className="bg-blue-600 hover:bg-blue-700">Create Tenant</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="tenant" 
+      />
     </div>
   );
 }
