@@ -169,7 +169,11 @@ async function resolveOrgId() {
       .limit(1)
       .maybeSingle();
 
-    return mem?.org_id ?? null;
+    if (mem?.org_id) return mem.org_id;
+
+    // Fallback: Pick the first available organization (crucial for SuperAdmins who don't have a specific membership)
+    const { data: org } = await supabase.from('organizations').select('id').limit(1).maybeSingle();
+    return org?.id || null;
   } catch {
     return null;
   }
@@ -316,6 +320,14 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       // Inject context fields
       if (orgId) data.org_id = orgId;
       if (propertyId && !data.property_id) data.property_id = propertyId;
+
+      // Relational strings: Strip fields that exist for the UI grid but don't map to DB columns.
+      const relationalStrings = ['property_name', 'building_name'];
+      if (moduleType !== 'lease') relationalStrings.push('tenant_name'); // 'leases' table HAS tenant_name
+      
+      relationalStrings.forEach(f => {
+        delete data[f];
+      });
 
       // Strip empty values
       Object.keys(data).forEach(k => {
