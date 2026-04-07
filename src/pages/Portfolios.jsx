@@ -10,9 +10,9 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Briefcase, Loader2, Home, Building2, Users, MapPin, ChevronRight } from "lucide-react";
+import { Plus, Search, Briefcase, Loader2, Home, Building2, Users, MapPin, ChevronRight, Download } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
@@ -88,9 +88,14 @@ export default function Portfolios() {
   return (
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Briefcase} title="Portfolio Overview" subtitle={`${portfolios.length} portfolios · ${totals.properties} properties across all portfolios`} iconColor="from-blue-500 to-indigo-600">
-        <Button onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 shadow-sm">
-          <Plus className="w-4 h-4 mr-2" />Create Portfolio
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => downloadCSV(enriched, 'portfolios.csv')} className="border-slate-200 hover:bg-slate-50 shadow-sm">
+            <Download className="w-4 h-4 mr-2 text-slate-500" />Export
+          </Button>
+          <Button onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 shadow-sm">
+            <Plus className="w-4 h-4 mr-2" />Create Portfolio
+          </Button>
+        </div>
       </PageHeader>
 
       {/* Global Stats */}

@@ -10,8 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Receipt, DollarSign, Clock, CheckCircle2, AlertTriangle, Loader2, Download, Home } from "lucide-react";
+import { Search, Plus, Receipt, DollarSign, Clock, CheckCircle2, AlertTriangle, Loader2, Download, Home, Upload } from "lucide-react";
 import ModuleLink from "@/components/ModuleLink";
+import PageHeader from "@/components/PageHeader";
+import { downloadCSV } from "@/utils/index";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 const statusColors = {
   draft: "bg-slate-100 text-slate-600", sent: "bg-blue-100 text-blue-700",
@@ -25,6 +28,7 @@ export default function Billing() {
   const [showGenerate, setShowGenerate] = useState(false);
   const [showDetail, setShowDetail] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [genMonth, setGenMonth] = useState(new Date().toISOString().substring(0, 7));
   const queryClient = useQueryClient();
 
@@ -124,13 +128,13 @@ export default function Billing() {
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2"><Receipt className="w-5 h-5 text-emerald-600" /><h1 className="text-xl font-bold text-slate-900">Billing & Invoicing</h1></div>
-          <p className="text-xs text-slate-500">{invoices.length} invoices · Generate monthly tenant invoices from leases & CAM</p>
+      <PageHeader icon={Receipt} title="Billing & Invoicing" subtitle={`${invoices.length} invoices · Generate monthly tenant invoices from leases & CAM`} iconColor="from-emerald-500 to-emerald-700">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(invoices, 'invoices.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
+          <Button size="sm" onClick={() => setShowGenerate(true)} className="bg-emerald-600 hover:bg-emerald-700 shadow-sm"><Plus className="w-3.5 h-3.5 mr-1" />Generate Invoices</Button>
         </div>
-        <Button size="sm" onClick={() => setShowGenerate(true)} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="w-3.5 h-3.5 mr-1" />Generate Invoices</Button>
-      </div>
+      </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
@@ -286,6 +290,12 @@ export default function Billing() {
           })()}
         </DialogContent>
       </Dialog>
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="invoice" 
+      />
     </div>
   );
 }

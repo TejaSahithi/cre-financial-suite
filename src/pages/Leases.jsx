@@ -6,15 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, Search, Loader2 } from "lucide-react";
+import { Upload, Search, Loader2, Download, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, downloadCSV } from "@/utils";
+import PageHeader from "@/components/PageHeader";
+import BulkImportModal from "@/components/property/BulkImportModal";
 import { differenceInDays } from "date-fns";
 
 export default function Leases() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [selectedPropertyId] = useState(null);
+  const [showImport, setShowImport] = useState(false);
 
   const { data: leases = [], isLoading } = useOrgQuery("Lease");
 
@@ -41,15 +44,15 @@ export default function Leases() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Leases</h1>
-          <p className="text-sm text-slate-500 mt-1">{leases.length} leases</p>
+      <PageHeader icon={FileText} title="Leases" subtitle={`${leases.length} lease records · OCR extraction and abstraction pipeline`} iconColor="from-blue-600 to-indigo-700">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(leases, 'leases.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Import</Button>
+          <Link to={createPageUrl("LeaseUpload")}>
+            <Button size="sm" className="bg-[#1a2744] hover:bg-[#243b67] shadow-sm"><Plus className="w-4 h-4 mr-2" />Upload Lease</Button>
+          </Link>
         </div>
-        <Link to={createPageUrl("LeaseUpload")}>
-          <Button className="bg-[#1a2744] hover:bg-[#243b67]"><Upload className="w-4 h-4 mr-2" />Upload Lease</Button>
-        </Link>
-      </div>
+      </PageHeader>
 
       <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={LEASE_ACTIONS} />
 
@@ -153,6 +156,12 @@ export default function Leases() {
           </TableBody>
         </Table>
       </Card>
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="lease" 
+      />
     </div>
   );
 }

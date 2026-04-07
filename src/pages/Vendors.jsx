@@ -10,11 +10,13 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Truck, DollarSign, Users, Pencil, Trash2, Receipt, TrendingUp, ArrowUpDown } from "lucide-react";
+import { Search, Plus, Truck, DollarSign, Users, Pencil, Trash2, Receipt, TrendingUp, ArrowUpDown, Download, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ScopeSelector from "@/components/ScopeSelector";
+import { downloadCSV } from "@/utils/index";
+import BulkImportModal from "@/components/property/BulkImportModal";
 
 const CATEGORIES = ["maintenance","utilities","insurance","janitorial","landscaping","security","legal","accounting","construction","technology","other"];
 const statusColors = { active: "bg-emerald-100 text-emerald-700", inactive: "bg-slate-100 text-slate-600", pending: "bg-amber-100 text-amber-700" };
@@ -23,6 +25,7 @@ export default function Vendors() {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("all");
   const [showDialog, setShowDialog] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [sortField, setSortField] = useState("totalSpend");
   const [sortDir, setSortDir] = useState("desc");
@@ -89,9 +92,13 @@ export default function Vendors() {
   return (
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Truck} title="Vendor Management" subtitle={`${vendors.length} vendors · Linked to expense records`} iconColor="from-violet-500 to-violet-700">
-        <Button size="sm" onClick={openNew} className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 shadow-sm">
-          <Plus className="w-3.5 h-3.5 mr-1" />Add Vendor
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(enriched, 'vendors.csv')}><Download className="w-3.5 h-3.5 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-3.5 h-3.5 mr-1" />Import</Button>
+          <Button size="sm" onClick={openNew} className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 shadow-sm">
+            <Plus className="w-3.5 h-3.5 mr-1" />Add Vendor
+          </Button>
+        </div>
       </PageHeader>
 
       <ScopeSelector properties={properties} buildings={buildings} units={[]} selectedProperty={scopeProperty} onPropertyChange={setScopeProperty} showUnit={false} />
@@ -204,6 +211,12 @@ export default function Vendors() {
           <DialogFooter><Button onClick={handleSave} disabled={!form.name} className="bg-gradient-to-r from-violet-600 to-violet-700">{editItem ? 'Update' : 'Create'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BulkImportModal 
+        isOpen={showImport} 
+        onClose={() => setShowImport(false)} 
+        moduleType="vendor" 
+      />
     </div>
   );
 }

@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Search, Download, Upload, Loader2, Home, Building2, CheckCircle2, XCircle, MapPin, ChevronRight, ArrowRight, ArrowLeft } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
@@ -187,6 +187,7 @@ export default function Properties() {
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Home} title="Properties" subtitle={`${properties.length} properties · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(properties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={downloadTemplate}><Download className="w-4 h-4 mr-1" />Template</Button>
           <Button variant="outline" size="sm" onClick={() => setShowBulk(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
           <Button size="sm" onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>

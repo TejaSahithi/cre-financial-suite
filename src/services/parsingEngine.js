@@ -148,6 +148,24 @@ const PROPERTY_COLUMNS = {
   status: 'status',
 };
 
+const BUILDING_COLUMNS = {
+  name: 'name', building_name: 'name', building: 'name',
+  property: 'property_id', property_id: 'property_id', property_name: 'property_id',
+  address: 'address', street: 'address',
+  total_sqft: 'total_sqft', sqft: 'total_sqft',
+  floors: 'floors', total_floors: 'floors',
+  year_built: 'year_built', built: 'year_built',
+};
+
+const UNIT_COLUMNS = {
+  unit_number: 'unit_number', unit: 'unit_number', suite: 'unit_number',
+  building: 'building_id', building_id: 'building_id', building_name: 'building_id',
+  floor: 'floor',
+  sqft: 'square_footage', square_footage: 'square_footage', sf: 'square_footage',
+  unit_type: 'unit_type', type: 'unit_type',
+  status: 'status',
+};
+
 const REVENUE_COLUMNS = {
   property: 'property_name', property_name: 'property_name',
   tenant: 'tenant_name', tenant_name: 'tenant_name',
@@ -271,4 +289,41 @@ export function parseRevenue(text) {
     return row;
   });
   return { rows: mapped, headers, columnMap: REVENUE_COLUMNS };
+}
+
+/**
+ * Parse building data from CSV text.
+ */
+export function parseBuildings(text) {
+  const { headers, rows } = parseCSV(text);
+  const mapped = rows.map(raw => {
+    const row = { _row: raw._row };
+    headers.forEach(h => {
+      const field = resolveColumn(h, BUILDING_COLUMNS);
+      row[field] = raw[h];
+    });
+    row.total_sqft = toNumber(row.total_sqft);
+    row.floors = toNumber(row.floors);
+    row.year_built = toNumber(row.year_built);
+    return row;
+  });
+  return { rows: mapped, headers, columnMap: BUILDING_COLUMNS };
+}
+
+/**
+ * Parse unit data from CSV text.
+ */
+export function parseUnits(text) {
+  const { headers, rows } = parseCSV(text);
+  const mapped = rows.map(raw => {
+    const row = { _row: raw._row };
+    headers.forEach(h => {
+      const field = resolveColumn(h, UNIT_COLUMNS);
+      row[field] = raw[h];
+    });
+    row.square_footage = toNumber(row.square_footage);
+    row.floor = toNumber(row.floor);
+    return row;
+  });
+  return { rows: mapped, headers, columnMap: UNIT_COLUMNS };
 }

@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Plus, Upload, Search, Loader2, Pencil, Trash2, BookOpen, Receipt, DollarSign, TrendingDown, Layers } from "lucide-react";
 import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, downloadCSV } from "@/utils";
 import ModuleLink from "@/components/ModuleLink";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 import RoleGuard from "@/components/RoleGuard";
@@ -77,6 +77,7 @@ export default function Expenses() {
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Receipt} title="Expense Engine" subtitle={`${scopedExpenses.length} expense records · Classification and recovery tracking`} iconColor="from-red-500 to-rose-600">
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(scopedExpenses, 'expenses.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <ModuleLink page="ChartOfAccounts"><Button variant="ghost" size="sm"><BookOpen className="w-4 h-4 mr-1" />GL Codes</Button></ModuleLink>
           <Link to={createPageUrl("BulkImport")}><Button variant="outline" size="sm"><Upload className="w-4 h-4 mr-1" />Bulk Import</Button></Link>
           <RoleGuard allowedRoles={["org_admin", "finance", "property_manager"]} mode="disable">
