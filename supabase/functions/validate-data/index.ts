@@ -2,6 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
 
 /**
  * Validate Data Edge Function
@@ -333,6 +334,9 @@ Deno.serve(async (req: Request) => {
       processing_started_at: new Date().toISOString(),
     });
 
+    const log = createLogger(supabaseAdmin, file_id, orgId);
+    await log.info("validate", `Validating ${fileRecord.row_count ?? 0} rows for module: ${fileRecord.module_type}`);
+
     try {
       // Read parsed data
       const parsedData: Record<string, unknown>[] = fileRecord.parsed_data || [];
@@ -412,8 +416,10 @@ Deno.serve(async (req: Request) => {
         .eq("id", file_id);
 
       if (finalStatus === "failed") {
+        await log.error("validate", "All rows failed validation", { error_count: errorCount });
         await setFailed(supabaseAdmin, file_id, "All rows failed validation", "validating", STATUS_PROGRESS.validating);
       } else {
+        await log.info("validate", `Validation complete: ${validCount} valid, ${errorCount} errors`, { valid_count: validCount, error_count: errorCount });
         await setStatus(supabaseAdmin, file_id, "validated", {
           processing_completed_at: new Date().toISOString(),
         });
@@ -433,6 +439,7 @@ Deno.serve(async (req: Request) => {
         },
       );
     } catch (validationError) {
+      await log.error("validate", validationError.message);
       await setFailed(supabaseAdmin, file_id, validationError.message, "validating", STATUS_PROGRESS.validating);
       throw validationError;
     }

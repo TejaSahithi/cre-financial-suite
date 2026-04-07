@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
+import { createLogger, type PipelineLogger } from "./logger.ts";
 
 /**
  * Compute Orchestrator
@@ -204,8 +205,10 @@ export async function triggerComputePipeline(opts: {
   validData: Record<string, any>[];
   fileRecord: Record<string, any>;
   supabaseAdmin: any;
+  log?: PipelineLogger;
 }): Promise<void> {
   const { fileId, moduleType, orgId, validData, fileRecord, supabaseAdmin } = opts;
+  const log = opts.log ?? createLogger(supabaseAdmin, fileId, orgId);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -221,14 +224,12 @@ export async function triggerComputePipeline(opts: {
     const propertyIds = await resolvePropertyIds(fileRecord, validData, moduleType, orgId, supabaseAdmin);
     const fiscalYear = new Date().getFullYear();
 
-    console.log(
-      `[compute-orchestrator] file_id=${fileId} module=${moduleType} properties=[${propertyIds.join(",")}] fy=${fiscalYear}`,
-    );
+    await log.info("compute", `Starting compute: module=${moduleType} properties=[${propertyIds.join(",")}] fy=${fiscalYear}`, { module: moduleType, property_ids: propertyIds, fiscal_year: fiscalYear });
 
     const jobs = getComputeJobs(moduleType, propertyIds, fiscalYear);
 
     if (jobs.length === 0) {
-      console.log(`[compute-orchestrator] No compute jobs for module=${moduleType}`);
+      await log.info("compute", `No compute jobs needed for module=${moduleType}`);
       await setStatus(supabaseAdmin, fileId, "completed", {
         processing_completed_at: new Date().toISOString(),
       });
@@ -240,8 +241,14 @@ export async function triggerComputePipeline(opts: {
     const results: JobResult[] = [];
 
     for (const job of jobs) {
+      await log.info(`compute:${job.functionName}`, `Starting ${job.functionName}`, { body: job.body });
       const result = await callWithRetry(supabaseUrl, job.functionName, job.body, serviceKey);
       results.push({ job, ...result });
+      if (result.ok) {
+        await log.info(`compute:${job.functionName}`, `Completed in ${result.attempts} attempt(s)`);
+      } else {
+        await log.error(`compute:${job.functionName}`, `Failed after ${result.attempts} attempts: ${result.lastError}`, { attempts: result.attempts, error: result.lastError });
+      }
     }
 
     // Separate successes from permanent failures
@@ -253,18 +260,17 @@ export async function triggerComputePipeline(opts: {
     );
 
     if (failed.length === 0) {
-      // All jobs succeeded
+      await log.info("compute", `All ${jobs.length} compute jobs succeeded`);
       await setStatus(supabaseAdmin, fileId, "completed", {
         processing_completed_at: new Date().toISOString(),
       });
     } else {
-      // One or more jobs failed after all retries — mark as failed
       const failedNames = failed.map((r) => r.job.functionName).join(", ");
       const failedDetails = failed
         .map((r) => `${r.job.functionName} (${r.attempts} attempts): ${r.lastError}`)
         .join(" | ");
 
-      console.error(`[compute-orchestrator] Permanent failures: ${failedDetails}`);
+      await log.error("compute", `${failed.length} compute job(s) failed permanently: ${failedNames}`, { failed_jobs: failedNames, details: failedDetails });
 
       await setFailed(
         supabaseAdmin,
@@ -277,6 +283,7 @@ export async function triggerComputePipeline(opts: {
 
   } catch (err) {
     console.error("[compute-orchestrator] Unexpected error:", err.message);
+    await log.error("compute", `Unexpected orchestrator error: ${err.message}`);
     await setFailed(supabaseAdmin, fileId, err.message, "computing", STATUS_PROGRESS.computing);
   }
 }

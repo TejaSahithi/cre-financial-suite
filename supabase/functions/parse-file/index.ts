@@ -2,6 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
 import { parseLeases } from "../_shared/parsers/lease-parser.ts";
 import { parseExpenses } from "../_shared/parsers/expense-parser.ts";
 import { parseProperties } from "../_shared/parsers/property-parser.ts";
@@ -147,6 +148,9 @@ Deno.serve(async (req: Request) => {
       processing_started_at: new Date().toISOString(),
     });
 
+    const log = createLogger(supabaseAdmin, file_id, orgId);
+    await log.info("parse", `Started parsing file: ${fileRecord.file_name}`);
+
     try {
       // Read file from Supabase Storage
       const storagePath = fileRecord.file_url.replace(/^.*\/storage\/v1\/object\/public\/financial-uploads\//, '');
@@ -199,6 +203,8 @@ Deno.serve(async (req: Request) => {
         processing_completed_at: new Date().toISOString(),
       });
 
+      await log.info("parse", `Parsed ${finalParsedData.length} rows`, { row_count: finalParsedData.length });
+
       return new Response(
         JSON.stringify({
           error: false,
@@ -212,6 +218,7 @@ Deno.serve(async (req: Request) => {
       );
 
     } catch (parseError) {
+      await log.error("parse", parseError.message, { file_name: fileRecord.file_name });
       await setFailed(supabaseAdmin, file_id, parseError.message, "parsing", STATUS_PROGRESS.parsing);
       throw parseError;
     }
