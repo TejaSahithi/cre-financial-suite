@@ -2,6 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
 import { triggerComputePipeline } from "../_shared/compute-orchestrator.ts";
 
 /**
@@ -153,6 +154,9 @@ Deno.serve(async (req: Request) => {
     // 5. Update status to 'storing'
     await setStatus(supabaseAdmin, file_id, "storing");
 
+    const log = createLogger(supabaseAdmin, file_id, orgId);
+    await log.info("store", `Storing ${fileRecord.valid_count ?? 0} validated rows into ${fileRecord.module_type}`);
+
     try {
       // 6. Read valid_data from the record
       const validData: Record<string, any>[] = fileRecord.valid_data;
@@ -213,6 +217,8 @@ Deno.serve(async (req: Request) => {
         processing_completed_at: new Date().toISOString(),
       });
 
+      await log.info("store", `Stored ${insertedCount} rows into ${tableName}`, { inserted_count: insertedCount, table: tableName });
+
       // 11. Fire compute pipeline asynchronously (fire-and-forget).
       triggerComputePipeline({
         fileId: file_id,
@@ -221,6 +227,7 @@ Deno.serve(async (req: Request) => {
         validData,
         fileRecord,
         supabaseAdmin,
+        log,
       }).catch((err) => {
         console.error("[store-data] compute pipeline trigger error:", err.message);
       });
@@ -240,6 +247,7 @@ Deno.serve(async (req: Request) => {
         }
       );
     } catch (storeError) {
+      await log.error("store", storeError.message);
       await setFailed(supabaseAdmin, file_id, storeError.message, "storing", STATUS_PROGRESS.storing);
 
       // Also log the failure in audit_logs
