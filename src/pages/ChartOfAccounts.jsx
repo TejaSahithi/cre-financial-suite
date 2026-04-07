@@ -199,7 +199,7 @@ export default function ChartOfAccounts() {
       <BulkImportModal 
         isOpen={showImport} 
         onClose={() => setShowImport(false)} 
-        moduleType="glAccount" 
+        moduleType="gl_account" 
       />
     </div>
   );
