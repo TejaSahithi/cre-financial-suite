@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { setStatus, setFailed, STATUS_PROGRESS } from "../_shared/pipeline-status.ts";
 import { triggerComputePipeline } from "../_shared/compute-orchestrator.ts";
 
 /**
@@ -150,13 +151,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // 5. Update status to 'storing'
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({
-        status: "storing",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", file_id);
+    await setStatus(supabaseAdmin, file_id, "storing");
 
     try {
       // 6. Read valid_data from the record
@@ -202,15 +197,10 @@ Deno.serve(async (req: Request) => {
         timestamp: new Date().toISOString(),
       });
 
-      // 10. On success: update status to 'stored', set processing_completed_at
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "stored",
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      // 10. On success: update status to 'stored'
+      await setStatus(supabaseAdmin, file_id, "stored", {
+        processing_completed_at: new Date().toISOString(),
+      });
 
       // 11. Fire compute pipeline asynchronously (fire-and-forget).
       //     This updates status: stored → computing → processed.
@@ -241,16 +231,7 @@ Deno.serve(async (req: Request) => {
         }
       );
     } catch (storeError) {
-      // On failure: update status to 'failed' with error_message
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "failed",
-          error_message: storeError.message,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      await setFailed(supabaseAdmin, file_id, storeError.message, "storing", STATUS_PROGRESS.storing);
 
       // Also log the failure in audit_logs
       await supabaseAdmin.from("audit_logs").insert({

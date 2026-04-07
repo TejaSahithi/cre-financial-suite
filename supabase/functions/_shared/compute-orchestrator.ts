@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
 /**
  * Compute Orchestrator
  *
@@ -14,7 +15,7 @@
  *   budgets   → compute-budget
  */
 
-export type ModuleType =
+import { setStatus, setFailed, STATUS_PROGRESS } from "./pipeline-status.ts";
   | "leases"
   | "expenses"
   | "properties"
@@ -206,10 +207,7 @@ export async function triggerComputePipeline(opts: {
 
   try {
     // Mark as computing
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({ status: "computing", updated_at: new Date().toISOString() })
-      .eq("id", fileId);
+    await setStatus(supabaseAdmin, fileId, "computing");
 
     // Resolve property_ids and fiscal year
     const propertyIds = await resolvePropertyIds(validData, moduleType, orgId, supabaseAdmin);
@@ -224,10 +222,9 @@ export async function triggerComputePipeline(opts: {
 
     if (jobs.length === 0) {
       console.log(`[compute-orchestrator] No compute jobs for module_type=${moduleType}`);
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({ status: "processed", processing_completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq("id", fileId);
+      await setStatus(supabaseAdmin, fileId, "completed", {
+        processing_completed_at: new Date().toISOString(),
+      });
       return;
     }
 
@@ -253,32 +250,21 @@ export async function triggerComputePipeline(opts: {
       }
     });
 
-    // Mark as processed (even if some compute jobs failed — data is stored)
-    const finalStatus = "processed";
+    // Mark as completed (even if some compute jobs failed — data is stored)
     const errorNote = errors.length > 0
       ? `Compute warnings: ${errors.slice(0, 3).join("; ")}`
       : null;
 
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({
-        status: finalStatus,
-        processing_completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        ...(errorNote ? { error_message: errorNote } : {}),
-      })
-      .eq("id", fileId);
+    await setStatus(supabaseAdmin, fileId, "completed", {
+      processing_completed_at: new Date().toISOString(),
+      ...(errorNote ? { error_message: errorNote } : {}),
+    });
 
     console.log(`[compute-orchestrator] Done. ${jobs.length} jobs, ${errors.length} errors.`);
 
   } catch (err) {
     // Never let orchestration errors break the pipeline
     console.error("[compute-orchestrator] Unexpected error:", err.message);
-    // Revert to 'stored' so the user can retry manually
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({ status: "stored", updated_at: new Date().toISOString() })
-      .eq("id", fileId)
-      .catch(() => {});
+    await setFailed(supabaseAdmin, fileId, err.message, "computing", STATUS_PROGRESS.computing);
   }
 }
