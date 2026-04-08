@@ -2,16 +2,17 @@
  * useComputeTrigger
  *
  * Shared hook for triggering compute-* Edge Functions from the frontend.
- * Used after any lease/expense/budget edit to refresh computation_snapshots.
+ * Used after any lease/expense/budget edit to refresh computation snapshots.
  *
  * Usage:
  *   const { trigger, isTriggering } = useComputeTrigger();
  *   await trigger("compute-lease", { property_id: id, fiscal_year: 2026 });
  */
 
-import { useState, useCallback } from "react";
-import { supabase } from "@/services/supabaseClient";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
+
+import { supabase } from "@/services/supabaseClient";
 
 export function useComputeTrigger() {
   const [isTriggering, setIsTriggering] = useState(false);
@@ -21,38 +22,49 @@ export function useComputeTrigger() {
     setIsTriggering(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        throw new Error("Not authenticated");
+      const attemptInvoke = async () => {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.access_token) {
+          throw new Error("Not authenticated");
+        }
+
+        return supabase.functions.invoke(functionName, {
+          body,
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+      };
+
+      let result = await attemptInvoke();
+      const needsRetry = result.error && /401|unauthorized|jwt/i.test(result.error.message || "");
+
+      if (needsRetry) {
+        const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshData?.session?.access_token) {
+          throw result.error;
+        }
+        result = await attemptInvoke();
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const res = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "unknown error");
-        throw new Error(`${functionName} failed: ${res.status} ${errText.slice(0, 100)}`);
+      if (result.error) {
+        throw result.error;
       }
 
       if (!silent) {
-        toast.success(successMessage ?? "Computation started — dashboard will update shortly");
+        toast.success(successMessage ?? "Computation started - dashboard will update shortly");
       }
 
-      return await res.json().catch(() => ({}));
-    } catch (err) {
-      console.error(`[useComputeTrigger] ${functionName} error:`, err.message);
+      return result.data || {};
+    } catch (error) {
+      console.error(`[useComputeTrigger] ${functionName} error:`, error?.message || error);
       if (!silent) {
-        toast.error(`Compute failed: ${err.message}`);
+        toast.error(`Compute failed: ${error?.message || "Unexpected error"}`);
       }
-      throw err;
+      throw error;
     } finally {
       setIsTriggering(false);
     }
