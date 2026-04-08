@@ -11,6 +11,7 @@ import {
   onAuthStateChange,
   resetProfileCache,
 } from '@/services/auth';
+import { clearCache, resetOrgIdCache } from '@/services/api';
 
 const AuthContext = createContext();
 
@@ -76,11 +77,15 @@ export const AuthProvider = ({ children }) => {
       console.log('[AuthContext] Auth event:', event);
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         resetProfileCache();
+        resetOrgIdCache();
+        clearCache();
         fetchProfile(false); // ← false: don't set isLoadingAuth=true for subsequent sign-ins
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsAuthenticated(false);
         resetProfileCache();
+        resetOrgIdCache();
+        clearCache();
       }
     });
 
@@ -116,6 +121,8 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setIsAuthenticated(false);
     resetProfileCache();
+    resetOrgIdCache();
+    clearCache();
 
     if (shouldRedirect) {
       authLogout(window.location.origin + '/Landing');
@@ -126,6 +133,8 @@ export const AuthProvider = ({ children }) => {
 
   const refreshProfile = async (showLoading = false) => {
     resetProfileCache();
+    resetOrgIdCache();
+    clearCache();
     return await fetchProfile(showLoading);
   };
 
