@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -22,13 +22,67 @@ export default function RequestAccess() {
     customRole: "", portfolios_count: "", properties_count: "", plan: "professional", billing_cycle: "monthly", notes: "",
   });
   const [errors, setErrors] = useState({});
-  const [submitted, setSubmitted] = useState(() => {
-    return localStorage.getItem("has_requested_access") === "true";
-  });
+  const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isCheckingSubmittedState, setIsCheckingSubmittedState] = useState(true);
   const [emailVerified, setEmailVerified] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
   const isOtherRole = form.role?.toLowerCase() === "other";
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncSubmittedState = async () => {
+      const hasSubmittedFlag = localStorage.getItem("has_requested_access") === "true";
+      const requestedEmail = localStorage.getItem("requested_access_email");
+
+      if (!hasSubmittedFlag) {
+        if (isMounted) {
+          setSubmitted(false);
+          setIsCheckingSubmittedState(false);
+        }
+        return;
+      }
+
+      if (!requestedEmail) {
+        localStorage.removeItem("has_requested_access");
+        if (isMounted) {
+          setSubmitted(false);
+          setIsCheckingSubmittedState(false);
+        }
+        return;
+      }
+
+      try {
+        const existing = await getExistingRequest(requestedEmail, "access");
+        const hasLiveRequest = ["pending_approval", "approved", "active"].includes(existing?.status);
+
+        if (!hasLiveRequest) {
+          localStorage.removeItem("has_requested_access");
+          localStorage.removeItem("requested_access_email");
+        }
+
+        if (isMounted) {
+          setSubmitted(hasLiveRequest);
+        }
+      } catch (e) {
+        console.warn("Failed to sync submitted request state:", e);
+        if (isMounted) {
+          setSubmitted(hasSubmittedFlag);
+        }
+      } finally {
+        if (isMounted) {
+          setIsCheckingSubmittedState(false);
+        }
+      }
+    };
+
+    syncSubmittedState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const validate = () => {
     const errs = {};
@@ -110,6 +164,7 @@ export default function RequestAccess() {
       });
 
       localStorage.setItem("has_requested_access", "true");
+      localStorage.setItem("requested_access_email", form.email.trim().toLowerCase());
       setSubmitted(true);
 
       // Notify internal team & user (non-blocking)
@@ -171,6 +226,14 @@ export default function RequestAccess() {
       <AlertCircle className="w-3 h-3" />{errors[field]}
     </motion.p>
   ) : null;
+
+  if (isCheckingSubmittedState) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
+      </div>
+    );
+  }
 
   if (submitted) {
     return (
