@@ -1,13 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { leaseService } from "@/services/leaseService";
 import useOrgId from "@/hooks/useOrgId";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { extractFromFile } from "@/services/documentExtractor";
 import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ScopeSelector from "@/components/ScopeSelector";
 import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const EMPTY_LEASE = {
@@ -61,12 +63,103 @@ async function resolveWritableOrgId(currentOrgId) {
 export default function LeaseUpload() {
   const { orgId } = useOrgId();
   const location = useLocation();
+  const navigate = useNavigate();
   const urlParams = new URLSearchParams(location.search);
+  const queryPropertyId = urlParams.get("property");
+  const queryBuildingId = urlParams.get("building");
+  const queryUnitId = urlParams.get("unit");
   const [step, setStep] = useState(1);
   const [file, setFile] = useState(null);
   const [extractedData, setExtractedData] = useState(null);
   const [extracting, setExtracting] = useState(false);
   const [savedLeaseId, setSavedLeaseId] = useState(null);
+  const [scopeProperty, setScopeProperty] = useState(queryPropertyId || "all");
+  const [scopeBuilding, setScopeBuilding] = useState(queryBuildingId || "all");
+  const [scopeUnit, setScopeUnit] = useState(queryUnitId || "all");
+
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
+
+  useEffect(() => {
+    let nextProperty = queryPropertyId || "all";
+    let nextBuilding = queryBuildingId || "all";
+    let nextUnit = queryUnitId || "all";
+
+    const selectedUnit = queryUnitId ? units.find((unit) => unit.id === queryUnitId) : null;
+    const selectedBuilding =
+      (queryBuildingId ? buildings.find((building) => building.id === queryBuildingId) : null) ||
+      (selectedUnit?.building_id ? buildings.find((building) => building.id === selectedUnit.building_id) : null);
+
+    if (selectedUnit?.building_id && nextBuilding === "all") {
+      nextBuilding = selectedUnit.building_id;
+    }
+    if (selectedUnit?.property_id && nextProperty === "all") {
+      nextProperty = selectedUnit.property_id;
+    }
+    if (selectedBuilding?.property_id && nextProperty === "all") {
+      nextProperty = selectedBuilding.property_id;
+    }
+
+    setScopeProperty(nextProperty);
+    setScopeBuilding(nextBuilding);
+    setScopeUnit(nextUnit);
+  }, [queryPropertyId, queryBuildingId, queryUnitId, buildings, units]);
+
+  const scopedBuildings = useMemo(
+    () => (scopeProperty !== "all" ? buildings.filter((building) => building.property_id === scopeProperty) : buildings),
+    [buildings, scopeProperty]
+  );
+
+  const scopedUnits = useMemo(() => {
+    if (scopeBuilding !== "all") {
+      return units.filter((unit) => unit.building_id === scopeBuilding);
+    }
+    if (scopeProperty !== "all") {
+      return units.filter((unit) => unit.property_id === scopeProperty);
+    }
+    return units;
+  }, [units, scopeBuilding, scopeProperty]);
+
+  const selectedProperty = scopeProperty !== "all" ? properties.find((property) => property.id === scopeProperty) ?? null : null;
+  const selectedBuilding = scopeBuilding !== "all" ? buildings.find((building) => building.id === scopeBuilding) ?? null : null;
+  const selectedUnit = scopeUnit !== "all" ? units.find((unit) => unit.id === scopeUnit) ?? null : null;
+  const effectivePropertyId = selectedUnit?.property_id || selectedBuilding?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
+
+  const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
+    const params = new URLSearchParams(location.search);
+    if (property && property !== "all") params.set("property", property);
+    else params.delete("property");
+
+    if (building && building !== "all") params.set("building", building);
+    else params.delete("building");
+
+    if (unit && unit !== "all") params.set("unit", unit);
+    else params.delete("unit");
+
+    navigate({
+      pathname: location.pathname,
+      search: params.toString() ? `?${params.toString()}` : "",
+    });
+  };
+
+  const handlePropertyChange = (value) => {
+    setScopeProperty(value);
+    setScopeBuilding("all");
+    setScopeUnit("all");
+    updateScopeParams({ property: value, building: "all", unit: "all" });
+  };
+
+  const handleBuildingChange = (value) => {
+    setScopeBuilding(value);
+    setScopeUnit("all");
+    updateScopeParams({ property: scopeProperty, building: value, unit: "all" });
+  };
+
+  const handleUnitChange = (value) => {
+    setScopeUnit(value);
+    updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
+  };
 
   const handleFileSelect = async (e) => {
     const selectedFile = e.target.files[0];
@@ -121,8 +214,8 @@ export default function LeaseUpload() {
         notes: extractedData.notes || null,
         status: "active",
         created_by: "lease_upload",
-        ...(urlParams.get("property") ? { property_id: urlParams.get("property") } : {}),
-        ...(urlParams.get("unit") ? { unit_id: urlParams.get("unit") } : {}),
+        ...(effectivePropertyId ? { property_id: effectivePropertyId } : {}),
+        ...(scopeUnit !== "all" ? { unit_id: scopeUnit } : {}),
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
       });
 
@@ -149,9 +242,36 @@ export default function LeaseUpload() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <Link to={createPageUrl("Leases")} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1">
+      <Link to={createPageUrl("Leases") + location.search} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1">
         <ArrowLeft className="w-4 h-4" /> Back to Leases
       </Link>
+
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Lease Scope</h2>
+            <p className="text-xs text-slate-500">Choose the property, building, and unit context for this upload.</p>
+          </div>
+          <ScopeSelector
+            properties={properties}
+            buildings={scopedBuildings}
+            units={scopedUnits}
+            selectedProperty={scopeProperty}
+            selectedBuilding={scopeBuilding}
+            selectedUnit={scopeUnit}
+            onPropertyChange={handlePropertyChange}
+            onBuildingChange={handleBuildingChange}
+            onUnitChange={handleUnitChange}
+          />
+          <div className="text-xs text-slate-500">
+            Scope:
+            {" "}
+            {[selectedProperty?.name, selectedBuilding?.name, selectedUnit?.unit_number || selectedUnit?.unit_id_code]
+              .filter(Boolean)
+              .join(" · ") || "No specific scope selected"}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="flex items-center gap-2">
         {steps.map((item, index) => (
@@ -281,7 +401,7 @@ export default function LeaseUpload() {
               </div>
             )}
             <div className="flex gap-3 justify-center">
-              <Link to={createPageUrl("Leases")}><Button variant="outline">Back to Leases</Button></Link>
+              <Link to={createPageUrl("Leases") + location.search}><Button variant="outline">Back to Leases</Button></Link>
               <Link to={createPageUrl("LeaseReview") + (savedLeaseId ? `?id=${savedLeaseId}` : "")}>
                 <Button className="bg-[#1a2744]">Review & Validate</Button>
               </Link>
