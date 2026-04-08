@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PortfolioService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +19,34 @@ import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
+async function resolveWritableOrgId(currentOrgId) {
+  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
+
+    const { data: membership } = await supabase
+      .from("memberships")
+      .select("org_id")
+      .eq("user_id", user?.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membership?.org_id) return membership.org_id;
+
+    const { data: org } = await supabase
+      .from("organizations")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    return org?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
@@ -34,7 +63,13 @@ export default function Portfolios() {
   const { data: leases = [] } = useOrgQuery("Lease");
 
   const createMutation = useMutation({
-    mutationFn: (data) => PortfolioService.create(data),
+    mutationFn: async (data) => {
+      const writableOrgId = await resolveWritableOrgId(orgId);
+      return PortfolioService.create({
+        ...data,
+        ...(writableOrgId ? { org_id: writableOrgId } : {}),
+      });
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['Portfolio'] });
       setShowCreate(false);
@@ -322,9 +357,8 @@ export default function Portfolios() {
               createMutation.mutate({
                 name: form.name,
                 ...(description ? { description } : {}),
-                ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
               });
-            }} disabled={!form.name || createMutation.isPending || !orgId || orgId === '__none__'} className="bg-gradient-to-r from-blue-600 to-indigo-700">
+            }} disabled={!form.name || createMutation.isPending} className="bg-gradient-to-r from-blue-600 to-indigo-700">
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}Create
             </Button>
           </DialogFooter>
