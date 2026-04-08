@@ -9,12 +9,15 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Upload, AlertTriangle, Loader2, CheckCircle2, Calculator } from "lucide-react";
+import { Upload, AlertTriangle, Loader2, CheckCircle2, Calculator, Trash2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { toast } from "sonner";
 
 export default function Reconciliation() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [showCreate, setShowCreate] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const queryClient = useQueryClient();
   const { orgId } = useOrgId();
 
@@ -108,6 +111,23 @@ export default function Reconciliation() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await ReconciliationService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Reconciliation"] });
+      queryClient.invalidateQueries({ queryKey: ["reconciliations"] });
+      setDeleteTarget(null);
+      toast.success("Reconciliation deleted successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete reconciliation: ${err?.message || "Unknown error"}`);
+    },
+  });
+
   const hasExpenseData = yearExpenses.length > 0;
   const statusColors = {
     pending: "bg-amber-100 text-amber-700",
@@ -159,9 +179,20 @@ export default function Reconciliation() {
               <p className="text-xs text-blue-600">Status: {currentRecon.status} · Deadline: {currentRecon.deadline || 'Not set'}</p>
             </div>
           </div>
-          <Badge className={statusColors[currentRecon.status] || 'bg-slate-100 text-slate-600'}>
-            {currentRecon.status?.replace('_', ' ')}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge className={statusColors[currentRecon.status] || 'bg-slate-100 text-slate-600'}>
+              {currentRecon.status?.replace('_', ' ')}
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+              onClick={() => setDeleteTarget(currentRecon)}
+              title="Delete reconciliation"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       )}
 
@@ -352,6 +383,15 @@ export default function Reconciliation() {
           </CardContent>
         </Card>
       )}
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete reconciliation for FY ${deleteTarget?.fiscal_year || ""}?`}
+        description="This will permanently remove the selected reconciliation record."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
 
       {/* Create Reconciliation Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>

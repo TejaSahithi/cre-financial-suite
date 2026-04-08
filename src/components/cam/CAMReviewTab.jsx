@@ -1,9 +1,14 @@
 import React, { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Minus, AlertTriangle, ChevronDown, ChevronUp, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Minus, AlertTriangle, ChevronDown, ChevronUp, ArrowUpRight, ArrowDownRight, Trash2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from "recharts";
+import { CAMCalculationService } from "@/services/api";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 function analyzeIncreaseReasons(currCAMs, prevCAMs, expenses) {
   const reasons = [];
@@ -67,6 +72,8 @@ function analyzeIncreaseReasons(currCAMs, prevCAMs, expenses) {
 
 export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, prevYear, scopeProperty }) {
   const [expandedTenant, setExpandedTenant] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const queryClient = useQueryClient();
 
   const scopedCAMs = scopeProperty !== "all" ? camCalcs.filter(c => c.property_id === scopeProperty) : camCalcs;
   const currCAMs = scopedCAMs.filter(c => c.fiscal_year === currentYear);
@@ -115,6 +122,22 @@ export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, 
   ].filter(d => d.value > 0);
 
   const capsApplied = tenantData.filter(t => t.capApplied).length;
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await CAMCalculationService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["CAMCalculation"] });
+      setDeleteTarget(null);
+      toast.success("CAM calculation deleted successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete CAM calculation: ${err?.message || "Unknown error"}`);
+    },
+  });
 
   return (
     <div className="space-y-5">
@@ -228,20 +251,21 @@ export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, 
         <CardContent className="p-0">
           <Table>
             <TableHeader>
-              <TableRow className="bg-slate-50">
-                <TableHead className="text-[10px] font-bold">TENANT</TableHead>
-                <TableHead className="text-[10px] font-bold">SHARE %</TableHead>
-                <TableHead className="text-[10px] font-bold text-right">FY {prevYear}</TableHead>
-                <TableHead className="text-[10px] font-bold text-right">FY {currentYear}</TableHead>
-                <TableHead className="text-[10px] font-bold text-right">MONTHLY</TableHead>
-                <TableHead className="text-[10px] font-bold text-right">CHANGE</TableHead>
-                <TableHead className="text-[10px] font-bold">FLAGS</TableHead>
-                <TableHead className="text-[10px] font-bold w-8"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tenantData.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-8 text-sm text-slate-400">No CAM calculations found for the selected scope/year</TableCell></TableRow>
+                <TableRow className="bg-slate-50">
+                  <TableHead className="text-[10px] font-bold">TENANT</TableHead>
+                  <TableHead className="text-[10px] font-bold">SHARE %</TableHead>
+                  <TableHead className="text-[10px] font-bold text-right">FY {prevYear}</TableHead>
+                  <TableHead className="text-[10px] font-bold text-right">FY {currentYear}</TableHead>
+                  <TableHead className="text-[10px] font-bold text-right">MONTHLY</TableHead>
+                  <TableHead className="text-[10px] font-bold text-right">CHANGE</TableHead>
+                  <TableHead className="text-[10px] font-bold">FLAGS</TableHead>
+                  <TableHead className="text-[10px] font-bold w-8"></TableHead>
+                  <TableHead className="text-[10px] font-bold w-8"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tenantData.length === 0 ? (
+                <TableRow><TableCell colSpan={9} className="text-center py-8 text-sm text-slate-400">No CAM calculations found for the selected scope/year</TableCell></TableRow>
               ) : tenantData.map(t => (
                 <React.Fragment key={t.id}>
                   <TableRow className="hover:bg-slate-50 cursor-pointer" onClick={() => setExpandedTenant(expandedTenant === t.id ? null : t.id)}>
@@ -273,11 +297,22 @@ export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, 
                         {t.pct > 15 && <Badge className="bg-red-100 text-red-700 text-[8px]">SPIKE</Badge>}
                       </div>
                     </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
+                        onClick={() => setDeleteTarget(t)}
+                        title="Delete CAM calculation"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </TableCell>
                     <TableCell>{expandedTenant === t.id ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}</TableCell>
                   </TableRow>
                   {expandedTenant === t.id && (
                     <TableRow>
-                      <TableCell colSpan={8} className="bg-slate-50/80 p-4">
+                      <TableCell colSpan={9} className="bg-slate-50/80 p-4">
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
                           <div className="bg-white rounded-lg p-2.5 border"><p className="text-[9px] text-slate-400 uppercase">CAM Pool</p><p className="text-sm font-bold">${(t.total_cam_pool || 0).toLocaleString()}</p></div>
                           <div className="bg-white rounded-lg p-2.5 border"><p className="text-[9px] text-slate-400 uppercase">Admin Fee</p><p className="text-sm font-bold">${(t.admin_fee || 0).toLocaleString()}</p></div>
@@ -327,13 +362,22 @@ export default function CAMReviewTab({ camCalcs, expenses, leases, currentYear, 
                       </span>
                     )}
                   </TableCell>
-                  <TableCell colSpan={2}></TableCell>
+                  <TableCell colSpan={3}></TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete CAM calculation for "${deleteTarget?.tenant_name || ""}"?`}
+        description="This will permanently remove the selected CAM calculation row."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }
