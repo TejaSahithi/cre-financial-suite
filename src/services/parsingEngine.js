@@ -1,14 +1,14 @@
 /**
- * Parsing Engine — Unified CSV/Text Data Parser
+ * Parsing Engine Ã¢â‚¬â€ Unified CSV/Text Data Parser
  *
  * Converts raw file content into structured, normalised JSON rows.
  * Each parser handles column name mapping and type conversion for
  * its specific module. No business logic or validation lives here.
  *
- * Flow: raw text → detect headers → normalise columns → convert types → output rows
+ * Flow: raw text Ã¢â€ â€™ detect headers Ã¢â€ â€™ normalise columns Ã¢â€ â€™ convert types Ã¢â€ â€™ output rows
  */
 
-// ─── Shared Utilities ─────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Shared Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 /**
  * Parse raw CSV text into an array of header-keyed objects.
@@ -62,7 +62,7 @@ function splitCSVLine(line) {
 
 /**
  * Normalise a header string to snake_case.
- * "Tenant Name" → "tenant_name", "Base Rent ($)" → "base_rent"
+ * "Tenant Name" Ã¢â€ â€™ "tenant_name", "Base Rent ($)" Ã¢â€ â€™ "base_rent"
  */
 function normaliseHeader(h) {
   return h
@@ -133,11 +133,11 @@ function resolveColumn(rawHeader, columnMap) {
   return norm; // pass through normalised form as-is
 }
 
-// ─── Module-Specific Column Maps ──────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Module-Specific Column Maps Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 // Each key is an exact normalised alias, value is the canonical DB field name.
 // IMPORTANT: Avoid overly short keys that cause cross-module collisions.
 
-// ── PROPERTIES ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ PROPERTIES Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const PROPERTY_COLUMNS = {
   // Name
   name: 'name',
@@ -236,7 +236,7 @@ const PROPERTY_COLUMNS = {
   remarks: 'notes',
 };
 
-// ── LEASES ────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ LEASES Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const LEASE_COLUMNS = {
   // Tenant
   tenant_name: 'tenant_name',
@@ -352,7 +352,7 @@ const LEASE_COLUMNS = {
   description: 'notes',
 };
 
-// ── TENANTS ───────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ TENANTS Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const TENANT_COLUMNS = {
   name: 'name',
   tenant_name: 'name',
@@ -381,7 +381,7 @@ const TENANT_COLUMNS = {
   comments: 'notes',
 };
 
-// ── BUILDINGS ─────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ BUILDINGS Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const BUILDING_COLUMNS = {
   name: 'name',
   building_name: 'name',
@@ -405,7 +405,7 @@ const BUILDING_COLUMNS = {
   status: 'status',
 };
 
-// ── UNITS ─────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ UNITS Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const UNIT_COLUMNS = {
   unit_number: 'unit_number',
   unit_id: 'unit_number',
@@ -439,7 +439,7 @@ const UNIT_COLUMNS = {
   asking_rent: 'monthly_rent',
 };
 
-// ── REVENUE ───────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ REVENUE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const REVENUE_COLUMNS = {
   portfolio_id: 'portfolio_id',
   portfolio: 'portfolio_id',
@@ -477,7 +477,7 @@ const REVENUE_COLUMNS = {
   comments: 'notes',
 };
 
-// ── EXPENSES ──────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ EXPENSES Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const EXPENSE_COLUMNS = {
   portfolio_id: 'portfolio_id',
   portfolio: 'portfolio_id',
@@ -536,7 +536,7 @@ const EXPENSE_COLUMNS = {
   reference: 'invoice_number',
 };
 
-// —— INVOICES ————————————————————————————————————————————————————————————————
+// Ã¢â‚¬â€Ã¢â‚¬â€ INVOICES Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€Ã¢â‚¬â€
 const INVOICE_COLUMNS = {
   tenant_name: 'tenant_name',
   tenant: 'tenant_name',
@@ -584,12 +584,12 @@ const INVOICE_COLUMNS = {
 function sanitizeTextValue(value) {
   if (value == null) return null;
   const cleaned = String(value)
-    .replace(/[–—]/g, '-')
+    .replace(/[Ã¢â‚¬â€œÃ¢â‚¬â€]/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
 
   if (!cleaned) return null;
-  if (cleaned === '-' || cleaned === '--' || cleaned === '—') return null;
+  if (cleaned === '-' || cleaned === '--' || cleaned === 'Ã¢â‚¬â€') return null;
   return cleaned;
 }
 
@@ -673,10 +673,49 @@ function matchFirstTextValue(text, patterns) {
   return null;
 }
 
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const LEASE_TEXT_LABELS = [
+  'tenant', 'tenant name', 'lessee', 'occupant',
+  'lease type', 'type', 'lease structure',
+  'start date', 'lease start', 'commencement date', 'lease commencement',
+  'end date', 'lease end', 'expiration date', 'expiry date', 'lease expiration', 'termination date',
+  'lease term', 'term', 'lease period',
+  'monthly rent', 'rent per month', 'monthly base rent', 'base rent',
+  'annual rent', 'yearly rent', 'annual base rent',
+  'rent/sf', 'rent per sf', 'annual rent/sf', 'psf',
+  'square footage', 'square feet', 'leased sf', 'leased sqft', 'rentable sf',
+  'security deposit', 'deposit',
+  'cam', 'cam charges', 'cam amount', 'common area maintenance',
+  'escalation rate', 'escalation', 'annual escalation', 'rent escalation',
+  'renewal option', 'renewal options', 'option to renew',
+  'ti allowance', 'tenant improvement allowance',
+  'free rent', 'free rent month', 'free rent months', 'abatement',
+  'property', 'property name', 'building',
+  'property address', 'address', 'premises',
+  'suite', 'suite number', 'unit', 'unit number', 'premises suite'
+];
+
+function extractLabeledValue(text, labels, stopLabels = LEASE_TEXT_LABELS) {
+  if (!text) return null;
+
+  const ownLabels = new Set(labels.map((label) => String(label).toLowerCase()));
+  const trailingLabels = stopLabels.filter((label) => !ownLabels.has(String(label).toLowerCase()));
+  const labelPattern = labels.map(escapeRegex).join('|');
+  const stopPattern = trailingLabels.map(escapeRegex).join('|');
+  const regex = new RegExp(
+    `(?:^|[\\n\\r]|\\b)(?:${labelPattern})\\s*:\\s*(.+?)(?=\\s+(?:${stopPattern})\\s*:|$)`,
+    'i'
+  );
+
+  return sanitizeTextValue(text.match(regex)?.[1] ?? null);
+}
+
 function extractLeaseTermRange(text) {
-  const explicitRange =
-    text.match(/^\s*(?:lease term|term|lease period)\s*:\s*(.+?)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(.+)\s*$/im) ||
-    text.match(/\b(?:lease term|term|lease period)\b\s*[:\-]\s*(.+?)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(.+?)(?:\n|$)/i);
+  const leaseTermValue = extractLabeledValue(text, ['lease term', 'term', 'lease period']);
+  const explicitRange = leaseTermValue?.match(/(.+?)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(.+)/i);
 
   if (explicitRange?.[1] && explicitRange?.[2]) {
     return {
@@ -712,83 +751,137 @@ function normalizeLeaseTypeLabel(value) {
 }
 
 function parseLeaseText(text) {
-  const tenantName = matchFirstTextValue(text, [
-    /^\s*(?:tenant|tenant name|lessee|occupant)\s*:\s*(.+)\s*$/im,
-    /\b(?:tenant|tenant name|lessee|occupant)\b\s*:\s*([^\n\r]+)/i,
-  ]);
+  const tenantName = extractLabeledValue(text, ['tenant', 'tenant name', 'lessee', 'occupant']);
   const leaseType = normalizeLeaseTypeLabel(
-    matchFirstTextValue(text, [
-      /^\s*(?:lease type|type|lease structure)\s*:\s*(.+)\s*$/im,
-      /\b(?:lease type|type|lease structure)\b\s*:\s*([^\n\r]+)/i,
-    ]) ||
+    extractLabeledValue(text, ['lease type', 'type', 'lease structure']) ||
     matchTextValue(text, /\b(triple net|nnn|modified gross|full service|gross|double net|net)\b/i)
   );
   const leaseTermRange = extractLeaseTermRange(text);
   const startDate =
-    toDate(matchFirstTextValue(text, [
-      /^\s*(?:start date|lease start|commencement date|lease commencement)\s*:\s*(.+)\s*$/im,
-      /\b(?:start date|lease start|commencement date|lease commencement)\b\s*:\s*([^\n\r]+)/i,
-    ])) || leaseTermRange.startDate;
+    toDate(extractLabeledValue(text, ['start date', 'lease start', 'commencement date', 'lease commencement'])) ||
+    leaseTermRange.startDate;
   const endDate =
-    toDate(matchFirstTextValue(text, [
-      /^\s*(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\s*:\s*(.+)\s*$/im,
-      /\b(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\b\s*:\s*([^\n\r]+)/i,
-    ])) || leaseTermRange.endDate;
+    toDate(extractLabeledValue(text, ['end date', 'lease end', 'expiration date', 'expiry date', 'lease expiration', 'termination date'])) ||
+    leaseTermRange.endDate;
   const monthlyRent = toNumber(
-    matchFirstTextValue(text, [
-      /^\s*(?:monthly rent|rent per month|monthly base rent)\s*:\s*(.+)\s*$/im,
-      /^\s*(?:base rent)\s*:\s*(.+)\s*$/im,
-      /\b(?:monthly rent|rent per month|monthly base rent|base rent)\b\s*:\s*([^\n\r]+)/i,
-    ])
+    extractLabeledValue(text, ['monthly rent', 'rent per month', 'monthly base rent', 'base rent'])
   );
-  const annualRent = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:annual rent|yearly rent|annual base rent)\s*:\s*(.+)\s*$/im,
-    /\b(?:annual rent|yearly rent|annual base rent)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const rentPerSf = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:rent\/sf|rent per sf|annual rent\/sf|psf)\s*:\s*(.+)\s*$/im,
-    /\b(?:rent\/sf|rent per sf|annual rent\/sf|psf)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const squareFootage = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:square footage|square feet|leased sf|leased sqft|rentable sf|sf)\s*:\s*(.+)\s*$/im,
-    /\b(?:square footage|square feet|leased sf|leased sqft|rentable sf)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const securityDeposit = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:security deposit|deposit)\s*:\s*(.+)\s*$/im,
-    /\b(?:security deposit|deposit)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const camAmount = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:cam|cam charges|cam amount|common area maintenance)\s*:\s*(.+)\s*$/im,
-    /\b(?:cam|cam charges|cam amount|common area maintenance)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const escalationRate = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:escalation rate|escalation|annual escalation|rent escalation)\s*:\s*(.+)\s*$/im,
-    /\b(?:escalation rate|escalation|annual escalation|rent escalation)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const renewalOptions = matchFirstTextValue(text, [
-    /^\s*(?:renewal options?|option to renew)\s*:\s*(.+)\s*$/im,
-    /\b(?:renewal options?|option to renew)\b\s*:\s*([^\n\r]+)/i,
-  ]);
-  const tiAllowance = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:ti allowance|tenant improvement allowance)\s*:\s*(.+)\s*$/im,
-    /\b(?:ti allowance|tenant improvement allowance)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const freeRentMonths = toNumber(matchFirstTextValue(text, [
-    /^\s*(?:free rent(?: months?)?|abatement)\s*:\s*(.+)\s*$/im,
-    /\b(?:free rent(?: months?)?|abatement)\b\s*:\s*([^\n\r]+)/i,
-  ]));
-  const propertyName = matchFirstTextValue(text, [
-    /^\s*(?:property|property name|building)\s*:\s*(.+)\s*$/im,
-    /\b(?:property|property name|building)\b\s*:\s*([^\n\r]+)/i,
-  ]);
-  const propertyAddress = matchFirstTextValue(text, [
-    /^\s*(?:property address|address|premises)\s*:\s*(.+)\s*$/im,
-    /\b(?:property address|address|premises)\b\s*:\s*([^\n\r]+)/i,
-  ]);
-  const unitNumber = matchFirstTextValue(text, [
-    /^\s*(?:suite|suite number|unit|unit number|premises suite)\s*:\s*(.+)\s*$/im,
-    /\b(?:suite|suite number|unit|unit number|premises suite)\b\s*:\s*([^\n\r]+)/i,
-  ]);
+  const annualRent = toNumber(extractLabeledValue(text, ['annual rent', 'yearly rent', 'annual base rent']));
+  const rentPerSf = toNumber(extractLabeledValue(text, ['rent/sf', 'rent per sf', 'annual rent/sf', 'psf']));
+  const squareFootage = toNumber(extractLabeledValue(text, ['square footage', 'square feet', 'leased sf', 'leased sqft', 'rentable sf']));
+  const securityDeposit = toNumber(extractLabeledValue(text, ['security deposit', 'deposit']));
+  const camAmount = toNumber(extractLabeledValue(text, ['cam', 'cam charges', 'cam amount', 'common area maintenance']));
+  const escalationRate = toNumber(extractLabeledValue(text, ['escalation rate', 'escalation', 'annual escalation', 'rent escalation']));
+  const renewalOptions = extractLabeledValue(text, ['renewal option', 'renewal options', 'option to renew']);
+  const tiAllowance = toNumber(extractLabeledValue(text, ['ti allowance', 'tenant improvement allowance']));
+  const freeRentMonths = toNumber(extractLabeledValue(text, ['free rent', 'free rent month', 'free rent months', 'abatement']));
+  const propertyName = extractLabeledValue(text, ['property', 'property name', 'building']);
+  const propertyAddress = extractLabeledValue(text, ['property address', 'address', 'premises']);
+  const unitNumber = extractLabeledValue(text, ['suite', 'suite number', 'unit', 'unit number', 'premises suite']);
+const extractedLease = {');
+}
+
+const LEASE_TEXT_LABELS = [
+  'tenant', 'tenant name', 'lessee', 'occupant',
+  'lease type', 'type', 'lease structure',
+  'start date', 'lease start', 'commencement date', 'lease commencement',
+  'end date', 'lease end', 'expiration date', 'expiry date', 'lease expiration', 'termination date',
+  'lease term', 'term', 'lease period',
+  'monthly rent', 'rent per month', 'monthly base rent', 'base rent',
+  'annual rent', 'yearly rent', 'annual base rent',
+  'rent/sf', 'rent per sf', 'annual rent/sf', 'psf',
+  'square footage', 'square feet', 'leased sf', 'leased sqft', 'rentable sf',
+  'security deposit', 'deposit',
+  'cam', 'cam charges', 'cam amount', 'common area maintenance',
+  'escalation rate', 'escalation', 'annual escalation', 'rent escalation',
+  'renewal option', 'renewal options', 'option to renew',
+  'ti allowance', 'tenant improvement allowance',
+  'free rent', 'free rent month', 'free rent months', 'abatement',
+  'property', 'property name', 'building',
+  'property address', 'address', 'premises',
+  'suite', 'suite number', 'unit', 'unit number', 'premises suite'
+];
+
+function extractLabeledValue(text, labels, stopLabels = LEASE_TEXT_LABELS) {
+  if (!text) return null;
+
+  const ownLabels = new Set(labels.map((label) => String(label).toLowerCase()));
+  const trailingLabels = stopLabels.filter((label) => !ownLabels.has(String(label).toLowerCase()));
+  const labelPattern = labels.map(escapeRegex).join('|');
+  const stopPattern = trailingLabels.map(escapeRegex).join('|');
+  const regex = new RegExp(
+    `(?:^|[\\n\\r]|\\b)(?:${labelPattern})\\s*:\\s*(.+?)(?=\\s+(?:${stopPattern})\\s*:|$)`,
+    'i'
+  );
+
+  return sanitizeTextValue(text.match(regex)?.[1] ?? null);
+}
+
+function extractLeaseTermRange(text) {
+  const leaseTermValue = extractLabeledValue(text, ['lease term', 'term', 'lease period']);
+  const explicitRange = leaseTermValue?.match(/(.+?)\s*(?:-|â€“|â€”|\bto\b|\bthrough\b)\s*(.+)/i);
+
+  if (explicitRange?.[1] && explicitRange?.[2]) {
+    return {
+      startDate: toDate(sanitizeTextValue(explicitRange[1])),
+      endDate: toDate(sanitizeTextValue(explicitRange[2])),
+    };
+  }
+
+  const genericRange = text.match(
+    /\b([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})\s*(?:-|â€“|â€”|\bto\b|\bthrough\b)\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})/i
+  );
+
+  if (genericRange?.[1] && genericRange?.[2]) {
+    return {
+      startDate: toDate(sanitizeTextValue(genericRange[1])),
+      endDate: toDate(sanitizeTextValue(genericRange[2])),
+    };
+  }
+
+  return { startDate: null, endDate: null };
+}
+
+function normalizeLeaseTypeLabel(value) {
+  if (!value) return null;
+  const leaseType = String(value).toLowerCase().trim();
+  if (leaseType.includes('triple') || leaseType.includes('nnn')) return 'triple_net';
+  if (leaseType.includes('modified')) return 'modified_gross';
+  if (leaseType.includes('full service')) return 'full_service';
+  if (leaseType.includes('gross')) return 'gross';
+  if (leaseType === 'nn' || leaseType.includes('double')) return 'nn';
+  if (leaseType.includes('net')) return 'net';
+  return leaseType.replace(/\s+/g, '_');
+}
+
+function parseLeaseText(text) {
+  const tenantName = extractLabeledValue(text, ['tenant', 'tenant name', 'lessee', 'occupant']);
+  const leaseType = normalizeLeaseTypeLabel(
+    extractLabeledValue(text, ['lease type', 'type', 'lease structure']) ||
+    matchTextValue(text, /\b(triple net|nnn|modified gross|full service|gross|double net|net)\b/i)
+  );
+  const leaseTermRange = extractLeaseTermRange(text);
+  const startDate =
+    toDate(extractLabeledValue(text, ['start date', 'lease start', 'commencement date', 'lease commencement'])) ||
+    leaseTermRange.startDate;
+  const endDate =
+    toDate(extractLabeledValue(text, ['end date', 'lease end', 'expiration date', 'expiry date', 'lease expiration', 'termination date'])) ||
+    leaseTermRange.endDate;
+  const monthlyRent = toNumber(
+    extractLabeledValue(text, ['monthly rent', 'rent per month', 'monthly base rent', 'base rent'])
+  );
+  const annualRent = toNumber(extractLabeledValue(text, ['annual rent', 'yearly rent', 'annual base rent']));
+  const rentPerSf = toNumber(extractLabeledValue(text, ['rent/sf', 'rent per sf', 'annual rent/sf', 'psf']));
+  const squareFootage = toNumber(extractLabeledValue(text, ['square footage', 'square feet', 'leased sf', 'leased sqft', 'rentable sf']));
+  const securityDeposit = toNumber(extractLabeledValue(text, ['security deposit', 'deposit']));
+  const camAmount = toNumber(extractLabeledValue(text, ['cam', 'cam charges', 'cam amount', 'common area maintenance']));
+  const escalationRate = toNumber(extractLabeledValue(text, ['escalation rate', 'escalation', 'annual escalation', 'rent escalation']));
+  const renewalOptions = extractLabeledValue(text, ['renewal option', 'renewal options', 'option to renew']);
+  const tiAllowance = toNumber(extractLabeledValue(text, ['ti allowance', 'tenant improvement allowance']));
+  const freeRentMonths = toNumber(extractLabeledValue(text, ['free rent', 'free rent month', 'free rent months', 'abatement']));
+  const propertyName = extractLabeledValue(text, ['property', 'property name', 'building']);
+  const propertyAddress = extractLabeledValue(text, ['property address', 'address', 'premises']);
+  const unitNumber = extractLabeledValue(text, ['suite', 'suite number', 'unit', 'unit number', 'premises suite']);
 
   const extractedLease = {
     _row: 1,
@@ -835,7 +928,7 @@ function parseLeaseText(text) {
   };
 }
 
-// ── GL ACCOUNTS ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ GL ACCOUNTS Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const GL_ACCOUNT_COLUMNS = {
   account_code: 'code',
   account_number: 'code',
@@ -866,7 +959,7 @@ const GL_ACCOUNT_COLUMNS = {
   comments: 'notes',
 };
 
-// ─── Module-Specific Parsers ──────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Module-Specific Parsers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 /**
  * Parse property data from CSV text.
@@ -1183,7 +1276,7 @@ export function parseInvoices(text) {
 }
 
 /**
- * Generic fallback parser — normalises headers, passes values through.
+ * Generic fallback parser Ã¢â‚¬â€ normalises headers, passes values through.
  */
 export function parseGeneric(text) {
   const { headers, rows } = parseCSV(text);
@@ -1197,19 +1290,19 @@ export function parseGeneric(text) {
   return { rows: mapped, headers };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 // UNIVERSAL NORMALIZATION & CALCULATION ENGINE
 // Applied to ALL rows regardless of source (CSV parser OR AI extraction).
 // This is the single source of truth for all field calculations in the app.
-// ─────────────────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 /**
  * Run all type coercions, derivations, and business logic calculations
  * for a given moduleType on an array of raw rows.
  *
- * @param {string}   moduleType  — 'property' | 'lease' | 'tenant' | 'unit' | ...
- * @param {object[]} rows        — raw rows from any source (AI, CSV, Excel)
- * @returns {object[]}           — fully normalized rows with all derived fields
+ * @param {string}   moduleType  Ã¢â‚¬â€ 'property' | 'lease' | 'tenant' | 'unit' | ...
+ * @param {object[]} rows        Ã¢â‚¬â€ raw rows from any source (AI, CSV, Excel)
+ * @returns {object[]}           Ã¢â‚¬â€ fully normalized rows with all derived fields
  */
 export function normalizeAndCalculate(moduleType, rows) {
   return rows.map((rawRow, idx) => {
@@ -1232,15 +1325,15 @@ export function normalizeAndCalculate(moduleType, rows) {
   });
 }
 
-// ── Per-module normalizer functions ───────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Per-module normalizer functions Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function normalizeLease(row) {
-  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Alias mapping (Pre-normalization) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.tenant_name       = row.tenant_name || row.tenant || row.lessee || row.occupant;
   row.unit_number       = row.unit_number || row.suite  || row.suite_number || row.unit || row.space;
   row.square_footage    = row.square_footage ?? row.total_sf ?? row.leased_sf ?? row.sqft ?? row.sf ?? row.area;
 
-  // ── Type coerce all numeric fields ────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Type coerce all numeric fields Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.monthly_rent      = toNumber(row.monthly_rent ?? row.base_rent ?? row.monthly_base_rent);
   row.annual_rent       = toNumber(row.annual_rent  ?? row.annual_base_rent ?? row.yearly_rent);
   row.square_footage    = toNumber(row.square_footage);
@@ -1251,17 +1344,17 @@ function normalizeLease(row) {
   row.security_deposit  = toNumber(row.security_deposit ?? row.deposit);
   row.lease_term_months = toNumber(row.lease_term_months ?? row.term_months);
 
-  // ── Derived and UI Compatibility Fields ────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Derived and UI Compatibility Fields Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.cam_per_month     = row.cam_amount || 0;
   row.total_cam         = (row.cam_per_month + (row.nnn_amount || 0));
   row.total_sf          = row.square_footage || 0; // Asset-level compatibility
   row.square_feet       = row.square_footage; // Unit-level compatibility
 
-  // ── Date coerce ────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Date coerce Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.start_date = toDate(row.start_date ?? row.commencement_date ?? row.lease_start ?? row.lease_commencement);
   row.end_date   = toDate(row.end_date   ?? row.expiration_date   ?? row.lease_end   ?? row.lease_expiration ?? row.termination_date);
 
-  // ── DERIVED: monthly ↔ annual rent ────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: monthly Ã¢â€ â€ annual rent Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (!row.monthly_rent && row.annual_rent) {
     row.monthly_rent = Math.round((row.annual_rent / 12) * 100) / 100;
   }
@@ -1269,17 +1362,17 @@ function normalizeLease(row) {
     row.annual_rent = Math.round(row.monthly_rent * 12 * 100) / 100;
   }
 
-  // ── DERIVED: rent_per_sf (annual $/SF) ────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: rent_per_sf (annual $/SF) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (!row.rent_per_sf && row.annual_rent && row.square_footage && row.square_footage > 0) {
     row.rent_per_sf = Math.round((row.annual_rent / row.square_footage) * 100) / 100;
   }
-  // Back-derive annual_rent from rent_per_sf × SF if we still don't have it
+  // Back-derive annual_rent from rent_per_sf Ãƒâ€” SF if we still don't have it
   if (!row.annual_rent && row.rent_per_sf && row.square_footage) {
     row.annual_rent  = Math.round(row.rent_per_sf * row.square_footage * 100) / 100;
     row.monthly_rent = Math.round((row.annual_rent / 12) * 100) / 100;
   }
 
-  // ── DERIVED: lease_term_months from start/end dates ───────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: lease_term_months from start/end dates Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (!row.lease_term_months && row.start_date && row.end_date) {
     const s = new Date(row.start_date);
     const e = new Date(row.end_date);
@@ -1297,19 +1390,19 @@ function normalizeLease(row) {
     }
   }
 
-  // ── DERIVED: total_cam = cam_amount + nnn_amount (if applicable) ──────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: total_cam = cam_amount + nnn_amount (if applicable) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (row.cam_amount || row.nnn_amount) {
     row.total_cam = Math.round(((row.cam_amount ?? 0) + (row.nnn_amount ?? 0)) * 100) / 100;
   }
 
-  // ── DERIVED: effective_gross_rent = monthly_rent + cam + nnn ─────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: effective_gross_rent = monthly_rent + cam + nnn Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (row.monthly_rent) {
     const camMonthly = (row.cam_amount ?? 0) / 12;
     const nnnMonthly = (row.nnn_amount ?? 0) / 12;
     row.effective_rent = Math.round((row.monthly_rent + camMonthly + nnnMonthly) * 100) / 100;
   }
 
-  // ── Normalize lease_type ──────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Normalize lease_type Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (row.lease_type) {
     const lt = String(row.lease_type).toLowerCase().trim();
     if (lt.includes('nnn') || lt.includes('triple'))       row.lease_type = 'nnn';
@@ -1320,7 +1413,7 @@ function normalizeLease(row) {
     else row.lease_type = lt;
   }
 
-  // ── Normalize status ──────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Normalize status Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (row.status) {
     const s = String(row.status).toLowerCase().trim();
     if (s.includes('active') || s === 'current')                      row.status = 'active';
@@ -1343,12 +1436,12 @@ function normalizeProperty(row) {
   row.noi            = toNumber(row.noi            ?? row.net_operating_income) ?? undefined;
   row.cap_rate       = toNumber(row.cap_rate       ?? row.capitalization_rate) ?? undefined;
 
-  // ── DERIVED: cap_rate = NOI / market_value × 100 ─────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: cap_rate = NOI / market_value Ãƒâ€” 100 Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (!row.cap_rate && row.noi && row.market_value && row.market_value > 0) {
     row.cap_rate = Math.round((row.noi / row.market_value) * 10000) / 100; // 2 decimals
   }
 
-  // ── DERIVED: noi from cap_rate and market_value ───────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ DERIVED: noi from cap_rate and market_value Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   if (!row.noi && row.cap_rate && row.market_value) {
     row.noi = Math.round((row.cap_rate / 100) * row.market_value);
   }
@@ -1433,7 +1526,7 @@ function normalizeInvoice(row) {
 }
 
 function normalizeUnit(row) {
-  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Alias mapping (Pre-normalization) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
   row.square_footage = row.square_footage ?? row.total_sf ?? row.sqft ?? row.sf ?? row.area ?? row.total_sqft;
 
@@ -1457,7 +1550,7 @@ function normalizeUnit(row) {
 }
 
 function normalizeBuilding(row) {
-  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Alias mapping (Pre-normalization) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
   row.total_sf       = row.total_sf ?? row.total_sqft ?? row.sqft ?? row.sf ?? row.square_footage ?? row.area;
 
@@ -1488,7 +1581,7 @@ function normalizeGLAccount(row) {
 
 
 /**
- * Map of moduleType → parser function.
+ * Map of moduleType Ã¢â€ â€™ parser function.
  * Used by documentExtractor.js to route CSV/Excel files to the right parser.
  */
 
