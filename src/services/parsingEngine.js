@@ -1070,7 +1070,8 @@ function normalizeUnit(row) {
   
   // UI Compatibility
   row.square_feet    = row.square_footage;
-  row.total_sf       = row.square_footage;
+  row.total_sf       = toNumber(row.total_sf ?? row.square_footage ?? row.sqft ?? row.sf ?? row.area);
+  row.square_footage = row.total_sf; // Internal consistency
 
   if (row.status) {
     const s = String(row.status).toLowerCase().trim();

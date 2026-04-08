@@ -66,7 +66,7 @@ const MODULE_FIELDS = {
   unit: [
     { key: 'unit_number',    label: 'Unit #',        required: true,  placeholder: '101' },
     { key: 'floor',          label: 'Floor',         required: false, placeholder: '1' },
-    { key: 'square_footage', label: 'Square Feet',   required: false, placeholder: '1200' },
+    { key: 'total_sf',         label: 'Square Feet',    required: false, placeholder: '1200' },
     { key: 'unit_type',      label: 'Unit Type',     required: false, placeholder: 'office' },
     { key: 'status',         label: 'Status',        required: false, placeholder: 'vacant / occupied' },
     { key: 'monthly_rent',   label: 'Monthly Rent',  required: false, placeholder: '2500' },
@@ -82,7 +82,7 @@ const MODULE_FIELDS = {
     { key: 'monthly_rent',     label: 'Monthly Rent',   required: false, placeholder: '5000' },
     { key: 'annual_rent',      label: 'Annual Rent',    required: false, placeholder: '60000' },
     { key: 'rent_per_sf',      label: 'Rent/SF (ann.)', required: false, placeholder: '25.00' },
-    { key: 'square_footage',   label: 'Square Feet',    required: false, placeholder: '2400' },
+    { key: 'total_sf',         label: 'Total SF',      required: false, placeholder: '2400' },
     { key: 'lease_type',       label: 'Lease Type',     required: false, placeholder: 'nnn / gross / modified_gross' },
     { key: 'security_deposit', label: 'Security Dep.',  required: false, placeholder: '10000' },
     { key: 'cam_amount',       label: 'CAM (Annual)',   required: false, placeholder: '5000' },
@@ -338,29 +338,41 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
         }
       }
 
-      // Relational strings: Strip fields that exist for the UI grid but don't map to DB columns.
-      // These often contain human names ("Sunset Plaza") or placeholders ("1") that crash DB inserts.
-      const relationalStrings = ['property_name', 'building_name', 'unit_id_code', 'property_id_code', 'total_sf', 'square_feet'];
+      // ── Strip UI-only and relational aliases to prevent DB schema conflicts ──
+      const fieldsToStrip = [
+        'property_name', 
+        'building_name', 
+        'unit_id_code', 
+        'property_id_code', 
+        'square_feet', 
+        'leased_sf',
+        'sqft'
+      ];
+      
+      // 'tenant_name' is ONLY valid for Leases. Strip for other modules.
       if (moduleType !== 'lease') {
-        relationalStrings.push('tenant_name'); // 'leases' table HAS tenant_name
+        fieldsToStrip.push('tenant_name');
       }
-      
-      // For Units, 'square_footage' is a real DB column, but 'square_feet' (alias) is not.
-      // For Buildings/Properties, 'total_sf' IS a real DB column.
-      const dbColumns = (moduleType === 'building' || moduleType === 'property') ? ['total_sf'] : [];
-      
-      relationalStrings.forEach(f => {
-        if (!dbColumns.includes(f)) delete data[f];
-      });
 
-      // Strip empty values and sensitive fields
-      Object.keys(data).forEach(k => {
-        if (data[k] === null || data[k] === undefined || data[k] === '') delete data[k];
-      });
+      // 'total_sf' is valid for Property, Building, and Lease. 
+      // Strip for Units (which use square_footage).
+      if (moduleType === 'unit') {
+        fieldsToStrip.push('total_sf');
+      }
 
-      // CRITICAL: Strip 'id' to prevent collisions during bulk import.
-      // The system should generate unique IDs for each new record.
-      delete data.id;
+      // ── Apply Cleanup ──────────────────────────────────────────────────
+      const cleanData = { ...data };
+      delete cleanData.id;    // Always fresh UUID from service
+      delete cleanData._row;  // UI-only index
+      
+      fieldsToStrip.forEach(key => delete cleanData[key]);
+
+      // Strip empty values to avoid DB schema constraint violations
+      Object.keys(cleanData).forEach(k => {
+        if (cleanData[k] === null || cleanData[k] === undefined || cleanData[k] === '') {
+          delete cleanData[k];
+        }
+      });
 
       try {
         await service.create(data);
