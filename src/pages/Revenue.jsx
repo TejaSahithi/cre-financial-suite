@@ -14,7 +14,7 @@ import PropertyContributionChart from "@/components/revenue/PropertyContribution
 import TenantRevenueDistribution from "@/components/revenue/TenantRevenueDistribution";
 import PropertyDrillDown from "@/components/revenue/PropertyDrillDown";
 import TenantDrillDown from "@/components/revenue/TenantDrillDown";
-import { PropertyService, LeaseService, CAMCalculationService, UnitService, BuildingService } from "@/services/api";
+import { PropertyService, LeaseService, CAMCalculationService, UnitService, BuildingService, PortfolioService } from "@/services/api";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Button } from "@/components/ui/button";
 import { downloadCSV, createPageUrl } from "@/utils";
@@ -50,8 +50,7 @@ export default function Revenue() {
   });
   const { data: portfolios = [] } = useQuery({
     queryKey: ["revenue-portfolios"],
-    queryFn: () => PropertyService.list().then(() => []),
-    initialData: [],
+    queryFn: () => PortfolioService.list(),
   });
 
   const scope = useMemo(
@@ -71,6 +70,11 @@ export default function Revenue() {
     setScopeBuilding(scope.buildingId || "all");
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useEffect(() => {
+    setSelectedProperty(null);
+    setSelectedTenant(null);
+  }, [location.search, scopeProperty, scopeBuilding, scopeUnit]);
 
   const isLoading = loadingProps || loadingLeases;
 
