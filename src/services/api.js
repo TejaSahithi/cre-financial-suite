@@ -382,7 +382,8 @@ const ALLOWED_COLUMNS = {
   ]),
   Invoice: new Set([
     ...COMMON_BASE_COLUMNS,
-    'tenant_id', 'property_id', 'amount', 'status', 'due_date', 'issued_date',
+    'tenant_id', 'property_id', 'amount', 'total_amount', 'status',
+    'due_date', 'issued_date', 'billing_period', 'invoice_number', 'amount_paid',
   ]),
   GLAccount: new Set([
     ...COMMON_BASE_COLUMNS,
