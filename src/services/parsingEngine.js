@@ -441,9 +441,18 @@ const UNIT_COLUMNS = {
 
 // ── REVENUE ───────────────────────────────────────────────────────────
 const REVENUE_COLUMNS = {
+  portfolio_id: 'portfolio_id',
+  portfolio: 'portfolio_id',
+  building_id: 'building_id',
+  building: 'building_id',
+  building_name: 'building_id',
+  unit_id: 'unit_id',
+  unit: 'unit_id',
+  unit_number: 'unit_id',
   property_name: 'property_name',
   property: 'property_name',
   property_id: 'property_id',
+  lease_id: 'lease_id',
   tenant_name: 'tenant_name',
   tenant: 'tenant_name',
   revenue_type: 'type',
@@ -470,6 +479,14 @@ const REVENUE_COLUMNS = {
 
 // ── EXPENSES ──────────────────────────────────────────────────────────
 const EXPENSE_COLUMNS = {
+  portfolio_id: 'portfolio_id',
+  portfolio: 'portfolio_id',
+  building_id: 'building_id',
+  building: 'building_id',
+  building_name: 'building_id',
+  unit_id: 'unit_id',
+  unit: 'unit_id',
+  unit_number: 'unit_id',
   date: 'date',
   expense_date: 'date',
   invoice_date: 'date',
