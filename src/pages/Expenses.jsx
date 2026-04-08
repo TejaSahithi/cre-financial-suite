@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Plus, Upload, Search, Loader2, Pencil, Trash2, BookOpen, Receipt, DollarSign, TrendingDown, Layers } from "lucide-react";
+import { Plus, Upload, Search, Loader2, Pencil, Trash2, BookOpen, Receipt, DollarSign, TrendingDown, Layers, Download } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl, downloadCSV } from "@/utils";
 import ModuleLink from "@/components/ModuleLink";
@@ -26,7 +26,6 @@ export default function Expenses() {
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
-  const [selectedPropertyId] = useState(null);
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
   const { data: budgets = [] } = useOrgQuery("Budget");
@@ -43,6 +42,7 @@ export default function Expenses() {
     if (scopeProperty !== "all" && e.property_id !== scopeProperty) return false;
     return true;
   });
+  const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : null;
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
@@ -86,7 +86,11 @@ export default function Expenses() {
         </div>
       </PageHeader>
 
-      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={EXPENSE_ACTIONS} />
+      {selectedPropertyId ? (
+        <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={EXPENSE_ACTIONS} />
+      ) : (
+        <div className="text-xs text-slate-500">Select a property to run expense compute/export actions.</div>
+      )}
 
       <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} selectedUnit={scopeUnit} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} onUnitChange={setScopeUnit} />
 
