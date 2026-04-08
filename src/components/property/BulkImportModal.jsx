@@ -253,6 +253,7 @@ export default function BulkImportModal({
   // Target property selected inside the modal (only used when no contextual propertyId)
   const [targetPropertyId, setTargetPropertyId] = useState('');
   const [propertyOptions, setPropertyOptions] = useState([]);
+  const [selectedPropertyAddress, setSelectedPropertyAddress] = useState("");
 
   const title   = MODULE_TITLES[moduleType] || moduleType;
   const service = SERVICE_MAP[moduleType];
@@ -273,6 +274,36 @@ export default function BulkImportModal({
     }).catch(() => { if (!cancelled) setPropertyOptions([]); });
     return () => { cancelled = true; };
   }, [isOpen, needsPropertyPick]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSelectedPropertyAddress = async () => {
+      const selectedId = propertyId || targetPropertyId;
+      if (!selectedId) {
+        setSelectedPropertyAddress("");
+        return;
+      }
+
+      const cachedProperty = propertyOptions.find((property) => property.id === selectedId);
+      if (cachedProperty) {
+        if (!cancelled) setSelectedPropertyAddress(cachedProperty.address || "");
+        return;
+      }
+
+      try {
+        const matches = await PropertyService.filter({ id: selectedId });
+        if (!cancelled) {
+          setSelectedPropertyAddress(matches?.[0]?.address || "");
+        }
+      } catch {
+        if (!cancelled) setSelectedPropertyAddress("");
+      }
+    };
+
+    loadSelectedPropertyAddress();
+    return () => { cancelled = true; };
+  }, [propertyId, targetPropertyId, propertyOptions]);
 
   const reset = () => { setRows(null); setFile(null); setMethod(null); setTargetPropertyId(''); };
 
@@ -375,6 +406,25 @@ export default function BulkImportModal({
   const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
 
   const canImport = rows && rows.length > 0 && allErrors.length === 0 && !importing && !missingTargetProperty;
+  const hasMismatchedBuildingAddresses =
+    moduleType === "building" &&
+    !!selectedPropertyAddress &&
+    Array.isArray(rows) &&
+    rows.some((row) => {
+      const rowAddress = String(row.address || "").trim();
+      return !rowAddress || rowAddress !== selectedPropertyAddress;
+    });
+
+  const autofillBuildingAddressesFromProperty = () => {
+    if (!selectedPropertyAddress || moduleType !== "building") return;
+    setRows((prev) =>
+      (prev || []).map((row) => ({
+        ...row,
+        address: selectedPropertyAddress,
+      }))
+    );
+    toast.success("Applied the selected property address to all building rows.");
+  };
 
   // ── Import execution ──────────────────────────────────────────────────────
   const executeImport = async () => {
@@ -575,6 +625,36 @@ export default function BulkImportModal({
                   No properties found. Create a property first, then come back.
                 </p>
               )}
+            </div>
+          )}
+
+          {moduleType === "building" && effectivePropertyId && selectedPropertyAddress && rows?.length > 0 && (
+            <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50/70">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-xs font-semibold text-amber-900">
+                    Building address autofill
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-1">
+                    Parent property address: {selectedPropertyAddress}
+                  </p>
+                  {hasMismatchedBuildingAddresses && (
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      Some building rows are blank or different. You can autofill them with the parent property address.
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={autofillBuildingAddressesFromProperty}
+                  disabled={!hasMismatchedBuildingAddresses}
+                >
+                  Use Property Address
+                </Button>
+              </div>
             </div>
           )}
 

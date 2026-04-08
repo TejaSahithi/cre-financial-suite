@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Building2,
   Search,
@@ -35,12 +35,15 @@ import { toast } from "sonner";
 
 export default function BuildingsUnits() {
   const location = useLocation();
+  const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
   const portfolioId = params.get("portfolio");
   const propertyId = params.get("property");
+  const buildingId = params.get("building");
 
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
+  const [portfolioFilter, setPortfolioFilter] = useState(portfolioId || "all");
   const [propertyFilter, setPropertyFilter] = useState(propertyId || "all");
   const [showCreateBuilding, setShowCreateBuilding] = useState(false);
   const [showCreateUnit, setShowCreateUnit] = useState(false);
@@ -69,18 +72,26 @@ export default function BuildingsUnits() {
   });
 
   useEffect(() => {
+    setPortfolioFilter(portfolioId || "all");
+  }, [portfolioId]);
+
+  useEffect(() => {
     setPropertyFilter(propertyId || "all");
   }, [propertyId]);
 
-  const scopedProperties = useMemo(() => {
-    if (propertyId) {
-      return properties.filter((property) => property.id === propertyId);
-    }
-    if (portfolioId) {
-      return properties.filter((property) => property.portfolio_id === portfolioId);
+  const portfolioScopedProperties = useMemo(() => {
+    if (portfolioFilter !== "all") {
+      return properties.filter((property) => property.portfolio_id === portfolioFilter);
     }
     return properties;
-  }, [properties, portfolioId, propertyId]);
+  }, [properties, portfolioFilter]);
+
+  const scopedProperties = useMemo(() => {
+    if (propertyId) {
+      return portfolioScopedProperties.filter((property) => property.id === propertyId);
+    }
+    return portfolioScopedProperties;
+  }, [portfolioScopedProperties, propertyId]);
 
   const scopedPropertyIds = useMemo(
     () => new Set(scopedProperties.map((property) => property.id)),
@@ -107,7 +118,8 @@ export default function BuildingsUnits() {
   );
 
   const activeProperty = propertyId ? scopedProperties[0] : null;
-  const activePortfolio = portfolioId ? portfolios.find((portfolio) => portfolio.id === portfolioId) : null;
+  const activePortfolio = portfolioFilter !== "all" ? portfolios.find((portfolio) => portfolio.id === portfolioFilter) : null;
+  const activeBuilding = buildingId ? scopedBuildings.find((building) => building.id === buildingId) : null;
 
   const getPropertyName = (id) => properties.find((property) => property.id === id)?.name || "—";
   const getBuildingUnits = (buildingId) => scopedUnits.filter((unit) => unit.building_id === buildingId);
@@ -119,6 +131,15 @@ export default function BuildingsUnits() {
     const matchProperty = propertyFilter === "all" || building.property_id === propertyFilter;
     return matchSearch && matchProperty;
   });
+
+  const filteredUnits = useMemo(() => {
+    const baseUnits = activeBuilding ? getBuildingUnits(activeBuilding.id) : scopedUnits;
+    return baseUnits.filter((unit) => {
+      const unitLabel = String(unit.unit_number || unit.unit_id_code || unit.id || "").toLowerCase();
+      const statusLabel = String(unit.occupancy_status || unit.status || "").toLowerCase();
+      return !search || unitLabel.includes(search.toLowerCase()) || statusLabel.includes(search.toLowerCase());
+    });
+  }, [activeBuilding, scopedUnits, search]);
 
   const totalUnits = scopedUnits.length;
   const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
@@ -174,9 +195,10 @@ export default function BuildingsUnits() {
   const subtitleParts = [
     `${scopedBuildings.length} buildings`,
     `${totalUnits} units`,
+    activeBuilding ? `inside ${activeBuilding.name}` : null,
     propertyId && activeProperty ? `for ${activeProperty.name}` : null,
-    !propertyId && portfolioId && activePortfolio ? `in ${activePortfolio.name}` : null,
-    !propertyId && !portfolioId ? `across ${scopedProperties.length} properties` : null,
+    !propertyId && portfolioFilter !== "all" && activePortfolio ? `in ${activePortfolio.name}` : null,
+    !propertyId && portfolioFilter === "all" ? `across ${scopedProperties.length} properties` : null,
   ].filter(Boolean);
 
   const allFilteredSelected = filteredBuildings.length > 0 && filteredBuildings.every((building) => selectedBuildingIds.includes(building.id));
@@ -196,6 +218,43 @@ export default function BuildingsUnits() {
     }
     const filteredIds = new Set(filteredBuildings.map((building) => building.id));
     setSelectedBuildingIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
+
+  const updateScopeParams = ({ nextPortfolio = portfolioFilter, nextProperty = propertyFilter, nextBuilding = buildingId || "" }) => {
+    const nextParams = new URLSearchParams(location.search);
+    if (nextPortfolio && nextPortfolio !== "all") nextParams.set("portfolio", nextPortfolio);
+    else nextParams.delete("portfolio");
+
+    if (nextProperty && nextProperty !== "all") nextParams.set("property", nextProperty);
+    else nextParams.delete("property");
+
+    if (nextBuilding) nextParams.set("building", nextBuilding);
+    else nextParams.delete("building");
+
+    navigate({
+      pathname: location.pathname,
+      search: nextParams.toString() ? `?${nextParams.toString()}` : "",
+    });
+  };
+
+  const handlePortfolioChange = (value) => {
+    setPortfolioFilter(value);
+    setPropertyFilter("all");
+    updateScopeParams({ nextPortfolio: value, nextProperty: "all", nextBuilding: "" });
+  };
+
+  const handlePropertyChange = (value) => {
+    setPropertyFilter(value);
+    updateScopeParams({ nextPortfolio: portfolioFilter, nextProperty: value, nextBuilding: "" });
+  };
+
+  const openBuildingUnitsView = (building) => {
+    const parentProperty = properties.find((property) => property.id === building.property_id) || null;
+    updateScopeParams({
+      nextPortfolio: parentProperty?.portfolio_id || portfolioFilter,
+      nextProperty: building.property_id,
+      nextBuilding: building.id,
+    });
   };
 
   return (
@@ -243,9 +302,22 @@ export default function BuildingsUnits() {
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="relative max-w-sm flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <Input placeholder="Search buildings..." className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <Input placeholder={activeBuilding ? "Search units..." : "Search buildings..."} className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
-          <Select value={propertyFilter} onValueChange={setPropertyFilter}>
+          <Select value={portfolioFilter} onValueChange={handlePortfolioChange}>
+            <SelectTrigger className="w-52">
+              <SelectValue placeholder="All Portfolios" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Portfolios</SelectItem>
+              {portfolios.map((portfolio) => (
+                <SelectItem key={portfolio.id} value={portfolio.id}>
+                  {portfolio.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={propertyFilter} onValueChange={handlePropertyChange}>
             <SelectTrigger className="w-48">
               <SelectValue placeholder="All Properties" />
             </SelectTrigger>
@@ -283,7 +355,64 @@ export default function BuildingsUnits() {
         </div>
       </div>
 
-      {isLoading ? (
+      {activeBuilding ? (
+        <Card className="overflow-hidden border-slate-200/80">
+          <CardContent className="p-5 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">{activeBuilding.name}</h3>
+                <p className="text-sm text-slate-500">
+                  Units for {getPropertyName(activeBuilding.property_id)}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => updateScopeParams({ nextPortfolio: portfolioFilter, nextProperty: propertyFilter, nextBuilding: "" })}>
+                Back To Buildings
+              </Button>
+            </div>
+
+            {filteredUnits.length === 0 ? (
+              <div className="py-10 text-center text-sm text-slate-400">No units found for this building</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                    <TableHead className="text-xs font-bold tracking-wider">UNIT</TableHead>
+                    <TableHead className="text-xs font-bold tracking-wider">FLOOR</TableHead>
+                    <TableHead className="text-xs font-bold tracking-wider">SQ FT</TableHead>
+                    <TableHead className="text-xs font-bold tracking-wider">TYPE</TableHead>
+                    <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
+                    <TableHead className="text-xs font-bold tracking-wider">TENANT</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredUnits.map((unit) => (
+                    <TableRow key={unit.id} className="hover:bg-slate-50">
+                      <TableCell className="text-sm font-medium text-slate-900">
+                        {unit.unit_number || unit.unit_id_code || "—"}
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-600">{unit.floor || "—"}</TableCell>
+                      <TableCell className="text-sm font-mono">{(unit.square_footage || unit.square_feet || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm text-slate-600 capitalize">{unit.unit_type || "—"}</TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${
+                          unit.occupancy_status === "leased"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : unit.occupancy_status === "vacant"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-600"
+                        }`}>
+                          {unit.occupancy_status || unit.status || "unknown"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-600">{unit.tenant_name || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
         </div>
@@ -416,12 +545,10 @@ export default function BuildingsUnits() {
                   >
                     <Trash2 className="w-4 h-4" />
                   </Button>
-                  <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
-                    <Button variant="outline" size="sm" className="flex-shrink-0 text-xs">
-                      Property
-                      <ChevronRight className="w-3 h-3 ml-1" />
-                    </Button>
-                  </Link>
+                  <Button variant="outline" size="sm" className="flex-shrink-0 text-xs" onClick={() => openBuildingUnitsView(building)}>
+                    View Units
+                    <ChevronRight className="w-3 h-3 ml-1" />
+                  </Button>
                 </CardContent>
               </Card>
             );
@@ -482,9 +609,7 @@ export default function BuildingsUnits() {
                     <TableCell><Badge className="bg-amber-100 text-amber-700 text-xs">{vacant}</Badge></TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
-                          <Button variant="outline" size="sm">View</Button>
-                        </Link>
+                        <Button variant="outline" size="sm" onClick={() => openBuildingUnitsView(building)}>View</Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -520,6 +645,9 @@ export default function BuildingsUnits() {
         isOpen={showImport}
         onClose={() => setShowImport(false)}
         moduleType={importType}
+        portfolioId={portfolioFilter !== "all" ? portfolioFilter : undefined}
+        propertyId={propertyFilter !== "all" ? propertyFilter : undefined}
+        buildingId={activeBuilding?.id || undefined}
       />
 
       <DeleteConfirmDialog
