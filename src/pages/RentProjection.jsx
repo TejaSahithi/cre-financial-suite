@@ -14,13 +14,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ALL_PROPERTIES = "__all__";
 
 export default function RentProjection() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
-  const initProperty = urlParams.get("property") || "";
+  const initProperty = urlParams.get("property") || ALL_PROPERTIES;
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
   const currentYear = new Date().getFullYear();
+  const selectedPropertyId = selectedProperty === ALL_PROPERTIES ? null : selectedProperty;
 
   const { data: properties = [] } = useQuery({
     queryKey: ["properties-rent"],
@@ -29,7 +31,7 @@ export default function RentProjection() {
 
   const { snapshot, outputs, isLoading, isFetching, refetch } = useSnapshotQuery({
     engineType: "lease",
-    propertyId: selectedProperty || null,
+    propertyId: selectedPropertyId,
     fiscalYear: currentYear,
   });
 
@@ -66,12 +68,16 @@ export default function RentProjection() {
       toast.error("Select a property first");
       return;
     }
+    if (!selectedPropertyId) {
+      toast.error("Select a property first");
+      return;
+    }
 
     try {
       await triggerCompute(
         "compute-lease",
         {
-          property_id: selectedProperty,
+          property_id: selectedPropertyId,
           fiscal_year: currentYear,
         },
         {
@@ -106,7 +112,7 @@ export default function RentProjection() {
               <SelectValue placeholder="All Properties" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Properties</SelectItem>
+              <SelectItem value={ALL_PROPERTIES}>All Properties</SelectItem>
               {properties.map((property) => (
                 <SelectItem key={property.id} value={property.id}>
                   {property.name}
@@ -117,10 +123,10 @@ export default function RentProjection() {
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
           </Button>
-          <Button
+            <Button
             size="sm"
             onClick={handleTriggerCompute}
-            disabled={isTriggering || !selectedProperty}
+            disabled={isTriggering || !selectedPropertyId}
             className="bg-[#1a2744] hover:bg-[#243b67]"
           >
             {isTriggering ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
