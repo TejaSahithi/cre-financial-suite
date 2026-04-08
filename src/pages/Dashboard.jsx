@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Building2, DollarSign, TrendingUp, BarChart3, Users } from "lucide-react";
@@ -30,13 +30,42 @@ export default function Dashboard() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: camCalcs = [] } = useOrgQuery("CAMCalculation");
 
+  const availablePortfolioIds = useMemo(
+    () => new Set(portfolios.map((portfolio) => portfolio.id)),
+    [portfolios]
+  );
+
+  const portfolioBackedProperties = useMemo(
+    () =>
+      properties.filter(
+        (property) => property.portfolio_id && availablePortfolioIds.has(property.portfolio_id)
+      ),
+    [properties, availablePortfolioIds]
+  );
+
+  const dashboardPortfolios = useMemo(
+    () =>
+      selectedPortfolio === "all"
+        ? portfolios
+        : portfolios.filter((portfolio) => portfolio.id === selectedPortfolio),
+    [portfolios, selectedPortfolio]
+  );
+
+  useEffect(() => {
+    if (selectedPortfolio !== "all" && !availablePortfolioIds.has(selectedPortfolio)) {
+      setSelectedPortfolio("all");
+    }
+  }, [selectedPortfolio, availablePortfolioIds]);
+
   // Portfolio filter
-  const fp = selectedPortfolio === "all" ? properties : properties.filter(p => p.portfolio_id === selectedPortfolio);
+  const fp = selectedPortfolio === "all"
+    ? portfolioBackedProperties
+    : portfolioBackedProperties.filter((property) => property.portfolio_id === selectedPortfolio);
   const fpIds = new Set(fp.map(p => p.id));
-  const fl = selectedPortfolio === "all" ? leases : leases.filter(l => fpIds.has(l.property_id));
-  const fe = selectedPortfolio === "all" ? expenses : expenses.filter(e => fpIds.has(e.property_id));
-  const fb = selectedPortfolio === "all" ? budgets : budgets.filter(b => fpIds.has(b.property_id));
-  const fc = selectedPortfolio === "all" ? camCalcs : camCalcs.filter(c => fpIds.has(c.property_id));
+  const fl = leases.filter((lease) => fpIds.has(lease.property_id));
+  const fe = expenses.filter((expense) => fpIds.has(expense.property_id));
+  const fb = budgets.filter((budget) => fpIds.has(budget.property_id));
+  const fc = camCalcs.filter((calc) => fpIds.has(calc.property_id));
 
   // Computations
   const totalSF = fp.reduce((s, p) => s + (p.total_sf || 0), 0);
@@ -157,7 +186,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KPICard icon={Building2} label="Portfolio Value" value={totalSF > 0 ? totalSF * 250 : null} change={3.7} changeLabel="YoY Value Growth" color="blue" drillPage="Properties"
           secondaryMetrics={[{ label: "Properties", value: fp.length }, { label: "Total SF", value: `${(totalSF / 1000).toFixed(0)}K` }]}
-          insight={`${fp.length} properties totaling ${(totalSF / 1000).toFixed(0)}K SF across ${portfolios.length} portfolios. Estimated at $250/SF.`}
+          insight={`${fp.length} properties totaling ${(totalSF / 1000).toFixed(0)}K SF across ${dashboardPortfolios.length} portfolios. Estimated at $250/SF.`}
           breakdown={fp.map(p => ({ label: p.name, sub: `${p.city || ''} ${p.state || ''} · ${((p.total_sf || 0) / 1000).toFixed(0)}K SF`, value: (p.total_sf || 0) * 250, pct: totalSF > 0 ? (p.total_sf || 0) / totalSF * 100 : 0, link: `/PropertyDetail?id=${p.id}` }))}
         />
         <KPICard icon={TrendingUp} label="Revenue" value={totalRevenue || null} change={revChange} changeLabel="YoY Revenue Growth" color="emerald" drillPage="Revenue"
@@ -200,7 +229,7 @@ export default function Dashboard() {
 
       {/* Bottom: Portfolios + Alerts + Activity */}
       <div className="grid lg:grid-cols-3 gap-3">
-        <PortfolioSummary portfolios={portfolios} properties={properties} />
+        <PortfolioSummary portfolios={portfolios} properties={portfolioBackedProperties} />
         <AlertsPanel />
         <ActivityFeed />
       </div>

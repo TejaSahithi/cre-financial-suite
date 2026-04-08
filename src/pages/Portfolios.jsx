@@ -150,21 +150,30 @@ export default function Portfolios() {
     ? portfolios
     : portfolios.filter((portfolio) => portfolio.org_id === selectedOrgId);
 
-  const visibleProperties = selectedOrgId === "all"
+  const orgProperties = selectedOrgId === "all"
     ? properties
     : properties.filter((property) => property.org_id === selectedOrgId);
 
-  const visibleBuildings = selectedOrgId === "all"
+  const orgBuildings = selectedOrgId === "all"
     ? buildings
     : buildings.filter((building) => building.org_id === selectedOrgId);
 
-  const visibleUnits = selectedOrgId === "all"
+  const orgUnits = selectedOrgId === "all"
     ? units
     : units.filter((unit) => unit.org_id === selectedOrgId);
 
-  const visibleLeases = selectedOrgId === "all"
+  const orgLeases = selectedOrgId === "all"
     ? leases
     : leases.filter((lease) => lease.org_id === selectedOrgId);
+
+  const visiblePortfolioIds = new Set(visiblePortfolios.map((portfolio) => portfolio.id));
+  const visibleProperties = orgProperties.filter(
+    (property) => property.portfolio_id && visiblePortfolioIds.has(property.portfolio_id)
+  );
+  const visiblePropertyIds = new Set(visibleProperties.map((property) => property.id));
+  const visibleBuildings = orgBuildings.filter((building) => visiblePropertyIds.has(building.property_id));
+  const visibleUnits = orgUnits.filter((unit) => visiblePropertyIds.has(unit.property_id));
+  const visibleLeases = orgLeases.filter((lease) => visiblePropertyIds.has(lease.property_id));
 
   const enriched = visiblePortfolios.map((portfolio) => {
     const portProperties = visibleProperties.filter((property) => property.portfolio_id === portfolio.id);
