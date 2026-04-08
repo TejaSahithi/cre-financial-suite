@@ -665,6 +665,40 @@ function matchTextValue(text, pattern) {
   return sanitizeTextValue(text.match(pattern)?.[1] ?? null);
 }
 
+function matchFirstTextValue(text, patterns) {
+  for (const pattern of patterns) {
+    const value = matchTextValue(text, pattern);
+    if (value) return value;
+  }
+  return null;
+}
+
+function extractLeaseTermRange(text) {
+  const explicitRange =
+    text.match(/^\s*(?:lease term|term|lease period)\s*:\s*(.+?)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(.+)\s*$/im) ||
+    text.match(/\b(?:lease term|term|lease period)\b\s*[:\-]\s*(.+?)\s*(?:-|–|—|\bto\b|\bthrough\b)\s*(.+?)(?:\n|$)/i);
+
+  if (explicitRange?.[1] && explicitRange?.[2]) {
+    return {
+      startDate: toDate(sanitizeTextValue(explicitRange[1])),
+      endDate: toDate(sanitizeTextValue(explicitRange[2])),
+    };
+  }
+
+  const genericRange = text.match(
+    /\b([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})\s*(?:-|–|—|\bto\b|\bthrough\b)\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})/i
+  );
+
+  if (genericRange?.[1] && genericRange?.[2]) {
+    return {
+      startDate: toDate(sanitizeTextValue(genericRange[1])),
+      endDate: toDate(sanitizeTextValue(genericRange[2])),
+    };
+  }
+
+  return { startDate: null, endDate: null };
+}
+
 function normalizeLeaseTypeLabel(value) {
   if (!value) return null;
   const leaseType = String(value).toLowerCase().trim();
@@ -678,29 +712,83 @@ function normalizeLeaseTypeLabel(value) {
 }
 
 function parseLeaseText(text) {
-  const tenantName = matchTextValue(text, /^\s*(?:tenant|tenant name|lessee|occupant)\s*:\s*(.+)\s*$/im);
+  const tenantName = matchFirstTextValue(text, [
+    /^\s*(?:tenant|tenant name|lessee|occupant)\s*:\s*(.+)\s*$/im,
+    /\b(?:tenant|tenant name|lessee|occupant)\b\s*:\s*([^\n\r]+)/i,
+  ]);
   const leaseType = normalizeLeaseTypeLabel(
-    matchTextValue(text, /^\s*(?:lease type|type|lease structure)\s*:\s*(.+)\s*$/im) ||
+    matchFirstTextValue(text, [
+      /^\s*(?:lease type|type|lease structure)\s*:\s*(.+)\s*$/im,
+      /\b(?:lease type|type|lease structure)\b\s*:\s*([^\n\r]+)/i,
+    ]) ||
     matchTextValue(text, /\b(triple net|nnn|modified gross|full service|gross|double net|net)\b/i)
   );
-  const startDate = toDate(matchTextValue(text, /^\s*(?:start date|lease start|commencement date|lease commencement)\s*:\s*(.+)\s*$/im));
-  const endDate = toDate(matchTextValue(text, /^\s*(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\s*:\s*(.+)\s*$/im));
+  const leaseTermRange = extractLeaseTermRange(text);
+  const startDate =
+    toDate(matchFirstTextValue(text, [
+      /^\s*(?:start date|lease start|commencement date|lease commencement)\s*:\s*(.+)\s*$/im,
+      /\b(?:start date|lease start|commencement date|lease commencement)\b\s*:\s*([^\n\r]+)/i,
+    ])) || leaseTermRange.startDate;
+  const endDate =
+    toDate(matchFirstTextValue(text, [
+      /^\s*(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\s*:\s*(.+)\s*$/im,
+      /\b(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\b\s*:\s*([^\n\r]+)/i,
+    ])) || leaseTermRange.endDate;
   const monthlyRent = toNumber(
-    matchTextValue(text, /^\s*(?:monthly rent|rent per month|monthly base rent)\s*:\s*(.+)\s*$/im) ||
-    matchTextValue(text, /^\s*(?:base rent)\s*:\s*(.+)\s*$/im)
+    matchFirstTextValue(text, [
+      /^\s*(?:monthly rent|rent per month|monthly base rent)\s*:\s*(.+)\s*$/im,
+      /^\s*(?:base rent)\s*:\s*(.+)\s*$/im,
+      /\b(?:monthly rent|rent per month|monthly base rent|base rent)\b\s*:\s*([^\n\r]+)/i,
+    ])
   );
-  const annualRent = toNumber(matchTextValue(text, /^\s*(?:annual rent|yearly rent|annual base rent)\s*:\s*(.+)\s*$/im));
-  const rentPerSf = toNumber(matchTextValue(text, /^\s*(?:rent\/sf|rent per sf|annual rent\/sf|psf)\s*:\s*(.+)\s*$/im));
-  const squareFootage = toNumber(matchTextValue(text, /^\s*(?:square footage|square feet|leased sf|leased sqft|rentable sf|sf)\s*:\s*(.+)\s*$/im));
-  const securityDeposit = toNumber(matchTextValue(text, /^\s*(?:security deposit|deposit)\s*:\s*(.+)\s*$/im));
-  const camAmount = toNumber(matchTextValue(text, /^\s*(?:cam|cam charges|cam amount|common area maintenance)\s*:\s*(.+)\s*$/im));
-  const escalationRate = toNumber(matchTextValue(text, /^\s*(?:escalation rate|escalation|annual escalation|rent escalation)\s*:\s*(.+)\s*$/im));
-  const renewalOptions = matchTextValue(text, /^\s*(?:renewal options?|option to renew)\s*:\s*(.+)\s*$/im);
-  const tiAllowance = toNumber(matchTextValue(text, /^\s*(?:ti allowance|tenant improvement allowance)\s*:\s*(.+)\s*$/im));
-  const freeRentMonths = toNumber(matchTextValue(text, /^\s*(?:free rent(?: months?)?|abatement)\s*:\s*(.+)\s*$/im));
-  const propertyName = matchTextValue(text, /^\s*(?:property|property name|building)\s*:\s*(.+)\s*$/im);
-  const propertyAddress = matchTextValue(text, /^\s*(?:property address|address|premises)\s*:\s*(.+)\s*$/im);
-  const unitNumber = matchTextValue(text, /^\s*(?:suite|suite number|unit|unit number|premises suite)\s*:\s*(.+)\s*$/im);
+  const annualRent = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:annual rent|yearly rent|annual base rent)\s*:\s*(.+)\s*$/im,
+    /\b(?:annual rent|yearly rent|annual base rent)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const rentPerSf = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:rent\/sf|rent per sf|annual rent\/sf|psf)\s*:\s*(.+)\s*$/im,
+    /\b(?:rent\/sf|rent per sf|annual rent\/sf|psf)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const squareFootage = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:square footage|square feet|leased sf|leased sqft|rentable sf|sf)\s*:\s*(.+)\s*$/im,
+    /\b(?:square footage|square feet|leased sf|leased sqft|rentable sf)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const securityDeposit = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:security deposit|deposit)\s*:\s*(.+)\s*$/im,
+    /\b(?:security deposit|deposit)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const camAmount = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:cam|cam charges|cam amount|common area maintenance)\s*:\s*(.+)\s*$/im,
+    /\b(?:cam|cam charges|cam amount|common area maintenance)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const escalationRate = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:escalation rate|escalation|annual escalation|rent escalation)\s*:\s*(.+)\s*$/im,
+    /\b(?:escalation rate|escalation|annual escalation|rent escalation)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const renewalOptions = matchFirstTextValue(text, [
+    /^\s*(?:renewal options?|option to renew)\s*:\s*(.+)\s*$/im,
+    /\b(?:renewal options?|option to renew)\b\s*:\s*([^\n\r]+)/i,
+  ]);
+  const tiAllowance = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:ti allowance|tenant improvement allowance)\s*:\s*(.+)\s*$/im,
+    /\b(?:ti allowance|tenant improvement allowance)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const freeRentMonths = toNumber(matchFirstTextValue(text, [
+    /^\s*(?:free rent(?: months?)?|abatement)\s*:\s*(.+)\s*$/im,
+    /\b(?:free rent(?: months?)?|abatement)\b\s*:\s*([^\n\r]+)/i,
+  ]));
+  const propertyName = matchFirstTextValue(text, [
+    /^\s*(?:property|property name|building)\s*:\s*(.+)\s*$/im,
+    /\b(?:property|property name|building)\b\s*:\s*([^\n\r]+)/i,
+  ]);
+  const propertyAddress = matchFirstTextValue(text, [
+    /^\s*(?:property address|address|premises)\s*:\s*(.+)\s*$/im,
+    /\b(?:property address|address|premises)\b\s*:\s*([^\n\r]+)/i,
+  ]);
+  const unitNumber = matchFirstTextValue(text, [
+    /^\s*(?:suite|suite number|unit|unit number|premises suite)\s*:\s*(.+)\s*$/im,
+    /\b(?:suite|suite number|unit|unit number|premises suite)\b\s*:\s*([^\n\r]+)/i,
+  ]);
 
   const extractedLease = {
     _row: 1,
