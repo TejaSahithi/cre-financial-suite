@@ -119,6 +119,27 @@ function isTableNotFound(err) {
   );
 }
 
+function extractMissingColumn(err) {
+  const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(' ');
+  if (!message) return null;
+
+  let match = message.match(/Could not find the '([^']+)' column/i);
+  if (match?.[1]) return match[1];
+
+  match = message.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
+  if (match?.[1]) return match[1];
+
+  return null;
+}
+
+function isMissingColumnError(err) {
+  return (
+    err?.code === 'PGRST204' ||
+    err?.code === '42703' ||
+    !!extractMissingColumn(err)
+  );
+}
+
 // ─── Per-entity column allow-lists ─────────────────────────────────────
 // These reflect the actual columns present in the Supabase tables AFTER all
 // migrations (including the bulk-import enrichment migration). Anything not
@@ -177,6 +198,10 @@ const ALLOWED_COLUMNS = {
     'property_id', 'lease_id', 'fiscal_year', 'month', 'type', 'amount', 'notes',
     // Bulk-import enrichment columns
     'date', 'tenant_name',
+  ]),
+  Invoice: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'tenant_id', 'property_id', 'amount', 'status', 'due_date', 'issued_date',
   ]),
   GLAccount: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -269,6 +294,46 @@ export function createEntityService(entityName) {
     } else if (normalized.square_footage !== undefined) {
       normalized.total_sf = normalized.square_footage;
     }
+
+    if (entityName === 'Lease') {
+      if (normalized.base_rent === undefined && normalized.monthly_rent !== undefined) {
+        normalized.base_rent = normalized.monthly_rent;
+      }
+      if (normalized.annual_rent === undefined && normalized.monthly_rent !== undefined) {
+        normalized.annual_rent = Number(normalized.monthly_rent || 0) * 12;
+      }
+      if (
+        normalized.rent_per_sf === undefined &&
+        normalized.annual_rent !== undefined &&
+        normalized.square_footage
+      ) {
+        normalized.rent_per_sf = Number(normalized.annual_rent || 0) / Number(normalized.square_footage || 1);
+      }
+    }
+
+    if (entityName === 'Invoice') {
+      if (normalized.total_amount === undefined && normalized.amount !== undefined) {
+        normalized.total_amount = normalized.amount;
+      }
+      if (normalized.billing_period === undefined && normalized.issued_date) {
+        normalized.billing_period = String(normalized.issued_date).slice(0, 7);
+      }
+      if (normalized.invoice_number === undefined && normalized.id) {
+        normalized.invoice_number = `INV-${String(normalized.id).slice(0, 8).toUpperCase()}`;
+      }
+      if (normalized.amount_paid === undefined) {
+        normalized.amount_paid = normalized.status === 'paid' ? Number(normalized.amount || 0) : 0;
+      }
+    }
+
+    if (entityName === 'Tenant') {
+      if (normalized.contact_email === undefined && normalized.email !== undefined) {
+        normalized.contact_email = normalized.email;
+      }
+      if (normalized.contact_phone === undefined && normalized.phone !== undefined) {
+        normalized.contact_phone = normalized.phone;
+      }
+    }
     
     return normalized;
   }
@@ -345,7 +410,23 @@ export function createEntityService(entityName) {
           }
           if (limit) query = query.limit(limit);
           
-          const { data, error } = await query;
+          let { data, error } = await query;
+          if (error && sortField && isMissingColumnError(error)) {
+            const fallbackSort = ['created_at', 'updated_at'].includes(sortField.replace(/^-/, ''))
+              ? null
+              : '-created_at';
+            let retry = supabase.from(tableName).select('*');
+            if (orgId && orgId !== '__none__') {
+              retry = retry.eq('org_id', orgId);
+            }
+            if (fallbackSort) {
+              const desc = fallbackSort.startsWith('-');
+              const field = desc ? fallbackSort.slice(1) : fallbackSort;
+              retry = retry.order(field, { ascending: !desc });
+            }
+            if (limit) retry = retry.limit(limit);
+            ({ data, error } = await retry);
+          }
           if (error) throw error;
           const result = normalizeFromDb(data || []);
           setCached(cacheKey, result);
@@ -471,19 +552,37 @@ export function createEntityService(entityName) {
         }
 
         if (supabase) {
-          let query = supabase.from(tableName).insert(enriched);
-          
-          // access_requests is a public form that doesn't allow SELECT for anon.
-          // We skip .select() to avoid 42501 RLS error on the response.
           const isPublicForm = tableName === 'access_requests';
-          if (!isPublicForm) {
-            query = query.select().single();
+          let payload = { ...enriched };
+          const strippedColumns = [];
+          let created = null;
+
+          while (true) {
+            let query = supabase.from(tableName).insert(payload);
+            if (!isPublicForm) {
+              query = query.select().single();
+            }
+
+            const { data: insertData, error } = await query;
+            if (!error) {
+              created = insertData;
+              break;
+            }
+
+            const missingColumn = extractMissingColumn(error);
+            if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
+              throw error;
+            }
+
+            strippedColumns.push(missingColumn);
+            delete payload[missingColumn];
           }
 
-          const { data: created, error } = await query;
-          if (error) throw error;
+          if (strippedColumns.length > 0) {
+            console.warn(`[api] ${entityName}.create() stripped unsupported columns: ${strippedColumns.join(', ')}`);
+          }
 
-          const finalRecord = isPublicForm ? { id: 'pending', ...enriched } : created;
+          const finalRecord = normalizeFromDb(isPublicForm ? { id: 'pending', ...payload } : created);
 
           // Audit
           logAudit({
@@ -600,14 +699,37 @@ export function createEntityService(entityName) {
 
         if (supabase) {
           const orgId = isOrgExempt ? null : await getCurrentOrgId();
-          let query = supabase.from(tableName).update(enriched).eq('id', id);
-          
-          if (orgId && orgId !== '__none__') {
-            query = query.eq('org_id', orgId);
+          let payload = { ...enriched };
+          const strippedColumns = [];
+          let updated = null;
+
+          while (true) {
+            let query = supabase.from(tableName).update(payload).eq('id', id);
+            
+            if (orgId && orgId !== '__none__') {
+              query = query.eq('org_id', orgId);
+            }
+
+            const { data: updateData, error } = await query.select().single();
+            if (!error) {
+              updated = updateData;
+              break;
+            }
+
+            const missingColumn = extractMissingColumn(error);
+            if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
+              throw error;
+            }
+
+            strippedColumns.push(missingColumn);
+            delete payload[missingColumn];
           }
 
-          const { data: updated, error } = await query.select().single();
-          if (error) throw error;
+          if (strippedColumns.length > 0) {
+            console.warn(`[api] ${entityName}.update() stripped unsupported columns: ${strippedColumns.join(', ')}`);
+          }
+
+          updated = normalizeFromDb(updated);
 
           logAudit({
             entityType: entityName,

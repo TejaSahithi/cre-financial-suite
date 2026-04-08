@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { tenantService } from "@/services/tenantService";
+import { supabase } from "@/services/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Link } from "react-router-dom";
@@ -18,6 +19,34 @@ import { downloadCSV } from "@/utils/index";
 import PageHeader from "@/components/PageHeader";
 import BulkImportModal from "@/components/property/BulkImportModal";
 
+async function resolveWritableOrgId(currentOrgId) {
+  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
+
+    const { data: membership } = await supabase
+      .from("memberships")
+      .select("org_id")
+      .eq("user_id", user?.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membership?.org_id) return membership.org_id;
+
+    const { data: org } = await supabase
+      .from("organizations")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    return org?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Tenants() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -33,8 +62,23 @@ export default function Tenants() {
   const { data: invoices = [] } = useOrgQuery("Invoice");
 
   const createMutation = useMutation({
-    mutationFn: (d) => tenantService.create({ ...d, org_id: orgId || "" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['tenants-entity'] }); setShowAdd(false); },
+    mutationFn: async (d) => {
+      const writableOrgId = await resolveWritableOrgId(orgId);
+      return tenantService.create({
+        name: d.name,
+        contact_name: d.contact_name,
+        email: d.contact_email,
+        phone: d.contact_phone,
+        industry: d.industry,
+        status: d.status,
+        ...(writableOrgId ? { org_id: writableOrgId } : {}),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['Tenant'] });
+      setShowAdd(false);
+      setForm({ name: "", contact_name: "", contact_email: "", contact_phone: "", industry: "", status: "active" });
+    },
   });
 
   // Build enriched tenant list from Tenant entity + lease data
@@ -43,6 +87,7 @@ export default function Tenants() {
   tenantEntities.forEach(t => {
     tenantMap[t.name] = { ...t, entityId: t.id, leases: [], units: [], properties: new Set(), totalRent: 0, invoiceCount: 0, outstandingBalance: 0 };
   });
+  const tenantNamesById = Object.fromEntries(tenantEntities.map(t => [t.id, t.name]));
   // Enrich from leases
   leases.forEach(l => {
     if (!l.tenant_name) return;
@@ -56,10 +101,11 @@ export default function Tenants() {
   });
   // Enrich from invoices
   invoices.forEach(inv => {
-    if (tenantMap[inv.tenant_name]) {
-      tenantMap[inv.tenant_name].invoiceCount++;
+    const invoiceTenantName = inv.tenant_name || tenantNamesById[inv.tenant_id];
+    if (invoiceTenantName && tenantMap[invoiceTenantName]) {
+      tenantMap[invoiceTenantName].invoiceCount++;
       if (['sent', 'partial', 'overdue'].includes(inv.status)) {
-        tenantMap[inv.tenant_name].outstandingBalance += (inv.total_amount || 0) - (inv.amount_paid || 0);
+        tenantMap[invoiceTenantName].outstandingBalance += (inv.total_amount || 0) - (inv.amount_paid || 0);
       }
     }
   });

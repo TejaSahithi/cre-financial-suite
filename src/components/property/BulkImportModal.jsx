@@ -16,7 +16,7 @@ import { extractFromFile, methodLabel, methodBadgeClass } from "@/services/docum
 import { supabase } from "@/services/supabaseClient";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
-  PropertyService, LeaseService, TenantService, GLAccountService,
+  PropertyService, LeaseService, TenantService, GLAccountService, InvoiceService,
 } from "@/services/api";
 
 // ── Service map ──────────────────────────────────────────────────────────────
@@ -24,13 +24,15 @@ const SERVICE_MAP = {
   building: BuildingService, unit: UnitService,
   revenue: RevenueService,   expense: ExpenseService,
   property: PropertyService, lease: LeaseService,
-  tenant: TenantService,     gl_account: GLAccountService, gl: GLAccountService,
+  tenant: TenantService,     invoice: InvoiceService,
+  gl_account: GLAccountService, gl: GLAccountService,
 };
 
 const MODULE_TITLES = {
   property: 'Properties', building: 'Buildings', unit: 'Units',
   lease: 'Leases', tenant: 'Tenants', revenue: 'Revenue Entries',
-  expense: 'Expenses', gl_account: 'GL Accounts', gl: 'GL Accounts',
+  expense: 'Expenses', invoice: 'Invoices',
+  gl_account: 'GL Accounts', gl: 'GL Accounts',
 };
 
 // ── All fields per module — shown in the edit grid ──────────────────────────
@@ -104,6 +106,16 @@ const MODULE_FIELDS = {
     { key: 'credit_rating',label: 'Credit Rating',required: false, placeholder: 'A+' },
     { key: 'status',       label: 'Status',       required: false, placeholder: 'active' },
     { key: 'notes',        label: 'Notes',        required: false, placeholder: '' },
+  ],
+  invoice: [
+    { key: 'tenant_name',    label: 'Tenant',       required: false, placeholder: 'Acme Corp' },
+    { key: 'property_name',  label: 'Property',     required: false, placeholder: 'Sunset Plaza' },
+    { key: 'invoice_number', label: 'Invoice #',    required: false, placeholder: 'INV-202604-001' },
+    { key: 'billing_period', label: 'Period',       required: false, placeholder: '2026-04' },
+    { key: 'issued_date',    label: 'Issued Date',  required: false, placeholder: 'YYYY-MM-DD' },
+    { key: 'due_date',       label: 'Due Date',     required: false, placeholder: 'YYYY-MM-DD' },
+    { key: 'amount',         label: 'Amount ($)',   required: true,  placeholder: '1250.00' },
+    { key: 'status',         label: 'Status',       required: false, placeholder: 'pending' },
   ],
   expense: [
     { key: 'date',          label: 'Date',           required: true,  placeholder: 'YYYY-MM-DD' },
@@ -267,6 +279,7 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       building: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
       unit:     { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage' },
       lease:    { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', leased_sf: 'square_footage' },
+      invoice:  { total_amount: 'amount', total: 'amount', amount_due: 'amount', invoice_date: 'issued_date' },
     };
     const aliases = ALIAS_MAP[moduleType] || {};
 
@@ -298,9 +311,11 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
     const f = e.target.files?.[0];
     if (!f) return;
     e.target.value = '';
+    setRows(null);
+    setMethod(null);
+    setTargetPropertyId('');
     setFile(f);
     setLoading(true);
-    reset();
 
     try {
       const result = await extractFromFile(f, moduleType);
@@ -357,6 +372,8 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
 
     setImporting(true);
     const orgId = await resolveOrgId();
+    const tenantIdCache = new Map();
+    const propertyIdCache = new Map();
     let count = 0, skipped = 0;
     const failures = [];
 
@@ -395,6 +412,38 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
         }
       });
 
+      if (moduleType === 'invoice') {
+        if (cleanData.billing_period && !cleanData.issued_date) {
+          cleanData.issued_date = `${cleanData.billing_period}-01`;
+        }
+        if (!cleanData.due_date && cleanData.issued_date) {
+          cleanData.due_date = cleanData.issued_date;
+        }
+
+        const tenantName = String(cleanData.tenant_name || '').trim();
+        if (!cleanData.tenant_id && tenantName) {
+          if (!tenantIdCache.has(tenantName)) {
+            const matches = await TenantService.filter({ name: tenantName });
+            tenantIdCache.set(tenantName, matches?.[0]?.id || null);
+          }
+          const tenantId = tenantIdCache.get(tenantName);
+          if (tenantId) cleanData.tenant_id = tenantId;
+        }
+
+        const propertyName = String(cleanData.property_name || '').trim();
+        if (!cleanData.property_id && propertyName) {
+          if (!propertyIdCache.has(propertyName)) {
+            const matches = await PropertyService.filter({ name: propertyName });
+            propertyIdCache.set(propertyName, matches?.[0]?.id || null);
+          }
+          const propertyIdMatch = propertyIdCache.get(propertyName);
+          if (propertyIdMatch) cleanData.property_id = propertyIdMatch;
+        }
+      }
+
+      delete cleanData.property_name;
+      delete cleanData.tenant_name;
+
       try {
         await service.create(cleanData);
         count++;
@@ -428,6 +477,7 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       unit:     ['Unit', 'bu-units', 'units'],
       lease:    ['Lease', 'leases-prop'],
       tenant:   ['Tenant'],
+      invoice:  ['Invoice', 'invoices'],
       revenue:  ['Revenue'],
       expense:  ['Expense', 'expenses-prop'],
       gl_account: ['GLAccount'],

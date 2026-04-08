@@ -30,9 +30,8 @@ export default function TenantDetail() {
   });
 
   const { data: invoices = [] } = useQuery({
-    queryKey: ['tenant-invoices', tenantName],
-    queryFn: () => InvoiceService.filter({ tenant_name: tenantName }),
-    enabled: !!tenantName,
+    queryKey: ['tenant-invoices'],
+    queryFn: () => InvoiceService.list('-created_at'),
   });
 
   const { data: tenantEntities = [] } = useQuery({
@@ -42,9 +41,10 @@ export default function TenantDetail() {
   });
 
   const tenantEntity = tenantEntities[0];
+  const tenantInvoices = tenantEntity?.id ? invoices.filter(inv => inv.tenant_id === tenantEntity.id) : [];
 
   const activeLeases = leases.filter(l => l.status !== 'expired');
-  const totalRent = leases.reduce((s, l) => s + (l.annual_rent || 0), 0);
+  const totalRent = leases.reduce((s, l) => s + Number(l.annual_rent || (Number(l.monthly_rent || 0) * 12) || 0), 0);
   const totalCAM = camCalcs.reduce((s, c) => s + (c.annual_cam || 0), 0);
 
   return (
@@ -73,7 +73,7 @@ export default function TenantDetail() {
           { label: "Annual Rent", value: `$${totalRent.toLocaleString()}`, icon: DollarSign, color: "text-emerald-600 bg-emerald-50" },
           { label: "Annual CAM", value: `$${totalCAM.toLocaleString()}`, icon: Calculator, color: "text-purple-600 bg-purple-50" },
           { label: "Properties", value: new Set(leases.map(l => l.property_id)).size, icon: Building2, color: "text-amber-600 bg-amber-50" },
-          { label: "Invoices", value: invoices.length, icon: Receipt, color: "text-rose-600 bg-rose-50" },
+          { label: "Invoices", value: tenantInvoices.length, icon: Receipt, color: "text-rose-600 bg-rose-50" },
         ].map((s, i) => (
           <Card key={i}><CardContent className="p-3 flex items-center gap-2.5">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${s.color}`}><s.icon className="w-4 h-4" /></div>
@@ -100,7 +100,7 @@ export default function TenantDetail() {
           <TabsTrigger value="leases">Leases</TabsTrigger>
           <TabsTrigger value="rent">Rent Schedule</TabsTrigger>
           <TabsTrigger value="cam">CAM Charges</TabsTrigger>
-          <TabsTrigger value="invoices">Invoices ({invoices.length})</TabsTrigger>
+          <TabsTrigger value="invoices">Invoices ({tenantInvoices.length})</TabsTrigger>
           <TabsTrigger value="audit">Audit Trail</TabsTrigger>
         </TabsList>
 
@@ -196,9 +196,9 @@ export default function TenantDetail() {
                 <TableHead className="text-[11px]">DUE DATE</TableHead>
               </TableRow></TableHeader>
               <TableBody>
-                {invoices.length === 0 ? (
+                {tenantInvoices.length === 0 ? (
                   <TableRow><TableCell colSpan={5} className="text-center py-8 text-sm text-slate-400">No invoices for this tenant</TableCell></TableRow>
-                ) : invoices.map(inv => (
+                ) : tenantInvoices.map(inv => (
                   <TableRow key={inv.id}>
                     <TableCell className="font-mono text-xs">{inv.invoice_number || '—'}</TableCell>
                     <TableCell className="text-xs">{inv.billing_period}</TableCell>

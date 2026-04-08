@@ -41,10 +41,20 @@ export async function getUserOrgId(userId: string, supabaseAdmin: any): Promise<
     .select('org_id')
     .eq('user_id', userId)
     .limit(1);
-    
-  if (error || !memberships || memberships.length === 0) {
+
+  if (!error && memberships && memberships.length > 0) {
+    return memberships[0].org_id;
+  }
+
+  const { data: org, error: orgError } = await supabaseAdmin
+    .from('organizations')
+    .select('id')
+    .limit(1)
+    .maybeSingle();
+
+  if (orgError || !org?.id) {
     throw new Error('User has no organization membership');
   }
-  
-  return memberships[0].org_id;
+
+  return org.id;
 }

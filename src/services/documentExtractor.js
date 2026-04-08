@@ -21,6 +21,7 @@
 import * as parsers from "@/services/parsingEngine";
 import { normalizeAndCalculate } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 // ── Excel / SheetJS ──────────────────────────────────────────────────────────
 
@@ -57,8 +58,7 @@ async function extractPdf(file) {
   const pdfjsLib = await import("pdfjs-dist");
 
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   }
 
   const buf = await file.arrayBuffer();
@@ -95,11 +95,27 @@ async function extractPdf(file) {
 // ── Vertex AI call via Supabase Edge Function ─────────────────────────────────
 
 async function extractWithAI(rawText, moduleType, fileName) {
-  const { data, error } = await supabase.functions.invoke("extract-document-fields", {
-    body: { moduleType, rawText, fileName },
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error("AI extraction requires an authenticated session.");
+  }
+
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const res = await fetch(`${supabaseUrl}/functions/v1/extract-document-fields`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${session.access_token}`,
+      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ moduleType, rawText, fileName }),
   });
 
-  if (error) throw new Error(`AI extraction failed: ${error.message}`);
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(`AI extraction failed: ${data?.error || data?.message || res.statusText}`);
+  }
   if (data?.error) throw new Error(`AI extraction error: ${data.error}`);
   if (!data?.rows || data.rows.length === 0) {
     throw new Error(
