@@ -141,6 +141,19 @@ export default function BuildingsUnits() {
     });
   }, [activeBuilding, scopedUnits, search]);
 
+  const displayBuildingCount = activeBuilding ? 1 : scopedBuildings.length;
+  const displayUnitCount = activeBuilding ? filteredUnits.length : totalUnits;
+  const displayLeasedCount = activeBuilding
+    ? filteredUnits.filter((unit) => unit.occupancy_status === "leased").length
+    : leasedUnits;
+  const displayVacantCount = activeBuilding
+    ? filteredUnits.filter((unit) => unit.occupancy_status === "vacant").length
+    : vacantUnits;
+  const displayTotalSF = activeBuilding
+    ? (activeBuilding.total_sf || activeBuilding.total_sqft || 0)
+    : totalSF;
+  const activeImportType = activeBuilding ? "unit" : "building";
+
   const totalUnits = scopedUnits.length;
   const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
   const vacantUnits = scopedUnits.filter((unit) => unit.occupancy_status === "vacant").length;
@@ -266,13 +279,13 @@ export default function BuildingsUnits() {
         iconColor="from-purple-500 to-purple-700"
       >
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(scopedBuildings, "buildings.csv")}>
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(activeBuilding ? filteredUnits : scopedBuildings, activeBuilding ? "units.csv" : "buildings.csv")}>
             <Download className="w-4 h-4 mr-1 text-slate-500" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={() => { setImportType("building"); setShowImport(true); }}>
+          <Button variant="outline" size="sm" onClick={() => { setImportType(activeImportType); setShowImport(true); }}>
             <Upload className="w-4 h-4 mr-1" />
-            Import
+            {activeBuilding ? "Import Units" : "Import"}
           </Button>
           <Button
             variant="outline"
@@ -291,11 +304,11 @@ export default function BuildingsUnits() {
       </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Buildings" value={scopedBuildings.length} icon={Building2} color="bg-purple-50 text-purple-600" />
-        <MetricCard label="Total Units" value={totalUnits} icon={DoorOpen} color="bg-blue-50 text-blue-600" />
-        <MetricCard label="Leased" value={leasedUnits} icon={Users} color="bg-emerald-50 text-emerald-600" />
-        <MetricCard label="Vacant" value={vacantUnits} icon={Layers} color="bg-amber-50 text-amber-600" />
-        <MetricCard label="Total SF" value={`${(totalSF / 1000).toFixed(0)}K`} icon={Home} color="bg-slate-100 text-slate-600" />
+        <MetricCard label="Buildings" value={displayBuildingCount} icon={Building2} color="bg-purple-50 text-purple-600" />
+        <MetricCard label="Total Units" value={displayUnitCount} icon={DoorOpen} color="bg-blue-50 text-blue-600" />
+        <MetricCard label="Leased" value={displayLeasedCount} icon={Users} color="bg-emerald-50 text-emerald-600" />
+        <MetricCard label="Vacant" value={displayVacantCount} icon={Layers} color="bg-amber-50 text-amber-600" />
+        <MetricCard label="Total SF" value={`${(displayTotalSF / 1000).toFixed(0)}K`} icon={Home} color="bg-slate-100 text-slate-600" />
       </div>
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
