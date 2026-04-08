@@ -43,7 +43,7 @@ export default function BuildingsUnits() {
   const totalUnits = units.length;
   const leasedUnits = units.filter(u => u.occupancy_status === "leased").length;
   const vacantUnits = units.filter(u => u.occupancy_status === "vacant").length;
-  const totalSF = buildings.reduce((s, b) => s + (b.total_sqft || 0), 0);
+  const totalSF = buildings.reduce((s, b) => s + (b.total_sf || 0), 0);
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -105,7 +105,7 @@ export default function BuildingsUnits() {
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
-                      { label: "SF", value: `${((b.total_sqft || 0) / 1000).toFixed(0)}K` },
+                      { label: "SF", value: `${((b.total_sf || 0) / 1000).toFixed(0)}K` },
                       { label: "Floors", value: b.floors || 1 },
                       { label: "Leased", value: leased },
                       { label: "Vacant", value: vacant },
@@ -154,7 +154,7 @@ export default function BuildingsUnits() {
                     <p className="text-xs text-slate-400 truncate">{getPropertyName(b.property_id)}</p>
                   </div>
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
-                    <div className="text-center"><p className="font-bold text-sm">{((b.total_sqft || 0) / 1000).toFixed(0)}K</p><p className="text-slate-400">SF</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{((b.total_sf || 0) / 1000).toFixed(0)}K</p><p className="text-slate-400">SF</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{b.floors || 1}</p><p className="text-slate-400">Floors</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{bUnits.length}</p><p className="text-slate-400">Units</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{leased}</p><p className="text-slate-400">Leased</p></div>
@@ -200,7 +200,7 @@ export default function BuildingsUnits() {
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-slate-600">{getPropertyName(b.property_id)}</TableCell>
-                    <TableCell className="text-sm font-mono">{(b.total_sqft || 0).toLocaleString()}</TableCell>
+                    <TableCell className="text-sm font-mono">{(b.total_sf || 0).toLocaleString()}</TableCell>
                     <TableCell className="text-sm">{b.floors || 1}</TableCell>
                     <TableCell className="text-sm">{b.year_built || "—"}</TableCell>
                     <TableCell className="text-sm font-medium">{bUnits.length}</TableCell>

@@ -22,12 +22,11 @@ export default function Leases() {
   const { data: leases = [], isLoading } = useOrgQuery("Lease");
 
   const statusColors = {
-    draft: "bg-slate-100 text-slate-600",
-    extracted: "bg-blue-100 text-blue-700",
-    validated: "bg-amber-100 text-amber-700",
-    budget_ready: "bg-emerald-100 text-emerald-700",
-    expired: "bg-red-100 text-red-700"
+    expired: "bg-red-100 text-red-700",
+    new: "bg-slate-100 text-slate-600"
   };
+
+  const getStatusColor = (status) => statusColors[status] || "bg-slate-100 text-slate-600";
 
   const filtered = leases.filter(l => {
     const matchSearch = l.tenant_name?.toLowerCase().includes(search.toLowerCase());
@@ -115,8 +114,13 @@ export default function Leases() {
                 const daysLeft = l.end_date ? differenceInDays(new Date(l.end_date), new Date()) : null;
                 return (
                   <TableRow key={l.id} className="hover:bg-slate-50">
-                    <TableCell className="text-sm font-medium text-slate-900">{l.tenant_name}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{l.unit_number || l.unit_id?.substring(0, 8) || '—'}</TableCell>
+                    <TableCell className="text-sm font-medium text-slate-900">{l.tenant_name || '—'}</TableCell>
+                    <TableCell className="text-sm text-slate-600">
+                      {/* Safety check to ensure unit_number isn't a lease type */}
+                      {l.unit_number && !['triple_net', 'gross', 'nNN', 'modified_gross'].includes(l.unit_number.toLowerCase()) 
+                        ? l.unit_number 
+                        : (l.unit_id_code || (l.unit_id && l.unit_id.length > 8 ? l.unit_id.substring(0, 8) : l.unit_id) || '—')}
+                    </TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{l.lease_type}</Badge></TableCell>
                     <TableCell className="text-sm">{l.start_date || '—'}</TableCell>
                     <TableCell className="text-sm">
@@ -129,8 +133,8 @@ export default function Leases() {
                     </TableCell>
                     <TableCell className="text-sm font-mono">${l.rent_per_sf?.toFixed(2) || '—'}</TableCell>
                     <TableCell className="text-sm font-mono">${l.annual_rent?.toLocaleString() || '—'}</TableCell>
-                    <TableCell className="text-sm font-mono">${l.cam_per_month?.toLocaleString() || '—'}</TableCell>
-                    <TableCell><Badge className={`${statusColors[l.status]} text-[10px] uppercase`}>{l.status?.replace('_', '-')}</Badge></TableCell>
+                    <TableCell className="text-sm font-mono">${(l.cam_per_month || 0).toLocaleString()}</TableCell>
+                    <TableCell><Badge className={`${getStatusColor(l.status)} text-[10px] uppercase whitespace-nowrap`}>{l.status?.replace('_', '-') || 'NEW'}</Badge></TableCell>
                     <TableCell>
                       {l.confidence_score ? (
                         <div className="flex items-center gap-1.5">
