@@ -309,15 +309,11 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
     if (!canImport) return;
 
     setImporting(true);
-    // Resolve org_id fresh — bypasses any stale cache
     const orgId = await resolveOrgId();
-
     let count = 0, skipped = 0;
 
     for (const row of rows) {
       const { _row, ...data } = row;
-
-      // Inject context fields
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       
       if (orgId) data.org_id = orgId;
@@ -338,35 +334,11 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
         }
       }
 
-      // ── Strip UI-only and relational aliases to prevent DB schema conflicts ──
-      const fieldsToStrip = [
-        'property_name', 
-        'building_name', 
-        'unit_id_code', 
-        'property_id_code', 
-        'square_feet', 
-        'leased_sf',
-        'sqft'
-      ];
-      
-      // 'tenant_name' is ONLY valid for Leases. Strip for other modules.
-      if (moduleType !== 'lease') {
-        fieldsToStrip.push('tenant_name');
-      }
-
-      // 'total_sf' is valid for Property, Building, and Lease. 
-      // Strip for Units (which use square_footage).
-      if (moduleType === 'unit') {
-        fieldsToStrip.push('total_sf');
-      }
-
       // ── Apply Cleanup ──────────────────────────────────────────────────
       const cleanData = { ...data };
       delete cleanData.id;    // Always fresh UUID from service
       delete cleanData._row;  // UI-only index
       
-      fieldsToStrip.forEach(key => delete cleanData[key]);
-
       // Strip empty values to avoid DB schema constraint violations
       Object.keys(cleanData).forEach(k => {
         if (cleanData[k] === null || cleanData[k] === undefined || cleanData[k] === '') {
