@@ -17,6 +17,8 @@ import {
 import { PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useAuth } from "@/lib/AuthContext";
+import { clearCache } from "@/services/api";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,6 +70,37 @@ async function resolveWritableOrgId(currentOrgId) {
   }
 }
 
+async function ensureCreatorPortfolioAccess({ portfolioId, orgId, user }) {
+  if (!portfolioId || !orgId || !user || user._raw_role === "super_admin") return;
+
+  const { data: existingGrant, error: existingGrantError } = await supabase
+    .from("user_access")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("org_id", orgId)
+    .eq("scope", "portfolio")
+    .eq("scope_id", portfolioId)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingGrantError) throw existingGrantError;
+  if (existingGrant?.id) return;
+
+  const { error: grantError } = await supabase
+    .from("user_access")
+    .insert({
+      user_id: user.id,
+      org_id: orgId,
+      scope: "portfolio",
+      scope_id: portfolioId,
+      role: "manager",
+      is_active: true,
+    });
+
+  if (grantError) throw grantError;
+}
+
 export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
@@ -90,6 +123,7 @@ export default function Portfolios() {
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data: portfolios = [], isLoading, orgId, isAdmin } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -130,13 +164,26 @@ export default function Portfolios() {
   const createMutation = useMutation({
     mutationFn: async (data) => {
       const writableOrgId = data.org_id || await resolveWritableOrgId(orgId);
-      return PortfolioService.create({
+      const created = await PortfolioService.create({
         ...data,
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
       });
+
+      await ensureCreatorPortfolioAccess({
+        portfolioId: created?.id,
+        orgId: created?.org_id || writableOrgId,
+        user,
+      });
+
+      return created;
     },
     onSuccess: (data) => {
+      clearCache();
       queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["Property"] });
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      queryClient.invalidateQueries({ queryKey: ["Lease"] });
       setShowCreate(false);
       setForm(defaultForm);
       if (data?.org_id) {
