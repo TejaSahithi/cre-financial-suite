@@ -45,6 +45,7 @@ const MODULE_FIELDS = {
     { key: 'property_type',  label: 'Type',            required: false, placeholder: 'office / retail / industrial…' },
     { key: 'total_sf',       label: 'Total SF',        required: false, placeholder: '50000' },
     { key: 'total_units',    label: 'Units',           required: false, placeholder: '10' },
+    { key: 'floors',         label: 'Floors',          required: false, placeholder: '5' },
     { key: 'year_built',     label: 'Year Built',      required: false, placeholder: '1998' },
     { key: 'status',         label: 'Status',          required: false, placeholder: 'active' },
     { key: 'purchase_price', label: 'Purchase Price',  required: false, placeholder: '5000000' },
@@ -52,6 +53,7 @@ const MODULE_FIELDS = {
     { key: 'noi',            label: 'NOI (Annual)',     required: false, placeholder: '350000' },
     { key: 'cap_rate',       label: 'Cap Rate %',      required: false, placeholder: '5.5' },
     { key: 'manager',        label: 'Property Manager',required: false, placeholder: 'Manager name' },
+    { key: 'owner',          label: 'Owner',           required: false, placeholder: 'Owner / entity' },
     { key: 'notes',          label: 'Notes',           required: false, placeholder: 'Additional info…' },
   ],
   building: [
@@ -81,13 +83,14 @@ const MODULE_FIELDS = {
     { key: 'monthly_rent',     label: 'Monthly Rent',   required: false, placeholder: '5000' },
     { key: 'annual_rent',      label: 'Annual Rent',    required: false, placeholder: '60000' },
     { key: 'rent_per_sf',      label: 'Rent/SF (ann.)', required: false, placeholder: '25.00' },
-    { key: 'total_sf',         label: 'Total SF',      required: false, placeholder: '2400' },
+    { key: 'square_footage',   label: 'Leased SF',      required: false, placeholder: '2400' },
     { key: 'lease_type',       label: 'Lease Type',     required: false, placeholder: 'nnn / gross / modified_gross' },
     { key: 'security_deposit', label: 'Security Dep.',  required: false, placeholder: '10000' },
     { key: 'cam_amount',       label: 'CAM (Annual)',   required: false, placeholder: '5000' },
     { key: 'escalation_rate',  label: 'Escalation %',  required: false, placeholder: '3' },
     { key: 'renewal_options',  label: 'Renewal Options',required: false, placeholder: '2×5yr options' },
     { key: 'ti_allowance',     label: 'TI Allowance',  required: false, placeholder: '25000' },
+    { key: 'free_rent_months', label: 'Free Rent (mo.)',required: false, placeholder: '2' },
     { key: 'status',           label: 'Status',         required: false, placeholder: 'active' },
     { key: 'notes',            label: 'Notes',          required: false, placeholder: '' },
   ],
@@ -210,6 +213,10 @@ const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onCh
 });
 EditableCell.displayName = 'EditableCell';
 
+// Modules whose DB row REQUIRES a property_id (NOT NULL FK).
+// When no propertyId context is provided, the user must pick one in the modal.
+const REQUIRES_PROPERTY = new Set(['building', 'unit']);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,32 +228,70 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
   // rows: array of plain objects keyed by field key
   const [rows, setRows]       = useState(null);
   const [method, setMethod]   = useState(null);
+  // Target property selected inside the modal (only used when no contextual propertyId)
+  const [targetPropertyId, setTargetPropertyId] = useState('');
+  const [propertyOptions, setPropertyOptions] = useState([]);
 
   const title   = MODULE_TITLES[moduleType] || moduleType;
   const service = SERVICE_MAP[moduleType];
   const fieldDefs = MODULE_FIELDS[moduleType] ?? [];
   const requiredFields = fieldDefs.filter(f => f.required).map(f => f.key);
 
-  const reset = () => { setRows(null); setFile(null); setMethod(null); };
+  // The property_id we'll attach to each row (context wins over modal selection)
+  const effectivePropertyId = propertyId || targetPropertyId || null;
+  const needsPropertyPick = REQUIRES_PROPERTY.has(moduleType) && !propertyId;
+
+  // Load property options for the in-modal picker (only when needed)
+  useEffect(() => {
+    if (!isOpen || !needsPropertyPick) return;
+    let cancelled = false;
+    PropertyService.list().then(list => {
+      if (cancelled) return;
+      setPropertyOptions(Array.isArray(list) ? list : []);
+    }).catch(() => { if (!cancelled) setPropertyOptions([]); });
+    return () => { cancelled = true; };
+  }, [isOpen, needsPropertyPick]);
+
+  const reset = () => { setRows(null); setFile(null); setMethod(null); setTargetPropertyId(''); };
 
   // ── Merge extracted rows with full field template ─────────────────────────
   const buildRows = useCallback((extractedRows) => {
     const defaultRow = Object.fromEntries(fieldDefs.map(f => [f.key, null]));
     const allowedKeys = new Set(fieldDefs.map(f => f.key));
-    
+
+    // Per-module key aliases — normalize alternative names the AI / CSV may
+    // produce so they map to our canonical MODULE_FIELDS key before the
+    // strict filter below would otherwise drop them.
+    const ALIAS_MAP = {
+      property: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
+      building: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
+      unit:     { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage' },
+      lease:    { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', leased_sf: 'square_footage' },
+    };
+    const aliases = ALIAS_MAP[moduleType] || {};
+
     return extractedRows.map((extracted, idx) => {
-      // STRICT FILTER: Only keep fields explicitly defined in MODULE_FIELDS for this specific module
+      // 1. Apply per-module aliases (without overwriting an existing canonical value)
+      const aliased = {};
+      Object.entries(extracted).forEach(([k, v]) => {
+        const targetKey = aliases[k] || k;
+        if (aliased[targetKey] === undefined || aliased[targetKey] === null) {
+          aliased[targetKey] = v;
+        }
+      });
+
+      // 2. STRICT FILTER: Only keep fields explicitly defined in MODULE_FIELDS for this specific module
       const filteredExtracted = Object.fromEntries(
-        Object.entries(extracted).filter(([k]) => allowedKeys.has(k))
+        Object.entries(aliased).filter(([k]) => allowedKeys.has(k))
       );
-      
+
       return {
         ...defaultRow,
         ...filteredExtracted,
         _row: idx + 1,
       };
     });
-  }, [fieldDefs]);
+  }, [fieldDefs, moduleType]);
 
   // ── File upload ───────────────────────────────────────────────────────────
   const handleFileUpload = async (e) => {
@@ -301,7 +346,10 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
     getRowErrors(row).map(f => `Row ${i + 1}: "${fieldDefs.find(d => d.key === f)?.label ?? f}" is required`)
   ) : [];
 
-  const canImport = rows && rows.length > 0 && allErrors.length === 0 && !importing;
+  // Block import if this module needs a property and the user hasn't picked one yet
+  const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
+
+  const canImport = rows && rows.length > 0 && allErrors.length === 0 && !importing && !missingTargetProperty;
 
   // ── Import execution ──────────────────────────────────────────────────────
   const executeImport = async () => {
@@ -310,18 +358,20 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
     setImporting(true);
     const orgId = await resolveOrgId();
     let count = 0, skipped = 0;
+    const failures = [];
 
     for (const row of rows) {
       const { _row, ...data } = row;
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      
+
       if (orgId) data.org_id = orgId;
-      
-      // If we have a context propertyId, use it if the row's property_id is missing or not a UUID
-      if (propertyId) {
+
+      // Attach property_id from context (page-level) OR modal selection.
+      // Page context wins; modal selection is the fallback.
+      if (effectivePropertyId) {
         const rowPropId = String(data.property_id || '').trim();
         if (!rowPropId || !uuidRegex.test(rowPropId)) {
-          data.property_id = propertyId;
+          data.property_id = effectivePropertyId;
         }
       }
 
@@ -349,30 +399,52 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
         await service.create(cleanData);
         count++;
       } catch (err) {
-        console.warn(`[BulkImportModal] Row ${_row} failed:`, err.message);
+        console.warn(`[BulkImportModal] Row ${_row} failed:`, err?.message || err);
+        failures.push({ row: _row, message: err?.message || String(err) });
         skipped++;
       }
     }
 
-    if (skipped > 0) {
+    if (skipped > 0 && count === 0) {
+      // Total failure — surface the first error so the user sees the actual cause
+      const first = failures[0];
+      toast.error(
+        `Import failed for all ${skipped} row${skipped > 1 ? 's' : ''}. ${first ? first.message : 'See console.'}`,
+        { duration: 8000 }
+      );
+    } else if (skipped > 0) {
       toast.warning(`Imported ${count}. ${skipped} rows failed — check console for details.`);
     } else {
       toast.success(`Successfully imported ${count} ${title}!`);
     }
 
-    // Invalidate only the affected entity queries to avoid nuking unrelated caches
-    const entityQueryKey = {
-      property: 'Property', building: 'Building', unit: 'Unit',
-      lease: 'Lease', tenant: 'Tenant', revenue: 'Revenue',
-      expense: 'Expense', gl_account: 'GLAccount', gl: 'GLAccount',
-    }[moduleType];
-    if (entityQueryKey) {
-      queryClient.invalidateQueries({ queryKey: [entityQueryKey] });
-    } else {
+    // Invalidate every consumer cache for the affected entity. We invalidate both
+    // the canonical entity key (used by useOrgQuery) AND the page-local keys used
+    // by Properties.jsx / BuildingsUnits.jsx / PropertyDetail.jsx so the lists
+    // refresh immediately after import.
+    const ENTITY_KEYS = {
+      property: ['Property', 'bu-properties', 'property'],
+      building: ['Building', 'bu-buildings', 'buildings'],
+      unit:     ['Unit', 'bu-units', 'units'],
+      lease:    ['Lease', 'leases-prop'],
+      tenant:   ['Tenant'],
+      revenue:  ['Revenue'],
+      expense:  ['Expense', 'expenses-prop'],
+      gl_account: ['GLAccount'],
+      gl:       ['GLAccount'],
+    };
+    const keys = ENTITY_KEYS[moduleType] || [];
+    if (keys.length === 0) {
       queryClient.invalidateQueries();
+    } else {
+      keys.forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
     }
     setImporting(false);
-    onClose(); reset();
+    // Only auto-close when at least one row landed; otherwise let the user
+    // see the error toast and fix the file.
+    if (count > 0) {
+      onClose(); reset();
+    }
   };
 
   const isAI = method === 'ai_gemini';
@@ -400,6 +472,37 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
 
         {/* ── Body ────────────────────────────────────────────── */}
         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
+
+          {/* Target property picker — required for buildings/units when no page context */}
+          {needsPropertyPick && (
+            <div className="mb-4 p-3 rounded-lg border border-blue-200 bg-blue-50/60">
+              <label className="block text-xs font-bold text-blue-900 mb-1.5 uppercase tracking-wide">
+                Target Property <span className="text-red-500">*</span>
+              </label>
+              <p className="text-[11px] text-blue-700/80 mb-2">
+                {moduleType === 'building'
+                  ? 'Buildings must belong to a property. Pick the parent property for these rows.'
+                  : 'Units must belong to a property. Pick the parent property for these rows.'}
+              </p>
+              <select
+                value={targetPropertyId}
+                onChange={e => setTargetPropertyId(e.target.value)}
+                className="w-full text-sm px-3 py-2 rounded border border-blue-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+              >
+                <option value="">— Select a property —</option>
+                {propertyOptions.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.address ? ` — ${p.address}` : ''}
+                  </option>
+                ))}
+              </select>
+              {propertyOptions.length === 0 && (
+                <p className="text-[11px] text-amber-700 mt-1.5">
+                  No properties found. Create a property first, then come back.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Upload Zone */}
           {!rows && !loading && (
@@ -566,6 +669,11 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
               {allErrors.length > 0 && (
                 <span className="text-[11px] text-red-600 flex-1 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3"/>Fill fields marked <span className="font-bold text-red-700">*</span> before importing
+                </span>
+              )}
+              {missingTargetProperty && allErrors.length === 0 && (
+                <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3"/>Pick a target property above before importing
                 </span>
               )}
               <Button
