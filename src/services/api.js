@@ -271,7 +271,7 @@ export function createEntityService(entityName) {
           
           const { data, error } = await query;
           if (error) throw error;
-          const result = data || [];
+          const result = normalizeFromDb(data || []);
           setCached(cacheKey, result);
           return result;
         }
@@ -338,7 +338,7 @@ export function createEntityService(entityName) {
           }
           const { data, error } = await query;
           if (error) throw error;
-          const result = data || [];
+          const result = normalizeFromDb(data || []);
           setCached(cacheKey, result);
           return result;
         }
