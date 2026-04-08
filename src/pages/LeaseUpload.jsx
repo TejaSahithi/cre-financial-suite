@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ScopeSelector from "@/components/ScopeSelector";
-import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle } from "lucide-react";
+import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle, Check, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
@@ -31,6 +31,31 @@ const EMPTY_LEASE = {
   notes: "",
   confidence_scores: {},
 };
+
+const NUMERIC_LEASE_FIELDS = new Set([
+  "monthly_rent",
+  "annual_rent",
+  "base_rent",
+  "rent_per_sf",
+  "square_footage",
+  "security_deposit",
+  "cam_amount",
+  "escalation_rate",
+  "ti_allowance",
+  "free_rent_months",
+]);
+
+const LONG_TEXT_LEASE_FIELDS = new Set(["notes", "renewal_options", "property_address"]);
+
+function coerceLeaseFieldValue(field, rawValue) {
+  const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+  if (NUMERIC_LEASE_FIELDS.has(field)) {
+    if (value === "" || value == null) return null;
+    const numericValue = Number(String(value).replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(numericValue) ? numericValue : null;
+  }
+  return value === "" ? "" : value;
+}
 
 async function resolveWritableOrgId(currentOrgId) {
   if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
@@ -73,6 +98,8 @@ export default function LeaseUpload() {
   const [extractedData, setExtractedData] = useState(null);
   const [extracting, setExtracting] = useState(false);
   const [savedLeaseId, setSavedLeaseId] = useState(null);
+  const [editingField, setEditingField] = useState(null);
+  const [draftFieldValue, setDraftFieldValue] = useState("");
   const [scopeProperty, setScopeProperty] = useState(queryPropertyId || "all");
   const [scopeBuilding, setScopeBuilding] = useState(queryBuildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(queryUnitId || "all");
@@ -171,6 +198,28 @@ export default function LeaseUpload() {
   const handleUnitChange = (value) => {
     setScopeUnit(value);
     updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
+  };
+
+  const beginFieldEdit = (field, value) => {
+    setEditingField(field);
+    setDraftFieldValue(value == null || value === false ? "" : String(value));
+  };
+
+  const cancelFieldEdit = () => {
+    setEditingField(null);
+    setDraftFieldValue("");
+  };
+
+  const saveFieldEdit = (field) => {
+    setExtractedData((prev) => ({
+      ...prev,
+      [field]: coerceLeaseFieldValue(field, draftFieldValue),
+      confidence_scores: {
+        ...(prev?.confidence_scores || {}),
+        [field]: Math.max(prev?.confidence_scores?.[field] || 85, 95),
+      },
+    }));
+    cancelFieldEdit();
   };
 
   const handleFileSelect = async (e) => {
@@ -280,7 +329,7 @@ export default function LeaseUpload() {
             {" "}
             {[selectedProperty?.name, selectedBuilding?.name, selectedUnit?.unit_number || selectedUnit?.unit_id_code]
               .filter(Boolean)
-              .join(" · ") || "No specific scope selected"}
+              .join(" Â· ") || "No specific scope selected"}
           </div>
         </CardContent>
       </Card>
@@ -368,20 +417,56 @@ export default function LeaseUpload() {
               .map(([key, value]) => (
                 <Card key={key} className="border">
                   <CardContent className="p-4 flex items-start justify-between">
-                    <div>
+                    <div className="flex-1 pr-4">
                       <div className="flex items-center gap-2">
                         <p className="text-[10px] font-semibold text-slate-500 uppercase">{key.replace(/_/g, " ")}</p>
                         <Badge className={`text-[10px] ${confidenceColor(extractedData.confidence_scores?.[key] || 85)}`}>
                           {extractedData.confidence_scores?.[key] || 85}%
                         </Badge>
                       </div>
-                      <p className="text-sm font-medium text-slate-900 mt-1">
-                        {value === true ? "Yes" : value === false ? "No" : String(value || "—")}
-                      </p>
+                      {editingField === key ? (
+                        LONG_TEXT_LEASE_FIELDS.has(key) ? (
+                          <textarea
+                            value={draftFieldValue}
+                            onChange={(e) => setDraftFieldValue(e.target.value)}
+                            className="mt-2 w-full min-h-[88px] rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            placeholder={`Enter ${key.replace(/_/g, " ")}`}
+                          />
+                        ) : (
+                          <input
+                            autoFocus
+                            value={draftFieldValue}
+                            onChange={(e) => setDraftFieldValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveFieldEdit(key);
+                              if (e.key === "Escape") cancelFieldEdit();
+                            }}
+                            className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            placeholder={`Enter ${key.replace(/_/g, " ")}`}
+                          />
+                        )
+                      ) : (
+                        <p className="text-sm font-medium text-slate-900 mt-1">
+                          {value === true ? "Yes" : value === false ? "No" : String(value || "—")}
+                        </p>
+                      )}
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <Pencil className="w-3.5 h-3.5" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      {editingField === key ? (
+                        <>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => saveFieldEdit(key)}>
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={cancelFieldEdit}>
+                            <X className="w-3.5 h-3.5 text-slate-500" />
+                          </Button>
+                        </>
+                      ) : (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => beginFieldEdit(key, value)}>
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -424,3 +509,4 @@ export default function LeaseUpload() {
     </div>
   );
 }
+
