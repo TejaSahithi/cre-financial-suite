@@ -1,22 +1,28 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { differenceInDays } from "date-fns";
-import { Upload, Search, Loader2, Download, Plus, FileText } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Upload, Search, Loader2, Download, Plus, FileText, Trash2 } from "lucide-react";
 
 import PipelineActions, { LEASE_ACTIONS } from "@/components/PipelineActions";
 import PageHeader from "@/components/PageHeader";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import ScopeSelector from "@/components/ScopeSelector";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createPageUrl, downloadCSV } from "@/utils";
+import { leaseService } from "@/services/leaseService";
 
 export default function Leases() {
+  const queryClient = useQueryClient();
   const location = useLocation();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -24,6 +30,9 @@ export default function Leases() {
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
+  const [selectedLeaseIds, setSelectedLeaseIds] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
 
   const { data: leases = [], isLoading } = useOrgQuery("Lease");
   const { data: units = [] } = useOrgQuery("Unit");
@@ -48,6 +57,10 @@ export default function Leases() {
     setScopeBuilding(scope.buildingId || "all");
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useEffect(() => {
+    setSelectedLeaseIds((prev) => prev.filter((id) => leases.some((lease) => lease.id === id)));
+  }, [leases]);
 
   const statusColors = {
     expired: "bg-red-100 text-red-700",
@@ -97,6 +110,62 @@ export default function Leases() {
   });
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
+  const allFilteredSelected = filtered.length > 0 && filtered.every((lease) => selectedLeaseIds.includes(lease.id));
+
+  const toggleLeaseSelection = (leaseId) => {
+    setSelectedLeaseIds((prev) =>
+      prev.includes(leaseId)
+        ? prev.filter((id) => id !== leaseId)
+        : [...prev, leaseId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedLeaseIds((prev) => [...new Set([...prev, ...filtered.map((lease) => lease.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filtered.map((lease) => lease.id));
+    setSelectedLeaseIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await leaseService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ["Lease"] });
+      setDeleteTarget(null);
+      setSelectedLeaseIds((prev) => prev.filter((selectedId) => selectedId !== id));
+      toast.success("Lease deleted successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete lease: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map(async (id) => {
+          const ok = await leaseService.delete(id);
+          if (!ok) throw new Error("Delete failed");
+        })
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["Lease"] });
+      setSelectedLeaseIds([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} lease${count === 1 ? "" : "s"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected leases: ${err?.message || "Unknown error"}`);
+    },
+  });
 
   const statusCounts = {
     budget_ready: selectorFilteredLeases.filter((lease) => lease.status === "budget_ready").length,
@@ -203,10 +272,32 @@ export default function Leases() {
         </div>
       </div>
 
+      {selectedLeaseIds.length > 0 && (
+        <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <span className="text-xs font-medium text-slate-600">{selectedLeaseIds.length} selected</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setSelectedLeaseIds([])}>
+              Clear
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => setShowBulkDelete(true)}>
+              <Trash2 className="w-4 h-4 mr-1" />
+              Delete Selected
+            </Button>
+          </div>
+        </div>
+      )}
+
       <Card>
         <Table>
           <TableHeader>
             <TableRow className="bg-slate-50">
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={allFilteredSelected}
+                  onCheckedChange={toggleSelectAllFiltered}
+                  aria-label="Select all filtered leases"
+                />
+              </TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Building</TableHead>
@@ -225,13 +316,13 @@ export default function Leases() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={13} className="text-center py-12">
+                <TableCell colSpan={14} className="text-center py-12">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
+                <TableCell colSpan={14} className="text-center py-12 text-sm text-slate-400">
                   No leases found
                 </TableCell>
               </TableRow>
@@ -323,6 +414,25 @@ export default function Leases() {
       </Card>
 
       <BulkImportModal isOpen={showImport} onClose={() => setShowImport(false)} moduleType="lease" propertyId={selectedPropertyId || undefined} buildingId={scopeBuilding !== "all" ? scopeBuilding : undefined} />
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete lease "${deleteTarget?.tenant_name || ""}"?`}
+        description="This will permanently remove the selected lease record."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedLeaseIds.length} selected lease${selectedLeaseIds.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove all selected lease records."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedLeaseIds)}
+      />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ScopeSelector from "@/components/ScopeSelector";
 import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle, Check, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -45,7 +46,27 @@ const NUMERIC_LEASE_FIELDS = new Set([
   "free_rent_months",
 ]);
 
+const DATE_LEASE_FIELDS = new Set(["start_date", "end_date"]);
 const LONG_TEXT_LEASE_FIELDS = new Set(["notes", "renewal_options", "property_address"]);
+const LEASE_FIELD_OPTIONS = {
+  lease_type: [
+    { value: "triple_net", label: "Triple Net" },
+    { value: "modified_gross", label: "Modified Gross" },
+    { value: "gross", label: "Gross" },
+    { value: "full_service", label: "Full Service" },
+    { value: "nn", label: "Double Net" },
+    { value: "net", label: "Net" },
+  ],
+};
+
+function formatLeaseFieldDisplay(field, value) {
+  if (value == null || value === "") return "—";
+  const option = LEASE_FIELD_OPTIONS[field]?.find((item) => item.value === value);
+  if (option) return option.label;
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return String(value);
+}
 
 function coerceLeaseFieldValue(field, rawValue) {
   const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
@@ -53,6 +74,9 @@ function coerceLeaseFieldValue(field, rawValue) {
     if (value === "" || value == null) return null;
     const numericValue = Number(String(value).replace(/[$,%\s,]/g, ""));
     return Number.isFinite(numericValue) ? numericValue : null;
+  }
+  if (DATE_LEASE_FIELDS.has(field)) {
+    return value === "" ? null : value;
   }
   return value === "" ? "" : value;
 }
@@ -425,7 +449,24 @@ export default function LeaseUpload() {
                         </Badge>
                       </div>
                       {editingField === key ? (
-                        LONG_TEXT_LEASE_FIELDS.has(key) ? (
+                        LEASE_FIELD_OPTIONS[key] ? (
+                          <Select
+                            value={draftFieldValue || "__empty__"}
+                            onValueChange={(nextValue) => setDraftFieldValue(nextValue === "__empty__" ? "" : nextValue)}
+                          >
+                            <SelectTrigger className="mt-2 w-full">
+                              <SelectValue placeholder={`Select ${key.replace(/_/g, " ")}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__empty__">No selection</SelectItem>
+                              {LEASE_FIELD_OPTIONS[key].map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : LONG_TEXT_LEASE_FIELDS.has(key) ? (
                           <textarea
                             value={draftFieldValue}
                             onChange={(e) => setDraftFieldValue(e.target.value)}
@@ -435,6 +476,7 @@ export default function LeaseUpload() {
                         ) : (
                           <input
                             autoFocus
+                            type={DATE_LEASE_FIELDS.has(key) ? "date" : NUMERIC_LEASE_FIELDS.has(key) ? "number" : "text"}
                             value={draftFieldValue}
                             onChange={(e) => setDraftFieldValue(e.target.value)}
                             onKeyDown={(e) => {
@@ -447,7 +489,7 @@ export default function LeaseUpload() {
                         )
                       ) : (
                         <p className="text-sm font-medium text-slate-900 mt-1">
-                          {value === true ? "Yes" : value === false ? "No" : String(value || "—")}
+                          {formatLeaseFieldDisplay(key, value)}
                         </p>
                       )}
                     </div>
