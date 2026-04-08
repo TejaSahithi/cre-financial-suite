@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Building2, Loader2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import { toast } from "sonner";
 
 export default function CreateBuildingModal({ isOpen, onClose, properties = [] }) {
   const queryClient = useQueryClient();
+  const [usePropertyAddress, setUsePropertyAddress] = useState(true);
   const [form, setForm] = useState({
     name: "",
     property_id: properties[0]?.id || "",
@@ -20,12 +22,39 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
     year_built: "",
   });
 
+  const selectedProperty = useMemo(
+    () => properties.find((property) => property.id === form.property_id) || null,
+    [properties, form.property_id]
+  );
+  const selectedPropertyAddress = [
+    selectedProperty?.address,
+    selectedProperty?.city,
+    selectedProperty?.state,
+    selectedProperty?.zip,
+  ].filter(Boolean).join(", ");
+
+  useEffect(() => {
+    if (usePropertyAddress && selectedProperty?.address) {
+      setForm((current) => ({ ...current, address: selectedProperty.address }));
+    }
+  }, [usePropertyAddress, selectedProperty?.address]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setForm((current) => ({
+      ...current,
+      property_id: properties[0]?.id || current.property_id || "",
+    }));
+    setUsePropertyAddress(true);
+  }, [isOpen, properties]);
+
   const createMutation = useMutation({
     mutationFn: (data) => BuildingService.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
       toast.success("Building created successfully.");
       onClose();
+      setUsePropertyAddress(true);
       setForm({ name: "", property_id: properties[0]?.id || "", address: "", total_sf: "", floors: "1", year_built: "" });
     },
     onError: (err) => {
@@ -73,7 +102,14 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
             <Label htmlFor="property">Property *</Label>
             <Select 
               value={form.property_id} 
-              onValueChange={v => setForm({...form, property_id: v})}
+              onValueChange={v => {
+                const nextProperty = properties.find((property) => property.id === v);
+                setForm((current) => ({
+                  ...current,
+                  property_id: v,
+                  address: usePropertyAddress && nextProperty?.address ? nextProperty.address : current.address,
+                }));
+              }}
             >
               <SelectTrigger id="property">
                 <SelectValue placeholder="Select property..." />
@@ -88,11 +124,35 @@ export default function CreateBuildingModal({ isOpen, onClose, properties = [] }
 
           <div className="space-y-1.5">
             <Label htmlFor="address">Address (Optional)</Label>
+            {selectedPropertyAddress && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={usePropertyAddress}
+                    onCheckedChange={(checked) => {
+                      const useSame = checked === true;
+                      setUsePropertyAddress(useSame);
+                      if (useSame && selectedProperty?.address) {
+                        setForm((current) => ({ ...current, address: selectedProperty.address }));
+                      }
+                    }}
+                  />
+                  <span>Use property address</span>
+                </label>
+                <span className="truncate text-slate-400">{selectedPropertyAddress}</span>
+              </div>
+            )}
             <Input 
               id="address" 
               placeholder="If different from property address" 
               value={form.address} 
-              onChange={e => setForm({...form, address: e.target.value})} 
+              onChange={e => {
+                const nextAddress = e.target.value;
+                setForm({...form, address: nextAddress});
+                if (selectedProperty?.address && nextAddress !== selectedProperty.address) {
+                  setUsePropertyAddress(false);
+                }
+              }} 
             />
           </div>
 
