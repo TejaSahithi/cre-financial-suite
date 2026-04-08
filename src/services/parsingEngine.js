@@ -879,6 +879,10 @@ export function normalizeAndCalculate(moduleType, rows) {
 // ── Per-module normalizer functions ───────────────────────────────────────────
 
 function normalizeLease(row) {
+  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  row.tenant_name       = row.tenant_name || row.tenant || row.lessee || row.occupant;
+  row.unit_number       = row.unit_number || row.suite  || row.suite_number || row.unit || row.space;
+
   // ── Type coerce all numeric fields ────────────────────────────────────────
   row.monthly_rent      = toNumber(row.monthly_rent ?? row.base_rent ?? row.monthly_base_rent);
   row.annual_rent       = toNumber(row.annual_rent  ?? row.annual_base_rent ?? row.yearly_rent);
@@ -1056,6 +1060,9 @@ function normalizeRevenue(row) {
 }
 
 function normalizeUnit(row) {
+  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
+
   row.square_footage = toNumber(row.square_footage ?? row.sqft ?? row.sf ?? row.area ?? row.total_sqft);
   row.floor          = toNumber(row.floor ?? row.floor_number ?? row.level);
   row.monthly_rent   = toNumber(row.monthly_rent ?? row.asking_rent ?? row.rent);
