@@ -13,6 +13,18 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
     ? units.filter(u => u.property_id === selectedProperty)
     : units;
 
+  const visibleUnits =
+    selectedBuilding && selectedBuilding !== "all" && filteredUnits.length === 0
+      ? units
+      : filteredUnits;
+
+  const getUnitLabel = (unit) =>
+    unit.unit_number ||
+    unit.unit_id_code ||
+    unit.name ||
+    unit.suite ||
+    (unit.id ? `Unit ${String(unit.id).slice(0, 8)}` : "Unnamed Unit");
+
   return (
     <div className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-xl p-2">
       <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider px-2">
@@ -43,14 +55,14 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
         </Select>
       )}
 
-      {showUnit && selectedBuilding && selectedBuilding !== "all" && filteredUnits.length > 0 && (
+      {showUnit && selectedBuilding && selectedBuilding !== "all" && visibleUnits.length > 0 && (
         <Select value={selectedUnit || "all"} onValueChange={(v) => { if (onUnitChange) onUnitChange(v); }}>
           <SelectTrigger className="w-40 h-9 text-sm border-slate-200 bg-slate-50">
             <SelectValue placeholder="All Units" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Units</SelectItem>
-            {filteredUnits.map(u => <SelectItem key={u.id} value={u.id}>{u.unit_id_code}</SelectItem>)}
+            {visibleUnits.map(u => <SelectItem key={u.id} value={u.id}>{getUnitLabel(u)}</SelectItem>)}
           </SelectContent>
         </Select>
       )}
