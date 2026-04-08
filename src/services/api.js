@@ -70,10 +70,9 @@ export async function getCurrentOrgId() {
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
-// Only super-admin bypasses fine-grained portfolio/property scope.
-// Org users, including org_admin, must respect explicit `user_access` grants
-// so organizations can isolate visibility by portfolio and property.
-const ACCESS_BYPASS_ROLES = new Set(['super_admin']);
+// Super-admin and org-admin keep full visibility within their org by default.
+// Scoped portfolio/property restrictions are applied to non-admin org users.
+const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
 
 async function getCurrentCacheScopeKey() {
   try {
