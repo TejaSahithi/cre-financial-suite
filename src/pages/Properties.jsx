@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -34,28 +35,55 @@ export default function Properties() {
   const [viewMode, setViewMode] = useState("details");
   const [structureFilter, setStructureFilter] = useState("all");
   const [verifyingAddress, setVerifyingAddress] = useState(false);
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState(portfolioId || "all");
+  const [selectedPropertyIds, setSelectedPropertyIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
 
   const buildDefaultForm = () => ({
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
     total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
-    portfolio_id: portfolioId || ""
+    portfolio_id: selectedPortfolioId !== "all" ? selectedPortfolioId : ""
   });
   const defaultForm = buildDefaultForm();
   const [form, setForm] = useState(defaultForm);
 
-  const { data: properties = [], isLoading, orgId } = useOrgQuery("Property");
+  const { data: properties = [], isLoading, orgId, isAdmin } = useOrgQuery("Property");
   const { orgId: currentOrgId } = useOrgId();
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
-  const activePortfolio = portfolioId ? portfolios.find((portfolio) => portfolio.id === portfolioId) : null;
+  const activePortfolioId = selectedPortfolioId !== "all" ? selectedPortfolioId : null;
+  const activePortfolio = activePortfolioId ? portfolios.find((portfolio) => portfolio.id === activePortfolioId) : null;
+  const importPortfolioId = activePortfolioId || (portfolios.length === 1 ? portfolios[0].id : undefined);
+  const noPortfolioAccess = !isLoading && portfolios.length === 0 && properties.length === 0;
 
   useEffect(() => {
-    setForm((prev) => ({ ...prev, portfolio_id: portfolioId || "" }));
+    setSelectedPortfolioId(portfolioId || "all");
   }, [portfolioId]);
+
+  useEffect(() => {
+    if (selectedPortfolioId !== "all" && portfolios.length > 0 && !portfolios.some((portfolio) => portfolio.id === selectedPortfolioId)) {
+      setSelectedPortfolioId("all");
+    }
+  }, [selectedPortfolioId, portfolios]);
+
+  useEffect(() => {
+    setForm((prev) => ({
+      ...prev,
+      portfolio_id:
+        activePortfolioId ||
+        (portfolios.length === 1 ? portfolios[0].id : prev.portfolio_id || ""),
+    }));
+  }, [activePortfolioId, portfolios]);
+
+  useEffect(() => {
+    setSelectedPropertyIds((prev) =>
+      prev.filter((id) => properties.some((property) => property.id === id))
+    );
+  }, [properties]);
 
   const createMutation = useMutation({
     mutationFn: (data) => propertyService.create(data),
@@ -80,11 +108,12 @@ export default function Properties() {
       if (!ok) throw new Error("Delete failed");
       return id;
     },
-    onSuccess: () => {
+    onSuccess: (id) => {
       queryClient.invalidateQueries({ queryKey: ["Property"] });
       queryClient.invalidateQueries({ queryKey: ["Building"] });
       queryClient.invalidateQueries({ queryKey: ["Unit"] });
       setDeleteTarget(null);
+      setSelectedPropertyIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Property deleted successfully");
     },
     onError: (err) => {
@@ -92,8 +121,31 @@ export default function Properties() {
     },
   });
 
-  const scopedProperties = portfolioId
-    ? properties.filter((property) => property.portfolio_id === portfolioId)
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map(async (id) => {
+          const ok = await propertyService.delete(id);
+          if (!ok) throw new Error("Delete failed");
+        })
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["Property"] });
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      setSelectedPropertyIds([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} propert${count === 1 ? "y" : "ies"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected properties: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const scopedProperties = activePortfolioId
+    ? properties.filter((property) => property.portfolio_id === activePortfolioId)
     : properties;
 
   const filtered = scopedProperties.filter(p => {
@@ -105,6 +157,39 @@ export default function Properties() {
   const singleTenantProps = scopedProperties.filter(p => p.structure_type === 'single');
   const multiTenantProps = scopedProperties.filter(p => p.structure_type === 'multi');
   const scopeSubtitle = activePortfolio ? ` in ${activePortfolio.name}` : "";
+  const allFilteredSelected = filtered.length > 0 && filtered.every((property) => selectedPropertyIds.includes(property.id));
+
+  const togglePropertySelection = (propertyId) => {
+    setSelectedPropertyIds((prev) =>
+      prev.includes(propertyId)
+        ? prev.filter((id) => id !== propertyId)
+        : [...prev, propertyId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedPropertyIds((prev) => [...new Set([...prev, ...filtered.map((property) => property.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filtered.map((property) => property.id));
+    setSelectedPropertyIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
+
+  const handlePortfolioChange = (value) => {
+    setSelectedPortfolioId(value);
+    const params = new URLSearchParams(location.search);
+    if (value === "all") params.delete("portfolio");
+    else params.set("portfolio", value);
+    const nextSearch = params.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      { replace: true }
+    );
+  };
 
   const generatePropertyId = () => {
     const prefix = form.state ? form.state.substring(0, 2).toUpperCase() : "XX";
@@ -161,11 +246,19 @@ export default function Properties() {
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
-          <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
-          <Button size="sm" onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
+          <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" disabled={noPortfolioAccess} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
+          <Button size="sm" disabled={noPortfolioAccess} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
       </PageHeader>
+
+      {noPortfolioAccess && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="p-4 text-sm text-amber-800">
+            No portfolio access is assigned to this user yet. This page stays blank and read-only until an org admin grants portfolio or property scope.
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div onClick={() => setStructureFilter("all")} className={`cursor-pointer`}>
@@ -181,12 +274,44 @@ export default function Properties() {
         <MetricCard label="Verified" value={`${scopedProperties.filter(p => p.address_verified).length}/${scopedProperties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative max-w-sm flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input placeholder="Search properties..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-1 min-w-0 flex-wrap">
+          <div className="relative max-w-sm flex-1 min-w-[240px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input placeholder="Search properties..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <Select value={selectedPortfolioId} onValueChange={handlePortfolioChange}>
+            <SelectTrigger className="w-[260px] bg-white">
+              <SelectValue placeholder="All Accessible Portfolios" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{isAdmin ? "All Portfolios" : "All Accessible Portfolios"}</SelectItem>
+              {portfolios.map((portfolio) => (
+                <SelectItem key={portfolio.id} value={portfolio.id}>
+                  {portfolio.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        <div className="flex items-center gap-2 flex-wrap">
+          {selectedPropertyIds.length > 0 && (
+            <>
+              <span className="text-xs font-medium text-slate-500">{selectedPropertyIds.length} selected</span>
+              <Button variant="outline" size="sm" onClick={() => setSelectedPropertyIds([])}>Clear</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-red-200 text-red-600 hover:bg-red-50"
+                onClick={() => setShowBulkDelete(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete Selected
+              </Button>
+            </>
+          )}
+          <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        </div>
       </div>
 
       {viewMode === "grid" ? (
@@ -202,6 +327,11 @@ export default function Properties() {
               <Card key={p.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80 group">
                 <CardContent className="p-5">
                   <div className="flex items-start gap-3 mb-3">
+                    <Checkbox
+                      checked={selectedPropertyIds.includes(p.id)}
+                      onCheckedChange={() => togglePropertySelection(p.id)}
+                      className="mt-1"
+                    />
                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
                       {p.structure_type === 'multi' ? <Building2 className="w-6 h-6 text-purple-500" /> : <Home className="w-6 h-6 text-blue-500" />}
                     </div>
@@ -265,6 +395,10 @@ export default function Properties() {
             return (
               <Card key={p.id} className="hover:shadow-md transition-all border-slate-200/80">
                 <CardContent className="p-3 flex items-center gap-4">
+                  <Checkbox
+                    checked={selectedPropertyIds.includes(p.id)}
+                    onCheckedChange={() => togglePropertySelection(p.id)}
+                  />
                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
                     {p.structure_type === 'multi' ? <Building2 className="w-5 h-5 text-purple-500" /> : <Home className="w-5 h-5 text-blue-500" />}
                   </div>
@@ -304,6 +438,13 @@ export default function Properties() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    aria-label="Select all filtered properties"
+                  />
+                </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PROPERTY</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">ADDRESS</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">TYPE</TableHead>
@@ -318,15 +459,22 @@ export default function Properties() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={10} className="text-center py-12"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-12"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={10} className="text-center py-12 text-sm text-slate-400">No properties found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-12 text-sm text-slate-400">No properties found</TableCell></TableRow>
               ) : (
                 filtered.map(p => {
                   const propBuildings = getPropBuildings(p.id);
                   const propUnits = getPropUnits(p.id);
                   return (
                     <TableRow key={p.id} className="hover:bg-slate-50">
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedPropertyIds.includes(p.id)}
+                          onCheckedChange={() => togglePropertySelection(p.id)}
+                          aria-label={`Select ${p.name}`}
+                        />
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
@@ -416,6 +564,26 @@ export default function Properties() {
                 <div>
                   <Label>Property Name *</Label>
                   <Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Camelback Commerce Center" className="mt-1.5" />
+                </div>
+                <div>
+                  <Label>Portfolio {portfolios.length > 0 ? "*" : ""}</Label>
+                  <div className="mt-1.5">
+                    <Select value={form.portfolio_id || "__unassigned__"} onValueChange={v => setForm({ ...form, portfolio_id: v === "__unassigned__" ? "" : v })}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select portfolio" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unassigned__" disabled={!isAdmin}>
+                          {isAdmin ? "No portfolio" : "Choose an assigned portfolio"}
+                        </SelectItem>
+                        {portfolios.map((portfolio) => (
+                          <SelectItem key={portfolio.id} value={portfolio.id}>
+                            {portfolio.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div>
                   <Label>Primary Property Type</Label>
@@ -547,7 +715,7 @@ export default function Properties() {
                 ...(form.portfolio_id ? { portfolio_id: form.portfolio_id } : {}),
                 ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
                 status: "active",
-              })} disabled={!form.name || createMutation.isPending} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
+              })} disabled={!form.name || createMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
                 {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Property
               </Button>
             )}
@@ -560,7 +728,7 @@ export default function Properties() {
         onClose={() => setShowImport(false)} 
         moduleType="property" 
         orgId={activePortfolio?.org_id || currentOrgId || undefined}
-        portfolioId={portfolioId || undefined}
+        portfolioId={importPortfolioId}
       />
 
       <DeleteConfirmDialog
@@ -570,6 +738,16 @@ export default function Properties() {
         description="This will permanently remove the property and may affect related buildings, units, leases, and reports."
         loading={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedPropertyIds.length} selected propert${selectedPropertyIds.length === 1 ? "y" : "ies"}?`}
+        description="This will permanently remove all selected properties and may affect related buildings, units, leases, and reports."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedPropertyIds)}
       />
     </div>
   );

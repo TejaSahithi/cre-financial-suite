@@ -22,6 +22,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -73,7 +74,9 @@ export default function Portfolios() {
   const [viewMode, setViewMode] = useState("grid");
   const [selectedOrgId, setSelectedOrgId] = useState("all");
   const [selectedCreateOrgId, setSelectedCreateOrgId] = useState("");
+  const [selectedPortfolioIds, setSelectedPortfolioIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const defaultForm = {
     name: "",
     description: "",
@@ -155,13 +158,35 @@ export default function Portfolios() {
       if (!ok) throw new Error("Delete failed");
       return id;
     },
-    onSuccess: () => {
+    onSuccess: (id) => {
       queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
       toast.success("Portfolio deleted");
       setDeleteTarget(null);
+      setSelectedPortfolioIds((prev) => prev.filter((selectedId) => selectedId !== id));
     },
     onError: (err) => {
       toast.error(`Failed to delete portfolio: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map(async (id) => {
+          const ok = await PortfolioService.delete(id);
+          if (!ok) throw new Error("Delete failed");
+        })
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
+      setSelectedPortfolioIds([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} portfolio${count === 1 ? "" : "s"} deleted`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected portfolios: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -226,6 +251,25 @@ export default function Portfolios() {
   const filtered = enriched.filter((portfolio) =>
     portfolio.name?.toLowerCase().includes(search.toLowerCase())
   );
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((portfolio) => selectedPortfolioIds.includes(portfolio.id));
+
+  const togglePortfolioSelection = (portfolioId) => {
+    setSelectedPortfolioIds((prev) =>
+      prev.includes(portfolioId)
+        ? prev.filter((id) => id !== portfolioId)
+        : [...prev, portfolioId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedPortfolioIds((prev) => [...new Set([...prev, ...filtered.map((portfolio) => portfolio.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filtered.map((portfolio) => portfolio.id));
+    setSelectedPortfolioIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
 
   const totals = {
     properties: visibleProperties.length,
@@ -298,7 +342,7 @@ export default function Portfolios() {
         <MetricCard label="Total SF" value={`${(totals.totalSF / 1000000).toFixed(1)}M`} icon={MapPin} color="bg-slate-100 text-slate-600" />
       </div>
 
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="relative max-w-sm flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input
@@ -308,7 +352,28 @@ export default function Portfolios() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
-        <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        <div className="flex items-center gap-2 flex-wrap">
+          {selectedPortfolioIds.length > 0 && (
+            <>
+              <span className="text-xs font-medium text-slate-500">
+                {selectedPortfolioIds.length} selected
+              </span>
+              <Button variant="outline" size="sm" onClick={() => setSelectedPortfolioIds([])}>
+                Clear
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-red-200 text-red-600 hover:bg-red-50"
+                onClick={() => setShowBulkDelete(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete Selected
+              </Button>
+            </>
+          )}
+          <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        </div>
       </div>
 
       {isLoading ? (
@@ -329,6 +394,11 @@ export default function Portfolios() {
               <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
+                    <Checkbox
+                      checked={selectedPortfolioIds.includes(portfolio.id)}
+                      onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
+                      className="mt-1"
+                    />
                     <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
                       <Briefcase className="w-6 h-6 text-white" />
                     </div>
@@ -409,6 +479,10 @@ export default function Portfolios() {
           {filtered.map((portfolio) => (
             <Card key={portfolio.id} className="hover:shadow-md transition-all border-slate-200/80">
               <CardContent className="p-4 flex items-center gap-4">
+                <Checkbox
+                  checked={selectedPortfolioIds.includes(portfolio.id)}
+                  onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
+                />
                 <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Briefcase className="w-5 h-5 text-white" />
                 </div>
@@ -450,6 +524,13 @@ export default function Portfolios() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    aria-label="Select all filtered portfolios"
+                  />
+                </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PORTFOLIO</TableHead>
                 {isAdmin && <TableHead className="text-xs font-bold tracking-wider">ORG</TableHead>}
                 <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
@@ -465,6 +546,13 @@ export default function Portfolios() {
             <TableBody>
               {filtered.map((portfolio) => (
                 <TableRow key={portfolio.id} className="hover:bg-slate-50">
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedPortfolioIds.includes(portfolio.id)}
+                      onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
+                      aria-label={`Select ${portfolio.name}`}
+                    />
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
@@ -649,6 +737,16 @@ export default function Portfolios() {
         description="This will permanently remove the portfolio. Properties inside it will not be deleted but will become unassigned."
         loading={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedPortfolioIds.length} selected portfolio${selectedPortfolioIds.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove all selected portfolios. Properties inside them will not be deleted but will become unassigned."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedPortfolioIds)}
       />
     </div>
   );
