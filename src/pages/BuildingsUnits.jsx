@@ -141,6 +141,10 @@ export default function BuildingsUnits() {
     });
   }, [activeBuilding, scopedUnits, search]);
 
+  const totalUnits = scopedUnits.length;
+  const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
+  const vacantUnits = scopedUnits.filter((unit) => unit.occupancy_status === "vacant").length;
+  const totalSF = scopedBuildings.reduce((sum, building) => sum + (building.total_sf || building.total_sqft || 0), 0);
   const displayBuildingCount = activeBuilding ? 1 : scopedBuildings.length;
   const displayUnitCount = activeBuilding ? filteredUnits.length : totalUnits;
   const displayLeasedCount = activeBuilding
@@ -153,11 +157,6 @@ export default function BuildingsUnits() {
     ? (activeBuilding.total_sf || activeBuilding.total_sqft || 0)
     : totalSF;
   const activeImportType = activeBuilding ? "unit" : "building";
-
-  const totalUnits = scopedUnits.length;
-  const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
-  const vacantUnits = scopedUnits.filter((unit) => unit.occupancy_status === "vacant").length;
-  const totalSF = scopedBuildings.reduce((sum, building) => sum + (building.total_sf || building.total_sqft || 0), 0);
 
   const deleteMutation = useMutation({
     mutationFn: async ({ type, id }) => {
