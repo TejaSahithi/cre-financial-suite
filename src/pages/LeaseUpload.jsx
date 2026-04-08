@@ -329,7 +329,7 @@ export default function LeaseUpload() {
             {" "}
             {[selectedProperty?.name, selectedBuilding?.name, selectedUnit?.unit_number || selectedUnit?.unit_id_code]
               .filter(Boolean)
-              .join(" Â· ") || "No specific scope selected"}
+              .join(" - ") || "No specific scope selected"}
           </div>
         </CardContent>
       </Card>
