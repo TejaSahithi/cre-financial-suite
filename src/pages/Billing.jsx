@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -27,6 +28,7 @@ import {
   AlertTriangle,
   Loader2,
   Download,
+  Trash2,
   Home,
   Upload,
 } from "lucide-react";
@@ -34,6 +36,7 @@ import ModuleLink from "@/components/ModuleLink";
 import PageHeader from "@/components/PageHeader";
 import { downloadCSV } from "@/utils/index";
 import BulkImportModal from "@/components/property/BulkImportModal";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
 const statusColors = {
   draft: "bg-slate-100 text-slate-600",
@@ -52,6 +55,9 @@ export default function Billing() {
   const [showDetail, setShowDetail] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [genMonth, setGenMonth] = useState(new Date().toISOString().substring(0, 7));
   const queryClient = useQueryClient();
 
@@ -208,6 +214,30 @@ export default function Billing() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (invoiceId) => InvoiceService.delete(invoiceId),
+    onSuccess: (_, invoiceId) => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      setSelectedInvoiceIds((prev) => prev.filter((id) => id !== invoiceId));
+      setDeleteTarget(null);
+      if (showDetail?.id === invoiceId) {
+        setShowDetail(null);
+      }
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (invoiceIds) => {
+      await Promise.all(invoiceIds.map((invoiceId) => InvoiceService.delete(invoiceId)));
+      return invoiceIds.length;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      setSelectedInvoiceIds([]);
+      setShowBulkDelete(false);
+    },
+  });
+
   const filtered = invoiceRows.filter((invoice) => {
     const matchSearch =
       !search ||
@@ -217,6 +247,25 @@ export default function Billing() {
     const matchStatus = statusFilter === "all" || invoice.status === statusFilter;
     return matchSearch && matchStatus;
   });
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((invoice) => selectedInvoiceIds.includes(invoice.id));
+
+  const toggleInvoiceSelection = (invoiceId) => {
+    setSelectedInvoiceIds((prev) =>
+      prev.includes(invoiceId)
+        ? prev.filter((id) => id !== invoiceId)
+        : [...prev, invoiceId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedInvoiceIds((prev) => [...new Set([...prev, ...filtered.map((invoice) => invoice.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filtered.map((invoice) => invoice.id));
+    setSelectedInvoiceIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
 
   const totalBilled = invoiceRows.reduce((sum, invoice) => sum + invoice.totalAmount, 0);
   const totalPaid = invoiceRows.filter((invoice) => invoice.status === "paid").reduce((sum, invoice) => sum + invoice.totalAmount, 0);
@@ -270,8 +319,8 @@ export default function Billing() {
         ))}
       </div>
 
-      <div className="flex gap-3 items-center">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex gap-3 items-center flex-wrap">
+        <div className="relative flex-1 max-w-sm min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input
             placeholder="Search tenant or invoice..."
@@ -293,6 +342,25 @@ export default function Billing() {
             ))}
           </SelectContent>
         </Select>
+        {selectedInvoiceIds.length > 0 && (
+          <>
+            <span className="text-xs font-medium text-slate-500">
+              {selectedInvoiceIds.length} selected
+            </span>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSelectedInvoiceIds([])}>
+              Clear
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs border-red-200 text-red-600 hover:bg-red-50"
+              onClick={() => setShowBulkDelete(true)}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Delete Selected
+            </Button>
+          </>
+        )}
       </div>
 
       <Card>
@@ -300,6 +368,13 @@ export default function Billing() {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50">
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    aria-label="Select all filtered invoices"
+                  />
+                </TableHead>
                 <TableHead className="text-[10px]">INVOICE #</TableHead>
                 <TableHead className="text-[10px]">TENANT</TableHead>
                 <TableHead className="text-[10px]">PROPERTY / LOCATION</TableHead>
@@ -315,13 +390,20 @@ export default function Billing() {
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-8 text-sm text-slate-400">
+                  <TableCell colSpan={11} className="text-center py-8 text-sm text-slate-400">
                     No invoices yet. Generate from active leases.
                   </TableCell>
                 </TableRow>
               ) : (
                 filtered.map((invoice) => (
                   <TableRow key={invoice.id} className="hover:bg-slate-50">
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedInvoiceIds.includes(invoice.id)}
+                        onCheckedChange={() => toggleInvoiceSelection(invoice.id)}
+                        aria-label={`Select ${invoice.invoiceNumber}`}
+                      />
+                    </TableCell>
                     <TableCell className="font-mono text-xs font-semibold">{invoice.invoiceNumber}</TableCell>
                     <TableCell>
                       <ModuleLink
@@ -369,6 +451,15 @@ export default function Billing() {
                             Mark Paid
                           </Button>
                         )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
+                          onClick={() => setDeleteTarget(invoice)}
+                          title="Delete invoice"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -488,6 +579,25 @@ export default function Billing() {
       </Dialog>
 
       <BulkImportModal isOpen={showImport} onClose={() => setShowImport(false)} moduleType="invoice" />
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete invoice "${deleteTarget?.invoiceNumber || ""}"?`}
+        description="This will permanently remove the selected invoice."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget?.id && deleteMutation.mutate(deleteTarget.id)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedInvoiceIds.length} selected invoice${selectedInvoiceIds.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove all selected invoices."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedInvoiceIds)}
+      />
     </div>
   );
 }
