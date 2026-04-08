@@ -113,13 +113,25 @@ export default function LeaseUpload() {
 
   const scopedUnits = useMemo(() => {
     if (scopeBuilding !== "all") {
-      return units.filter((unit) => unit.building_id === scopeBuilding);
+      const buildingUnits = units.filter((unit) => unit.building_id === scopeBuilding);
+      if (buildingUnits.length > 0) {
+        return buildingUnits;
+      }
+
+      const selectedScopeBuilding = buildings.find((building) => building.id === scopeBuilding);
+      const fallbackPropertyId =
+        selectedScopeBuilding?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
+
+      if (fallbackPropertyId) {
+        return units.filter((unit) => unit.property_id === fallbackPropertyId);
+      }
+      return [];
     }
     if (scopeProperty !== "all") {
       return units.filter((unit) => unit.property_id === scopeProperty);
     }
     return units;
-  }, [units, scopeBuilding, scopeProperty]);
+  }, [units, scopeBuilding, scopeProperty, buildings]);
 
   const selectedProperty = scopeProperty !== "all" ? properties.find((property) => property.id === scopeProperty) ?? null : null;
   const selectedBuilding = scopeBuilding !== "all" ? buildings.find((building) => building.id === scopeBuilding) ?? null : null;
