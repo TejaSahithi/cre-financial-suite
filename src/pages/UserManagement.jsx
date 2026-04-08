@@ -62,6 +62,47 @@ const ROLE_COLOR_CLASSES = {
   slate:   { badge: "bg-slate-100 text-slate-600 border-slate-200",     dot: "bg-slate-400" },
 };
 
+async function invokeInviteUser(body) {
+  const attemptInvoke = async (session) => {
+    if (!session?.access_token) {
+      throw new Error("Not authenticated");
+    }
+
+    return supabase.functions.invoke("invite-user", {
+      body,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+  };
+
+  let { data: sessionData } = await supabase.auth.getSession();
+  let session = sessionData?.session;
+
+  if (!session?.access_token) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshData?.session?.access_token) {
+      throw refreshError || new Error("Not authenticated");
+    }
+    session = refreshData.session;
+  }
+
+  let result = await attemptInvoke(session);
+
+  if (result.error) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (!refreshError && refreshData?.session?.access_token) {
+      result = await attemptInvoke(refreshData.session);
+    }
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data;
+}
+
 // ─── Page-Level Permission Groups ─────────────────────────────────────────────
 const PAGE_PERMISSION_GROUPS = [
   {
@@ -984,12 +1025,17 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
             {status === "invited" && (
               <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs"
                 onClick={async () => {
-                  const { data: { session } } = await supabase.auth.getSession();
-                  const { error } = await supabase.functions.invoke("invite-user", {
-                    body: { email: member.profiles?.email, full_name: member.profiles?.full_name, org_id: orgId, role: getMemberRoles(member)[0] || null },
-                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-                  });
-                  if (error) toast.error("Failed"); else toast.success("Invite resent");
+                  try {
+                    await invokeInviteUser({
+                      email: member.profiles?.email,
+                      full_name: member.profiles?.full_name,
+                      org_id: orgId,
+                      role: getMemberRoles(member)[0] || null,
+                    });
+                    toast.success("Invite resent");
+                  } catch (error) {
+                    toast.error(error?.message || "Failed");
+                  }
                 }}>
                 <Mail className="w-3.5 h-3.5" /> Resend Invite
               </Button>
@@ -1048,26 +1094,21 @@ function InviteDialog({ open, onClose, orgId }) {
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
-      const { data: { session } } = await supabase.auth.getSession();
-      const { error } = await supabase.functions.invoke("invite-user", {
-        body: {
-          email: form.email.trim(),
-          full_name: form.full_name.trim(),
-          phone: form.phone.trim(),
-          role: primaryRole,
-          org_id: orgId,
-          page_permissions: pagePerms,
-          access_scopes: dataScope,
-          capabilities: {
-            roles: selectedRoles,
-            custom_role: customRoleName || null,
-            signing_privileges: signingPrivs,
-          },
-          access_role: accessRole,
+      await invokeInviteUser({
+        email: form.email.trim(),
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        role: primaryRole,
+        org_id: orgId,
+        page_permissions: pagePerms,
+        access_scopes: dataScope,
+        capabilities: {
+          roles: selectedRoles,
+          custom_role: customRoleName || null,
+          signing_privileges: signingPrivs,
         },
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        access_role: accessRole,
       });
-      if (error) throw error;
       toast.success(`Invite sent to ${form.email}`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
       // Reset
@@ -1265,12 +1306,13 @@ function CSVUploadDialog({ open, onClose, orgId }) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const { error } = await supabase.functions.invoke("invite-user", {
-          body: { email: row.email, full_name: row.full_name, phone: row.phone, org_id: orgId, role: null },
-          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        await invokeInviteUser({
+          email: row.email,
+          full_name: row.full_name,
+          phone: row.phone,
+          org_id: orgId,
+          role: null,
         });
-        if (error) throw error;
         setProgress(p => ({ ...p, done: p.done + 1, success: p.success + 1 }));
       } catch (e) {
         setProgress(p => ({ ...p, done: p.done + 1, errors: [...p.errors, { email: row.email, msg: e.message }] }));
@@ -1627,8 +1669,11 @@ export default function UserManagement() {
     const targets = selectedMembers.filter(m => deriveStatus(m) === "invited");
     if (!targets.length) { toast.info("No invited users selected"); return; }
     for (const m of targets) {
-      await supabase.functions.invoke("invite-user", {
-        body: { email: m.profiles?.email, full_name: m.profiles?.full_name, org_id: activeOrgId, role: getMemberRoles(m)[0] || null },
+      await invokeInviteUser({
+        email: m.profiles?.email,
+        full_name: m.profiles?.full_name,
+        org_id: activeOrgId,
+        role: getMemberRoles(m)[0] || null,
       });
     }
     toast.success(`Resent ${targets.length} invites`);
