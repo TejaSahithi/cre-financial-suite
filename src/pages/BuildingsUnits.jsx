@@ -1,15 +1,26 @@
-import React, { useState } from "react";
-import { UnitService, BuildingService, PropertyService } from "@/services/api";
-
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link, useLocation } from "react-router-dom";
+import {
+  Building2,
+  Search,
+  Loader2,
+  Home,
+  Users,
+  Layers,
+  ChevronRight,
+  DoorOpen,
+  Plus,
+  Download,
+  Upload,
+} from "lucide-react";
+import { UnitService, BuildingService, PropertyService, PortfolioService } from "@/services/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Building2, Search, Loader2, Home, Users, Layers, ChevronRight, DoorOpen, Plus, Download, Upload } from "lucide-react";
-import { Link } from "react-router-dom";
 import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
@@ -19,45 +30,136 @@ import CreateUnitModal from "@/components/property/CreateUnitModal";
 import BulkImportModal from "@/components/property/BulkImportModal";
 
 export default function BuildingsUnits() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const portfolioId = params.get("portfolio");
+  const propertyId = params.get("property");
+
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
-  const [propertyFilter, setPropertyFilter] = useState("all");
+  const [propertyFilter, setPropertyFilter] = useState(propertyId || "all");
   const [showCreateBuilding, setShowCreateBuilding] = useState(false);
   const [showCreateUnit, setShowCreateUnit] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importType, setImportType] = useState("building");
 
-  const { data: properties = [] } = useQuery({ queryKey: ['bu-properties'], queryFn: () => PropertyService.list() });
-  const { data: buildings = [], isLoading } = useQuery({ queryKey: ['bu-buildings'], queryFn: () => BuildingService.list() });
-  const { data: units = [] } = useQuery({ queryKey: ['bu-units'], queryFn: () => UnitService.list() });
+  const { data: properties = [] } = useQuery({
+    queryKey: ["bu-properties"],
+    queryFn: () => PropertyService.list(),
+  });
+  const { data: portfolios = [] } = useQuery({
+    queryKey: ["bu-portfolios"],
+    queryFn: () => PortfolioService.list(),
+  });
+  const { data: buildings = [], isLoading } = useQuery({
+    queryKey: ["bu-buildings"],
+    queryFn: () => BuildingService.list(),
+  });
+  const { data: units = [] } = useQuery({
+    queryKey: ["bu-units"],
+    queryFn: () => UnitService.list(),
+  });
 
-  const getPropertyName = (pid) => properties.find(p => p.id === pid)?.name || "—";
-  const getBuildingUnits = (bid) => units.filter(u => u.building_id === bid);
+  useEffect(() => {
+    setPropertyFilter(propertyId || "all");
+  }, [propertyId]);
 
-  const filtered = buildings.filter(b => {
-    const matchSearch = b.name?.toLowerCase().includes(search.toLowerCase()) || getPropertyName(b.property_id).toLowerCase().includes(search.toLowerCase());
-    const matchProperty = propertyFilter === "all" || b.property_id === propertyFilter;
+  const scopedProperties = useMemo(() => {
+    if (propertyId) {
+      return properties.filter((property) => property.id === propertyId);
+    }
+    if (portfolioId) {
+      return properties.filter((property) => property.portfolio_id === portfolioId);
+    }
+    return properties;
+  }, [properties, portfolioId, propertyId]);
+
+  const scopedPropertyIds = useMemo(
+    () => new Set(scopedProperties.map((property) => property.id)),
+    [scopedProperties]
+  );
+
+  const scopedBuildings = useMemo(
+    () => buildings.filter((building) => scopedPropertyIds.has(building.property_id)),
+    [buildings, scopedPropertyIds]
+  );
+
+  const scopedBuildingIds = useMemo(
+    () => new Set(scopedBuildings.map((building) => building.id)),
+    [scopedBuildings]
+  );
+
+  const scopedUnits = useMemo(
+    () =>
+      units.filter((unit) => {
+        if (unit.building_id && scopedBuildingIds.has(unit.building_id)) return true;
+        return scopedPropertyIds.has(unit.property_id);
+      }),
+    [units, scopedBuildingIds, scopedPropertyIds]
+  );
+
+  const activeProperty = propertyId ? scopedProperties[0] : null;
+  const activePortfolio = portfolioId ? portfolios.find((portfolio) => portfolio.id === portfolioId) : null;
+
+  const getPropertyName = (id) => properties.find((property) => property.id === id)?.name || "—";
+  const getBuildingUnits = (buildingId) => scopedUnits.filter((unit) => unit.building_id === buildingId);
+
+  const filteredBuildings = scopedBuildings.filter((building) => {
+    const matchSearch =
+      building.name?.toLowerCase().includes(search.toLowerCase()) ||
+      getPropertyName(building.property_id).toLowerCase().includes(search.toLowerCase());
+    const matchProperty = propertyFilter === "all" || building.property_id === propertyFilter;
     return matchSearch && matchProperty;
   });
 
-  const totalUnits = units.length;
-  const leasedUnits = units.filter(u => u.occupancy_status === "leased").length;
-  const vacantUnits = units.filter(u => u.occupancy_status === "vacant").length;
-  const totalSF = buildings.reduce((s, b) => s + (b.total_sf || b.total_sqft || 0), 0);
+  const totalUnits = scopedUnits.length;
+  const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
+  const vacantUnits = scopedUnits.filter((unit) => unit.occupancy_status === "vacant").length;
+  const totalSF = scopedBuildings.reduce((sum, building) => sum + (building.total_sf || building.total_sqft || 0), 0);
+
+  const subtitleParts = [
+    `${scopedBuildings.length} buildings`,
+    `${totalUnits} units`,
+    propertyId && activeProperty ? `for ${activeProperty.name}` : null,
+    !propertyId && portfolioId && activePortfolio ? `in ${activePortfolio.name}` : null,
+    !propertyId && !portfolioId ? `across ${scopedProperties.length} properties` : null,
+  ].filter(Boolean);
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Building2} title="Buildings & Units" subtitle={`${buildings.length} buildings · ${totalUnits} units across ${properties.length} properties`} iconColor="from-purple-500 to-purple-700">
+      <PageHeader
+        icon={Building2}
+        title="Buildings & Units"
+        subtitle={subtitleParts.join(" · ")}
+        iconColor="from-purple-500 to-purple-700"
+      >
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(buildings, 'buildings.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
-          <Button variant="outline" size="sm" onClick={() => { setImportType("building"); setShowImport(true); }}><Upload className="w-4 h-4 mr-1" />Import</Button>
-          <Button variant="outline" size="sm" onClick={() => setShowCreateBuilding(true)} className="border-purple-200 text-purple-700 hover:bg-purple-50"><Plus className="w-4 h-4 mr-1" />Add Building</Button>
-          <Button size="sm" onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(scopedBuildings, "buildings.csv")}>
+            <Download className="w-4 h-4 mr-1 text-slate-500" />
+            Export
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => { setImportType("building"); setShowImport(true); }}>
+            <Upload className="w-4 h-4 mr-1" />
+            Import
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowCreateBuilding(true)}
+            className="border-purple-200 text-purple-700 hover:bg-purple-50"
+          >
+            <Plus className="w-4 h-4 mr-1" />
+            Add Building
+          </Button>
+          <Button size="sm" onClick={() => setShowCreateUnit(true)} className="bg-gradient-to-r from-purple-600 to-purple-700 shadow-sm">
+            <Plus className="w-4 h-4 mr-1" />
+            Add Unit
+          </Button>
         </div>
       </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Buildings" value={buildings.length} icon={Building2} color="bg-purple-50 text-purple-600" />
+        <MetricCard label="Buildings" value={scopedBuildings.length} icon={Building2} color="bg-purple-50 text-purple-600" />
         <MetricCard label="Total Units" value={totalUnits} icon={DoorOpen} color="bg-blue-50 text-blue-600" />
         <MetricCard label="Leased" value={leasedUnits} icon={Users} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Vacant" value={vacantUnits} icon={Layers} color="bg-amber-50 text-amber-600" />
@@ -68,13 +170,19 @@ export default function BuildingsUnits() {
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="relative max-w-sm flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <Input placeholder="Search buildings..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+            <Input placeholder="Search buildings..." className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
           <Select value={propertyFilter} onValueChange={setPropertyFilter}>
-            <SelectTrigger className="w-48"><SelectValue placeholder="All Properties" /></SelectTrigger>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="All Properties" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Properties</SelectItem>
-              {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+              {scopedProperties.map((property) => (
+                <SelectItem key={property.id} value={property.id}>
+                  {property.name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -82,57 +190,72 @@ export default function BuildingsUnits() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
-      ) : filtered.length === 0 ? (
-        <Card><CardContent className="p-16 text-center text-sm text-slate-400">No buildings found</CardContent></Card>
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        </div>
+      ) : filteredBuildings.length === 0 ? (
+        <Card>
+          <CardContent className="p-16 text-center text-sm text-slate-400">No buildings found</CardContent>
+        </Card>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map(b => {
-            const bUnits = getBuildingUnits(b.id);
-            const leased = bUnits.filter(u => u.occupancy_status === "leased").length;
-            const vacant = bUnits.filter(u => u.occupancy_status === "vacant").length;
+          {filteredBuildings.map((building) => {
+            const buildingUnits = getBuildingUnits(building.id);
+            const leased = buildingUnits.filter((unit) => unit.occupancy_status === "leased").length;
+            const vacant = buildingUnits.filter((unit) => unit.occupancy_status === "vacant").length;
+
             return (
-              <Card key={b.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80">
+              <Card key={building.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80">
                 <CardContent className="p-5">
                   <div className="flex items-start gap-3 mb-3">
                     <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
                       <Building2 className="w-6 h-6 text-purple-500" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-base font-bold text-slate-900">{b.name}</h3>
-                      <p className="text-xs text-slate-400">{getPropertyName(b.property_id)}</p>
+                      <h3 className="text-base font-bold text-slate-900">{building.name}</h3>
+                      <p className="text-xs text-slate-400">{getPropertyName(building.property_id)}</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
-                      { label: "SF", value: `${(((b.total_sf || b.total_sqft || 0) / 1000).toFixed(0))}K` },
-                      { label: "Floors", value: b.floors || 1 },
+                      { label: "SF", value: `${(((building.total_sf || building.total_sqft || 0) / 1000).toFixed(0))}K` },
+                      { label: "Floors", value: building.floors || 1 },
                       { label: "Leased", value: leased },
                       { label: "Vacant", value: vacant },
-                    ].map((m, i) => (
-                      <div key={i} className="bg-slate-50 rounded px-2 py-1.5 text-center">
-                        <p className="text-[9px] font-bold text-slate-400 uppercase">{m.label}</p>
-                        <p className="text-sm font-bold text-slate-900">{m.value}</p>
+                    ].map((metric, index) => (
+                      <div key={index} className="bg-slate-50 rounded px-2 py-1.5 text-center">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">{metric.label}</p>
+                        <p className="text-sm font-bold text-slate-900">{metric.value}</p>
                       </div>
                     ))}
                   </div>
-                  {bUnits.length > 0 && (
+                  {buildingUnits.length > 0 && (
                     <div className="space-y-1 max-h-32 overflow-y-auto">
-                      {bUnits.map(u => (
-                        <div key={u.id} className="flex items-center justify-between bg-slate-50 rounded-md px-2.5 py-1.5">
+                      {buildingUnits.map((unit) => (
+                        <div key={unit.id} className="flex items-center justify-between bg-slate-50 rounded-md px-2.5 py-1.5">
                           <div className="flex items-center gap-2">
                             <DoorOpen className="w-3 h-3 text-slate-400" />
-                            <span className="text-xs font-medium text-slate-700">{u.unit_number || u.unit_id_code || u.id?.substring(0, 8)}</span>
-                            <span className="text-[10px] text-slate-400">{u.square_footage?.toLocaleString()} SF</span>
+                            <span className="text-xs font-medium text-slate-700">
+                              {unit.unit_number || unit.unit_id_code || unit.id?.substring(0, 8)}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{unit.square_footage?.toLocaleString()} SF</span>
                           </div>
-                          <Badge className={`text-[10px] ${u.occupancy_status === 'leased' ? 'bg-emerald-100 text-emerald-700' : u.occupancy_status === 'vacant' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                            {u.occupancy_status}
+                          <Badge
+                            className={`text-[10px] ${
+                              unit.occupancy_status === "leased"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : unit.occupancy_status === "vacant"
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {unit.occupancy_status}
                           </Badge>
                         </div>
                       ))}
                     </div>
                   )}
-                  {b.year_built && <p className="text-[10px] text-slate-400 mt-2">Built {b.year_built}</p>}
+                  {building.year_built && <p className="text-[10px] text-slate-400 mt-2">Built {building.year_built}</p>}
                 </CardContent>
               </Card>
             );
@@ -140,28 +263,32 @@ export default function BuildingsUnits() {
         </div>
       ) : viewMode === "list" ? (
         <div className="space-y-2">
-          {filtered.map(b => {
-            const bUnits = getBuildingUnits(b.id);
-            const leased = bUnits.filter(u => u.occupancy_status === "leased").length;
+          {filteredBuildings.map((building) => {
+            const buildingUnits = getBuildingUnits(building.id);
+            const leased = buildingUnits.filter((unit) => unit.occupancy_status === "leased").length;
+
             return (
-              <Card key={b.id} className="hover:shadow-md transition-all border-slate-200/80">
+              <Card key={building.id} className="hover:shadow-md transition-all border-slate-200/80">
                 <CardContent className="p-3 flex items-center gap-4">
                   <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
                     <Building2 className="w-5 h-5 text-purple-500" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-bold text-slate-900 truncate">{b.name}</h3>
-                    <p className="text-xs text-slate-400 truncate">{getPropertyName(b.property_id)}</p>
+                    <h3 className="text-sm font-bold text-slate-900 truncate">{building.name}</h3>
+                    <p className="text-xs text-slate-400 truncate">{getPropertyName(building.property_id)}</p>
                   </div>
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
-                    <div className="text-center"><p className="font-bold text-sm">{(((b.total_sf || b.total_sqft || 0) / 1000).toFixed(0))}K</p><p className="text-slate-400">SF</p></div>
-                    <div className="text-center"><p className="font-bold text-sm">{b.floors || 1}</p><p className="text-slate-400">Floors</p></div>
-                    <div className="text-center"><p className="font-bold text-sm">{bUnits.length}</p><p className="text-slate-400">Units</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{(((building.total_sf || building.total_sqft || 0) / 1000).toFixed(0))}K</p><p className="text-slate-400">SF</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{building.floors || 1}</p><p className="text-slate-400">Floors</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{buildingUnits.length}</p><p className="text-slate-400">Units</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{leased}</p><p className="text-slate-400">Leased</p></div>
                   </div>
-                  {b.year_built && <span className="text-xs text-slate-400 flex-shrink-0">{b.year_built}</span>}
-                  <Link to={createPageUrl("PropertyDetail") + `?id=${b.property_id}`}>
-                    <Button variant="outline" size="sm" className="flex-shrink-0 text-xs">Property <ChevronRight className="w-3 h-3 ml-1" /></Button>
+                  {building.year_built && <span className="text-xs text-slate-400 flex-shrink-0">{building.year_built}</span>}
+                  <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
+                    <Button variant="outline" size="sm" className="flex-shrink-0 text-xs">
+                      Property
+                      <ChevronRight className="w-3 h-3 ml-1" />
+                    </Button>
                   </Link>
                 </CardContent>
               </Card>
@@ -181,33 +308,34 @@ export default function BuildingsUnits() {
                 <TableHead className="text-xs font-bold tracking-wider">UNITS</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">LEASED</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">VACANT</TableHead>
-                <TableHead></TableHead>
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map(b => {
-                const bUnits = getBuildingUnits(b.id);
-                const leased = bUnits.filter(u => u.occupancy_status === "leased").length;
-                const vacant = bUnits.filter(u => u.occupancy_status === "vacant").length;
+              {filteredBuildings.map((building) => {
+                const buildingUnits = getBuildingUnits(building.id);
+                const leased = buildingUnits.filter((unit) => unit.occupancy_status === "leased").length;
+                const vacant = buildingUnits.filter((unit) => unit.occupancy_status === "vacant").length;
+
                 return (
-                  <TableRow key={b.id} className="hover:bg-slate-50">
+                  <TableRow key={building.id} className="hover:bg-slate-50">
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
                           <Building2 className="w-4 h-4 text-purple-500" />
                         </div>
-                        <span className="text-sm font-semibold text-slate-900">{b.name}</span>
+                        <span className="text-sm font-semibold text-slate-900">{building.name}</span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm text-slate-600">{getPropertyName(b.property_id)}</TableCell>
-                    <TableCell className="text-sm font-mono">{(b.total_sf || b.total_sqft || 0).toLocaleString()}</TableCell>
-                    <TableCell className="text-sm">{b.floors || 1}</TableCell>
-                    <TableCell className="text-sm">{b.year_built || "—"}</TableCell>
-                    <TableCell className="text-sm font-medium">{bUnits.length}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{getPropertyName(building.property_id)}</TableCell>
+                    <TableCell className="text-sm font-mono">{(building.total_sf || building.total_sqft || 0).toLocaleString()}</TableCell>
+                    <TableCell className="text-sm">{building.floors || 1}</TableCell>
+                    <TableCell className="text-sm">{building.year_built || "—"}</TableCell>
+                    <TableCell className="text-sm font-medium">{buildingUnits.length}</TableCell>
                     <TableCell><Badge className="bg-emerald-100 text-emerald-700 text-xs">{leased}</Badge></TableCell>
                     <TableCell><Badge className="bg-amber-100 text-amber-700 text-xs">{vacant}</Badge></TableCell>
                     <TableCell>
-                      <Link to={createPageUrl("PropertyDetail") + `?id=${b.property_id}`}>
+                      <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
                         <Button variant="outline" size="sm">View</Button>
                       </Link>
                     </TableCell>
@@ -219,23 +347,22 @@ export default function BuildingsUnits() {
         </Card>
       )}
 
-      {/* Modals */}
-      <CreateBuildingModal 
-        isOpen={showCreateBuilding} 
-        onClose={() => setShowCreateBuilding(false)} 
-        properties={properties} 
+      <CreateBuildingModal
+        isOpen={showCreateBuilding}
+        onClose={() => setShowCreateBuilding(false)}
+        properties={scopedProperties}
       />
 
-      <CreateUnitModal 
-        isOpen={showCreateUnit} 
-        onClose={() => setShowCreateUnit(false)} 
-        buildings={buildings} 
+      <CreateUnitModal
+        isOpen={showCreateUnit}
+        onClose={() => setShowCreateUnit(false)}
+        buildings={scopedBuildings}
       />
 
-      <BulkImportModal 
-        isOpen={showImport} 
-        onClose={() => setShowImport(false)} 
-        moduleType={importType} 
+      <BulkImportModal
+        isOpen={showImport}
+        onClose={() => setShowImport(false)}
+        moduleType={importType}
       />
     </div>
   );
