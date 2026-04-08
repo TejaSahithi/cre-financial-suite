@@ -21,6 +21,7 @@ import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import BulkImportModal from "@/components/property/BulkImportModal";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
 export default function Properties() {
   const navigate = useNavigate();
@@ -33,6 +34,7 @@ export default function Properties() {
   const [viewMode, setViewMode] = useState("details");
   const [structureFilter, setStructureFilter] = useState("all");
   const [verifyingAddress, setVerifyingAddress] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const queryClient = useQueryClient();
 
   const buildDefaultForm = () => ({
@@ -69,6 +71,24 @@ export default function Properties() {
     },
     onError: (err) => {
       toast.error("Failed to create property: " + (err?.message || "Unknown error"));
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await propertyService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Property"] });
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      setDeleteTarget(null);
+      toast.success("Property deleted successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete property: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -195,6 +215,15 @@ export default function Properties() {
                         </Badge>
                       </div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                      onClick={() => setDeleteTarget(p)}
+                      title="Delete property"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
@@ -253,6 +282,15 @@ export default function Properties() {
                     {p.structure_type === 'multi' ? 'Multi' : 'Single'}
                   </Badge>
                   {p.address_verified ? <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-slate-300 flex-shrink-0" />}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
+                    onClick={() => setDeleteTarget(p)}
+                    title="Delete property"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                   <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
                     <Button variant="outline" size="sm" className="flex-shrink-0">View</Button>
                   </Link>
@@ -326,9 +364,20 @@ export default function Properties() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
-                          <Button variant="outline" size="sm">View</Button>
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link to={createPageUrl("PropertyDetail") + `?id=${p.id}`}>
+                            <Button variant="outline" size="sm">View</Button>
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                            onClick={() => setDeleteTarget(p)}
+                            title="Delete property"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -512,6 +561,15 @@ export default function Properties() {
         moduleType="property" 
         orgId={activePortfolio?.org_id || currentOrgId || undefined}
         portfolioId={portfolioId || undefined}
+      />
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete property "${deleteTarget?.name || ""}"?`}
+        description="This will permanently remove the property and may affect related buildings, units, leases, and reports."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
       />
     </div>
   );

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
   Upload,
@@ -26,6 +27,7 @@ import ScopeSelector from "@/components/ScopeSelector";
 import VendorSpendAnalysis from "@/components/expenses/VendorSpendAnalysis";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
+import { ExpenseService } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { createPageUrl, downloadCSV } from "@/utils";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
 export default function Expenses() {
   const location = useLocation();
@@ -41,6 +44,8 @@ export default function Expenses() {
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
   const { data: budgets = [] } = useOrgQuery("Budget");
@@ -150,6 +155,22 @@ export default function Expenses() {
     building: (building) => `${selectorScopedExpenses.length} expense records for ${building.name}`,
     unit: (unit) => `${selectorScopedExpenses.length} expense records for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
     org: () => `${selectorScopedExpenses.length} expense records in selected organization`,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await ExpenseService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      setDeleteTarget(null);
+      toast.success("Expense deleted successfully");
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete expense: ${err?.message || "Unknown error"}`);
+    },
   });
 
   return (
@@ -394,7 +415,12 @@ export default function Expenses() {
                             <Button variant="ghost" size="sm" className="text-[10px] h-6 px-1.5">
                               <Pencil className="w-3 h-3" />
                             </Button>
-                            <Button variant="ghost" size="sm" className="text-[10px] h-6 px-1.5 text-red-500">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-[10px] h-6 px-1.5 text-red-500"
+                              onClick={() => setDeleteTarget(expense)}
+                            >
                               <Trash2 className="w-3 h-3" />
                             </Button>
                           </div>
@@ -415,10 +441,19 @@ export default function Expenses() {
           <VendorSpendAnalysis expenses={selectorScopedExpenses} vendors={vendors} budgets={budgets} />
         </TabsContent>
 
-        <TabsContent value="audit">
+      <TabsContent value="audit">
           <AuditTrailPanel entityType="Expense" />
         </TabsContent>
       </Tabs>
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete expense "${deleteTarget?.category?.replace(/_/g, " ") || ""}"?`}
+        description="This will permanently remove the selected expense record."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }

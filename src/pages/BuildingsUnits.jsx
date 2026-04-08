@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
 import {
   Building2,
@@ -13,6 +13,7 @@ import {
   Plus,
   Download,
   Upload,
+  Trash2,
 } from "lucide-react";
 import { UnitService, BuildingService, PropertyService, PortfolioService } from "@/services/api";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +29,8 @@ import ViewModeToggle from "@/components/ViewModeToggle";
 import CreateBuildingModal from "@/components/property/CreateBuildingModal";
 import CreateUnitModal from "@/components/property/CreateUnitModal";
 import BulkImportModal from "@/components/property/BulkImportModal";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { toast } from "sonner";
 
 export default function BuildingsUnits() {
   const location = useLocation();
@@ -42,6 +45,8 @@ export default function BuildingsUnits() {
   const [showCreateUnit, setShowCreateUnit] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importType, setImportType] = useState("building");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const queryClient = useQueryClient();
 
   const { data: properties = [] } = useQuery({
     queryKey: ["bu-properties"],
@@ -116,6 +121,25 @@ export default function BuildingsUnits() {
   const leasedUnits = scopedUnits.filter((unit) => unit.occupancy_status === "leased").length;
   const vacantUnits = scopedUnits.filter((unit) => unit.occupancy_status === "vacant").length;
   const totalSF = scopedBuildings.reduce((sum, building) => sum + (building.total_sf || building.total_sqft || 0), 0);
+
+  const deleteMutation = useMutation({
+    mutationFn: async ({ type, id }) => {
+      const ok = type === "unit" ? await UnitService.delete(id) : await BuildingService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return { type, id };
+    },
+    onSuccess: ({ type }) => {
+      queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
+      queryClient.invalidateQueries({ queryKey: ["bu-units"] });
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      setDeleteTarget(null);
+      toast.success(`${type === "unit" ? "Unit" : "Building"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete: ${err?.message || "Unknown error"}`);
+    },
+  });
 
   const subtitleParts = [
     `${scopedBuildings.length} buildings`,
@@ -215,6 +239,15 @@ export default function BuildingsUnits() {
                       <h3 className="text-base font-bold text-slate-900">{building.name}</h3>
                       <p className="text-xs text-slate-400">{getPropertyName(building.property_id)}</p>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                      onClick={() => setDeleteTarget({ type: "building", record: building })}
+                      title="Delete building"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
@@ -232,7 +265,7 @@ export default function BuildingsUnits() {
                   {buildingUnits.length > 0 && (
                     <div className="space-y-1 max-h-32 overflow-y-auto">
                       {buildingUnits.map((unit) => (
-                        <div key={unit.id} className="flex items-center justify-between bg-slate-50 rounded-md px-2.5 py-1.5">
+                        <div key={unit.id} className="flex items-center justify-between bg-slate-50 rounded-md px-2.5 py-1.5 gap-2">
                           <div className="flex items-center gap-2">
                             <DoorOpen className="w-3 h-3 text-slate-400" />
                             <span className="text-xs font-medium text-slate-700">
@@ -240,17 +273,28 @@ export default function BuildingsUnits() {
                             </span>
                             <span className="text-[10px] text-slate-400">{unit.square_footage?.toLocaleString()} SF</span>
                           </div>
-                          <Badge
-                            className={`text-[10px] ${
-                              unit.occupancy_status === "leased"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : unit.occupancy_status === "vacant"
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-slate-100 text-slate-600"
-                            }`}
-                          >
-                            {unit.occupancy_status}
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge
+                              className={`text-[10px] ${
+                                unit.occupancy_status === "leased"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : unit.occupancy_status === "vacant"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {unit.occupancy_status}
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0 text-red-500 hover:text-red-600"
+                              onClick={() => setDeleteTarget({ type: "unit", record: unit })}
+                              title="Delete unit"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -284,6 +328,15 @@ export default function BuildingsUnits() {
                     <div className="text-center"><p className="font-bold text-sm">{leased}</p><p className="text-slate-400">Leased</p></div>
                   </div>
                   {building.year_built && <span className="text-xs text-slate-400 flex-shrink-0">{building.year_built}</span>}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
+                    onClick={() => setDeleteTarget({ type: "building", record: building })}
+                    title="Delete building"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                   <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
                     <Button variant="outline" size="sm" className="flex-shrink-0 text-xs">
                       Property
@@ -335,9 +388,20 @@ export default function BuildingsUnits() {
                     <TableCell><Badge className="bg-emerald-100 text-emerald-700 text-xs">{leased}</Badge></TableCell>
                     <TableCell><Badge className="bg-amber-100 text-amber-700 text-xs">{vacant}</Badge></TableCell>
                     <TableCell>
-                      <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
-                        <Button variant="outline" size="sm">View</Button>
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link to={createPageUrl("PropertyDetail") + `?id=${building.property_id}`}>
+                          <Button variant="outline" size="sm">View</Button>
+                        </Link>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                          onClick={() => setDeleteTarget({ type: "building", record: building })}
+                          title="Delete building"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -363,6 +427,22 @@ export default function BuildingsUnits() {
         isOpen={showImport}
         onClose={() => setShowImport(false)}
         moduleType={importType}
+      />
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete ${deleteTarget?.type || "item"} "${deleteTarget?.record?.name || deleteTarget?.record?.unit_number || deleteTarget?.record?.unit_id_code || ""}"?`}
+        description={
+          deleteTarget?.type === "unit"
+            ? "This will permanently remove the selected unit."
+            : "This will permanently remove the selected building and may affect related units and reports."
+        }
+        loading={deleteMutation.isPending}
+        onConfirm={() =>
+          deleteTarget?.record?.id &&
+          deleteMutation.mutate({ type: deleteTarget.type, id: deleteTarget.record.id })
+        }
       />
     </div>
   );
