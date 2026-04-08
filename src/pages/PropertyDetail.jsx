@@ -35,9 +35,8 @@ export default function PropertyDetail() {
 
   const { data: property, isLoading } = useQuery({
     queryKey: ['property', propertyId],
-    queryFn: () => PropertyService.filter({ id: propertyId }),
+    queryFn: () => PropertyService.get(propertyId),
     enabled: !!propertyId,
-    select: data => data?.[0],
   });
 
   const { data: units = [] } = useQuery({

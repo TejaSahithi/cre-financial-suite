@@ -201,13 +201,13 @@ export function createEntityService(entityName) {
    * Super-admins (orgId === null) bypass the filter.
    */
   async function applyOrgScope(query) {
-    if (!query) return query;
-    if (isOrgExempt) return query;
+    if (!query) return { query };
+    if (isOrgExempt) return { query };
     const orgId = await getCurrentOrgId();
     if (orgId && orgId !== '__none__') {
-      return query.eq('org_id', orgId);
+      return { query: query.eq('org_id', orgId), orgId };
     }
-    return query;
+    return { query, orgId };
   }
 
   /**
@@ -403,7 +403,12 @@ export function createEntityService(entityName) {
       try {
         if (supabase) {
           let baseQuery = supabase.from(tableName).select('*');
-          let query = await applyOrgScope(baseQuery);
+          // Supabase builders are thenables, so returning them directly from an
+          // async helper causes the request to execute before we add the actual
+          // filters. Wrap the builder in a plain object so `id`/`property_id`
+          // constraints still make it into the final query.
+          const scoped = await applyOrgScope(baseQuery);
+          let query = scoped.query;
           
           if (filters && typeof filters === 'object') {
             for (const [key, value] of Object.entries(filters)) {
