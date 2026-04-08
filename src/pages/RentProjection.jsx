@@ -1,7 +1,10 @@
 import React, { useState } from "react";
-import { propertyService } from "@/services/propertyService";
-import { supabase } from "@/services/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
+import { Loader2, RefreshCw, AlertCircle } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { toast } from "sonner";
+import { propertyService } from "@/services/propertyService";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,13 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, RefreshCw, AlertCircle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { toast } from "sonner";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// ─── Component ─────────────────────────────────────────────────────────────
 export default function RentProjection() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
@@ -28,7 +27,6 @@ export default function RentProjection() {
     queryFn: () => propertyService.list(),
   });
 
-  // Read from computation_snapshots via shared hook — no client-side math
   const { snapshot, outputs, isLoading, isFetching, refetch } = useSnapshotQuery({
     engineType: "lease",
     propertyId: selectedProperty || null,
@@ -37,20 +35,19 @@ export default function RentProjection() {
 
   const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
 
-  // Outputs come directly from the snapshot — no derivation
   const tenantRentData = outputs?.tenant_schedules ?? [];
   const summary = outputs?.summary ?? {};
   const monthlyProjections = outputs?.monthly_projections ?? [];
 
-  // Build chart data from snapshot monthly_projections
-  const monthlyChart = MONTHS.map((month, i) => {
-    const proj = monthlyProjections.find((p) => p.month === i + 1) ?? {};
+  const monthlyChart = MONTHS.map((month, index) => {
+    const projection = monthlyProjections.find((item) => item.month === index + 1) ?? {};
+
     return {
       month,
-      current: Math.round(proj.base_rent ?? 0),
-      projected: Math.round(proj.projected_rent ?? 0),
-      previous: Math.round(proj.previous_rent ?? 0),
-      budget: Math.round(proj.budget_rent ?? 0),
+      current: Math.round(projection.base_rent ?? 0),
+      projected: Math.round(projection.projected_rent ?? 0),
+      previous: Math.round(projection.previous_rent ?? 0),
+      budget: Math.round(projection.budget_rent ?? 0),
     };
   });
 
@@ -59,25 +56,31 @@ export default function RentProjection() {
   const totalPrevMonthly = summary.avg_previous_monthly ?? 0;
   const totalCurrentAnnual = summary.total_rent ?? 0;
   const totalProjectedAnnual = summary.total_projected_rent ?? 0;
-  const yoyChange = totalPrevMonthly > 0
-    ? ((totalCurrentMonthly - totalPrevMonthly) / totalPrevMonthly * 100).toFixed(1)
-    : null;
+  const yoyChange =
+    totalPrevMonthly > 0
+      ? ((totalCurrentMonthly - totalPrevMonthly) / totalPrevMonthly * 100).toFixed(1)
+      : null;
 
   const handleTriggerCompute = async () => {
     if (!selectedProperty) {
       toast.error("Select a property first");
       return;
     }
-    setIsTriggering(true);
+
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      await triggerCompute(selectedProperty, currentYear, session?.access_token);
-      toast.success("Computation started — results will appear shortly");
+      await triggerCompute(
+        "compute-lease",
+        {
+          property_id: selectedProperty,
+          fiscal_year: currentYear,
+        },
+        {
+          successMessage: "Computation started — results will appear shortly",
+        }
+      );
       setTimeout(() => refetch(), 3000);
-    } catch (err) {
+    } catch {
       toast.error("Failed to trigger computation");
-    } finally {
-      setIsTriggering(false);
     }
   };
 
@@ -85,7 +88,6 @@ export default function RentProjection() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Rent Roll & Projection</h1>
@@ -93,7 +95,7 @@ export default function RentProjection() {
             Computed rent schedules, escalations, and projections
             {snapshot && (
               <span className="ml-2 text-slate-400">
-                · Last computed {new Date(snapshot.computed_at).toLocaleString()}
+                {" · "}Last computed {new Date(snapshot.computed_at).toLocaleString()}
               </span>
             )}
           </p>
@@ -105,17 +107,14 @@ export default function RentProjection() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="">All Properties</SelectItem>
-              {properties.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              {properties.map((property) => (
+                <SelectItem key={property.id} value={property.id}>
+                  {property.name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-          >
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
           </Button>
           <Button
@@ -130,7 +129,6 @@ export default function RentProjection() {
         </div>
       </div>
 
-      {/* No snapshot state */}
       {noSnapshot && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-6 flex items-center gap-4">
@@ -138,26 +136,23 @@ export default function RentProjection() {
             <div>
               <p className="text-sm font-semibold text-amber-800">No computation results yet</p>
               <p className="text-xs text-amber-600 mt-1">
-                Select a property and click "Run Computation" to generate rent schedules.
-                Results are automatically computed after uploading lease data.
+                Select a property and click "Run Computation" to generate rent schedules. Results are
+                automatically computed after uploading lease data.
               </p>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Loading */}
       {isLoading && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
-          <span className="ml-3 text-slate-500">Loading computation results…</span>
+          <span className="ml-3 text-slate-500">Loading computation results...</span>
         </div>
       )}
 
-      {/* Results */}
       {snapshot && (
         <>
-          {/* Summary cards — values from snapshot.outputs.summary */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="border-l-4 border-l-blue-500">
               <CardContent className="p-4">
@@ -172,7 +167,9 @@ export default function RentProjection() {
             </Card>
             <Card className="border-l-4 border-l-emerald-500">
               <CardContent className="p-4">
-                <p className="text-[10px] font-semibold text-slate-500 uppercase">Projected Monthly (Next Yr)</p>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">
+                  Projected Monthly (Next Yr)
+                </p>
                 <p className="text-2xl font-bold text-emerald-600">
                   ${totalProjectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </p>
@@ -196,16 +193,18 @@ export default function RentProjection() {
                 <p className="text-2xl font-bold">
                   {yoyChange !== null ? (
                     <span className={parseFloat(yoyChange) >= 0 ? "text-emerald-600" : "text-red-500"}>
-                      {parseFloat(yoyChange) >= 0 ? "+" : ""}{yoyChange}%
+                      {parseFloat(yoyChange) >= 0 ? "+" : ""}
+                      {yoyChange}%
                     </span>
-                  ) : "—"}
+                  ) : (
+                    "—"
+                  )}
                 </p>
                 <p className="text-[10px] text-slate-400">Current vs Previous</p>
               </CardContent>
             </Card>
           </div>
 
-          {/* Chart — from snapshot monthly_projections */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
@@ -216,11 +215,17 @@ export default function RentProjection() {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={monthlyChart}>
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
-                  <Tooltip formatter={(v) => `$${v.toLocaleString()}`} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value) => `$${value.toLocaleString()}`} />
                   <Legend />
                   <Bar dataKey="current" name="Current Rent" fill="#1a2744" radius={[2, 2, 0, 0]} barSize={18} />
-                  <Bar dataKey="projected" name="Projected (Next Yr)" fill="#10b981" radius={[2, 2, 0, 0]} barSize={18} />
+                  <Bar
+                    dataKey="projected"
+                    name="Projected (Next Yr)"
+                    fill="#10b981"
+                    radius={[2, 2, 0, 0]}
+                    barSize={18}
+                  />
                   <Bar dataKey="previous" name="Previous Rent" fill="#94a3b8" radius={[2, 2, 0, 0]} barSize={18} />
                   <Bar dataKey="budget" name="Budget Revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} barSize={18} />
                 </BarChart>
@@ -228,7 +233,6 @@ export default function RentProjection() {
             </CardContent>
           </Card>
 
-          {/* Per-tenant table — from snapshot tenant_schedules */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Tenant Rent Summary</CardTitle>
@@ -252,34 +256,36 @@ export default function RentProjection() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {tenantRentData.map((t, i) => (
-                      <TableRow key={i}>
-                        <TableCell className="text-sm font-medium">{t.tenant_name}</TableCell>
+                    {tenantRentData.map((tenant, index) => (
+                      <TableRow key={index}>
+                        <TableCell className="text-sm font-medium">{tenant.tenant_name}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="text-[10px]">{t.lease_type}</Badge>
+                          <Badge variant="outline" className="text-[10px]">
+                            {tenant.lease_type}
+                          </Badge>
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right">
-                          {(t.square_footage || 0).toLocaleString()}
+                          {(tenant.square_footage || 0).toLocaleString()}
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right">
-                          ${(t.rent_per_sf || 0).toFixed(2)}
+                          ${(tenant.rent_per_sf || 0).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right">
-                          ${(t.monthly_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          ${(tenant.monthly_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right">
-                          ${(t.cam_charge || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          ${(tenant.cam_charge || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right font-bold">
-                          ${(t.total_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          ${(tenant.total_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell className="text-sm font-mono text-right text-emerald-600">
-                          ${(t.projected_monthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          ${(tenant.projected_monthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className="text-[10px] capitalize">
-                            {t.escalation_type || "none"}
-                            {t.escalation_rate > 0 ? ` ${t.escalation_rate}%` : ""}
+                            {tenant.escalation_type || "none"}
+                            {tenant.escalation_rate > 0 ? ` ${tenant.escalation_rate}%` : ""}
                           </Badge>
                         </TableCell>
                       </TableRow>
@@ -290,13 +296,10 @@ export default function RentProjection() {
             </CardContent>
           </Card>
 
-          {/* Monthly rent schedule — from snapshot rent_schedule */}
           {outputs?.rent_schedule && outputs.rent_schedule.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">
-                  Monthly Rent Schedule — Jan to Dec {currentYear}
-                </CardTitle>
+                <CardTitle className="text-base">Monthly Rent Schedule — Jan to Dec {currentYear}</CardTitle>
               </CardHeader>
               <CardContent className="overflow-x-auto">
                 <Table>
@@ -310,8 +313,8 @@ export default function RentProjection() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {outputs.rent_schedule.map((row, i) => (
-                      <TableRow key={i}>
+                    {outputs.rent_schedule.map((row, index) => (
+                      <TableRow key={index}>
                         <TableCell className="text-sm sticky left-0 bg-white z-10">{row.month}</TableCell>
                         <TableCell className="text-sm font-mono text-right">
                           ${(row.base_rent || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
