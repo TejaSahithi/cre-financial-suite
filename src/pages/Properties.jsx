@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { propertyService } from "@/services/propertyService";
 import { validateAddress } from "@/services/integrations";
 import { supabase } from "@/services/supabaseClient";
@@ -35,25 +35,32 @@ export default function Properties() {
   const [verifyingAddress, setVerifyingAddress] = useState(false);
   const queryClient = useQueryClient();
 
-  const defaultForm = {
+  const buildDefaultForm = () => ({
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
     total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
     portfolio_id: portfolioId || ""
-  };
+  });
+  const defaultForm = buildDefaultForm();
   const [form, setForm] = useState(defaultForm);
 
   const { data: properties = [], isLoading, orgId } = useOrgQuery("Property");
   const { orgId: currentOrgId } = useOrgId();
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const activePortfolio = portfolioId ? portfolios.find((portfolio) => portfolio.id === portfolioId) : null;
+
+  useEffect(() => {
+    setForm((prev) => ({ ...prev, portfolio_id: portfolioId || "" }));
+  }, [portfolioId]);
 
   const createMutation = useMutation({
     mutationFn: (data) => propertyService.create(data),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['Property'] });
       setShowCreate(false);
-      setForm(defaultForm);
+      setForm(buildDefaultForm());
       setCurrentStep(1);
       toast.success("Property created successfully");
       if (data && data.id) {
@@ -65,18 +72,22 @@ export default function Properties() {
     },
   });
 
-  const filtered = properties.filter(p => {
+  const scopedProperties = portfolioId
+    ? properties.filter((property) => property.portfolio_id === portfolioId)
+    : properties;
+
+  const filtered = scopedProperties.filter(p => {
     const matchSearch = p.name?.toLowerCase().includes(search.toLowerCase()) || p.address?.toLowerCase().includes(search.toLowerCase());
     const matchStructure = structureFilter === "all" || p.structure_type === structureFilter;
     return matchSearch && matchStructure;
   });
 
-  const singleTenantProps = properties.filter(p => p.structure_type === 'single');
-  const multiTenantProps = properties.filter(p => p.structure_type === 'multi');
+  const singleTenantProps = scopedProperties.filter(p => p.structure_type === 'single');
+  const multiTenantProps = scopedProperties.filter(p => p.structure_type === 'multi');
 
   const generatePropertyId = () => {
     const prefix = form.state ? form.state.substring(0, 2).toUpperCase() : "XX";
-    const num = String(properties.length + 1).padStart(3, "0");
+      const num = String(scopedProperties.length + 1).padStart(3, "0");
     return `MCG-${prefix}-${num}`;
   };
 
@@ -129,7 +140,7 @@ export default function Properties() {
     <div className="p-4 lg:p-6 space-y-5">
       <PageHeader icon={Home} title="Properties" subtitle={`${properties.length} properties · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(properties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
           <Button variant="outline" size="sm" onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
           <Button size="sm" onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
@@ -137,7 +148,7 @@ export default function Properties() {
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div onClick={() => setStructureFilter("all")} className={`cursor-pointer`}>
-          <MetricCard label="All Properties" value={properties.length} icon={Home} color="bg-slate-100 text-slate-600" className={structureFilter === 'all' ? 'ring-2 ring-blue-500' : ''} />
+          <MetricCard label="All Properties" value={scopedProperties.length} icon={Home} color="bg-slate-100 text-slate-600" className={structureFilter === 'all' ? 'ring-2 ring-blue-500' : ''} />
         </div>
         <div onClick={() => setStructureFilter("single")} className={`cursor-pointer`}>
           <MetricCard label="Single Building" value={singleTenantProps.length} icon={Home} color="bg-blue-50 text-blue-600" className={structureFilter === 'single' ? 'ring-2 ring-blue-500' : ''} />
@@ -145,8 +156,8 @@ export default function Properties() {
         <div onClick={() => setStructureFilter("multi")} className={`cursor-pointer`}>
           <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-purple-50 text-purple-600" className={structureFilter === 'multi' ? 'ring-2 ring-purple-500' : ''} />
         </div>
-        <MetricCard label="Total SF" value={properties.reduce((s, p) => s + (p.total_sf || p.total_sqft || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
-        <MetricCard label="Verified" value={`${properties.filter(p => p.address_verified).length}/${properties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
+        <MetricCard label="Total SF" value={scopedProperties.reduce((s, p) => s + (p.total_sf || p.total_sqft || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
+        <MetricCard label="Verified" value={`${scopedProperties.filter(p => p.address_verified).length}/${scopedProperties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 
       <div className="flex items-center justify-between gap-4">
