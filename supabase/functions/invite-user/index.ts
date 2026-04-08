@@ -42,7 +42,8 @@ Deno.serve(async (req: Request) => {
 
     const {
       email, full_name, role, custom_role, org_id,
-      phone, module_permissions, page_permissions, capabilities
+      phone, module_permissions, page_permissions, capabilities,
+      access_scopes, access_role
     } = await req.json();
 
     // role is optional: null/omitted means user is imported with no role (no_access)
@@ -107,6 +108,53 @@ Deno.serve(async (req: Request) => {
         onboarding_type: "invited",
         first_login: true,
       }, { onConflict: "id" }).catch((e: any) => console.error("[invite-user] profile upsert:", e));
+
+      const normalizedScope = {
+        portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
+        properties: Array.isArray(access_scopes?.properties) ? [...new Set(access_scopes.properties.filter(Boolean))] : [],
+      };
+      const normalizedAccessRole = ["viewer", "editor", "manager"].includes(access_role) ? access_role : "viewer";
+
+      const { error: deleteAccessError } = await adminClient
+        .from("user_access")
+        .delete()
+        .eq("user_id", userId)
+        .eq("org_id", org_id);
+
+      if (deleteAccessError) {
+        console.error("[invite-user] user_access delete error:", deleteAccessError);
+      }
+
+      const accessRows = [
+        ...normalizedScope.portfolios.map((scopeId: string) => ({
+          user_id: userId,
+          org_id,
+          scope: "portfolio",
+          scope_id: scopeId,
+          role: normalizedAccessRole,
+          granted_by: caller.id,
+          is_active: true,
+        })),
+        ...normalizedScope.properties.map((scopeId: string) => ({
+          user_id: userId,
+          org_id,
+          scope: "property",
+          scope_id: scopeId,
+          role: normalizedAccessRole,
+          granted_by: caller.id,
+          is_active: true,
+        })),
+      ];
+
+      if (accessRows.length > 0) {
+        const { error: accessInsertError } = await adminClient
+          .from("user_access")
+          .insert(accessRows);
+
+        if (accessInsertError) {
+          console.error("[invite-user] user_access insert error:", accessInsertError);
+        }
+      }
     }
 
     // ── Log invitation ────────────────────────────────────────────────────────

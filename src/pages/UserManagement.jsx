@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
@@ -175,6 +175,7 @@ const DEFAULT_PAGE_PERMS = Object.fromEntries(
 );
 const DEFAULT_SIGNING = Object.fromEntries(DOCUMENT_TYPES.map(d => [d.key, 0]));
 const DEFAULT_ROLES = [];
+const DEFAULT_DATA_SCOPE = { portfolios: [], properties: [] };
 
 const STATUS_CONFIG = {
   active:    { label: "Active",    badgeClass: "bg-emerald-100 text-emerald-700", Icon: CheckCircle2 },
@@ -254,6 +255,186 @@ function parseCSV(text) {
       phone:     headerMap.phone     !== undefined ? vals[headerMap.phone]     || "" : "",
     };
   }).filter(r => r.email && r.email.includes("@"));
+}
+
+function getMemberDataScope(member) {
+  const grants = member?.access_grants || [];
+  return {
+    portfolios: grants.filter((grant) => grant.scope === "portfolio").map((grant) => grant.scope_id),
+    properties: grants.filter((grant) => grant.scope === "property").map((grant) => grant.scope_id),
+  };
+}
+
+function deriveAccessGrantRole(selectedRoles, pagePerms) {
+  const selected = new Set(selectedRoles || []);
+  const hasFullPageAccess = Object.values(pagePerms || {}).some((value) => value === "full");
+
+  if (
+    hasFullPageAccess ||
+    selected.has("asset_manager") ||
+    selected.has("portfolio_manager") ||
+    selected.has("property_manager") ||
+    selected.has("operations_director")
+  ) {
+    return "manager";
+  }
+
+  if (
+    selected.has("financial_analyst") ||
+    selected.has("accounts_manager") ||
+    selected.has("leasing_agent") ||
+    selected.has("lease_admin")
+  ) {
+    return "editor";
+  }
+
+  return "viewer";
+}
+
+async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
+  const normalized = {
+    portfolios: [...new Set((dataScope?.portfolios || []).filter(Boolean))],
+    properties: [...new Set((dataScope?.properties || []).filter(Boolean))],
+  };
+
+  const { error: deleteError } = await supabase
+    .from("user_access")
+    .delete()
+    .eq("user_id", userId)
+    .eq("org_id", orgId);
+
+  if (deleteError) throw deleteError;
+
+  const rows = [
+    ...normalized.portfolios.map((scopeId) => ({
+      user_id: userId,
+      org_id: orgId,
+      scope: "portfolio",
+      scope_id: scopeId,
+      role,
+      is_active: true,
+    })),
+    ...normalized.properties.map((scopeId) => ({
+      user_id: userId,
+      org_id: orgId,
+      scope: "property",
+      scope_id: scopeId,
+      role,
+      is_active: true,
+    })),
+  ];
+
+  if (rows.length === 0) return;
+
+  const { error: insertError } = await supabase
+    .from("user_access")
+    .insert(rows);
+
+  if (insertError) throw insertError;
+}
+
+function DataScopeEditor({ orgId, value, onChange }) {
+  const { data: portfolios = [] } = useQuery({
+    queryKey: ["member-scope-portfolios", orgId],
+    queryFn: async () => {
+      if (!orgId) return [];
+      const { data, error } = await supabase
+        .from("portfolios")
+        .select("id, name")
+        .eq("org_id", orgId)
+        .order("name");
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!orgId,
+    initialData: [],
+  });
+
+  const { data: properties = [] } = useQuery({
+    queryKey: ["member-scope-properties", orgId],
+    queryFn: async () => {
+      if (!orgId) return [];
+      const { data, error } = await supabase
+        .from("properties")
+        .select("id, name, portfolio_id")
+        .eq("org_id", orgId)
+        .order("name");
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!orgId,
+    initialData: [],
+  });
+
+  const selectedPortfolios = new Set(value?.portfolios || []);
+  const selectedProperties = new Set(value?.properties || []);
+  const portfolioNameById = Object.fromEntries(portfolios.map((portfolio) => [portfolio.id, portfolio.name]));
+
+  const toggle = (key, scopeId) => {
+    const current = new Set(value?.[key] || []);
+    if (current.has(scopeId)) current.delete(scopeId);
+    else current.add(scopeId);
+    onChange({ ...(value || DEFAULT_DATA_SCOPE), [key]: [...current] });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 rounded-xl border border-blue-100 bg-blue-50 text-xs text-blue-700">
+        Assign the exact portfolios or properties this user can work on. For non-admin org users, leaving both lists empty means they will not see portfolio or property data.
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+            <p className="text-sm font-semibold text-slate-800">Portfolio Access</p>
+            <p className="text-[11px] text-slate-500">{selectedPortfolios.size} selected</p>
+          </div>
+          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+            {portfolios.length === 0 ? (
+              <div className="px-4 py-4 text-xs text-slate-400">No portfolios in this organization</div>
+            ) : (
+              portfolios.map((portfolio) => (
+                <label key={portfolio.id} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
+                  <Checkbox
+                    checked={selectedPortfolios.has(portfolio.id)}
+                    onCheckedChange={() => toggle("portfolios", portfolio.id)}
+                  />
+                  <span className="text-sm text-slate-700">{portfolio.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+            <p className="text-sm font-semibold text-slate-800">Property Access</p>
+            <p className="text-[11px] text-slate-500">{selectedProperties.size} selected</p>
+          </div>
+          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+            {properties.length === 0 ? (
+              <div className="px-4 py-4 text-xs text-slate-400">No properties in this organization</div>
+            ) : (
+              properties.map((property) => (
+                <label key={property.id} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
+                  <Checkbox
+                    checked={selectedProperties.has(property.id)}
+                    onCheckedChange={() => toggle("properties", property.id)}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-700">{property.name}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {portfolioNameById[property.portfolio_id] || "No portfolio"}
+                    </p>
+                  </div>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── RoleSelector Component ───────────────────────────────────────────────────
@@ -582,6 +763,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   const [customRoleName, setCustomRoleName] = useState(member.capabilities?.custom_role || "");
   const [pagePerms, setPagePerms] = useState(getMemberPagePerms(member));
   const [signingPrivs, setSigningPrivs] = useState(getMemberSigningPrivileges(member));
+  const [dataScope, setDataScope] = useState(DEFAULT_DATA_SCOPE);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const status = deriveStatus(member);
@@ -592,13 +774,42 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   const TABS = [
     { key: "roles",    label: "Roles" },
     { key: "access",   label: "Page Access" },
+    { key: "data",     label: "Data Scope" },
     { key: "signing",  label: "Signing" },
   ];
+
+  const { data: accessGrants = [] } = useQuery({
+    queryKey: ["member-access-grants", member.user_id, orgId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("user_access")
+        .select("scope, scope_id, role, is_active, expires_at")
+        .eq("user_id", member.user_id)
+        .eq("org_id", orgId)
+        .eq("is_active", true);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!member?.user_id && !!orgId,
+    initialData: [],
+  });
+
+  useEffect(() => {
+    setSelectedRoles(getMemberRoles(member));
+    setCustomRoleName(member.capabilities?.custom_role || "");
+    setPagePerms(getMemberPagePerms(member));
+    setSigningPrivs(getMemberSigningPrivileges(member));
+  }, [member]);
+
+  useEffect(() => {
+    setDataScope(getMemberDataScope({ access_grants: accessGrants }));
+  }, [accessGrants]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
+      const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
       const { error } = await supabase.from("memberships").update({
         role: primaryRole,
         page_permissions: pagePerms,
@@ -611,9 +822,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
         },
       }).eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
+      await syncUserAccessGrants({ userId: member.user_id, orgId, dataScope, role: accessRole });
       await logAudit({ action: "update_user_permissions", target_user_id: member.user_id, details: { roles: selectedRoles, signing: signingPrivs } });
       toast.success("Permissions saved");
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
+      queryClient.invalidateQueries({ queryKey: ["member-access-grants", member.user_id, orgId] });
       onClose();
     } catch (e) {
       toast.error(e.message || "Failed to save");
@@ -625,6 +838,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
     if (!confirm(`Remove ${member.profiles?.full_name || member.profiles?.email} from this organization?`)) return;
     setRemoving(true);
     try {
+      await supabase.from("user_access").delete().eq("user_id", member.user_id).eq("org_id", orgId);
       const { error } = await supabase.from("memberships").delete().eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
       await logAudit({ action: "remove_member", target_user_id: member.user_id });
@@ -747,6 +961,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
             </div>
           )}
 
+          {activeTab === "data" && (
+            <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
+          )}
+
           {activeTab === "signing" && (
             <div>
               <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
@@ -803,6 +1021,7 @@ function InviteDialog({ open, onClose, orgId }) {
   const [customRoleName, setCustomRoleName] = useState("");
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
+  const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
 
@@ -810,7 +1029,8 @@ function InviteDialog({ open, onClose, orgId }) {
     { key: "info",    label: "1. Contact" },
     { key: "roles",   label: "2. Roles" },
     { key: "access",  label: "3. Page Access" },
-    { key: "signing", label: "4. Signing" },
+    { key: "data",    label: "4. Data Scope" },
+    { key: "signing", label: "5. Signing" },
   ];
 
   const validate = () => {
@@ -827,6 +1047,7 @@ function InviteDialog({ open, onClose, orgId }) {
     setSubmitting(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
+      const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
       const { data: { session } } = await supabase.auth.getSession();
       const { error } = await supabase.functions.invoke("invite-user", {
         body: {
@@ -836,11 +1057,13 @@ function InviteDialog({ open, onClose, orgId }) {
           role: primaryRole,
           org_id: orgId,
           page_permissions: pagePerms,
+          access_scopes: dataScope,
           capabilities: {
             roles: selectedRoles,
             custom_role: customRoleName || null,
             signing_privileges: signingPrivs,
           },
+          access_role: accessRole,
         },
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
@@ -852,6 +1075,7 @@ function InviteDialog({ open, onClose, orgId }) {
       setSelectedRoles([]);
       setCustomRoleName("");
       setPagePerms({ ...DEFAULT_PAGE_PERMS });
+      setDataScope({ ...DEFAULT_DATA_SCOPE });
       setSigningPrivs({ ...DEFAULT_SIGNING });
       setActiveTab("info");
       onClose();
@@ -949,6 +1173,18 @@ function InviteDialog({ open, onClose, orgId }) {
               />
               <div className="flex gap-2 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setActiveTab("roles")}>← Back</Button>
+                <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("data")}>
+                  Next: Data Scope →
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "data" && (
+            <div className="space-y-4">
+              <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setActiveTab("access")}>← Back</Button>
                 <Button className="flex-1 bg-[#1a2744]/10 text-[#1a2744] hover:bg-[#1a2744]/20 font-semibold" onClick={() => setActiveTab("signing")}>
                   Next: Signing →
                 </Button>
@@ -1198,15 +1434,22 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
   const [customRoleName, setCustomRoleName] = useState("");
   const [pagePerms, setPagePerms] = useState({ ...DEFAULT_PAGE_PERMS });
   const [signingPrivs, setSigningPrivs] = useState({ ...DEFAULT_SIGNING });
+  const [dataScope, setDataScope] = useState({ ...DEFAULT_DATA_SCOPE });
   const [activeTab, setActiveTab] = useState("roles");
   const [saving, setSaving] = useState(false);
 
-  const TABS = [{ key: "roles", label: "Roles" }, { key: "access", label: "Page Access" }, { key: "signing", label: "Signing" }];
+  const TABS = [
+    { key: "roles", label: "Roles" },
+    { key: "access", label: "Page Access" },
+    { key: "data", label: "Data Scope" },
+    { key: "signing", label: "Signing" },
+  ];
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
+      const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
       for (const m of selectedMembers) {
         await supabase.from("memberships").update({
           role: primaryRole,
@@ -1219,6 +1462,7 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
             signing_privileges: signingPrivs,
           },
         }).eq("user_id", m.user_id).eq("org_id", orgId);
+        await syncUserAccessGrants({ userId: m.user_id, orgId, dataScope, role: accessRole });
       }
       await logAudit({ action: "bulk_update_permissions", details: { count: selectedMembers.length, roles: selectedRoles } });
       toast.success(`Updated ${selectedMembers.length} users`);
@@ -1256,6 +1500,9 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
           )}
           {activeTab === "access" && (
             <PagePermissionMatrix permissions={pagePerms} onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))} />
+          )}
+          {activeTab === "data" && (
+            <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
           )}
           {activeTab === "signing" && (
             <SigningPrivilegesMatrix privileges={signingPrivs} onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))} />

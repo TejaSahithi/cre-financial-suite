@@ -69,6 +69,160 @@ export async function getCurrentOrgId() {
   }
 }
 
+const ACCESS_CACHE_PREFIX = '__access_scope__';
+const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
+
+async function getCurrentAccessScope(orgId) {
+  if (!orgId || orgId === '__none__') return null;
+
+  try {
+    const { me } = await import('@/services/auth');
+    const user = await me();
+
+    if (!user) return null;
+    if (user.role === 'admin' || ACCESS_BYPASS_ROLES.has(user._raw_role)) {
+      return { unrestricted: true, userId: user.id, orgId };
+    }
+
+    const cacheKey = `${ACCESS_CACHE_PREFIX}:${user.id}:${orgId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
+    if (!supabase) {
+      const emptyScope = {
+        unrestricted: false,
+        userId: user.id,
+        orgId,
+        accessiblePortfolioIds: new Set(),
+        accessiblePropertyIds: new Set(),
+        accessibleTenantIds: new Set(),
+        accessibleTenantNames: new Set(),
+      };
+      setCached(cacheKey, emptyScope);
+      return emptyScope;
+    }
+
+    const [{ data: grants, error: grantsError }, { data: properties, error: propertiesError }] = await Promise.all([
+      supabase
+        .from('user_access')
+        .select('scope, scope_id, expires_at, is_active')
+        .eq('user_id', user.id)
+        .eq('org_id', orgId)
+        .eq('is_active', true),
+      supabase
+        .from('properties')
+        .select('id, portfolio_id')
+        .eq('org_id', orgId),
+    ]);
+
+    if (grantsError) throw grantsError;
+    if (propertiesError) throw propertiesError;
+
+    const nowTs = Date.now();
+    const activeGrants = (grants || []).filter((grant) => {
+      if (!grant?.is_active) return false;
+      if (!grant.expires_at) return true;
+      return new Date(grant.expires_at).getTime() > nowTs;
+    });
+
+    const accessiblePortfolioIds = new Set(
+      activeGrants.filter((grant) => grant.scope === 'portfolio').map((grant) => grant.scope_id)
+    );
+    const accessiblePropertyIds = new Set(
+      activeGrants.filter((grant) => grant.scope === 'property').map((grant) => grant.scope_id)
+    );
+
+    (properties || []).forEach((property) => {
+      if (property.portfolio_id && accessiblePortfolioIds.has(property.portfolio_id)) {
+        accessiblePropertyIds.add(property.id);
+      }
+      if (accessiblePropertyIds.has(property.id) && property.portfolio_id) {
+        accessiblePortfolioIds.add(property.portfolio_id);
+      }
+    });
+
+    let accessibleTenantIds = new Set();
+    let accessibleTenantNames = new Set();
+
+    if (accessiblePropertyIds.size > 0) {
+      const { data: leases, error: leasesError } = await supabase
+        .from('leases')
+        .select('tenant_id, tenant_name, property_id')
+        .eq('org_id', orgId)
+        .in('property_id', [...accessiblePropertyIds]);
+
+      if (leasesError) throw leasesError;
+
+      accessibleTenantIds = new Set(
+        (leases || []).map((lease) => lease.tenant_id).filter(Boolean)
+      );
+      accessibleTenantNames = new Set(
+        (leases || [])
+          .map((lease) => String(lease.tenant_name || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+    }
+
+    const scope = {
+      unrestricted: false,
+      userId: user.id,
+      orgId,
+      accessiblePortfolioIds,
+      accessiblePropertyIds,
+      accessibleTenantIds,
+      accessibleTenantNames,
+    };
+    setCached(cacheKey, scope);
+    return scope;
+  } catch (error) {
+    console.error('[api] getCurrentAccessScope() error:', error);
+    return null;
+  }
+}
+
+function filterRecordsByAccessScope(entityName, records, accessScope) {
+  if (!Array.isArray(records) || !accessScope || accessScope.unrestricted) {
+    return records;
+  }
+
+  const {
+    accessiblePortfolioIds,
+    accessiblePropertyIds,
+    accessibleTenantIds,
+    accessibleTenantNames,
+  } = accessScope;
+
+  if (
+    accessiblePortfolioIds.size === 0 &&
+    accessiblePropertyIds.size === 0 &&
+    accessibleTenantIds.size === 0 &&
+    accessibleTenantNames.size === 0
+  ) {
+    return [];
+  }
+
+  if (entityName === 'Portfolio') {
+    return records.filter((record) => accessiblePortfolioIds.has(record.id));
+  }
+
+  if (entityName === 'Property') {
+    return records.filter((record) => accessiblePropertyIds.has(record.id));
+  }
+
+  if (entityName === 'Tenant') {
+    return records.filter((record) => {
+      const normalizedName = String(record.name || '').trim().toLowerCase();
+      return accessibleTenantIds.has(record.id) || accessibleTenantNames.has(normalizedName);
+    });
+  }
+
+  return records.filter((record) => {
+    if (record.property_id) return accessiblePropertyIds.has(record.property_id);
+    if (record.portfolio_id) return accessiblePortfolioIds.has(record.portfolio_id);
+    return false;
+  });
+}
+
 
 /** Reset the cached org ID (e.g. after login/logout). */
 export function resetOrgIdCache() {
@@ -372,8 +526,12 @@ export function createEntityService(entityName) {
             throw error;
           }
           const normalized = normalizeFromDb(data);
-          setCached(cacheKey, normalized);
-          return normalized;
+          const orgId = isOrgExempt ? null : await getCurrentOrgId();
+          const accessScope = await getCurrentAccessScope(orgId);
+          const filtered = filterRecordsByAccessScope(entityName, normalized ? [normalized] : [], accessScope);
+          const finalRecord = filtered[0] || null;
+          setCached(cacheKey, finalRecord);
+          return finalRecord;
         }
         // In-memory fallback
         seedMemoryStore();
@@ -437,7 +595,9 @@ export function createEntityService(entityName) {
             ({ data, error } = await retry);
           }
           if (error) throw error;
-          const result = normalizeFromDb(data || []);
+          const normalized = normalizeFromDb(data || []);
+          const accessScope = await getCurrentAccessScope(orgId);
+          const result = filterRecordsByAccessScope(entityName, normalized, accessScope);
           setCached(cacheKey, result);
           return result;
         }
@@ -509,7 +669,10 @@ export function createEntityService(entityName) {
           }
           const { data, error } = await query;
           if (error) throw error;
-          const result = normalizeFromDb(data || []);
+          const normalized = normalizeFromDb(data || []);
+          const orgId = scoped?.orgId;
+          const accessScope = await getCurrentAccessScope(orgId);
+          const result = filterRecordsByAccessScope(entityName, normalized, accessScope);
           setCached(cacheKey, result);
           return result;
         }
