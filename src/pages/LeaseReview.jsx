@@ -49,14 +49,8 @@ export default function LeaseReview() {
 
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => {
-      // Call Supabase directly so we get the real error — leaseService swallows errors silently
-      const { data: updated, error } = await supabase
-        .from("leases")
-        .update({ ...data, updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .select()
-        .single();
-      if (error) throw error;
+      // Use leaseService instead of raw supabase to benefit from global schema mapping
+      const updated = await leaseService.update(id, data);
       return updated;
     },
     onSuccess: (updated) => {

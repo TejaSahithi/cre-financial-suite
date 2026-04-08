@@ -1086,7 +1086,7 @@ function normalizeUnit(row) {
 function normalizeBuilding(row) {
   // ── Alias mapping (Pre-normalization) ────────────────────────────────────
   row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
-  row.total_sf       = row.total_sf ?? row.total_sqft ?? row.sqft ?? row.sf ?? row.square_footage;
+  row.total_sf       = row.total_sf ?? row.total_sqft ?? row.sqft ?? row.sf ?? row.square_footage ?? row.area;
 
   row.total_sf       = toNumber(row.total_sf);
   row.floors         = toNumber(row.floors ?? row.total_floors ?? row.stories);

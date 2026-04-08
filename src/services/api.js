@@ -142,6 +142,61 @@ export function createEntityService(entityName) {
     return query;
   }
 
+  /**
+   * Translates UI-standardized fields back to the specific database schema 
+   * expected by Supabase for this entity. This resolves mismatches such as 
+   * 'total_sf' vs 'total_sqft' or 'square_footage'.
+   */
+  function translateToDbSchema(data) {
+    if (!data || typeof data !== 'object') return data;
+    const clean = { ...data };
+    
+    // 1. Generic field translation (Total SF)
+    if (clean.total_sf !== undefined) {
+      if (['Property', 'Building'].includes(entityName)) {
+        clean.total_sqft = clean.total_sf;
+      } else if (['Unit', 'Lease'].includes(entityName)) {
+        clean.square_footage = clean.total_sf;
+      }
+    }
+
+    // 2. Entity-specific cleanup (Strip non-existent columns)
+    if (entityName === 'Property') {
+      delete clean.floors; // Replaced by per-Building floor data
+    }
+
+    // 3. Global Strip List (Relational aliases and UI-only artifacts)
+    const toStrip = [
+      'total_sf', 'square_feet', 'sqft', 'sf', 'leased_sf', 'area',
+      'property_name', 'building_name', 'unit_id_code', 'property_id_code',
+      '_row' // Used by BulkImportModal UI
+    ];
+    
+    toStrip.forEach(key => delete clean[key]);
+    
+    return clean;
+  }
+
+  /**
+   * Normalizes database-specific keys back to UI-standardized fields.
+   * This is the inverse of translateToDbSchema.
+   */
+  function normalizeFromDb(data) {
+    if (!data) return data;
+    if (Array.isArray(data)) return data.map(item => normalizeFromDb(item));
+    
+    const normalized = { ...data };
+    
+    // 1. Map specialized SQFT keys back to UI-standard 'total_sf'
+    if (normalized.total_sqft !== undefined) {
+      normalized.total_sf = normalized.total_sqft;
+    } else if (normalized.square_footage !== undefined) {
+      normalized.total_sf = normalized.square_footage;
+    }
+    
+    return normalized;
+  }
+
   return {
     // ── GET ──────────────────────────────────────────────────────────
     /**
@@ -166,8 +221,9 @@ export function createEntityService(entityName) {
             if (error.code === 'PGRST116') return null; // Not found
             throw error;
           }
-          setCached(cacheKey, data);
-          return data;
+          const normalized = normalizeFromDb(data);
+          setCached(cacheKey, normalized);
+          return normalized;
         }
         // In-memory fallback
         seedMemoryStore();
@@ -317,11 +373,12 @@ export function createEntityService(entityName) {
      */
     async create(data) {
       try {
+        const translated = translateToDbSchema(data);
         const now = new Date().toISOString();
         const enriched = {
-          ...data,
-          created_at: data.created_at || now,
-          updated_at: data.updated_at || now,
+          ...translated,
+          created_at: translated.created_at || now,
+          updated_at: translated.updated_at || now,
         };
 
         // Inject org_id if not present and table requires it
@@ -398,10 +455,11 @@ export function createEntityService(entityName) {
      */
     async upsert(data, conflictColumn = 'email') {
       try {
+        const translated = translateToDbSchema(data);
         const now = new Date().toISOString();
         const enriched = {
-          ...data,
-          created_at: data.created_at || now,
+          ...translated,
+          created_at: translated.created_at || now,
           updated_at: now,
         };
 
@@ -453,9 +511,10 @@ export function createEntityService(entityName) {
      */
     async update(id, data) {
       try {
+        const translated = translateToDbSchema(data);
         const enriched = {
-          ...data,
-          updated_at: data.updated_at || new Date().toISOString(),
+          ...translated,
+          updated_at: translated.updated_at || new Date().toISOString(),
         };
 
         if (supabase) {
