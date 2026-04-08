@@ -145,7 +145,7 @@ export default function Properties() {
         <div onClick={() => setStructureFilter("multi")} className={`cursor-pointer`}>
           <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-purple-50 text-purple-600" className={structureFilter === 'multi' ? 'ring-2 ring-purple-500' : ''} />
         </div>
-        <MetricCard label="Total SF" value={`${(properties.reduce((s, p) => s + (p.total_sqft || 0), 0) / 1000000).toFixed(1)}M`} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
+        <MetricCard label="Total SF" value={properties.reduce((s, p) => s + (p.total_sqft || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Verified" value={`${properties.filter(p => p.address_verified).length}/${properties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 

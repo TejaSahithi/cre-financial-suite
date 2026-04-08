@@ -124,7 +124,7 @@ export default function PropertyDetail() {
                     <MapPin className="w-3.5 h-3.5" />
                     {property.address}{property.city ? `, ${property.city}` : ''}{property.state ? `, ${property.state} ${property.zip || ''}` : ''}
                     <Badge variant="outline" className="capitalize">{property.property_type?.replace('_', ' ')}</Badge>
-                    <span className="text-slate-400">ID: {property.property_id_code}</span>
+                    <span className="text-slate-400">ID: {property.property_id_code || property.id?.substring(0, 8)}</span>
                   </div>
                 </div>
               </div>
