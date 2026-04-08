@@ -84,6 +84,7 @@ export default function Properties() {
 
   const singleTenantProps = scopedProperties.filter(p => p.structure_type === 'single');
   const multiTenantProps = scopedProperties.filter(p => p.structure_type === 'multi');
+  const scopeSubtitle = activePortfolio ? ` in ${activePortfolio.name}` : "";
 
   const generatePropertyId = () => {
     const prefix = form.state ? form.state.substring(0, 2).toUpperCase() : "XX";
@@ -509,6 +510,8 @@ export default function Properties() {
         isOpen={showImport} 
         onClose={() => setShowImport(false)} 
         moduleType="property" 
+        orgId={activePortfolio?.org_id || currentOrgId || undefined}
+        portfolioId={portfolioId || undefined}
       />
     </div>
   );

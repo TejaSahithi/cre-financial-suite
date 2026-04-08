@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { CSV_TEMPLATES } from "@/services/parsingEngine";
 import { extractFromFile, methodLabel, methodBadgeClass } from "@/services/documentExtractor";
 import { supabase } from "@/services/supabaseClient";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
   PropertyService, LeaseService, TenantService, GLAccountService, InvoiceService,
@@ -232,7 +233,16 @@ const REQUIRES_PROPERTY = new Set(['building', 'unit']);
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-export default function BulkImportModal({ isOpen, onClose, moduleType, propertyId, buildingId }) {
+export default function BulkImportModal({
+  isOpen,
+  onClose,
+  moduleType,
+  orgId: contextOrgId,
+  portfolioId,
+  propertyId,
+  buildingId,
+  unitId,
+}) {
   const queryClient = useQueryClient();
   const [file, setFile]       = useState(null);
   const [loading, setLoading] = useState(false);
@@ -371,7 +381,7 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
     if (!canImport) return;
 
     setImporting(true);
-    const orgId = await resolveOrgId();
+    const writableOrgId = await resolveWritableOrgId(contextOrgId);
     const tenantIdCache = new Map();
     const propertyIdCache = new Map();
     let count = 0, skipped = 0;
@@ -381,7 +391,14 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       const { _row, ...data } = row;
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-      if (orgId) data.org_id = orgId;
+      if (writableOrgId) data.org_id = writableOrgId;
+
+      if (portfolioId) {
+        const rowPortfolioId = String(data.portfolio_id || '').trim();
+        if (!rowPortfolioId || !uuidRegex.test(rowPortfolioId)) {
+          data.portfolio_id = portfolioId;
+        }
+      }
 
       // Attach property_id from context (page-level) OR modal selection.
       // Page context wins; modal selection is the fallback.
@@ -397,6 +414,13 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
         const rowBldId = String(data.building_id || '').trim();
         if (!rowBldId || !uuidRegex.test(rowBldId)) {
           data.building_id = buildingId;
+        }
+      }
+
+      if (unitId) {
+        const rowUnitId = String(data.unit_id || '').trim();
+        if (!rowUnitId || !uuidRegex.test(rowUnitId)) {
+          data.unit_id = unitId;
         }
       }
 
