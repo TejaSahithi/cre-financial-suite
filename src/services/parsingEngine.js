@@ -944,6 +944,11 @@ function normalizeLease(row) {
     row.effective_rent = Math.round((row.monthly_rent + camMonthly + nnnMonthly) * 100) / 100;
   }
 
+  // ── DERIVED: UI compatibility ─────────────────────────────────────────────
+  if (row.cam_amount && !row.cam_per_month) {
+    row.cam_per_month = Math.round((row.cam_amount / 12) * 100) / 100;
+  }
+
   // ── Normalize lease_type ──────────────────────────────────────────────────
   if (row.lease_type) {
     const lt = String(row.lease_type).toLowerCase().trim();
@@ -1054,6 +1059,9 @@ function normalizeUnit(row) {
   row.square_footage = toNumber(row.square_footage ?? row.sqft ?? row.sf ?? row.area ?? row.total_sqft);
   row.floor          = toNumber(row.floor ?? row.floor_number ?? row.level);
   row.monthly_rent   = toNumber(row.monthly_rent ?? row.asking_rent ?? row.rent);
+  
+  // UI Compatibility
+  row.square_feet = row.square_footage;
 
   if (row.status) {
     const s = String(row.status).toLowerCase().trim();

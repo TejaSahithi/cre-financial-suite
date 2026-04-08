@@ -105,7 +105,7 @@ export default function BuildingsUnits() {
                   </div>
                   <div className="grid grid-cols-4 gap-2 mb-3">
                     {[
-                      { label: "SF", value: `${((b.total_sf || 0) / 1000).toFixed(0)}K` },
+                      { label: "SF", value: `${((b.total_sqft || 0) / 1000).toFixed(0)}K` },
                       { label: "Floors", value: b.floors || 1 },
                       { label: "Leased", value: leased },
                       { label: "Vacant", value: vacant },
@@ -122,8 +122,8 @@ export default function BuildingsUnits() {
                         <div key={u.id} className="flex items-center justify-between bg-slate-50 rounded-md px-2.5 py-1.5">
                           <div className="flex items-center gap-2">
                             <DoorOpen className="w-3 h-3 text-slate-400" />
-                            <span className="text-xs font-medium text-slate-700">{u.unit_id_code}</span>
-                            <span className="text-[10px] text-slate-400">{u.square_feet?.toLocaleString()} SF</span>
+                            <span className="text-xs font-medium text-slate-700">{u.unit_number || u.unit_id_code || u.id?.substring(0, 8)}</span>
+                            <span className="text-[10px] text-slate-400">{u.square_footage?.toLocaleString()} SF</span>
                           </div>
                           <Badge className={`text-[10px] ${u.occupancy_status === 'leased' ? 'bg-emerald-100 text-emerald-700' : u.occupancy_status === 'vacant' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
                             {u.occupancy_status}
@@ -200,7 +200,7 @@ export default function BuildingsUnits() {
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-slate-600">{getPropertyName(b.property_id)}</TableCell>
-                    <TableCell className="text-sm font-mono">{(b.total_sf || 0).toLocaleString()}</TableCell>
+                    <TableCell className="text-sm font-mono">{(b.total_sqft || 0).toLocaleString()}</TableCell>
                     <TableCell className="text-sm">{b.floors || 1}</TableCell>
                     <TableCell className="text-sm">{b.year_built || "—"}</TableCell>
                     <TableCell className="text-sm font-medium">{bUnits.length}</TableCell>

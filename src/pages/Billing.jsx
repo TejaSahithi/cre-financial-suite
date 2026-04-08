@@ -87,7 +87,7 @@ export default function Billing() {
     setGenerating(true);
     for (const lease of activeLeases) {
       const cam = camCalcs.find(c => c.lease_id === lease.id);
-      const baseRent = lease.base_rent || 0;
+      const baseRent = lease.monthly_rent || 0;
       const camCharge = cam?.monthly_cam || 0;
       const total = baseRent + camCharge;
       await InvoiceService.create({

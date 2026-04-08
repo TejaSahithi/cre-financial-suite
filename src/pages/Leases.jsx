@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, Search, Loader2, Download, Plus } from "lucide-react";
+import { Upload, Search, Loader2, Download, Plus, FileText } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
@@ -116,7 +116,7 @@ export default function Leases() {
                 return (
                   <TableRow key={l.id} className="hover:bg-slate-50">
                     <TableCell className="text-sm font-medium text-slate-900">{l.tenant_name}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{l.unit_id?.substring(0, 8) || '—'}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{l.unit_number || l.unit_id?.substring(0, 8) || '—'}</TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{l.lease_type}</Badge></TableCell>
                     <TableCell className="text-sm">{l.start_date || '—'}</TableCell>
                     <TableCell className="text-sm">

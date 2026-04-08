@@ -50,7 +50,7 @@ export default function Tenants() {
       tenantMap[l.tenant_name] = { name: l.tenant_name, leases: [], units: [], properties: new Set(), totalRent: 0, invoiceCount: 0, outstandingBalance: 0 };
     }
     tenantMap[l.tenant_name].leases.push(l);
-    tenantMap[l.tenant_name].totalRent += (l.annual_rent || (l.base_rent || 0) * 12 || 0);
+    tenantMap[l.tenant_name].totalRent += (l.annual_rent || (l.monthly_rent || 0) * 12 || 0);
     if (l.unit_id) tenantMap[l.tenant_name].units.push(l.unit_id);
     if (l.property_id) tenantMap[l.tenant_name].properties.add(l.property_id);
   });

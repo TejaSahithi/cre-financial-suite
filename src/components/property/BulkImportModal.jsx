@@ -318,11 +318,29 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       const { _row, ...data } = row;
 
       // Inject context fields
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      
       if (orgId) data.org_id = orgId;
-      if (propertyId && !data.property_id) data.property_id = propertyId;
+      
+      // If we have a context propertyId, use it if the row's property_id is missing or not a UUID
+      if (propertyId) {
+        const rowPropId = String(data.property_id || '').trim();
+        if (!rowPropId || !uuidRegex.test(rowPropId)) {
+          data.property_id = propertyId;
+        }
+      }
+
+      // If we have a context buildingId, use it
+      if (buildingId) {
+        const rowBldId = String(data.building_id || '').trim();
+        if (!rowBldId || !uuidRegex.test(rowBldId)) {
+          data.building_id = buildingId;
+        }
+      }
 
       // Relational strings: Strip fields that exist for the UI grid but don't map to DB columns.
-      const relationalStrings = ['property_name', 'building_name'];
+      // These often contain human names ("Sunset Plaza") or placeholders ("1") that crash DB inserts.
+      const relationalStrings = ['property_name', 'building_name', 'unit_id_code', 'property_id_code'];
       if (moduleType !== 'lease') relationalStrings.push('tenant_name'); // 'leases' table HAS tenant_name
       
       relationalStrings.forEach(f => {
