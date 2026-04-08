@@ -70,7 +70,23 @@ export async function getCurrentOrgId() {
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
-const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
+const ACCESS_BYPASS_ROLES = new Set(['super_admin']);
+
+async function getCurrentCacheScopeKey() {
+  try {
+    const { me } = await import('@/services/auth');
+    const user = await me();
+
+    if (!user) return 'anon';
+    if (user.role === 'admin' || user._raw_role === 'super_admin') {
+      return `super_admin:${user.id}`;
+    }
+
+    return `user:${user.id}:org:${user.org_id || '__none__'}`;
+  } catch {
+    return 'anon';
+  }
+}
 
 async function getCurrentAccessScope(orgId) {
   if (!orgId || orgId === '__none__') return null;
@@ -510,12 +526,19 @@ export function createEntityService(entityName) {
      */
     async get(id) {
       if (!id) return null;
-      const cacheKey = `${entityName}:get:${id}`;
+      const orgId = isOrgExempt ? null : await getCurrentOrgId();
+      const cacheScopeKey = await getCurrentCacheScopeKey();
+      const cacheKey = `${cacheScopeKey}:${entityName}:get:${id}`;
       const cached = getCached(cacheKey);
       if (cached) return cached;
 
       try {
         if (supabase) {
+          if (!isOrgExempt && orgId === '__none__') {
+            setCached(cacheKey, null);
+            return null;
+          }
+
           const { data, error } = await supabase
             .from(tableName)
             .select('*')
@@ -526,7 +549,6 @@ export function createEntityService(entityName) {
             throw error;
           }
           const normalized = normalizeFromDb(data);
-          const orgId = isOrgExempt ? null : await getCurrentOrgId();
           const accessScope = await getCurrentAccessScope(orgId);
           const filtered = filterRecordsByAccessScope(entityName, normalized ? [normalized] : [], accessScope);
           const finalRecord = filtered[0] || null;
@@ -557,13 +579,19 @@ export function createEntityService(entityName) {
      * @returns {Promise<Array>}
      */
     async list(sortField, limit) {
-      const cacheKey = `${entityName}:list:${sortField || ''}:${limit || ''}`;
+      const orgId = isOrgExempt ? null : await getCurrentOrgId();
+      const cacheScopeKey = await getCurrentCacheScopeKey();
+      const cacheKey = `${cacheScopeKey}:${entityName}:list:${sortField || ''}:${limit || ''}`;
       const cached = getCached(cacheKey);
       if (cached) return cached;
 
       try {
         if (supabase) {
-          const orgId = isOrgExempt ? null : await getCurrentOrgId();
+          if (!isOrgExempt && orgId === '__none__') {
+            setCached(cacheKey, []);
+            return [];
+          }
+
           let query = supabase.from(tableName).select('*');
           
           if (orgId && orgId !== '__none__') {
@@ -646,12 +674,19 @@ export function createEntityService(entityName) {
      * @returns {Promise<Array>}
      */
     async filter(filters = {}) {
-      const cacheKey = `${entityName}:filter:${JSON.stringify(filters)}`;
+      const orgId = isOrgExempt ? null : await getCurrentOrgId();
+      const cacheScopeKey = await getCurrentCacheScopeKey();
+      const cacheKey = `${cacheScopeKey}:${entityName}:filter:${JSON.stringify(filters)}`;
       const cached = getCached(cacheKey);
       if (cached) return cached;
 
       try {
         if (supabase) {
+          if (!isOrgExempt && orgId === '__none__') {
+            setCached(cacheKey, []);
+            return [];
+          }
+
           let baseQuery = supabase.from(tableName).select('*');
           // Supabase builders are thenables, so returning them directly from an
           // async helper causes the request to execute before we add the actual
