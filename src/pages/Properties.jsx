@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Search, Download, Upload, Loader2, Home, Building2, CheckCircle2, XCircle, MapPin, ChevronRight, ArrowRight, ArrowLeft } from "lucide-react";
+import { Plus, Search, Download, Upload, Loader2, Home, Building2, CheckCircle2, XCircle, MapPin, ChevronRight, ArrowRight, ArrowLeft, Trash2 } from "lucide-react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
