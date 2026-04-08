@@ -12,6 +12,7 @@ import {
   MapPin,
   ChevronRight,
   Download,
+  Trash2,
 } from "lucide-react";
 import { PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
@@ -35,6 +36,7 @@ import { createPageUrl, downloadCSV } from "@/utils";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 async function resolveWritableOrgId(currentOrgId) {
@@ -71,6 +73,7 @@ export default function Portfolios() {
   const [viewMode, setViewMode] = useState("grid");
   const [selectedOrgId, setSelectedOrgId] = useState("all");
   const [selectedCreateOrgId, setSelectedCreateOrgId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const defaultForm = {
     name: "",
     description: "",
@@ -143,6 +146,22 @@ export default function Portfolios() {
     },
     onError: (err) => {
       toast.error(`Failed to create portfolio: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      const ok = await PortfolioService.delete(id);
+      if (!ok) throw new Error("Delete failed");
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
+      toast.success("Portfolio deleted");
+      setDeleteTarget(null);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -321,6 +340,15 @@ export default function Portfolios() {
                       </div>
                     </div>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    onClick={() => setDeleteTarget(portfolio)}
+                    title="Delete portfolio"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
                 {portfolio.description && (
                   <p className="text-xs text-slate-400 mb-3 line-clamp-2">{portfolio.description}</p>
@@ -404,6 +432,15 @@ export default function Portfolios() {
                     <ChevronRight className="w-3 h-3 ml-1" />
                   </Button>
                 </Link>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
+                  onClick={() => setDeleteTarget(portfolio)}
+                  title="Delete portfolio"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
               </CardContent>
             </Card>
           ))}
@@ -455,9 +492,20 @@ export default function Portfolios() {
                   </TableCell>
                   <TableCell className="text-sm font-medium">${(portfolio._annualRent / 1000).toFixed(0)}K</TableCell>
                   <TableCell>
-                    <Link to={createPageUrl("Properties") + `?portfolio=${portfolio.id}`}>
-                      <Button variant="outline" size="sm">View</Button>
-                    </Link>
+                    <div className="flex items-center gap-1">
+                      <Link to={createPageUrl("Properties") + `?portfolio=${portfolio.id}`}>
+                        <Button variant="outline" size="sm">View</Button>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        onClick={() => setDeleteTarget(portfolio)}
+                        title="Delete portfolio"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -593,6 +641,15 @@ export default function Portfolios() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DeleteConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Delete portfolio "${deleteTarget?.name || ""}"?`}
+        description="This will permanently remove the portfolio. Properties inside it will not be deleted but will become unassigned."
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }
