@@ -705,8 +705,8 @@ export function createEntityService(entityName) {
           const { data, error } = await query;
           if (error) throw error;
           const normalized = normalizeFromDb(data || []);
-          const orgId = scoped?.orgId;
-          const accessScope = await getCurrentAccessScope(orgId);
+          const scopedOrgId = scoped?.orgId ?? orgId;
+          const accessScope = await getCurrentAccessScope(scopedOrgId);
           const result = filterRecordsByAccessScope(entityName, normalized, accessScope);
           setCached(cacheKey, result);
           return result;
