@@ -119,6 +119,73 @@ function isTableNotFound(err) {
   );
 }
 
+// ─── Per-entity column allow-lists ─────────────────────────────────────
+// These reflect the actual columns present in the Supabase tables AFTER all
+// migrations (including the bulk-import enrichment migration). Anything not
+// listed here is silently dropped before INSERT/UPDATE so the request can't
+// fail with `column "X" does not exist`. This is the single source of truth
+// for what survives a `service.create()` call.
+const COMMON_BASE_COLUMNS = ['id', 'org_id', 'created_at', 'updated_at'];
+const ALLOWED_COLUMNS = {
+  Property: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'portfolio_id', 'name', 'address', 'city', 'state', 'zip',
+    'property_type', 'total_sqft', 'year_built', 'status',
+    'structure_type', 'total_buildings', 'total_units', 'occupancy_pct',
+    'address_verified', 'address_verification_note', 'property_id_code',
+    // Bulk-import enrichment columns (added in 20260408_bulk_import_columns.sql)
+    'purchase_price', 'market_value', 'noi', 'cap_rate',
+    'manager', 'owner', 'contact', 'notes',
+  ]),
+  Building: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'name', 'total_sqft', 'floors',
+    'address', 'year_built', 'status', 'description',
+  ]),
+  Unit: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'building_id', 'unit_number', 'square_footage',
+    'status', 'tenant_id', 'floor', 'unit_type', 'occupancy_status',
+    'lease_id', 'monthly_rent', 'lease_start', 'lease_end', 'notes',
+  ]),
+  Lease: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'unit_id', 'tenant_name', 'tenant_id',
+    'start_date', 'end_date', 'monthly_rent', 'square_footage',
+    'status', 'lease_type', 'created_by',
+    // Bulk-import enrichment columns
+    'annual_rent', 'rent_per_sf', 'lease_term_months', 'security_deposit',
+    'cam_amount', 'nnn_amount', 'escalation_rate', 'renewal_options',
+    'ti_allowance', 'free_rent_months', 'notes',
+  ]),
+  Tenant: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'name', 'email', 'phone', 'company', 'status',
+    // Bulk-import enrichment columns
+    'contact_name', 'industry', 'credit_rating', 'notes',
+  ]),
+  Expense: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'category', 'amount', 'classification', 'vendor',
+    'vendor_id', 'gl_code', 'fiscal_year', 'month', 'date', 'source',
+    'is_controllable', 'created_by',
+    // Bulk-import enrichment columns
+    'description', 'invoice_number',
+  ]),
+  Revenue: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'lease_id', 'fiscal_year', 'month', 'type', 'amount', 'notes',
+    // Bulk-import enrichment columns
+    'date', 'tenant_name',
+  ]),
+  GLAccount: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'code', 'name', 'category', 'type', 'description', 'is_active',
+    // Bulk-import enrichment columns
+    'normal_balance', 'is_recoverable', 'notes',
+  ]),
+};
+
 // ─── Generic Entity Service Factory ────────────────────────────────────
 /**
  * Create a CRUD service for a given entity.
@@ -127,6 +194,7 @@ function isTableNotFound(err) {
 export function createEntityService(entityName) {
   const tableName = resolveTableName(entityName);
   const isOrgExempt = ORG_EXEMPT_TABLES.has(tableName);
+  const allowedColumns = ALLOWED_COLUMNS[entityName] || null;
 
   /**
    * Apply org_id scoping to a Supabase query unless exempt.
@@ -160,10 +228,8 @@ export function createEntityService(entityName) {
       }
     }
 
-    // 2. Entity-specific cleanup (Strip non-existent columns)
-    if (entityName === 'Property') {
-      delete clean.floors; // Replaced by per-Building floor data
-    }
+    // 2. Entity-specific cleanup (none currently — `floors` is now a real
+    //    column on properties, see 20260408_bulk_import_columns.sql)
 
     // 3. Global Strip List (Relational aliases and UI-only artifacts)
     const toStrip = [
@@ -171,9 +237,19 @@ export function createEntityService(entityName) {
       'property_name', 'building_name', 'unit_id_code', 'property_id_code',
       '_row' // Used by BulkImportModal UI
     ];
-    
+
     toStrip.forEach(key => delete clean[key]);
-    
+
+    // 4. Strict allow-list — drop any column not present in the table schema.
+    // This guarantees the INSERT/UPDATE never fails with `column "X" does not
+    // exist`. Without this guard, bulk imports silently lose entire rows when
+    // the source data carries extra fields the DB doesn't know about.
+    if (allowedColumns) {
+      Object.keys(clean).forEach(k => {
+        if (!allowedColumns.has(k)) delete clean[k];
+      });
+    }
+
     return clean;
   }
 
