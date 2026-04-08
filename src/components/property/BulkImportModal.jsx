@@ -43,7 +43,7 @@ const MODULE_FIELDS = {
     { key: 'state',          label: 'State',           required: false, placeholder: 'AZ' },
     { key: 'zip',            label: 'ZIP',             required: false, placeholder: '85001' },
     { key: 'property_type',  label: 'Type',            required: false, placeholder: 'office / retail / industrial…' },
-    { key: 'total_sqft',     label: 'Total SQFT',      required: false, placeholder: '50000' },
+    { key: 'total_sf',       label: 'Total SF',        required: false, placeholder: '50000' },
     { key: 'total_units',    label: 'Units',           required: false, placeholder: '10' },
     { key: 'floors',         label: 'Floors',          required: false, placeholder: '5' },
     { key: 'year_built',     label: 'Year Built',      required: false, placeholder: '1998' },
@@ -58,7 +58,7 @@ const MODULE_FIELDS = {
   building: [
     { key: 'name',       label: 'Building Name', required: true,  placeholder: 'Building A' },
     { key: 'address',    label: 'Address',       required: false, placeholder: '123 Main St' },
-    { key: 'total_sqft', label: 'Total SQFT',    required: false, placeholder: '50000' },
+    { key: 'total_sf',   label: 'Total SF',      required: false, placeholder: '50000' },
     { key: 'floors',     label: 'Floors',        required: false, placeholder: '5' },
     { key: 'year_built', label: 'Year Built',    required: false, placeholder: '1998' },
     { key: 'status',     label: 'Status',        required: false, placeholder: 'active' },
@@ -214,7 +214,7 @@ EditableCell.displayName = 'EditableCell';
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-export default function BulkImportModal({ isOpen, onClose, moduleType, propertyId }) {
+export default function BulkImportModal({ isOpen, onClose, moduleType, propertyId, buildingId }) {
   const queryClient = useQueryClient();
   const [file, setFile]       = useState(null);
   const [loading, setLoading] = useState(false);
@@ -340,17 +340,27 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
 
       // Relational strings: Strip fields that exist for the UI grid but don't map to DB columns.
       // These often contain human names ("Sunset Plaza") or placeholders ("1") that crash DB inserts.
-      const relationalStrings = ['property_name', 'building_name', 'unit_id_code', 'property_id_code'];
-      if (moduleType !== 'lease') relationalStrings.push('tenant_name'); // 'leases' table HAS tenant_name
+      const relationalStrings = ['property_name', 'building_name', 'unit_id_code', 'property_id_code', 'total_sf', 'square_feet'];
+      if (moduleType !== 'lease') {
+        relationalStrings.push('tenant_name'); // 'leases' table HAS tenant_name
+      }
+      
+      // For Units, 'square_footage' is a real DB column, but 'square_feet' (alias) is not.
+      // For Buildings/Properties, 'total_sf' IS a real DB column.
+      const dbColumns = (moduleType === 'building' || moduleType === 'property') ? ['total_sf'] : [];
       
       relationalStrings.forEach(f => {
-        delete data[f];
+        if (!dbColumns.includes(f)) delete data[f];
       });
 
-      // Strip empty values
+      // Strip empty values and sensitive fields
       Object.keys(data).forEach(k => {
         if (data[k] === null || data[k] === undefined || data[k] === '') delete data[k];
       });
+
+      // CRITICAL: Strip 'id' to prevent collisions during bulk import.
+      // The system should generate unique IDs for each new record.
+      delete data.id;
 
       try {
         await service.create(data);

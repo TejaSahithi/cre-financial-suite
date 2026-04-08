@@ -30,7 +30,7 @@ export default function PropertyDetail() {
   const [showAddBuilding, setShowAddBuilding] = useState(false);
   const [showAddUnit, setShowAddUnit] = useState(false);
   const [selectedBuildingId, setSelectedBuildingId] = useState(null);
-  const [buildingForm, setBuildingForm] = useState({ name: "", total_sqft: "", floors: 1 });
+  const [buildingForm, setBuildingForm] = useState({ name: "", total_sf: "", floors: 1 });
   const [unitForm, setUnitForm] = useState({ unit_number: "", square_footage: "", status: "vacant" });
 
   const { data: property, isLoading } = useQuery({
@@ -72,7 +72,7 @@ export default function PropertyDetail() {
 
   const createBuildingMutation = useMutation({
     mutationFn: (data) => BuildingService.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sqft: "", floors: 1 }); }
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1 }); }
   });
 
   const createUnitMutation = useMutation({
@@ -89,7 +89,7 @@ export default function PropertyDetail() {
   const ownerOccUnits = units.filter(u => u.status === 'owner_occupied');
   const underConstUnits = units.filter(u => u.status === 'under_construction');
   const leasedSF = leasedUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
-  const totalSF = units.reduce((s, u) => s + (u.square_footage || 0), 0) || property.total_sqft || 0;
+  const totalSF = units.reduce((s, u) => s + (u.square_footage || 0), 0) || property.total_sf || 0;
   const vacantSF = vacantUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
   const preLeasesSF = preLeaseUnits.reduce((s, u) => s + (u.square_footage || 0), 0);
   const ownerOccSF = ownerOccUnits.reduce((s, u) => s + (u.square_footage || 0), 0);

@@ -188,7 +188,7 @@ export default function Properties() {
                     {[
                       { label: "Bldgs", value: propBuildings.length || p.total_buildings || 1 },
                       { label: "Units", value: propUnits.length || p.total_units || 0 },
-                      { label: "SF", value: `${((p.total_sqft || 0) / 1000).toFixed(0)}K` },
+                      { label: "SF", value: `${((p.total_sf || 0) / 1000).toFixed(0)}K` },
                       { label: "Occ.", value: `${p.occupancy_pct || 0}%` },
                     ].map((m, i) => (
                       <div key={i} className="bg-slate-50 rounded px-2 py-1.5 text-center">
@@ -438,7 +438,7 @@ export default function Properties() {
                 </div>
                 <div>
                   <Label>Total Rentable Square Feet (RSF)</Label>
-                  <Input className="mt-1.5 font-mono" type="number" value={form.total_sqft} onChange={e => setForm({...form, total_sqft: e.target.value})} placeholder="e.g. 150000" />
+                  <Input className="mt-1.5 font-mono" type="number" value={form.total_sf} onChange={e => setForm({...form, total_sf: e.target.value})} placeholder="e.g. 150000" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -478,7 +478,7 @@ export default function Properties() {
                 zip: form.zip,
                 property_type: form.property_type,
                 structure_type: form.structure_type || "single",
-                total_sqft: parseInt(form.total_sqft) || 0,
+                total_sf: parseInt(form.total_sf) || 0,
                 total_buildings: parseInt(form.total_buildings) || 1,
                 total_units: parseInt(form.total_units) || 0,
                 year_built: parseInt(form.year_built) || null,
