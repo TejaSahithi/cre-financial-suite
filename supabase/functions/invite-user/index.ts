@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const corsHeaders = {
@@ -12,22 +13,30 @@ Deno.serve(async (req: Request) => {
 
   try {
     if (!authorization) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ error: "Unauthorized: missing Authorization header" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const adminClient = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !serviceKey) {
+      console.error("[invite-user] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars");
+      return new Response(JSON.stringify({ error: "Server misconfigured: missing service credentials" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const adminClient = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
 
     // Verify caller is org_admin or super_admin
     const token = authorization.replace("Bearer ", "");
     const { data: { user: caller }, error: callerErr } = await adminClient.auth.getUser(token);
     if (callerErr || !caller) {
-      return new Response(JSON.stringify({ error: "Invalid token" }), {
+      console.error("[invite-user] getUser failed:", callerErr?.message);
+      return new Response(JSON.stringify({ error: `Invalid token: ${callerErr?.message || "no user"}` }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -83,6 +92,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Upsert membership record (status: invited) ────────────────────────────
+    const warnings: string[] = [];
     if (userId) {
       const membershipRow: any = {
         user_id: userId,
@@ -96,8 +106,15 @@ Deno.serve(async (req: Request) => {
       if (page_permissions && Object.keys(page_permissions).length > 0) membershipRow.page_permissions = page_permissions;
       if (capabilities && Object.keys(capabilities).length > 0) membershipRow.capabilities = capabilities;
 
-      const { error: membershipErr } = await adminClient.from("memberships").upsert(membershipRow, { onConflict: "user_id,org_id" });
-      if (membershipErr) console.error("[invite-user] membership error:", membershipErr);
+      const { error: membershipErr } = await adminClient
+        .from("memberships")
+        .upsert(membershipRow, { onConflict: "user_id,org_id" });
+      if (membershipErr) {
+        console.error("[invite-user] membership upsert error:", membershipErr);
+        // Auth user already exists at this point — don't 500 on a missing
+        // optional column. Surface the warning so the client can show it.
+        warnings.push(`membership: ${membershipErr.message}`);
+      }
 
       // ── Ensure profile row exists for invited user ────────────────────────
       await adminClient.from("profiles").upsert({
@@ -123,6 +140,7 @@ Deno.serve(async (req: Request) => {
 
       if (deleteAccessError) {
         console.error("[invite-user] user_access delete error:", deleteAccessError);
+        warnings.push(`user_access delete: ${deleteAccessError.message}`);
       }
 
       const accessRows = [
@@ -153,6 +171,7 @@ Deno.serve(async (req: Request) => {
 
         if (accessInsertError) {
           console.error("[invite-user] user_access insert error:", accessInsertError);
+          warnings.push(`user_access insert: ${accessInsertError.message}`);
         }
       }
     }
@@ -209,7 +228,7 @@ Deno.serve(async (req: Request) => {
       } catch (e: any) { console.error("[invite-user] existing user email err:", e.message); }
     }
 
-    return new Response(JSON.stringify({ success: true, isNewUser }), {
+    return new Response(JSON.stringify({ success: true, isNewUser, warnings }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: any) {

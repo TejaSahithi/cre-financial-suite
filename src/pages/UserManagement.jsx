@@ -97,7 +97,19 @@ async function invokeInviteUser(body) {
   }
 
   if (result.error) {
-    throw result.error;
+    // FunctionsHttpError only exposes a generic message; the real reason is in
+    // the response body. Read it so the toast shows the actual server error.
+    let detail = result.error.message;
+    try {
+      const ctx = result.error.context;
+      if (ctx && typeof ctx.json === "function") {
+        const body = await ctx.json();
+        if (body?.error) detail = body.error;
+      }
+    } catch {
+      /* ignore body-parse failures */
+    }
+    throw new Error(detail);
   }
 
   return result.data;
