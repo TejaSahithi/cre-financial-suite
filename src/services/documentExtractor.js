@@ -152,7 +152,7 @@ export async function extractFromFile(file, moduleType) {
       const result = parser(text);
       if (result.rows.length > 0) {
         rawRows = result.rows;
-        method  = "csv_parser";
+        method  = result.method || "csv_parser";
       }
     }
 
@@ -173,7 +173,7 @@ export async function extractFromFile(file, moduleType) {
       const result = parser(csvText);
       if (result.rows.length > 0) {
         rawRows = result.rows;
-        method  = "excel_parser";
+        method  = result.method || "excel_parser";
       }
     }
 

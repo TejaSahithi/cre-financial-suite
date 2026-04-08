@@ -50,6 +50,7 @@ export default function BuildingsUnits() {
   const [showImport, setShowImport] = useState(false);
   const [importType, setImportType] = useState("building");
   const [selectedBuildingIds, setSelectedBuildingIds] = useState([]);
+  const [selectedUnitIds, setSelectedUnitIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
@@ -78,6 +79,10 @@ export default function BuildingsUnits() {
   useEffect(() => {
     setPropertyFilter(propertyId || "all");
   }, [propertyId]);
+
+  useEffect(() => {
+    setSelectedUnitIds([]);
+  }, [buildingId]);
 
   const portfolioScopedProperties = useMemo(() => {
     if (portfolioFilter !== "all") {
@@ -172,6 +177,8 @@ export default function BuildingsUnits() {
       setDeleteTarget(null);
       if (type === "building") {
         setSelectedBuildingIds((prev) => prev.filter((selectedId) => selectedId !== id));
+      } else {
+        setSelectedUnitIds((prev) => prev.filter((selectedId) => selectedId !== id));
       }
       toast.success(`${type === "unit" ? "Unit" : "Building"} deleted successfully`);
     },
@@ -181,26 +188,27 @@ export default function BuildingsUnits() {
   });
 
   const bulkDeleteMutation = useMutation({
-    mutationFn: async (ids) => {
+    mutationFn: async ({ type, ids }) => {
       await Promise.all(
         ids.map(async (id) => {
-          const ok = await BuildingService.delete(id);
+          const ok = type === "unit" ? await UnitService.delete(id) : await BuildingService.delete(id);
           if (!ok) throw new Error("Delete failed");
         })
       );
-      return ids.length;
+      return { type, count: ids.length };
     },
-    onSuccess: (count) => {
+    onSuccess: ({ type, count }) => {
       queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
       queryClient.invalidateQueries({ queryKey: ["bu-units"] });
       queryClient.invalidateQueries({ queryKey: ["Building"] });
       queryClient.invalidateQueries({ queryKey: ["Unit"] });
-      setSelectedBuildingIds([]);
+      if (type === "unit") setSelectedUnitIds([]);
+      else setSelectedBuildingIds([]);
       setShowBulkDelete(false);
-      toast.success(`${count} building${count === 1 ? "" : "s"} deleted successfully`);
+      toast.success(`${count} ${type}${count === 1 ? "" : "s"} deleted successfully`);
     },
     onError: (err) => {
-      toast.error(`Failed to delete selected buildings: ${err?.message || "Unknown error"}`);
+      toast.error(`Failed to delete selected items: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -213,7 +221,11 @@ export default function BuildingsUnits() {
     !propertyId && portfolioFilter === "all" ? `across ${scopedProperties.length} properties` : null,
   ].filter(Boolean);
 
-  const allFilteredSelected = filteredBuildings.length > 0 && filteredBuildings.every((building) => selectedBuildingIds.includes(building.id));
+  const currentSelectedIds = activeBuilding ? selectedUnitIds : selectedBuildingIds;
+  const bulkDeleteType = activeBuilding ? "unit" : "building";
+  const allFilteredSelected = activeBuilding
+    ? filteredUnits.length > 0 && filteredUnits.every((unit) => selectedUnitIds.includes(unit.id))
+    : filteredBuildings.length > 0 && filteredBuildings.every((building) => selectedBuildingIds.includes(building.id));
 
   const toggleBuildingSelection = (buildingId) => {
     setSelectedBuildingIds((prev) =>
@@ -223,7 +235,25 @@ export default function BuildingsUnits() {
     );
   };
 
+  const toggleUnitSelection = (unitId) => {
+    setSelectedUnitIds((prev) =>
+      prev.includes(unitId)
+        ? prev.filter((id) => id !== unitId)
+        : [...prev, unitId]
+    );
+  };
+
   const toggleSelectAllFiltered = (checked) => {
+    if (activeBuilding) {
+      if (checked) {
+        setSelectedUnitIds((prev) => [...new Set([...prev, ...filteredUnits.map((unit) => unit.id)])]);
+        return;
+      }
+      const filteredIds = new Set(filteredUnits.map((unit) => unit.id));
+      setSelectedUnitIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+      return;
+    }
+
     if (checked) {
       setSelectedBuildingIds((prev) => [...new Set([...prev, ...filteredBuildings.map((building) => building.id)])]);
       return;
@@ -344,12 +374,16 @@ export default function BuildingsUnits() {
           </Select>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {selectedBuildingIds.length > 0 && (
+          {currentSelectedIds.length > 0 && (
             <>
               <span className="text-xs font-medium text-slate-500">
-                {selectedBuildingIds.length} selected
+                {currentSelectedIds.length} selected
               </span>
-              <Button variant="outline" size="sm" onClick={() => setSelectedBuildingIds([])}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => (activeBuilding ? setSelectedUnitIds([]) : setSelectedBuildingIds([]))}
+              >
                 Clear
               </Button>
               <Button
@@ -388,17 +422,32 @@ export default function BuildingsUnits() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allFilteredSelected}
+                        onCheckedChange={toggleSelectAllFiltered}
+                        aria-label="Select all filtered units"
+                      />
+                    </TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">UNIT</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">FLOOR</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">SQ FT</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">TYPE</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">STATUS</TableHead>
                     <TableHead className="text-xs font-bold tracking-wider">TENANT</TableHead>
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredUnits.map((unit) => (
                     <TableRow key={unit.id} className="hover:bg-slate-50">
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedUnitIds.includes(unit.id)}
+                          onCheckedChange={() => toggleUnitSelection(unit.id)}
+                          aria-label={`Select ${unit.unit_number || unit.unit_id_code || unit.id}`}
+                        />
+                      </TableCell>
                       <TableCell className="text-sm font-medium text-slate-900">
                         {unit.unit_number || unit.unit_id_code || "—"}
                       </TableCell>
@@ -417,6 +466,17 @@ export default function BuildingsUnits() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">{unit.tenant_name || "—"}</TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                          onClick={() => setDeleteTarget({ type: "unit", record: unit })}
+                          title="Delete unit"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -632,8 +692,8 @@ export default function BuildingsUnits() {
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
-                    </TableCell>
-                  </TableRow>
+                      </TableCell>
+                    </TableRow>
                 );
               })}
             </TableBody>
@@ -681,12 +741,17 @@ export default function BuildingsUnits() {
       <DeleteConfirmDialog
         open={showBulkDelete}
         onOpenChange={setShowBulkDelete}
-        title={`Delete ${selectedBuildingIds.length} selected building${selectedBuildingIds.length === 1 ? "" : "s"}?`}
-        description="This will permanently remove all selected buildings and may affect related units and reports."
+        title={`Delete ${currentSelectedIds.length} selected ${bulkDeleteType}${currentSelectedIds.length === 1 ? "" : "s"}?`}
+        description={
+          bulkDeleteType === "unit"
+            ? "This will permanently remove all selected units."
+            : "This will permanently remove all selected buildings and may affect related units and reports."
+        }
         confirmLabel="Delete Selected"
         loading={bulkDeleteMutation.isPending}
-        onConfirm={() => bulkDeleteMutation.mutate(selectedBuildingIds)}
+        onConfirm={() => bulkDeleteMutation.mutate({ type: bulkDeleteType, ids: currentSelectedIds })}
       />
     </div>
   );
 }
+

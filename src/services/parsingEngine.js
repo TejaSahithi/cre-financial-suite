@@ -536,6 +536,131 @@ const EXPENSE_COLUMNS = {
   reference: 'invoice_number',
 };
 
+// —— INVOICES ————————————————————————————————————————————————————————————————
+const INVOICE_COLUMNS = {
+  tenant_name: 'tenant_name',
+  tenant: 'tenant_name',
+  customer: 'tenant_name',
+  customer_name: 'tenant_name',
+  bill_to: 'tenant_name',
+
+  property_name: 'property_name',
+  property: 'property_name',
+  asset: 'property_name',
+  property_id: 'property_id',
+
+  invoice_number: 'invoice_number',
+  invoice_no: 'invoice_number',
+  invoice_id: 'invoice_number',
+  invoice: 'invoice_number',
+  reference: 'invoice_number',
+  reference_number: 'invoice_number',
+
+  billing_period: 'billing_period',
+  period: 'billing_period',
+  billing_month: 'billing_period',
+  invoice_period: 'billing_period',
+
+  issued_date: 'issued_date',
+  invoice_date: 'issued_date',
+  date: 'issued_date',
+  issue_date: 'issued_date',
+
+  due_date: 'due_date',
+  due: 'due_date',
+  payment_due_date: 'due_date',
+
+  amount: 'amount',
+  total_amount: 'amount',
+  total: 'amount',
+  amount_due: 'amount',
+  total_due: 'amount',
+  invoice_amount: 'amount',
+
+  status: 'status',
+  invoice_status: 'status',
+};
+
+function sanitizeTextValue(value) {
+  if (value == null) return null;
+  const cleaned = String(value)
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return null;
+  if (cleaned === '-' || cleaned === '--' || cleaned === '—') return null;
+  return cleaned;
+}
+
+function normalizeBillingPeriod(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+
+  if (/^\d{4}-\d{2}$/.test(trimmed)) return trimmed;
+
+  const isoDate = toDate(trimmed);
+  if (isoDate) return isoDate.slice(0, 7);
+
+  const monthYear = trimmed.match(/^([A-Za-z]{3,9})\s+(\d{4})$/);
+  if (monthYear) {
+    const months = {
+      january: 1, jan: 1,
+      february: 2, feb: 2,
+      march: 3, mar: 3,
+      april: 4, apr: 4,
+      may: 5,
+      june: 6, jun: 6,
+      july: 7, jul: 7,
+      august: 8, aug: 8,
+      september: 9, sep: 9,
+      october: 10, oct: 10,
+      november: 11, nov: 11,
+      december: 12, dec: 12,
+    };
+    const month = months[monthYear[1].toLowerCase()];
+    if (month) return `${monthYear[2]}-${String(month).padStart(2, '0')}`;
+  }
+
+  return trimmed;
+}
+
+function parseInvoiceText(text) {
+  const matchValue = (pattern) => sanitizeTextValue(text.match(pattern)?.[1] ?? null);
+
+  const invoiceNumber = matchValue(/^\s*invoice(?:\s*(?:#|number|no\.?))?\s*:\s*(.+)\s*$/im);
+  const issuedDate = toDate(matchValue(/^\s*(?:date|invoice\s+date|issued\s+date)\s*:\s*(.+)\s*$/im));
+  const tenantName = matchValue(/^\s*tenant\s*:\s*(.+)\s*$/im);
+  const propertyName = matchValue(/^\s*property\s*:\s*(.+)\s*$/im);
+  const billingPeriod = normalizeBillingPeriod(matchValue(/^\s*billing\s+period\s*:\s*(.+)\s*$/im));
+  const dueDate = toDate(matchValue(/^\s*due\s+date\s*:\s*(.+)\s*$/im));
+  const amount = toNumber(matchValue(/^\s*total(?:\s+due)?\s*:\s*(.+)\s*$/im));
+  const status = matchValue(/^\s*status\s*:\s*(.+)\s*$/im);
+
+  const hasInvoiceSignals = [invoiceNumber, issuedDate, tenantName, propertyName, billingPeriod, dueDate, amount, status]
+    .some((value) => value !== null && value !== undefined && value !== '');
+
+  if (!hasInvoiceSignals) {
+    return { rows: [], headers: [], method: 'text_parser' };
+  }
+
+  return {
+    rows: [{
+      _row: 1,
+      invoice_number: invoiceNumber,
+      issued_date: issuedDate,
+      tenant_name: tenantName,
+      property_name: propertyName,
+      billing_period: billingPeriod || (issuedDate ? issuedDate.slice(0, 7) : null),
+      due_date: dueDate,
+      amount,
+      status,
+    }],
+    headers: [],
+    method: 'text_parser',
+  };
+}
+
 // ── GL ACCOUNTS ───────────────────────────────────────────────────────
 const GL_ACCOUNT_COLUMNS = {
   account_code: 'code',
@@ -845,6 +970,40 @@ export function parseGLAccounts(text) {
 }
 
 /**
+ * Parse invoice data from CSV or key-value text.
+ */
+export function parseInvoices(text) {
+  const parsedTextInvoice = parseInvoiceText(text);
+  if (parsedTextInvoice.rows.length > 0) {
+    return parsedTextInvoice;
+  }
+
+  const { headers, rows } = parseCSV(text);
+  const mapped = rows.map(raw => {
+    const row = { _row: raw._row };
+    headers.forEach(h => {
+      const field = resolveColumn(h, INVOICE_COLUMNS);
+      if (row[field] === undefined || (raw[h] && raw[h] !== '')) {
+        row[field] = raw[h];
+      }
+    });
+    row.amount = toNumber(row.amount);
+    row.issued_date = toDate(row.issued_date);
+    row.due_date = toDate(row.due_date);
+    row.billing_period = normalizeBillingPeriod(row.billing_period ?? row.period);
+
+    if (!row.billing_period && row.issued_date) {
+      row.billing_period = row.issued_date.slice(0, 7);
+    }
+    if (row.status) {
+      row.status = String(row.status).toLowerCase().trim();
+    }
+    return row;
+  });
+  return { rows: mapped, headers, columnMap: INVOICE_COLUMNS, method: 'csv_parser' };
+}
+
+/**
  * Generic fallback parser — normalises headers, passes values through.
  */
 export function parseGeneric(text) {
@@ -883,6 +1042,7 @@ export function normalizeAndCalculate(moduleType, rows) {
       case 'property':    return normalizeProperty(row);
       case 'expense':     return normalizeExpense(row);
       case 'revenue':     return normalizeRevenue(row);
+      case 'invoice':     return normalizeInvoice(row);
       case 'unit':        return normalizeUnit(row);
       case 'building':    return normalizeBuilding(row);
       case 'tenant':      return normalizeTenant(row);
@@ -1076,6 +1236,23 @@ function normalizeRevenue(row) {
   return row;
 }
 
+function normalizeInvoice(row) {
+  row.amount = toNumber(row.amount ?? row.total_amount ?? row.total ?? row.amount_due ?? row.invoice_amount);
+  row.total_amount = toNumber(row.total_amount ?? row.amount);
+  row.issued_date = toDate(row.issued_date ?? row.invoice_date ?? row.date ?? row.issue_date);
+  row.due_date = toDate(row.due_date ?? row.due ?? row.payment_due_date);
+  row.billing_period = normalizeBillingPeriod(row.billing_period ?? row.period);
+  row.invoice_number = row.invoice_number || row.invoice || row.invoice_no || row.reference;
+
+  if (!row.billing_period && row.issued_date) {
+    row.billing_period = row.issued_date.slice(0, 7);
+  }
+  if (row.status) {
+    row.status = String(row.status).toLowerCase().trim();
+  }
+  return row;
+}
+
 function normalizeUnit(row) {
   // ── Alias mapping (Pre-normalization) ────────────────────────────────────
   row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
@@ -1144,9 +1321,9 @@ export const PARSER_MAP = {
   tenant:     parseTenants,
   revenue:    parseRevenue,
   expense:    parseExpenses,
+  invoice:    parseInvoices,
   gl_account: parseGLAccounts,
   gl:         parseGLAccounts,
-  invoice:    parseGeneric,
   vendor:     parseGeneric,
 };
 
