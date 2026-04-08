@@ -3,6 +3,7 @@ import { expenseService } from "@/services/expenseService";
 import { useQueryClient } from "@tanstack/react-query";
 import useOrgId from "@/hooks/useOrgId";
 import { supabase } from "@/services/supabaseClient";
+import { parseCSV } from "@/services/parsingEngine";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,34 @@ import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const systemFields = ["expense_date", "category", "amount", "vendor", "recoverable_flag", "description"];
+
+async function resolveWritableOrgId(currentOrgId) {
+  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
+
+    const { data: membership } = await supabase
+      .from("memberships")
+      .select("org_id")
+      .eq("user_id", user?.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membership?.org_id) return membership.org_id;
+
+    const { data: org } = await supabase
+      .from("organizations")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    return org?.id || null;
+  } catch {
+    return null;
+  }
+}
 
 export default function BulkImport() {
   const navigate = useNavigate();
@@ -54,32 +83,43 @@ export default function BulkImport() {
 
     // Parse CSV/Excel client-side
     try {
-      const text = await f.text();
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length > 0) {
-        const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-        const rows = lines.slice(1).map(line => {
-          const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-          const obj = {};
-          headers.forEach((h, i) => { obj[h] = vals[i] || ""; });
-          return obj;
-        }).filter(r => Object.values(r).some(v => v));
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      let csvText = "";
 
+      if (ext === "xlsx" || ext === "xls") {
+        const { read, utils } = await import("xlsx");
+        const buf = await f.arrayBuffer();
+        const workbook = read(buf, { type: "array" });
+        const firstSheet = workbook.SheetNames[0];
+        if (!firstSheet) {
+          throw new Error("Excel file contains no worksheets.");
+        }
+        csvText = utils.sheet_to_csv(workbook.Sheets[firstSheet], { blankrows: false });
+      } else {
+        csvText = await f.text();
+      }
+
+      const { headers, rows } = parseCSV(csvText);
+      if (headers.length > 0) {
         const autoMap = {};
         headers.forEach(c => {
           const lower = c.toLowerCase();
           if (lower.includes('date')) autoMap[c] = 'expense_date';
           else if (lower.includes('category') || lower.includes('type')) autoMap[c] = 'category';
-          else if (lower.includes('amount') || lower.includes('cost')) autoMap[c] = 'amount';
-          else if (lower.includes('vendor') || lower.includes('supplier')) autoMap[c] = 'vendor';
+          else if (lower.includes('amount') || lower.includes('cost') || lower.includes('total')) autoMap[c] = 'amount';
+          else if (lower.includes('vendor') || lower.includes('supplier') || lower.includes('payee')) autoMap[c] = 'vendor';
           else if (lower.includes('recover') || lower.includes('class')) autoMap[c] = 'recoverable_flag';
-          else if (lower.includes('desc') || lower.includes('note')) autoMap[c] = 'description';
+          else if (lower.includes('desc') || lower.includes('note') || lower.includes('memo')) autoMap[c] = 'description';
         });
         setColumnMap(autoMap);
         setExtractedRows(rows);
+      } else {
+        throw new Error("No tabular rows found in the uploaded file.");
       }
     } catch (err) {
       console.error('[BulkImport] CSV parse error:', err);
+      setExtractedRows([]);
+      setColumnMap({});
     }
 
     setUploading(false);
@@ -105,6 +145,7 @@ export default function BulkImport() {
   };
 
   const importData = async () => {
+    const writableOrgId = await resolveWritableOrgId(orgId);
     const ready = validatedRows.filter(r => r.status !== 'error');
     for (const row of ready) {
       await expenseService.create({
@@ -115,7 +156,7 @@ export default function BulkImport() {
         description: row.description || "",
         classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
         source: "import",
-        org_id: orgId || "",
+        ...(writableOrgId ? { org_id: writableOrgId } : {}),
         fiscal_year: new Date().getFullYear()
       });
     }
