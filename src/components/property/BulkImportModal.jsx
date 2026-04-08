@@ -45,7 +45,6 @@ const MODULE_FIELDS = {
     { key: 'property_type',  label: 'Type',            required: false, placeholder: 'office / retail / industrial…' },
     { key: 'total_sf',       label: 'Total SF',        required: false, placeholder: '50000' },
     { key: 'total_units',    label: 'Units',           required: false, placeholder: '10' },
-    { key: 'floors',         label: 'Floors',          required: false, placeholder: '5' },
     { key: 'year_built',     label: 'Year Built',      required: false, placeholder: '1998' },
     { key: 'status',         label: 'Status',          required: false, placeholder: 'active' },
     { key: 'purchase_price', label: 'Purchase Price',  required: false, placeholder: '5000000' },
@@ -66,7 +65,7 @@ const MODULE_FIELDS = {
   unit: [
     { key: 'unit_number',    label: 'Unit #',        required: true,  placeholder: '101' },
     { key: 'floor',          label: 'Floor',         required: false, placeholder: '1' },
-    { key: 'total_sf',         label: 'Square Feet',    required: false, placeholder: '1200' },
+    { key: 'square_footage', label: 'Square Feet',   required: false, placeholder: '1200' },
     { key: 'unit_type',      label: 'Unit Type',     required: false, placeholder: 'office' },
     { key: 'status',         label: 'Status',        required: false, placeholder: 'vacant / occupied' },
     { key: 'monthly_rent',   label: 'Monthly Rent',  required: false, placeholder: '2500' },
@@ -347,7 +346,7 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       });
 
       try {
-        await service.create(data);
+        await service.create(cleanData);
         count++;
       } catch (err) {
         console.warn(`[BulkImportModal] Row ${_row} failed:`, err.message);
@@ -361,7 +360,17 @@ export default function BulkImportModal({ isOpen, onClose, moduleType, propertyI
       toast.success(`Successfully imported ${count} ${title}!`);
     }
 
-    queryClient.invalidateQueries();
+    // Invalidate only the affected entity queries to avoid nuking unrelated caches
+    const entityQueryKey = {
+      property: 'Property', building: 'Building', unit: 'Unit',
+      lease: 'Lease', tenant: 'Tenant', revenue: 'Revenue',
+      expense: 'Expense', gl_account: 'GLAccount', gl: 'GLAccount',
+    }[moduleType];
+    if (entityQueryKey) {
+      queryClient.invalidateQueries({ queryKey: [entityQueryKey] });
+    } else {
+      queryClient.invalidateQueries();
+    }
     setImporting(false);
     onClose(); reset();
   };

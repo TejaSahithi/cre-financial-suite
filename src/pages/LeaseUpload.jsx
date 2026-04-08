@@ -11,6 +11,8 @@ import { createPageUrl } from "@/utils";
 
 export default function LeaseUpload() {
   const { orgId } = useOrgId();
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
   const [step, setStep] = useState(1);
   const [file, setFile] = useState(null);
   const [fileUrl, setFileUrl] = useState("");
@@ -58,16 +60,19 @@ export default function LeaseUpload() {
       if (!error && data && !data.error && Object.keys(data).length > 0) {
         setExtractedData(data);
       } else {
-        // No AI backend or extraction failed — provide empty scaffold for manual entry
+        // No AI backend or extraction failed — provide full scaffold for manual entry
         setExtractedData({
           tenant_name: "",
           lease_type: "triple_net",
           start_date: "",
           end_date: "",
+          monthly_rent: 0,
+          annual_rent: 0,
           base_rent: 0,
           rent_per_sf: 0,
-          total_sf: 0,
-          annual_rent: 0,
+          square_footage: 0,
+          security_deposit: 0,
+          cam_amount: 0,
           escalation_type: "fixed",
           escalation_rate: 3,
           cam_cap_type: "none",
@@ -76,6 +81,9 @@ export default function LeaseUpload() {
           admin_fee_allowed: true,
           admin_fee_pct: 10,
           management_fee_pct: 5,
+          renewal_options: "",
+          ti_allowance: 0,
+          notes: "",
           confidence_scores: {}
         });
       }
@@ -85,7 +93,14 @@ export default function LeaseUpload() {
         lease_type: "triple_net",
         start_date: "",
         end_date: "",
-        base_rent: 0,
+        monthly_rent: 0,
+        annual_rent: 0,
+        rent_per_sf: 0,
+        square_footage: 0,
+        security_deposit: 0,
+        escalation_rate: 3,
+        cam_amount: 0,
+        notes: "",
         confidence_scores: {}
       });
     }
@@ -96,14 +111,9 @@ export default function LeaseUpload() {
   const saveLease = async () => {
     if (!extractedData) return;
     try {
-      // Only send columns that exist in the leases table:
-      // tenant_name, start_date, end_date, monthly_rent, square_footage,
-      // status, lease_type, created_by, property_id, unit_id, org_id
-      const location = useLocation();
-  const urlParams = new URLSearchParams(location.search);
       const monthlyRent = extractedData.annual_rent
         ? Math.round(extractedData.annual_rent / 12)
-        : (extractedData.base_rent || extractedData.monthly_rent || 0);
+        : (extractedData.monthly_rent || extractedData.base_rent || 0);
 
       const newLease = await leaseService.create({
         tenant_name: extractedData.tenant_name || "",

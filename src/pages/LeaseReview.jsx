@@ -197,10 +197,11 @@ export default function LeaseReview() {
 
     // Coerce to correct type based on field key
     const numericFields = [
-      "rent_per_sf", "total_sf", "annual_rent", "escalation_rate", "admin_fee_pct",
+      "rent_per_sf", "total_sf", "square_footage", "annual_rent", "monthly_rent",
+      "base_rent", "escalation_rate", "admin_fee_pct", "cam_cap_rate",
       "ti_allowance", "hvac_landlord_limit", "renewal_notice_months", "recon_deadline_days",
       "recon_collection_limit_months", "percentage_rent_rate", "percentage_rent_breakpoint",
-      "management_fee_pct", "base_rent", "cam_cap_rate", "monthly_rent", "square_footage",
+      "management_fee_pct", "security_deposit", "cam_amount", "nnn_amount",
     ];
     const boolFields = ["gross_up_clause", "percentage_rent", "admin_fee_allowed"];
 
