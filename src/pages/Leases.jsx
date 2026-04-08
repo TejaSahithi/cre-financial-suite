@@ -345,6 +345,13 @@ export default function Leases() {
 
                 return (
                   <TableRow key={lease.id} className="hover:bg-slate-50">
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedLeaseIds.includes(lease.id)}
+                        onCheckedChange={() => toggleLeaseSelection(lease.id)}
+                        aria-label={`Select lease ${lease.tenant_name || lease.id}`}
+                      />
+                    </TableCell>
                     <TableCell className="text-sm font-medium text-slate-900">{lease.tenant_name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{building?.name || "—"}</TableCell>
@@ -403,6 +410,14 @@ export default function Leases() {
                             Edit
                           </Button>
                         </Link>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs h-7 px-2 text-red-600 hover:text-red-700"
+                          onClick={() => setDeleteTarget(lease)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
