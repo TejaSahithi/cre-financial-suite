@@ -70,11 +70,10 @@ export async function getCurrentOrgId() {
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
-// Roles that always have full visibility within their org. The fine-grained
-// `user_access` table is only consulted for roles that are NOT in this set.
-// org_admin must be here — otherwise an admin who has not been granted
-// per-portfolio rows in user_access sees nothing in their own org.
-const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
+// Only super-admin bypasses fine-grained portfolio/property scope.
+// Org users, including org_admin, must respect explicit `user_access` grants
+// so organizations can isolate visibility by portfolio and property.
+const ACCESS_BYPASS_ROLES = new Set(['super_admin']);
 
 async function getCurrentCacheScopeKey() {
   try {

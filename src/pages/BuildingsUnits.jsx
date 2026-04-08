@@ -20,6 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl, downloadCSV } from "@/utils";
@@ -45,7 +46,9 @@ export default function BuildingsUnits() {
   const [showCreateUnit, setShowCreateUnit] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importType, setImportType] = useState("building");
+  const [selectedBuildingIds, setSelectedBuildingIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: properties = [] } = useQuery({
@@ -128,16 +131,43 @@ export default function BuildingsUnits() {
       if (!ok) throw new Error("Delete failed");
       return { type, id };
     },
-    onSuccess: ({ type }) => {
+    onSuccess: ({ type, id }) => {
       queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
       queryClient.invalidateQueries({ queryKey: ["bu-units"] });
       queryClient.invalidateQueries({ queryKey: ["Building"] });
       queryClient.invalidateQueries({ queryKey: ["Unit"] });
       setDeleteTarget(null);
+      if (type === "building") {
+        setSelectedBuildingIds((prev) => prev.filter((selectedId) => selectedId !== id));
+      }
       toast.success(`${type === "unit" ? "Unit" : "Building"} deleted successfully`);
     },
     onError: (err) => {
       toast.error(`Failed to delete: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map(async (id) => {
+          const ok = await BuildingService.delete(id);
+          if (!ok) throw new Error("Delete failed");
+        })
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["bu-buildings"] });
+      queryClient.invalidateQueries({ queryKey: ["bu-units"] });
+      queryClient.invalidateQueries({ queryKey: ["Building"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      setSelectedBuildingIds([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} building${count === 1 ? "" : "s"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected buildings: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -148,6 +178,25 @@ export default function BuildingsUnits() {
     !propertyId && portfolioId && activePortfolio ? `in ${activePortfolio.name}` : null,
     !propertyId && !portfolioId ? `across ${scopedProperties.length} properties` : null,
   ].filter(Boolean);
+
+  const allFilteredSelected = filteredBuildings.length > 0 && filteredBuildings.every((building) => selectedBuildingIds.includes(building.id));
+
+  const toggleBuildingSelection = (buildingId) => {
+    setSelectedBuildingIds((prev) =>
+      prev.includes(buildingId)
+        ? prev.filter((id) => id !== buildingId)
+        : [...prev, buildingId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedBuildingIds((prev) => [...new Set([...prev, ...filteredBuildings.map((building) => building.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filteredBuildings.map((building) => building.id));
+    setSelectedBuildingIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -210,7 +259,28 @@ export default function BuildingsUnits() {
             </SelectContent>
           </Select>
         </div>
-        <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        <div className="flex items-center gap-2 flex-wrap">
+          {selectedBuildingIds.length > 0 && (
+            <>
+              <span className="text-xs font-medium text-slate-500">
+                {selectedBuildingIds.length} selected
+              </span>
+              <Button variant="outline" size="sm" onClick={() => setSelectedBuildingIds([])}>
+                Clear
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-red-200 text-red-600 hover:bg-red-50"
+                onClick={() => setShowBulkDelete(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete Selected
+              </Button>
+            </>
+          )}
+          <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+        </div>
       </div>
 
       {isLoading ? (
@@ -232,6 +302,11 @@ export default function BuildingsUnits() {
               <Card key={building.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80">
                 <CardContent className="p-5">
                   <div className="flex items-start gap-3 mb-3">
+                    <Checkbox
+                      checked={selectedBuildingIds.includes(building.id)}
+                      onCheckedChange={() => toggleBuildingSelection(building.id)}
+                      className="mt-1"
+                    />
                     <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
                       <Building2 className="w-6 h-6 text-purple-500" />
                     </div>
@@ -314,6 +389,10 @@ export default function BuildingsUnits() {
             return (
               <Card key={building.id} className="hover:shadow-md transition-all border-slate-200/80">
                 <CardContent className="p-3 flex items-center gap-4">
+                  <Checkbox
+                    checked={selectedBuildingIds.includes(building.id)}
+                    onCheckedChange={() => toggleBuildingSelection(building.id)}
+                  />
                   <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
                     <Building2 className="w-5 h-5 text-purple-500" />
                   </div>
@@ -353,6 +432,13 @@ export default function BuildingsUnits() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    aria-label="Select all filtered buildings"
+                  />
+                </TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">BUILDING</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">PROPERTY</TableHead>
                 <TableHead className="text-xs font-bold tracking-wider">SQ FT</TableHead>
@@ -372,6 +458,13 @@ export default function BuildingsUnits() {
 
                 return (
                   <TableRow key={building.id} className="hover:bg-slate-50">
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedBuildingIds.includes(building.id)}
+                        onCheckedChange={() => toggleBuildingSelection(building.id)}
+                        aria-label={`Select ${building.name}`}
+                      />
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
@@ -443,6 +536,16 @@ export default function BuildingsUnits() {
           deleteTarget?.record?.id &&
           deleteMutation.mutate({ type: deleteTarget.type, id: deleteTarget.record.id })
         }
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedBuildingIds.length} selected building${selectedBuildingIds.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove all selected buildings and may affect related units and reports."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedBuildingIds)}
       />
     </div>
   );

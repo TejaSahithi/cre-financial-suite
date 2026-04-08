@@ -16,6 +16,7 @@ import {
   Download,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
+import { toast } from "sonner";
 
 import PipelineActions, { EXPENSE_ACTIONS } from "@/components/PipelineActions";
 import ModuleLink from "@/components/ModuleLink";
@@ -32,6 +33,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { createPageUrl, downloadCSV } from "@/utils";
@@ -44,7 +46,9 @@ export default function Expenses() {
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
+  const [selectedExpenseIds, setSelectedExpenseIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -163,15 +167,56 @@ export default function Expenses() {
       if (!ok) throw new Error("Delete failed");
       return id;
     },
-    onSuccess: () => {
+    onSuccess: (id) => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
       setDeleteTarget(null);
+      setSelectedExpenseIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Expense deleted successfully");
     },
     onError: (err) => {
       toast.error(`Failed to delete expense: ${err?.message || "Unknown error"}`);
     },
   });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map(async (id) => {
+          const ok = await ExpenseService.delete(id);
+          if (!ok) throw new Error("Delete failed");
+        })
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      setSelectedExpenseIds([]);
+      setShowBulkDelete(false);
+      toast.success(`${count} expense record${count === 1 ? "" : "s"} deleted successfully`);
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete selected expenses: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((expense) => selectedExpenseIds.includes(expense.id));
+
+  const toggleExpenseSelection = (expenseId) => {
+    setSelectedExpenseIds((prev) =>
+      prev.includes(expenseId)
+        ? prev.filter((id) => id !== expenseId)
+        : [...prev, expenseId]
+    );
+  };
+
+  const toggleSelectAllFiltered = (checked) => {
+    if (checked) {
+      setSelectedExpenseIds((prev) => [...new Set([...prev, ...filtered.map((expense) => expense.id)])]);
+      return;
+    }
+    const filteredIds = new Set(filtered.map((expense) => expense.id));
+    setSelectedExpenseIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+  };
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -333,12 +378,38 @@ export default function Expenses() {
                 </Button>
               ))}
             </div>
+            {selectedExpenseIds.length > 0 && (
+              <>
+                <span className="text-xs font-medium text-slate-500">
+                  {selectedExpenseIds.length} selected
+                </span>
+                <Button variant="outline" size="sm" onClick={() => setSelectedExpenseIds([])}>
+                  Clear
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-200 text-red-600 hover:bg-red-50"
+                  onClick={() => setShowBulkDelete(true)}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Delete Selected
+                </Button>
+              </>
+            )}
           </div>
 
           <Card className="overflow-hidden border-slate-200/80">
             <Table>
               <TableHeader>
                 <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={allFilteredSelected}
+                      onCheckedChange={toggleSelectAllFiltered}
+                      aria-label="Select all filtered expenses"
+                    />
+                  </TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">DATE</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">PROPERTY</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">BUILDING</TableHead>
@@ -356,13 +427,13 @@ export default function Expenses() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center py-12">
+                    <TableCell colSpan={13} className="text-center py-12">
                       <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                     </TableCell>
                   </TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center py-12 text-sm text-slate-400">
+                    <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
                       No expenses found
                     </TableCell>
                   </TableRow>
@@ -377,6 +448,13 @@ export default function Expenses() {
 
                     return (
                       <TableRow key={expense.id} className="hover:bg-slate-50">
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedExpenseIds.includes(expense.id)}
+                            onCheckedChange={() => toggleExpenseSelection(expense.id)}
+                            aria-label={`Select expense ${expense.category || expense.id}`}
+                          />
+                        </TableCell>
                         <TableCell className="text-xs whitespace-nowrap">
                           {expense.date || (expense.fiscal_year ? `FY${expense.fiscal_year}${expense.month ? `-M${expense.month}` : ""}` : "—")}
                         </TableCell>
@@ -453,6 +531,16 @@ export default function Expenses() {
         description="This will permanently remove the selected expense record."
         loading={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
+
+      <DeleteConfirmDialog
+        open={showBulkDelete}
+        onOpenChange={setShowBulkDelete}
+        title={`Delete ${selectedExpenseIds.length} selected expense record${selectedExpenseIds.length === 1 ? "" : "s"}?`}
+        description="This will permanently remove all selected expense records."
+        confirmLabel="Delete Selected"
+        loading={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedExpenseIds)}
       />
     </div>
   );
