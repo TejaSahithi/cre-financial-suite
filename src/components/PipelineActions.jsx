@@ -105,37 +105,53 @@ export default function PipelineActions({
 }) {
   const [loadingIndex, setLoadingIndex] = useState(null);
 
-  const handleAction = async (action, index) => {
-    if (loadingIndex !== null) return; // block concurrent runs
-    setLoadingIndex(index);
-
-    try {
+  const invokeWithFreshSession = async (fnName, body) => {
+    const attemptInvoke = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
         throw new Error("Not authenticated");
       }
 
+      const { data, error } = await supabase.functions.invoke(fnName, {
+        body,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      return { data, error };
+    };
+
+    let result = await attemptInvoke();
+    const needsRetry = result.error && /401|unauthorized|jwt/i.test(result.error.message || "");
+
+    if (needsRetry) {
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshData?.session?.access_token) {
+        throw result.error;
+      }
+      result = await attemptInvoke();
+    }
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return result.data || {};
+  };
+
+  const handleAction = async (action, index) => {
+    if (loadingIndex !== null) return; // block concurrent runs
+    setLoadingIndex(index);
+
+    try {
       const body = {
         property_id: propertyId,
         fiscal_year: fiscalYear,
         ...(action.extra || {}),
       };
 
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${action.fn}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || "Unknown error");
-      }
+      const data = await invokeWithFreshSession(action.fn, body);
 
       // For export actions – auto-open the download link when provided
       if (data?.download_url) {

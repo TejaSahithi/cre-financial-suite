@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { leaseService } from "@/services/leaseService";
 import useOrgId from "@/hooks/useOrgId";
 import { extractFromFile } from "@/services/documentExtractor";
+import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,34 @@ const EMPTY_LEASE = {
   notes: "",
   confidence_scores: {},
 };
+
+async function resolveWritableOrgId(currentOrgId) {
+  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
+
+    const { data: membership } = await supabase
+      .from("memberships")
+      .select("org_id")
+      .eq("user_id", user?.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membership?.org_id) return membership.org_id;
+
+    const { data: org } = await supabase
+      .from("organizations")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    return org?.id || null;
+  } catch {
+    return null;
+  }
+}
 
 export default function LeaseUpload() {
   const { orgId } = useOrgId();
@@ -67,6 +96,7 @@ export default function LeaseUpload() {
     if (!extractedData) return;
 
     try {
+      const writableOrgId = await resolveWritableOrgId(orgId);
       const monthlyRent = extractedData.monthly_rent ||
         extractedData.base_rent ||
         (extractedData.annual_rent ? Math.round(Number(extractedData.annual_rent) / 12) : 0);
@@ -93,7 +123,7 @@ export default function LeaseUpload() {
         created_by: "lease_upload",
         ...(urlParams.get("property") ? { property_id: urlParams.get("property") } : {}),
         ...(urlParams.get("unit") ? { unit_id: urlParams.get("unit") } : {}),
-        ...(orgId && orgId !== "__none__" ? { org_id: orgId } : {}),
+        ...(writableOrgId ? { org_id: writableOrgId } : {}),
       });
 
       setSavedLeaseId(newLease.id);
