@@ -661,6 +661,92 @@ function parseInvoiceText(text) {
   };
 }
 
+function matchTextValue(text, pattern) {
+  return sanitizeTextValue(text.match(pattern)?.[1] ?? null);
+}
+
+function normalizeLeaseTypeLabel(value) {
+  if (!value) return null;
+  const leaseType = String(value).toLowerCase().trim();
+  if (leaseType.includes('triple') || leaseType.includes('nnn')) return 'triple_net';
+  if (leaseType.includes('modified')) return 'modified_gross';
+  if (leaseType.includes('full service')) return 'full_service';
+  if (leaseType.includes('gross')) return 'gross';
+  if (leaseType === 'nn' || leaseType.includes('double')) return 'nn';
+  if (leaseType.includes('net')) return 'net';
+  return leaseType.replace(/\s+/g, '_');
+}
+
+function parseLeaseText(text) {
+  const tenantName = matchTextValue(text, /^\s*(?:tenant|tenant name|lessee|occupant)\s*:\s*(.+)\s*$/im);
+  const leaseType = normalizeLeaseTypeLabel(
+    matchTextValue(text, /^\s*(?:lease type|type|lease structure)\s*:\s*(.+)\s*$/im) ||
+    matchTextValue(text, /\b(triple net|nnn|modified gross|full service|gross|double net|net)\b/i)
+  );
+  const startDate = toDate(matchTextValue(text, /^\s*(?:start date|lease start|commencement date|lease commencement)\s*:\s*(.+)\s*$/im));
+  const endDate = toDate(matchTextValue(text, /^\s*(?:end date|lease end|expiration date|expiry date|lease expiration|termination date)\s*:\s*(.+)\s*$/im));
+  const monthlyRent = toNumber(
+    matchTextValue(text, /^\s*(?:monthly rent|rent per month|monthly base rent)\s*:\s*(.+)\s*$/im) ||
+    matchTextValue(text, /^\s*(?:base rent)\s*:\s*(.+)\s*$/im)
+  );
+  const annualRent = toNumber(matchTextValue(text, /^\s*(?:annual rent|yearly rent|annual base rent)\s*:\s*(.+)\s*$/im));
+  const rentPerSf = toNumber(matchTextValue(text, /^\s*(?:rent\/sf|rent per sf|annual rent\/sf|psf)\s*:\s*(.+)\s*$/im));
+  const squareFootage = toNumber(matchTextValue(text, /^\s*(?:square footage|square feet|leased sf|leased sqft|rentable sf|sf)\s*:\s*(.+)\s*$/im));
+  const securityDeposit = toNumber(matchTextValue(text, /^\s*(?:security deposit|deposit)\s*:\s*(.+)\s*$/im));
+  const camAmount = toNumber(matchTextValue(text, /^\s*(?:cam|cam charges|cam amount|common area maintenance)\s*:\s*(.+)\s*$/im));
+  const escalationRate = toNumber(matchTextValue(text, /^\s*(?:escalation rate|escalation|annual escalation|rent escalation)\s*:\s*(.+)\s*$/im));
+  const renewalOptions = matchTextValue(text, /^\s*(?:renewal options?|option to renew)\s*:\s*(.+)\s*$/im);
+  const tiAllowance = toNumber(matchTextValue(text, /^\s*(?:ti allowance|tenant improvement allowance)\s*:\s*(.+)\s*$/im));
+  const freeRentMonths = toNumber(matchTextValue(text, /^\s*(?:free rent(?: months?)?|abatement)\s*:\s*(.+)\s*$/im));
+  const propertyName = matchTextValue(text, /^\s*(?:property|property name|building)\s*:\s*(.+)\s*$/im);
+  const propertyAddress = matchTextValue(text, /^\s*(?:property address|address|premises)\s*:\s*(.+)\s*$/im);
+  const unitNumber = matchTextValue(text, /^\s*(?:suite|suite number|unit|unit number|premises suite)\s*:\s*(.+)\s*$/im);
+
+  const extractedLease = {
+    _row: 1,
+    tenant_name: tenantName,
+    lease_type: leaseType,
+    start_date: startDate,
+    end_date: endDate,
+    monthly_rent: monthlyRent,
+    annual_rent: annualRent,
+    base_rent: monthlyRent,
+    rent_per_sf: rentPerSf,
+    square_footage: squareFootage,
+    security_deposit: securityDeposit,
+    cam_amount: camAmount,
+    escalation_rate: escalationRate,
+    renewal_options: renewalOptions,
+    ti_allowance: tiAllowance,
+    free_rent_months: freeRentMonths,
+    property_name: propertyName,
+    property_address: propertyAddress,
+    unit_number: unitNumber,
+    confidence_scores: {},
+  };
+
+  const matchedFields = Object.entries(extractedLease).filter(([key, value]) => (
+    !['_row', 'confidence_scores'].includes(key) &&
+    value !== null &&
+    value !== undefined &&
+    value !== ''
+  ));
+
+  if (matchedFields.length === 0) {
+    return { rows: [], headers: [], method: 'text_parser' };
+  }
+
+  matchedFields.forEach(([key]) => {
+    extractedLease.confidence_scores[key] = 85;
+  });
+
+  return {
+    rows: [extractedLease],
+    headers: [],
+    method: 'text_parser',
+  };
+}
+
 // ── GL ACCOUNTS ───────────────────────────────────────────────────────
 const GL_ACCOUNT_COLUMNS = {
   account_code: 'code',
@@ -733,6 +819,11 @@ export function parseProperties(text) {
  * Parse lease data from CSV text.
  */
 export function parseLeases(text) {
+  const parsedTextLease = parseLeaseText(text);
+  if (parsedTextLease.rows.length > 0) {
+    return parsedTextLease;
+  }
+
   const { headers, rows } = parseCSV(text);
   const mapped = rows.map(raw => {
     const row = { _row: raw._row };

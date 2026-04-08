@@ -188,17 +188,45 @@ export async function extractFromFile(file, moduleType) {
   // ── Word DOCX ─────────────────────────────────────────────────────────────
   else if (ext === "docx" || ext === "doc") {
     const rawText  = await extractDocx(file);
-    const aiResult = await extractWithAI(rawText, moduleType, file.name);
-    rawRows = aiResult.rows;
-    method  = aiResult.method;
+    try {
+      const aiResult = await extractWithAI(rawText, moduleType, file.name);
+      rawRows = aiResult.rows;
+      method  = aiResult.method;
+    } catch (err) {
+      if (parser) {
+        const fallbackResult = parser(rawText);
+        if (fallbackResult.rows.length > 0) {
+          rawRows = fallbackResult.rows;
+          method = fallbackResult.method || "text_parser";
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   // ── PDF ───────────────────────────────────────────────────────────────────
   else if (ext === "pdf") {
     const rawText  = await extractPdf(file);
-    const aiResult = await extractWithAI(rawText, moduleType, file.name);
-    rawRows = aiResult.rows;
-    method  = aiResult.method;
+    try {
+      const aiResult = await extractWithAI(rawText, moduleType, file.name);
+      rawRows = aiResult.rows;
+      method  = aiResult.method;
+    } catch (err) {
+      if (parser) {
+        const fallbackResult = parser(rawText);
+        if (fallbackResult.rows.length > 0) {
+          rawRows = fallbackResult.rows;
+          method = fallbackResult.method || "text_parser";
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   // ── Unsupported ───────────────────────────────────────────────────────────
