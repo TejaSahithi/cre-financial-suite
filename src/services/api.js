@@ -187,7 +187,8 @@ const ALLOWED_COLUMNS = {
   ]),
   Expense: new Set([
     ...COMMON_BASE_COLUMNS,
-    'property_id', 'category', 'amount', 'classification', 'vendor',
+    'portfolio_id', 'property_id', 'building_id', 'unit_id',
+    'category', 'amount', 'classification', 'vendor',
     'vendor_id', 'gl_code', 'fiscal_year', 'month', 'date', 'source',
     'is_controllable', 'created_by',
     // Bulk-import enrichment columns
@@ -195,9 +196,17 @@ const ALLOWED_COLUMNS = {
   ]),
   Revenue: new Set([
     ...COMMON_BASE_COLUMNS,
-    'property_id', 'lease_id', 'fiscal_year', 'month', 'type', 'amount', 'notes',
+    'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id',
+    'fiscal_year', 'month', 'type', 'amount', 'notes',
     // Bulk-import enrichment columns
     'date', 'tenant_name',
+  ]),
+  Budget: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'portfolio_id', 'property_id', 'building_id', 'unit_id',
+    'name', 'budget_year', 'fiscal_year', 'scope', 'period',
+    'generation_method', 'total_revenue', 'total_expenses',
+    'cam_total', 'noi', 'status', 'ai_insights', 'created_by',
   ]),
   Invoice: new Set([
     ...COMMON_BASE_COLUMNS,
