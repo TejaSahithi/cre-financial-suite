@@ -171,17 +171,17 @@ const PROPERTY_COLUMNS = {
   class: 'property_type',
 
   // Square footage
-  total_sqft: 'total_sqft',
-  total_sf: 'total_sqft',
-  square_footage: 'total_sqft',
-  square_feet: 'total_sqft',
-  sqft: 'total_sqft',
-  sf: 'total_sqft',
-  rentable_sf: 'total_sqft',
-  gla: 'total_sqft',
-  gross_leasable_area: 'total_sqft',
-  net_rentable_area: 'total_sqft',
-  nra: 'total_sqft',
+  total_sf: 'total_sf',
+  total_sqft: 'total_sf',
+  square_footage: 'total_sf',
+  square_feet: 'total_sf',
+  sqft: 'total_sf',
+  sf: 'total_sf',
+  rentable_sf: 'total_sf',
+  gla: 'total_sf',
+  gross_leasable_area: 'total_sf',
+  net_rentable_area: 'total_sf',
+  nra: 'total_sf',
 
   // Year built
   year_built: 'year_built',
@@ -391,11 +391,11 @@ const BUILDING_COLUMNS = {
   property_name: 'property_id',
   address: 'address',
   street: 'address',
-  total_sqft: 'total_sqft',
-  total_sf: 'total_sqft',
-  square_footage: 'total_sqft',
-  sqft: 'total_sqft',
-  sf: 'total_sqft',
+  total_sf: 'total_sf',
+  total_sqft: 'total_sf',
+  square_footage: 'total_sf',
+  sqft: 'total_sf',
+  sf: 'total_sf',
   floors: 'floors',
   total_floors: 'floors',
   stories: 'floors',
@@ -566,7 +566,7 @@ export function parseProperties(text) {
         row[field] = raw[h];
       }
     });
-    row.total_sqft    = toNumber(row.total_sqft);
+    row.total_sf      = toNumber(row.total_sf);
     row.year_built    = toNumber(row.year_built);
     row.total_units   = toNumber(row.total_units);
     row.floors        = toNumber(row.floors);
@@ -764,7 +764,7 @@ export function parseBuildings(text) {
         row[field] = raw[h];
       }
     });
-    row.total_sqft  = toNumber(row.total_sqft);
+    row.total_sf    = toNumber(row.total_sf);
     row.floors      = toNumber(row.floors);
     row.year_built  = toNumber(row.year_built);
     return row;
@@ -882,19 +882,24 @@ function normalizeLease(row) {
   // ── Alias mapping (Pre-normalization) ────────────────────────────────────
   row.tenant_name       = row.tenant_name || row.tenant || row.lessee || row.occupant;
   row.unit_number       = row.unit_number || row.suite  || row.suite_number || row.unit || row.space;
+  row.square_footage    = row.square_footage ?? row.total_sf ?? row.leased_sf ?? row.sqft ?? row.sf ?? row.area;
 
   // ── Type coerce all numeric fields ────────────────────────────────────────
   row.monthly_rent      = toNumber(row.monthly_rent ?? row.base_rent ?? row.monthly_base_rent);
   row.annual_rent       = toNumber(row.annual_rent  ?? row.annual_base_rent ?? row.yearly_rent);
-  row.square_footage    = toNumber(row.square_footage ?? row.total_sf ?? row.leased_sf ?? row.sqft ?? row.sf ?? row.area);
-  row.rent_per_sf       = toNumber(row.rent_per_sf  ?? row.rent_psf ?? row.annual_rent_psf);
-  row.lease_term_months = toNumber(row.lease_term_months ?? row.term_months ?? row.lease_term ?? row.term);
+  row.square_footage    = toNumber(row.square_footage);
+  row.escalation_rate   = toNumber(row.escalation_rate ?? row.escalation_value);
+  row.rent_per_sf       = toNumber(row.rent_per_sf ?? row.rent_psf);
+  row.cam_amount        = toNumber(row.cam_amount ?? row.cam_charges ?? row.cam);
+  row.nnn_amount        = toNumber(row.nnn_amount ?? row.nnn_charges ?? row.nnn);
   row.security_deposit  = toNumber(row.security_deposit ?? row.deposit);
-  row.cam_amount        = toNumber(row.cam_amount   ?? row.cam_charges ?? row.cam);
-  row.nnn_amount        = toNumber(row.nnn_amount   ?? row.nnn_charges ?? row.nnn ?? row.operating_expenses);
-  row.escalation_rate   = toNumber(row.escalation_rate ?? row.annual_escalation ?? row.rent_escalation ?? row.escalation_value ?? row.escalation);
-  row.ti_allowance      = toNumber(row.ti_allowance ?? row.tenant_improvement ?? row.ti);
-  row.free_rent_months  = toNumber(row.free_rent_months ?? row.free_rent);
+  row.lease_term_months = toNumber(row.lease_term_months ?? row.term_months);
+
+  // ── Derived and UI Compatibility Fields ────────────────────────────────────
+  row.cam_per_month     = row.cam_amount || 0;
+  row.total_cam         = (row.cam_per_month + (row.nnn_amount || 0));
+  row.total_sf          = row.square_footage || 0; // Asset-level compatibility
+  row.square_feet       = row.square_footage; // Unit-level compatibility
 
   // ── Date coerce ────────────────────────────────────────────────────────────
   row.start_date = toDate(row.start_date ?? row.commencement_date ?? row.lease_start ?? row.lease_commencement);
@@ -948,11 +953,6 @@ function normalizeLease(row) {
     row.effective_rent = Math.round((row.monthly_rent + camMonthly + nnnMonthly) * 100) / 100;
   }
 
-  // ── DERIVED: UI compatibility ─────────────────────────────────────────────
-  if (row.cam_amount && !row.cam_per_month) {
-    row.cam_per_month = Math.round((row.cam_amount / 12) * 100) / 100;
-  }
-
   // ── Normalize lease_type ──────────────────────────────────────────────────
   if (row.lease_type) {
     const lt = String(row.lease_type).toLowerCase().trim();
@@ -978,7 +978,7 @@ function normalizeLease(row) {
 }
 
 function normalizeProperty(row) {
-  row.total_sqft     = toNumber(row.total_sqft  ?? row.total_sf ?? row.square_footage ?? row.sqft ?? row.sf ?? row.gla ?? row.nra);
+  row.total_sf       = toNumber(row.total_sf ?? row.total_sqft ?? row.square_footage ?? row.sqft ?? row.sf ?? row.gla ?? row.nra);
   row.year_built     = toNumber(row.year_built  ?? row.built ?? row.construction_year);
   row.total_units    = toNumber(row.total_units ?? row.units ?? row.unit_count);
   row.floors         = toNumber(row.floors      ?? row.stories ?? row.number_of_floors);
@@ -1062,13 +1062,15 @@ function normalizeRevenue(row) {
 function normalizeUnit(row) {
   // ── Alias mapping (Pre-normalization) ────────────────────────────────────
   row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
+  row.square_footage = row.square_footage ?? row.total_sf ?? row.sqft ?? row.sf ?? row.area ?? row.total_sqft;
 
-  row.square_footage = toNumber(row.square_footage ?? row.sqft ?? row.sf ?? row.area ?? row.total_sqft);
+  row.square_footage = toNumber(row.square_footage);
   row.floor          = toNumber(row.floor ?? row.floor_number ?? row.level);
   row.monthly_rent   = toNumber(row.monthly_rent ?? row.asking_rent ?? row.rent);
   
   // UI Compatibility
-  row.square_feet = row.square_footage;
+  row.square_feet    = row.square_footage;
+  row.total_sf       = row.square_footage;
 
   if (row.status) {
     const s = String(row.status).toLowerCase().trim();
@@ -1081,9 +1083,13 @@ function normalizeUnit(row) {
 }
 
 function normalizeBuilding(row) {
-  row.total_sqft = toNumber(row.total_sqft ?? row.sqft ?? row.sf ?? row.square_footage);
-  row.floors     = toNumber(row.floors     ?? row.stories ?? row.total_floors);
-  row.year_built = toNumber(row.year_built ?? row.built   ?? row.construction_year);
+  // ── Alias mapping (Pre-normalization) ────────────────────────────────────
+  row.unit_number    = row.unit_number || row.suite || row.suite_number || row.unit || row.space;
+  row.total_sf       = row.total_sf ?? row.total_sqft ?? row.sqft ?? row.sf ?? row.square_footage;
+
+  row.total_sf       = toNumber(row.total_sf);
+  row.floors         = toNumber(row.floors ?? row.total_floors ?? row.stories);
+  row.year_built     = toNumber(row.year_built ?? row.built ?? row.construction_year);
   return row;
 }
 

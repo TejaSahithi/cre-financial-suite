@@ -38,7 +38,7 @@ export default function Properties() {
   const defaultForm = {
     name: "", address: "", city: "", state: "", zip: "",
     property_type: "office", structure_type: "single",
-    total_sqft: "", total_buildings: 1, total_units: 0, year_built: "",
+    total_sf: "", total_buildings: 1, total_units: 0, year_built: "",
     portfolio_id: portfolioId || ""
   };
   const [form, setForm] = useState(defaultForm);
@@ -145,7 +145,7 @@ export default function Properties() {
         <div onClick={() => setStructureFilter("multi")} className={`cursor-pointer`}>
           <MetricCard label="Multi Building" value={multiTenantProps.length} icon={Building2} color="bg-purple-50 text-purple-600" className={structureFilter === 'multi' ? 'ring-2 ring-purple-500' : ''} />
         </div>
-        <MetricCard label="Total SF" value={properties.reduce((s, p) => s + (p.total_sqft || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
+        <MetricCard label="Total SF" value={properties.reduce((s, p) => s + (p.total_sf || 0), 0).toLocaleString()} icon={MapPin} color="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Verified" value={`${properties.filter(p => p.address_verified).length}/${properties.length}`} icon={CheckCircle2} color="bg-green-50 text-green-600" sub="addresses verified" />
       </div>
 
@@ -234,7 +234,7 @@ export default function Properties() {
                   <div className="hidden md:flex items-center gap-6 text-xs text-slate-600 flex-shrink-0">
                     <div className="text-center"><p className="font-bold text-sm">{propBuildings.length || p.total_buildings || 1}</p><p className="text-slate-400">Bldgs</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{propUnits.length || p.total_units || 0}</p><p className="text-slate-400">Units</p></div>
-                    <div className="text-center"><p className="font-bold text-sm">{((p.total_sqft || 0) / 1000).toFixed(0)}K</p><p className="text-slate-400">SF</p></div>
+                    <div className="text-center"><p className="font-bold text-sm">{(p.total_sf || 0).toLocaleString()}</p><p className="text-slate-400">Total SF</p></div>
                     <div className="text-center"><p className="font-bold text-sm">{p.occupancy_pct || 0}%</p><p className="text-slate-400">Occ.</p></div>
                   </div>
                   <Badge className={`flex-shrink-0 text-[10px] ${p.structure_type === 'multi' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
@@ -297,7 +297,7 @@ export default function Properties() {
                       </TableCell>
                       <TableCell className="text-sm">{propBuildings.length || p.total_buildings || 1}</TableCell>
                       <TableCell className="text-sm">{propUnits.length || p.total_units || 0}</TableCell>
-                      <TableCell className="text-sm font-mono">{(p.total_sqft || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm font-mono">{(p.total_sf || 0).toLocaleString()}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.occupancy_pct || 0}%</span>
