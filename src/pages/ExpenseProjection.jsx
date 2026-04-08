@@ -3,6 +3,7 @@ import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { propertyService } from "@/services/propertyService";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,14 +11,16 @@ import { Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ALL_PROPERTIES = "__all__";
 
 export default function ExpenseProjection() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
-  const initProperty = urlParams.get("property") || "";
+  const initProperty = urlParams.get("property") || ALL_PROPERTIES;
   const [selectedProperty, setSelectedProperty] = useState(initProperty);
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
+  const selectedPropertyId = selectedProperty === ALL_PROPERTIES ? null : selectedProperty;
 
   const { data: properties = [] } = useQuery({
     queryKey: ['properties-exp-proj'],
@@ -26,15 +29,15 @@ export default function ExpenseProjection() {
 
   const { data: expenses = [], isLoading } = useQuery({
     queryKey: ['expenses-proj', selectedProperty],
-    queryFn: () => selectedProperty
-      ? expenseService.filter({ property_id: selectedProperty })
+    queryFn: () => selectedPropertyId
+      ? expenseService.filter({ property_id: selectedPropertyId })
       : expenseService.list(),
   });
 
   const { data: budgets = [] } = useQuery({
     queryKey: ['budgets-proj', selectedProperty],
-    queryFn: () => selectedProperty
-      ? budgetService.filter({ property_id: selectedProperty })
+    queryFn: () => selectedPropertyId
+      ? budgetService.filter({ property_id: selectedPropertyId })
       : budgetService.list(),
   });
 
@@ -96,7 +99,7 @@ export default function ExpenseProjection() {
         <Select value={selectedProperty} onValueChange={setSelectedProperty}>
           <SelectTrigger className="w-64"><SelectValue placeholder="All Properties" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value={null}>All Properties</SelectItem>
+            <SelectItem value={ALL_PROPERTIES}>All Properties</SelectItem>
             {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
           </SelectContent>
         </Select>
