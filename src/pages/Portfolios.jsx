@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Download,
   Trash2,
+  Info,
 } from "lucide-react";
 import { PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
@@ -653,7 +654,12 @@ export default function Portfolios() {
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create Portfolio</DialogTitle>
-            <DialogDescription>Group properties into a portfolio for unified management</DialogDescription>
+            <DialogDescription>
+              Group properties into a portfolio for unified management.
+              <span className="block mt-1 text-blue-600 font-medium">
+                Metrics like SF, Occupancy, and Rent are calculated automatically as you add properties.
+              </span>
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -745,6 +751,26 @@ export default function Portfolios() {
                     <SelectItem value="oct_sep">Oct 1 - Sep 30</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="mt-6 p-4 bg-blue-50/50 border border-blue-100 rounded-xl flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <Info className="w-4 h-4 text-blue-600" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-blue-900">Automated KPI Tracking</p>
+                <p className="text-xs text-blue-700 leading-relaxed">
+                  After creating this portfolio, you will be redirected to link properties.
+                  The dashboard will then automatically compute:
+                </p>
+                <div className="flex gap-3 pt-1">
+                  {['Total Square Footage', 'Occupancy %', 'Annual Rent'].map((item) => (
+                    <span key={item} className="text-[10px] bg-white/80 border border-blue-200 text-blue-600 px-2 py-0.5 rounded-full font-medium">
+                      {item}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
