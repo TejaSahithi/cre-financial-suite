@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Upload, Lock } from "lucide-react";
+import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock } from "lucide-react";
 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
