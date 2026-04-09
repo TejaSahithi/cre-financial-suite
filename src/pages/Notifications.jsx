@@ -11,14 +11,17 @@ const typeIcons = {
   lease_expiry: AlertTriangle, budget_approval: Clock, cam_variance: AlertTriangle,
   reconciliation_pending: Clock, expense_threshold: DollarSign,
   access_request: Info, cpi_change: Info, system: Info, info: Info,
-  warning: AlertTriangle, success: CheckCircle2
+  warning: AlertTriangle, success: CheckCircle2,
+  low_confidence_alert: AlertTriangle, draft_lease_created: Clock
 };
 const typeColors = {
   lease_expiry: "border-l-red-500 bg-red-50", budget_approval: "border-l-blue-500 bg-blue-50",
   cam_variance: "border-l-amber-500 bg-amber-50", reconciliation_pending: "border-l-slate-400 bg-slate-50",
   expense_threshold: "border-l-orange-500 bg-orange-50",
   system: "border-l-slate-400 bg-slate-50", info: "border-l-blue-500 bg-blue-50",
-  warning: "border-l-amber-500 bg-amber-50", success: "border-l-emerald-500 bg-emerald-50"
+  warning: "border-l-amber-500 bg-amber-50", success: "border-l-emerald-500 bg-emerald-50",
+  low_confidence_alert: "border-l-amber-500 bg-amber-50",
+  draft_lease_created: "border-l-blue-500 bg-blue-50"
 };
 
 export default function Notifications() {
@@ -97,7 +100,9 @@ export default function Notifications() {
                         {n.priority === 'high' && <Badge className="bg-red-100 text-red-600 text-[9px]">HIGH</Badge>}
                       </div>
                       <p className="text-sm text-slate-600 mt-1">{n.message}</p>
-                      <p className="text-xs text-slate-400 mt-2">{n.created_date ? new Date(n.created_date).toLocaleString() : ''}</p>
+                      <p className="text-xs text-slate-400 mt-2">
+                        {n.created_at || n.created_date ? new Date(n.created_at || n.created_date).toLocaleString() : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
