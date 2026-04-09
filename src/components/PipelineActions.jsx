@@ -1,11 +1,11 @@
 import React, { useState } from "react";
-import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Calculator, Download, Loader2, CheckCircle, Lock, FileSearch } from "lucide-react";
 import { toast } from "sonner";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 // ---------------------------------------------------------------------------
-// Icon lookup – maps string names from action configs to actual components
+// Icon lookup maps string names from action configs to actual components
 // ---------------------------------------------------------------------------
 const ICON_MAP = {
   Calculator,
@@ -114,66 +114,13 @@ export default function PipelineActions({
   const resolvedPropertyId =
     propertyId && propertyId !== "all" ? propertyId : null;
 
-  const invokeWithFreshSession = async (fnName, body) => {
-    const attemptInvoke = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        throw new Error("Not authenticated — please sign in again");
-      }
-
-      const { data, error } = await supabase.functions.invoke(fnName, {
-        body,
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-      });
-
-      return { data, error };
-    };
-
-    let result = await attemptInvoke();
-    const needsRetry = result.error && /401|unauthorized|jwt/i.test(result.error.message || "");
-
-    if (needsRetry) {
-      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-      if (refreshError || !refreshData?.session?.access_token) {
-        throw result.error;
-      }
-      result = await attemptInvoke();
-    }
-
-    if (result.error) {
-      // Try to surface the function's JSON error message
-      const ctx = result.error?.context;
-      if (ctx && typeof ctx.json === "function") {
-        try {
-          const body = await ctx.json();
-          if (body?.message) {
-            throw new Error(body.message);
-          }
-        } catch {
-          /* fall through */
-        }
-      }
-      throw result.error;
-    }
-
-    // Functions return { error: true, message } as 200/400 — surface that too
-    if (result.data && result.data.error === true) {
-      throw new Error(result.data.message || "Function returned an error");
-    }
-
-    return result.data || {};
-  };
-
   const handleAction = async (action, index) => {
     if (loadingIndex !== null) return; // block concurrent runs
 
     // Validate property_id BEFORE we waste a network round-trip
     if (requireProperty && !resolvedPropertyId) {
       toast.error(
-        `${action.label} requires a property — pick one in the Scope selector first.`
+        `${action.label} requires a property - pick one in the Scope selector first.`
       );
       return;
     }
@@ -189,19 +136,16 @@ export default function PipelineActions({
         ...(action.extra || {}),
       };
 
-      const data = await invokeWithFreshSession(action.fn, body);
+      const data = await invokeEdgeFunction(action.fn, body);
 
-      // For export actions – auto-open the download link when provided
+      // For export actions, auto-open the download link when provided
       if (data?.download_url) {
         window.open(data.download_url, "_blank", "noopener");
-        toast.success(
-          `${action.label} complete – download started.`
-        );
+        toast.success(`${action.label} complete - download started.`);
         if (typeof onComplete === "function") onComplete(action, data);
         return;
       }
 
-      // Build a short summary from the response
       const summary =
         data?.message ||
         data?.summary ||
@@ -212,9 +156,7 @@ export default function PipelineActions({
       toast.success(`${action.label}: ${summary}`);
       if (typeof onComplete === "function") onComplete(action, data);
     } catch (err) {
-      toast.error(
-        `${action.label} failed: ${err?.message || "Unexpected error"}`
-      );
+      toast.error(`${action.label} failed: ${err?.message || "Unexpected error"}`);
     } finally {
       setLoadingIndex(null);
     }

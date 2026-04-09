@@ -12,7 +12,7 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
-import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 export function useComputeTrigger() {
   const [isTriggering, setIsTriggering] = useState(false);
@@ -22,44 +22,13 @@ export function useComputeTrigger() {
     setIsTriggering(true);
 
     try {
-      const attemptInvoke = async () => {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session?.access_token) {
-          throw new Error("Not authenticated");
-        }
-
-        return supabase.functions.invoke(functionName, {
-          body,
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-        });
-      };
-
-      let result = await attemptInvoke();
-      const needsRetry = result.error && /401|unauthorized|jwt/i.test(result.error.message || "");
-
-      if (needsRetry) {
-        const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-        if (refreshError || !refreshData?.session?.access_token) {
-          throw result.error;
-        }
-        result = await attemptInvoke();
-      }
-
-      if (result.error) {
-        throw result.error;
-      }
+      const data = await invokeEdgeFunction(functionName, body);
 
       if (!silent) {
         toast.success(successMessage ?? "Computation started - dashboard will update shortly");
       }
 
-      return result.data || {};
+      return data;
     } catch (error) {
       console.error(`[useComputeTrigger] ${functionName} error:`, error?.message || error);
       if (!silent) {

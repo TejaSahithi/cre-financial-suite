@@ -16,12 +16,15 @@ export function createAdminClient() {
  * Returns the authenticated user or throws an error
  */
 export async function verifyUser(req: Request) {
-  const authHeader = req.headers.get('Authorization');
+  const authHeader =
+    req.headers.get('x-user-jwt') ||
+    req.headers.get('x-supabase-auth') ||
+    req.headers.get('Authorization');
   if (!authHeader) {
     throw new Error('Missing Authorization header');
   }
   
-  const token = authHeader.replace('Bearer ', '');
+  const token = authHeader.replace(/^Bearer\s+/i, '');
   const supabaseAdmin = createAdminClient();
   
   const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
