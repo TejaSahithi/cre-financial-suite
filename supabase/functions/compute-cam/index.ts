@@ -6,6 +6,129 @@ import { calculateCam } from "../_shared/cam-calculator.ts";
 
 type ScopeLevel = "property" | "building" | "unit";
 
+function asNumber(value: unknown) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function leaseOverlapsFiscalYear(lease: any, fiscalYear: number) {
+  const status = String(lease?.status || "active").toLowerCase();
+  if (status === "expired") return false;
+
+  const yearStart = new Date(Date.UTC(fiscalYear, 0, 1));
+  const yearEnd = new Date(Date.UTC(fiscalYear, 11, 31));
+  const start = lease?.start_date ? new Date(`${lease.start_date}T00:00:00Z`) : null;
+  const end = lease?.end_date ? new Date(`${lease.end_date}T00:00:00Z`) : null;
+
+  const effectiveStart = start && start > yearStart ? start : yearStart;
+  const effectiveEnd = end && end < yearEnd ? end : yearEnd;
+  return effectiveEnd >= effectiveStart;
+}
+
+function scopedLeaseMatches(lease: any, units: any[], scopeLevel: ScopeLevel, scopeId: string, propertyId: string) {
+  if (lease.property_id !== propertyId) return false;
+  if (scopeLevel === "property") return true;
+  if (scopeLevel === "building") {
+    return lease.building_id === scopeId || units.some((unit) => unit.id === lease.unit_id && unit.building_id === scopeId);
+  }
+  return lease.unit_id === scopeId;
+}
+
+function resolveScopeTotals(
+  property: any,
+  buildings: any[],
+  units: any[],
+  scopeLevel: ScopeLevel,
+  scopeId: string,
+) {
+  if (scopeLevel === "building") {
+    const building = buildings.find((item) => item.id === scopeId);
+    const buildingUnits = units.filter((unit) => unit.building_id === scopeId);
+    const totalSqft = asNumber(building?.total_sqft) || buildingUnits.reduce((sum, unit) => sum + asNumber(unit.square_footage ?? unit.square_feet), 0);
+    return { totalSqft, selectedBuilding: building ?? null, selectedUnit: null };
+  }
+
+  if (scopeLevel === "unit") {
+    const unit = units.find((item) => item.id === scopeId);
+    const building = unit?.building_id ? buildings.find((item) => item.id === unit.building_id) : null;
+    const buildingUnits = unit?.building_id ? units.filter((item) => item.building_id === unit.building_id) : [];
+    const totalSqft =
+      asNumber(building?.total_sqft) ||
+      buildingUnits.reduce((sum, item) => sum + asNumber(item.square_footage ?? item.square_feet), 0) ||
+      asNumber(property?.total_sqft);
+    return { totalSqft, selectedBuilding: building ?? null, selectedUnit: unit ?? null };
+  }
+
+  const propertyBuildings = buildings.filter((item) => item.property_id === property.id);
+  const totalSqft =
+    asNumber(property?.total_sqft) ||
+    propertyBuildings.reduce((sum, building) => sum + asNumber(building.total_sqft), 0) ||
+    units.reduce((sum, unit) => sum + asNumber(unit.square_footage ?? unit.square_feet), 0);
+
+  return { totalSqft, selectedBuilding: null, selectedUnit: null };
+}
+
+function mergePropertyConfig(propertyConfig: any, body: Record<string, unknown>) {
+  const overrideValues = {
+    ...(propertyConfig?.config_values ?? {}),
+    ...(body?.override_values ?? {}),
+  };
+
+  const topLevelKeys = [
+    "allocation_method",
+    "admin_fee_pct",
+    "management_fee_pct",
+    "management_fee_basis",
+    "gross_up_enabled",
+    "gross_up_target_occupancy_pct",
+    "gross_up_apply_to",
+    "cam_cap_rate",
+    "vacancy_handling",
+    "property_pool_denominator_mode",
+    "building_pool_denominator_mode",
+  ];
+
+  for (const key of topLevelKeys) {
+    if (body?.[key] !== undefined) {
+      overrideValues[key] = body[key];
+    }
+  }
+
+  return {
+    ...(propertyConfig ?? {}),
+    cam_calculation_method: propertyConfig?.cam_calculation_method ?? "pro_rata",
+    expense_recovery_method: propertyConfig?.expense_recovery_method ?? "base_year",
+    fiscal_year_start: propertyConfig?.fiscal_year_start ?? 1,
+    config_values: overrideValues,
+  };
+}
+
+function emptyCalculation(propertyId: string, fiscalYear: number, scopeLevel: ScopeLevel, scopeId: string, assumptions: string[]) {
+  return {
+    fiscal_year: fiscalYear,
+    property_id: propertyId,
+    scope_level: scopeLevel,
+    scope_id: scopeId,
+    assumptions,
+    summary: {
+      total_recoverable: 0,
+      property_pool: 0,
+      building_pools: 0,
+      direct_allocations: 0,
+      total_shared_before_fees: 0,
+      total_billed: 0,
+      gross_up_adjustment: 0,
+      admin_fees: 0,
+      management_fees: 0,
+    },
+    pools: {
+      property_pool: null,
+      building_pools: [],
+    },
+    tenant_charges: [],
+  };
+}
+
 async function fetchPropertyContext(supabaseAdmin: any, orgId: string, propertyId: string) {
   const { data: property, error: propertyError } = await supabaseAdmin
     .from("properties")
@@ -168,6 +291,35 @@ Deno.serve(async (req: Request) => {
       propertyId,
       leaseIds,
     );
+    const mergedPropertyConfig = mergePropertyConfig(propertyConfig, body);
+
+    const recoverableExpenses = expenses.filter(
+      (expense: any) => String(expense.classification || "").toLowerCase() === "recoverable",
+    );
+    if (recoverableExpenses.length === 0) {
+      throw new Error(`No recoverable expenses found for property ${propertyId} in fiscal year ${fiscalYear}`);
+    }
+
+    const activeScopedLeases = leases.filter((lease: any) =>
+      scopedLeaseMatches(lease, units, scopeLevel, scopeId, propertyId) &&
+      leaseOverlapsFiscalYear(lease, fiscalYear),
+    );
+
+    const { totalSqft } = resolveScopeTotals(property, buildings, units, scopeLevel, scopeId);
+    if (totalSqft <= 0) {
+      throw new Error(`Total square footage for ${scopeLevel} scope ${scopeId} must be greater than 0`);
+    }
+
+    console.log("Total SqFt:", totalSqft);
+    console.log("[compute-cam] Scope validation:", {
+      property_id: propertyId,
+      fiscal_year: fiscalYear,
+      scope_level: scopeLevel,
+      scope_id: scopeId,
+      expense_count: expenses.length,
+      recoverable_expense_count: recoverableExpenses.length,
+      active_lease_count: activeScopedLeases.length,
+    });
 
     const historicalYears = collectHistoricalYears(fiscalYear, leaseConfigMap);
     const { data: historicalSnapshots, error: historicalError } = await supabaseAdmin
@@ -183,23 +335,31 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Failed to fetch historical CAM snapshots: ${historicalError.message}`);
     }
 
-    const calculation = calculateCam({
-      fiscal_year: fiscalYear,
-      scope_level: scopeLevel,
-      scope_id: scopeId,
-      property: {
-        id: property.id,
-        name: property.name,
-        total_sqft: property.total_sqft,
-      },
-      buildings,
-      units,
-      expenses,
-      leases,
-      property_config: propertyConfig,
-      lease_configs: leaseConfigMap,
-      historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
-    });
+    const calculation = activeScopedLeases.length === 0
+      ? emptyCalculation(
+          propertyId,
+          fiscalYear,
+          scopeLevel,
+          scopeId,
+          [`No active leases found for ${scopeLevel} scope ${scopeId}; CAM allocation skipped`],
+        )
+      : calculateCam({
+          fiscal_year: fiscalYear,
+          scope_level: scopeLevel,
+          scope_id: scopeId,
+          property: {
+            id: property.id,
+            name: property.name,
+            total_sqft: property.total_sqft,
+          },
+          buildings,
+          units,
+          expenses,
+          leases,
+          property_config: mergedPropertyConfig,
+          lease_configs: leaseConfigMap,
+          historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
+        });
 
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
@@ -226,7 +386,7 @@ Deno.serve(async (req: Request) => {
       0,
     );
     const denominatorSqft = calculation.pools?.property_pool?.metrics?.occupied_area
-      || property.total_sqft
+      || totalSqft
       || 0;
     const camPerSf = denominatorSqft > 0 ? totalCam / Number(denominatorSqft) : 0;
 
@@ -239,11 +399,11 @@ Deno.serve(async (req: Request) => {
           fiscal_year: fiscalYear,
           annual_cam: round2(totalCam),
           cam_per_sf: round2(camPerSf),
-          method: propertyConfig?.cam_calculation_method ?? "pro_rata",
+          method: mergedPropertyConfig?.cam_calculation_method ?? "pro_rata",
           status: "computed",
-          admin_fee_pct: Number(propertyConfig?.config_values?.admin_fee_pct ?? 0),
-          gross_up_pct: Number(propertyConfig?.config_values?.gross_up_target_occupancy_pct ?? 0),
-          cap_pct: 0,
+          admin_fee_pct: Number(mergedPropertyConfig?.config_values?.admin_fee_pct ?? 0),
+          gross_up_pct: Number(mergedPropertyConfig?.config_values?.gross_up_target_occupancy_pct ?? 0),
+          cap_pct: Number(mergedPropertyConfig?.config_values?.cam_cap_rate ?? 0),
           total_recoverable: calculation.summary.total_recoverable,
           total_building_sf: Number(denominatorSqft) || 0,
           notes: calculation.assumptions.join(" | "),
@@ -269,6 +429,21 @@ Deno.serve(async (req: Request) => {
       scope_id: scopeId,
     };
 
+    console.log("CAM Pool:", {
+      property_pool: calculation.summary.property_pool,
+      building_pools: calculation.summary.building_pools,
+      direct_allocations: calculation.summary.direct_allocations,
+      total_billed: calculation.summary.total_billed,
+    });
+    for (const tenantCharge of calculation.tenant_charges) {
+      console.log("Final Tenant CAM:", {
+        lease_id: tenantCharge.lease_id,
+        tenant_name: tenantCharge.tenant_name,
+        annual_cam: tenantCharge.annual_cam,
+        monthly_cam: tenantCharge.monthly_cam,
+      });
+    }
+
     const inputs = {
       property_id: propertyId,
       fiscal_year: fiscalYear,
@@ -278,7 +453,8 @@ Deno.serve(async (req: Request) => {
       expense_count: expenses.length,
       building_count: buildings.length,
       unit_count: units.length,
-      property_config: propertyConfig,
+      property_config: mergedPropertyConfig,
+      override_values: body?.override_values ?? null,
     };
 
     await saveSnapshot(supabaseAdmin, {
