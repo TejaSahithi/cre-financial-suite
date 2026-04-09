@@ -150,10 +150,12 @@ export default function AddExpense() {
         building_id: form.building_id || null,
         unit_id: form.unit_id || null,
         source: "manual",
-        fiscal_year: new Date().getFullYear(),
+        fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
       },
       {
         onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["Expense"] });
+          toast.success("Expense saved successfully");
           if (addAnother) {
             setForm({
               ...buildInitialForm(scope),
@@ -165,7 +167,12 @@ export default function AddExpense() {
               unit_id: form.unit_id || "",
             });
             setAttachmentUrl("");
+          } else {
+            navigate(createPageUrl("Expenses") + location.search);
           }
+        },
+        onError: (err) => {
+          toast.error(`Failed to save expense: ${err?.message || "Unknown error"}`);
         },
       }
     );
