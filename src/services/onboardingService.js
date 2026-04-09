@@ -1,25 +1,19 @@
-import { supabase } from "@/services/supabaseClient";
-
-async function getAccessToken() {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  return data?.session?.access_token || null;
-}
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 export async function ensureOnboardingOrganization() {
-  const accessToken = await getAccessToken();
-  if (!accessToken) {
-    throw new Error("Your session is not ready yet. Please refresh and try onboarding again.");
+  try {
+    return await invokeEdgeFunction("first-login", {});
+  } catch (error) {
+    const message = error?.message || "Failed to initialize onboarding organization";
+    if (/onboarding-ready state/i.test(message)) {
+      throw new Error("Your account is not approved for organization setup yet. Please check that this email was approved for onboarding.");
+    }
+    if (/Only owners trigger standard first-login/i.test(message)) {
+      throw new Error("This account is not marked as an organization owner, so it cannot create a new organization.");
+    }
+    if (/Profile not found/i.test(message)) {
+      throw new Error("Your account profile is still being provisioned. Please wait a moment and try again.");
+    }
+    throw error instanceof Error ? error : new Error(message);
   }
-
-  const { data, error } = await supabase.functions.invoke("first-login", {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (error || data?.error) {
-    throw new Error(error?.message || data?.error || "Failed to initialize onboarding organization");
-  }
-
-  return data;
 }
-
