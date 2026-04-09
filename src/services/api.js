@@ -343,7 +343,7 @@ const ALLOWED_COLUMNS = {
   ]),
   Lease: new Set([
     ...COMMON_BASE_COLUMNS,
-    'property_id', 'unit_id', 'tenant_name', 'tenant_id',
+    'property_id', 'building_id', 'unit_id', 'tenant_name', 'tenant_id',
     'start_date', 'end_date', 'monthly_rent', 'square_footage',
     'status', 'lease_type', 'created_by',
     // Bulk-import enrichment columns
@@ -352,7 +352,10 @@ const ALLOWED_COLUMNS = {
     'ti_allowance', 'free_rent_months', 'notes',
     // Extended fields (20260408_lease_extended_fields.sql)
     'escalation_type', 'escalation_timing', 'renewal_type', 'renewal_notice_months',
-    'cam_cap_type', 'admin_fee_pct', 'management_fee_basis',
+    'cam_applicable', 'cam_cap', 'cam_cap_type', 'cam_cap_rate',
+    'admin_fee_pct', 'management_fee_pct', 'management_fee_basis',
+    'gross_up_clause', 'allocation_method', 'weight_factor',
+    'base_year_amount', 'expense_stop_amount',
     'hvac_responsibility', 'sales_reporting_frequency',
     'extraction_data', 'confidence_score', 'low_confidence_fields', 'extracted_fields',
   ]),
@@ -364,7 +367,7 @@ const ALLOWED_COLUMNS = {
   ]),
   Expense: new Set([
     ...COMMON_BASE_COLUMNS,
-    'portfolio_id', 'property_id', 'building_id', 'unit_id',
+    'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id',
     'category', 'amount', 'classification', 'vendor',
     'vendor_id', 'gl_code', 'fiscal_year', 'month', 'date', 'source',
     'is_controllable', 'created_by',
@@ -372,6 +375,8 @@ const ALLOWED_COLUMNS = {
     'description', 'invoice_number',
     // Attachment / receipt
     'attachment_url',
+    // CAM allocation fields
+    'allocation_type', 'allocation_meta', 'direct_tenant_ids',
   ]),
   Revenue: new Set([
     ...COMMON_BASE_COLUMNS,
