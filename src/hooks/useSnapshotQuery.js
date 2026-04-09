@@ -22,7 +22,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 
-async function fetchSnapshot({ engineType, propertyId, fiscalYear }) {
+function scopeMatches(snapshot, scopeLevel, scopeId) {
+  const inputScopeLevel = snapshot?.inputs?.scope_level ?? snapshot?.outputs?.scope_level ?? "property";
+  const inputScopeId = snapshot?.inputs?.scope_id ?? snapshot?.outputs?.scope_id ?? snapshot?.property_id ?? null;
+  if (!scopeLevel || scopeLevel === "property") {
+    return inputScopeLevel === "property" || inputScopeId === snapshot?.property_id;
+  }
+  return inputScopeLevel === scopeLevel && inputScopeId === scopeId;
+}
+
+async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId }) {
   if (!supabase) return null;
 
   let query = supabase
@@ -31,7 +40,7 @@ async function fetchSnapshot({ engineType, propertyId, fiscalYear }) {
     .eq("engine_type", engineType)
     .eq("status", "completed")
     .order("computed_at", { ascending: false })
-    .limit(1);
+    .limit(scopeLevel && scopeLevel !== "property" ? 20 : 5);
 
   if (fiscalYear) query = query.eq("fiscal_year", fiscalYear);
 
@@ -44,15 +53,33 @@ async function fetchSnapshot({ engineType, propertyId, fiscalYear }) {
     console.error(`[useSnapshotQuery] ${engineType} fetch error:`, error.message);
     return null;
   }
-  return data?.[0] ?? null;
+
+  const rows = data ?? [];
+  if (!rows.length) return null;
+
+  return rows.find((row) => scopeMatches(row, scopeLevel, scopeId)) ?? null;
 }
 
-export function useSnapshotQuery({ engineType, propertyId, fiscalYear, autoRefreshMs = 0 }) {
-  const queryKey = ["snapshot", engineType, propertyId ?? "all", fiscalYear ?? "any"];
+export function useSnapshotQuery({
+  engineType,
+  propertyId,
+  fiscalYear,
+  scopeLevel,
+  scopeId,
+  autoRefreshMs = 0,
+}) {
+  const queryKey = [
+    "snapshot",
+    engineType,
+    propertyId ?? "all",
+    fiscalYear ?? "any",
+    scopeLevel ?? "property",
+    scopeId ?? "all",
+  ];
 
   const { data: snapshot, isLoading, isFetching, refetch } = useQuery({
     queryKey,
-    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear }),
+    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId }),
     // Auto-refresh if no snapshot yet (compute may still be running)
     refetchInterval: (data) => {
       if (autoRefreshMs > 0) return autoRefreshMs;

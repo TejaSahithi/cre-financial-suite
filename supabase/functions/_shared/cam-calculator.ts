@@ -1170,9 +1170,25 @@ export function calculateCam(input: CamCalculatorInput) {
     const candidateLeases = pool.metrics.leases.filter((lease) => lease.cam_applicable);
     if (!candidateLeases.length) continue;
 
+    console.log("CAM Pool:", {
+      pool_id: pool.id,
+      scope: pool.scope,
+      scope_id: pool.scope_id,
+      totalSqft: pool.metrics.eligible_area,
+      occupiedSqft: pool.metrics.occupied_area,
+      camPool: pool.final_shared_pool,
+    });
+
     for (const lease of candidateLeases) {
       const share = leaseShare(lease, candidateLeases, pool, propertyRules);
       if (share <= 0) continue;
+
+      console.log("Tenant Share:", {
+        lease_id: lease.lease_id,
+        tenant_name: lease.tenant_name,
+        scope_id: pool.scope_id,
+        share,
+      });
 
       for (const expense of pool.expenses) {
         if (isExcludedForLease(lease, expense.category)) {
