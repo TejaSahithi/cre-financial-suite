@@ -159,14 +159,29 @@ export function errorResponse(error, fallback = []) {
  * @property {string} id
  * @property {string} org_id
  * @property {string} [property_id]
+ * @property {string} [building_id]
  * @property {string} [unit_id]
  * @property {string} [tenant_name]
  * @property {string} [start_date]
  * @property {string} [end_date]
  * @property {number} [monthly_rent]
+ * @property {number} [annual_rent]
+ * @property {number} [rent_per_sf]
  * @property {number} [square_footage]
  * @property {string} [status]
  * @property {string} [lease_type]
+ * @property {boolean} [cam_applicable]
+ * @property {number} [cam_cap]
+ * @property {string} [cam_cap_type]
+ * @property {number} [cam_cap_rate]
+ * @property {number} [admin_fee_pct]
+ * @property {number} [management_fee_pct]
+ * @property {string} [management_fee_basis]
+ * @property {boolean} [gross_up_clause]
+ * @property {string} [allocation_method]
+ * @property {number} [weight_factor]
+ * @property {number} [base_year_amount]
+ * @property {number} [expense_stop_amount]
  * @property {string} [created_by]
  * @property {string} created_at
  * @property {string} updated_at
@@ -177,6 +192,9 @@ export function errorResponse(error, fallback = []) {
  * @property {string} id
  * @property {string} org_id
  * @property {string} [property_id]
+ * @property {string} [building_id]
+ * @property {string} [unit_id]
+ * @property {string} [lease_id]
  * @property {string} [category]
  * @property {number} [amount]
  * @property {string} [classification] - 'recoverable' | 'non_recoverable' | 'conditional'
@@ -188,6 +206,9 @@ export function errorResponse(error, fallback = []) {
  * @property {string} [date]
  * @property {string} [source]
  * @property {boolean} [is_controllable]
+ * @property {string} [allocation_type]
+ * @property {Object} [allocation_meta]
+ * @property {string[]} [direct_tenant_ids]
  * @property {string} [created_by]
  * @property {string} created_at
  * @property {string} updated_at

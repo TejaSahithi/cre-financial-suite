@@ -1,5 +1,18 @@
 import { supabase } from "@/services/supabaseClient";
 
+function buildStandardUserHeaders(userJwt) {
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  if (!anonKey) {
+    throw new Error("Missing Supabase anon key");
+  }
+
+  return {
+    Authorization: `Bearer ${userJwt}`,
+    apikey: anonKey,
+  };
+}
+
 function buildGatewayCompatibleHeaders(userJwt) {
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -16,7 +29,7 @@ function buildGatewayCompatibleHeaders(userJwt) {
   };
 }
 
-async function getAuthenticatedHeaders() {
+async function getCurrentAccessToken() {
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -25,7 +38,7 @@ async function getAuthenticatedHeaders() {
     throw new Error("Not authenticated");
   }
 
-  return buildGatewayCompatibleHeaders(session.access_token);
+  return session.access_token;
 }
 
 function isAuthError(error) {
@@ -33,19 +46,30 @@ function isAuthError(error) {
 }
 
 export async function invokeEdgeFunction(fnName, body) {
-  const attemptInvoke = async () => {
-    const headers = await getAuthenticatedHeaders();
+  const attemptInvoke = async (builder) => {
+    const userJwt = await getCurrentAccessToken();
+    const headers = builder(userJwt);
     return supabase.functions.invoke(fnName, { body, headers });
   };
 
-  let result = await attemptInvoke();
+  let result = await attemptInvoke(buildStandardUserHeaders);
+
+  if (result.error && isAuthError(result.error)) {
+    result = await attemptInvoke(buildGatewayCompatibleHeaders);
+  }
 
   if (result.error && isAuthError(result.error)) {
     const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !refreshData?.session?.access_token) {
-      throw result.error;
+    if (!refreshError && refreshData?.session?.access_token) {
+      result = await attemptInvoke(buildStandardUserHeaders);
     }
-    result = await attemptInvoke();
+  }
+
+  if (result.error && isAuthError(result.error)) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (!refreshError && refreshData?.session?.access_token) {
+      result = await attemptInvoke(buildGatewayCompatibleHeaders);
+    }
   }
 
   if (result.error) {

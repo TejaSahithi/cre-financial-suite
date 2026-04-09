@@ -33,6 +33,7 @@ export interface CamExpenseInput {
   building_id?: string | null;
   unit_id?: string | null;
   lease_id?: string | null;
+  direct_tenant_ids?: string[] | null;
   fiscal_year?: number | null;
   month?: number | null;
   date?: string | null;
@@ -638,12 +639,53 @@ function buildPools(
     if (amount === 0) continue;
 
     const category = baseCategory(expense.category);
+    const allocationMeta =
+      expense.allocation_meta && typeof expense.allocation_meta === "object"
+        ? expense.allocation_meta
+        : {};
+    const directLeaseIds = Array.from(
+      new Set([
+        ...asStringArray(expense.direct_tenant_ids),
+        ...asStringArray((allocationMeta as Record<string, unknown>).direct_tenant_ids),
+        ...asStringArray((allocationMeta as Record<string, unknown>).lease_ids),
+        ...asStringArray((allocationMeta as Record<string, unknown>).tenant_ids),
+      ]),
+    );
     const isDirect =
       String(expense.allocation_type || "").toLowerCase() === "direct" ||
       !!expense.lease_id ||
-      !!expense.unit_id;
+      !!expense.unit_id ||
+      directLeaseIds.length > 0;
 
     if (isDirect) {
+      if (directLeaseIds.length > 0) {
+        const explicitAmounts =
+          allocationMeta.lease_amounts && typeof allocationMeta.lease_amounts === "object"
+            ? allocationMeta.lease_amounts as Record<string, unknown>
+            : {};
+        const hasExplicitAmounts = Object.keys(explicitAmounts).length > 0;
+        const equalSplitAmount = round2(amount / directLeaseIds.length);
+
+        for (const directLeaseId of directLeaseIds) {
+          const explicitAmount = asOptionalNumber(explicitAmounts[directLeaseId]);
+          directAllocations.push({
+            expense_id: expense.id,
+            category,
+            amount: round2(explicitAmount ?? equalSplitAmount),
+            lease_id: directLeaseId,
+            unit_id: expense.unit_id ? String(expense.unit_id) : null,
+          });
+        }
+
+        if (!hasExplicitAmounts && directLeaseIds.length > 1) {
+          pushNote(
+            assumptions,
+            `Direct expense ${expense.id} targeted multiple leases without explicit amounts; split evenly across ${directLeaseIds.length} leases`,
+          );
+        }
+        continue;
+      }
+
       const resolvedLeaseId =
         String(expense.lease_id || "") ||
         String(leaseByUnitId.get(String(expense.unit_id || ""))?.lease_id || "");
