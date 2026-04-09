@@ -337,29 +337,29 @@ Deno.serve(async (req: Request) => {
 
     const calculation = activeScopedLeases.length === 0
       ? emptyCalculation(
-          propertyId,
-          fiscalYear,
-          scopeLevel,
-          scopeId,
-          [`No active leases found for ${scopeLevel} scope ${scopeId}; CAM allocation skipped`],
-        )
+        propertyId,
+        fiscalYear,
+        scopeLevel,
+        scopeId,
+        [`No active leases found for ${scopeLevel} scope ${scopeId}; CAM allocation skipped`],
+      )
       : calculateCam({
-          fiscal_year: fiscalYear,
-          scope_level: scopeLevel,
-          scope_id: scopeId,
-          property: {
-            id: property.id,
-            name: property.name,
-            total_sqft: property.total_sqft,
-          },
-          buildings,
-          units,
-          expenses,
-          leases,
-          property_config: mergedPropertyConfig,
-          lease_configs: leaseConfigMap,
-          historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
-        });
+        fiscal_year: fiscalYear,
+        scope_level: scopeLevel,
+        scope_id: scopeId,
+        property: {
+          id: property.id,
+          name: property.name,
+          total_sqft: property.total_sqft,
+        },
+        buildings,
+        units,
+        expenses,
+        leases,
+        property_config: mergedPropertyConfig,
+        lease_configs: leaseConfigMap,
+        historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
+      });
 
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
