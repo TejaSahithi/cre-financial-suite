@@ -35,18 +35,21 @@ export async function fetchPropertyCamConfig(propertyId) {
     };
   }
 
-  const orgId = await getCurrentOrgId();
-  let query = supabase
+  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
+  if (!orgId) {
+    return {
+      row: null,
+      values: { ...DEFAULT_CAM_CONFIG, cam_calculation_method: "pro_rata", expense_recovery_method: "base_year", fiscal_year_start: 1 },
+    };
+  }
+
+  const { data, error } = await supabase
     .from("property_config")
     .select("*")
     .eq("property_id", propertyId)
+    .eq("org_id", orgId)
     .maybeSingle();
 
-  if (orgId && orgId !== "__none__") {
-    query = query.eq("org_id", orgId);
-  }
-
-  const { data, error } = await query;
   if (error) throw error;
 
   return { row: data ?? null, values: normalizeConfig(data) };
@@ -124,7 +127,9 @@ function normalizeLeaseConfig(row) {
 
 export async function fetchLeaseConfig(leaseId) {
   if (!supabase || !leaseId) return { row: null, values: { ...DEFAULT_LEASE_CAM_CONFIG } };
-  const orgId = await getCurrentOrgId();
+  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
+  if (!orgId) return { row: null, values: { ...DEFAULT_LEASE_CAM_CONFIG } };
+
   const { data, error } = await supabase
     .from("lease_config")
     .select("*")
