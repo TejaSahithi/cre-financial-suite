@@ -72,7 +72,7 @@ const MODULE_FIELDS = {
     { key: 'floor',          label: 'Floor',         required: false, placeholder: '1' },
     { key: 'square_footage', label: 'Square Feet',   required: false, placeholder: '1200' },
     { key: 'unit_type',      label: 'Unit Type',     required: false, placeholder: 'office' },
-    { key: 'status',         label: 'Status',        required: false, placeholder: 'vacant / occupied' },
+    { key: 'occupancy_status', label: 'Status',        required: false, placeholder: 'vacant / occupied' },
     { key: 'monthly_rent',   label: 'Monthly Rent',  required: false, placeholder: '2500' },
     { key: 'tenant_name',    label: 'Tenant Name',   required: false, placeholder: 'Acme Corp' },
   ],
@@ -318,7 +318,7 @@ export default function BulkImportModal({
     const ALIAS_MAP = {
       property: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
       building: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
-      unit:     { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage' },
+      unit:     { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', status: 'occupancy_status' },
       lease:    { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', leased_sf: 'square_footage' },
       invoice:  { total_amount: 'amount', total: 'amount', amount_due: 'amount', invoice_date: 'issued_date' },
     };

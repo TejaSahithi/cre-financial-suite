@@ -153,11 +153,11 @@ export default function BuildingsUnits() {
   const displayBuildingCount = activeBuilding ? 1 : scopedBuildings.length;
   const displayUnitCount = activeBuilding ? filteredUnits.length : totalUnits;
   const displayLeasedCount = activeBuilding
-    ? filteredUnits.filter((unit) => unit.occupancy_status === "leased").length
-    : leasedUnits;
+    ? filteredUnits.filter((unit) => (unit.occupancy_status === "leased" || unit.status === "leased")).length
+    : scopedUnits.filter((unit) => (unit.occupancy_status === "leased" || unit.status === "leased")).length;
   const displayVacantCount = activeBuilding
-    ? filteredUnits.filter((unit) => unit.occupancy_status === "vacant").length
-    : vacantUnits;
+    ? filteredUnits.filter((unit) => (unit.occupancy_status === "vacant" || unit.status === "vacant")).length
+    : scopedUnits.filter((unit) => (unit.occupancy_status === "vacant" || unit.status === "vacant")).length;
   const displayTotalSF = activeBuilding
     ? (activeBuilding.total_sf || activeBuilding.total_sqft || 0)
     : totalSF;
@@ -456,9 +456,9 @@ export default function BuildingsUnits() {
                       <TableCell className="text-sm text-slate-600 capitalize">{unit.unit_type || "—"}</TableCell>
                       <TableCell>
                         <Badge className={`text-[10px] ${
-                          unit.occupancy_status === "leased"
+                          (unit.occupancy_status === "leased" || unit.status === "leased")
                             ? "bg-emerald-100 text-emerald-700"
-                            : unit.occupancy_status === "vacant"
+                            : (unit.occupancy_status === "vacant" || unit.status === "vacant")
                               ? "bg-amber-100 text-amber-700"
                               : "bg-slate-100 text-slate-600"
                         }`}>
