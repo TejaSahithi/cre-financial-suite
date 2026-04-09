@@ -7,7 +7,8 @@ import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SelectWithCustom } from "@/components/ui/select-with-custom";
+import { LEASE_FIELD_OPTIONS, getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
 import ScopeSelector from "@/components/ScopeSelector";
 import { Upload, FileText, CheckCircle2, Loader2, ArrowLeft, ArrowRight, Pencil, AlertTriangle, Check, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -26,7 +27,10 @@ const EMPTY_LEASE = {
   security_deposit: 0,
   cam_amount: 0,
   escalation_rate: 3,
+  escalation_type: "fixed_pct",
+  renewal_type: "",
   renewal_options: "",
+  renewal_notice_months: 0,
   ti_allowance: 0,
   free_rent_months: 0,
   notes: "",
@@ -44,25 +48,17 @@ const NUMERIC_LEASE_FIELDS = new Set([
   "escalation_rate",
   "ti_allowance",
   "free_rent_months",
+  "renewal_notice_months",
 ]);
 
 const DATE_LEASE_FIELDS = new Set(["start_date", "end_date"]);
-const LONG_TEXT_LEASE_FIELDS = new Set(["notes", "renewal_options", "property_address"]);
-const LEASE_FIELD_OPTIONS = {
-  lease_type: [
-    { value: "triple_net", label: "Triple Net" },
-    { value: "modified_gross", label: "Modified Gross" },
-    { value: "gross", label: "Gross" },
-    { value: "full_service", label: "Full Service" },
-    { value: "nn", label: "Double Net" },
-    { value: "net", label: "Net" },
-  ],
-};
+const LONG_TEXT_LEASE_FIELDS = new Set(["notes", "property_address"]);
 
 function formatLeaseFieldDisplay(field, value) {
   if (value == null || value === "") return "—";
-  const option = LEASE_FIELD_OPTIONS[field]?.find((item) => item.value === value);
-  if (option) return option.label;
+  if (hasLeaseFieldOptions(field)) {
+    return getLeaseFieldLabel(field, value) || String(value);
+  }
   if (value === true) return "Yes";
   if (value === false) return "No";
   return String(value);
@@ -293,7 +289,10 @@ export default function LeaseUpload() {
         security_deposit: extractedData.security_deposit || 0,
         cam_amount: extractedData.cam_amount || 0,
         escalation_rate: extractedData.escalation_rate || 0,
+        escalation_type: extractedData.escalation_type || null,
+        renewal_type: extractedData.renewal_type || null,
         renewal_options: extractedData.renewal_options || null,
+        renewal_notice_months: extractedData.renewal_notice_months || 0,
         ti_allowance: extractedData.ti_allowance || 0,
         free_rent_months: extractedData.free_rent_months || 0,
         notes: extractedData.notes || null,
@@ -449,23 +448,29 @@ export default function LeaseUpload() {
                         </Badge>
                       </div>
                       {editingField === key ? (
-                        LEASE_FIELD_OPTIONS[key] ? (
-                          <Select
-                            value={draftFieldValue || "__empty__"}
-                            onValueChange={(nextValue) => setDraftFieldValue(nextValue === "__empty__" ? "" : nextValue)}
-                          >
-                            <SelectTrigger className="mt-2 w-full">
-                              <SelectValue placeholder={`Select ${key.replace(/_/g, " ")}`} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__empty__">No selection</SelectItem>
-                              {LEASE_FIELD_OPTIONS[key].map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                        hasLeaseFieldOptions(key) ? (
+                          <div className="mt-2">
+                            <SelectWithCustom
+                              value={draftFieldValue}
+                              onChange={(nextValue) => {
+                                setDraftFieldValue(nextValue);
+                                // Auto-commit when a predefined option is picked.
+                                if (LEASE_FIELD_OPTIONS[key]?.some((opt) => opt.value === nextValue)) {
+                                  setExtractedData((prev) => ({
+                                    ...prev,
+                                    [key]: coerceLeaseFieldValue(key, nextValue),
+                                    confidence_scores: {
+                                      ...(prev?.confidence_scores || {}),
+                                      [key]: Math.max(prev?.confidence_scores?.[key] || 85, 95),
+                                    },
+                                  }));
+                                  cancelFieldEdit();
+                                }
+                              }}
+                              options={LEASE_FIELD_OPTIONS[key]}
+                              placeholder={`Select ${key.replace(/_/g, " ")}`}
+                            />
+                          </div>
                         ) : LONG_TEXT_LEASE_FIELDS.has(key) ? (
                           <textarea
                             value={draftFieldValue}

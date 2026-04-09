@@ -350,6 +350,10 @@ const ALLOWED_COLUMNS = {
     'annual_rent', 'rent_per_sf', 'lease_term_months', 'security_deposit',
     'cam_amount', 'nnn_amount', 'escalation_rate', 'renewal_options',
     'ti_allowance', 'free_rent_months', 'notes',
+    // Extended fields (20260408_lease_extended_fields.sql)
+    'escalation_type', 'escalation_timing', 'renewal_type', 'renewal_notice_months',
+    'cam_cap_type', 'admin_fee_pct', 'management_fee_basis',
+    'hvac_responsibility', 'sales_reporting_frequency',
   ]),
   Tenant: new Set([
     ...COMMON_BASE_COLUMNS,
