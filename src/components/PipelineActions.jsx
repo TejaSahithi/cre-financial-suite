@@ -102,20 +102,27 @@ export default function PipelineActions({
   propertyId,
   fiscalYear = new Date().getFullYear(),
   actions = [],
+  onComplete,
+  requireProperty = true,
 }) {
   const [loadingIndex, setLoadingIndex] = useState(null);
+
+  // "all" or empty string means no property selected
+  const resolvedPropertyId =
+    propertyId && propertyId !== "all" ? propertyId : null;
 
   const invokeWithFreshSession = async (fnName, body) => {
     const attemptInvoke = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
-        throw new Error("Not authenticated");
+        throw new Error("Not authenticated — please sign in again");
       }
 
       const { data, error } = await supabase.functions.invoke(fnName, {
         body,
         headers: {
           Authorization: `Bearer ${session.access_token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
         },
       });
 
@@ -134,7 +141,24 @@ export default function PipelineActions({
     }
 
     if (result.error) {
+      // Try to surface the function's JSON error message
+      const ctx = result.error?.context;
+      if (ctx && typeof ctx.json === "function") {
+        try {
+          const body = await ctx.json();
+          if (body?.message) {
+            throw new Error(body.message);
+          }
+        } catch {
+          /* fall through */
+        }
+      }
       throw result.error;
+    }
+
+    // Functions return { error: true, message } as 200/400 — surface that too
+    if (result.data && result.data.error === true) {
+      throw new Error(result.data.message || "Function returned an error");
     }
 
     return result.data || {};
@@ -142,11 +166,20 @@ export default function PipelineActions({
 
   const handleAction = async (action, index) => {
     if (loadingIndex !== null) return; // block concurrent runs
+
+    // Validate property_id BEFORE we waste a network round-trip
+    if (requireProperty && !resolvedPropertyId) {
+      toast.error(
+        `${action.label} requires a property — pick one in the Scope selector first.`
+      );
+      return;
+    }
+
     setLoadingIndex(index);
 
     try {
       const body = {
-        property_id: propertyId,
+        property_id: resolvedPropertyId,
         fiscal_year: fiscalYear,
         ...(action.extra || {}),
       };
@@ -159,6 +192,7 @@ export default function PipelineActions({
         toast.success(
           `${action.label} complete – download started.`
         );
+        if (typeof onComplete === "function") onComplete(action, data);
         return;
       }
 
@@ -171,6 +205,7 @@ export default function PipelineActions({
           : "Completed successfully");
 
       toast.success(`${action.label}: ${summary}`);
+      if (typeof onComplete === "function") onComplete(action, data);
     } catch (err) {
       toast.error(
         `${action.label} failed: ${err?.message || "Unexpected error"}`
@@ -182,12 +217,17 @@ export default function PipelineActions({
 
   if (!actions.length) return null;
 
+  const noProperty = requireProperty && !resolvedPropertyId;
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {actions.map((action, idx) => {
         const IconComponent = ICON_MAP[action.icon] || Calculator;
         const isLoading = loadingIndex === idx;
-        const isDisabled = loadingIndex !== null;
+        const isDisabled = loadingIndex !== null || noProperty;
+        const title = noProperty
+          ? "Select a property in the Scope selector first"
+          : action.label;
 
         return (
           <Button
@@ -197,6 +237,7 @@ export default function PipelineActions({
             disabled={isDisabled}
             onClick={() => handleAction(action, idx)}
             className="gap-1.5"
+            title={title}
           >
             {isLoading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
