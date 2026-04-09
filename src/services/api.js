@@ -764,7 +764,22 @@ export function createEntityService(entityName) {
         if (!isOrgExempt && !enriched.org_id) {
           const orgId = await getCurrentOrgId();
           if (orgId && orgId !== '__none__') {
+            // Regular user — use their org directly
             enriched.org_id = orgId;
+          } else if (orgId === null) {
+            // Super-admin context — org_id is null meaning "no filter / see all".
+            // We still need a real org_id to satisfy the NOT NULL constraint.
+            // Fall back to resolveWritableOrgId which picks the first org in the system.
+            try {
+              const { resolveWritableOrgId } = await import('@/lib/orgUtils');
+              const fallbackOrgId = await resolveWritableOrgId(null);
+              if (fallbackOrgId) {
+                enriched.org_id = fallbackOrgId;
+                console.warn(`[api] ${entityName}.create() — SuperAdmin: auto-assigned org_id=${fallbackOrgId}`);
+              }
+            } catch (e) {
+              console.error('[api] Failed to resolve SuperAdmin org fallback:', e);
+            }
           }
         }
 
