@@ -193,7 +193,7 @@ Deno.serve(async (req: Request) => {
     const { error: inviteLogErr } = await adminClient.from("invitations").insert({
       email, org_id, role,
       token: "magic-link",
-      status: "accepted",
+      status: "pending",
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
     });
 

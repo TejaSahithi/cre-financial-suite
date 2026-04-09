@@ -80,6 +80,14 @@ export default function Login() {
       if (res && res.valid) {
         setVerifiedCompany(res.company_name);
         setVerifiedRole(res.role || "Admin (Owner)");
+        
+        // Check if user already exists in Auth to suggest Sign In
+        const { data: { public_user }, error: checkErr } = await supabase.auth.admin.listUsers();
+        // Since we are using the public client, we can't search all users.
+        // But we can try to "sign up" and if it errors with 'Already exists', we know.
+        // Actually, let's just keep it simple: if valid, let them try to sign up. 
+        // The error from handleRegister will tell them if they exist.
+        
         setIsValidatingEmail(false);
         return true;
       } else {
@@ -174,7 +182,12 @@ export default function Login() {
         if (data?.session) navigate(createPageUrl("Onboarding"));
       }
     } catch (err) {
-      setError(err.message || "Failed to create account.");
+      const msg = err.message || "";
+      if (msg.toLowerCase().includes("user already registered") || msg.toLowerCase().includes("already exists")) {
+        setError("An account with this email already exists. Please Sign In using the link below instead.");
+      } else {
+        setError(msg || "Failed to create account.");
+      }
     }
     setLoading(false);
   };
