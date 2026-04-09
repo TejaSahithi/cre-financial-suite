@@ -17,3 +17,65 @@ entrypoint = "./functions/save-security-questions/index.ts"
 [functions.invite-user]
 enabled = true
 verify_jwt = false
+
+# Engine & Computation Functions (Internal Auth)
+[functions.compute-lease]
+enabled = true
+verify_jwt = false
+
+[functions.compute-expense]
+enabled = true
+verify_jwt = false
+
+[functions.compute-cam]
+enabled = true
+verify_jwt = false
+
+[functions.compute-budget]
+enabled = true
+verify_jwt = false
+
+[functions.compute-revenue]
+enabled = true
+verify_jwt = false
+
+[functions.compute-reconciliation]
+enabled = true
+verify_jwt = false
+
+# Data & Export Functions (Internal Auth)
+[functions.export-data]
+enabled = true
+verify_jwt = false
+
+[functions.pipeline-status]
+enabled = true
+verify_jwt = false
+
+[functions.validate-data]
+enabled = true
+verify_jwt = false
+
+[functions.upload-handler]
+enabled = true
+verify_jwt = false
+
+[functions.store-data]
+enabled = true
+verify_jwt = false
+
+[functions.ingest-file]
+enabled = true
+verify_jwt = false
+
+[functions.parse-file]
+enabled = true
+verify_jwt = false
+
+[functions.parse-pdf-docling]
+enabled = true
+verify_jwt = false
+
+[functions.normalize-pdf-output]
+enabled = true
+verify_jwt = false
