@@ -117,14 +117,16 @@ Deno.serve(async (req: Request) => {
       }
 
       // ── Ensure profile row exists for invited user ────────────────────────
-      await adminClient.from("profiles").upsert({
+      const { error: profileErr } = await adminClient.from("profiles").upsert({
         id: userId,
         email,
         full_name: full_name || null,
         status: "active",
         onboarding_type: "invited",
         first_login: true,
-      }, { onConflict: "id" }).catch((e: any) => console.error("[invite-user] profile upsert:", e));
+      }, { onConflict: "id" });
+      
+      if (profileErr) console.error("[invite-user] profile upsert:", profileErr);
 
       const normalizedScope = {
         portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
@@ -177,12 +179,14 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Log invitation ────────────────────────────────────────────────────────
-    await adminClient.from("invitations").insert({
+    const { error: inviteLogErr } = await adminClient.from("invitations").insert({
       email, org_id, role,
       token: "magic-link",
       status: "accepted",
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
-    }).catch((e: any) => console.error("[invite-user] invitation log err:", e));
+    });
+
+    if (inviteLogErr) console.error("[invite-user] invitation log err:", inviteLogErr);
 
     // ── If user already existed, send a notification email instead ────────────
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
