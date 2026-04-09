@@ -1,150 +1,186 @@
 // @ts-nocheck
-/**
- * Unit Tests: CAM Calculation
- * Feature: backend-driven-pipeline, Task 10.4
- *
- * Requirements: 7.1, 7.2, 7.3, 7.4
- */
 
-import {
-  assertEquals,
-  assertAlmostEquals,
-  assert,
-} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { calculateCam } from "../_shared/cam-calculator.ts";
 
-// ---------------------------------------------------------------------------
-// Pure helper functions
-// ---------------------------------------------------------------------------
-
-interface Tenant {
-  id: string;
-  square_footage: number;
-  cam_cap?: number | null;
+function assert(condition: boolean, message: string) {
+  if (!condition) throw new Error(message);
 }
 
-interface Expense {
-  category: string;
-  amount: number;
+function assertEquals(actual: unknown, expected: unknown, message: string) {
+  if (actual !== expected) {
+    throw new Error(`${message}. Expected ${expected}, received ${actual}`);
+  }
 }
 
-/**
- * Computes pro-rata CAM charges for each tenant.
- */
-function proRataCAM(
-  totalCAM: number,
-  tenants: Tenant[],
-): { id: string; cam_charge: number }[] {
-  const totalSqft = tenants.reduce((sum, t) => sum + t.square_footage, 0);
-  if (totalSqft === 0) return tenants.map((t) => ({ id: t.id, cam_charge: 0 }));
-  return tenants.map((t) => ({
-    id: t.id,
-    cam_charge: (t.square_footage / totalSqft) * totalCAM,
-  }));
+function assertAlmostEquals(actual: number, expected: number, epsilon: number, message: string) {
+  if (Math.abs((Number(actual) || 0) - (Number(expected) || 0)) > epsilon) {
+    throw new Error(`${message}. Expected ${expected}, received ${actual}`);
+  }
 }
 
-/**
- * Applies a per-tenant CAM cap.
- */
-function applyCAMCap(rawCam: number, camCap: number | null | undefined): number {
-  if (camCap != null && rawCam > camCap) return camCap;
-  return rawCam;
+function tenant(result: any, leaseId: string) {
+  const match = result.tenant_charges.find((row: any) => row.lease_id === leaseId);
+  assert(!!match, `Missing tenant result for ${leaseId}`);
+  return match;
 }
 
-/**
- * Calculates a tenant's CAM charge, filtering out excluded categories.
- */
-function calculateTenantCAM(
-  expenses: Expense[],
-  excludedCategories: string[],
-  sqft: number,
-  totalSqft: number,
-): number {
-  if (totalSqft === 0) return 0;
-  const eligible = expenses.filter((e) => !excludedCategories.includes(e.category));
-  const pool = eligible.reduce((sum, e) => sum + e.amount, 0);
-  return (sqft / totalSqft) * pool;
-}
+Deno.test("CAM engine allocates property/building pools, honours exclusions, and preserves direct charges", () => {
+  const result = calculateCam({
+    fiscal_year: 2026,
+    property: { id: "prop-1", name: "Sunset Plaza", total_sqft: 10000 },
+    buildings: [
+      { id: "bldg-1", property_id: "prop-1", name: "Tower A", total_sqft: 6000 },
+      { id: "bldg-2", property_id: "prop-1", name: "Tower B", total_sqft: 4000 },
+    ],
+    units: [
+      { id: "u-1", property_id: "prop-1", building_id: "bldg-1", square_footage: 3000, occupancy_status: "leased" },
+      { id: "u-2", property_id: "prop-1", building_id: "bldg-1", square_footage: 3000, occupancy_status: "leased" },
+      { id: "u-3", property_id: "prop-1", building_id: "bldg-2", square_footage: 4000, occupancy_status: "vacant" },
+    ],
+    expenses: [
+      { id: "exp-1", property_id: "prop-1", fiscal_year: 2026, category: "taxes", amount: 1000, classification: "recoverable", is_controllable: false },
+      { id: "exp-2", property_id: "prop-1", fiscal_year: 2026, category: "maintenance", amount: 4000, classification: "recoverable", is_controllable: true },
+      { id: "exp-3", property_id: "prop-1", building_id: "bldg-1", fiscal_year: 2026, category: "utilities", amount: 1200, classification: "recoverable", is_controllable: true },
+      { id: "exp-4", property_id: "prop-1", unit_id: "u-1", lease_id: "lease-1", fiscal_year: 2026, category: "hvac", amount: 300, classification: "recoverable", allocation_type: "direct", is_controllable: true },
+    ],
+    leases: [
+      { id: "lease-1", property_id: "prop-1", building_id: "bldg-1", unit_id: "u-1", tenant_name: "Alpha", start_date: "2026-01-01", end_date: "2026-12-31", square_footage: 3000, cam_applicable: true },
+      { id: "lease-2", property_id: "prop-1", building_id: "bldg-1", unit_id: "u-2", tenant_name: "Beta", start_date: "2026-01-01", end_date: "2026-12-31", square_footage: 3000, cam_applicable: true },
+    ],
+    property_config: {
+      config_values: {
+        recoverable_classifications: ["recoverable"],
+        property_pool_denominator_mode: "property_total_sqft",
+        building_pool_denominator_mode: "occupied_sqft",
+        admin_fee_pct: 0,
+        management_fee_pct: 0,
+        gross_up_enabled: false,
+      },
+    },
+    lease_configs: {
+      "lease-1": {
+        lease_id: "lease-1",
+        excluded_expenses: ["taxes"],
+        config_values: {},
+      },
+    },
+  });
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+  const alpha = tenant(result, "lease-1");
+  const beta = tenant(result, "lease-2");
 
-// 1. Pro-rata with 3 tenants (1000, 2000, 2000 sqft, total 5000)
-Deno.test("Pro-rata CAM: 3 tenants with 1000/2000/2000 sqft get correct share of 10000 CAM", () => {
-  const totalCAM = 10000;
-  const tenants: Tenant[] = [
-    { id: "t1", square_footage: 1000 },
-    { id: "t2", square_footage: 2000 },
-    { id: "t3", square_footage: 2000 },
-  ];
+  assertAlmostEquals(alpha.annual_cam, 2100, 0.01, "Alpha should receive pooled plus direct CAM");
+  assertAlmostEquals(alpha.monthly_cam, 175, 0.01, "Alpha monthly CAM should be annual/12");
+  assertAlmostEquals(alpha.total_cam_pool, 1800, 0.01, "Alpha pooled CAM should exclude taxes");
+  assertAlmostEquals(alpha.direct_expense_total, 300, 0.01, "Alpha direct expense should remain separately allocated");
+  assert(
+    !alpha.expense_breakdown.some((row: any) => row.category === "taxes"),
+    "Alpha should not receive excluded taxes category",
+  );
 
-  const charges = proRataCAM(totalCAM, tenants);
-  const totalSqft = 5000;
-
-  const t1 = charges.find((c) => c.id === "t1")!;
-  const t2 = charges.find((c) => c.id === "t2")!;
-  const t3 = charges.find((c) => c.id === "t3")!;
-
-  // t1: 1000/5000 * 10000 = 2000
-  assertAlmostEquals(t1.cam_charge, 2000, 0.01, "Tenant 1 (1000 sqft) should get 2000");
-  // t2: 2000/5000 * 10000 = 4000
-  assertAlmostEquals(t2.cam_charge, 4000, 0.01, "Tenant 2 (2000 sqft) should get 4000");
-  // t3: 2000/5000 * 10000 = 4000
-  assertAlmostEquals(t3.cam_charge, 4000, 0.01, "Tenant 3 (2000 sqft) should get 4000");
-
-  // Sum should equal totalCAM
-  const sum = charges.reduce((s, c) => s + c.cam_charge, 0);
-  assertAlmostEquals(sum, totalCAM, 0.01, "Sum of charges must equal totalCAM");
+  assertAlmostEquals(beta.annual_cam, 2100, 0.01, "Beta should receive property and building pool CAM");
+  assertAlmostEquals(beta.direct_expense_total, 0, 0.01, "Beta should not receive direct expenses");
+  assertAlmostEquals(result.summary.total_billed, 4200, 0.01, "Total billed should reflect exclusion and vacancy leakage");
 });
 
-// 2. CAM cap: tenant with 3000 sqft, cam_cap=2000, raw_cam=3000 → capped at 2000
-Deno.test("CAM cap: raw_cam=3000 with cap=2000 is capped at 2000", () => {
-  const rawCam = 3000;
-  const camCap = 2000;
-  const result = applyCAMCap(rawCam, camCap);
-  assertEquals(result, 2000, "CAM charge must be capped at 2000");
+Deno.test("CAM engine applies base-year deductions, annual caps, and partial-year proration deterministically", () => {
+  const result = calculateCam({
+    fiscal_year: 2026,
+    property: { id: "prop-2", name: "Commerce Center", total_sqft: 2000 },
+    units: [
+      { id: "u-21", property_id: "prop-2", square_footage: 1000, occupancy_status: "leased" },
+      { id: "u-22", property_id: "prop-2", square_footage: 1000, occupancy_status: "leased" },
+    ],
+    expenses: [
+      { id: "exp-21", property_id: "prop-2", fiscal_year: 2026, category: "maintenance", amount: 6000, classification: "recoverable", is_controllable: true },
+    ],
+    leases: [
+      { id: "lease-21", property_id: "prop-2", unit_id: "u-21", tenant_name: "Northwind", start_date: "2026-07-01", end_date: "2026-12-31", square_footage: 1000, cam_applicable: true, cam_cap_rate: 10 },
+      { id: "lease-22", property_id: "prop-2", unit_id: "u-22", tenant_name: "Southwind", start_date: "2026-01-01", end_date: "2026-12-31", square_footage: 1000, cam_applicable: true },
+    ],
+    property_config: {
+      config_values: {
+        recoverable_classifications: ["recoverable"],
+        property_pool_denominator_mode: "occupied_sqft",
+        gross_up_enabled: false,
+        admin_fee_pct: 0,
+        management_fee_pct: 0,
+      },
+    },
+    lease_configs: {
+      "lease-21": {
+        lease_id: "lease-21",
+        base_year: 2025,
+        config_values: {},
+      },
+    },
+    historical_by_year: {
+      "2025": {
+        "lease-21": {
+          annual_cam: 1000,
+          controllable_amount: 1000,
+        },
+      },
+    },
+  });
+
+  const northwind = tenant(result, "lease-21");
+  const southwind = tenant(result, "lease-22");
+
+  assertAlmostEquals(northwind.raw_share_before_caps, 1512.33, 0.02, "Northwind raw share should prorate from 3000 annual share");
+  assertAlmostEquals(northwind.base_year_adjustment, 504.11, 0.02, "Northwind base-year deduction should prorate from 1000");
+  assertAlmostEquals(northwind.cap_adjustment, 453.7, 0.02, "Northwind cap reduction should prorate from 900");
+  assertAlmostEquals(northwind.annual_cam, 554.52, 0.02, "Northwind annual CAM should reflect base year, cap, and proration");
+  assertAlmostEquals(northwind.monthly_cam, 92.42, 0.02, "Northwind monthly CAM should be spread over occupied months");
+  assertEquals(northwind.cap_applied, true, "Northwind cap flag should be true");
+
+  assertAlmostEquals(southwind.annual_cam, 3000, 0.01, "Southwind should receive uncapped full-year CAM");
+  assertAlmostEquals(result.summary.total_billed, 3554.52, 0.02, "Summary total billed should match tenant totals");
 });
 
-Deno.test("CAM cap: raw_cam=1500 with cap=2000 is not capped", () => {
-  const rawCam = 1500;
-  const camCap = 2000;
-  const result = applyCAMCap(rawCam, camCap);
-  assertEquals(result, 1500, "CAM charge below cap must not be modified");
-});
+Deno.test("CAM engine applies gross-up, management fee, and admin fee in the configured order", () => {
+  const result = calculateCam({
+    fiscal_year: 2026,
+    property: { id: "prop-3", name: "Lakeside", total_sqft: 10000 },
+    units: [
+      { id: "u-31", property_id: "prop-3", square_footage: 3000, occupancy_status: "leased" },
+      { id: "u-32", property_id: "prop-3", square_footage: 2000, occupancy_status: "leased" },
+      { id: "u-33", property_id: "prop-3", square_footage: 5000, occupancy_status: "vacant" },
+    ],
+    expenses: [
+      { id: "exp-31", property_id: "prop-3", fiscal_year: 2026, category: "maintenance", amount: 5000, classification: "recoverable", is_controllable: true },
+      { id: "exp-32", property_id: "prop-3", fiscal_year: 2026, category: "taxes", amount: 2000, classification: "recoverable", is_controllable: false },
+    ],
+    leases: [
+      { id: "lease-31", property_id: "prop-3", unit_id: "u-31", tenant_name: "Atlas", start_date: "2026-01-01", end_date: "2026-12-31", square_footage: 3000, cam_applicable: true },
+      { id: "lease-32", property_id: "prop-3", unit_id: "u-32", tenant_name: "Beacon", start_date: "2026-01-01", end_date: "2026-12-31", square_footage: 2000, cam_applicable: true },
+    ],
+    property_config: {
+      config_values: {
+        recoverable_classifications: ["recoverable"],
+        property_pool_denominator_mode: "occupied_sqft",
+        gross_up_enabled: true,
+        gross_up_target_occupancy_pct: 95,
+        gross_up_apply_to: "controllable",
+        management_fee_pct: 5,
+        management_fee_basis: "shared_pool",
+        admin_fee_pct: 10,
+        admin_fee_basis: "shared_pool_plus_management",
+      },
+    },
+  });
 
-Deno.test("CAM cap: null cap means no cap applied", () => {
-  const rawCam = 9999;
-  const result = applyCAMCap(rawCam, null);
-  assertEquals(result, 9999, "No cap should leave charge unchanged");
-});
+  const atlas = tenant(result, "lease-31");
+  const beacon = tenant(result, "lease-32");
 
-// 3. CAM exclusions: exclude "management" category, verify it's not in tenant's charge
-Deno.test("CAM exclusions: excluding 'management' removes it from tenant charge", () => {
-  const expenses: Expense[] = [
-    { category: "utilities", amount: 3000 },
-    { category: "maintenance", amount: 2000 },
-    { category: "management", amount: 5000 }, // should be excluded
-  ];
-  const sqft = 1000;
-  const totalSqft = 5000;
+  assertAlmostEquals(result.summary.gross_up_adjustment, 4500, 0.01, "Gross-up should add 4500 to controllable expenses");
+  assertAlmostEquals(atlas.total_cam_pool, 6900, 0.01, "Atlas pooled share should include gross-up");
+  assertAlmostEquals(atlas.management_fee_applied, 345, 0.01, "Atlas management fee should be 5% of shared pool");
+  assertAlmostEquals(atlas.admin_fee_applied, 724.5, 0.01, "Atlas admin fee should be 10% of pool plus management fee");
+  assertAlmostEquals(atlas.annual_cam, 7969.5, 0.01, "Atlas annual CAM should include pool, management, and admin fees");
 
-  const withExclusion = calculateTenantCAM(expenses, ["management"], sqft, totalSqft);
-  const withoutExclusion = calculateTenantCAM(expenses, [], sqft, totalSqft);
-
-  // Without exclusion: (3000+2000+5000) * (1000/5000) = 10000 * 0.2 = 2000
-  assertAlmostEquals(withoutExclusion, 2000, 0.01, "Without exclusion should be 2000");
-
-  // With exclusion: (3000+2000) * (1000/5000) = 5000 * 0.2 = 1000
-  assertAlmostEquals(withExclusion, 1000, 0.01, "With management excluded should be 1000");
-
-  assert(withExclusion < withoutExclusion, "Exclusion must reduce the CAM charge");
-});
-
-Deno.test("CAM exclusions: excluding all categories results in zero charge", () => {
-  const expenses: Expense[] = [
-    { category: "utilities", amount: 3000 },
-    { category: "management", amount: 5000 },
-  ];
-  const result = calculateTenantCAM(expenses, ["utilities", "management"], 1000, 5000);
-  assertEquals(result, 0, "Excluding all categories must result in zero charge");
+  assertAlmostEquals(beacon.annual_cam, 5313, 0.01, "Beacon annual CAM should reflect its 40% share");
+  assertAlmostEquals(result.summary.management_fees, 575, 0.01, "Total management fees should sum by tenant");
+  assertAlmostEquals(result.summary.admin_fees, 1207.5, 0.01, "Total admin fees should sum by tenant");
+  assertAlmostEquals(result.summary.total_billed, 13282.5, 0.01, "Total billed should include shared pool and fees");
 });
