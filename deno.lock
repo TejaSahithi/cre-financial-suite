@@ -36,6 +36,7 @@
     "https://deno.land/std@0.208.0/assert/unimplemented.ts": "d56fbeecb1f108331a380f72e3e010a1f161baa6956fd0f7cf3e095ae1a4c75a",
     "https://deno.land/std@0.208.0/assert/unreachable.ts": "4600dc0baf7d9c15a7f7d234f00c23bca8f3eba8b140286aaca7aa998cf9a536",
     "https://deno.land/std@0.208.0/fmt/colors.ts": "34b3f77432925eb72cf0bfb351616949746768620b8e5ead66da532f93d10ba2",
+    "https://esm.sh/@supabase/supabase-js@2.39.0": "f51aeb2dbf8f67c8fa396628af45793e3513067d45705f1ea158f5c678bb0cea",
     "https://esm.sh/fast-check@3.15.0": "81dd48396995234e445ebd70b5c3a72ea06613d3b2245881f78fff296cf70b94",
     "https://esm.sh/fast-check@3.15.0/denonext/fast-check.mjs": "28dd2d64d3db648180e8c0b83c7ff2f17d50d3a515d7f5f6ce075bbc8144c801",
     "https://esm.sh/pure-rand@6.1.0/denonext/pure-rand.mjs": "7da8ca2c2af243dd17b5513288aa8476e6b49f2083d5d2b7b3450234df3a7e0d",
@@ -102,8 +103,10 @@
         "npm:jspdf@4",
         "npm:lodash@^4.17.21",
         "npm:lucide-react@0.475",
+        "npm:mammoth@^1.12.0",
         "npm:moment@^2.30.1",
         "npm:next-themes@~0.4.4",
+        "npm:pdfjs-dist@^5.6.205",
         "npm:postcss@^8.5.3",
         "npm:react-day-picker@^8.10.1",
         "npm:react-dom@^18.2.0",
@@ -125,6 +128,7 @@
         "npm:uuid@13",
         "npm:vaul@^1.1.2",
         "npm:vite@^6.1.0",
+        "npm:xlsx@~0.18.5",
         "npm:zod@^3.24.2"
       ]
     }

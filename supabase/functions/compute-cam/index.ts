@@ -4,12 +4,32 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { saveSnapshot } from "../_shared/snapshot.ts";
 
 /**
- * Compute CAM Edge Function
- * Applies CAM calculation methods per property
+ * Compute CAM Edge Function — multi-level
  *
- * Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6
- * Task: 10.1
+ * Computes Common Area Maintenance charges at one of three levels:
+ *   - "property": classic — pool all property expenses, allocate across all
+ *                 active leases on the property by sqft / fixed / percentage.
+ *   - "building": pool only expenses scoped to a building (or expenses for
+ *                 the parent property if `expenses.building_id` is null),
+ *                 then allocate across leases tied to units in that building.
+ *   - "unit":     directly bills the lease tied to a single unit. Pool is the
+ *                 unit's directly-attributed expenses (expenses.unit_id) plus
+ *                 a pro-rata slice of building/property-level recoverables.
+ *
+ * Body:
+ *   {
+ *     scope_level?: "property" | "building" | "unit",   // default "property"
+ *     scope_id?: string,                                // id of the scope target
+ *     property_id: string,                              // ALWAYS required (parent)
+ *     fiscal_year: number
+ *   }
+ *
+ * For backwards compatibility, if scope_level/scope_id are omitted the call
+ * behaves exactly like the old property-level compute.
  */
+
+type ScopeLevel = "property" | "building" | "unit";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -19,17 +39,36 @@ Deno.serve(async (req: Request) => {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin);
 
-    const { property_id, fiscal_year } = await req.json();
+    const body = await req.json();
+    const {
+      property_id,
+      fiscal_year,
+      scope_level: rawScopeLevel,
+      scope_id: rawScopeId,
+    } = body ?? {};
+
     if (!property_id || !fiscal_year) {
       throw new Error("property_id and fiscal_year are required");
     }
 
+    const scopeLevel: ScopeLevel = (
+      rawScopeLevel === "unit" || rawScopeLevel === "building"
+        ? rawScopeLevel
+        : "property"
+    );
+    const scopeId: string | null =
+      scopeLevel === "property" ? property_id : (rawScopeId ?? null);
+
+    if (scopeLevel !== "property" && !scopeId) {
+      throw new Error(`scope_id is required when scope_level = ${scopeLevel}`);
+    }
+
     // ---------------------------------------------------------------
-    // 1. Fetch property and property_config
+    // 1. Fetch property + property_config (always needed for the pool)
     // ---------------------------------------------------------------
     const { data: property, error: propErr } = await supabaseAdmin
       .from("properties")
-      .select("id, total_sqft, org_id")
+      .select("id, total_sqft, org_id, name")
       .eq("id", property_id)
       .eq("org_id", orgId)
       .single();
@@ -46,44 +85,165 @@ Deno.serve(async (req: Request) => {
 
     const camMethod = propertyConfig?.cam_calculation_method ?? "pro_rata";
     const propConfigValues = propertyConfig?.config_values ?? {};
-    const adminFeePct = propConfigValues.admin_fee_pct ?? 10;
-    const grossUpPct = propConfigValues.gross_up_pct ?? 0;
-    const capPct = propConfigValues.cap_pct ?? null;
+    const adminFeePct = Number(propConfigValues.admin_fee_pct ?? 10);
+    const grossUpPct = Number(propConfigValues.gross_up_pct ?? 0);
+    const capPct = propConfigValues.cap_pct != null ? Number(propConfigValues.cap_pct) : null;
 
     // ---------------------------------------------------------------
-    // 2. Fetch all recoverable expenses for property + fiscal year
+    // 2. Resolve scope target metadata (building / unit)
     // ---------------------------------------------------------------
-    const { data: expenses, error: expErr } = await supabaseAdmin
-      .from("expenses")
-      .select("id, category, amount, classification, is_controllable")
-      .eq("property_id", property_id)
-      .eq("org_id", orgId)
-      .eq("fiscal_year", fiscal_year)
-      .or("classification.eq.recoverable,is_controllable.eq.true");
+    let scopeRecord: any = null;
+    let scopeSf = 0;
 
-    if (expErr) {
-      throw new Error(`Failed to fetch expenses: ${expErr.message}`);
+    if (scopeLevel === "building") {
+      const { data: building, error: bErr } = await supabaseAdmin
+        .from("buildings")
+        .select("id, name, total_sqft, property_id, org_id")
+        .eq("id", scopeId)
+        .eq("org_id", orgId)
+        .single();
+      if (bErr || !building) {
+        throw new Error(`Building not found: ${bErr?.message ?? scopeId}`);
+      }
+      if (building.property_id !== property_id) {
+        throw new Error("Building does not belong to the specified property");
+      }
+      scopeRecord = building;
+      scopeSf = Number(building.total_sqft) || 0;
+    } else if (scopeLevel === "unit") {
+      const { data: unit, error: uErr } = await supabaseAdmin
+        .from("units")
+        .select("id, unit_number, square_footage, property_id, building_id, org_id")
+        .eq("id", scopeId)
+        .eq("org_id", orgId)
+        .single();
+      if (uErr || !unit) {
+        throw new Error(`Unit not found: ${uErr?.message ?? scopeId}`);
+      }
+      if (unit.property_id !== property_id) {
+        throw new Error("Unit does not belong to the specified property");
+      }
+      scopeRecord = unit;
+      scopeSf = Number(unit.square_footage) || 0;
     }
 
     // ---------------------------------------------------------------
-    // 3. Fetch all active leases for the property
+    // 3. Fetch recoverable expenses for the scope
+    //
+    // We try the scoped query first; if `expenses.building_id` /
+    // `expenses.unit_id` columns don't exist on the deployed DB
+    // (older migration), we transparently fall back to property-level
+    // expenses so the call still succeeds.
     // ---------------------------------------------------------------
-    const { data: leases, error: leaseErr } = await supabaseAdmin
+    const fetchExpensesForScope = async () => {
+      // Always include property-level rows in the candidate set so the
+      // building/unit queries don't return empty when expenses haven't
+      // been tagged with the new hierarchy columns yet.
+      let query = supabaseAdmin
+        .from("expenses")
+        .select("id, category, amount, classification, is_controllable, property_id, building_id, unit_id")
+        .eq("property_id", property_id)
+        .eq("org_id", orgId)
+        .eq("fiscal_year", fiscal_year);
+
+      const { data, error } = await query;
+      if (error) {
+        const msg = String(error.message ?? "");
+        if (/column .* does not exist/i.test(msg) || error.code === "42703") {
+          // Older schema — building_id/unit_id not present. Re-query without them.
+          const { data: legacy, error: legacyErr } = await supabaseAdmin
+            .from("expenses")
+            .select("id, category, amount, classification, is_controllable, property_id")
+            .eq("property_id", property_id)
+            .eq("org_id", orgId)
+            .eq("fiscal_year", fiscal_year);
+          if (legacyErr) {
+            throw new Error(`Failed to fetch expenses: ${legacyErr.message}`);
+          }
+          return (legacy ?? []).map((e: any) => ({ ...e, building_id: null, unit_id: null }));
+        }
+        throw new Error(`Failed to fetch expenses: ${msg}`);
+      }
+      return data ?? [];
+    };
+
+    const allExpenses = await fetchExpensesForScope();
+
+    // Only recoverable / controllable rows feed the CAM pool.
+    const recoverableExpenses = allExpenses.filter((e: any) =>
+      e.classification === "recoverable" || e.is_controllable === true
+    );
+
+    // Slice expenses by scope
+    let scopedExpenses: any[] = [];
+    let directExpenses: any[] = []; // direct-billed for unit scope
+    if (scopeLevel === "property") {
+      scopedExpenses = recoverableExpenses;
+    } else if (scopeLevel === "building") {
+      scopedExpenses = recoverableExpenses.filter(
+        (e: any) => e.building_id === scopeId || e.building_id == null,
+      );
+    } else if (scopeLevel === "unit") {
+      // Unit-direct rows = pure pass-through (utilities, sub-metered, etc.)
+      directExpenses = recoverableExpenses.filter((e: any) => e.unit_id === scopeId);
+      // The rest of the recoverable pool is shared across the building/property
+      scopedExpenses = recoverableExpenses.filter((e: any) => e.unit_id == null);
+    }
+
+    // ---------------------------------------------------------------
+    // 4. Fetch active leases for the scope
+    // ---------------------------------------------------------------
+    let leaseQuery = supabaseAdmin
       .from("leases")
-      .select("id, tenant_name, square_footage, status")
+      .select("id, tenant_name, square_footage, status, unit_id")
       .eq("property_id", property_id)
       .eq("org_id", orgId)
       .eq("status", "active");
 
+    let { data: leasesRaw, error: leaseErr } = await leaseQuery;
     if (leaseErr) {
-      throw new Error(`Failed to fetch leases: ${leaseErr.message}`);
+      // Tolerate older lease schemas without unit_id
+      const msg = String(leaseErr.message ?? "");
+      if (/unit_id/i.test(msg)) {
+        const { data: legacy, error: legacyErr } = await supabaseAdmin
+          .from("leases")
+          .select("id, tenant_name, square_footage, status")
+          .eq("property_id", property_id)
+          .eq("org_id", orgId)
+          .eq("status", "active");
+        if (legacyErr) throw new Error(`Failed to fetch leases: ${legacyErr.message}`);
+        leasesRaw = (legacy ?? []).map((l: any) => ({ ...l, unit_id: null }));
+      } else {
+        throw new Error(`Failed to fetch leases: ${leaseErr.message}`);
+      }
+    }
+    leasesRaw = leasesRaw ?? [];
+
+    // Filter leases by scope
+    let leases: any[] = [];
+    if (scopeLevel === "property") {
+      leases = leasesRaw;
+    } else if (scopeLevel === "building") {
+      // Need to know which units belong to the building
+      const { data: bldgUnits, error: uErr } = await supabaseAdmin
+        .from("units")
+        .select("id")
+        .eq("building_id", scopeId)
+        .eq("org_id", orgId);
+      if (uErr) throw new Error(`Failed to fetch building units: ${uErr.message}`);
+      const unitSet = new Set((bldgUnits ?? []).map((u: any) => u.id));
+      leases = leasesRaw.filter((l: any) => l.unit_id && unitSet.has(l.unit_id));
+    } else if (scopeLevel === "unit") {
+      leases = leasesRaw.filter((l: any) => l.unit_id === scopeId);
     }
 
-    if (!leases || leases.length === 0) {
-      throw new Error("No active leases found for this property");
+    if (!leases.length) {
+      throw new Error(
+        `No active leases found for ${scopeLevel} scope ${scopeId ?? property_id}`,
+      );
     }
 
-    // Fetch lease_config for every active lease
+    // Fetch lease_config for every active lease in scope
     const leaseIds = leases.map((l: any) => l.id);
     const { data: leaseConfigs, error: lcErr } = await supabaseAdmin
       .from("lease_config")
@@ -94,45 +254,50 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Failed to fetch lease configs: ${lcErr.message}`);
     }
 
-    // Index lease_config by lease_id for fast lookup
     const leaseConfigMap: Record<string, any> = {};
-    if (leaseConfigs) {
-      for (const lc of leaseConfigs) {
-        leaseConfigMap[lc.lease_id] = lc;
-      }
+    for (const lc of leaseConfigs ?? []) {
+      leaseConfigMap[lc.lease_id] = lc;
     }
 
     // ---------------------------------------------------------------
-    // 4. Determine CAM calculation method (already resolved above)
+    // 5. Determine the CAM pool denominator (sqft) for this scope
     // ---------------------------------------------------------------
-
-    // ---------------------------------------------------------------
-    // 5. Calculate total CAM pool
-    // ---------------------------------------------------------------
-    const totalBuildingSf = Number(property.total_sqft) || 0;
-    if (totalBuildingSf <= 0) {
+    const totalPropertySf = Number(property.total_sqft) || 0;
+    if (totalPropertySf <= 0) {
       throw new Error("Property total_sqft must be greater than zero");
     }
 
-    // Sum all recoverable expense amounts (base recoverable total)
-    const totalRecoverable = (expenses ?? []).reduce(
+    let denominatorSf: number;
+    if (scopeLevel === "property") {
+      denominatorSf = totalPropertySf;
+    } else if (scopeLevel === "building") {
+      denominatorSf = scopeSf > 0 ? scopeSf : totalPropertySf;
+    } else {
+      denominatorSf = scopeSf > 0 ? scopeSf : totalPropertySf;
+    }
+
+    // ---------------------------------------------------------------
+    // 6. Build the CAM pool: shared recoverables + admin fee + gross-up + cap
+    // ---------------------------------------------------------------
+    const totalRecoverable = scopedExpenses.reduce(
       (sum: number, e: any) => sum + (Number(e.amount) || 0),
-      0
+      0,
+    );
+    const totalDirect = directExpenses.reduce(
+      (sum: number, e: any) => sum + (Number(e.amount) || 0),
+      0,
     );
 
-    // Apply admin fee
     let totalCam = totalRecoverable * (1 + adminFeePct / 100);
 
-    // Calculate occupancy and apply gross-up if < 100%
+    // Occupancy / gross-up — use leases in scope vs denominator
     const occupiedSf = leases.reduce(
       (sum: number, l: any) => sum + (Number(l.square_footage) || 0),
-      0
+      0,
     );
-    const occupancyRate = occupiedSf / totalBuildingSf;
+    const occupancyRate = denominatorSf > 0 ? occupiedSf / denominatorSf : 0;
 
     if (occupancyRate < 1 && grossUpPct > 0) {
-      // Gross-up: adjust variable expenses to what they would be at full occupancy
-      // The gross_up_pct indicates the percentage of expenses that are variable
       const variablePortion = totalCam * (grossUpPct / 100);
       const fixedPortion = totalCam - variablePortion;
       const grossedUpVariable =
@@ -140,18 +305,18 @@ Deno.serve(async (req: Request) => {
       totalCam = fixedPortion + grossedUpVariable;
     }
 
-    // Apply property-level CAM cap percentage if configured
     if (capPct !== null && capPct > 0) {
       const capAmount = totalRecoverable * (capPct / 100);
-      if (totalCam > capAmount) {
-        totalCam = capAmount;
-      }
+      if (totalCam > capAmount) totalCam = capAmount;
     }
 
-    const camPerSf = totalBuildingSf > 0 ? totalCam / totalBuildingSf : 0;
+    // Direct-billed (unit-scope) sits OUTSIDE the gross-up / admin fee math
+    totalCam += totalDirect;
+
+    const camPerSf = denominatorSf > 0 ? totalCam / denominatorSf : 0;
 
     // ---------------------------------------------------------------
-    // 6 / 7 / 8. Calculate per-tenant charges
+    // 7. Allocate CAM to each lease in scope
     // ---------------------------------------------------------------
     const tenantCharges: any[] = [];
     let totalBilled = 0;
@@ -162,40 +327,32 @@ Deno.serve(async (req: Request) => {
       const excludedCategories: string[] = lc.excluded_expenses ?? [];
       const lcConfigValues = lc.config_values ?? {};
 
-      // Step 8: If this lease has excluded expense categories, compute a
-      // tenant-specific recoverable total that omits those categories.
+      // Tenant-specific recoverable (subtract excluded categories)
       let tenantRecoverable = totalRecoverable;
       if (excludedCategories.length > 0) {
-        tenantRecoverable = (expenses ?? []).reduce(
-          (sum: number, e: any) => {
-            if (excludedCategories.includes(e.category)) return sum;
-            return sum + (Number(e.amount) || 0);
-          },
-          0
+        tenantRecoverable = scopedExpenses.reduce(
+          (sum: number, e: any) =>
+            excludedCategories.includes(e.category) ? sum : sum + (Number(e.amount) || 0),
+          0,
         );
       }
 
-      // Tenant-specific CAM pool (with admin fee applied to their recoverable)
       let tenantCamPool = tenantRecoverable * (1 + adminFeePct / 100);
 
-      // Apply same gross-up logic to tenant-specific pool
       if (occupancyRate < 1 && grossUpPct > 0) {
         const variablePortion = tenantCamPool * (grossUpPct / 100);
         const fixedPortion = tenantCamPool - variablePortion;
         const grossedUpVariable =
-          occupancyRate > 0
-            ? variablePortion / occupancyRate
-            : variablePortion;
+          occupancyRate > 0 ? variablePortion / occupancyRate : variablePortion;
         tenantCamPool = fixedPortion + grossedUpVariable;
       }
 
-      // Step 6: Apply calculation method
       let tenantCam = 0;
       let proRataShare = 0;
 
       switch (camMethod) {
         case "pro_rata": {
-          proRataShare = totalBuildingSf > 0 ? tenantSf / totalBuildingSf : 0;
+          proRataShare = denominatorSf > 0 ? tenantSf / denominatorSf : 0;
           tenantCam = tenantCamPool * proRataShare;
           break;
         }
@@ -204,34 +361,35 @@ Deno.serve(async (req: Request) => {
           if (fixedAmount !== undefined && fixedAmount !== null) {
             tenantCam = Number(fixedAmount);
           } else {
-            // Fallback: split evenly among all leases
             tenantCam = tenantCamPool / leases.length;
           }
-          proRataShare = totalBuildingSf > 0 ? tenantSf / totalBuildingSf : 0;
+          proRataShare = denominatorSf > 0 ? tenantSf / denominatorSf : 0;
           break;
         }
-        case "percentage": {
+        case "percentage":
+        case "capped": {
           const pct = lcConfigValues.cam_percentage;
           if (pct !== undefined && pct !== null) {
             tenantCam = tenantCamPool * (Number(pct) / 100);
           } else {
-            // Fallback to pro-rata when percentage not configured
-            proRataShare =
-              totalBuildingSf > 0 ? tenantSf / totalBuildingSf : 0;
+            proRataShare = denominatorSf > 0 ? tenantSf / denominatorSf : 0;
             tenantCam = tenantCamPool * proRataShare;
           }
-          proRataShare =
-            tenantCamPool > 0 ? tenantCam / tenantCamPool : 0;
+          proRataShare = tenantCamPool > 0 ? tenantCam / tenantCamPool : 0;
           break;
         }
         default: {
-          // Default to pro_rata
-          proRataShare = totalBuildingSf > 0 ? tenantSf / totalBuildingSf : 0;
+          proRataShare = denominatorSf > 0 ? tenantSf / denominatorSf : 0;
           tenantCam = tenantCamPool * proRataShare;
         }
       }
 
-      // Step 7: Apply CAM cap per lease
+      // Add direct-billed expenses (unit scope only): the lease that owns the
+      // unit absorbs 100% of its direct expenses on top of the pro-rata share.
+      if (scopeLevel === "unit" && lease.unit_id === scopeId) {
+        tenantCam += totalDirect;
+      }
+
       let capApplied = false;
       if (lc.cam_cap !== undefined && lc.cam_cap !== null) {
         const capValue = Number(lc.cam_cap);
@@ -241,24 +399,24 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Round to two decimal places
       tenantCam = Math.round(tenantCam * 100) / 100;
-      proRataShare = Math.round(proRataShare * 10000) / 10000; // 4 decimals
-
+      proRataShare = Math.round(proRataShare * 10000) / 10000;
       totalBilled += tenantCam;
 
       tenantCharges.push({
         tenant_name: lease.tenant_name,
         lease_id: lease.id,
+        unit_id: lease.unit_id,
         square_footage: tenantSf,
         pro_rata_share: proRataShare,
         cam_charge: tenantCam,
+        monthly_cam: Math.round((tenantCam / 12) * 100) / 100,
         cap_applied: capApplied,
       });
     }
 
     // ---------------------------------------------------------------
-    // 9. Generate CAM reconciliation summary
+    // 8. Reconciliation summary
     // ---------------------------------------------------------------
     totalBilled = Math.round(totalBilled * 100) / 100;
     const roundedTotalCam = Math.round(totalCam * 100) / 100;
@@ -267,14 +425,15 @@ Deno.serve(async (req: Request) => {
 
     const reconciliation = {
       total_recoverable: Math.round(totalRecoverable * 100) / 100,
+      total_direct: Math.round(totalDirect * 100) / 100,
       total_billed: totalBilled,
       variance,
     };
 
     // ---------------------------------------------------------------
-    // 10. Store results in cam_calculations AND computation_snapshots
+    // 9. Persist to cam_calculations and computation_snapshots
     // ---------------------------------------------------------------
-    const camCalcPayload = {
+    const camCalcPayload: any = {
       org_id: orgId,
       property_id,
       fiscal_year,
@@ -286,85 +445,85 @@ Deno.serve(async (req: Request) => {
       gross_up_pct: grossUpPct,
       cap_pct: capPct,
       total_recoverable: Math.round(totalRecoverable * 100) / 100,
-      total_building_sf: totalBuildingSf,
+      total_building_sf: denominatorSf,
     };
 
     const { error: camInsertErr } = await supabaseAdmin
       .from("cam_calculations")
-      .upsert(camCalcPayload, {
-        onConflict: "org_id,property_id,fiscal_year",
-      });
+      .upsert(camCalcPayload, { onConflict: "org_id,property_id,fiscal_year" });
 
     if (camInsertErr) {
-      console.error(
-        "[compute-cam] cam_calculations upsert error:",
-        camInsertErr.message
-      );
-      // Non-fatal: we still return the result even if storage fails.
-      // Fall back to insert if upsert fails (in case there is no unique constraint).
+      console.error("[compute-cam] cam_calculations upsert error:", camInsertErr.message);
+      // Fall back to plain insert in case the unique constraint isn't there
       await supabaseAdmin.from("cam_calculations").insert(camCalcPayload);
     }
 
-    // ---------------------------------------------------------------
-    // Fetch prior-year CAM total and budgeted CAM for dashboard metrics
-    // ---------------------------------------------------------------
+    // Prior-year CAM total (for YoY) at the same scope
     let prevYearTotal = 0;
-    const { data: prevSnap } = await supabaseAdmin
-      .from("computation_snapshots")
-      .select("outputs")
-      .eq("property_id", property_id)
-      .eq("engine_type", "cam")
-      .eq("fiscal_year", fiscal_year - 1)
-      .order("computed_at", { ascending: false })
-      .limit(1);
-    if (prevSnap && prevSnap.length > 0) {
-      prevYearTotal = Number(prevSnap[0].outputs?.total_cam ?? 0);
+    {
+      const { data: prevSnap } = await supabaseAdmin
+        .from("computation_snapshots")
+        .select("outputs")
+        .eq("property_id", property_id)
+        .eq("engine_type", "cam")
+        .eq("fiscal_year", fiscal_year - 1)
+        .order("computed_at", { ascending: false })
+        .limit(1);
+      if (prevSnap && prevSnap.length > 0) {
+        prevYearTotal = Number(prevSnap[0].outputs?.total_cam ?? 0);
+      }
     }
 
+    // Budgeted CAM (revenue.cam_recovery from budget snapshot)
     let budgetedCam = 0;
-    const { data: budgetSnap } = await supabaseAdmin
-      .from("computation_snapshots")
-      .select("outputs")
-      .eq("property_id", property_id)
-      .eq("engine_type", "budget")
-      .eq("fiscal_year", fiscal_year)
-      .order("computed_at", { ascending: false })
-      .limit(1);
-    if (budgetSnap && budgetSnap.length > 0) {
-      budgetedCam = Number(budgetSnap[0].outputs?.line_items?.revenue?.cam_recovery ?? 0);
+    {
+      const { data: budgetSnap } = await supabaseAdmin
+        .from("computation_snapshots")
+        .select("outputs")
+        .eq("property_id", property_id)
+        .eq("engine_type", "budget")
+        .eq("fiscal_year", fiscal_year)
+        .order("computed_at", { ascending: false })
+        .limit(1);
+      if (budgetSnap && budgetSnap.length > 0) {
+        budgetedCam = Number(budgetSnap[0].outputs?.line_items?.revenue?.cam_recovery ?? 0);
+      }
     }
 
-    const snapshotPayload = {
-      org_id: orgId,
+    const inputs = {
       property_id,
-      engine_type: "cam",
       fiscal_year,
-      computed_at: new Date().toISOString(),
-      computed_by: user.email ?? user.id,
-      inputs: {
-        property_id,
-        fiscal_year,
-        cam_method: camMethod,
-        admin_fee_pct: adminFeePct,
-        gross_up_pct: grossUpPct,
-        cap_pct: capPct,
-        total_building_sf: totalBuildingSf,
-        occupancy_rate: Math.round(occupancyRate * 10000) / 10000,
-        expense_count: (expenses ?? []).length,
-        lease_count: leases.length,
-      },
-      outputs: {
-        total_cam: roundedTotalCam,
-        cam_per_sf: roundedCamPerSf,
-        prev_year_total: Math.round(prevYearTotal * 100) / 100,
-        budgeted_cam: Math.round(budgetedCam * 100) / 100,
-        total_billed: Math.round(totalBilled * 100) / 100,
-        method: camMethod,
-        admin_fee_pct: adminFeePct,
-        tenant_charges: tenantCharges,
-        reconciliation,
-      },
-      status: "completed",
+      scope_level: scopeLevel,
+      scope_id: scopeId,
+      cam_method: camMethod,
+      admin_fee_pct: adminFeePct,
+      gross_up_pct: grossUpPct,
+      cap_pct: capPct,
+      total_building_sf: totalPropertySf,
+      denominator_sf: denominatorSf,
+      occupancy_rate: Math.round(occupancyRate * 10000) / 10000,
+      expense_count: scopedExpenses.length + directExpenses.length,
+      lease_count: leases.length,
+    };
+
+    const outputs = {
+      total_cam: roundedTotalCam,
+      cam_per_sf: roundedCamPerSf,
+      prev_year_total: Math.round(prevYearTotal * 100) / 100,
+      budgeted_cam: Math.round(budgetedCam * 100) / 100,
+      total_billed: totalBilled,
+      method: camMethod,
+      scope_level: scopeLevel,
+      scope_id: scopeId,
+      scope_label:
+        scopeLevel === "property"
+          ? property.name
+          : scopeLevel === "building"
+          ? scopeRecord?.name
+          : scopeRecord?.unit_number,
+      admin_fee_pct: adminFeePct,
+      tenant_charges: tenantCharges,
+      reconciliation,
     };
 
     await saveSnapshot(supabaseAdmin, {
@@ -373,8 +532,8 @@ Deno.serve(async (req: Request) => {
       engine_type: "cam",
       fiscal_year,
       computed_by: user.email ?? user.id,
-      inputs: snapshotPayload.inputs,
-      outputs: snapshotPayload.outputs,
+      inputs,
+      outputs,
     });
 
     // ---------------------------------------------------------------
@@ -385,6 +544,8 @@ Deno.serve(async (req: Request) => {
         error: false,
         property_id,
         fiscal_year,
+        scope_level: scopeLevel,
+        scope_id: scopeId,
         total_cam: roundedTotalCam,
         cam_per_sf: roundedCamPerSf,
         method: camMethod,
@@ -392,9 +553,7 @@ Deno.serve(async (req: Request) => {
         tenant_charges: tenantCharges,
         reconciliation,
       }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
     console.error("[compute-cam] Error:", err.message);
@@ -403,7 +562,7 @@ Deno.serve(async (req: Request) => {
       {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      },
     );
   }
 });
