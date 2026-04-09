@@ -68,6 +68,10 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // ── Fetch Organization Name ────────────────────────────────────────────────
+    const { data: orgData } = await adminClient.from("organizations").select("name").eq("id", org_id).single();
+    const orgName = orgData?.name || "Our Organization";
+
     // ── Check if user already exists ──────────────────────────────────────────
     const { data: existingUsers } = await adminClient.auth.admin.listUsers();
     const existingUser = existingUsers?.users?.find((u: any) => u.email === email);
@@ -75,20 +79,27 @@ Deno.serve(async (req: Request) => {
     const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
     let userId = existingUser?.id;
     let isNewUser = !userId;
+    let inviteLink = `${frontendUrl}/Login`;
 
     if (isNewUser) {
-      // ── Use inviteUserByEmail for new users (magic link, time-limited, single-use) ──
-      const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(email, {
-        redirectTo: `${frontendUrl}/AcceptInvite`,
-        data: {
-          full_name: full_name || "",
-          role,
-          org_id,
-          invited_by: caller.id,
+      // Use generateLink to get a secure signup URL without sending the system email
+      const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
+        type: "invite",
+        email: email,
+        options: {
+          redirectTo: `${frontendUrl}/AcceptInvite`,
+          data: {
+            full_name: full_name || "",
+            role,
+            org_id,
+            org_name: orgName,
+            invited_by: caller.id,
+          },
         },
       });
-      if (inviteErr) throw inviteErr;
-      userId = inviteData.user.id;
+      if (linkErr) throw linkErr;
+      userId = linkData.user.id;
+      inviteLink = linkData.properties.action_link;
     }
 
     // ── Upsert membership record (status: invited) ────────────────────────────
@@ -188,12 +199,17 @@ Deno.serve(async (req: Request) => {
 
     if (inviteLogErr) console.error("[invite-user] invitation log err:", inviteLogErr);
 
-    // ── If user already existed, send a notification email instead ────────────
+    // ── Send Branded Email via Resend ──────────────────────────────────────────
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
-    if (!isNewUser && RESEND_API_KEY) {
+    if (RESEND_API_KEY) {
       try {
-        const loginLink = `${frontendUrl}/Login`;
         const roleLabel = role ? role.replaceAll("_", " ") : "team member";
+        const title = isNewUser ? "Complete your account setup" : "You've been added to a new organization";
+        const bodyText = isNewUser 
+          ? `You've been invited to join <strong>${orgName}</strong> as <strong>${roleLabel}</strong>. Please create your account to get started.`
+          : `Your existing CRE Platform account has been given access to <strong>${orgName}</strong> as <strong>${roleLabel}</strong>.`;
+        const ctaText = isNewUser ? "Create Account" : "Sign In";
+
         const html = `<!DOCTYPE html>
           <html lang="en">
             <head>
@@ -202,7 +218,7 @@ Deno.serve(async (req: Request) => {
               <title>CRE Platform</title>
             </head>
             <body style="margin:0;padding:40px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-              <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
                 <div style="padding:28px 36px;background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%);">
                   <div style="display:flex;align-items:center;gap:10px;">
                     <div style="width:36px;height:36px;border-radius:10px;background:#ffffff;display:flex;align-items:center;justify-content:center;">
@@ -215,21 +231,27 @@ Deno.serve(async (req: Request) => {
                   </div>
                 </div>
                 <div style="padding:32px 36px;color:#475569;font-size:15px;line-height:1.6;">
-                  <h2 style="margin:0 0 12px;color:#0f172a;font-size:24px;">You've been added to a team</h2>
+                  <h2 style="margin:0 0 12px;color:#0f172a;font-size:24px;">${title}</h2>
                   <p style="margin:0 0 16px;">Hi ${full_name || "there"},</p>
-                  <p style="margin:0 0 20px;">Your existing CRE Platform account has been given access to a new organization as <strong>${roleLabel}</strong>.</p>
-                  <a href="${loginLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;">Sign In</a>
+                  <p style="margin:0 0 20px;">${bodyText}</p>
+                  <a href="${inviteLink}" style="display:inline-block;background:#1a2744;color:#ffffff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:16px;">${ctaText}</a>
                 </div>
                 <div style="border-top:1px solid #e2e8f0;background:#f8fafc;padding:18px 36px;text-align:center;color:#94a3b8;font-size:12px;">CRE Platform · support@cresuite.org</div>
               </div>
             </body>
           </html>`;
+
         await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ from: "CRE Platform <support@cresuite.org>", to: email, subject: "You've been added to a CRE Platform team", html }),
+          body: JSON.stringify({ 
+            from: "CRE Platform <support@cresuite.org>", 
+            to: email, 
+            subject: title, 
+            html 
+          }),
         });
-      } catch (e: any) { console.error("[invite-user] existing user email err:", e.message); }
+      } catch (e: any) { console.error("[invite-user] email send err:", e.message); }
     }
 
     return new Response(JSON.stringify({ success: true, isNewUser, warnings }), {
