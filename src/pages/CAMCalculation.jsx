@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Calculator, AlertTriangle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabaseClient";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
@@ -114,6 +115,27 @@ export default function CAMCalculation() {
       setOverrideDraft(toOverrideDraft(configData.values));
     }
   }, [configData]);
+
+  const { data: customRulesCount } = useQuery({
+    queryKey: ["lease-config-count", scope.targetPropertyId],
+    queryFn: async () => {
+      if (!scope.targetPropertyId) return 0;
+      const { count } = await supabase
+        .from("lease_config")
+        .select("id", { count: "exact" })
+        .eq("org_id", leases?.[0]?.org_id); // using any lease's org_id or just relying on RLS
+      // To strictly filter by this property's leases:
+      const leaseIdsInProperty = leases.filter(l => l.property_id === scope.targetPropertyId).map(l => l.id);
+      if (!leaseIdsInProperty.length) return 0;
+      
+      const { count: exactCount } = await supabase
+        .from("lease_config")
+        .select("id", { count: "exact" })
+        .in("lease_id", leaseIdsInProperty);
+      return exactCount || 0;
+    },
+    enabled: !!scope.targetPropertyId,
+  });
 
   const {
     outputs,
@@ -395,7 +417,14 @@ export default function CAMCalculation() {
               </div>
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="text-[9px] text-slate-400 uppercase font-bold">Active Leases</p>
-                <p className="text-lg font-bold">{scope.activeLeases.length}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-lg font-bold">{scope.activeLeases.length}</p>
+                  {customRulesCount > 0 && (
+                    <Badge variant="outline" className="bg-teal-50 text-teal-700 text-[9px] border-teal-200 uppercase px-1.5 py-0">
+                      {customRulesCount} Custom Rules
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-[10px] text-slate-400">Eligible for allocation</p>
               </div>
               <div className="bg-slate-50 rounded-lg p-3">
