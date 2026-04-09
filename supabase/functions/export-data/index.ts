@@ -308,19 +308,22 @@ Deno.serve(async (req: Request) => {
       // ----------------------------------------------------------
       const fallbackTable = FALLBACK_TABLE_MAP[export_type as ExportType];
 
-      const query = supabaseAdmin
+      let query = supabaseAdmin
         .from(fallbackTable)
         .select('*')
         .eq('org_id', orgId)
         .eq('property_id', property_id);
 
-      // Not all tables have fiscal_year, but attempt the filter
+      // Handle the different year column names across tables
+      const yearColumn = (export_type === 'budget') ? 'budget_year' : 'fiscal_year';
+      
       const { data: rawData, error: rawErr } = await query
-        .eq('fiscal_year', fiscal_year)
+        .eq(yearColumn, fiscal_year)
         .order('created_at', { ascending: true });
 
       if (rawErr) {
-        // Retry without fiscal_year filter in case the column does not exist
+        console.error(`[export-data] Initial query failed for ${fallbackTable}:`, rawErr.message);
+        // Retry without year filter as a last resort
         const { data: retryData, error: retryErr } = await supabaseAdmin
           .from(fallbackTable)
           .select('*')
