@@ -14,6 +14,7 @@ import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import MetricCard from "@/components/MetricCard";
 import CAMReviewTab from "@/components/cam/CAMReviewTab";
+import CustomCAMRulesTab from "@/components/cam/CustomCAMRulesTab";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -237,6 +238,7 @@ export default function CAMDashboard() {
       <Tabs defaultValue="config">
         <TabsList className="bg-white border">
           <TabsTrigger value="config">Config</TabsTrigger>
+          <TabsTrigger value="rules">Custom CAM Rules</TabsTrigger>
           <TabsTrigger value="summary">Input Summary</TabsTrigger>
           <TabsTrigger value="review">Review</TabsTrigger>
         </TabsList>
@@ -379,6 +381,19 @@ export default function CAMDashboard() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="rules" className="mt-4">
+          {!scope.targetPropertyId ? (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Select a property to configure per-tenant CAM rules.
+            </div>
+          ) : (
+            <CustomCAMRulesTab
+              leases={leaseList.filter((l) => l.property_id === scope.targetPropertyId)}
+              currentYear={currentYear}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="summary" className="mt-4">
