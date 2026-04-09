@@ -223,6 +223,11 @@ async function handleGenerate(
     budget_year: fiscalYear,
     total_revenue: round2(totalRevenue),
     total_expenses: round2(totalExpenses),
+    noi: noi,
+    cam_total: round2(camRecovery),
+    generation_method: "automated",
+    period: "annual",
+    scope: "property",
     status: "draft",
     updated_at: new Date().toISOString(),
   };
