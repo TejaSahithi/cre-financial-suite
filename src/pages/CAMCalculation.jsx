@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Calculator, AlertTriangle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
@@ -70,6 +70,15 @@ export default function CAMCalculation() {
   const [scopeUnit, setScopeUnit] = useState("all");
   const [fiscalYear, setFiscalYear] = useState(currentYear);
   const [overrideDraft, setOverrideDraft] = useState(() => toOverrideDraft({}));
+  const [searchParams] = useSearchParams();
+
+  // Pre-fill from URL params when navigated from Custom CAM Rules tab
+  useEffect(() => {
+    const pid = searchParams.get("property_id");
+    const yr = searchParams.get("year");
+    if (pid) setScopeProperty(pid);
+    if (yr) setFiscalYear(Number(yr));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");

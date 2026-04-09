@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Calculator, ArrowRight, Save, SlidersHorizontal, TrendingUp, Building2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -67,6 +67,7 @@ export default function CAMDashboard() {
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -143,6 +144,16 @@ export default function CAMDashboard() {
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const nonControllableTotal = recoverableTotal - controllableTotal;
   const occupancyPct = scope.totalSqft > 0 ? (scope.occupiedSqft / scope.totalSqft) * 100 : 0;
+
+  const handleTriggerCalculation = () => {
+    const url = createPageUrl("CAMCalculation");
+    const params = new URLSearchParams();
+    if (scope.targetPropertyId) params.set("property_id", scope.targetPropertyId);
+    if (scope.targetScopeLevel && scope.targetScopeLevel !== "property") params.set("scope_level", scope.targetScopeLevel);
+    if (scope.targetScopeId && scope.targetScopeId !== scope.targetPropertyId) params.set("scope_id", scope.targetScopeId);
+    params.set("year", String(currentYear));
+    navigate(`${url}?${params.toString()}`);
+  };
 
   const snapshotOutputs = outputs ?? {};
   const currentTotal = Number(snapshotOutputs.total_cam ?? 0);
@@ -392,6 +403,8 @@ export default function CAMDashboard() {
             <CustomCAMRulesTab
               leases={leaseList.filter((l) => l.property_id === scope.targetPropertyId)}
               currentYear={currentYear}
+              propertyId={scope.targetPropertyId}
+              onTriggerCalculation={handleTriggerCalculation}
             />
           )}
         </TabsContent>
