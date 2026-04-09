@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { leaseService } from "@/services/leaseService";
+import { NotificationService } from "@/services/api";
 import useOrgId from "@/hooks/useOrgId";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { extractFromFile } from "@/services/documentExtractor";
@@ -277,7 +278,12 @@ export default function LeaseUpload() {
 
       const annualRent = extractedData.annual_rent || (monthlyRent * 12);
 
-      const newLease = await leaseService.create({
+      const scores = Object.values(extractedData.confidence_scores || {}).filter(
+        (s) => typeof s === "number"
+      );
+      const avgConfidence = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 85;
+
+      const leasePayload = {
         tenant_name: extractedData.tenant_name || "",
         lease_type: extractedData.lease_type || null,
         start_date: extractedData.start_date || null,
@@ -296,14 +302,27 @@ export default function LeaseUpload() {
         ti_allowance: extractedData.ti_allowance || 0,
         free_rent_months: extractedData.free_rent_months || 0,
         notes: extractedData.notes || null,
-        status: "active",
+        status: "draft",
+        confidence_score: avgConfidence,
+        confidence_scores: extractedData.confidence_scores || {},
         created_by: "lease_upload",
+        org_id: writableOrgId,
         ...(effectivePropertyId ? { property_id: effectivePropertyId } : {}),
         ...(scopeUnit !== "all" ? { unit_id: scopeUnit } : {}),
-        ...(writableOrgId ? { org_id: writableOrgId } : {}),
+      };
+
+      const saved = await leaseService.create(leasePayload);
+      setSavedLeaseId(saved.id);
+
+      await NotificationService.create({
+        org_id: writableOrgId,
+        type: "draft_lease_created",
+        title: "New Lease Draft Ready",
+        message: `A new lease for ${extractedData.tenant_name || "Unknown Tenant"} has been uploaded and is ready for validation.`,
+        link: createPageUrl("LeaseReview", { id: saved.id }),
+        priority: avgConfidence < 75 ? "high" : "normal",
       });
 
-      setSavedLeaseId(newLease.id);
       setStep(4);
     } catch (err) {
       console.error("[LeaseUpload] saveLease error:", err);

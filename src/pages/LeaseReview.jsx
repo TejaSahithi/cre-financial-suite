@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { leaseService } from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -46,6 +46,20 @@ export default function LeaseReview() {
     enabled: !!leaseId,
     select: data => data?.[0],
   });
+
+  // Mark related notifications as read when the review page is opened
+  useEffect(() => {
+    if (leaseId) {
+      NotificationService.list().then(notifs => {
+        const related = notifs.filter(n => !n.is_read && n.link?.includes(leaseId));
+        for (const n of related) {
+          NotificationService.update(n.id, { is_read: true }).catch(() => {});
+        }
+      }).catch(err => {
+        console.warn("[LeaseReview] Failed to auto-clear notifications:", err);
+      });
+    }
+  }, [leaseId]);
 
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
 
