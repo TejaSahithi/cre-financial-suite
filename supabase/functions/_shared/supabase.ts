@@ -16,23 +16,34 @@ export function createAdminClient() {
  * Returns the authenticated user or throws an error
  */
 export async function verifyUser(req: Request) {
-  const authHeader =
-    req.headers.get('x-user-jwt') ||
-    req.headers.get('x-supabase-auth') ||
-    req.headers.get('Authorization');
+  const headerSources = ['x-user-jwt', 'x-supabase-auth', 'Authorization'] as const;
+  let authHeader: string | null = null;
+  let usedHeader = '';
+
+  for (const name of headerSources) {
+    const value = req.headers.get(name);
+    if (value) {
+      authHeader = value;
+      usedHeader = name;
+      break;
+    }
+  }
+
   if (!authHeader) {
+    console.error("[verifyUser] No auth header found. Checked:", headerSources.join(', '));
     throw new Error('Missing Authorization header');
   }
-  
+
   const token = authHeader.replace(/^Bearer\s+/i, '');
   const supabaseAdmin = createAdminClient();
-  
+
   const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
   if (authError || !user) {
-    console.error("[verifyUser] Auth failed:", authError?.message);
+    console.error("[verifyUser] Auth failed via", usedHeader, ":", authError?.message);
     throw new Error(`Unauthorized: ${authError?.message || 'Invalid token'}`);
   }
-  
+
+  console.log("[verifyUser] Authenticated", user.email ?? user.id, "via", usedHeader);
   return { user, supabaseAdmin };
 }
 
