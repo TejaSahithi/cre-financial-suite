@@ -29,6 +29,7 @@ export async function verifyUser(req: Request) {
   
   const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
   if (authError || !user) {
+    console.error("[verifyUser] Auth failed:", authError?.message);
     throw new Error(`Unauthorized: ${authError?.message || 'Invalid token'}`);
   }
   

@@ -1,5 +1,6 @@
 import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 export const DEFAULT_CAM_CONFIG = {
   allocation_method: "pro_rata_total_sqft",
@@ -56,8 +57,8 @@ export async function savePropertyCamConfig(propertyId, values) {
     throw new Error("Select a property before saving CAM configuration");
   }
 
-  const orgId = await getCurrentOrgId();
-  if (!orgId || orgId === "__none__") {
+  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
+  if (!orgId) {
     throw new Error("Unable to resolve organization for CAM configuration");
   }
 
@@ -84,7 +85,7 @@ export async function savePropertyCamConfig(propertyId, values) {
 
   const { data, error } = await supabase
     .from("property_config")
-    .upsert(payload, { onConflict: "property_config_org_id_property_id_key" })
+    .upsert(payload, { onConflict: "org_id,property_id" })
     .select("*")
     .single();
 
@@ -136,8 +137,8 @@ export async function fetchLeaseConfig(leaseId) {
 
 export async function saveLeaseConfig(leaseId, values) {
   if (!supabase || !leaseId) throw new Error("Lease ID is required");
-  const orgId = await getCurrentOrgId();
-  if (!orgId || orgId === "__none__") throw new Error("Unable to resolve organization");
+  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
+  if (!orgId) throw new Error("Unable to resolve organization");
 
   const payload = {
     lease_id: leaseId,
@@ -162,7 +163,7 @@ export async function saveLeaseConfig(leaseId, values) {
 
   const { data, error } = await supabase
     .from("lease_config")
-    .upsert(payload, { onConflict: "lease_config_org_id_lease_id_key" })
+    .upsert(payload, { onConflict: "org_id,lease_id" })
     .select("*")
     .single();
   if (error) throw error;
