@@ -184,6 +184,7 @@ async function fetchLeases(supabaseAdmin: any, orgId: string, propertyId: string
 }
 
 async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: string, leaseIds: string[]) {
+  // Gracefully handle missing/empty property_config — returns null if no row exists
   const { data: propertyConfig, error: propertyConfigError } = await supabaseAdmin
     .from("property_config")
     .select("*")
@@ -192,7 +193,7 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
     .maybeSingle();
 
   if (propertyConfigError) {
-    throw new Error(`Failed to fetch property_config: ${propertyConfigError.message}`);
+    console.warn("[compute-cam] property_config fetch warning (non-fatal):", propertyConfigError.message);
   }
 
   let leaseConfigMap: Record<string, Record<string, unknown>> = {};
@@ -204,13 +205,13 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
       .in("lease_id", leaseIds);
 
     if (leaseConfigError) {
-      throw new Error(`Failed to fetch lease_config: ${leaseConfigError.message}`);
+      console.warn("[compute-cam] lease_config fetch warning (non-fatal):", leaseConfigError.message);
+    } else {
+      leaseConfigMap = Object.fromEntries((leaseConfigs ?? []).map((row: any) => [row.lease_id, row]));
     }
-
-    leaseConfigMap = Object.fromEntries((leaseConfigs ?? []).map((row: any) => [row.lease_id, row]));
   }
 
-  return { propertyConfig, leaseConfigMap };
+  return { propertyConfig: propertyConfig ?? null, leaseConfigMap };
 }
 
 function collectHistoricalYears(
@@ -293,12 +294,11 @@ Deno.serve(async (req: Request) => {
     );
     const mergedPropertyConfig = mergePropertyConfig(propertyConfig, body);
 
-    const recoverableExpenses = expenses.filter(
-      (expense: any) => String(expense.classification || "").toLowerCase() === "recoverable",
-    );
-    if (recoverableExpenses.length === 0) {
-      throw new Error(`No recoverable expenses found for property ${propertyId} in fiscal year ${fiscalYear}`);
-    }
+    // Filter recoverable expenses — accept 'recoverable', 'cam', 'nnn', or null classification
+    const recoverableExpenses = expenses.filter((expense: any) => {
+      const cls = String(expense.classification || "").toLowerCase();
+      return cls === "recoverable" || cls === "cam" || cls === "nnn" || cls === "";
+    });
 
     const activeScopedLeases = leases.filter((lease: any) =>
       scopedLeaseMatches(lease, units, scopeLevel, scopeId, propertyId) &&
@@ -310,7 +310,6 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Total square footage for ${scopeLevel} scope ${scopeId} must be greater than 0`);
     }
 
-    console.log("Total SqFt:", totalSqft);
     console.log("[compute-cam] Scope validation:", {
       property_id: propertyId,
       fiscal_year: fiscalYear,
@@ -332,34 +331,33 @@ Deno.serve(async (req: Request) => {
       .order("computed_at", { ascending: false });
 
     if (historicalError) {
-      throw new Error(`Failed to fetch historical CAM snapshots: ${historicalError.message}`);
+      console.warn("[compute-cam] Historical snapshots warning:", historicalError.message);
     }
 
-    const calculation = activeScopedLeases.length === 0
-      ? emptyCalculation(
-        propertyId,
-        fiscalYear,
-        scopeLevel,
-        scopeId,
-        [`No active leases found for ${scopeLevel} scope ${scopeId}; CAM allocation skipped`],
-      )
+    const shouldSkip = activeScopedLeases.length === 0 || recoverableExpenses.length === 0;
+    const skipReason = activeScopedLeases.length === 0
+      ? `No active leases found for ${scopeLevel} scope ${scopeId}; CAM allocation skipped`
+      : `No recoverable expenses found for FY ${fiscalYear}; CAM allocation skipped`;
+
+    const calculation = shouldSkip
+      ? emptyCalculation(propertyId, fiscalYear, scopeLevel, scopeId, [skipReason])
       : calculateCam({
-        fiscal_year: fiscalYear,
-        scope_level: scopeLevel,
-        scope_id: scopeId,
-        property: {
-          id: property.id,
-          name: property.name,
-          total_sqft: property.total_sqft,
-        },
-        buildings,
-        units,
-        expenses,
-        leases,
-        property_config: mergedPropertyConfig,
-        lease_configs: leaseConfigMap,
-        historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
-      });
+          fiscal_year: fiscalYear,
+          scope_level: scopeLevel,
+          scope_id: scopeId,
+          property: {
+            id: property.id,
+            name: property.name,
+            total_sqft: property.total_sqft,
+          },
+          buildings,
+          units,
+          expenses: recoverableExpenses,
+          leases,
+          property_config: mergedPropertyConfig,
+          lease_configs: leaseConfigMap,
+          historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
+        });
 
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
@@ -385,9 +383,7 @@ Deno.serve(async (req: Request) => {
       (sum: number, row: any) => sum + (Number(row.annual_cam) || 0),
       0,
     );
-    const denominatorSqft = calculation.pools?.property_pool?.metrics?.occupied_area
-      || totalSqft
-      || 0;
+    const denominatorSqft = calculation.pools?.property_pool?.metrics?.occupied_area || totalSqft || 0;
     const camPerSf = denominatorSqft > 0 ? totalCam / Number(denominatorSqft) : 0;
 
     const { error: camCalculationError } = await supabaseAdmin
@@ -429,21 +425,6 @@ Deno.serve(async (req: Request) => {
       scope_id: scopeId,
     };
 
-    console.log("CAM Pool:", {
-      property_pool: calculation.summary.property_pool,
-      building_pools: calculation.summary.building_pools,
-      direct_allocations: calculation.summary.direct_allocations,
-      total_billed: calculation.summary.total_billed,
-    });
-    for (const tenantCharge of calculation.tenant_charges) {
-      console.log("Final Tenant CAM:", {
-        lease_id: tenantCharge.lease_id,
-        tenant_name: tenantCharge.tenant_name,
-        annual_cam: tenantCharge.annual_cam,
-        monthly_cam: tenantCharge.monthly_cam,
-      });
-    }
-
     const inputs = {
       property_id: propertyId,
       fiscal_year: fiscalYear,
@@ -451,6 +432,7 @@ Deno.serve(async (req: Request) => {
       scope_id: scopeId,
       lease_count: leases.length,
       expense_count: expenses.length,
+      recoverable_expense_count: recoverableExpenses.length,
       building_count: buildings.length,
       unit_count: units.length,
       property_config: mergedPropertyConfig,
