@@ -15,8 +15,8 @@ export default function RoleGuard({ allowedRoles = [], mode = "hide", children, 
   const { user } = useAuth();
   const role = user?.role;
 
-  // Admin always has full access
-  if (role === "admin") return children;
+  // Admin and Super Admin always have full access
+  if (role === "admin" || role === "super_admin") return children;
 
   const hasAccess = allowedRoles.includes(role);
 
