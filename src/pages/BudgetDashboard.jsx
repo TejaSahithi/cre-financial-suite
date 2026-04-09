@@ -18,7 +18,7 @@ import {
 } from "recharts";
 
 import { BudgetService } from "@/services/api";
-import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
@@ -102,61 +102,7 @@ function escapeHtml(value) {
 }
 
 async function invokeFunctionWithFreshSession(fnName, body) {
-  const attemptInvoke = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) {
-      throw new Error("Not authenticated - please sign in again");
-    }
-
-    const { data, error } = await supabase.functions.invoke(fnName, {
-      body,
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-      },
-    });
-
-    return { data, error };
-  };
-
-  let result = await attemptInvoke();
-  const needsRetry = result.error && /401|unauthorized|jwt/i.test(result.error.message || "");
-
-  if (needsRetry) {
-    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !refreshData?.session?.access_token) {
-      throw result.error;
-    }
-    result = await attemptInvoke();
-  }
-
-  if (result.error) {
-    const ctx = result.error?.context;
-    if (ctx && typeof ctx.json === "function") {
-      let parsedMessage = "";
-      try {
-        const payload = await ctx.json();
-        if (payload?.message) {
-          parsedMessage = payload.message;
-        }
-        if (!parsedMessage && payload?.error) {
-          parsedMessage = payload.error;
-        }
-      } catch {
-        // Fall through to the original error when the response body is unavailable.
-      }
-      if (parsedMessage) {
-        throw new Error(parsedMessage);
-      }
-    }
-    throw result.error;
-  }
-
-  if (result.data?.error === true) {
-    throw new Error(result.data.message || "Function returned an error");
-  }
-
-  return result.data || {};
+  return invokeEdgeFunction(fnName, body);
 }
 
 function buildBudgetEmailHtml({ budget, scopeLabel, customMessage, downloadUrl }) {
