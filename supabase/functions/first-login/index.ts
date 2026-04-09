@@ -42,8 +42,8 @@ Deno.serve(async (req) => {
 
     if (profileError || !profile) throw new Error('Profile not found');
 
-    if (profile.status !== 'approved') {
-      return new Response(JSON.stringify({ error: 'User is not in approved state', status: profile.status }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!['approved', 'onboarding'].includes(profile.status)) {
+      return new Response(JSON.stringify({ error: 'User is not in an onboarding-ready state', status: profile.status }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     if (profile.onboarding_type !== 'owner') {
@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
       .eq('user_id', user.id);
 
     if (existingMemberships && existingMemberships.length > 0) {
-      // If membership exists but status is approved, we just fix the status
+      // If membership exists, normalize the profile state and reuse the existing org.
       await supabaseAdmin.from('profiles').update({ status: 'onboarding' }).eq('id', user.id);
       return new Response(JSON.stringify({ success: true, message: 'Corrected dirty state. Resuming.' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

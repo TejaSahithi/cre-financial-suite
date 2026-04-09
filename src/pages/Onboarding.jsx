@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { OrganizationService } from "@/services/api";
 import { redirectToLogin } from "@/services/auth";
+import { ensureOnboardingOrganization } from "@/services/onboardingService";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
 import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Clock, Shield, AlertCircle, RefreshCw } from "lucide-react";
@@ -273,22 +274,39 @@ export default function Onboarding() {
 
     try {
       let savedOrg;
-      if (org) {
-        console.log('[Onboarding] Updating existing org:', org.id);
-        savedOrg = await OrganizationService.update(org.id, { ...form, onboarding_step: 2 });
-      } else {
-        // Fallback: This should rarely happen if first-login worked
-        console.warn('[Onboarding] Org missing, attempting fresh create');
-        savedOrg = await OrganizationService.create({ ...form, status: "onboarding", onboarding_step: 2 });
+      let targetOrg = org;
 
-        if (savedOrg?.id && authUser?.id && supabase) {
-          await supabase.from('memberships').upsert({
-            user_id: authUser.id,
-            org_id: savedOrg.id,
-            role: 'org_admin',
-          }, { onConflict: 'user_id,org_id' });
-          await refreshProfile();
+      if (!targetOrg) {
+        console.warn("[Onboarding] No org attached yet. Initializing onboarding org via server.");
+        await ensureOnboardingOrganization();
+        const refreshedUser = await refreshProfile(false).catch(() => null);
+        targetOrg = refreshedUser?.activeOrg || null;
+
+        if (!targetOrg?.id && authUser?.id) {
+          const { data: memberships, error: membershipError } = await supabase
+            .from("memberships")
+            .select("org_id, role, created_at")
+            .eq("user_id", authUser.id)
+            .order("created_at", { ascending: true });
+
+          if (membershipError) {
+            throw membershipError;
+          }
+
+          const primaryMembership = (memberships || []).find((membership) => membership.role === "org_admin") || memberships?.[0];
+          if (primaryMembership?.org_id) {
+            targetOrg = await OrganizationService.get(primaryMembership.org_id);
+          }
         }
+      }
+
+      if (!targetOrg?.id) {
+        throw new Error("Unable to initialize your organization. Please refresh and try again.");
+      }
+
+      if (targetOrg) {
+        console.log('[Onboarding] Updating existing org:', targetOrg.id);
+        savedOrg = await OrganizationService.update(targetOrg.id, { ...form, onboarding_step: 2 });
       }
 
       if (savedOrg?.id) {

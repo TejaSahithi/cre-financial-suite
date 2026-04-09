@@ -13,6 +13,7 @@ import { ModuleAccessProvider, useModuleAccess } from '@/lib/ModuleAccessContext
 import DevModeBanner from '@/components/DevModeBanner';
 import { supabase } from '@/services/supabaseClient';
 import MFAGuard from '@/components/MFAGuard';
+import { ensureOnboardingOrganization } from '@/services/onboardingService';
 
 // ─── Error Boundary ───────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -259,70 +260,14 @@ const AuthenticatedApp = () => {
         try {
           console.log('[App] Triggering first-login initialization');
 
-          // Try the edge function first (works when deployed + user is 'approved')
-          let edgeFnSuccess = false;
           try {
-            const { data, error } = await supabase.functions.invoke('first-login', {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-            });
-            if (error?.message?.includes('401') || error?.status === 401) {
+            await ensureOnboardingOrganization();
+          } catch (edgeErr) {
+            if (edgeErr?.message?.includes('401')) {
               console.warn('[App] first-login: 401 — session not ready');
               return;
             }
-            if (!error && !data?.error) {
-              edgeFnSuccess = true;
-            }
-          } catch (edgeErr) {
-            console.warn('[App] first-login edge function unavailable, using direct init:', edgeErr?.message);
-          }
-
-          // Fallback: create org + membership directly via Supabase client.
-          // RLS allows: orgs_insert_authenticated (auth.uid() IS NOT NULL)
-          // and memberships_insert_secure (user_id = auth.uid(), role = 'org_admin', first membership).
-          if (!edgeFnSuccess) {
-            const userId = session.user.id;
-
-            // Ensure profile row exists (handle_new_user trigger may not be deployed)
-            await supabase.from('profiles').upsert({
-              id: userId,
-              email: session.user.email,
-              full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
-              status: 'onboarding',
-              onboarding_type: 'owner',
-              onboarding_complete: false,
-              first_login: true,
-            }, { onConflict: 'id' });
-
-            // Check if a membership already exists (idempotent)
-            const { data: existingMem } = await supabase
-              .from('memberships')
-              .select('id, org_id')
-              .eq('user_id', userId)
-              .limit(1);
-
-            if (!existingMem || existingMem.length === 0) {
-              // Create a default organization
-              const { data: org, error: orgError } = await supabase
-                .from('organizations')
-                .insert({
-                  name: 'My Organization',
-                  status: 'onboarding',
-                  onboarding_step: 1,
-                  primary_contact_email: session.user.email,
-                })
-                .select('id')
-                .single();
-
-              if (orgError) throw orgError;
-
-              // Create membership with org_admin role
-              const { error: memError } = await supabase
-                .from('memberships')
-                .insert({ user_id: userId, org_id: org.id, role: 'org_admin' });
-
-              if (memError) throw memError;
-              console.log('[App] Direct org init succeeded, org_id:', org.id);
-            }
+            console.warn('[App] first-login initialization failed:', edgeErr?.message);
           }
 
           await refreshProfile(false);
