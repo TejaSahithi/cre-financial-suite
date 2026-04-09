@@ -101,6 +101,18 @@ export default function AcceptInvite() {
           <p className="text-slate-500 text-sm mt-1">Let's get your account set up</p>
         </div>
 
+        {/* Org/Role Info */}
+        {(session?.user?.user_metadata?.org_name || session?.user?.user_metadata?.role) && (
+          <div className="mb-8 p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-center animate-in fade-in slide-in-from-top-4 duration-700">
+            <p className="text-sm text-slate-600">
+              You've been invited to join <span className="font-bold text-blue-900">{session.user.user_metadata.org_name || "the organization"}</span>
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              as <span className="font-medium text-slate-700 capitalize">{(session.user.user_metadata.role || "team member").replaceAll("_", " ")}</span>
+            </p>
+          </div>
+        )}
+
         {/* Step indicator */}
         <div className="flex items-center justify-center gap-2 mb-8">
           {STEPS.map((s, i) => (
