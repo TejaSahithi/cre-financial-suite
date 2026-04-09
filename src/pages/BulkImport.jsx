@@ -1,16 +1,19 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { expenseService } from "@/services/expenseService";
 import { useQueryClient } from "@tanstack/react-query";
 import useOrgId from "@/hooks/useOrgId";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { parseCSV } from "@/services/parsingEngine";
+import ScopeSelector from "@/components/ScopeSelector";
+import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, Upload, Download, CheckCircle2, Loader2 } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const systemFields = ["expense_date", "category", "amount", "vendor", "recoverable_flag", "description"];
@@ -45,6 +48,7 @@ async function resolveWritableOrgId(currentOrgId) {
 
 export default function BulkImport() {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { orgId } = useOrgId();
   const [step, setStep] = useState(1);
@@ -54,6 +58,96 @@ export default function BulkImport() {
   const [extractedRows, setExtractedRows] = useState([]);
   const [columnMap, setColumnMap] = useState({});
   const [validatedRows, setValidatedRows] = useState([]);
+  const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit, setScopeUnit] = useState("all");
+
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
+  const { data: portfolios = [] } = useOrgQuery("Portfolio");
+
+  const scope = useMemo(
+    () =>
+      buildHierarchyScope({
+        search: location.search,
+        portfolios,
+        properties,
+        buildings,
+        units,
+      }),
+    [location.search, portfolios, properties, buildings, units]
+  );
+
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  const scopedBuildings = useMemo(
+    () => (scopeProperty !== "all" ? buildings.filter((building) => building.property_id === scopeProperty) : buildings),
+    [buildings, scopeProperty]
+  );
+
+  const scopedUnits = useMemo(() => {
+    if (scopeBuilding !== "all") {
+      const buildingUnits = units.filter((unit) => unit.building_id === scopeBuilding);
+      if (buildingUnits.length > 0) return buildingUnits;
+
+      const selectedScopeBuilding = buildings.find((building) => building.id === scopeBuilding);
+      const fallbackPropertyId = selectedScopeBuilding?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
+      return fallbackPropertyId ? units.filter((unit) => unit.property_id === fallbackPropertyId) : [];
+    }
+    if (scopeProperty !== "all") {
+      return units.filter((unit) => unit.property_id === scopeProperty);
+    }
+    return units;
+  }, [units, scopeBuilding, scopeProperty, buildings]);
+
+  const selectedProperty = scopeProperty !== "all" ? properties.find((property) => property.id === scopeProperty) ?? null : null;
+  const selectedBuilding = scopeBuilding !== "all" ? buildings.find((building) => building.id === scopeBuilding) ?? null : null;
+  const selectedUnit = scopeUnit !== "all" ? units.find((unit) => unit.id === scopeUnit) ?? null : null;
+  const effectiveProperty = selectedUnit?.property_id ? properties.find((property) => property.id === selectedUnit.property_id) ?? null : selectedBuilding?.property_id ? properties.find((property) => property.id === selectedBuilding.property_id) ?? null : selectedProperty;
+  const effectiveBuilding = selectedUnit?.building_id ? buildings.find((building) => building.id === selectedUnit.building_id) ?? null : selectedBuilding;
+  const effectivePortfolio =
+    scope.activePortfolio ||
+    (effectiveProperty?.portfolio_id ? portfolios.find((portfolio) => portfolio.id === effectiveProperty.portfolio_id) ?? null : null);
+
+  const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
+    const params = new URLSearchParams(location.search);
+    if (property && property !== "all") params.set("property", property);
+    else params.delete("property");
+
+    if (building && building !== "all") params.set("building", building);
+    else params.delete("building");
+
+    if (unit && unit !== "all") params.set("unit", unit);
+    else params.delete("unit");
+
+    navigate({
+      pathname: location.pathname,
+      search: params.toString() ? `?${params.toString()}` : "",
+    });
+  };
+
+  const handlePropertyChange = (value) => {
+    setScopeProperty(value);
+    setScopeBuilding("all");
+    setScopeUnit("all");
+    updateScopeParams({ property: value, building: "all", unit: "all" });
+  };
+
+  const handleBuildingChange = (value) => {
+    setScopeBuilding(value);
+    setScopeUnit("all");
+    updateScopeParams({ property: scopeProperty, building: value, unit: "all" });
+  };
+
+  const handleUnitChange = (value) => {
+    setScopeUnit(value);
+    updateScopeParams({ property: scopeProperty, building: scopeBuilding, unit: value });
+  };
 
   const handleFileUpload = async (e) => {
     const f = e.target.files[0];
@@ -146,6 +240,14 @@ export default function BulkImport() {
 
   const importData = async () => {
     const writableOrgId = await resolveWritableOrgId(orgId);
+    const effectivePropertyId = selectedUnit?.property_id || selectedBuilding?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
+    const effectiveBuildingId = selectedUnit?.building_id || (scopeBuilding !== "all" ? scopeBuilding : null);
+    const effectiveUnitId = scopeUnit !== "all" ? scopeUnit : null;
+    const effectivePortfolioId =
+      effectivePortfolio?.id ||
+      (effectivePropertyId
+        ? properties.find((property) => property.id === effectivePropertyId)?.portfolio_id || null
+        : null);
     const ready = validatedRows.filter(r => r.status !== 'error');
     for (const row of ready) {
       await expenseService.create({
@@ -156,11 +258,15 @@ export default function BulkImport() {
         description: row.description || "",
         classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
         source: "import",
+        ...(effectivePortfolioId ? { portfolio_id: effectivePortfolioId } : {}),
+        ...(effectivePropertyId ? { property_id: effectivePropertyId } : {}),
+        ...(effectiveBuildingId ? { building_id: effectiveBuildingId } : {}),
+        ...(effectiveUnitId ? { unit_id: effectiveUnitId } : {}),
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
         fiscal_year: new Date().getFullYear()
       });
     }
-    queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    queryClient.invalidateQueries({ queryKey: ['Expense'] });
     setStep(4);
   };
 
@@ -180,7 +286,7 @@ export default function BulkImport() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <Link to={createPageUrl("Expenses")} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Back to Expenses</Link>
+      <Link to={createPageUrl("Expenses") + location.search} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Back to Expenses</Link>
 
       <div className="flex items-center justify-between">
         <div>
@@ -189,6 +295,32 @@ export default function BulkImport() {
         </div>
         <Button variant="outline" onClick={downloadTemplate}><Download className="w-4 h-4 mr-2" />Download Template</Button>
       </div>
+
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Expense Scope</h2>
+            <p className="text-xs text-slate-500">Imported expenses will be saved against this hierarchy.</p>
+          </div>
+          <ScopeSelector
+            properties={scope.scopedProperties}
+            buildings={scopedBuildings}
+            units={scopedUnits}
+            selectedProperty={scopeProperty}
+            selectedBuilding={scopeBuilding}
+            selectedUnit={scopeUnit}
+            onPropertyChange={handlePropertyChange}
+            onBuildingChange={handleBuildingChange}
+            onUnitChange={handleUnitChange}
+          />
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant="outline">Portfolio: {effectivePortfolio?.name || "Org-level only"}</Badge>
+            <Badge variant="outline">Property: {effectiveProperty?.name || "All properties"}</Badge>
+            <Badge variant="outline">Building: {effectiveBuilding?.name || "All buildings"}</Badge>
+            <Badge variant="outline">Unit: {selectedUnit?.unit_number || selectedUnit?.unit_id_code || "All units"}</Badge>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Steps */}
       <div className="flex items-center gap-2">
@@ -211,7 +343,11 @@ export default function BulkImport() {
           <CardContent className="p-12 text-center">
             <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4"><Upload className="w-8 h-8 text-slate-400" /></div>
             <h2 className="text-lg font-bold text-slate-900 mb-2">Upload Expense File</h2>
-            <p className="text-sm text-slate-500 mb-6">Drag and drop your CSV or Excel file, or click to browse.</p>
+            <p className="text-sm text-slate-500 mb-6">
+              Drag and drop your CSV or Excel file, or click to browse.
+              <br />
+              Imported rows will use the selected expense scope shown above.
+            </p>
             <label>
               <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
               <Button asChild className="bg-[#1a2744] hover:bg-[#243b67] cursor-pointer"><span>{uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}Browse Files</span></Button>
@@ -265,6 +401,13 @@ export default function BulkImport() {
       {/* Step 3: Validate */}
       {step === 3 && (
         <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs">
+            <Badge variant="outline">Applied Portfolio: {effectivePortfolio?.name || "Org-level only"}</Badge>
+            <Badge variant="outline">Applied Property: {effectiveProperty?.name || "All properties"}</Badge>
+            <Badge variant="outline">Applied Building: {effectiveBuilding?.name || "All buildings"}</Badge>
+            <Badge variant="outline">Applied Unit: {selectedUnit?.unit_number || selectedUnit?.unit_id_code || "All units"}</Badge>
+          </div>
+
           <div className="grid grid-cols-4 gap-4">
             <Card className="bg-slate-50"><CardContent className="p-4"><p className="text-[10px] font-semibold text-slate-500 uppercase">Total Rows</p><p className="text-2xl font-bold">{validatedRows.length}</p></CardContent></Card>
             <Card className="bg-emerald-50"><CardContent className="p-4"><p className="text-[10px] font-semibold text-emerald-600 uppercase">Ready to Import</p><p className="text-2xl font-bold text-emerald-700">{readyCount}</p></CardContent></Card>
@@ -327,7 +470,7 @@ export default function BulkImport() {
             <CheckCircle2 className="w-16 h-16 text-emerald-500 mx-auto mb-4" />
             <h2 className="text-xl font-bold text-slate-900 mb-2">Import Complete!</h2>
             <p className="text-sm text-slate-500 mb-6">{readyCount + warningCount} expenses imported successfully.</p>
-            <Link to={createPageUrl("Expenses")}><Button className="bg-blue-600 hover:bg-blue-700">View Expenses</Button></Link>
+            <Link to={createPageUrl("Expenses") + location.search}><Button className="bg-blue-600 hover:bg-blue-700">View Expenses</Button></Link>
           </CardContent>
         </Card>
       )}

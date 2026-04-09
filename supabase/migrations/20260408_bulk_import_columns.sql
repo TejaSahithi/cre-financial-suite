@@ -19,7 +19,7 @@ ALTER TABLE public.properties ADD COLUMN IF NOT EXISTS owner          TEXT;
 ALTER TABLE public.properties ADD COLUMN IF NOT EXISTS contact        TEXT;
 ALTER TABLE public.properties ADD COLUMN IF NOT EXISTS notes          TEXT;
 
--- ── LEASES ───────────────────vscode-webview://1in2rttj32b8c0clk6135179vkqig6olv89n8p23oease2s1pgn5/cre-financial-suite-main/supabase/migrations/20260408_bulk_import_columns.sql─────────────────────────────────
+-- ── LEASES ────────────────────────────────────────────────────
 ALTER TABLE public.leases ADD COLUMN IF NOT EXISTS annual_rent       NUMERIC;
 ALTER TABLE public.leases ADD COLUMN IF NOT EXISTS rent_per_sf       NUMERIC;
 ALTER TABLE public.leases ADD COLUMN IF NOT EXISTS lease_term_months INT;

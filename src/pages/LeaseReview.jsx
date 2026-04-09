@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { leaseService } from "@/services/leaseService";
-import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -10,11 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SelectWithCustom } from "@/components/ui/select-with-custom";
+import { LEASE_FIELD_OPTIONS, getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX, RefreshCw } from "lucide-react";
-import {  Link, useNavigate , useLocation } from 'react-router-dom';
+import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX } from "lucide-react";
+import { Link, useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
@@ -28,7 +29,6 @@ export default function LeaseReview() {
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
   const leaseId = urlParams.get("id");
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { trigger: triggerCompute } = useComputeTrigger();
   const [showSignature, setShowSignature] = useState(false);
@@ -107,42 +107,44 @@ export default function LeaseReview() {
   const scores = lease.extraction_data?.confidence_scores || {};
   const getConf = (key, fallback = 85) => (typeof scores[key] === 'number' ? scores[key] : fallback);
 
+  // Helper to render an option-backed field's display value, falling back to
+  // the raw stored string for custom user-entered values.
+  const optionLabel = (key, fallback = "—") => {
+    const raw = lease[key];
+    if (raw == null || raw === "") return fallback;
+    return getLeaseFieldLabel(key, raw) || String(raw);
+  };
+
+  const totalSf = lease.total_sf || lease.square_footage;
+
   const fields = {
     "Basic Terms": [
       { key: "tenant_name", label: "TENANT NAME", value: lease.tenant_name || "—", confidence: getConf("tenant_name", 98) },
-      { key: "lease_type", label: "LEASE TYPE", value: lease.lease_type || "—", confidence: getConf("lease_type", 95) },
+      { key: "lease_type", label: "LEASE TYPE", value: optionLabel("lease_type"), confidence: getConf("lease_type", 95) },
       { key: "start_date", label: "START DATE", value: lease.start_date || "—", confidence: getConf("start_date", 94) },
       { key: "end_date", label: "END DATE", value: lease.end_date || "—", confidence: getConf("end_date", 92) },
     ],
     "Financial Terms": [
       { key: "rent_per_sf", label: "BASE RENT ($/SF/YR)", value: lease.rent_per_sf ? `$${lease.rent_per_sf}` : "—", confidence: getConf("rent_per_sf", 92) },
-      { key: "total_sf", label: "TOTAL SF", value: lease.total_sf?.toLocaleString() || "—", confidence: getConf("total_sf", 99) },
-      { key: "annual_rent", label: "ANNUAL RENT", value: lease.annual_rent ? `$${lease.annual_rent.toLocaleString()}` : "—", confidence: getConf("annual_rent", 99) },
-      { key: "escalation_rate", label: "RENT ESCALATION", value: lease.escalation_rate ? `${lease.escalation_rate}% ${lease.escalation_type || ''}` : "—", confidence: getConf("escalation_rate", 78) },
+      { key: "total_sf", label: "TOTAL SF", value: totalSf ? Number(totalSf).toLocaleString() : "—", confidence: getConf("total_sf", 99) },
+      { key: "annual_rent", label: "ANNUAL RENT", value: lease.annual_rent ? `$${Number(lease.annual_rent).toLocaleString()}` : "—", confidence: getConf("annual_rent", 99) },
+      { key: "escalation_rate", label: "RENT ESCALATION", value: lease.escalation_rate ? `${lease.escalation_rate}%` : "—", confidence: getConf("escalation_rate", 78) },
+      { key: "escalation_type", label: "ESCALATION TYPE", value: optionLabel("escalation_type"), confidence: getConf("escalation_type", 80) },
     ],
     "Escalation & Renewal": [
-      { key: "escalation_timing", label: "ESCALATION TIMING", value: lease.escalation_timing === 'calendar_year' ? 'Calendar Year (Jan 1)' : 'Lease Anniversary', confidence: getConf("escalation_timing", 90) },
+      { key: "escalation_timing", label: "ESCALATION TIMING", value: optionLabel("escalation_timing", "Lease Anniversary"), confidence: getConf("escalation_timing", 90) },
       { key: "free_rent_months", label: "FREE RENT PERIODS", value: lease.free_rent_months || "—", confidence: getConf("free_rent_months", 91) },
-      { key: "ti_allowance", label: "TI ALLOWANCE", value: lease.ti_allowance ? `$${lease.ti_allowance.toLocaleString()}` : "—", confidence: getConf("ti_allowance", 88) },
-      { key: "renewal_type", label: "RENEWAL TYPE", value: lease.renewal_type || "—", confidence: getConf("renewal_type", 78) },
-      { key: "renewal_options", label: "RENEWAL OPTIONS", value: lease.renewal_options || "—", confidence: getConf("renewal_options", 64) },
+      { key: "ti_allowance", label: "TI ALLOWANCE", value: lease.ti_allowance ? `$${Number(lease.ti_allowance).toLocaleString()}` : "—", confidence: getConf("ti_allowance", 88) },
+      { key: "renewal_type", label: "RENEWAL TYPE", value: optionLabel("renewal_type"), confidence: getConf("renewal_type", 78) },
+      { key: "renewal_options", label: "RENEWAL OPTIONS", value: optionLabel("renewal_options"), confidence: getConf("renewal_options", 64) },
       { key: "renewal_notice_months", label: "RENEWAL NOTICE (MONTHS)", value: lease.renewal_notice_months || "—", confidence: getConf("renewal_notice_months", 72) },
     ],
     "CAM & Management": [
-      { key: "cam_cap_type", label: "CAM CAP TYPE", value: lease.cam_cap_type || "None", confidence: getConf("cam_cap_type", 95) },
-      { key: "cpi_index", label: "CPI INDEX SOURCE", value: lease.cpi_index || "N/A", confidence: getConf("cpi_index", 90) },
+      { key: "cam_cap_type", label: "CAM CAP TYPE", value: optionLabel("cam_cap_type", "None"), confidence: getConf("cam_cap_type", 95) },
       { key: "admin_fee_pct", label: "ADMIN FEE %", value: lease.admin_fee_pct ? `${lease.admin_fee_pct}%` : "N/A", confidence: getConf("admin_fee_pct", 97) },
-      { key: "management_fee_basis", label: "MGMT FEE BASIS", value: lease.management_fee_basis === 'tenant_annual_rent' ? '% of Tenant Annual Rent' : 'CAM Pool Pro-Rata', confidence: getConf("management_fee_basis", 88) },
-      { key: "gross_up_clause", label: "GROSS-UP PROVISION", value: lease.gross_up_clause ? 'Yes' : 'No', confidence: getConf("gross_up_clause", 94) },
-      { key: "hvac_responsibility", label: "HVAC RESPONSIBILITY", value: (lease.hvac_responsibility || 'landlord').replace('_', ' '), confidence: getConf("hvac_responsibility", 92) },
-      { key: "hvac_landlord_limit", label: "HVAC LANDLORD LIMIT", value: lease.hvac_landlord_limit ? `$${lease.hvac_landlord_limit.toLocaleString()}` : "No limit", confidence: getConf("hvac_landlord_limit", 85) },
-    ],
-    "Revenue & Recon": [
-      { key: "percentage_rent", label: "PERCENTAGE RENT", value: lease.percentage_rent ? `${lease.percentage_rent_rate}% over $${(lease.percentage_rent_breakpoint || 0).toLocaleString()}` : "No", confidence: getConf("percentage_rent", 90) },
-      { key: "sales_reporting_frequency", label: "SALES REPORTING FREQ.", value: (lease.sales_reporting_frequency || 'annual'), confidence: getConf("sales_reporting_frequency", 88) },
-      { key: "recon_deadline_days", label: "RECON DEADLINE", value: `${lease.recon_deadline_days || 90} days after year-end`, confidence: getConf("recon_deadline_days", 92) },
-      { key: "recon_collection_limit_months", label: "COLLECTION LIMIT", value: `${lease.recon_collection_limit_months || 12} months`, confidence: getConf("recon_collection_limit_months", 90) },
-      { key: "version", label: "LEASE VERSION", value: `v${lease.version || 1}`, confidence: 99 },
+      { key: "management_fee_basis", label: "MGMT FEE BASIS", value: optionLabel("management_fee_basis", "CAM Pool Pro-Rata"), confidence: getConf("management_fee_basis", 88) },
+      { key: "hvac_responsibility", label: "HVAC RESPONSIBILITY", value: optionLabel("hvac_responsibility", "Landlord"), confidence: getConf("hvac_responsibility", 92) },
+      { key: "sales_reporting_frequency", label: "SALES REPORTING FREQ.", value: optionLabel("sales_reporting_frequency", "Annual"), confidence: getConf("sales_reporting_frequency", 88) },
     ],
   };
 
@@ -161,10 +163,11 @@ export default function LeaseReview() {
     validationChecks.push({ pass: true, label: "Tenant name present", detail: `${lease.tenant_name} verified` });
   }
   if (lease.annual_rent) {
-    validationChecks.push({ pass: lease.annual_rent > 0, label: "Annual rent > $0", detail: `$${lease.annual_rent.toLocaleString()}` });
+    validationChecks.push({ pass: lease.annual_rent > 0, label: "Annual rent > $0", detail: `$${Number(lease.annual_rent).toLocaleString()}` });
   }
-  if (lease.total_sf) {
-    validationChecks.push({ pass: lease.total_sf > 0, label: "Square footage present", detail: `${lease.total_sf.toLocaleString()} SF` });
+  const sf = lease.total_sf || lease.square_footage;
+  if (sf) {
+    validationChecks.push({ pass: sf > 0, label: "Square footage present", detail: `${Number(sf).toLocaleString()} SF` });
   }
   const hasLowConf = lowConf > 0;
   if (hasLowConf) {
@@ -191,29 +194,29 @@ export default function LeaseReview() {
     setEditValue(raw !== undefined && raw !== null ? String(raw) : "");
   };
 
+  const NUMERIC_FIELDS = new Set([
+    "rent_per_sf", "total_sf", "square_footage", "annual_rent", "monthly_rent",
+    "base_rent", "escalation_rate", "admin_fee_pct",
+    "ti_allowance", "renewal_notice_months",
+    "security_deposit", "cam_amount", "nnn_amount", "free_rent_months",
+  ]);
+
   const handleFieldSave = async () => {
     if (!editingField) return;
-    let val = editValue.trim();
+    let val = typeof editValue === "string" ? editValue.trim() : editValue;
 
-    // Coerce to correct type based on field key
-    const numericFields = [
-      "rent_per_sf", "total_sf", "square_footage", "annual_rent", "monthly_rent",
-      "base_rent", "escalation_rate", "admin_fee_pct", "cam_cap_rate",
-      "ti_allowance", "hvac_landlord_limit", "renewal_notice_months", "recon_deadline_days",
-      "recon_collection_limit_months", "percentage_rent_rate", "percentage_rent_breakpoint",
-      "management_fee_pct", "security_deposit", "cam_amount", "nnn_amount",
-    ];
-    const boolFields = ["gross_up_clause", "percentage_rent", "admin_fee_allowed"];
-
-    if (numericFields.includes(editingField.key)) {
-      const n = parseFloat(val.replace(/[$,]/g, ""));
+    if (NUMERIC_FIELDS.has(editingField.key)) {
+      const n = parseFloat(String(val).replace(/[$,]/g, ""));
       val = isNaN(n) ? null : n;
-    } else if (boolFields.includes(editingField.key)) {
-      val = ["true", "yes", "1", "y"].includes(val.toLowerCase());
     }
 
+    // Map UI alias `total_sf` to the actual DB column.
+    const updateData = editingField.key === "total_sf"
+      ? { square_footage: val }
+      : { [editingField.key]: val };
+
     try {
-      await updateLeaseMutation.mutateAsync({ id: lease.id, data: { [editingField.key]: val } });
+      await updateLeaseMutation.mutateAsync({ id: lease.id, data: updateData });
       setEditingField(null); // only close on success
     } catch {
       // error already toasted by onError — keep dialog open so user can retry
@@ -229,7 +232,7 @@ export default function LeaseReview() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Lease Review & Validation</h1>
-          <p className="text-sm text-slate-500">{lease.tenant_name} — {lease.total_sf ? `${lease.total_sf.toLocaleString()} SF` : ''} · {lease.lease_type || 'Unknown type'}</p>
+          <p className="text-sm text-slate-500">{lease.tenant_name} — {totalSf ? `${Number(totalSf).toLocaleString()} SF` : ''} · {getLeaseFieldLabel("lease_type", lease.lease_type) || 'Unknown type'}</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline">Re-Upload PDF</Button>
@@ -366,7 +369,7 @@ export default function LeaseReview() {
           <p className="text-sm text-slate-500 mb-2">This will mark the lease as Budget-Ready</p>
           <div className="bg-slate-50 p-3 rounded-lg mb-2">
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
-            <p className="text-xs text-slate-500">{lease.tenant_name} · {lease.lease_type} · {lease.start_date} to {lease.end_date}</p>
+            <p className="text-xs text-slate-500">{lease.tenant_name} · {getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} · {lease.start_date} to {lease.end_date}</p>
           </div>
           {validationChecks.some(c => !c.pass) && (
             <div className="flex items-center gap-2 text-amber-600 text-xs"><AlertTriangle className="w-3.5 h-3.5" />{validationChecks.filter(c => !c.pass).length} validation warning(s) — review before approving</div>
@@ -390,7 +393,26 @@ export default function LeaseReview() {
             </div>
             <div>
               <Label>New Value</Label>
-              <Input value={editValue} onChange={e => setEditValue(e.target.value)} className="mt-1" />
+              {editingField && hasLeaseFieldOptions(editingField.key) ? (
+                <div className="mt-1">
+                  <SelectWithCustom
+                    value={editValue}
+                    onChange={(next) => setEditValue(next)}
+                    options={LEASE_FIELD_OPTIONS[editingField.key]}
+                    placeholder={`Select ${editingField.label.toLowerCase()}`}
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Pick a preset or choose <span className="font-medium">Custom…</span> to enter your own value.
+                  </p>
+                </div>
+              ) : (
+                <Input
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="mt-1"
+                  type={editingField && NUMERIC_FIELDS.has(editingField.key) ? "number" : "text"}
+                />
+              )}
             </div>
           </div>
           <DialogFooter>
