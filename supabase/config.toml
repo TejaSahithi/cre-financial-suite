@@ -1,19 +1,10 @@
 
 [functions.save-security-questions]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/save-security-questions/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/save-security-questions/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/save-security-questions/*.html" ]
 
-# invite-user verifies the caller's JWT inside the function (see index.ts),
-# so we disable the gateway-level check. Otherwise the gateway 401s before
-# the function ever runs, and the client only sees a generic
-# "Edge Function returned a non-2xx status code" error.
 [functions.invite-user]
 enabled = true
 verify_jwt = false
@@ -77,5 +68,68 @@ enabled = true
 verify_jwt = false
 
 [functions.normalize-pdf-output]
+enabled = true
+verify_jwt = false
+
+# Onboarding & Auth Functions
+[functions.first-login]
+enabled = true
+verify_jwt = false
+
+[functions.signup]
+enabled = true
+verify_jwt = false
+
+[functions.complete-onboarding]
+enabled = true
+verify_jwt = false
+
+# Admin & Management Functions
+[functions.approve-organization]
+enabled = true
+verify_jwt = false
+
+[functions.approve-request]
+enabled = true
+verify_jwt = false
+
+[functions.invite-client]
+enabled = true
+verify_jwt = false
+
+[functions.send-invite]
+enabled = true
+verify_jwt = false
+
+[functions.send-email]
+enabled = true
+verify_jwt = false
+
+[functions.reset-mfa]
+enabled = true
+verify_jwt = false
+
+# External Integrations & Data
+[functions.submit-contact]
+enabled = true
+verify_jwt = false
+
+[functions.validate-address-ups]
+enabled = true
+verify_jwt = false
+
+[functions.extract-document-fields]
+enabled = true
+verify_jwt = false
+
+[functions.extract-lease]
+enabled = true
+verify_jwt = false
+
+[functions.generate-budget]
+enabled = true
+verify_jwt = false
+
+[functions.debug-user]
 enabled = true
 verify_jwt = false
