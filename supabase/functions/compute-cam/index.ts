@@ -386,30 +386,31 @@ Deno.serve(async (req: Request) => {
     const denominatorSqft = calculation.pools?.property_pool?.metrics?.occupied_area || totalSqft || 0;
     const camPerSf = denominatorSqft > 0 ? totalCam / Number(denominatorSqft) : 0;
 
+    const camPayload = {
+      org_id: orgId,
+      property_id: propertyId,
+      fiscal_year: fiscalYear,
+      annual_cam: round2(totalCam),
+      cam_per_sf: round2(camPerSf),
+      method: mergedPropertyConfig?.cam_calculation_method ?? "pro_rata",
+      status: "computed",
+      admin_fee_pct: Number(mergedPropertyConfig?.config_values?.admin_fee_pct ?? 0),
+      gross_up_pct: Number(mergedPropertyConfig?.config_values?.gross_up_target_occupancy_pct ?? 0),
+      cap_pct: Number(mergedPropertyConfig?.config_values?.cam_cap_rate ?? 0),
+      total_recoverable: calculation.summary.total_recoverable,
+      total_building_sf: Number(denominatorSqft) || 0,
+      notes: calculation.assumptions.join(" | "),
+    };
+
     const { error: camCalculationError } = await supabaseAdmin
       .from("cam_calculations")
-      .upsert(
-        {
-          org_id: orgId,
-          property_id: propertyId,
-          fiscal_year: fiscalYear,
-          annual_cam: round2(totalCam),
-          cam_per_sf: round2(camPerSf),
-          method: mergedPropertyConfig?.cam_calculation_method ?? "pro_rata",
-          status: "computed",
-          admin_fee_pct: Number(mergedPropertyConfig?.config_values?.admin_fee_pct ?? 0),
-          gross_up_pct: Number(mergedPropertyConfig?.config_values?.gross_up_target_occupancy_pct ?? 0),
-          cap_pct: Number(mergedPropertyConfig?.config_values?.cam_cap_rate ?? 0),
-          total_recoverable: calculation.summary.total_recoverable,
-          total_building_sf: Number(denominatorSqft) || 0,
-          notes: calculation.assumptions.join(" | "),
-        },
-        { onConflict: "org_id,property_id,fiscal_year" },
-      );
+      .upsert(camPayload, { onConflict: "org_id,property_id,fiscal_year" });
+
 
     if (camCalculationError) {
       console.error("[compute-cam] cam_calculations upsert failed:", camCalculationError.message);
     }
+
 
     const outputs = {
       ...calculation.summary,

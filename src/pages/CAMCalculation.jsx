@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Calculator, AlertTriangle, RefreshCw } from "lucide-react";
+import { ArrowLeft, Calculator, AlertTriangle, RefreshCw, Sliders } from "lucide-react";
+
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -116,23 +117,18 @@ export default function CAMCalculation() {
     }
   }, [configData]);
 
-  const { data: customRulesCount } = useQuery({
-    queryKey: ["lease-config-count", scope.targetPropertyId],
+  const { data: customRules = [] } = useQuery({
+    queryKey: ["lease-config-ids", scope.targetPropertyId],
     queryFn: async () => {
-      if (!scope.targetPropertyId) return 0;
-      const { count } = await supabase
-        .from("lease_config")
-        .select("id", { count: "exact" })
-        .eq("org_id", leases?.[0]?.org_id); // using any lease's org_id or just relying on RLS
-      // To strictly filter by this property's leases:
+      if (!scope.targetPropertyId) return [];
       const leaseIdsInProperty = leases.filter(l => l.property_id === scope.targetPropertyId).map(l => l.id);
-      if (!leaseIdsInProperty.length) return 0;
+      if (!leaseIdsInProperty.length) return [];
       
-      const { count: exactCount } = await supabase
+      const { data } = await supabase
         .from("lease_config")
-        .select("id", { count: "exact" })
+        .select("lease_id")
         .in("lease_id", leaseIdsInProperty);
-      return exactCount || 0;
+      return data?.map(d => d.lease_id) || [];
     },
     enabled: !!scope.targetPropertyId,
   });
@@ -211,12 +207,20 @@ export default function CAMCalculation() {
         subtitle="Validate actual inputs, send overrides to compute-cam, and render the latest backend snapshot"
         iconColor="from-teal-500 to-cyan-600"
       >
-        <Link to={createPageUrl("CAMDashboard")}>
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            CAM Dashboard
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link to={`${createPageUrl("CAMDashboard")}?property_id=${scope.targetPropertyId}&year=${fiscalYear}`}>
+            <Button variant="outline" size="sm" className="border-teal-200 text-teal-700 hover:bg-teal-50">
+              <Sliders className="w-4 h-4 mr-2" />
+              Manage Custom Rules
+            </Button>
+          </Link>
+          <Link to={createPageUrl("CAMDashboard")}>
+            <Button variant="outline" size="sm">
+              <ArrowLeft className="w-4 h-4 mr-1" />
+              CAM Dashboard
+            </Button>
+          </Link>
+        </div>
       </PageHeader>
 
       <ScopeSelector
@@ -419,9 +423,9 @@ export default function CAMCalculation() {
                 <p className="text-[9px] text-slate-400 uppercase font-bold">Active Leases</p>
                 <div className="flex items-center justify-between">
                   <p className="text-lg font-bold">{scope.activeLeases.length}</p>
-                  {customRulesCount > 0 && (
+                  {customRules.length > 0 && (
                     <Badge variant="outline" className="bg-teal-50 text-teal-700 text-[9px] border-teal-200 uppercase px-1.5 py-0">
-                      {customRulesCount} Custom Rules
+                      {customRules.length} Custom Rules
                     </Badge>
                   )}
                 </div>
@@ -510,6 +514,9 @@ export default function CAMCalculation() {
                       <TableCell className="text-right text-xs font-mono">${Number(tenant.cap_adjustment || 0).toLocaleString()}</TableCell>
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
+                          {customRules.includes(tenant.lease_id) ? (
+                            <Badge className="bg-teal-100 text-teal-700 text-[9px] border-teal-200">RULES ACTIVE</Badge>
+                          ) : null}
                           {tenant.gross_up_applied ? <Badge className="bg-blue-100 text-blue-700 text-[9px]">GROSS-UP</Badge> : null}
                           {tenant.cap_applied ? <Badge className="bg-amber-100 text-amber-700 text-[9px]">CAPPED</Badge> : null}
                           {Number(tenant.base_year_adjustment || 0) > 0 ? <Badge className="bg-slate-100 text-slate-700 text-[9px]">BASE YEAR</Badge> : null}

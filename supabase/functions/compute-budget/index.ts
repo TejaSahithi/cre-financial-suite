@@ -241,44 +241,32 @@ async function handleGenerate(
     .eq("budget_year", fiscalYear)
     .limit(1);
 
-  let budgetId: string;
-
   if (existingBudget && existingBudget.length > 0) {
     const existing = existingBudget[0];
-    // Only allow regeneration if budget is still in draft
     if (existing.status === "locked") {
       throw new Error("Cannot regenerate a locked budget. Create a new version instead.");
     }
     if (existing.status === "approved") {
       throw new Error("Cannot regenerate an approved budget. Reject it first or lock and create a new version.");
     }
-
-    const { error: updateErr } = await supabaseAdmin
-      .from("budgets")
-      .update(budgetPayload)
-      .eq("id", existing.id);
-
-    if (updateErr) {
-      throw new Error(`Failed to update budget: ${updateErr.message}`);
-    }
-    budgetId = existing.id;
-  } else {
-    const insertPayload = {
-      ...budgetPayload,
-      created_at: new Date().toISOString(),
-    };
-
-    const { data: inserted, error: insertErr } = await supabaseAdmin
-      .from("budgets")
-      .insert(insertPayload)
-      .select("id")
-      .single();
-
-    if (insertErr) {
-      throw new Error(`Failed to create budget: ${insertErr.message}`);
-    }
-    budgetId = inserted.id;
   }
+
+  const { data: upsertData, error: upsertErr } = await supabaseAdmin
+    .from("budgets")
+    .upsert({
+      ...budgetPayload,
+      created_at: new Date().toISOString(), // Will be ignored on update if we don't include it in onConflict, but we want it for new rows
+    }, { 
+      onConflict: "org_id,property_id,budget_year" 
+    })
+    .select("id")
+    .single();
+
+  if (upsertErr) {
+    throw new Error(`Failed to save budget: ${upsertErr.message}`);
+  }
+  const budgetId = upsertData.id;
+
 
   // ---------------------------------------------------------------
   // 6. Store in computation_snapshots with engine_type='budget'

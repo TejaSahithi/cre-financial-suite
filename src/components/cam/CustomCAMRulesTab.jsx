@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, ChevronDown, ChevronUp, Sliders, Calculator, CheckCircle2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+
 import { toast } from "sonner";
 
 import { fetchLeaseConfig, saveLeaseConfig, DEFAULT_LEASE_CAM_CONFIG } from "@/services/camConfig";
@@ -141,9 +143,16 @@ function LeaseRuleCard({ lease, currentYear, onSaved }) {
       {expanded && (
         <div className="border-t bg-slate-50 p-4 space-y-5">
           {/* Info banner */}
-          <div className="flex items-start gap-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 text-xs text-teal-800">
-            <Calculator className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            These rules are automatically applied when CAM is calculated for this property. Save rules, then run Calculate CAM.
+          <div className="flex items-center justify-between bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
+            <div className="flex items-start gap-2 text-xs text-teal-800">
+              <Calculator className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>These rules are automatically applied when CAM is calculated for this property. Save rules, then run Calculate CAM.</span>
+            </div>
+            <Link to={createPageUrl("CAMCalculation")}>
+              <Button variant="link" size="sm" className="h-auto p-0 text-[10px] text-teal-700 font-bold uppercase hover:text-teal-900">
+                Run Calculation →
+              </Button>
+            </Link>
           </div>
 
           {/* CAM Applicability */}

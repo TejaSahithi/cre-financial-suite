@@ -346,31 +346,17 @@ Deno.serve(async (req: Request) => {
       completed_at: new Date().toISOString(),
     };
 
-    // Try upsert first; fall back to insert
-    const { data: reconData, error: reconErr } = await supabaseAdmin
+    const { data: upsertData, error: upsertErr } = await supabaseAdmin
       .from("reconciliations")
-      .upsert(reconciliationPayload, {
-        onConflict: "org_id,property_id,fiscal_year",
-      })
+      .upsert(reconciliationPayload, { onConflict: "org_id,property_id,fiscal_year" })
       .select("id")
       .maybeSingle();
 
-    let reconciliationId = reconData?.id ?? null;
-
-    if (reconErr) {
-      console.error("[compute-reconciliation] Reconciliation upsert error:", reconErr.message);
-      // Fall back to insert
-      const { data: insertData, error: insertErr } = await supabaseAdmin
-        .from("reconciliations")
-        .insert(reconciliationPayload)
-        .select("id")
-        .maybeSingle();
-
-      if (insertErr) {
-        console.error("[compute-reconciliation] Reconciliation insert error:", insertErr.message);
-      }
-      reconciliationId = insertData?.id ?? null;
+    if (upsertErr) {
+      console.error("[compute-reconciliation] Reconciliation upsert error:", upsertErr.message);
     }
+    const reconciliationId = upsertData?.id ?? null;
+
 
     // ---------------------------------------------------------------
     // 11. Store in computation_snapshots with engine_type='reconciliation'

@@ -702,6 +702,19 @@ Deno.serve(async (req: Request) => {
     );
   } catch (err) {
     console.error("[export-data] Error:", err.message);
+    
+    // For 'No data found' errors, return a 200 with error: true so 
+    // the frontend can gracefully show a toast instead of a 400 crash
+    if (err.message?.includes("No data found")) {
+      return new Response(
+        JSON.stringify({ error: true, message: err.message, empty: true }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     return new Response(
       JSON.stringify({ error: true, message: err.message }),
       {
