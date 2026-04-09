@@ -354,7 +354,7 @@ Deno.serve(async (req: Request) => {
 
     if (rows.length === 0) {
       throw new Error(
-        `No data found for export_type="${export_type}", property="${property_id}", fiscal_year=${fiscal_year}`,
+        `No data found for export_type="${export_type}" (Engine: ${engineType}, Table: ${FALLBACK_TABLE_MAP[export_type as ExportType]}). Parameters: property="${property_id}", fiscal_year=${fiscal_year}, org_id="${orgId}". Rows found: 0.`,
       );
     }
 
