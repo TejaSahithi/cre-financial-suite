@@ -22,15 +22,7 @@ export function useComputeTrigger() {
     setIsTriggering(true);
 
     try {
-      // Force-refresh the JWT so edge functions never receive an expired token
-      const { supabase } = await import("@/services/supabaseClient");
-      if (supabase) {
-        const { error: refreshError } = await supabase.auth.refreshSession();
-        if (refreshError) {
-          console.warn("[useComputeTrigger] session refresh failed:", refreshError.message);
-        }
-      }
-
+      // Session refresh is handled inside invokeEdgeFunction
       const data = await invokeEdgeFunction(functionName, body);
 
       if (!silent) {
