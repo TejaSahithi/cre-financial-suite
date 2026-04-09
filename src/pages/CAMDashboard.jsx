@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Calculator, ArrowRight, Plus, Trash2, DollarSign, TrendingUp, RefreshCw, AlertCircle, Loader2 } from "lucide-react";
+import { Calculator, ArrowRight, Plus, Trash2, DollarSign, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import PageHeader from "@/components/PageHeader";
 import MetricCard from "@/components/MetricCard";

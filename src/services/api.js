@@ -354,6 +354,7 @@ const ALLOWED_COLUMNS = {
     'escalation_type', 'escalation_timing', 'renewal_type', 'renewal_notice_months',
     'cam_cap_type', 'admin_fee_pct', 'management_fee_basis',
     'hvac_responsibility', 'sales_reporting_frequency',
+    'extraction_data', 'confidence_score', 'low_confidence_fields', 'extracted_fields',
   ]),
   Tenant: new Set([
     ...COMMON_BASE_COLUMNS,

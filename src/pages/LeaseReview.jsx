@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { leaseService } from "@/services/leaseService";
+import { NotificationService } from "@/services/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -37,6 +38,7 @@ export default function LeaseReview() {
   const [vacancyHandling, setVacancyHandling] = useState("exclude");
   const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
+  const [notificationSent, setNotificationSent] = useState(false);
 
   const { data: lease, isLoading } = useQuery({
     queryKey: ['lease', leaseId],
@@ -179,6 +181,22 @@ export default function LeaseReview() {
   const passCount = validationChecks.filter(v => v.pass).length;
 
   const handleApprove = async () => {
+    if (lowConf > 0) {
+      try {
+        await NotificationService.create({
+          org_id: lease.org_id,
+          type: "low_confidence_alert",
+          title: "Approval Attempt with Low Confidence",
+          message: `Lease for ${lease.tenant_name} was submitted for approval with ${lowConf} low-confidence fields.`,
+          link: createPageUrl("LeaseReview", { id: lease.id }),
+          priority: "high"
+        });
+        toast.info("Notification sent to team regarding low-confidence fields.");
+      } catch (err) {
+        console.error("Failed to send notification:", err);
+      }
+    }
+
     try {
       await updateLeaseMutation.mutateAsync({ id: lease.id, data: { status: "budget_ready" } });
       setShowApproval(false);
@@ -243,11 +261,38 @@ export default function LeaseReview() {
 
       {/* Low Confidence Block Alert */}
       {lowConf > 0 && (
-        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex items-center gap-3">
-          <AlertTriangle className="w-6 h-6 text-red-500 flex-shrink-0" />
-          <div>
-            <p className="text-sm font-bold text-red-800">Budget Start Blocked — Low Confidence Fields Detected</p>
-            <p className="text-xs text-red-600 mt-0.5">{lowConf} field(s) scored below 70% confidence. Human review and correction is required before this lease can be marked as "Budget Ready." Correct the flagged fields and re-validate.</p>
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-6 h-6 text-red-500 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-bold text-red-800">Budget Start Blocked — Low Confidence Fields Detected</p>
+              <p className="text-xs text-red-600 mt-0.5">{lowConf} field(s) scored below 70% confidence. Human review and correction is required before this lease can be marked as "Budget Ready." Correct the flagged fields and re-validate.</p>
+            </div>
+          </div>
+          <div className="flex justify-end pt-2 border-t border-red-200">
+            <Button 
+              size="sm" 
+              variant="destructive" 
+              className="bg-red-600 hover:bg-red-700"
+              onClick={async () => {
+                try {
+                  await NotificationService.create({
+                    org_id: lease.org_id,
+                    type: "review_request",
+                    title: "Manual Review Requested",
+                    message: `Manual review requested for lease extraction: ${lease.tenant_name}`,
+                    link: createPageUrl("LeaseReview", { id: lease.id }),
+                    priority: "high"
+                  });
+                  toast.success("Review request sent to team");
+                } catch (err) {
+                  toast.error("Failed to send review request");
+                }
+              }}
+            >
+              <AlertTriangle className="w-4 h-4 mr-1.5" />
+              Flag for Team Review
+            </Button>
           </div>
         </div>
       )}
