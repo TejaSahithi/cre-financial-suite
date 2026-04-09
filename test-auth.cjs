@@ -1,16 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
-const fs = require('fs');
-const path = require('path');
 
-const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
-const env = {};
-envFile.split('\n').forEach(line => {
-  const match = line.match(/^([^#=]+)=(.+)$/);
-  if (match) env[match[1].trim()] = match[2].trim();
-});
-
-const SUPABASE_URL = env.VITE_SUPABASE_URL || "https://cjwdwuqqdokblakheyjb.supabase.co";
-const SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_URL = "https://cjwdwuqqdokblakheyjb.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqd2R3dXFxZG9rYmxha2hleWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTgyNjEsImV4cCI6MjA4OTU5NDI2MX0.zBHQJPHcm4OCZPgQRvJleiXKcu5iKgUOyo1HKqMu0OQ";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -22,11 +13,19 @@ async function testInsert() {
   });
   
   if (authError) {
-    console.error("Auth Error:", authError);
+    if (authError.message.includes('MFA')) {
+      console.log("MFA is still required:", authError.message);
+    } else {
+      console.error("Auth Error:", authError);
+    }
     return;
   }
   
-  console.log("Logged in UID:", authData.user.id);
+  if (authData.session?.user) {
+     console.log("Logged in UID:", authData.session.user.id);
+  } else {
+     console.log("User may not be fully authenticated due to MFA missing from session, let's try insert anyway...");
+  }
   
   // Use same data as from browser subagent
   const payload = {
