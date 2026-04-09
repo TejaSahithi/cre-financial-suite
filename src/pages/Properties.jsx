@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { propertyService } from "@/services/propertyService";
 import { validateAddress } from "@/services/integrations";
-import { supabase } from "@/services/supabaseClient";
 import useOrgId from "@/hooks/useOrgId";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";

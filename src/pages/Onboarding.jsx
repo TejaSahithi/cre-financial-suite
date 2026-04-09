@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
-import {  useSearchParams, useNavigate , useLocation } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { OrganizationService } from "@/services/api";
 import { redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
-import { logAudit } from "@/services/audit";
 import { supabase } from "@/services/supabaseClient";
 import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Clock, Shield, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";

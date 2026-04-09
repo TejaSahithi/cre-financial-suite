@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { AccessRequestService } from "@/services/api";
 import { Building2, Clock, CheckCircle2, Mail, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useLocation } from "react-router-dom";
 
 import { redirectToLogin } from "@/services/auth";
 
@@ -9,16 +10,16 @@ export default function PendingApproval() {
   const [status, setStatus] = useState("pending"); // pending | approved | rejected
   const [checking, setChecking] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const location = useLocation();
 
   useEffect(() => {
     // Try to get email from URL params or local storage
-    const location = useLocation();
-  const params = new URLSearchParams(location.search);
+    const params = new URLSearchParams(location.search);
     const email = params.get("email") || localStorage.getItem("cre_pending_email") || "";
     setUserEmail(email);
 
     checkStatus(email);
-  }, []);
+  }, [location.search]);
 
   const checkStatus = async (email) => {
     if (!email) return;
