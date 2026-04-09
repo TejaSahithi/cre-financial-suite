@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Paperclip, ArrowLeft, Plus } from "lucide-react";
@@ -122,7 +123,6 @@ export default function AddExpense() {
 
   const createMutation = useMutation({
     mutationFn: (data) => expenseService.create(data),
-    onSuccess: () => navigate(createPageUrl("Expenses") + location.search),
   });
 
   const createVendorMutation = useMutation({
@@ -185,15 +185,33 @@ export default function AddExpense() {
     setUploading(true);
     let fileUrl = "";
     try {
-      const fileName = `expenses/${Date.now()}-${file.name}`;
+      // Resolve org_id for scoped path so RLS is satisfied
+      const resolvedOrg = await resolveWritableOrgId(orgId);
+      const orgPrefix = resolvedOrg || "shared";
+      const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const fileName = `${orgPrefix}/expenses/${Date.now()}-${safeFileName}`;
+
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from("financial-uploads")
         .upload(fileName, file, { upsert: true });
-      if (!uploadError && uploadData) {
-        const { data: urlData } = supabase.storage.from("financial-uploads").getPublicUrl(fileName);
-        fileUrl = urlData?.publicUrl || "";
+
+      if (uploadError) {
+        console.error("[AddExpense] upload error:", uploadError);
+        toast.error(`Upload failed: ${uploadError.message}`);
+        // Fallback: object URL so the user at least sees a preview
+        fileUrl = URL.createObjectURL(file);
+      } else if (uploadData) {
+        // Bucket is private — use a long-lived signed URL (7 days)
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from("financial-uploads")
+          .createSignedUrl(fileName, 60 * 60 * 24 * 7);
+        fileUrl = signedData?.signedUrl || "";
+        if (signedError) {
+          console.warn("[AddExpense] signed URL error:", signedError.message);
+        }
       }
-    } catch {
+    } catch (err) {
+      console.error("[AddExpense] handleAttachment exception:", err);
       fileUrl = URL.createObjectURL(file);
     }
     setAttachmentUrl(fileUrl);

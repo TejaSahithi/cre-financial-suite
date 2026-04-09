@@ -370,6 +370,8 @@ const ALLOWED_COLUMNS = {
     'is_controllable', 'created_by',
     // Bulk-import enrichment columns
     'description', 'invoice_number',
+    // Attachment / receipt
+    'attachment_url',
   ]),
   Revenue: new Set([
     ...COMMON_BASE_COLUMNS,
