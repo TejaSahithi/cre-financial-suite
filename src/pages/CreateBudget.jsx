@@ -9,6 +9,8 @@ import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
+import FileUploader from "@/components/FileUploader";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -386,11 +388,17 @@ export default function CreateBudget() {
                 <Card className="bg-slate-50 border-dashed">
                   <CardContent className="p-4">
                     <p className="text-sm font-medium text-slate-700 mb-2">Upload Historical Budget or Actuals (optional)</p>
-                    <Button variant="outline" size="sm">
-                      <Upload className="w-4 h-4 mr-2" />
-                      Upload Prior Budget (CSV/Excel/PDF)
-                    </Button>
-                    <p className="text-[10px] text-slate-400 mt-2">AI will generate 4 scenarios: Conservative, Moderate, Optimistic, Market-Adjusted — each with explanation.</p>
+                    <div className="mt-2 max-w-sm">
+                      <FileUploader 
+                        orgId={orgId} 
+                        propertyId={form.property_id} 
+                        accept=".csv,.pdf,.xls,.xlsx"
+                        onUploadComplete={(data) => {
+                          toast.success("Historical budget successfully queued for AI processing.");
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-3">AI will generate 4 scenarios: Conservative, Moderate, Optimistic, Market-Adjusted — each with explanation.</p>
                   </CardContent>
                 </Card>
               )}
