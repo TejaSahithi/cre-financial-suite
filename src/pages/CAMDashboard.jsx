@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import PipelineActions, { CAM_ACTIONS } from "@/components/PipelineActions";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
-import { useQuery } from "@tanstack/react-query";
+import { useComputeTrigger } from "@/hooks/useComputeTrigger";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -73,16 +74,19 @@ export default function CAMDashboard() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
-  const [selectedPropertyId, setSelectedPropertyId] = useState(null);
-  const [isTriggering, setIsTriggering] = useState(false);
+  const queryClient = useQueryClient();
+  const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
 
+  // The single source of truth for which property the compute targets.
+  // ScopeSelector returns "all" when nothing is picked — treat that as null.
+  const targetPropertyId = scopeProperty !== "all" ? scopeProperty : null;
+
   // Read CAM metrics from computation_snapshots — no client-side math
   const {
     data: camSnapshot,
-    isLoading: snapshotLoading,
     refetch: refetchSnapshot,
   } = useQuery({
     queryKey: ["cam-snapshot", scopeProperty, currentYear],
@@ -95,28 +99,33 @@ export default function CAMDashboard() {
   const prevTotal = snapshotOutputs.prev_year_total ?? 0;
   const camBudgeted = snapshotOutputs.budgeted_cam ?? 0;
   const leaseCAMTotal = snapshotOutputs.total_billed ?? 0;
-  const camPerSF = snapshotOutputs.cam_per_sf ?? 0;
 
-  const handleTriggerCompute = async () => {
-    const pid = scopeProperty !== "all" ? scopeProperty : null;
-    if (!pid) { toast.error("Select a property first"); return; }
-    setIsTriggering(true);
+  // Refresh snapshot + cached lists after any compute action succeeds
+  const refreshAfterCompute = useCallback(() => {
+    // Give the edge function a moment to commit before refetch
+    setTimeout(() => {
+      refetchSnapshot();
+      queryClient.invalidateQueries({ queryKey: ["cam-snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["CAMCalculation"] });
+    }, 800);
+  }, [queryClient, refetchSnapshot]);
+
+  // Manual "Calculate CAM Allocation" button on the Calculate tab
+  const handleCalculate = async () => {
+    if (!targetPropertyId) {
+      toast.error("Select a property in the Scope selector first");
+      return;
+    }
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      await fetch(`${supabaseUrl}/functions/v1/compute-cam`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session?.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ property_id: pid, fiscal_year: currentYear }),
-      });
-      toast.success("CAM computation started");
-      setTimeout(() => refetchSnapshot(), 3000);
-    } catch { toast.error("Failed to trigger CAM computation"); }
-    finally { setIsTriggering(false); }
+      await triggerCompute(
+        "compute-cam",
+        { property_id: targetPropertyId, fiscal_year: currentYear },
+        { successMessage: "CAM allocation calculated — refreshing dashboard…" }
+      );
+      refreshAfterCompute();
+    } catch {
+      /* useComputeTrigger already toasts */
+    }
   };
 
   const [camRules, setCamRules] = useState(DEFAULT_CAM_RULES);
@@ -162,9 +171,20 @@ export default function CAMDashboard() {
         </Link>
       </PageHeader>
 
-      <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={CAM_ACTIONS} />
+      <PipelineActions
+        propertyId={targetPropertyId}
+        fiscalYear={currentYear}
+        actions={CAM_ACTIONS}
+        onComplete={refreshAfterCompute}
+      />
 
       <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} showUnit={false} />
+
+      {!targetPropertyId && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Pick a property in the Scope selector above to enable CAM compute and export.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label={`CAM Pool (${currentYear})`} value={`$${currentTotal.toLocaleString()}`} icon={Calculator} color="bg-teal-50 text-teal-600" trend={prevTotal > 0 ? parseFloat(((currentTotal - prevTotal) / prevTotal * 100).toFixed(1)) : undefined} />
@@ -343,9 +363,18 @@ export default function CAMDashboard() {
                 </div>
               </div>
 
-              <Button className="w-full bg-red-500 hover:bg-red-600 h-12 text-base font-semibold">
-                <Calculator className="w-5 h-5 mr-2" /> Calculate CAM Allocation
+              <Button
+                onClick={handleCalculate}
+                disabled={isTriggering || !targetPropertyId}
+                className="w-full bg-red-500 hover:bg-red-600 h-12 text-base font-semibold"
+                title={!targetPropertyId ? "Select a property in the Scope selector first" : "Run compute-cam for the selected property"}
+              >
+                <Calculator className="w-5 h-5 mr-2" />
+                {isTriggering ? "Calculating…" : "Calculate CAM Allocation"}
               </Button>
+              {!targetPropertyId && (
+                <p className="text-xs text-amber-600 text-center">Select a property in the Scope selector above to enable this button.</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
