@@ -84,7 +84,7 @@ export async function savePropertyCamConfig(propertyId, values) {
 
   const { data, error } = await supabase
     .from("property_config")
-    .upsert(payload, { onConflict: "property_id" })
+    .upsert(payload, { onConflict: "org_id,property_id" })
     .select("*")
     .single();
 
@@ -162,7 +162,7 @@ export async function saveLeaseConfig(leaseId, values) {
 
   const { data, error } = await supabase
     .from("lease_config")
-    .upsert(payload, { onConflict: "lease_id" })
+    .upsert(payload, { onConflict: "org_id,lease_id" })
     .select("*")
     .single();
   if (error) throw error;
