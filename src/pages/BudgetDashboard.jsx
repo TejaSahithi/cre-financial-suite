@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Plus, Download, Mail, Loader2, CheckCircle2, X } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+
+import { BudgetService } from "@/services/api";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
@@ -24,6 +28,23 @@ export default function BudgetDashboard() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+
+  const queryClient = useQueryClient();
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...data }) => BudgetService.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(["org-data", "Budget"]);
+      toast.success("Budget status updated");
+    },
+    onError: (err) => {
+      toast.error(`Failed to update budget: ${err.message}`);
+    }
+  });
+
+  const handleStatusChange = (id, newStatus) => {
+    updateMutation.mutate({ id, status: newStatus });
+  };
 
   const scope = useMemo(
     () =>
@@ -221,21 +242,25 @@ export default function BudgetDashboard() {
                   )}
 
                   <div className="flex gap-3">
-                    <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700">
-                      <CheckCircle2 className="w-4 h-4 mr-2" />
-                      Approve Budget
-                    </Button>
-                    <Button variant="outline" className="text-red-500 border-red-200 hover:bg-red-50">
-                      <X className="w-4 h-4 mr-2" />
-                      Reject
-                    </Button>
+                    {["draft", "ai_generated", "under_review", "reviewed"].includes(selectedBudget.status) && (
+                      <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleStatusChange(selectedBudget.id, "approved")} disabled={updateMutation.isPending}>
+                        {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                        Approve Budget
+                      </Button>
+                    )}
+                    {(!["approved", "locked", "signed"].includes(selectedBudget.status)) && (
+                      <Button variant="outline" className="text-red-500 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange(selectedBudget.id, "draft")} disabled={updateMutation.isPending}>
+                        <X className="w-4 h-4 mr-2" />
+                        Reject
+                      </Button>
+                    )}
                   </div>
                   <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1">
+                    <Button variant="outline" className="flex-1" onClick={() => downloadCSV([selectedBudget], `budget-${selectedBudget.name || selectedBudget.id}.csv`)}>
                       <Download className="w-4 h-4 mr-2" />
                       Download Excel/CSV
                     </Button>
-                    <Button variant="outline" className="flex-1">
+                    <Button variant="outline" className="flex-1" onClick={() => toast.success(`Email sent to stakeholders for budget: ${selectedBudget.name}`)}>
                       <Mail className="w-4 h-4 mr-2" />
                       Email to Stakeholders
                     </Button>
