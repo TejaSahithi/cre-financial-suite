@@ -74,6 +74,7 @@ export default function CAMDashboard() {
   const { data: expenses = [] } = useOrgQuery("Expense");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit, setScopeUnit] = useState("all");
   const queryClient = useQueryClient();
   const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
 
@@ -83,6 +84,41 @@ export default function CAMDashboard() {
   // The single source of truth for which property the compute targets.
   // ScopeSelector returns "all" when nothing is picked — treat that as null.
   const targetPropertyId = scopeProperty !== "all" ? scopeProperty : null;
+
+  // Multi-level scope: most-specific selection wins (unit > building > property)
+  const targetScopeLevel =
+    scopeUnit !== "all"
+      ? "unit"
+      : scopeBuilding !== "all"
+      ? "building"
+      : targetPropertyId
+      ? "property"
+      : null;
+
+  const targetScopeId =
+    targetScopeLevel === "unit"
+      ? scopeUnit
+      : targetScopeLevel === "building"
+      ? scopeBuilding
+      : targetScopeLevel === "property"
+      ? targetPropertyId
+      : null;
+
+  const targetScopeLabel = (() => {
+    if (targetScopeLevel === "unit") {
+      const u = allUnits.find((x) => x.id === scopeUnit);
+      return u ? `Unit ${u.unit_number || u.unit_id_code || u.name || u.id.slice(0, 6)}` : "Unit";
+    }
+    if (targetScopeLevel === "building") {
+      const b = allBuildings.find((x) => x.id === scopeBuilding);
+      return b ? `Building ${b.name}` : "Building";
+    }
+    if (targetScopeLevel === "property") {
+      const p = properties.find((x) => x.id === targetPropertyId);
+      return p ? p.name : "Property";
+    }
+    return null;
+  })();
 
   // Read CAM metrics from computation_snapshots — no client-side math
   const {
@@ -119,8 +155,15 @@ export default function CAMDashboard() {
     try {
       await triggerCompute(
         "compute-cam",
-        { property_id: targetPropertyId, fiscal_year: currentYear },
-        { successMessage: "CAM allocation calculated — refreshing dashboard…" }
+        {
+          property_id: targetPropertyId,
+          fiscal_year: currentYear,
+          scope_level: targetScopeLevel,
+          scope_id: targetScopeId,
+        },
+        {
+          successMessage: `CAM calculated for ${targetScopeLabel} — refreshing dashboard…`,
+        }
       );
       refreshAfterCompute();
     } catch {
@@ -176,13 +219,32 @@ export default function CAMDashboard() {
         fiscalYear={currentYear}
         actions={CAM_ACTIONS}
         onComplete={refreshAfterCompute}
+        scopeLevel={targetScopeLevel}
+        scopeId={targetScopeId}
       />
 
-      <ScopeSelector properties={properties} buildings={allBuildings} units={allUnits} selectedProperty={scopeProperty} selectedBuilding={scopeBuilding} onPropertyChange={setScopeProperty} onBuildingChange={setScopeBuilding} showUnit={false} />
+      <ScopeSelector
+        properties={properties}
+        buildings={allBuildings}
+        units={allUnits}
+        selectedProperty={scopeProperty}
+        selectedBuilding={scopeBuilding}
+        selectedUnit={scopeUnit}
+        onPropertyChange={(v) => { setScopeProperty(v); setScopeBuilding("all"); setScopeUnit("all"); }}
+        onBuildingChange={(v) => { setScopeBuilding(v); setScopeUnit("all"); }}
+        onUnitChange={setScopeUnit}
+        showUnit
+      />
 
-      {!targetPropertyId && (
+      {!targetPropertyId ? (
         <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          Pick a property in the Scope selector above to enable CAM compute and export.
+          Pick a property in the Scope selector above to enable CAM compute and export. Optionally drill down into a building or unit for level-specific CAM.
+        </div>
+      ) : (
+        <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          Compute scope: <span className="font-semibold capitalize">{targetScopeLevel}</span>
+          {" → "}
+          <span className="font-semibold">{targetScopeLabel}</span>
         </div>
       )}
 

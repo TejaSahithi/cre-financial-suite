@@ -104,6 +104,9 @@ export default function PipelineActions({
   actions = [],
   onComplete,
   requireProperty = true,
+  // Optional multi-level scope for engines that support it (e.g. compute-cam)
+  scopeLevel,
+  scopeId,
 }) {
   const [loadingIndex, setLoadingIndex] = useState(null);
 
@@ -181,6 +184,8 @@ export default function PipelineActions({
       const body = {
         property_id: resolvedPropertyId,
         fiscal_year: fiscalYear,
+        ...(scopeLevel ? { scope_level: scopeLevel } : {}),
+        ...(scopeId ? { scope_id: scopeId } : {}),
         ...(action.extra || {}),
       };
 
