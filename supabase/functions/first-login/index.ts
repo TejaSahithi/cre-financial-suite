@@ -34,19 +34,72 @@ Deno.serve(async (req) => {
     );
 
     // 1. Verify user profile status
-    const { data: profile, error: profileError } = await supabaseAdmin
+    let { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('status, onboarding_type, full_name, email')
       .eq('id', user.id)
-      .single();
+      .maybeSingle();
 
-    if (profileError || !profile) throw new Error('Profile not found');
+    if (profileError) throw profileError;
+
+    if (!profile) {
+      let isAuthorized = false;
+
+      const [{ data: approvedRequest }, { data: invitation }] = await Promise.all([
+        supabaseAdmin
+          .from('access_requests')
+          .select('id')
+          .eq('email', user.email)
+          .eq('status', 'approved')
+          .maybeSingle(),
+        supabaseAdmin
+          .from('invitations')
+          .select('id')
+          .eq('email', user.email)
+          .maybeSingle(),
+      ]);
+
+      isAuthorized = !!approvedRequest || !!invitation;
+
+      const fallbackOnboardingType =
+        (user.user_metadata?.onboarding_type as string | undefined) ||
+        (user.app_metadata?.onboarding_type as string | undefined) ||
+        'owner';
+
+      const insertedProfile = {
+        id: user.id,
+        email: user.email,
+        full_name:
+          (user.user_metadata?.full_name as string | undefined) ||
+          (user.user_metadata?.name as string | undefined) ||
+          user.email?.split('@')[0] ||
+          'User',
+        onboarding_type: fallbackOnboardingType,
+        onboarding_complete: fallbackOnboardingType === 'invited',
+        first_login: true,
+        status: isAuthorized ? 'approved' : 'pending_approval',
+      };
+
+      const { data: createdProfile, error: createProfileError } = await supabaseAdmin
+        .from('profiles')
+        .upsert(insertedProfile, { onConflict: 'id' })
+        .select('status, onboarding_type, full_name, email')
+        .single();
+
+      if (createProfileError) throw createProfileError;
+      profile = createdProfile;
+    }
+
+    const onboardingType =
+      profile.onboarding_type ||
+      (user.user_metadata?.onboarding_type as string | undefined) ||
+      'owner';
 
     if (!['approved', 'onboarding'].includes(profile.status)) {
       return new Response(JSON.stringify({ error: 'User is not in an onboarding-ready state', status: profile.status }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    if (profile.onboarding_type !== 'owner') {
+    if (onboardingType !== 'owner') {
       return new Response(JSON.stringify({ error: 'Only owners trigger standard first-login' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
