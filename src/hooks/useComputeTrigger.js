@@ -22,6 +22,12 @@ export function useComputeTrigger() {
     setIsTriggering(true);
 
     try {
+      // Ensure we have a fresh session/JWT before invoking
+      const { supabase } = await import("@/services/supabaseClient");
+      if (supabase) {
+        await supabase.auth.getSession();
+      }
+
       const data = await invokeEdgeFunction(functionName, body);
 
       if (!silent) {
