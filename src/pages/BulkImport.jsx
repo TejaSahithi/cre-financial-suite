@@ -15,36 +15,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ArrowLeft, Upload, Download, CheckCircle2, Loader2 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 const systemFields = ["expense_date", "category", "amount", "vendor", "recoverable_flag", "description"];
 
-async function resolveWritableOrgId(currentOrgId) {
-  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
-
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
-
-    const { data: membership } = await supabase
-      .from("memberships")
-      .select("org_id")
-      .eq("user_id", user?.id)
-      .limit(1)
-      .maybeSingle();
-
-    if (membership?.org_id) return membership.org_id;
-
-    const { data: org } = await supabase
-      .from("organizations")
-      .select("id")
-      .limit(1)
-      .maybeSingle();
-
-    return org?.id || null;
-  } catch {
-    return null;
-  }
-}
 
 export default function BulkImport() {
   const navigate = useNavigate();
@@ -263,7 +237,7 @@ export default function BulkImport() {
         ...(effectiveBuildingId ? { building_id: effectiveBuildingId } : {}),
         ...(effectiveUnitId ? { unit_id: effectiveUnitId } : {}),
         ...(writableOrgId ? { org_id: writableOrgId } : {}),
-        fiscal_year: new Date().getFullYear()
+        fiscal_year: row.expense_date ? new Date(row.expense_date).getFullYear() : new Date().getFullYear()
       });
     }
     queryClient.invalidateQueries({ queryKey: ['Expense'] });

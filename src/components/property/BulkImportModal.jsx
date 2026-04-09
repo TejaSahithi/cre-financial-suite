@@ -515,6 +515,14 @@ export default function BulkImportModal({
         }
       }
 
+      if (['expense', 'revenue'].includes(moduleType)) {
+        const dateVal = cleanData.date || cleanData.expense_date;
+        if (dateVal && !cleanData.fiscal_year) {
+          const year = new Date(dateVal).getFullYear();
+          if (!isNaN(year)) cleanData.fiscal_year = year;
+        }
+      }
+
       delete cleanData.property_name;
       delete cleanData.tenant_name;
 
