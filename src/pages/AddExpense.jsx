@@ -144,7 +144,8 @@ export default function AddExpense() {
         ...form,
         amount: parseFloat(form.amount),
         attachment_url: attachmentUrl,
-        org_id: writableOrgId || "",
+        // Only set org_id if resolved — api.js handles the SuperAdmin fallback
+        ...(writableOrgId ? { org_id: writableOrgId } : {}),
         portfolio_id: property?.portfolio_id || form.portfolio_id || null,
         property_id: form.property_id || null,
         building_id: form.building_id || null,
