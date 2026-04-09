@@ -1,10 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Plus, Download, Mail, Loader2, CheckCircle2, X } from "lucide-react";
+import { Plus, Download, Mail, Loader2, CheckCircle2, X, PieChart as PieChartIcon, BarChart3, TrendingUp, Info } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { 
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid
+} from "recharts";
 
 import { BudgetService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
@@ -14,7 +19,133 @@ import PipelineActions, { BUDGET_ACTIONS } from "@/components/PipelineActions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { 
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger 
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { createPageUrl, downloadCSV } from "@/utils";
+
+function EmailStakeholderDialog({ budget, trigger }) {
+  const [emails, setEmails] = useState("");
+  const [message, setMessage] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const handleSend = () => {
+    if (!emails.trim()) {
+      toast.error("Please enter at least one email addressed");
+      return;
+    }
+    toast.success(`Budget "${budget.name}" emailed to: ${emails}`);
+    setOpen(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Email Budget to Stakeholders</DialogTitle>
+          <DialogDescription>
+            Share the latest budget details, insights, and financial projections.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <div className="grid gap-2">
+            <Label htmlFor="emails">Recipient Emails (comma separated)</Label>
+            <Input 
+              id="emails" 
+              placeholder="stakeholder@example.com, ceo@example.com" 
+              value={emails}
+              onChange={(e) => setEmails(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="message">Message to Stakeholders</Label>
+            <Textarea 
+              id="message" 
+              placeholder="Hi Team, please find the latest budget for review..." 
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={handleSend} className="bg-blue-600 hover:bg-blue-700">Send Budget</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BudgetInsights({ budget }) {
+  const data = [
+    { name: "Revenue", value: budget.total_revenue || 0, color: "#10b981" },
+    { name: "Expenses", value: budget.total_expenses || 0, color: "#ef4444" },
+    { name: "CAM", value: budget.cam_total || 0, color: "#3b82f6" },
+  ];
+
+  const barData = [
+    { name: "Comparison", Revenue: budget.total_revenue || 0, Expenses: budget.total_expenses || 0, CAM: budget.cam_total || 0 }
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="h-64 border rounded-xl p-4 bg-white shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 mb-2">Financial Allocation</p>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={data}
+                innerRadius={60}
+                outerRadius={80}
+                paddingAngle={5}
+                dataKey="value"
+              >
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => `$${value.toLocaleString()}`} />
+              <Legend verticalAlign="bottom" height={36}/>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="h-64 border rounded-xl p-4 bg-white shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 mb-2">KPI Breakdown</p>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={barData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+              <XAxis dataKey="name" hide />
+              <YAxis hide />
+              <Tooltip formatter={(value) => `$${value.toLocaleString()}`} />
+              <Bar dataKey="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="CAM" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      
+      {budget.ai_insights && (
+        <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 flex gap-3">
+          <div className="mt-0.5">
+            <div className="bg-blue-100 p-1 rounded-full">
+              <Info className="w-3.5 h-3.5 text-blue-600" />
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-blue-900 mb-1">AI Recommendation</p>
+            <p className="text-sm text-blue-800 leading-relaxed">{budget.ai_insights}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function BudgetDashboard() {
   const location = useLocation();
@@ -44,6 +175,36 @@ export default function BudgetDashboard() {
 
   const handleStatusChange = (id, newStatus) => {
     updateMutation.mutate({ id, status: newStatus });
+  };
+
+  const handleDetailedExport = async (budget) => {
+    if (!budget) return;
+    const toastId = toast.loading("Preparing detailed financial export...");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data, error } = await supabase.functions.invoke("export-data", {
+        body: {
+          export_type: "budget",
+          property_id: budget.property_id,
+          fiscal_year: budget.budget_year || budget.fiscal_year || 2027,
+          format: "csv"
+        },
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`
+        }
+      });
+
+      if (error) throw error;
+      if (data?.download_url) {
+        window.open(data.download_url, "_blank");
+        toast.success("Detailed export downloaded", { id: toastId });
+      } else {
+        throw new Error("Download URL not received");
+      }
+    } catch (err) {
+      console.error("[Export] Detailed action failed:", err);
+      toast.error(`Export failed: ${err.message}`, { id: toastId });
+    }
   };
 
   const scope = useMemo(
@@ -116,9 +277,9 @@ export default function BudgetDashboard() {
     <div className="p-6 space-y-6">
       <PageHeader title="Budget Dashboard" subtitle={subtitleScope}>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(visibleBudgets, "budgets.csv")}>
+          <Button variant="outline" size="sm" onClick={() => handleDetailedExport(selectedBudget)}>
             <Download className="w-4 h-4 mr-2" />
-            Export
+            Export Budget
           </Button>
           <Link to={createPageUrl("CreateBudget") + location.search}>
             <Button className="bg-blue-600 hover:bg-blue-700">
@@ -234,14 +395,9 @@ export default function BudgetDashboard() {
                     </div>
                   </div>
 
-                  {selectedBudget.ai_insights && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                      <p className="text-xs font-semibold text-amber-700 mb-1">AI Insights</p>
-                      <p className="text-sm text-amber-800">{selectedBudget.ai_insights}</p>
-                    </div>
-                  )}
+                  <BudgetInsights budget={selectedBudget} />
 
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 pt-2">
                     {["draft", "ai_generated", "under_review", "reviewed"].includes(selectedBudget.status) && (
                       <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleStatusChange(selectedBudget.id, "approved")} disabled={updateMutation.isPending}>
                         {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
@@ -256,14 +412,19 @@ export default function BudgetDashboard() {
                     )}
                   </div>
                   <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1" onClick={() => downloadCSV([selectedBudget], `budget-${selectedBudget.name || selectedBudget.id}.csv`)}>
+                    <Button variant="outline" className="flex-1" onClick={() => handleDetailedExport(selectedBudget)}>
                       <Download className="w-4 h-4 mr-2" />
                       Download Excel/CSV
                     </Button>
-                    <Button variant="outline" className="flex-1" onClick={() => toast.success(`Email sent to stakeholders for budget: ${selectedBudget.name}`)}>
-                      <Mail className="w-4 h-4 mr-2" />
-                      Email to Stakeholders
-                    </Button>
+                    <EmailStakeholderDialog 
+                      budget={selectedBudget} 
+                      trigger={
+                        <Button variant="outline" className="flex-1">
+                          <Mail className="w-4 h-4 mr-2" />
+                          Email to Stakeholders
+                        </Button>
+                      }
+                    />
                   </div>
                 </CardContent>
               </Card>
