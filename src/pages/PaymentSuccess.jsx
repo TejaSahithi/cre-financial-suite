@@ -20,6 +20,29 @@ export default function PaymentSuccess() {
   const orgName = state.org_name || state.org || searchParams.get("org") || "Your Organization";
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
+  const downloadTextReceipt = () => {
+    const lines = [
+      "CRE SUITE RECEIPT",
+      `Invoice ID: ${invoiceId}`,
+      `Date: ${date}`,
+      `Organization: ${orgName}`,
+      `Plan: ${plan}`,
+      `Billing Cycle: ${billingCycle}`,
+      amount ? `Amount Paid: $${Number(amount).toLocaleString()}` : "Amount Paid: Paid",
+      "Status: PAID",
+    ];
+
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${invoiceId}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
   // Auto-poll every 10 seconds for org activation.
   // When the SuperAdmin approves the org, profile + org status flip to 'active'.
   // Navigate directly to /WelcomeAboard to avoid a race with App.jsx's routing guard.
@@ -64,8 +87,10 @@ export default function PaymentSuccess() {
 
   const handleDownloadInvoice = async () => {
     try {
+      const { toast } = await import("sonner");
       const jsPDFModule = await import("jspdf");
       const jsPDF = jsPDFModule.jsPDF ?? jsPDFModule.default;
+      if (!jsPDF) throw new Error("PDF library unavailable");
       const doc = new jsPDF();
 
       doc.setFont("helvetica", "bold");
@@ -107,9 +132,25 @@ export default function PaymentSuccess() {
       doc.setTextColor("#64748b");
       doc.text("Thank you for choosing CRE Financial Suite.", 20, 122);
 
-      doc.save(`${invoiceId}.pdf`);
+      const pdfBlob = doc.output("blob");
+      const url = URL.createObjectURL(pdfBlob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${invoiceId}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      toast.success("Invoice downloaded successfully.");
     } catch (error) {
       console.error("[PaymentSuccess] Invoice download failed:", error);
+      try {
+        const { toast } = await import("sonner");
+        downloadTextReceipt();
+        toast.info("PDF download failed, so a text receipt was downloaded instead.");
+      } catch {
+        // Ignore fallback UI failures.
+      }
     }
   };
 

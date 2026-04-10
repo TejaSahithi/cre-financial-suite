@@ -259,21 +259,62 @@ function formatLastActive(ts) {
 
 function deriveStatus(member) {
   if (member.status === "invited") return "invited";
-  const roles = member.capabilities?.roles || [];
+  const roles = getMemberRoles(member);
   if (roles.length === 0 && !member.role) return "no_access";
   return "active";
 }
 
+function parseJsonSafely(value) {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeArray(value) {
+  const parsed = parseJsonSafely(value);
+  if (Array.isArray(parsed)) return parsed;
+  if (typeof parsed === "string") {
+    return parsed
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeObject(value, fallback = {}) {
+  const parsed = parseJsonSafely(value);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  return fallback;
+}
+
+function normalizeCapabilities(capabilities) {
+  const parsed = normalizeObject(capabilities, {});
+  return {
+    ...parsed,
+    roles: normalizeArray(parsed.roles),
+    signing_privileges: normalizeObject(parsed.signing_privileges, {}),
+  };
+}
+
 function getMemberRoles(member) {
-  return member.capabilities?.roles || (member.role ? [member.role] : []);
+  const roles = normalizeArray(member?.capabilities?.roles);
+  if (roles.length > 0) return roles;
+  return member?.role ? [member.role] : [];
 }
 
 function getMemberSigningPrivileges(member) {
-  return { ...DEFAULT_SIGNING, ...(member.capabilities?.signing_privileges || {}) };
+  return { ...DEFAULT_SIGNING, ...normalizeObject(member?.capabilities?.signing_privileges, {}) };
 }
 
 function getMemberPagePerms(member) {
-  return { ...DEFAULT_PAGE_PERMS, ...(member.page_permissions || {}) };
+  return { ...DEFAULT_PAGE_PERMS, ...normalizeObject(member?.page_permissions, {}) };
 }
 
 function getHighestSigningLevel(signingPrivs) {
@@ -311,7 +352,7 @@ function parseCSV(text) {
 }
 
 function getMemberDataScope(member) {
-  const grants = member?.access_grants || [];
+  const grants = Array.isArray(member?.access_grants) ? member.access_grants : [];
   return {
     portfolios: grants.filter((grant) => grant.scope === "portfolio").map((grant) => grant.scope_id),
     properties: grants.filter((grant) => grant.scope === "property").map((grant) => grant.scope_id),
@@ -1646,12 +1687,16 @@ export default function UserManagement() {
       const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
 
       const enrichedMembers = baseMembers.map(member => {
+        const capabilities = normalizeCapabilities(member.capabilities);
         const profile = profilesById.get(member.user_id);
-        const invitedEmail = member.capabilities?.invited_email || null;
-        const invitedFullName = member.capabilities?.invited_full_name || null;
+        const invitedEmail = capabilities.invited_email || null;
+        const invitedFullName = capabilities.invited_full_name || null;
 
         return {
           ...member,
+          capabilities,
+          page_permissions: normalizeObject(member.page_permissions, {}),
+          module_permissions: normalizeObject(member.module_permissions, {}),
           profiles: {
             id: profile?.id || member.user_id || null,
             full_name: profile?.full_name || invitedFullName || null,
