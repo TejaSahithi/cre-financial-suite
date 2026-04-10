@@ -104,10 +104,16 @@ export default function Login() {
         setIsValidatingEmail(false);
         return false;
       }
-    } catch {
+    } catch (err) {
+      console.error("[Login] validateApprovedEmail error:", err);
       setVerifiedCompany(null);
       setVerifiedRole(null);
-      setError("Failed to verify access request. Please try again.");
+      const msg = err?.message || "";
+      if (msg.includes("verify_access_request") || msg.includes("schema cache")) {
+        setError("Email verification is not yet configured. Please contact your administrator or try again later.");
+      } else {
+        setError("Database error checking email. Please try again.");
+      }
       setIsValidatingEmail(false);
       return false;
     }
