@@ -391,6 +391,8 @@ const ALLOWED_COLUMNS = {
     'name', 'budget_year', 'fiscal_year', 'scope', 'period',
     'generation_method', 'total_revenue', 'total_expenses',
     'cam_total', 'noi', 'status', 'ai_insights', 'created_by',
+    'reviewed_at', 'reviewed_by', 'rejected_at', 'rejected_by',
+    'rejection_comment',
   ]),
   Invoice: new Set([
     ...COMMON_BASE_COLUMNS,

@@ -7,9 +7,11 @@ import { UnitService, BuildingService, PropertyService, LeaseService, BudgetServ
 import { supabase } from "@/services/supabaseClient";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { useAuth } from "@/lib/AuthContext";
 import { createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
 import FileUploader from "@/components/FileUploader";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,10 +39,42 @@ function buildDefaultForm(scope) {
   };
 }
 
+function normalizeBudgetNotificationRecipients(stakeholders, propertyId) {
+  return [...new Set(
+    stakeholders
+      .filter((stakeholder) =>
+        stakeholder?.email &&
+        stakeholder.notify_budget_approval !== false &&
+        (!stakeholder.property_id || !propertyId || stakeholder.property_id === propertyId)
+      )
+      .map((stakeholder) => stakeholder.email.trim().toLowerCase())
+      .filter(Boolean)
+  )];
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function invalidateBudgetCaches(queryClient) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["Budget"] }),
+    queryClient.invalidateQueries({ queryKey: ["budgets"] }),
+    queryClient.invalidateQueries({ queryKey: ["budgets-manage"] }),
+    queryClient.invalidateQueries({ queryKey: ["Notification"] }),
+  ]);
+}
+
 export default function CreateBudget() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [method, setMethod] = useState("lease_driven");
   const [generating, setGenerating] = useState(false);
   const [selectedBudgetId, setSelectedBudgetId] = useState(null);
@@ -49,6 +83,7 @@ export default function CreateBudget() {
   const [rejectTargetId, setRejectTargetId] = useState(null);
 
   const { orgId } = useOrgQuery("Budget");
+  const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
 
   const { data: portfolios = [] } = useQuery({ queryKey: ["cb-portfolios"], queryFn: () => PortfolioService.list() });
   const { data: properties = [] } = useQuery({ queryKey: ["cb-properties"], queryFn: () => PropertyService.list() });
@@ -89,14 +124,13 @@ export default function CreateBudget() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, ...data }) => BudgetService.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["budgets-manage"] });
+    onSuccess: async () => {
+      await invalidateBudgetCaches(queryClient);
+    },
+    onError: (error) => {
+      toast.error(error?.message || "Failed to update budget workflow");
     },
   });
-
-  const handleStatusChange = (id, newStatus) => {
-    updateMutation.mutate({ id, status: newStatus });
-  };
 
   const filteredBuildings = form.property_id ? scope.scopedBuildings.filter((building) => building.property_id === form.property_id) : scope.scopedBuildings;
   const filteredUnits = form.building_id
@@ -210,6 +244,82 @@ export default function CreateBudget() {
     }
   }, [budgets, selectedBudgetId]);
 
+  const notifyStakeholdersOfRework = async (budget, comment) => {
+    const recipients = normalizeBudgetNotificationRecipients(stakeholders, budget?.property_id);
+    const propertyName = properties.find((property) => property.id === budget?.property_id)?.name || "selected property";
+    const message = `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) was sent back for rework for ${propertyName}. Comments: ${comment}`;
+
+    const notificationPayload = {
+      org_id: budget?.org_id,
+      type: "budget_approval",
+      title: "Budget Sent Back for Rework",
+      message,
+      link: String(budget?.id || ""),
+      priority: "high",
+    };
+
+    const notificationPromise = budget?.org_id
+      ? supabase.from("notifications").insert(notificationPayload)
+      : Promise.resolve({ error: null });
+
+    const actionUrl = typeof window !== "undefined"
+      ? `${window.location.origin}${createPageUrl("CreateBudget")}${location.search}`
+      : "";
+
+    const emailPromise = recipients.length > 0
+      ? invokeEdgeFunction("send-email", {
+          to: recipients,
+          subject: `${budget?.name || "Budget"} requires rework`,
+          html: `
+            <h1 style="margin-bottom: 8px;">Budget Rework Requested</h1>
+            <p style="margin: 0 0 16px; color: #475569;">
+              ${escapeHtml(propertyName)} budget for FY ${escapeHtml(budget?.budget_year || budget?.fiscal_year || "current")} needs updates before approval.
+            </p>
+            <div style="margin: 0 0 20px; padding: 16px; border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;">
+              <strong>Reviewer comments</strong><br />
+              ${escapeHtml(comment).replace(/\n/g, "<br />")}
+            </div>
+            ${actionUrl ? `<p style="margin: 0;"><a href="${escapeHtml(actionUrl)}" style="color: #1d4ed8; font-weight: 600;">Open Budget Studio</a></p>` : ""}
+          `,
+        })
+      : Promise.resolve();
+
+    const [notificationResult, emailResult] = await Promise.allSettled([notificationPromise, emailPromise]);
+
+    if (notificationResult.status === "fulfilled" && notificationResult.value?.error) {
+      console.error("[CreateBudget] Failed to create rework notification:", notificationResult.value.error);
+    }
+
+    if (emailResult.status === "rejected") {
+      console.error("[CreateBudget] Failed to email stakeholders:", emailResult.reason);
+      toast.warning("Budget was sent back for rework, but stakeholder email delivery failed.");
+      return;
+    }
+
+    if (recipients.length > 0) {
+      toast.success(`Rework notes sent to ${recipients.length} stakeholder${recipients.length === 1 ? "" : "s"}`);
+    } else {
+      toast.info("Budget was sent back for rework. No stakeholder email recipients were configured.");
+    }
+  };
+
+  const handleReviewed = async (budget) => {
+    if (!budget) return;
+
+    try {
+      await updateMutation.mutateAsync({
+        id: budget.id,
+        status: "reviewed",
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: user?.id || undefined,
+        rejection_comment: null,
+      });
+      toast.success(`"${budget.name}" marked as reviewed`);
+    } catch (error) {
+      console.error("[CreateBudget] Failed to mark budget as reviewed:", error);
+    }
+  };
+
   const handleReject = (budgetId) => {
     setRejectTargetId(budgetId);
     setRejectComment("");
@@ -219,20 +329,25 @@ export default function CreateBudget() {
   const handleRejectConfirm = async () => {
     if (!rejectTargetId) return;
     const budget = budgets.find(b => b.id === rejectTargetId);
-    updateMutation.mutate(
-      { id: rejectTargetId, status: "draft" },
-      {
-        onSuccess: () => {
-          toast.success("Budget rejected and sent back for rework");
-          if (rejectComment.trim()) {
-            toast.info(`Rejection comment: "${rejectComment.trim()}"`);
-          }
-          setRejectDialogOpen(false);
-          setRejectComment("");
-          setRejectTargetId(null);
-        },
-      }
-    );
+    const comment = rejectComment.trim();
+
+    try {
+      const updatedBudget = await updateMutation.mutateAsync({
+        id: rejectTargetId,
+        status: "draft",
+        rejection_comment: comment,
+        rejected_at: new Date().toISOString(),
+        rejected_by: user?.id || undefined,
+      });
+
+      toast.success("Budget rejected and sent back for rework");
+      await notifyStakeholdersOfRework(updatedBudget || budget, comment);
+      setRejectDialogOpen(false);
+      setRejectComment("");
+      setRejectTargetId(null);
+    } catch (error) {
+      console.error("[CreateBudget] Failed to reject budget:", error);
+    }
   };
 
   return (
@@ -435,9 +550,13 @@ export default function CreateBudget() {
                       <FileUploader 
                         orgId={orgId} 
                         propertyId={form.property_id} 
+                        defaultFileType="budgets"
+                        allowedFileTypes={["budgets", "expenses", "revenue"]}
+                        multiple
                         accept=".csv,.pdf,.xls,.xlsx"
                         onUploadComplete={(data) => {
-                          toast.success("Historical budget successfully queued for AI processing.");
+                          const uploadCount = Array.isArray(data) ? data.length : data?.uploads?.length || 1;
+                          toast.success(`${uploadCount} historical file${uploadCount === 1 ? "" : "s"} queued for AI processing.`);
                         }}
                       />
                     </div>
@@ -534,28 +653,31 @@ export default function CreateBudget() {
                           <p className="text-sm text-amber-800">{selectedBudget.ai_insights}</p>
                         </div>
                       )}
+                      {selectedBudget.rejection_comment && (
+                        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                          <p className="text-xs font-semibold text-red-700 mb-1">Latest Rework Comments</p>
+                          <p className="text-sm text-red-800 whitespace-pre-wrap">{selectedBudget.rejection_comment}</p>
+                        </div>
+                      )}
                       <div className="flex gap-3 mt-6 pt-4 border-t border-slate-100">
                         {["draft", "ai_generated", "under_review"].includes(selectedBudget.status) && (
                           <Button
                             className="flex-1 bg-amber-500 hover:bg-amber-600"
                             disabled={updateMutation.isPending}
-                            onClick={() => {
-                              handleStatusChange(selectedBudget.id, "reviewed");
-                              toast.success(`"${selectedBudget.name}" marked as reviewed`);
-                            }}
+                            onClick={() => handleReviewed(selectedBudget)}
                           >
                             {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                             Mark as Reviewed
                           </Button>
                         )}
                         {["reviewed"].includes(selectedBudget.status) && (
-                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" disabled={updateMutation.isPending} onClick={() => handleStatusChange(selectedBudget.id, "approved")}>
+                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ id: selectedBudget.id, status: "approved" })}>
                             <CheckCircle2 className="w-4 h-4 mr-2" />
                             Approve Budget
                           </Button>
                         )}
                         {["approved"].includes(selectedBudget.status) && (
-                          <Button className="flex-1 bg-slate-800 hover:bg-slate-900" disabled={updateMutation.isPending} onClick={() => handleStatusChange(selectedBudget.id, "locked")}>
+                          <Button className="flex-1 bg-slate-800 hover:bg-slate-900" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ id: selectedBudget.id, status: "locked" })}>
                             <Lock className="w-4 h-4 mr-2" />
                             Lock Budget
                           </Button>

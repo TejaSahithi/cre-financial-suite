@@ -166,6 +166,14 @@ function getBudgetScopeLabel(budget, scope) {
   return unit?.unit_number || unit?.unit_id_code || building?.name || property?.name || "Selected scope";
 }
 
+async function invalidateBudgetCaches(queryClient) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["Budget"] }),
+    queryClient.invalidateQueries({ queryKey: ["budgets"] }),
+    queryClient.invalidateQueries({ queryKey: ["Notification"] }),
+  ]);
+}
+
 function EmailStakeholderDialog({ budget, trigger, scopeLabel, onSend }) {
   const [emails, setEmails] = useState("");
   const [message, setMessage] = useState("");
@@ -384,8 +392,8 @@ export default function BudgetDashboard() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, ...data }) => BudgetService.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(["org-data", "Budget"]);
+    onSuccess: async () => {
+      await invalidateBudgetCaches(queryClient);
       toast.success("Budget status updated");
     },
     onError: (err) => {
