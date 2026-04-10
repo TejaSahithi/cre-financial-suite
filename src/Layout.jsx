@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
-import { filterNavForRole, PUBLIC_PAGES } from "@/lib/rbac";
+import { filterNavForAllowedPages, filterNavForRole, PUBLIC_PAGES } from "@/lib/rbac";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { filterNavForModules } from "@/lib/moduleConfig";
 import {
@@ -141,9 +141,13 @@ function NavItem({ item, currentPageName, collapsed }) {
 export default function Layout({ children, currentPageName }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
   const { user, logout: authContextLogout } = useAuth();
-  const { enabledModules } = useModuleAccess();
+  const { enabledModules, pageAccess } = useModuleAccess();
+  const allowedPageNames = Object.keys(pageAccess || {}).filter(Boolean);
+  const baseNav = allowedPageNames.length > 0
+    ? filterNavForAllowedPages(navSections, allowedPageNames)
+    : filterNavForRole(navSections, user?.role);
+  const visibleNav = filterNavForModules(baseNav, enabledModules);
 
   // Handle unauthenticated state if on a protected page
   useEffect(() => {
@@ -178,7 +182,7 @@ export default function Layout({ children, currentPageName }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-          {filterNavForModules(filterNavForRole(navSections, user?.role), enabledModules).map((item, i) => (
+          {visibleNav.map((item, i) => (
             <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={!sidebarOpen} />
           ))}
         </nav>
@@ -212,7 +216,7 @@ export default function Layout({ children, currentPageName }) {
               <button onClick={() => setMobileOpen(false)} className="ml-auto text-white/40"><X className="w-5 h-5" /></button>
             </div>
             <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-              {filterNavForModules(filterNavForRole(navSections, user?.role), enabledModules).map((item, i) => (
+              {visibleNav.map((item, i) => (
                 <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={false} />
               ))}
             </nav>
