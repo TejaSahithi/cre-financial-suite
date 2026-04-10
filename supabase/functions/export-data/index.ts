@@ -316,7 +316,7 @@ async function buildBudgetExportRows({
       .order("created_at", { ascending: true }),
     supabaseAdmin
       .from("revenues")
-      .select("property_id, building_id, unit_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name")
+      .select("property_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name")
       .eq("org_id", orgId)
       .eq("property_id", propertyId)
       .eq("fiscal_year", fiscalYear)
@@ -455,8 +455,6 @@ async function buildBudgetExportRows({
         lease_id: revenue.lease_id ?? "",
         source: "revenues_table",
         property_id: revenue.property_id ?? propertyId,
-        building_id: revenue.building_id ?? "",
-        unit_id: revenue.unit_id ?? "",
       }),
     );
   }
