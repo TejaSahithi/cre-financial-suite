@@ -92,8 +92,9 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json();
     const { email, password, full_name, onboarding_type, action } = body;
+    const normalizedEmail = String(email || "").trim().toLowerCase();
 
-    if (!email) {
+    if (!normalizedEmail) {
       return new Response(JSON.stringify({ error: "email is required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -105,7 +106,7 @@ Deno.serve(async (req: Request) => {
       try {
         const { data, error } = await admin.auth.admin.generateLink({
           type: "recovery",
-          email,
+          email: normalizedEmail,
           options: { redirectTo: resetUrl },
         });
         const link = data?.properties?.action_link;
@@ -116,7 +117,7 @@ Deno.serve(async (req: Request) => {
           });
         }
         if (RESEND_API_KEY) {
-          const firstName = (full_name || email.split("@")[0]);
+          const firstName = (full_name || normalizedEmail.split("@")[0]);
           const html = emailWrapper(`
             <h1>Reset your password</h1>
             <p>Hi ${firstName},</p>
@@ -127,10 +128,10 @@ Deno.serve(async (req: Request) => {
           const res = await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ from: FROM, to: [email], subject: "Reset your CRE Platform password", html }),
+            body: JSON.stringify({ from: FROM, to: [normalizedEmail], subject: "Reset your CRE Platform password", html }),
           });
           if (!res.ok) console.error("[signup] Resend error (recovery):", await res.text());
-          else console.log("[signup] Password reset email sent to:", email);
+          else console.log("[signup] Password reset email sent to:", normalizedEmail);
         }
       } catch (e: any) {
         console.error("[signup] forgot_password error:", e.message);
@@ -145,22 +146,22 @@ Deno.serve(async (req: Request) => {
 
     // ── RESEND flow ──────────────────────────────────────────────────────────
     if (action === "resend") {
-      const flow = await detectRegistrationFlow(admin, email);
+      const flow = await detectRegistrationFlow(admin, normalizedEmail);
       if (RESEND_API_KEY) {
         const redirectUrl = flow === "invite" ? INVITE_ACCEPT_URL : POST_CONFIRM_URL;
-        const link = await getAnyAuthLink(admin, email, redirectUrl);
+        const link = await getAnyAuthLink(admin, normalizedEmail, redirectUrl);
         if (link) {
           await sendFlowEmail({
             resendKey: RESEND_API_KEY,
             from: FROM,
-            email,
-            firstName: full_name || email.split("@")[0],
+            email: normalizedEmail,
+            firstName: full_name || normalizedEmail.split("@")[0],
             link,
             flow,
           });
-          console.log("[signup] Resend auth email sent via Resend to:", email, "flow:", flow);
+          console.log("[signup] Resend auth email sent via Resend to:", normalizedEmail, "flow:", flow);
         } else {
-          console.error("[signup] Could not generate any auth link for resend:", email);
+          console.error("[signup] Could not generate any auth link for resend:", normalizedEmail);
         }
       }
       return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
@@ -176,24 +177,23 @@ Deno.serve(async (req: Request) => {
     }
 
     // Check if user already exists
-    const { data: existingUsers } = await admin.auth.admin.listUsers();
-    const existing = existingUsers?.users?.find((u: any) => u.email === email);
+    const existing = await findAuthUserByEmail(admin, normalizedEmail);
     if (existing) {
-      const flow = await detectRegistrationFlow(admin, email, existing.id);
+      const flow = await detectRegistrationFlow(admin, normalizedEmail, existing.id);
 
       if (flow === "invite") {
         if (RESEND_API_KEY) {
-          const link = await getAnyAuthLink(admin, email, INVITE_ACCEPT_URL);
+          const link = await getAnyAuthLink(admin, normalizedEmail, INVITE_ACCEPT_URL);
           if (link) {
             await sendFlowEmail({
               resendKey: RESEND_API_KEY,
               from: FROM,
-              email,
-              firstName: full_name || email.split("@")[0],
+              email: normalizedEmail,
+              firstName: full_name || normalizedEmail.split("@")[0],
               link,
               flow,
             });
-            console.log("[signup] Invite completion email sent for existing invited user:", email);
+            console.log("[signup] Invite completion email sent for existing invited user:", normalizedEmail);
           }
         }
         return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
@@ -204,17 +204,17 @@ Deno.serve(async (req: Request) => {
       if (!existing.email_confirmed_at) {
         // Exists but unconfirmed — resend confirmation
         if (RESEND_API_KEY) {
-          const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
+          const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
           if (link) {
             await sendFlowEmail({
               resendKey: RESEND_API_KEY,
               from: FROM,
-              email,
-              firstName: full_name || email.split("@")[0],
+              email: normalizedEmail,
+              firstName: full_name || normalizedEmail.split("@")[0],
               link,
               flow: "signup",
             });
-            console.log("[signup] Resent confirmation for existing unconfirmed user:", email);
+            console.log("[signup] Resent confirmation for existing unconfirmed user:", normalizedEmail);
           }
         }
         return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {
@@ -228,7 +228,7 @@ Deno.serve(async (req: Request) => {
 
     // Create user — email_confirm: false suppresses Supabase's built-in email
     const { data: newUser, error: createErr } = await admin.auth.admin.createUser({
-      email,
+      email: normalizedEmail,
       password,
       email_confirm: false,
       user_metadata: {
@@ -239,28 +239,37 @@ Deno.serve(async (req: Request) => {
 
     if (createErr) {
       console.error("[signup] createUser error:", createErr.message);
+      if (/Database error checking email/i.test(createErr.message || "")) {
+        const existingAfterCreateErr = await findAuthUserByEmail(admin, normalizedEmail);
+        if (existingAfterCreateErr) {
+          const flow = await detectRegistrationFlow(admin, normalizedEmail, existingAfterCreateErr.id);
+          return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
       return new Response(JSON.stringify({ error: createErr.message }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log("[signup] Created user:", email, "id:", newUser?.user?.id);
+    console.log("[signup] Created user:", normalizedEmail, "id:", newUser?.user?.id);
 
     // Generate confirmation link and send via Resend
     if (RESEND_API_KEY) {
-      const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
+      const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
       if (link) {
         await sendFlowEmail({
           resendKey: RESEND_API_KEY,
           from: FROM,
-          email,
-          firstName: full_name || email.split("@")[0],
+          email: normalizedEmail,
+          firstName: full_name || normalizedEmail.split("@")[0],
           link,
           flow: "signup",
         });
-        console.log("[signup] Confirmation email sent via Resend to:", email);
+        console.log("[signup] Confirmation email sent via Resend to:", normalizedEmail);
       } else {
-        console.error("[signup] Failed to generate auth link for new user:", email);
+        console.error("[signup] Failed to generate auth link for new user:", normalizedEmail);
       }
     } else {
       console.warn("[signup] RESEND_API_KEY not set — no confirmation email sent");
@@ -301,18 +310,42 @@ async function getAnyAuthLink(admin: any, email: string, frontendUrl: string): P
   return null;
 }
 
+async function findAuthUserByEmail(admin: any, email: string) {
+  const targetEmail = String(email || "").trim().toLowerCase();
+  if (!targetEmail) return null;
+
+  let page = 1;
+  const perPage = 200;
+
+  while (page <= 20) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error("[signup] listUsers error:", error.message);
+      break;
+    }
+
+    const users = data?.users || [];
+    const match = users.find((user: any) => String(user.email || "").trim().toLowerCase() === targetEmail);
+    if (match) return match;
+    if (users.length < perPage) break;
+    page += 1;
+  }
+
+  return null;
+}
+
 async function detectRegistrationFlow(admin: any, email: string, userId?: string): Promise<"signup" | "invite"> {
   try {
     const queries = [
       admin
         .from("profiles")
         .select("onboarding_type")
-        .eq("email", email)
+        .ilike("email", email)
         .maybeSingle(),
       admin
         .from("invitations")
         .select("id, status")
-        .eq("email", email)
+        .ilike("email", email)
         .in("status", ["pending", "pending_approval"]),
     ];
 
