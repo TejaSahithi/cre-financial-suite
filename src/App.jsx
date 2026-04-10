@@ -135,6 +135,7 @@ const AuthenticatedApp = () => {
   useEffect(() => {
     const hash = window.location.hash;
     if (!hash) return;
+    const currentPath = window.location.pathname.replace(/^\//, '');
     const params = new URLSearchParams(hash.replace('#', ''));
     const errorCode = params.get('error_code');
     const errorDesc = params.get('error_description');
@@ -151,6 +152,9 @@ const AuthenticatedApp = () => {
       }
       import('sonner').then(({ toast }) => toast.error(message, { duration: 8000 }));
       navigateToLogin();
+    } else if (currentPath === 'AcceptInvite') {
+      // AcceptInvite handles auth callback verification itself.
+      return;
     } else {
       // No error — just clean up the hash fragment left by Supabase auth redirects
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
