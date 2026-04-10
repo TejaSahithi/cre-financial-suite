@@ -10,6 +10,23 @@ import { supabase } from "@/services/supabaseClient";
 import { verifyAccessRequest } from "@/services/api";
 import { toast } from "sonner";
 
+async function getFunctionErrorMessage(fnError) {
+  if (!fnError) return "";
+
+  let detail = fnError.message || "";
+  try {
+    const ctx = fnError.context;
+    if (ctx && typeof ctx.json === "function") {
+      const body = await ctx.json();
+      if (body?.error) detail = body.error;
+    }
+  } catch {
+    // Ignore body parse failures and keep the top-level message.
+  }
+
+  return detail;
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const { login, loginWithGoogle } = useAuth();
@@ -30,8 +47,7 @@ export default function Login() {
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
   const [confirmationRequired, setConfirmationRequired] = useState(false);
   const [resentConfirmation, setResentConfirmation] = useState(false);
-  const [loginVerifiedCompany, setLoginVerifiedCompany] = useState(null);
-  const [loginEmailChecked, setLoginEmailChecked] = useState(false);
+  const [registrationFlow, setRegistrationFlow] = useState("signup");
 
   const resetForm = () => {
     setError("");
@@ -43,8 +59,7 @@ export default function Login() {
     setVerifiedRole(null);
     setConfirmationRequired(false);
     setResentConfirmation(false);
-    setLoginVerifiedCompany(null);
-    setLoginEmailChecked(false);
+    setRegistrationFlow("signup");
   };
 
   const handleEmailLogin = async (e) => {
@@ -80,14 +95,6 @@ export default function Login() {
       if (res && res.valid) {
         setVerifiedCompany(res.company_name);
         setVerifiedRole(res.role || "Admin (Owner)");
-        
-        // Check if user already exists in Auth to suggest Sign In
-        const { data: { public_user }, error: checkErr } = await supabase.auth.admin.listUsers();
-        // Since we are using the public client, we can't search all users.
-        // But we can try to "sign up" and if it errors with 'Already exists', we know.
-        // Actually, let's just keep it simple: if valid, let them try to sign up. 
-        // The error from handleRegister will tell them if they exist.
-        
         setIsValidatingEmail(false);
         return true;
       } else {
@@ -97,7 +104,7 @@ export default function Login() {
         setIsValidatingEmail(false);
         return false;
       }
-    } catch (err) {
+    } catch {
       setVerifiedCompany(null);
       setVerifiedRole(null);
       setError("Failed to verify access request. Please try again.");
@@ -135,7 +142,7 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      // Try edge function first (sends confirmation via Resend, no rate limits).
+      // Try edge function first (sends confirmation or invite-completion links via Resend).
       // If not yet deployed, fall back to supabase.auth.signUp() so signup still works.
       let usedEdgeFunction = false;
       try {
@@ -147,20 +154,32 @@ export default function Login() {
             onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
           },
         });
-        if (!fnError && !fnData?.error) {
-          usedEdgeFunction = true;
-          setConfirmationRequired(true);
-          setRegistrationSuccess(true);
-        } else if (fnData?.error) {
-          // Business-level error (e.g. duplicate account) — surface it
+
+        if (fnError) {
+          const detail = await getFunctionErrorMessage(fnError);
+          throw new Error(detail || fnError.message || "Failed to create account.");
+        }
+
+        if (fnData?.error) {
           throw new Error(fnData.error);
         }
-        // fnError means function unreachable — fall through to native signUp
-      } catch (edgeErr) {
-        if (edgeErr.message && !edgeErr.message.includes("Failed to send a request")) {
-          throw edgeErr; // Re-throw real errors (duplicate account, etc.)
+
+        if (fnData?.success) {
+          usedEdgeFunction = true;
+          setRegistrationFlow(fnData?.flow === "invite" ? "invite" : "signup");
+          setConfirmationRequired(Boolean(fnData?.confirmationRequired ?? true));
+          setRegistrationSuccess(true);
         }
-        // Edge function not deployed — fall back silently
+      } catch (edgeErr) {
+        const edgeMessage = edgeErr?.message || "";
+        const functionUnavailable =
+          edgeMessage.includes("Failed to send a request")
+          || edgeMessage.includes("NetworkError")
+          || edgeMessage.includes("fetch");
+
+        if (!functionUnavailable) {
+          throw edgeErr;
+        }
       }
 
       if (!usedEdgeFunction) {
@@ -177,6 +196,7 @@ export default function Login() {
           },
         });
         if (signUpError) throw signUpError;
+        setRegistrationFlow("signup");
         setConfirmationRequired(!data?.session);
         setRegistrationSuccess(true);
         if (data?.session) navigate(createPageUrl("Onboarding"));
@@ -222,7 +242,9 @@ export default function Login() {
           {confirmationRequired ? (
             <>
               <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-                We&apos;ve sent a confirmation link to <strong>{email}</strong>. Once you click it, you&apos;ll be redirected into the secure setup flow and prompted for MFA.
+                {registrationFlow === "invite"
+                  ? <>We&apos;ve sent a secure invite-completion link to <strong>{email}</strong>. Open that email to finish creating your invited account and continue into your welcome setup.</>
+                  : <>We&apos;ve sent a confirmation link to <strong>{email}</strong>. Once you click it, you&apos;ll be redirected into the secure setup flow and prompted for MFA.</>}
               </p>
               <Button
                 type="button"
@@ -236,7 +258,15 @@ export default function Login() {
                       const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
                         body: { email, full_name: fullName, action: "resend" },
                       });
-                      if (!fnError && !fnData?.error) sent = true;
+                      if (fnError) {
+                        const detail = await getFunctionErrorMessage(fnError);
+                        throw new Error(detail || fnError.message || "Failed to resend confirmation email.");
+                      }
+                      if (fnData?.error) throw new Error(fnData.error);
+                      if (fnData?.success) {
+                        sent = true;
+                        setRegistrationFlow(fnData?.flow === "invite" ? "invite" : "signup");
+                      }
                     } catch { /* edge function not deployed — fall back */ }
 
                     if (!sent) {
@@ -253,9 +283,15 @@ export default function Login() {
                   }
                 }}
               >
-                Resend confirmation email
+                {registrationFlow === "invite" ? "Resend invite email" : "Resend confirmation email"}
               </Button>
-              {resentConfirmation && <p className="text-xs text-emerald-600 mt-3">A new confirmation email has been sent.</p>}
+              {resentConfirmation && (
+                <p className="text-xs text-emerald-600 mt-3">
+                  {registrationFlow === "invite"
+                    ? "A new invite-completion email has been sent."
+                    : "A new confirmation email has been sent."}
+                </p>
+              )}
               <p className="text-slate-400 text-xs italic mt-3">
                 If you don&apos;t see it, check spam or confirm email delivery is enabled in Supabase Auth.
               </p>

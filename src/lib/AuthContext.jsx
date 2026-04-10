@@ -53,7 +53,13 @@ export const AuthProvider = ({ children }) => {
         return null;
       }
     } catch (err) {
-      console.error('[AuthContext] fetchProfile error:', err);
+      const isMissingSession =
+        err?.name === 'AuthSessionMissingError'
+        || String(err?.message || '').includes('Auth session missing');
+
+      if (!isMissingSession) {
+        console.error('[AuthContext] fetchProfile error:', err);
+      }
       setUser(null);
       setIsAuthenticated(false);
       setAuthError({

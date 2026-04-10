@@ -77,6 +77,7 @@ Deno.serve(async (req: Request) => {
     const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "https://cre-financial-suite-main.vercel.app";
     // After confirmation, land on a protected page so MFAGuard triggers enrollment
     const POST_CONFIRM_URL = `${FRONTEND_URL}/Onboarding`;
+    const INVITE_ACCEPT_URL = `${FRONTEND_URL}/AcceptInvite`;
     const FROM = "CRE Platform <support@cresuite.org>";
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -144,16 +145,25 @@ Deno.serve(async (req: Request) => {
 
     // ── RESEND flow ──────────────────────────────────────────────────────────
     if (action === "resend") {
+      const flow = await detectRegistrationFlow(admin, email);
       if (RESEND_API_KEY) {
-        const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
+        const redirectUrl = flow === "invite" ? INVITE_ACCEPT_URL : POST_CONFIRM_URL;
+        const link = await getAnyAuthLink(admin, email, redirectUrl);
         if (link) {
-          await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
-          console.log("[signup] Resend confirmation sent via Resend to:", email);
+          await sendFlowEmail({
+            resendKey: RESEND_API_KEY,
+            from: FROM,
+            email,
+            firstName: full_name || email.split("@")[0],
+            link,
+            flow,
+          });
+          console.log("[signup] Resend auth email sent via Resend to:", email, "flow:", flow);
         } else {
           console.error("[signup] Could not generate any auth link for resend:", email);
         }
       }
-      return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
+      return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -169,16 +179,45 @@ Deno.serve(async (req: Request) => {
     const { data: existingUsers } = await admin.auth.admin.listUsers();
     const existing = existingUsers?.users?.find((u: any) => u.email === email);
     if (existing) {
+      const flow = await detectRegistrationFlow(admin, email, existing.id);
+
+      if (flow === "invite") {
+        if (RESEND_API_KEY) {
+          const link = await getAnyAuthLink(admin, email, INVITE_ACCEPT_URL);
+          if (link) {
+            await sendFlowEmail({
+              resendKey: RESEND_API_KEY,
+              from: FROM,
+              email,
+              firstName: full_name || email.split("@")[0],
+              link,
+              flow,
+            });
+            console.log("[signup] Invite completion email sent for existing invited user:", email);
+          }
+        }
+        return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       if (!existing.email_confirmed_at) {
         // Exists but unconfirmed — resend confirmation
         if (RESEND_API_KEY) {
           const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
           if (link) {
-            await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
+            await sendFlowEmail({
+              resendKey: RESEND_API_KEY,
+              from: FROM,
+              email,
+              firstName: full_name || email.split("@")[0],
+              link,
+              flow: "signup",
+            });
             console.log("[signup] Resent confirmation for existing unconfirmed user:", email);
           }
         }
-        return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
+        return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -211,7 +250,14 @@ Deno.serve(async (req: Request) => {
     if (RESEND_API_KEY) {
       const link = await getAnyAuthLink(admin, email, POST_CONFIRM_URL);
       if (link) {
-        await sendConfirmEmail(RESEND_API_KEY, FROM, email, full_name || email.split("@")[0], link);
+        await sendFlowEmail({
+          resendKey: RESEND_API_KEY,
+          from: FROM,
+          email,
+          firstName: full_name || email.split("@")[0],
+          link,
+          flow: "signup",
+        });
         console.log("[signup] Confirmation email sent via Resend to:", email);
       } else {
         console.error("[signup] Failed to generate auth link for new user:", email);
@@ -220,7 +266,7 @@ Deno.serve(async (req: Request) => {
       console.warn("[signup] RESEND_API_KEY not set — no confirmation email sent");
     }
 
-    return new Response(JSON.stringify({ success: true, confirmationRequired: true }), {
+    return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
@@ -255,20 +301,80 @@ async function getAnyAuthLink(admin: any, email: string, frontendUrl: string): P
   return null;
 }
 
-async function sendConfirmEmail(
+async function detectRegistrationFlow(admin: any, email: string, userId?: string): Promise<"signup" | "invite"> {
+  try {
+    const queries = [
+      admin
+        .from("profiles")
+        .select("onboarding_type")
+        .eq("email", email)
+        .maybeSingle(),
+      admin
+        .from("invitations")
+        .select("id, status")
+        .eq("email", email)
+        .in("status", ["pending", "pending_approval"]),
+    ];
+
+    if (userId) {
+      queries.push(
+        admin
+          .from("memberships")
+          .select("status")
+          .eq("user_id", userId)
+          .eq("status", "invited")
+      );
+    }
+
+    const [profileRes, inviteRes, membershipRes] = await Promise.all(queries as any);
+    const profile = profileRes?.data;
+    const invitations = inviteRes?.data || [];
+    const memberships = membershipRes?.data || [];
+
+    if (profile?.onboarding_type === "invited") return "invite";
+    if (memberships.length > 0) return "invite";
+    if (invitations.length > 0 && !userId) return "invite";
+  } catch (error: any) {
+    console.error("[signup] detectRegistrationFlow error:", error?.message || error);
+  }
+
+  return "signup";
+}
+
+async function sendFlowEmail({
+  resendKey,
+  from,
+  email,
+  firstName,
+  link,
+  flow,
+}: {
   resendKey: string,
   from: string,
   email: string,
   firstName: string,
-  confirmLink: string,
-) {
-  const html = emailWrapper(`
-    <h1>Confirm your email address</h1>
-    <p>Hi ${firstName},</p>
-    <p>Thanks for signing up for CRE Platform! Click the button below to confirm your email and activate your account.</p>
-    <a href="${confirmLink}" class="cta">Confirm Email Address →</a>
-    <p class="note">This link expires in 24 hours. If you didn't create an account, you can safely ignore this email.</p>
-  `);
+  link: string,
+  flow: "signup" | "invite",
+}) {
+  const html = flow === "invite"
+    ? emailWrapper(`
+        <h1>Complete your invited account</h1>
+        <p>Hi ${firstName},</p>
+        <p>Your organization has already assigned your access in CRE Platform. Use the secure link below to set your password and activate your member workspace.</p>
+        <a href="${link}" class="cta">Complete Account Setup →</a>
+        <p class="note">This link signs you in securely so you can finish setup and review your assigned modules and pages.</p>
+      `)
+    : emailWrapper(`
+        <h1>Confirm your email address</h1>
+        <p>Hi ${firstName},</p>
+        <p>Thanks for signing up for CRE Platform! Click the button below to confirm your email and activate your account.</p>
+        <a href="${link}" class="cta">Confirm Email Address →</a>
+        <p class="note">This link expires in 24 hours. If you didn't create an account, you can safely ignore this email.</p>
+      `);
+
+  const subject = flow === "invite"
+    ? "Complete your CRE Platform account setup"
+    : "Confirm your CRE Platform account";
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -276,7 +382,7 @@ async function sendConfirmEmail(
     body: JSON.stringify({
       from,
       to: [email],
-      subject: "Confirm your CRE Platform account",
+      subject,
       html,
     }),
   });

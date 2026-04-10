@@ -37,6 +37,13 @@ export default function AcceptInvite() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const invitedName = session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name || "";
+    if (invitedName && !fullName) {
+      setFullName(invitedName);
+    }
+  }, [fullName, session]);
+
   const rules = [
     { label: "At least 8 characters", ok: password.length >= 8 },
     { label: "One uppercase letter",  ok: /[A-Z]/.test(password) },
@@ -63,18 +70,22 @@ export default function AcceptInvite() {
     try {
       await updateProfile({
         full_name: fullName || undefined,
+        status: "active",
         first_login: false,
         onboarding_complete: true,
+        dashboard_viewed: false,
       });
-      if (phone) {
-        await supabase.from("memberships")
-          .update({ phone, status: "active" })
-          .eq("user_id", session?.user?.id);
-      } else {
-        await supabase.from("memberships")
-          .update({ status: "active" })
-          .eq("user_id", session?.user?.id);
+      const membershipUpdate = supabase
+        .from("memberships")
+        .update(phone ? { phone, status: "active" } : { status: "active" })
+        .eq("user_id", session?.user?.id);
+
+      if (session?.user?.user_metadata?.org_id) {
+        membershipUpdate.eq("org_id", session.user.user_metadata.org_id);
       }
+
+      const { error: membershipError } = await membershipUpdate;
+      if (membershipError) throw membershipError;
       setStep(2);
     } catch (err) {
       toast.error("Failed to save profile: " + (err.message || "Unknown error"));
@@ -83,7 +94,7 @@ export default function AcceptInvite() {
   };
 
   const handleFinish = () => {
-    window.location.href = "/Dashboard";
+    window.location.href = "/WelcomeAboard";
   };
 
   return (
