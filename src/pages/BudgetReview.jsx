@@ -153,8 +153,6 @@ function buildCategoryComparison(currExpenses, prevExpenses) {
 
 export default function BudgetReview() {
   const location = useLocation();
-  const currentYear = new Date().getFullYear();
-  const prevYear = currentYear - 1;
 
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -189,6 +187,19 @@ export default function BudgetReview() {
     return true;
   });
 
+  const availableBudgetYears = useMemo(
+    () =>
+      [...new Set(
+        filteredBudgets
+          .map((budget) => Number(budget.budget_year || budget.fiscal_year))
+          .filter((year) => Number.isFinite(year) && year > 0)
+      )].sort((a, b) => b - a),
+    [filteredBudgets]
+  );
+
+  const currentYear = availableBudgetYears[0] || new Date().getFullYear();
+  const prevYear = availableBudgetYears.find((year) => year < currentYear) || currentYear - 1;
+
   const currBudgets = filteredBudgets.filter(b => (b.budget_year || b.fiscal_year) === currentYear);
   const prevBudgets = filteredBudgets.filter(b => (b.budget_year || b.fiscal_year) === prevYear);
 
@@ -211,6 +222,8 @@ export default function BudgetReview() {
   // Expense category analysis
   const scopedExpenses = expenses.filter(e => {
     if (scopeProperty !== "all" && e.property_id !== scopeProperty) return false;
+    if (scopeBuilding !== "all" && e.building_id !== scopeBuilding) return false;
+    if (scopeUnit !== "all" && e.unit_id !== scopeUnit) return false;
     return true;
   });
   const currExpenses = scopedExpenses.filter(e => e.fiscal_year === currentYear);
@@ -288,10 +301,18 @@ export default function BudgetReview() {
 
   const hasBothYears = currAgg.count > 0 && prevAgg.count > 0;
   const hasAnyBudget = currAgg.count > 0 || prevAgg.count > 0;
+  const subtitleScope = getScopeSubtitle(scope, {
+    default: `${filteredBudgets.length} budgets across the active scope`,
+    portfolio: (portfolio) => `${filteredBudgets.length} budgets in ${portfolio.name}`,
+    property: (property) => `${filteredBudgets.length} budgets for ${property.name}`,
+    building: (building) => `${filteredBudgets.length} budgets for ${building.name}`,
+    unit: (unit) => `${filteredBudgets.length} budgets for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
+    org: () => `${filteredBudgets.length} budgets in the selected organization`,
+  });
 
   return (
     <div className="space-y-6 p-6">
-      <PageHeader title="Budget Review" subtitle={`Year-over-year analysis: FY ${prevYear} vs FY ${currentYear}`}>
+      <PageHeader title="Budget Review" subtitle={`${subtitleScope} | Year-over-year analysis: FY ${prevYear} vs FY ${currentYear}`}>
         <div className="flex gap-2">
           {currBudgets[0] && (
             <Button variant="outline" size="sm" onClick={() => handleExport(currBudgets[0])}>

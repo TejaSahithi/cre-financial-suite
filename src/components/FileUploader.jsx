@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { supabase } from "@/services/supabaseClient";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,9 +19,11 @@ const ALL_FILE_TYPES = [
   { value: "expenses", label: "Expenses" },
   { value: "properties", label: "Properties" },
   { value: "revenue", label: "Revenue" },
+  { value: "budgets", label: "Budget" },
 ];
 
 const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".tsv"];
+const DEFAULT_ACCEPT = ACCEPTED_EXTENSIONS.join(",");
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 function formatFileSize(bytes) {
@@ -35,179 +37,228 @@ function getFileExtension(name) {
   return idx !== -1 ? name.slice(idx).toLowerCase() : "";
 }
 
+function normalizeFileType(value) {
+  return value === "budget" ? "budgets" : value;
+}
+
 /**
  * Reusable file upload component that sends files to the upload-handler
- * Edge Function and auto-triggers parsing on success.
+ * Edge Function and auto-triggers ingestion on success.
  *
  * @param {Object}   props
- * @param {Function} props.onUploadComplete  - called with the upload result object
- * @param {string}   [props.defaultFileType] - pre-selected file type
- * @param {string[]} [props.allowedFileTypes] - restrict dropdown options (default: all)
- * @param {string}   [props.propertyId]      - pre-selected property_id (passed to upload-handler)
+ * @param {Function} props.onUploadComplete
+ * @param {string}   [props.defaultFileType]
+ * @param {string[]} [props.allowedFileTypes]
+ * @param {string}   [props.propertyId]
+ * @param {string}   [props.orgId]
+ * @param {boolean}  [props.multiple]
+ * @param {string}   [props.accept]
  */
 export default function FileUploader({
   onUploadComplete,
   defaultFileType,
   allowedFileTypes,
   propertyId,
+  orgId: orgIdOverride,
+  multiple = false,
+  accept = DEFAULT_ACCEPT,
 }) {
   const { orgId } = useOrgId();
+  const resolvedOrgId = orgIdOverride ?? orgId;
   const fileInputRef = useRef(null);
 
-  // --- state ---
-  const [file, setFile] = useState(null);
-  const [fileType, setFileType] = useState(defaultFileType || "");
+  const [files, setFiles] = useState([]);
+  const [fileType, setFileType] = useState(normalizeFileType(defaultFileType || ""));
   const [dragOver, setDragOver] = useState(false);
-  const [uploadState, setUploadState] = useState("idle"); // idle | uploading | success | error
-  const [uploadResult, setUploadResult] = useState(null);
-  const [uploadError, setUploadError] = useState(null);
+  const [uploadState, setUploadState] = useState("idle"); // idle | uploading | success | partial | error
+  const [uploadResults, setUploadResults] = useState([]);
+  const [uploadErrors, setUploadErrors] = useState([]);
 
-  // Determine which file type options to show
-  const typeOptions = allowedFileTypes
-    ? ALL_FILE_TYPES.filter((ft) => allowedFileTypes.includes(ft.value))
+  const normalizedAllowedTypes = useMemo(
+    () => (allowedFileTypes || []).map((type) => normalizeFileType(type)),
+    [allowedFileTypes]
+  );
+
+  const typeOptions = normalizedAllowedTypes.length > 0
+    ? ALL_FILE_TYPES.filter((fileTypeOption) => normalizedAllowedTypes.includes(fileTypeOption.value))
     : ALL_FILE_TYPES;
 
-  // --- file validation ---
-  const validateFile = useCallback((f) => {
-    const ext = getFileExtension(f.name);
-    if (!ACCEPTED_EXTENSIONS.includes(ext)) {
-      return `Unsupported format "${ext}". Accepted: ${ACCEPTED_EXTENSIONS.join(", ")}`;
+  const validateFile = useCallback((file) => {
+    const extension = getFileExtension(file.name);
+    if (!ACCEPTED_EXTENSIONS.includes(extension)) {
+      return `Unsupported format "${extension}". Accepted: ${ACCEPTED_EXTENSIONS.join(", ")}`;
     }
-    if (f.size > MAX_FILE_SIZE) {
-      return `File exceeds 50 MB limit (${formatFileSize(f.size)}).`;
+    if (file.size > MAX_FILE_SIZE) {
+      return `File exceeds 50 MB limit (${formatFileSize(file.size)}).`;
     }
     return null;
   }, []);
 
+  const resetUploadFeedback = useCallback(() => {
+    setUploadState("idle");
+    setUploadResults([]);
+    setUploadErrors([]);
+  }, []);
+
   const handleFileSelect = useCallback(
-    (f) => {
-      const error = validateFile(f);
-      if (error) {
-        toast.error(error);
+    (fileList) => {
+      const nextFiles = Array.from(fileList || []);
+      if (!nextFiles.length) return;
+
+      const validFiles = [];
+      const validationErrors = [];
+
+      nextFiles.forEach((file) => {
+        const error = validateFile(file);
+        if (error) {
+          validationErrors.push(`${file.name}: ${error}`);
+          return;
+        }
+        validFiles.push(file);
+      });
+
+      if (!validFiles.length) {
+        toast.error(validationErrors[0] || "No valid files selected.");
         return;
       }
-      setFile(f);
-      setUploadState("idle");
-      setUploadResult(null);
-      setUploadError(null);
+
+      if (validationErrors.length > 0) {
+        toast.warning(validationErrors[0]);
+      }
+
+      setFiles(multiple ? validFiles : [validFiles[0]]);
+      resetUploadFeedback();
     },
-    [validateFile]
+    [multiple, resetUploadFeedback, validateFile]
   );
 
-  // --- drag & drop handlers ---
-  const onDragOver = useCallback((e) => {
-    e.preventDefault();
+  const onDragOver = useCallback((event) => {
+    event.preventDefault();
     setDragOver(true);
   }, []);
 
-  const onDragLeave = useCallback((e) => {
-    e.preventDefault();
+  const onDragLeave = useCallback((event) => {
+    event.preventDefault();
     setDragOver(false);
   }, []);
 
   const onDrop = useCallback(
-    (e) => {
-      e.preventDefault();
+    (event) => {
+      event.preventDefault();
       setDragOver(false);
-      const dropped = e.dataTransfer.files?.[0];
-      if (dropped) handleFileSelect(dropped);
+      handleFileSelect(event.dataTransfer.files);
     },
     [handleFileSelect]
   );
 
   const onInputChange = useCallback(
-    (e) => {
-      const selected = e.target.files?.[0];
-      if (selected) handleFileSelect(selected);
-      // reset so the same file can be selected again if needed
-      e.target.value = "";
+    (event) => {
+      handleFileSelect(event.target.files);
+      event.target.value = "";
     },
     [handleFileSelect]
   );
 
-  // --- upload ---
-  const handleUpload = useCallback(async () => {
-    if (!file) {
-      toast.error("Please select a file first.");
-      return;
-    }
-    if (!fileType) {
-      toast.error("Please select a file type.");
-      return;
-    }
-    if (!supabase) {
-      toast.error("Supabase client is not available.");
-      return;
-    }
+  const uploadSingleFile = useCallback(
+    async (file) => {
+      if (!supabase) {
+        throw new Error("Supabase client is not available.");
+      }
 
-    setUploadState("uploading");
-    setUploadError(null);
-    setUploadResult(null);
-
-    try {
-      // Build FormData for Edge Function
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("file_type", fileType);
-      if (orgId && orgId !== "__none__") {
-        formData.append("org_id", orgId);
+      formData.append("file_type", normalizeFileType(fileType));
+
+      if (resolvedOrgId && resolvedOrgId !== "__none__") {
+        formData.append("org_id", resolvedOrgId);
       }
+
       if (propertyId) {
         formData.append("property_id", propertyId);
       }
 
-      const { data, error } = await supabase.functions.invoke(
-        "upload-handler",
-        { body: formData }
-      );
-
+      const { data, error } = await supabase.functions.invoke("upload-handler", { body: formData });
       if (error) throw error;
 
-      setUploadResult(data);
-      setUploadState("success");
-      toast.success("File uploaded successfully.");
-
-      // Auto-trigger ingestion (routes to correct parser based on file type)
       if (data?.file_id) {
         try {
           await supabase.functions.invoke("ingest-file", {
-            body: { file_id: data.file_id, module_type: fileType },
+            body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
           });
-          toast.info("File processing started.");
-        } catch (parseErr) {
-          console.error("[FileUploader] ingest-file invocation failed:", parseErr);
-          toast.warning("Upload succeeded but processing could not be started.");
+        } catch (ingestError) {
+          console.error("[FileUploader] ingest-file invocation failed:", ingestError);
+          toast.warning(`"${file.name}" uploaded, but processing could not be started automatically.`);
         }
       }
 
-      if (onUploadComplete) onUploadComplete(data);
-    } catch (err) {
-      console.error("[FileUploader] upload failed:", err);
-      const message =
-        err?.message || err?.context?.message || "Upload failed. Please try again.";
-      setUploadError(message);
-      setUploadState("error");
-      toast.error(message);
+      return data;
+    },
+    [fileType, propertyId, resolvedOrgId]
+  );
+
+  const handleUpload = useCallback(async () => {
+    if (!files.length) {
+      toast.error("Please select at least one file first.");
+      return;
     }
-  }, [file, fileType, orgId, onUploadComplete]);
 
-  // --- retry ---
-  const handleRetry = useCallback(() => {
-    setUploadState("idle");
-    setUploadError(null);
-    setUploadResult(null);
-  }, []);
+    if (!fileType) {
+      toast.error("Please select a file type.");
+      return;
+    }
 
-  // --- reset ---
+    setUploadState("uploading");
+    setUploadResults([]);
+    setUploadErrors([]);
+
+    const results = [];
+    const errors = [];
+
+    for (const file of files) {
+      try {
+        const result = await uploadSingleFile(file);
+        results.push({ file_name: file.name, ...result });
+      } catch (error) {
+        console.error("[FileUploader] upload failed:", error);
+        const message =
+          error?.message || error?.context?.message || "Upload failed. Please try again.";
+        errors.push({ file_name: file.name, message });
+      }
+    }
+
+    setUploadResults(results);
+    setUploadErrors(errors);
+
+    if (results.length > 0 && errors.length === 0) {
+      setUploadState("success");
+      toast.success(`${results.length} file${results.length === 1 ? "" : "s"} uploaded successfully.`);
+      if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
+      return;
+    }
+
+    if (results.length > 0 && errors.length > 0) {
+      setUploadState("partial");
+      toast.warning(`${results.length} file${results.length === 1 ? "" : "s"} uploaded. ${errors.length} failed.`);
+      if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
+      return;
+    }
+
+    setUploadState("error");
+    toast.error(errors[0]?.message || "Upload failed. Please try again.");
+  }, [fileType, files, multiple, onUploadComplete, uploadSingleFile]);
+
   const handleReset = useCallback(() => {
-    setFile(null);
-    setFileType(defaultFileType || "");
+    setFiles([]);
+    setFileType(normalizeFileType(defaultFileType || ""));
+    setUploadResults([]);
+    setUploadErrors([]);
     setUploadState("idle");
-    setUploadResult(null);
-    setUploadError(null);
   }, [defaultFileType]);
 
-  // --- render ---
+  const selectedFileLabel = multiple
+    ? `${files.length} files selected`
+    : files[0]?.name || "No file selected";
+
   return (
     <Card className="w-full">
       <CardHeader>
@@ -218,7 +269,6 @@ export default function FileUploader({
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Drop zone */}
         <div
           role="button"
           tabIndex={0}
@@ -226,12 +276,12 @@ export default function FileUploader({
           onDragLeave={onDragLeave}
           onDrop={onDrop}
           onClick={() => fileInputRef.current?.click()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") fileInputRef.current?.click();
           }}
           className={`
-            flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8
-            cursor-pointer transition-colors
+            flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8
+            transition-colors
             ${
               dragOver
                 ? "border-blue-500 bg-blue-50"
@@ -239,83 +289,76 @@ export default function FileUploader({
             }
           `}
         >
-          <Upload
-            className={`w-8 h-8 ${dragOver ? "text-blue-500" : "text-slate-400"}`}
-          />
+          <Upload className={`w-8 h-8 ${dragOver ? "text-blue-500" : "text-slate-400"}`} />
           <p className="text-sm font-medium text-slate-600">
-            Drag and drop a file here, or click to select
+            {multiple ? "Drag and drop files here, or click to select" : "Drag and drop a file here, or click to select"}
           </p>
           <p className="text-xs text-slate-400">
-            Accepted: .csv, .xls, .xlsx, .pdf, .txt &mdash; Max 50 MB
+            Accepted: .csv, .xls, .xlsx, .pdf, .txt, .tsv - Max 50 MB each
           </p>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xls,.xlsx,.pdf,.txt,.tsv"
+            accept={accept}
+            multiple={multiple}
             className="hidden"
             onChange={onInputChange}
           />
         </div>
 
-        {/* Selected file info */}
-        {file && (
-          <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3">
-            <FileText className="w-5 h-5 text-slate-500 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-800 truncate">
-                {file.name}
-              </p>
-              <p className="text-xs text-slate-400">
-                {formatFileSize(file.size)} &mdash;{" "}
-                {getFileExtension(file.name).replace(".", "").toUpperCase()}
-              </p>
+        {files.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              {selectedFileLabel}
+            </p>
+            <div className="space-y-2">
+              {files.map((file) => (
+                <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3">
+                  <FileText className="w-5 h-5 shrink-0 text-slate-500" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-800">{file.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {formatFileSize(file.size)} - {getFileExtension(file.name).replace(".", "").toUpperCase()}
+                    </p>
+                  </div>
+                </div>
+              ))}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-slate-400 hover:text-slate-600"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleReset();
-              }}
-            >
-              <XCircle className="w-4 h-4" />
-            </Button>
           </div>
         )}
 
-        {/* File type selector */}
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+          <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
             File Type
           </label>
-          <Select value={fileType} onValueChange={setFileType}>
+          <Select value={fileType} onValueChange={(value) => setFileType(normalizeFileType(value))}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select file type..." />
             </SelectTrigger>
             <SelectContent>
-              {typeOptions.map((ft) => (
-                <SelectItem key={ft.value} value={ft.value}>
-                  {ft.label}
+              {typeOptions.map((fileTypeOption) => (
+                <SelectItem key={fileTypeOption.value} value={fileTypeOption.value}>
+                  {fileTypeOption.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
-        {/* Upload button */}
         {uploadState === "idle" && (
-          <Button
-            className="w-full"
-            disabled={!file || !fileType}
-            onClick={handleUpload}
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload
-          </Button>
+          <div className="flex gap-2">
+            <Button className="flex-1" disabled={!files.length || !fileType} onClick={handleUpload}>
+              <Upload className="w-4 h-4 mr-2" />
+              {multiple && files.length > 1 ? `Upload ${files.length} Files` : "Upload"}
+            </Button>
+            {files.length > 0 && (
+              <Button variant="outline" onClick={handleReset}>
+                Reset
+              </Button>
+            )}
+          </div>
         )}
 
-        {/* Uploading spinner */}
         {uploadState === "uploading" && (
           <Button className="w-full" disabled>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -323,51 +366,66 @@ export default function FileUploader({
           </Button>
         )}
 
-        {/* Success state */}
-        {uploadState === "success" && uploadResult && (
+        {(uploadState === "success" || uploadState === "partial") && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-              <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-emerald-800">
-                  Upload successful
+            <div className={`flex items-center gap-2 rounded-lg border p-3 ${
+              uploadState === "success"
+                ? "border-emerald-200 bg-emerald-50"
+                : "border-amber-200 bg-amber-50"
+            }`}>
+              <CheckCircle className={`w-5 h-5 shrink-0 ${
+                uploadState === "success" ? "text-emerald-600" : "text-amber-600"
+              }`} />
+              <div className="min-w-0 flex-1">
+                <p className={`text-sm font-medium ${
+                  uploadState === "success" ? "text-emerald-800" : "text-amber-800"
+                }`}>
+                  {uploadState === "success"
+                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}`
+                    : `Uploaded ${uploadResults.length} of ${files.length} files`}
                 </p>
-                {uploadResult.file_id && (
-                  <p className="text-xs text-emerald-600 truncate">
-                    File ID: {uploadResult.file_id}
-                  </p>
-                )}
-                {uploadResult.status && (
-                  <Badge variant="outline" className="mt-1 text-xs">
-                    {uploadResult.status}
-                  </Badge>
-                )}
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {uploadResults.map((result) => (
+                    <Badge key={`${result.file_id}-${result.file_name}`} variant="outline" className="text-xs">
+                      {result.file_name}
+                    </Badge>
+                  ))}
+                </div>
               </div>
             </div>
+
+            {uploadErrors.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3">
+                <p className="text-sm font-medium text-red-800">Files that need attention</p>
+                {uploadErrors.map((error) => (
+                  <p key={`${error.file_name}-${error.message}`} className="text-xs text-red-600">
+                    {error.file_name}: {error.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
             <Button variant="outline" className="w-full" onClick={handleReset}>
-              Upload Another File
+              Upload Another {multiple ? "Set of Files" : "File"}
             </Button>
           </div>
         )}
 
-        {/* Error state */}
         {uploadState === "error" && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <XCircle className="w-5 h-5 text-red-600 shrink-0" />
-              <div className="flex-1 min-w-0">
+            <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3">
+              <div className="flex items-center gap-2">
+                <XCircle className="w-5 h-5 shrink-0 text-red-600" />
                 <p className="text-sm font-medium text-red-800">Upload failed</p>
-                {uploadError && (
-                  <p className="text-xs text-red-600">{uploadError}</p>
-                )}
               </div>
+              {uploadErrors.map((error) => (
+                <p key={`${error.file_name}-${error.message}`} className="text-xs text-red-600">
+                  {error.file_name}: {error.message}
+                </p>
+              ))}
             </div>
             <div className="flex gap-2">
-              <Button
-                variant="destructive"
-                className="flex-1"
-                onClick={handleRetry}
-              >
+              <Button variant="destructive" className="flex-1" onClick={handleUpload}>
                 Retry
               </Button>
               <Button variant="outline" className="flex-1" onClick={handleReset}>
