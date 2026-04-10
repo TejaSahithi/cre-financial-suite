@@ -115,7 +115,7 @@ BEGIN
       'company_name', COALESCE(v_record.company_name, 'Unknown'),
       'role', COALESCE(v_record.role, 'Admin (Landlord)'),
       'onboarding_type', CASE
-        WHEN lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) IN ('admin', 'org_admin', 'super_admin', 'owner', 'organization_owner', 'admin_(landlord)', 'landlord_admin', 'admin_landlord')
+        WHEN lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) IN ('admin', 'org_admin', 'super_admin', 'owner', 'landlord', 'organization_owner', 'admin_(landlord)', 'landlord_admin', 'admin_landlord')
           OR lower(COALESCE(v_record.role, '')) LIKE '%owner%'
           OR lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) LIKE 'admin_%'
           OR lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) LIKE '%_admin'

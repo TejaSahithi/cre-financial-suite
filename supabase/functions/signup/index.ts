@@ -22,6 +22,7 @@ const OWNER_ROLE_ALIASES = new Set([
   "org_admin",
   "super_admin",
   "owner",
+  "landlord",
   "organization_owner",
   "admin_(landlord)",
   "landlord_admin",
