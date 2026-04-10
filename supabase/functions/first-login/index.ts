@@ -95,6 +95,13 @@ Deno.serve(async (req) => {
       (user.user_metadata?.onboarding_type as string | undefined) ||
       'owner';
 
+    // Owner-type signups (new org creators) should be auto-approved.
+    // They arrive with 'pending_approval' because they aren't in access_requests.
+    if (onboardingType === 'owner' && profile.status === 'pending_approval') {
+      await supabaseAdmin.from('profiles').update({ status: 'approved' }).eq('id', user.id);
+      profile.status = 'approved';
+    }
+
     if (!['approved', 'onboarding'].includes(profile.status)) {
       return new Response(JSON.stringify({ error: 'User is not in an onboarding-ready state', status: profile.status }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
