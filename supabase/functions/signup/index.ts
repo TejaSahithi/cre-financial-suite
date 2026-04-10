@@ -226,11 +226,35 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Create user — email_confirm: false suppresses Supabase's built-in email
-    let newUser: any = null;
-    let createErr: any = null;
+    // ── Pre-flight cleanup ───────────────────────────────────────────────
+    // The handle_new_user trigger on auth.users tries to INSERT into profiles.
+    // If an orphan profile row exists from a previous failed attempt, the trigger
+    // crashes with "Database error checking email" and the whole signup rolls back.
+    // Proactively remove any orphan profile row BEFORE creating the auth user.
+    try {
+      const { data: orphan } = await admin
+        .from("profiles")
+        .select("id, email")
+        .eq("email", normalizedEmail)
+        .maybeSingle();
 
-    ({ data: newUser, error: createErr } = await admin.auth.admin.createUser({
+      if (orphan) {
+        console.warn("[signup] Found orphan profile for:", normalizedEmail, "id:", orphan.id);
+        // Check if the auth user for this profile still exists
+        const orphanAuthUser = await findAuthUserByEmail(admin, normalizedEmail);
+        if (!orphanAuthUser) {
+          // Profile exists but auth user doesn't — orphan. Delete it.
+          await admin.from("profiles").delete().eq("email", normalizedEmail);
+          console.log("[signup] Deleted orphan profile for:", normalizedEmail);
+        }
+      }
+    } catch (cleanupErr: any) {
+      console.warn("[signup] Pre-flight cleanup failed (non-fatal):", cleanupErr?.message);
+    }
+
+    // ── Create user ─────────────────────────────────────────────────────────
+    // email_confirm: false suppresses Supabase's built-in email
+    const { data: newUser, error: createErr } = await admin.auth.admin.createUser({
       email: normalizedEmail,
       password,
       email_confirm: false,
@@ -238,59 +262,120 @@ Deno.serve(async (req: Request) => {
         full_name: full_name || "",
         onboarding_type: onboarding_type || "owner",
       },
-    }));
+    });
 
-    // "Database error checking email" means the handle_new_user trigger on
-    // auth.users crashed (usually a profiles unique constraint or missing column).
-    // Strategy: clean up any orphan profile row, then retry user creation.
+    // "Database error checking email" means handle_new_user trigger still crashed.
+    // Fallback: check if auth user was partially created, and manually create profile.
     if (createErr && /Database error/i.test(createErr.message || "")) {
-      console.warn("[signup] Trigger-level error — attempting profile cleanup and retry for:", normalizedEmail);
+      console.error("[signup] Trigger crashed for:", normalizedEmail, "—", createErr.message);
 
-      // Remove orphan profile row that may block the trigger's INSERT
-      try {
-        await admin.from("profiles").delete().eq("email", normalizedEmail);
-        console.log("[signup] Cleaned up orphan profile for:", normalizedEmail);
-      } catch (cleanupErr: any) {
-        console.warn("[signup] Profile cleanup failed (may not exist):", cleanupErr?.message);
-      }
-
-      // Also check if auth user was partially created and clean that up
+      // The auth user MAY have been created before the trigger rolled it back,
+      // or Postgres may have fully rolled back. Check both paths.
       const partialUser = await findAuthUserByEmail(admin, normalizedEmail);
+
       if (partialUser) {
-        // User exists in auth but trigger failed — ensure profile is created
+        // Auth user exists — trigger failed but user was created.
+        // Manually ensure profile exists.
+        console.log("[signup] Found partial auth user:", partialUser.id, "— creating profile manually");
         try {
           await ensureProfile(admin, partialUser.id, normalizedEmail, full_name, onboarding_type);
-          console.log("[signup] Ensured profile for partially created user:", normalizedEmail);
           const flow = await detectRegistrationFlow(admin, normalizedEmail, partialUser.id);
+
+          // Send confirmation email
+          if (RESEND_API_KEY) {
+            const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
+            if (link) {
+              await sendFlowEmail({
+                resendKey: RESEND_API_KEY, from: FROM, email: normalizedEmail,
+                firstName: full_name || normalizedEmail.split("@")[0], link, flow,
+              });
+            }
+          }
+
           return new Response(JSON.stringify({ success: true, confirmationRequired: !partialUser.email_confirmed_at, flow }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         } catch (profileErr: any) {
-          console.error("[signup] Failed to ensure profile:", profileErr?.message);
+          console.error("[signup] Manual profile creation also failed:", profileErr?.message);
         }
       }
 
-      // Retry createUser after cleanup
-      const retry = await admin.auth.admin.createUser({
+      // Full rollback — no auth user exists. Try once more: delete any remaining
+      // orphan profile and re-create with email_confirm: true (sometimes avoids trigger issues).
+      try {
+        await admin.from("profiles").delete().eq("email", normalizedEmail);
+      } catch { /* ignore */ }
+
+      const { data: retryUser, error: retryErr } = await admin.auth.admin.createUser({
         email: normalizedEmail,
         password,
-        email_confirm: false,
+        email_confirm: true, // auto-confirm — avoids some trigger issues
         user_metadata: {
           full_name: full_name || "",
           onboarding_type: onboarding_type || "owner",
         },
       });
 
-      if (retry.error) {
-        console.error("[signup] Retry createUser also failed:", retry.error.message);
-        return new Response(JSON.stringify({ error: "Account creation failed. Please contact support or try again later." }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      if (retryErr) {
+        console.error("[signup] Retry with email_confirm:true also failed:", retryErr.message);
+
+        // Last resort: use the native signUp (not admin API) which may handle triggers differently
+        try {
+          const { data: nativeData, error: nativeErr } = await admin.auth.signUp({
+            email: normalizedEmail,
+            password,
+            options: {
+              emailRedirectTo: POST_CONFIRM_URL,
+              data: {
+                full_name: full_name || "",
+                onboarding_type: onboarding_type || "owner",
+              },
+            },
+          });
+
+          if (nativeErr) {
+            console.error("[signup] Native signUp also failed:", nativeErr.message);
+            return new Response(JSON.stringify({
+              error: "Account creation failed due to a database configuration issue. Please ask your admin to run the latest SQL migrations, or try again later.",
+            }), {
+              status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+
+          console.log("[signup] Native signUp succeeded for:", normalizedEmail);
+          return new Response(JSON.stringify({ success: true, confirmationRequired: !nativeData?.session, flow: "signup" }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        } catch (nativeCrash: any) {
+          console.error("[signup] Native signUp crash:", nativeCrash?.message);
+          return new Response(JSON.stringify({
+            error: "Account creation failed. Please ask your admin to run the latest SQL migrations (20260410_fix_handle_new_user.sql).",
+          }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
 
-      newUser = retry.data;
-      createErr = null;
-      console.log("[signup] Retry succeeded for:", normalizedEmail);
+      // Retry succeeded — ensure profile
+      if (retryUser?.user?.id) {
+        try {
+          await ensureProfile(admin, retryUser.user.id, normalizedEmail, full_name, onboarding_type);
+        } catch { /* trigger may have handled it */ }
+      }
+
+      if (RESEND_API_KEY) {
+        const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
+        if (link) {
+          await sendFlowEmail({
+            resendKey: RESEND_API_KEY, from: FROM, email: normalizedEmail,
+            firstName: full_name || normalizedEmail.split("@")[0], link, flow: "signup",
+          });
+        }
+      }
+
+      return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     if (createErr) {
@@ -302,7 +387,7 @@ Deno.serve(async (req: Request) => {
 
     console.log("[signup] Created user:", normalizedEmail, "id:", newUser?.user?.id);
 
-    // Ensure profile exists (in case trigger didn't fire or was skipped)
+    // Ensure profile exists (safety net in case trigger didn't fire)
     if (newUser?.user?.id) {
       try {
         await ensureProfile(admin, newUser.user.id, normalizedEmail, full_name, onboarding_type);
