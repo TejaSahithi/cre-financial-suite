@@ -126,7 +126,24 @@ export default function FileUploader({
         toast.warning(validationErrors[0]);
       }
 
-      setFiles(multiple ? validFiles : [validFiles[0]]);
+      setFiles((currentFiles) => {
+        if (!multiple) return [validFiles[0]];
+
+        const mergedFiles = [...currentFiles];
+        const seen = new Set(
+          currentFiles.map((file) => `${file.name}:${file.size}:${file.lastModified}`),
+        );
+
+        validFiles.forEach((file) => {
+          const key = `${file.name}:${file.size}:${file.lastModified}`;
+          if (!seen.has(key)) {
+            mergedFiles.push(file);
+            seen.add(key);
+          }
+        });
+
+        return mergedFiles;
+      });
       resetUploadFeedback();
     },
     [multiple, resetUploadFeedback, validateFile]

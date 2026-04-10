@@ -1614,11 +1614,7 @@ export default function UserManagement() {
 
       const { data: membershipRows, error: membershipError } = await supabase
         .from("memberships")
-        .select(`
-          id, user_id, role, status, phone, custom_role,
-          module_permissions, page_permissions, capabilities,
-          created_at, updated_at
-        `)
+        .select("*")
         .eq("org_id", activeOrgId)
         .neq("role", "super_admin");
       if (membershipError) throw membershipError;
@@ -1630,12 +1626,12 @@ export default function UserManagement() {
         userIds.length > 0
           ? supabase
               .from("profiles")
-              .select("id, full_name, email, phone, status, last_sign_in_at, avatar_url")
+              .select("*")
               .in("id", userIds)
           : Promise.resolve({ data: [], error: null }),
         supabase
           .from("invitations")
-          .select("id, email, org_id, role, status, created_at, updated_at, expires_at")
+          .select("*")
           .eq("org_id", activeOrgId)
           .in("status", ["pending", "pending_approval"]),
       ]);
