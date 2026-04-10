@@ -53,17 +53,27 @@ export async function verifyUser(req: Request) {
 export async function getUserOrgId(userId: string, supabaseAdmin: any): Promise<string> {
   const { data: memberships, error } = await supabaseAdmin
     .from('memberships')
-    .select('org_id')
-    .eq('user_id', userId)
-    .limit(1);
+    .select('org_id, role')
+    .eq('user_id', userId);
 
   if (!error && memberships && memberships.length > 0) {
-    return memberships[0].org_id;
+    // Super admins may have a membership with org_id = NULL.
+    // Try to find a membership with a real org_id first.
+    const withOrg = memberships.find((m: any) => m.org_id != null);
+    if (withOrg) return withOrg.org_id;
+
+    // Super admin with no org_id — fall through to pick the first org in the system.
+    const isSuperAdmin = memberships.some((m: any) => m.role === 'super_admin');
+    if (!isSuperAdmin) {
+      throw new Error('User membership has no organization');
+    }
   }
 
+  // Fallback: pick the first organization (for super admins or users with no membership)
   const { data: org, error: orgError } = await supabaseAdmin
     .from('organizations')
     .select('id')
+    .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -71,5 +81,6 @@ export async function getUserOrgId(userId: string, supabaseAdmin: any): Promise<
     throw new Error('User has no organization membership');
   }
 
+  console.log("[getUserOrgId] Resolved org_id via fallback:", org.id, "for user:", userId);
   return org.id;
 }
