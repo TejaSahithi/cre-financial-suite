@@ -815,13 +815,13 @@ function calculatePool(
 
 function resolvedAllocationMethod(
   lease: LeaseState,
-  pool: PoolDefinition,
+  pool: PoolDefinition | undefined | null,
   propertyRules: ReturnType<typeof normalizePropertyRules>,
 ): string {
   const configured = String(lease.allocation_method || "").toLowerCase();
   const propertyDefault = String(propertyRules.allocation_method || "").toLowerCase();
   const denominatorMode = String(
-    pool.scope === "building"
+    pool?.scope === "building"
       ? propertyRules.building_pool_denominator_mode
       : propertyRules.property_pool_denominator_mode,
   ).toLowerCase();
@@ -1322,9 +1322,13 @@ export function calculateCam(input: CamCalculatorInput) {
       proration_months: billedMonths,
       occupancy_ratio: lease.occupancy_ratio,
       vacancy_handling: propertyRules.vacancy_handling,
-      allocation_model: resolvedAllocationMethod(lease, allPools.find((pool) =>
-        pool.scope === "building" ? pool.scope_id === lease.building_id : pool.scope_id === lease.property_id
-      ) ?? allPools[0], propertyRules),
+      allocation_model: resolvedAllocationMethod(
+        lease,
+        allPools.find((pool) =>
+          pool.scope === "building" ? pool.scope_id === lease.building_id : pool.scope_id === lease.property_id
+        ) ?? allPools[0] ?? null,
+        propertyRules,
+      ),
       tenant_share_pct: tenantSharePct,
       cap_applied: lease.cap_adjustment > 0,
       cap_amount: lease.cam_cap_amount,
