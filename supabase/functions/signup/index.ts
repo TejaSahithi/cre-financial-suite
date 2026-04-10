@@ -604,8 +604,10 @@ async function ensureProfile(
     } catch { /* table may not exist */ }
   }
 
-  const profileStatus = isAuthorized ? "approved" : "pending_approval";
   const resolvedType = onboardingType || "owner";
+  // Owner-type signups (new org creators) are self-approving — they don't need
+  // to be in access_requests. Only invited/member types need pre-approval.
+  const profileStatus = (isAuthorized || resolvedType === "owner") ? "approved" : "pending_approval";
 
   const { error } = await admin.from("profiles").upsert(
     {
