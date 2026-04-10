@@ -65,10 +65,12 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
 
 const RbacGuard = ({ pageName, children }) => {
   const { user } = useAuth();
-  const { isPageEnabled } = useModuleAccess();
+  const { isPageEnabled, pageAccess } = useModuleAccess();
   // Public pages and loading states — allow through
   if (publicPages.includes(pageName) || !user) return children;
-  if (!canAccess(user.role, pageName)) {
+  const hasExplicitPagePermissions = Object.keys(pageAccess || {}).length > 0;
+  const roleAllowsPage = hasExplicitPagePermissions ? Boolean(pageAccess?.[pageName]) : canAccess(user.role, pageName);
+  if (!roleAllowsPage) {
     return (
       <LayoutWrapper currentPageName={pageName}>
         <AccessDenied />

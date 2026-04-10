@@ -114,6 +114,24 @@ const ROLE_PAGES = {
   ],
 };
 
+const ROLE_ALIASES = {
+  asset_manager: "manager",
+  portfolio_manager: "manager",
+  operations_director: "manager",
+  facility_manager: "manager",
+  construction_manager: "manager",
+  acquisitions_mgr: "manager",
+  cfo_controller: "finance",
+  accounts_manager: "finance",
+  financial_analyst: "editor",
+  investor_relations: "viewer",
+  leasing_director: "manager",
+  leasing_agent: "editor",
+  lease_admin: "editor",
+  compliance_officer: "auditor",
+  internal_auditor: "auditor",
+};
+
 // Pages that don't require auth / are public
 const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "AwaitingRole"];
 
@@ -123,6 +141,16 @@ const MANDATORY_SETUP_PAGES = ["Onboarding", "Welcome", "WelcomeAboard", "Paymen
 // SuperAdmin-only pages
 const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
 
+export function resolveRoleForAccess(role) {
+  if (!role) return role;
+  return ROLE_ALIASES[role] || role;
+}
+
+export function getAllowedPagesForRole(role) {
+  const resolvedRole = resolveRoleForAccess(role);
+  return ROLE_PAGES[resolvedRole] || [];
+}
+
 /**
  * Check if a user role can access a given page.
  * @param {string} role - user role
@@ -130,13 +158,14 @@ const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
  * @returns {boolean}
  */
 export function canAccess(role, pageName) {
+  const resolvedRole = resolveRoleForAccess(role);
   if (!pageName) return true;
   if (PUBLIC_PAGES.includes(pageName)) return true;
   if (MANDATORY_SETUP_PAGES.includes(pageName)) return true;
   // SuperAdmin sees everything — support both mapped 'admin' and raw 'super_admin'
-  if (role === "admin" || role === "super_admin") return true;
+  if (resolvedRole === "admin" || resolvedRole === "super_admin") return true;
   if (ADMIN_ONLY_PAGES.includes(pageName)) return false;
-  const allowedPages = ROLE_PAGES[role];
+  const allowedPages = ROLE_PAGES[resolvedRole];
   if (!allowedPages) return false; // Unknown role — deny access
   return allowedPages.includes(pageName);
 }
@@ -147,11 +176,12 @@ export function canAccess(role, pageName) {
  * @returns {{ canRead: boolean, canWrite: boolean, canManage: boolean, canAdmin: boolean }}
  */
 export function getPermissions(role) {
+  const resolvedRole = resolveRoleForAccess(role);
   return {
     canRead: true, // all roles can read
-    canWrite: ['admin', 'super_admin', 'org_admin', 'manager', 'editor', 'finance', 'property_manager'].includes(role),
-    canManage: ['admin', 'super_admin', 'org_admin', 'manager', 'property_manager'].includes(role),
-    canAdmin: ['admin', 'super_admin', 'org_admin'].includes(role),
+    canWrite: ['admin', 'super_admin', 'org_admin', 'manager', 'editor', 'finance', 'property_manager'].includes(resolvedRole),
+    canManage: ['admin', 'super_admin', 'org_admin', 'manager', 'property_manager'].includes(resolvedRole),
+    canAdmin: ['admin', 'super_admin', 'org_admin'].includes(resolvedRole),
   };
 }
 
@@ -161,10 +191,11 @@ export function getPermissions(role) {
  */
 export function filterNavForRole(navSections, role) {
   if (!role) return [];
+  const resolvedRole = resolveRoleForAccess(role);
   // SuperAdmin sees all nav items
-  const isSuperAdmin = role === "admin" || role === "super_admin";
+  const isSuperAdmin = resolvedRole === "admin" || resolvedRole === "super_admin";
   
-  const allowed = ROLE_PAGES[role];
+  const allowed = ROLE_PAGES[resolvedRole];
   const allowedSet = new Set(allowed || []);
   
   return navSections
@@ -190,4 +221,23 @@ export function filterNavForRole(navSections, role) {
     .filter(Boolean);
 }
 
-export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, MANDATORY_SETUP_PAGES };
+export function filterNavForAllowedPages(navSections, allowedPages) {
+  const allowedSet = new Set(allowedPages || []);
+  return navSections
+    .map((item) => {
+      if (item.page) {
+        return allowedSet.has(item.page) ? item : null;
+      }
+
+      if (item.children) {
+        const filteredChildren = item.children.filter((child) => allowedSet.has(child.page));
+        if (filteredChildren.length === 0) return null;
+        return { ...item, children: filteredChildren };
+      }
+
+      return item;
+    })
+    .filter(Boolean);
+}
+
+export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, ROLE_ALIASES, MANDATORY_SETUP_PAGES };

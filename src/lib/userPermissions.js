@@ -1,7 +1,7 @@
 // User Management v2 — Permission System Constants & Helpers
 // Role = default template, Access = override layer
 
-import { ROLE_PAGES } from "@/lib/rbac";
+import { getAllowedPagesForRole, resolveRoleForAccess } from "@/lib/rbac";
 import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
 // ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
@@ -107,7 +107,7 @@ export function getRoleDefaultModulePerms(roleStr) {
 
   const allowedPages = new Set();
   roles.forEach(role => {
-    (ROLE_PAGES[role] || []).forEach(p => allowedPages.add(p));
+    getAllowedPagesForRole(role).forEach((p) => allowedPages.add(p));
   });
 
   const perms = {};
@@ -160,9 +160,11 @@ export function resolveEffectivePermissions(roleStr, modulePerms, pagePerms, cap
   const roles = parseRoles(roleStr);
   const baseCaps = {};
   roles.forEach(role => {
-    const def = getRoleDefinition(role)?.defaultCapabilities || {};
-    Object.keys(def).forEach(k => {
-      if (def[k]) baseCaps[k] = true;
+    const resolvedRole = resolveRoleForAccess(role);
+    const def = getRoleDefinition(role) || getRoleDefinition(resolvedRole);
+    const caps = def?.defaultCapabilities || {};
+    Object.keys(caps).forEach(k => {
+      if (caps[k]) baseCaps[k] = true;
     });
   });
 
