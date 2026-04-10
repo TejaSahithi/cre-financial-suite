@@ -281,6 +281,46 @@ function createBudgetExportRow(partial: Record<string, any>): Record<string, any
   };
 }
 
+async function fetchBudgetRevenueDetails({
+  supabaseAdmin,
+  orgId,
+  propertyId,
+  fiscalYear,
+}: {
+  supabaseAdmin: any;
+  orgId: string;
+  propertyId: string;
+  fiscalYear: number;
+}) {
+  const safeSelect = "property_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name";
+
+  let result = await supabaseAdmin
+    .from("revenues")
+    .select(safeSelect)
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("fiscal_year", fiscalYear)
+    .order("date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+
+  if (
+    result.error &&
+    /revenues\.(building_id|unit_id)\s+does not exist/i.test(result.error.message || "")
+  ) {
+    console.warn("[export-data] Retrying revenue detail export without legacy hierarchy columns");
+    result = await supabaseAdmin
+      .from("revenues")
+      .select("lease_id, fiscal_year, month, type, amount, notes, date, tenant_name")
+      .eq("org_id", orgId)
+      .eq("property_id", propertyId)
+      .eq("fiscal_year", fiscalYear)
+      .order("date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+  }
+
+  return result;
+}
+
 async function buildBudgetExportRows({
   supabaseAdmin,
   orgId,
@@ -314,14 +354,12 @@ async function buildBudgetExportRows({
       .eq("fiscal_year", fiscalYear)
       .order("date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true }),
-    supabaseAdmin
-      .from("revenues")
-      .select("property_id, lease_id, fiscal_year, month, type, amount, notes, date, tenant_name")
-      .eq("org_id", orgId)
-      .eq("property_id", propertyId)
-      .eq("fiscal_year", fiscalYear)
-      .order("date", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true }),
+    fetchBudgetRevenueDetails({
+      supabaseAdmin,
+      orgId,
+      propertyId,
+      fiscalYear,
+    }),
     supabaseAdmin
       .from("leases")
       .select("id, property_id, unit_id, tenant_name, start_date, end_date, monthly_rent, annual_rent, square_footage, status, lease_type, cam_amount, nnn_amount, escalation_rate, notes")
