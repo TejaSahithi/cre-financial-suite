@@ -17,6 +17,17 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
+const OWNER_ROLE_ALIASES = new Set([
+  "admin",
+  "org_admin",
+  "super_admin",
+  "owner",
+  "organization_owner",
+  "admin_(landlord)",
+  "landlord_admin",
+  "admin_landlord",
+]);
+
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin || "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -99,6 +110,8 @@ Deno.serve(async (req: Request) => {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const resolvedOnboardingType = await resolveOnboardingType(admin, normalizedEmail, onboarding_type);
 
     // ── FORGOT PASSWORD flow ─────────────────────────────────────────────────
     if (action === "forgot_password") {
@@ -260,7 +273,7 @@ Deno.serve(async (req: Request) => {
       email_confirm: false,
       user_metadata: {
         full_name: full_name || "",
-        onboarding_type: onboarding_type || "owner",
+        onboarding_type: resolvedOnboardingType,
       },
     });
 
@@ -278,7 +291,7 @@ Deno.serve(async (req: Request) => {
         // Manually ensure profile exists.
         console.log("[signup] Found partial auth user:", partialUser.id, "— creating profile manually");
         try {
-          await ensureProfile(admin, partialUser.id, normalizedEmail, full_name, onboarding_type);
+          await ensureProfile(admin, partialUser.id, normalizedEmail, full_name, resolvedOnboardingType);
           const flow = await detectRegistrationFlow(admin, normalizedEmail, partialUser.id);
 
           // Send confirmation email
@@ -312,7 +325,7 @@ Deno.serve(async (req: Request) => {
         email_confirm: true, // auto-confirm — avoids some trigger issues
         user_metadata: {
           full_name: full_name || "",
-          onboarding_type: onboarding_type || "owner",
+          onboarding_type: resolvedOnboardingType,
         },
       });
 
@@ -328,7 +341,7 @@ Deno.serve(async (req: Request) => {
               emailRedirectTo: POST_CONFIRM_URL,
               data: {
                 full_name: full_name || "",
-                onboarding_type: onboarding_type || "owner",
+                onboarding_type: resolvedOnboardingType,
               },
             },
           });
@@ -359,7 +372,7 @@ Deno.serve(async (req: Request) => {
       // Retry succeeded — ensure profile
       if (retryUser?.user?.id) {
         try {
-          await ensureProfile(admin, retryUser.user.id, normalizedEmail, full_name, onboarding_type);
+          await ensureProfile(admin, retryUser.user.id, normalizedEmail, full_name, resolvedOnboardingType);
         } catch { /* trigger may have handled it */ }
       }
 
@@ -390,7 +403,7 @@ Deno.serve(async (req: Request) => {
     // Ensure profile exists (safety net in case trigger didn't fire)
     if (newUser?.user?.id) {
       try {
-        await ensureProfile(admin, newUser.user.id, normalizedEmail, full_name, onboarding_type);
+        await ensureProfile(admin, newUser.user.id, normalizedEmail, full_name, resolvedOnboardingType);
       } catch (profileErr: any) {
         console.warn("[signup] ensureProfile after create:", profileErr?.message);
       }
@@ -473,6 +486,55 @@ async function findAuthUserByEmail(admin: any, email: string) {
   }
 
   return null;
+}
+
+function normalizeRole(role: string | null | undefined) {
+  return String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isOwnerLikeRole(role: string | null | undefined) {
+  const normalizedRole = normalizeRole(role);
+  if (!normalizedRole) return false;
+  if (OWNER_ROLE_ALIASES.has(normalizedRole)) return true;
+  if (normalizedRole.startsWith("admin_") || normalizedRole.endsWith("_admin")) return true;
+  return normalizedRole.includes("owner");
+}
+
+async function resolveOnboardingType(admin: any, email: string, requestedType?: string) {
+  const normalizedRequestedType = String(requestedType || "").trim().toLowerCase();
+
+  try {
+    const [{ data: invitation }, { data: accessRequest }] = await Promise.all([
+      admin
+        .from("invitations")
+        .select("id, role, status")
+        .ilike("email", email)
+        .in("status", ["pending", "pending_approval"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      admin
+        .from("access_requests")
+        .select("id, role, status")
+        .ilike("email", email)
+        .eq("status", "approved")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    if (invitation) return "invited";
+    if (isOwnerLikeRole(accessRequest?.role)) return "owner";
+  } catch (error: any) {
+    console.warn("[signup] resolveOnboardingType warning:", error?.message || error);
+  }
+
+  if (normalizedRequestedType === "invited") return "invited";
+  if (normalizedRequestedType === "member") return "member";
+  return "owner";
 }
 
 async function detectRegistrationFlow(admin: any, email: string, userId?: string): Promise<"signup" | "invite"> {
