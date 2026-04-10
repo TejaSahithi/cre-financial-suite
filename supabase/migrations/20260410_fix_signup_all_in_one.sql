@@ -59,7 +59,11 @@ BEGIN
       email            = EXCLUDED.email,
       full_name        = COALESCE(EXCLUDED.full_name, profiles.full_name),
       onboarding_type  = COALESCE(EXCLUDED.onboarding_type, profiles.onboarding_type),
-      status           = CASE WHEN v_is_authorized THEN 'approved' ELSE profiles.status END,
+      status           = CASE
+        WHEN v_is_authorized THEN 'approved'
+        WHEN COALESCE(EXCLUDED.onboarding_type, 'owner') = 'owner' THEN 'approved'
+        ELSE profiles.status
+      END,
       onboarding_complete = CASE
         WHEN EXCLUDED.onboarding_type = 'invited' THEN TRUE
         ELSE profiles.onboarding_complete
@@ -70,7 +74,11 @@ BEGIN
       UPDATE public.profiles
       SET id = NEW.id,
           full_name = COALESCE(NEW.raw_user_meta_data->>'full_name', profiles.full_name),
-          status = CASE WHEN v_is_authorized THEN 'approved' ELSE profiles.status END
+          status = CASE
+            WHEN v_is_authorized THEN 'approved'
+            WHEN COALESCE(NEW.raw_user_meta_data->>'onboarding_type', 'owner') = 'owner' THEN 'approved'
+            ELSE profiles.status
+          END
       WHERE email = NEW.email;
     WHEN OTHERS THEN
       RAISE WARNING '[handle_new_user] Profile insert failed for %: %', NEW.email, SQLERRM;
@@ -105,17 +113,25 @@ BEGIN
     RETURN json_build_object(
       'valid', true,
       'company_name', COALESCE(v_record.company_name, 'Unknown'),
-      'role', COALESCE(v_record.role, 'Admin (Landlord)')
+      'role', COALESCE(v_record.role, 'Admin (Landlord)'),
+      'onboarding_type', CASE
+        WHEN lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) IN ('admin', 'org_admin', 'super_admin', 'owner', 'organization_owner', 'admin_(landlord)', 'landlord_admin', 'admin_landlord')
+          OR lower(COALESCE(v_record.role, '')) LIKE '%owner%'
+          OR lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) LIKE 'admin_%'
+          OR lower(replace(replace(COALESCE(v_record.role, ''), ' ', '_'), '-', '_')) LIKE '%_admin'
+        THEN 'owner'
+        ELSE 'member'
+      END
     );
   END IF;
 
   -- Check pending invitations
   SELECT i.org_id, o.name AS org_name, i.role
     INTO v_invite
-    FROM public.invitations i
+   FROM public.invitations i
     LEFT JOIN public.organizations o ON o.id = i.org_id
    WHERE i.email = lower(trim(p_email))
-     AND i.status = 'pending'
+     AND i.status IN ('pending', 'pending_approval')
    ORDER BY i.created_at DESC
    LIMIT 1;
 
@@ -123,7 +139,8 @@ BEGIN
     RETURN json_build_object(
       'valid', true,
       'company_name', COALESCE(v_invite.org_name, 'Your Organization'),
-      'role', COALESCE(v_invite.role, 'Member')
+      'role', COALESCE(v_invite.role, 'Member'),
+      'onboarding_type', 'invited'
     );
   END IF;
 

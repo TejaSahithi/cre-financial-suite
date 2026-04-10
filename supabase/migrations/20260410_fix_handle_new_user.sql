@@ -41,14 +41,22 @@ BEGIN
     COALESCE(NEW.raw_user_meta_data->>'onboarding_type', 'owner'),
     CASE WHEN (NEW.raw_user_meta_data->>'onboarding_type') = 'invited' THEN TRUE ELSE FALSE END,
     TRUE,
-    CASE WHEN v_is_authorized THEN 'approved' ELSE 'pending_approval' END
+    CASE
+      WHEN v_is_authorized THEN 'approved'
+      WHEN COALESCE(NEW.raw_user_meta_data->>'onboarding_type', 'owner') = 'owner' THEN 'approved'
+      ELSE 'pending_approval'
+    END
   )
   ON CONFLICT (id) DO UPDATE
     SET
       email            = EXCLUDED.email,
       full_name        = COALESCE(EXCLUDED.full_name, profiles.full_name),
       onboarding_type  = COALESCE(EXCLUDED.onboarding_type, profiles.onboarding_type),
-      status           = CASE WHEN v_is_authorized THEN 'approved' ELSE profiles.status END,
+      status           = CASE
+        WHEN v_is_authorized THEN 'approved'
+        WHEN COALESCE(EXCLUDED.onboarding_type, 'owner') = 'owner' THEN 'approved'
+        ELSE profiles.status
+      END,
       onboarding_complete = CASE
         WHEN EXCLUDED.onboarding_type = 'invited' THEN TRUE
         ELSE profiles.onboarding_complete
@@ -64,7 +72,11 @@ EXCEPTION WHEN unique_violation THEN
   SET id = NEW.id,
       full_name = COALESCE(NEW.raw_user_meta_data->>'full_name', profiles.full_name),
       onboarding_type = COALESCE(NEW.raw_user_meta_data->>'onboarding_type', profiles.onboarding_type),
-      status = CASE WHEN v_is_authorized THEN 'approved' ELSE profiles.status END
+      status = CASE
+        WHEN v_is_authorized THEN 'approved'
+        WHEN COALESCE(NEW.raw_user_meta_data->>'onboarding_type', 'owner') = 'owner' THEN 'approved'
+        ELSE profiles.status
+      END
   WHERE email = NEW.email;
   RETURN NEW;
 

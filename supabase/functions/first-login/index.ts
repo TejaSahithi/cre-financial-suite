@@ -1,6 +1,32 @@
 // @ts-nocheck
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
+const OWNER_ROLE_ALIASES = new Set([
+  "admin",
+  "org_admin",
+  "super_admin",
+  "owner",
+  "organization_owner",
+  "admin_(landlord)",
+  "landlord_admin",
+  "admin_landlord",
+]);
+
+function normalizeRole(role) {
+  return String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isOwnerLikeRole(role) {
+  const normalizedRole = normalizeRole(role);
+  if (!normalizedRole) return false;
+  if (OWNER_ROLE_ALIASES.has(normalizedRole)) return true;
+  if (normalizedRole.startsWith("admin_") || normalizedRole.endsWith("_admin")) return true;
+  return normalizedRole.includes("owner");
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -48,20 +74,27 @@ Deno.serve(async (req) => {
       const [{ data: approvedRequest }, { data: invitation }] = await Promise.all([
         supabaseAdmin
           .from('access_requests')
-          .select('id')
-          .eq('email', user.email)
+          .select('id, role')
+          .ilike('email', user.email)
           .eq('status', 'approved')
+          .order('created_at', { ascending: false })
+          .limit(1)
           .maybeSingle(),
         supabaseAdmin
           .from('invitations')
           .select('id')
-          .eq('email', user.email)
+          .ilike('email', user.email)
+          .in('status', ['pending', 'pending_approval'])
+          .order('created_at', { ascending: false })
+          .limit(1)
           .maybeSingle(),
       ]);
 
       isAuthorized = !!approvedRequest || !!invitation;
 
       const fallbackOnboardingType =
+        invitation ? 'invited' :
+        (isOwnerLikeRole(approvedRequest?.role) ? 'owner' : null) ||
         (user.user_metadata?.onboarding_type as string | undefined) ||
         (user.app_metadata?.onboarding_type as string | undefined) ||
         'owner';
@@ -77,7 +110,7 @@ Deno.serve(async (req) => {
         onboarding_type: fallbackOnboardingType,
         onboarding_complete: fallbackOnboardingType === 'invited',
         first_login: true,
-        status: isAuthorized ? 'approved' : 'pending_approval',
+        status: (isAuthorized || fallbackOnboardingType === 'owner') ? 'approved' : 'pending_approval',
       };
 
       const { data: createdProfile, error: createProfileError } = await supabaseAdmin
@@ -90,10 +123,39 @@ Deno.serve(async (req) => {
       profile = createdProfile;
     }
 
+    const [{ data: approvedRequest }, { data: invitation }] = await Promise.all([
+      supabaseAdmin
+        .from('access_requests')
+        .select('id, role')
+        .ilike('email', user.email)
+        .eq('status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('invitations')
+        .select('id')
+        .ilike('email', user.email)
+        .in('status', ['pending', 'pending_approval'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
     const onboardingType =
+      invitation ? 'invited' :
+      (isOwnerLikeRole(approvedRequest?.role) ? 'owner' : null) ||
       profile.onboarding_type ||
       (user.user_metadata?.onboarding_type as string | undefined) ||
       'owner';
+
+    if (profile.onboarding_type !== onboardingType) {
+      await supabaseAdmin
+        .from('profiles')
+        .update({ onboarding_type: onboardingType })
+        .eq('id', user.id);
+      profile.onboarding_type = onboardingType;
+    }
 
     // Owner-type signups (new org creators) should be auto-approved.
     // They arrive with 'pending_approval' because they aren't in access_requests.

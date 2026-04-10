@@ -27,6 +27,29 @@ async function getFunctionErrorMessage(fnError) {
   return detail;
 }
 
+function resolveSignupOnboardingType(verifiedRole) {
+  const normalizedRole = String(verifiedRole || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  const explicitOwnerRoles = new Set([
+    "admin",
+    "org_admin",
+    "super_admin",
+    "owner",
+    "organization_owner",
+    "admin_(landlord)",
+    "landlord_admin",
+    "admin_landlord",
+  ]);
+
+  if (explicitOwnerRoles.has(normalizedRole)) return "owner";
+  if (normalizedRole.startsWith("admin_") || normalizedRole.endsWith("_admin")) return "owner";
+  if (normalizedRole.includes("owner")) return "owner";
+  return "member";
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const { login, loginWithGoogle } = useAuth();
@@ -43,6 +66,7 @@ export default function Login() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [verifiedCompany, setVerifiedCompany] = useState(null);
   const [verifiedRole, setVerifiedRole] = useState(null);
+  const [verifiedOnboardingType, setVerifiedOnboardingType] = useState(null);
   const [isValidatingEmail, setIsValidatingEmail] = useState(false);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
   const [confirmationRequired, setConfirmationRequired] = useState(false);
@@ -57,6 +81,7 @@ export default function Login() {
     setEmail("");
     setVerifiedCompany(null);
     setVerifiedRole(null);
+    setVerifiedOnboardingType(null);
     setConfirmationRequired(false);
     setResentConfirmation(false);
     setRegistrationFlow("signup");
@@ -85,6 +110,7 @@ export default function Login() {
     if (!emailToCheck) {
       setVerifiedCompany(null);
       setVerifiedRole(null);
+      setVerifiedOnboardingType(null);
       return false;
     }
     
@@ -95,11 +121,13 @@ export default function Login() {
       if (res && res.valid) {
         setVerifiedCompany(res.company_name);
         setVerifiedRole(res.role || "Admin (Owner)");
+        setVerifiedOnboardingType(res.onboarding_type || null);
         setIsValidatingEmail(false);
         return true;
       } else {
         setVerifiedCompany(null);
         setVerifiedRole(null);
+        setVerifiedOnboardingType(null);
         setError(res?.message || "Your email is not approved for account creation.");
         setIsValidatingEmail(false);
         return false;
@@ -108,6 +136,7 @@ export default function Login() {
       console.error("[Login] validateApprovedEmail error:", err);
       setVerifiedCompany(null);
       setVerifiedRole(null);
+      setVerifiedOnboardingType(null);
       const msg = err?.message || "";
       if (msg.includes("verify_access_request") || msg.includes("schema cache")) {
         setError("Email verification is not yet configured. Please contact your administrator or try again later.");
@@ -152,12 +181,13 @@ export default function Login() {
       // If not yet deployed, fall back to supabase.auth.signUp() so signup still works.
       let usedEdgeFunction = false;
       try {
+        const resolvedOnboardingType = verifiedOnboardingType || resolveSignupOnboardingType(verifiedRole);
         const { data: fnData, error: fnError } = await supabase.functions.invoke("signup", {
           body: {
             email,
             password,
             full_name: fullName,
-            onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
+            onboarding_type: resolvedOnboardingType,
           },
         });
 
@@ -189,6 +219,7 @@ export default function Login() {
       }
 
       if (!usedEdgeFunction) {
+        const resolvedOnboardingType = verifiedOnboardingType || resolveSignupOnboardingType(verifiedRole);
         // Fallback: native Supabase signUp (uses Supabase's email service)
         const { data, error: signUpError } = await supabase.auth.signUp({
           email,
@@ -197,7 +228,7 @@ export default function Login() {
             emailRedirectTo: `${window.location.origin}/Onboarding`,
             data: {
               full_name: fullName,
-              onboarding_type: (verifiedRole && verifiedRole.startsWith('Admin')) ? 'owner' : 'member',
+              onboarding_type: resolvedOnboardingType,
             },
           },
         });
@@ -439,6 +470,8 @@ export default function Login() {
                           setEmail(e.target.value); 
                           setError(""); 
                           setVerifiedCompany(null); 
+                          setVerifiedRole(null);
+                          setVerifiedOnboardingType(null);
                         }}
                         onBlur={handleEmailBlur}
                         placeholder="you@company.com"
