@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock } from "lucide-react";
+import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare } from "lucide-react";
 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
@@ -18,6 +18,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import useOrgQuery from "@/hooks/useOrgQuery";
 
 function buildDefaultForm(scope) {
@@ -39,6 +43,10 @@ export default function CreateBudget() {
   const queryClient = useQueryClient();
   const [method, setMethod] = useState("lease_driven");
   const [generating, setGenerating] = useState(false);
+  const [selectedBudgetId, setSelectedBudgetId] = useState(null);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectComment, setRejectComment] = useState("");
+  const [rejectTargetId, setRejectTargetId] = useState(null);
 
   const { orgId } = useOrgQuery("Budget");
 
@@ -188,8 +196,43 @@ export default function CreateBudget() {
     draft: "bg-slate-100 text-slate-600",
     ai_generated: "bg-blue-100 text-blue-700",
     under_review: "bg-red-100 text-red-700",
+    reviewed: "bg-amber-100 text-amber-700",
     approved: "bg-emerald-100 text-emerald-700",
+    signed: "bg-green-100 text-green-700",
     locked: "bg-slate-800 text-white",
+  };
+
+  // Keep selectedBudgetId in sync when budgets change
+  const selectedBudget = budgets.find(b => b.id === selectedBudgetId) || budgets[0] || null;
+  useEffect(() => {
+    if (budgets.length > 0 && !budgets.find(b => b.id === selectedBudgetId)) {
+      setSelectedBudgetId(budgets[0].id);
+    }
+  }, [budgets, selectedBudgetId]);
+
+  const handleReject = (budgetId) => {
+    setRejectTargetId(budgetId);
+    setRejectComment("");
+    setRejectDialogOpen(true);
+  };
+
+  const handleRejectConfirm = async () => {
+    if (!rejectTargetId) return;
+    const budget = budgets.find(b => b.id === rejectTargetId);
+    updateMutation.mutate(
+      { id: rejectTargetId, status: "draft" },
+      {
+        onSuccess: () => {
+          toast.success("Budget rejected and sent back for rework");
+          if (rejectComment.trim()) {
+            toast.info(`Rejection comment: "${rejectComment.trim()}"`);
+          }
+          setRejectDialogOpen(false);
+          setRejectComment("");
+          setRejectTargetId(null);
+        },
+      }
+    );
   };
 
   return (
@@ -430,7 +473,11 @@ export default function CreateBudget() {
             <div className="grid lg:grid-cols-3 gap-6">
               <div className="space-y-3">
                 {budgets.map((budget) => (
-                  <Card key={budget.id} className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-blue-500">
+                  <Card
+                    key={budget.id}
+                    className={`cursor-pointer hover:shadow-md transition-shadow border-l-4 ${selectedBudget?.id === budget.id ? "border-l-blue-700 ring-1 ring-blue-200" : "border-l-blue-500"}`}
+                    onClick={() => setSelectedBudgetId(budget.id)}
+                  >
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between">
                         <div>
@@ -450,63 +497,72 @@ export default function CreateBudget() {
                   </Card>
                 ))}
               </div>
-              {budgets[0] && (
+              {selectedBudget && (
                 <div className="lg:col-span-2">
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
                       <div>
-                        <CardTitle className="text-base">{budgets[0].name}</CardTitle>
-                        <p className="text-xs text-slate-400">{budgets[0].budget_year} · {budgets[0].generation_method?.replace("_", " ")}</p>
+                        <CardTitle className="text-base">{selectedBudget.name}</CardTitle>
+                        <p className="text-xs text-slate-400">{selectedBudget.budget_year} · {selectedBudget.generation_method?.replace("_", " ")}</p>
                       </div>
-                      <Badge className={`${statusColors[budgets[0].status] || "bg-slate-100"} uppercase text-[10px]`}>
-                        {budgets[0].status?.replace("_", " ")}
+                      <Badge className={`${statusColors[selectedBudget.status] || "bg-slate-100"} uppercase text-[10px]`}>
+                        {selectedBudget.status?.replace("_", " ")}
                       </Badge>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="p-4 bg-slate-50 rounded-xl">
                           <p className="text-xs text-slate-500">Total Revenue</p>
-                          <p className="text-xl font-bold">${(budgets[0].total_revenue || 0).toLocaleString()}</p>
+                          <p className="text-xl font-bold">${(selectedBudget.total_revenue || 0).toLocaleString()}</p>
                         </div>
                         <div className="p-4 bg-slate-50 rounded-xl">
                           <p className="text-xs text-slate-500">Total Expenses</p>
-                          <p className="text-xl font-bold text-red-600">${(budgets[0].total_expenses || 0).toLocaleString()}</p>
+                          <p className="text-xl font-bold text-red-600">${(selectedBudget.total_expenses || 0).toLocaleString()}</p>
                         </div>
                         <div className="p-4 bg-slate-50 rounded-xl">
                           <p className="text-xs text-slate-500">CAM Total</p>
-                          <p className="text-xl font-bold text-blue-600">${(budgets[0].cam_total || 0).toLocaleString()}</p>
+                          <p className="text-xl font-bold text-blue-600">${(selectedBudget.cam_total || 0).toLocaleString()}</p>
                         </div>
                         <div className="p-4 bg-slate-50 rounded-xl">
                           <p className="text-xs text-slate-500">NOI</p>
-                          <p className="text-xl font-bold text-emerald-600">${(budgets[0].noi || 0).toLocaleString()}</p>
+                          <p className="text-xl font-bold text-emerald-600">${(selectedBudget.noi || 0).toLocaleString()}</p>
                         </div>
                       </div>
-                      {budgets[0].ai_insights && (
+                      {selectedBudget.ai_insights && (
                         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                           <p className="text-xs font-semibold text-amber-700 mb-1">AI Insights</p>
-                          <p className="text-sm text-amber-800">{budgets[0].ai_insights}</p>
+                          <p className="text-sm text-amber-800">{selectedBudget.ai_insights}</p>
                         </div>
                       )}
                       <div className="flex gap-3 mt-6 pt-4 border-t border-slate-100">
-                        {["draft", "ai_generated", "under_review"].includes(budgets[0].status) && (
-                          <Button className="flex-1 bg-amber-500 hover:bg-amber-600" onClick={() => handleStatusChange(budgets[0].id, "reviewed")}>
+                        {["draft", "ai_generated", "under_review"].includes(selectedBudget.status) && (
+                          <Button
+                            className="flex-1 bg-amber-500 hover:bg-amber-600"
+                            disabled={updateMutation.isPending}
+                            onClick={() => {
+                              handleStatusChange(selectedBudget.id, "reviewed");
+                              toast.success(`"${selectedBudget.name}" marked as reviewed`);
+                            }}
+                          >
+                            {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                             Mark as Reviewed
                           </Button>
                         )}
-                        {["reviewed"].includes(budgets[0].status) && (
-                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleStatusChange(budgets[0].id, "approved")}>
+                        {["reviewed"].includes(selectedBudget.status) && (
+                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" disabled={updateMutation.isPending} onClick={() => handleStatusChange(selectedBudget.id, "approved")}>
                             <CheckCircle2 className="w-4 h-4 mr-2" />
                             Approve Budget
                           </Button>
                         )}
-                        {["approved"].includes(budgets[0].status) && (
-                          <Button className="flex-1 bg-slate-800 hover:bg-slate-900" onClick={() => handleStatusChange(budgets[0].id, "locked")}>
+                        {["approved"].includes(selectedBudget.status) && (
+                          <Button className="flex-1 bg-slate-800 hover:bg-slate-900" disabled={updateMutation.isPending} onClick={() => handleStatusChange(selectedBudget.id, "locked")}>
                             <Lock className="w-4 h-4 mr-2" />
                             Lock Budget
                           </Button>
                         )}
-                        {!["approved", "locked", "signed"].includes(budgets[0].status) && (
-                          <Button variant="outline" className="text-red-500 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange(budgets[0].id, "draft")}>
+                        {!["approved", "locked", "signed"].includes(selectedBudget.status) && (
+                          <Button variant="outline" className="text-red-500 border-red-200 hover:bg-red-50" onClick={() => handleReject(selectedBudget.id)}>
+                            <X className="w-4 h-4 mr-2" />
                             Reject / Rework
                           </Button>
                         )}
@@ -517,6 +573,49 @@ export default function CreateBudget() {
               )}
             </div>
           )}
+
+          {/* Rejection Dialog */}
+          <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-red-500" />
+                  Reject & Send Back for Rework
+                </DialogTitle>
+                <DialogDescription>
+                  Provide comments explaining why this budget is being rejected. The budget will be set back to Draft status and stakeholders will be notified.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-4 space-y-3">
+                <div>
+                  <Label className="text-xs font-semibold">Budget</Label>
+                  <p className="text-sm text-slate-700 mt-0.5">{budgets.find(b => b.id === rejectTargetId)?.name || "—"}</p>
+                </div>
+                <div>
+                  <Label htmlFor="reject-comment" className="text-xs font-semibold">Rejection Comments *</Label>
+                  <Textarea
+                    id="reject-comment"
+                    placeholder="e.g. Expense projections for insurance are too low based on renewal quotes. Please revise Section 3 with updated vendor estimates."
+                    value={rejectComment}
+                    onChange={(e) => setRejectComment(e.target.value)}
+                    rows={5}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
+                <Button
+                  className="bg-red-600 hover:bg-red-700 text-white"
+                  disabled={!rejectComment.trim() || updateMutation.isPending}
+                  onClick={handleRejectConfirm}
+                >
+                  {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <X className="w-4 h-4 mr-2" />}
+                  Reject & Notify Stakeholders
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
       </Tabs>
     </div>
