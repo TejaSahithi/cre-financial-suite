@@ -1611,17 +1611,103 @@ export default function UserManagement() {
     queryKey: ["org-members", activeOrgId],
     queryFn: async () => {
       if (!activeOrgId) return [];
-      const { data, error } = await supabase
+
+      const { data: membershipRows, error: membershipError } = await supabase
         .from("memberships")
         .select(`
-          id, user_id, role, status, module_permissions, page_permissions, capabilities,
-          created_at, updated_at,
-          profiles!inner(id, full_name, email, phone, status, last_sign_in_at, avatar_url)
+          id, user_id, role, status, phone, custom_role,
+          module_permissions, page_permissions, capabilities,
+          created_at, updated_at
         `)
         .eq("org_id", activeOrgId)
         .neq("role", "super_admin");
-      if (error) throw error;
-      return data || [];
+      if (membershipError) throw membershipError;
+
+      const baseMembers = membershipRows || [];
+      const userIds = [...new Set(baseMembers.map(member => member.user_id).filter(Boolean))];
+
+      const [profilesResult, invitationsResult] = await Promise.all([
+        userIds.length > 0
+          ? supabase
+              .from("profiles")
+              .select("id, full_name, email, phone, status, last_sign_in_at, avatar_url")
+              .in("id", userIds)
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from("invitations")
+          .select("id, email, org_id, role, status, created_at, updated_at, expires_at")
+          .eq("org_id", activeOrgId)
+          .in("status", ["pending", "pending_approval"]),
+      ]);
+
+      if (profilesResult.error) {
+        console.warn("[UserManagement] profile enrichment failed:", profilesResult.error.message);
+      }
+      if (invitationsResult.error) {
+        console.warn("[UserManagement] invitation enrichment failed:", invitationsResult.error.message);
+      }
+
+      const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+
+      const enrichedMembers = baseMembers.map(member => {
+        const profile = profilesById.get(member.user_id);
+        const invitedEmail = member.capabilities?.invited_email || null;
+        const invitedFullName = member.capabilities?.invited_full_name || null;
+
+        return {
+          ...member,
+          profiles: {
+            id: profile?.id || member.user_id || null,
+            full_name: profile?.full_name || invitedFullName || null,
+            email: profile?.email || invitedEmail || null,
+            phone: profile?.phone || member.phone || null,
+            status: profile?.status || null,
+            last_sign_in_at: profile?.last_sign_in_at || null,
+            avatar_url: profile?.avatar_url || null,
+          },
+        };
+      });
+
+      const knownEmails = new Set(
+        enrichedMembers
+          .map(member => member.profiles?.email?.toLowerCase())
+          .filter(Boolean),
+      );
+
+      const invitationOnlyMembers = (invitationsResult.data || [])
+        .filter(invitation => invitation.email && !knownEmails.has(invitation.email.toLowerCase()))
+        .map(invitation => ({
+          id: `invitation:${invitation.id}`,
+          user_id: `invitation:${invitation.id}`,
+          role: invitation.role || null,
+          status: "invited",
+          phone: null,
+          custom_role: null,
+          module_permissions: {},
+          page_permissions: {},
+          capabilities: {
+            roles: invitation.role ? [invitation.role] : [],
+            invited_email: invitation.email,
+            invited_full_name: null,
+          },
+          created_at: invitation.created_at,
+          updated_at: invitation.updated_at || invitation.created_at,
+          invitation,
+          isInvitationOnly: true,
+          profiles: {
+            id: null,
+            full_name: null,
+            email: invitation.email,
+            phone: null,
+            status: "invited",
+            last_sign_in_at: null,
+            avatar_url: null,
+          },
+        }));
+
+      return [...enrichedMembers, ...invitationOnlyMembers].sort(
+        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime(),
+      );
     },
     enabled: !!activeOrgId,
   });
@@ -1651,8 +1737,9 @@ export default function UserManagement() {
     });
   }, [members, searchQuery, filterStatus, filterCategory]);
 
-  const selectedMembers = members.filter(m => selectedIds.has(m.user_id));
-  const allSelected = filtered.length > 0 && filtered.every(m => selectedIds.has(m.user_id));
+  const selectableMembers = filtered.filter(m => !m.isInvitationOnly);
+  const selectedMembers = members.filter(m => !m.isInvitationOnly && selectedIds.has(m.user_id));
+  const allSelected = selectableMembers.length > 0 && selectableMembers.every(m => selectedIds.has(m.user_id));
   const hasFilters = searchQuery || filterStatus !== "all" || filterCategory !== "all";
 
   const toggleSelect = (id) => setSelectedIds(prev => {
@@ -1663,7 +1750,7 @@ export default function UserManagement() {
 
   const toggleAll = () => {
     if (allSelected) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filtered.map(m => m.user_id)));
+    else setSelectedIds(new Set(selectableMembers.map(m => m.user_id)));
   };
 
   const handleBulkRemove = async () => {
@@ -1887,17 +1974,24 @@ export default function UserManagement() {
                 const highestSigning = getHighestSigningLevel(signingPrivs);
                 const highestSlvl = SIGNING_LEVELS[highestSigning];
                 const isSelected = selectedIds.has(member.user_id);
+                const canOpenDetails = !member.isInvitationOnly;
                 const initials = (member.profiles?.full_name || member.profiles?.email || "?")
                   .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
                 return (
                   <TableRow
                     key={member.user_id}
-                    className={`cursor-pointer transition-colors ${isSelected ? "bg-[#1a2744]/5" : "hover:bg-slate-50/80"}`}
-                    onClick={() => setDrawerMember(member)}
+                    className={`${canOpenDetails ? "cursor-pointer" : "cursor-default"} transition-colors ${isSelected ? "bg-[#1a2744]/5" : "hover:bg-slate-50/80"}`}
+                    onClick={() => {
+                      if (canOpenDetails) setDrawerMember(member);
+                    }}
                   >
                     <TableCell className="px-4" onClick={e => e.stopPropagation()}>
-                      <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(member.user_id)} />
+                      <Checkbox
+                        checked={isSelected}
+                        disabled={member.isInvitationOnly}
+                        onCheckedChange={() => toggleSelect(member.user_id)}
+                      />
                     </TableCell>
 
                     {/* Member */}
@@ -1915,6 +2009,11 @@ export default function UserManagement() {
                             {status === "no_access" && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold uppercase tracking-wide flex-shrink-0">
                                 Needs Role
+                              </span>
+                            )}
+                            {member.isInvitationOnly && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase tracking-wide flex-shrink-0">
+                                Pending Invite
                               </span>
                             )}
                           </div>
@@ -1962,10 +2061,14 @@ export default function UserManagement() {
 
                     {/* Actions */}
                     <TableCell onClick={e => e.stopPropagation()}>
-                      <button className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                        onClick={() => setDrawerMember(member)}>
-                        <Eye className="w-4 h-4" />
-                      </button>
+                      {canOpenDetails ? (
+                        <button className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                          onClick={() => setDrawerMember(member)}>
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

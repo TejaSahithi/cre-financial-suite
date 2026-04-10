@@ -105,6 +105,12 @@ Deno.serve(async (req: Request) => {
     // ── Upsert membership record (status: invited) ────────────────────────────
     const warnings: string[] = [];
     if (userId) {
+      const membershipCapabilities = {
+        ...(capabilities && typeof capabilities === "object" ? capabilities : {}),
+        invited_email: email,
+        invited_full_name: full_name || null,
+      };
+
       const membershipRow: any = {
         user_id: userId,
         org_id,
@@ -115,7 +121,7 @@ Deno.serve(async (req: Request) => {
       if (phone) membershipRow.phone = phone;
       if (module_permissions && Object.keys(module_permissions).length > 0) membershipRow.module_permissions = module_permissions;
       if (page_permissions && Object.keys(page_permissions).length > 0) membershipRow.page_permissions = page_permissions;
-      if (capabilities && Object.keys(capabilities).length > 0) membershipRow.capabilities = capabilities;
+      if (Object.keys(membershipCapabilities).length > 0) membershipRow.capabilities = membershipCapabilities;
 
       const { error: membershipErr } = await adminClient
         .from("memberships")
@@ -124,7 +130,23 @@ Deno.serve(async (req: Request) => {
         console.error("[invite-user] membership upsert error:", membershipErr);
         // Auth user already exists at this point — don't 500 on a missing
         // optional column. Surface the warning so the client can show it.
-        warnings.push(`membership: ${membershipErr.message}`);
+        const { error: fallbackMembershipErr } = await adminClient
+          .from("memberships")
+          .upsert(
+            {
+              user_id: userId,
+              org_id,
+              role,
+            },
+            { onConflict: "user_id,org_id" },
+          );
+
+        if (fallbackMembershipErr) {
+          console.error("[invite-user] fallback membership upsert error:", fallbackMembershipErr);
+          warnings.push(`membership: ${fallbackMembershipErr.message}`);
+        } else {
+          warnings.push(`membership metadata: ${membershipErr.message}`);
+        }
       }
 
       // ── Ensure profile row exists for invited user ────────────────────────
@@ -193,7 +215,7 @@ Deno.serve(async (req: Request) => {
     const { error: inviteLogErr } = await adminClient.from("invitations").insert({
       email, org_id, role,
       token: "magic-link",
-      status: "pending",
+      status: "pending_approval",
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
     });
 
