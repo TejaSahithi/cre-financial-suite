@@ -32,10 +32,18 @@ const mockSupabaseAdmin = {
     }),
     update: (data: any) => ({
       eq: (column: string, value: any) => ({
+        eq: (column2: string, value2: any) => ({
+          select: () => ({
+            single: () => Promise.resolve({
+              data: { id: value, ...data },
+              error: null
+            })
+          })
+        }),
         select: () => ({
-          single: () => Promise.resolve({ 
-            data: { id: value, ...data }, 
-            error: null 
+          single: () => Promise.resolve({
+            data: { id: value, ...data },
+            error: null
           })
         })
       })

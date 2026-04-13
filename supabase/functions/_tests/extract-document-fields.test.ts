@@ -386,7 +386,7 @@ Deno.test("Custom Field Analysis", () => {
       const suggestion = {
         field_name: fieldName,
         field_label: fieldName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-        field_type: inferFieldType(uniqueValues),
+        field_type: inferFieldType(data.values),
         sample_values: uniqueValues.slice(0, 5),
         confidence: Math.min(95, 60 + (data.count * 10)),
       };
@@ -434,6 +434,14 @@ Deno.test("Custom Field Analysis", () => {
         parking_spaces: "3",
         hvac_responsibility: "Landlord",
         pet_policy: "Cats allowed"
+      }
+    },
+    {
+      tenant_name: "Gamma Inc",
+      custom_fields: {
+        parking_spaces: "8",
+        hvac_responsibility: "Tenant",
+        pet_policy: "No pets allowed"
       }
     }
   ];

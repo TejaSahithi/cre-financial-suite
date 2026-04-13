@@ -14,7 +14,6 @@ async function fetchProperties() {
 
 export default function PipelineUpload() {
   const location = useLocation();
-  const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
   const [selectedPropertyId, setSelectedPropertyId] = useState(urlParams.get("property") || "");
 

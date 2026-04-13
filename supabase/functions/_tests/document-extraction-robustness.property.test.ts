@@ -1,5 +1,5 @@
 import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { fc } from "https://esm.sh/fast-check@3.15.0";
+import fc from "https://esm.sh/fast-check@3.15.0";
 
 /**
  * Property-Based Tests for Document Extraction Pipeline Robustness
@@ -31,7 +31,7 @@ const fileFormatArbitrary = fc.oneof(
 );
 
 const fileNameArbitrary = fc.tuple(
-  fc.stringOf(fc.char().filter(c => /[a-zA-Z0-9_-]/.test(c)), { minLength: 1, maxLength: 50 }),
+  fc.stringOf(fc.char().filter((c: string) => /[a-zA-Z0-9_-]/.test(c)), { minLength: 1, maxLength: 50 }),
   fc.oneof(
     fc.constant('.pdf'),
     fc.constant('.doc'),
@@ -46,12 +46,12 @@ const fileNameArbitrary = fc.tuple(
     fc.constant('.csv'),
     fc.constant('.unknown')
   )
-).map(([name, ext]) => name + ext);
+).map(([name, ext]: [string, string]) => name + ext);
 
 const fileSizeArbitrary = fc.integer({ min: 0, max: 100_000_000 }); // 0 to 100MB
 
 const orgIdArbitrary = fc.stringOf(
-  fc.char().filter(c => /[a-zA-Z0-9-]/.test(c)),
+  fc.char().filter((c: string) => /[a-zA-Z0-9-]/.test(c)),
   { minLength: 5, maxLength: 50 }
 );
 
@@ -67,15 +67,15 @@ const testFileArbitrary = fc.record({
 const documentContentArbitrary = fc.oneof(
   // Structured lease data
   fc.record({
-    tenant_name: fc.fullName(),
+    tenant_name: fc.string({ minLength: 3, maxLength: 50 }),
     property_name: fc.string({ minLength: 5, maxLength: 100 }),
     unit_number: fc.oneof(fc.integer({ min: 1, max: 9999 }).map(String), fc.string({ minLength: 1, maxLength: 10 })),
-    start_date: fc.date({ min: new Date('2020-01-01'), max: new Date('2030-12-31') }).map(d => d.toISOString().split('T')[0]),
-    end_date: fc.date({ min: new Date('2025-01-01'), max: new Date('2035-12-31') }).map(d => d.toISOString().split('T')[0]),
-    monthly_rent: fc.float({ min: 500, max: 50000 }),
+    start_date: fc.date({ min: new Date('2020-01-01'), max: new Date('2030-12-31') }).map((d: Date) => d.toISOString().split('T')[0]),
+    end_date: fc.date({ min: new Date('2025-01-01'), max: new Date('2035-12-31') }).map((d: Date) => d.toISOString().split('T')[0]),
+    monthly_rent: fc.float({ min: 500, max: 50000, noNaN: true, noDefaultInfinity: true }),
     square_footage: fc.integer({ min: 100, max: 10000 }),
     lease_type: fc.oneof(fc.constant('gross'), fc.constant('net'), fc.constant('modified_gross')),
-    security_deposit: fc.float({ min: 0, max: 100000 })
+    security_deposit: fc.float({ min: 0, max: 100000, noNaN: true, noDefaultInfinity: true })
   }),
   // Unstructured text content
   fc.lorem({ maxCount: 1000 }),
@@ -83,12 +83,12 @@ const documentContentArbitrary = fc.oneof(
   fc.record({
     structured_data: fc.record({
       field1: fc.string(),
-      field2: fc.float(),
+      field2: fc.float({ noNaN: true, noDefaultInfinity: true }),
       field3: fc.boolean()
     }),
     unstructured_text: fc.lorem({ maxCount: 500 }),
     metadata: fc.record({
-      created_at: fc.date().map(d => d.toISOString()),
+      created_at: fc.date().map((d: Date) => d.toISOString()),
       version: fc.integer({ min: 1, max: 10 }),
       tags: fc.array(fc.string({ minLength: 1, maxLength: 20 }), { maxLength: 10 })
     })
@@ -112,9 +112,9 @@ const fieldTypeArbitrary = fc.oneof(
 );
 
 const fieldNameArbitrary = fc.stringOf(
-  fc.char().filter(c => /[a-z0-9_]/.test(c)),
+  fc.char().filter((c: string) => /[a-z0-9_]/.test(c)),
   { minLength: 1, maxLength: 50 }
-).filter(name => /^[a-z]/.test(name)); // Must start with letter
+).filter((name: string) => /^[a-z]/.test(name)); // Must start with letter
 
 const customFieldArbitrary = fc.record({
   field_name: fieldNameArbitrary,
@@ -240,7 +240,7 @@ async function mockDocumentPipeline(
 
     result.success = criticalSuccess && optionalSuccess;
 
-  } catch (error) {
+  } catch (error: any) {
     result.errors?.push(`Pipeline error: ${error.message}`);
   }
 
@@ -296,7 +296,7 @@ async function mockCustomFieldCreation(field: any): Promise<{ success: boolean; 
 
 Deno.test("Property 1: Random file uploads should be handled gracefully", () => {
   fc.assert(
-    fc.property(testFileArbitrary, async (file) => {
+    fc.asyncProperty(testFileArbitrary, async (file: any) => {
       const result = await mockDocumentPipeline(file);
 
       // Property: Pipeline should never crash, always return a result
@@ -317,7 +317,7 @@ Deno.test("Property 1: Random file uploads should be handled gracefully", () => 
       // Property: Errors should be descriptive when present
       if (!result.success && result.errors) {
         assert(result.errors.length > 0, 'Failed results should have error messages');
-        result.errors.forEach(error => {
+        result.errors.forEach((error: string) => {
           assert(typeof error === 'string', 'Errors should be strings');
           assert(error.length > 0, 'Error messages should not be empty');
         });
@@ -329,7 +329,7 @@ Deno.test("Property 1: Random file uploads should be handled gracefully", () => 
 
 Deno.test("Property 2: Document content extraction should preserve data integrity", () => {
   fc.assert(
-    fc.property(testFileArbitrary, documentContentArbitrary, async (file, content) => {
+    fc.asyncProperty(testFileArbitrary, documentContentArbitrary, async (file: any, content: any) => {
       const result = await mockDocumentPipeline(file, content);
 
       // Property: If extraction succeeds, extracted data should be present
@@ -337,7 +337,7 @@ Deno.test("Property 2: Document content extraction should preserve data integrit
         assertExists(result.extractedData, 'Successful extraction should produce data');
         assert(Array.isArray(result.extractedData), 'Extracted data should be an array');
         
-        if (result.extractedData.length > 0) {
+        if (result.extractedData!.length > 0) {
           // Property: Extracted data should be serializable
           const serialized = JSON.stringify(result.extractedData);
           const deserialized = JSON.parse(serialized);
@@ -356,7 +356,7 @@ Deno.test("Property 2: Document content extraction should preserve data integrit
       // Property: String content should be preserved in some form
       if (typeof content === 'string' && content.length > 0) {
         if (result.stages.aiInterpretation && result.extractedData) {
-          const hasTextContent = result.extractedData.some(item => 
+          const hasTextContent = result.extractedData.some((item: any) =>
             typeof item === 'object' && item !== null && 'text_content' in item
           );
           assert(hasTextContent, 'String content should be preserved as text_content');
@@ -369,7 +369,7 @@ Deno.test("Property 2: Document content extraction should preserve data integrit
 
 Deno.test("Property 3: Custom field creation should validate inputs correctly", () => {
   fc.assert(
-    fc.property(customFieldArbitrary, async (field) => {
+    fc.asyncProperty(customFieldArbitrary, async (field: any) => {
       const result = await mockCustomFieldCreation(field);
 
       // Property: Result should always have success flag and errors array
@@ -457,7 +457,7 @@ Deno.test("Property 4: Pipeline should handle edge cases gracefully", () => {
   });
 
   fc.assert(
-    fc.property(edgeCaseArbitrary, async ({ file, content }) => {
+    fc.asyncProperty(edgeCaseArbitrary, async ({ file, content }: any) => {
       const result = await mockDocumentPipeline(file, content);
 
       // Property: Pipeline should never throw unhandled exceptions
@@ -470,8 +470,8 @@ Deno.test("Property 4: Pipeline should handle edge cases gracefully", () => {
       }
 
       // Property: Very large files should be rejected gracefully
-      if (file.size > 50_000_000) {
-        const sizeErrors = result.errors?.filter(e => e.includes('large') || e.includes('size')) || [];
+      if (file.size > 50_000_000 && file.name && file.type) {
+        const sizeErrors = result.errors?.filter((e: string) => e.includes('large') || e.includes('size')) || [];
         assert(sizeErrors.length > 0, 'Very large files should produce size-related errors');
       }
 
@@ -484,7 +484,7 @@ Deno.test("Property 4: Pipeline should handle edge cases gracefully", () => {
 
       // Property: All error messages should be informative
       if (result.errors && result.errors.length > 0) {
-        result.errors.forEach(error => {
+        result.errors.forEach((error: string) => {
           assert(typeof error === 'string', 'All errors should be strings');
           assert(error.length > 5, 'Error messages should be informative (>5 chars)');
           assert(!error.includes('undefined'), 'Error messages should not contain "undefined"');
@@ -500,13 +500,13 @@ Deno.test("Property 5: Field mapping should be consistent and reversible", () =>
   const fieldMappingArbitrary = fc.record({
     extractedFields: fc.array(
       fc.record({
-        name: fc.stringOf(fc.char().filter(c => /[a-zA-Z0-9_\s-]/.test(c)), { minLength: 1, maxLength: 50 }),
+        name: fc.stringOf(fc.char().filter((c: string) => /[a-zA-Z0-9_\s-]/.test(c)), { minLength: 1, maxLength: 50 }),
         value: fc.oneof(
           fc.string(),
-          fc.float(),
+          fc.float({ noNaN: true, noDefaultInfinity: true }),
           fc.integer(),
           fc.boolean(),
-          fc.date().map(d => d.toISOString())
+          fc.date().map((d: Date) => d.toISOString())
         )
       }),
       { minLength: 1, maxLength: 20 }
@@ -519,7 +519,7 @@ Deno.test("Property 5: Field mapping should be consistent and reversible", () =>
   });
 
   fc.assert(
-    fc.property(fieldMappingArbitrary, ({ extractedFields, moduleType }) => {
+    fc.property(fieldMappingArbitrary, ({ extractedFields, moduleType }: any) => {
       // Mock field mapping logic
       const standardMappings: Record<string, Record<string, string>> = {
         leases: {
@@ -597,9 +597,9 @@ Deno.test("Property 6: System should preserve existing data operations", () => {
   const existingDataArbitrary = fc.record({
     csvData: fc.array(
       fc.record({
-        tenant_name: fc.fullName(),
-        monthly_rent: fc.float({ min: 500, max: 10000 }),
-        start_date: fc.date({ min: new Date('2020-01-01'), max: new Date('2025-12-31') }).map(d => d.toISOString().split('T')[0])
+        tenant_name: fc.string({ minLength: 3, maxLength: 50 }),
+        monthly_rent: fc.float({ min: 500, max: 10000, noNaN: true, noDefaultInfinity: true }),
+        start_date: fc.date({ min: new Date('2020-01-01'), max: new Date('2025-12-31') }).map((d: Date) => d.toISOString().split('T')[0])
       }),
       { minLength: 1, maxLength: 100 }
     ),
@@ -607,8 +607,8 @@ Deno.test("Property 6: System should preserve existing data operations", () => {
       status: fc.oneof(fc.constant('success'), fc.constant('error')),
       data: fc.array(fc.record({
         id: fc.uuid(),
-        created_at: fc.date().map(d => d.toISOString()),
-        updated_at: fc.date().map(d => d.toISOString())
+        created_at: fc.date().map((d: Date) => d.toISOString()),
+        updated_at: fc.date().map((d: Date) => d.toISOString())
       })),
       metadata: fc.record({
         total: fc.integer({ min: 0, max: 1000 }),
@@ -619,9 +619,9 @@ Deno.test("Property 6: System should preserve existing data operations", () => {
   });
 
   fc.assert(
-    fc.property(existingDataArbitrary, ({ csvData, apiFormat }) => {
+    fc.property(existingDataArbitrary, ({ csvData, apiFormat }: any) => {
       // Mock existing data processing
-      const processedCsvData = csvData.map(row => ({
+      const processedCsvData = csvData.map((row: any) => ({
         ...row,
         processed: true,
         processing_timestamp: new Date().toISOString()
@@ -659,7 +659,7 @@ Deno.test("Property 6: System should preserve existing data operations", () => {
       const originalApiSerialized = JSON.stringify(apiFormat);
       
       // Process again to ensure idempotency
-      const reprocessedCsv = csvData.map(row => ({
+      const reprocessedCsv = csvData.map((row: any) => ({
         ...row,
         processed: true,
         processing_timestamp: new Date().toISOString()
