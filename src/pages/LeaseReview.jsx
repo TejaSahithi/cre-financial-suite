@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { leaseService } from "@/services/leaseService";
-import { NotificationService } from "@/services/api";
+import { NotificationService, createEntityService } from "@/services/api";
+import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -15,12 +16,15 @@ import { LEASE_FIELD_OPTIONS, getLeaseFieldLabel, hasLeaseFieldOptions } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX } from "lucide-react";
+import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX, Plus } from "lucide-react";
 import { Link, useLocation } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 
-const confidenceColor = (score) => {
+const documentService = createEntityService("Document");
+
+const confidenceColor = (score, isEdited = false) => {
+  if (isEdited) return "bg-emerald-100 text-emerald-700"; // manually edited → always green
   if (score >= 90) return "bg-emerald-100 text-emerald-700";
   if (score >= 75) return "bg-amber-100 text-amber-700";
   return "bg-red-100 text-red-700";
@@ -39,6 +43,18 @@ export default function LeaseReview() {
   const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
   const [notificationSent, setNotificationSent] = useState(false);
+  // Track fields that have been manually edited — they get boosted confidence display
+  const [editedFields, setEditedFields] = useState(new Set());
+  // Custom fields added by user
+  const [customFields, setCustomFields] = useState([]);
+  const [showAddField, setShowAddField] = useState(false);
+  const [newFieldKey, setNewFieldKey] = useState("");
+  const [newFieldValue, setNewFieldValue] = useState("");
+  // Approval state
+  const [approvalSignedBy, setApprovalSignedBy] = useState("");
+  const [approvalSignedAt, setApprovalSignedAt] = useState("");
+  const [approvalComments, setApprovalComments] = useState("");
+  const [approvalDocumentUrl, setApprovalDocumentUrl] = useState("");
 
   const { data: lease, isLoading } = useQuery({
     queryKey: ['lease', leaseId],
@@ -141,11 +157,12 @@ export default function LeaseReview() {
       { key: "end_date", label: "END DATE", value: lease.end_date || "—", confidence: getConf("end_date", 92) },
     ],
     "Financial Terms": [
-      { key: "rent_per_sf", label: "BASE RENT ($/SF/YR)", value: lease.rent_per_sf ? `$${lease.rent_per_sf}` : "—", confidence: getConf("rent_per_sf", 92) },
-      { key: "total_sf", label: "TOTAL SF", value: totalSf ? Number(totalSf).toLocaleString() : "—", confidence: getConf("total_sf", 99) },
-      { key: "annual_rent", label: "ANNUAL RENT", value: lease.annual_rent ? `$${Number(lease.annual_rent).toLocaleString()}` : "—", confidence: getConf("annual_rent", 99) },
-      { key: "escalation_rate", label: "RENT ESCALATION", value: lease.escalation_rate ? `${lease.escalation_rate}%` : "—", confidence: getConf("escalation_rate", 78) },
-      { key: "escalation_type", label: "ESCALATION TYPE", value: optionLabel("escalation_type"), confidence: getConf("escalation_type", 80) },
+      { key: "rent_per_sf", label: "BASE RENT ($/SF/YR)", value: lease.rent_per_sf ? String(lease.rent_per_sf) : "\u2014", confidence: editedFields.has("rent_per_sf") ? 95 : getConf("rent_per_sf", 92) },
+      { key: "total_sf", label: "TOTAL SF", value: totalSf ? Number(totalSf).toLocaleString() : "\u2014", confidence: editedFields.has("total_sf") ? 99 : getConf("total_sf", 99) },
+      { key: "annual_rent", label: "ANNUAL RENT", value: lease.annual_rent ? "$" + Number(lease.annual_rent).toLocaleString() : "\u2014", confidence: editedFields.has("annual_rent") ? 99 : getConf("annual_rent", 99) },
+      { key: "security_deposit", label: "SECURITY DEPOSIT", value: lease.security_deposit ? "$" + Number(lease.security_deposit).toLocaleString() : "\u2014", confidence: editedFields.has("security_deposit") ? 95 : getConf("security_deposit", 60) },
+      { key: "escalation_rate", label: "RENT ESCALATION", value: lease.escalation_rate ? lease.escalation_rate + "%" : "\u2014", confidence: editedFields.has("escalation_rate") ? 90 : getConf("escalation_rate", 78) },
+      { key: "escalation_type", label: "ESCALATION TYPE", value: optionLabel("escalation_type"), confidence: editedFields.has("escalation_type") ? 90 : getConf("escalation_type", 80) },
     ],
     "Escalation & Renewal": [
       { key: "escalation_timing", label: "ESCALATION TIMING", value: optionLabel("escalation_timing", "Lease Anniversary"), confidence: getConf("escalation_timing", 90) },
@@ -195,24 +212,75 @@ export default function LeaseReview() {
   const passCount = validationChecks.filter(v => v.pass).length;
 
   const handleApprove = async () => {
+    // Block approval if no signature info provided
+    if (!approvalSignedBy.trim()) {
+      toast.error("Please enter who signed the lease before approving.");
+      return;
+    }
+    if (!approvalSignedAt) {
+      toast.error("Please enter the date/time the lease was signed.");
+      return;
+    }
+
     if (lowConf > 0) {
       try {
         await NotificationService.create({
           org_id: lease.org_id,
           type: "low_confidence_alert",
           title: "Approval Attempt with Low Confidence",
-          message: `Lease for ${lease.tenant_name} was submitted for approval with ${lowConf} low-confidence fields.`,
+          message: `Lease for ${lease.tenant_name} was approved with ${lowConf} low-confidence fields.`,
           link: createPageUrl("LeaseReview", { id: lease.id }),
           priority: "high"
         });
-        toast.info("Notification sent to team regarding low-confidence fields.");
       } catch (err) {
         console.error("Failed to send notification:", err);
       }
     }
 
     try {
-      await updateLeaseMutation.mutateAsync({ id: lease.id, data: { status: "budget_ready" } });
+      // 1. Update lease to budget_ready with signature metadata
+      await updateLeaseMutation.mutateAsync({
+        id: lease.id,
+        data: {
+          status: "budget_ready",
+          signed_by: approvalSignedBy,
+          signed_at: approvalSignedAt,
+          approval_comments: approvalComments,
+          approval_document_url: approvalDocumentUrl || null,
+        }
+      });
+
+      // 2. Save to documents table (non-fatal if table missing)
+      try {
+        await documentService.create({
+          org_id: lease.org_id,
+          property_id: lease.property_id,
+          lease_id: lease.id,
+          type: "lease",
+          name: `Lease — ${lease.tenant_name}`,
+          status: "approved",
+          signed_by: approvalSignedBy,
+          signed_at: approvalSignedAt,
+          comments: approvalComments,
+          document_url: approvalDocumentUrl || null,
+        });
+      } catch (docErr) {
+        console.warn("[LeaseReview] Failed to save to documents:", docErr);
+      }
+
+      // 3. Send approval notification
+      try {
+        await NotificationService.create({
+          org_id: lease.org_id,
+          type: "lease_approved",
+          title: "Lease Approved",
+          message: `Lease for ${lease.tenant_name} has been approved and is now budget-ready. Signed by ${approvalSignedBy}.`,
+          link: createPageUrl("LeaseReview", { id: lease.id }),
+          priority: "normal"
+        });
+      } catch {}
+
+      toast.success("Lease approved and saved to Documents.");
       setShowApproval(false);
     } catch {
       // error already toasted by onError
@@ -249,6 +317,8 @@ export default function LeaseReview() {
 
     try {
       await updateLeaseMutation.mutateAsync({ id: lease.id, data: updateData });
+      // Boost confidence display for this field — it's been human-verified
+      setEditedFields(prev => new Set([...prev, editingField.key]));
       setEditingField(null); // only close on success
     } catch {
       // error already toasted by onError — keep dialog open so user can retry
@@ -290,16 +360,35 @@ export default function LeaseReview() {
               className="bg-red-600 hover:bg-red-700"
               onClick={async () => {
                 try {
+                  // 1. In-app notification to the whole org
                   await NotificationService.create({
                     org_id: lease.org_id,
                     type: "review_request",
                     title: "Manual Review Requested",
-                    message: `Manual review requested for lease extraction: ${lease.tenant_name}`,
+                    message: `Manual review requested for lease extraction: ${lease.tenant_name} — ${lowConf} low-confidence field(s) need attention.`,
                     link: createPageUrl("LeaseReview", { id: lease.id }),
                     priority: "high"
                   });
-                  toast.success("Review request sent to team");
+
+                  // 2. Email the assigned property manager (stakeholder with role=property_manager)
+                  const pmStakeholder = stakeholders.find(s => s.role === "property_manager");
+                  if (pmStakeholder?.email) {
+                    const reviewUrl = window.location.origin + createPageUrl("LeaseReview", { id: lease.id });
+                    await supabase.functions.invoke("send-email", {
+                      body: {
+                        to: pmStakeholder.email,
+                        subject: `[Action Required] Lease Review Flagged: ${lease.tenant_name}`,
+                        html: `<h2>Lease Review Flagged for Team Review</h2>
+                          <p>A lease extraction for <strong>${lease.tenant_name}</strong> has been flagged and requires your attention.</p>
+                          <p><strong>${lowConf} field(s)</strong> scored below the 70% confidence threshold and must be corrected before the lease can be approved.</p>
+                          <p><a href="${reviewUrl}" style="background:#dc2626;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:12px;">Review Lease Now</a></p>`,
+                      },
+                    });
+                  }
+
+                  toast.success("Review request sent to team" + (pmStakeholder?.email ? " and property manager" : ""));
                 } catch (err) {
+                  console.error("[LeaseReview] Flag for review error:", err);
                   toast.error("Failed to send review request");
                 }
               }}
@@ -328,21 +417,43 @@ export default function LeaseReview() {
             </TabsList>
             {Object.entries(fields).map(([tabName, fieldList]) => (
               <TabsContent key={tabName} value={tabName} className="mt-4 space-y-3">
-                {fieldList.map((f, i) => (
-                  <Card key={i} className={f.warning ? 'border-amber-200' : ''}>
+                {fieldList.map((f, i) => {
+                  const isEdited = editedFields.has(f.key);
+                  return (
+                    <Card key={i} className={f.warning ? 'border-amber-200' : ''}>
+                      <CardContent className="p-4 flex items-start justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-[10px] font-semibold text-slate-500 uppercase">{f.label}</p>
+                            <Badge className={`text-[10px] ${confidenceColor(f.confidence, isEdited)}`}>
+                              {isEdited ? "Verified" : f.confidence + "%"}
+                            </Badge>
+                          </div>
+                          <p className="text-sm font-medium text-slate-900 mt-1">{String(f.value)}</p>
+                          {f.warning && <p className="text-xs text-amber-600 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{f.warning}</p>}
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFieldEdit(f)}><Pencil className="w-3.5 h-3.5 text-slate-400" /></Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+                {/* Custom fields for this tab (shown on all tabs) */}
+                {tabName === "Financial Terms" && customFields.map((cf, i) => (
+                  <Card key={"custom-" + i} className="border-dashed border-slate-300">
                     <CardContent className="p-4 flex items-start justify-between">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-[10px] font-semibold text-slate-500 uppercase">{f.label}</p>
-                          <Badge className={`text-[10px] ${confidenceColor(f.confidence)}`}>{f.confidence}%</Badge>
-                        </div>
-                        <p className="text-sm font-medium text-slate-900 mt-1">{String(f.value)}</p>
-                        {f.warning && <p className="text-xs text-amber-600 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{f.warning}</p>}
+                        <p className="text-[10px] font-semibold text-slate-500 uppercase">{cf.label}</p>
+                        <p className="text-sm font-medium text-slate-900 mt-1">{cf.value}</p>
                       </div>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFieldEdit(f)}><Pencil className="w-3.5 h-3.5 text-slate-400" /></Button>
+                      <Badge className="text-[10px] bg-blue-100 text-blue-700">Custom</Badge>
                     </CardContent>
                   </Card>
                 ))}
+                {tabName === "Financial Terms" && (
+                  <Button variant="outline" size="sm" className="w-full border-dashed" onClick={() => setShowAddField(true)}>
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Custom Field
+                  </Button>
+                )}
               </TabsContent>
             ))}
           </Tabs>
@@ -423,17 +534,56 @@ export default function LeaseReview() {
 
       {/* Approve Lease Dialog */}
       <Dialog open={showApproval} onOpenChange={setShowApproval}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Approve Lease</DialogTitle></DialogHeader>
-          <p className="text-sm text-slate-500 mb-2">This will mark the lease as Budget-Ready</p>
-          <div className="bg-slate-50 p-3 rounded-lg mb-2">
+          <p className="text-sm text-slate-500 mb-2">Approval requires signature confirmation. The lease will be marked as Budget-Ready and saved to Documents.</p>
+          <div className="bg-slate-50 p-3 rounded-lg mb-3">
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
             <p className="text-xs text-slate-500">{lease.tenant_name} · {getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} · {lease.start_date} to {lease.end_date}</p>
           </div>
           {validationChecks.some(c => !c.pass) && (
-            <div className="flex items-center gap-2 text-amber-600 text-xs"><AlertTriangle className="w-3.5 h-3.5" />{validationChecks.filter(c => !c.pass).length} validation warning(s) — review before approving</div>
+            <div className="flex items-center gap-2 text-amber-600 text-xs mb-3"><AlertTriangle className="w-3.5 h-3.5" />{validationChecks.filter(c => !c.pass).length} validation warning(s) — review before approving</div>
           )}
-          <DialogFooter>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Signed By <span className="text-red-500">*</span></Label>
+              <Input
+                className="mt-1"
+                placeholder="Full name of signatory"
+                value={approvalSignedBy}
+                onChange={e => setApprovalSignedBy(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Signed At <span className="text-red-500">*</span></Label>
+              <Input
+                className="mt-1"
+                type="datetime-local"
+                value={approvalSignedAt}
+                onChange={e => setApprovalSignedAt(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Document URL (optional)</Label>
+              <Input
+                className="mt-1"
+                placeholder="https://... (signed lease document link)"
+                value={approvalDocumentUrl}
+                onChange={e => setApprovalDocumentUrl(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Additional Comments</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Any notes from the signing party..."
+                rows={3}
+                value={approvalComments}
+                onChange={e => setApprovalComments(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setShowApproval(false)}>Cancel</Button>
             <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleApprove} disabled={updateLeaseMutation.isPending}>
               {updateLeaseMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-1" />}Confirm Approval
@@ -478,6 +628,50 @@ export default function LeaseReview() {
             <Button variant="outline" onClick={() => setEditingField(null)}>Cancel</Button>
             <Button onClick={handleFieldSave} disabled={updateLeaseMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {updateLeaseMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-1" />}Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Custom Field Dialog */}
+      <Dialog open={showAddField} onOpenChange={setShowAddField}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Custom Field</DialogTitle></DialogHeader>
+          <p className="text-sm text-slate-500 mb-2">Add a field that wasn't extracted automatically.</p>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Field Name</Label>
+              <Input
+                className="mt-1"
+                placeholder="e.g. Parking Spaces, Option to Purchase..."
+                value={newFieldKey}
+                onChange={e => setNewFieldKey(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">Value</Label>
+              <Input
+                className="mt-1"
+                placeholder="e.g. 4 reserved spaces"
+                value={newFieldValue}
+                onChange={e => setNewFieldValue(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => { setShowAddField(false); setNewFieldKey(""); setNewFieldValue(""); }}>Cancel</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={() => {
+                if (!newFieldKey.trim()) { toast.error("Field name is required"); return; }
+                setCustomFields(prev => [...prev, { label: newFieldKey.trim(), value: newFieldValue.trim() }]);
+                setShowAddField(false);
+                setNewFieldKey("");
+                setNewFieldValue("");
+                toast.success("Custom field added");
+              }}
+            >
+              Add Field
             </Button>
           </DialogFooter>
         </DialogContent>
