@@ -17,6 +17,7 @@ import { createPageUrl } from "@/utils";
 
 const EMPTY_LEASE = {
   tenant_name: "",
+  landlord_name: "",
   lease_type: "triple_net",
   start_date: "",
   end_date: "",
@@ -27,13 +28,14 @@ const EMPTY_LEASE = {
   square_footage: 0,
   security_deposit: 0,
   cam_amount: 0,
-  escalation_rate: 3,
+  escalation_rate: 0,
   escalation_type: "fixed_pct",
   renewal_type: "",
   renewal_options: "",
   renewal_notice_months: 0,
   ti_allowance: 0,
   free_rent_months: 0,
+  property_address: "",
   notes: "",
   confidence_scores: {},
 };
@@ -254,11 +256,16 @@ export default function LeaseUpload() {
     try {
       const result = await extractFromFile(selectedFile, "lease");
       const firstRow = result.rows?.[0] || {};
-      setExtractedData({
-        ...EMPTY_LEASE,
-        ...firstRow,
-        confidence_scores: firstRow.confidence_scores || {},
-      });
+      // Merge: extracted values win over EMPTY_LEASE defaults, but only if non-null/undefined
+      const merged = { ...EMPTY_LEASE };
+      for (const [key, val] of Object.entries(firstRow)) {
+        if (key === "confidence_scores") continue; // handled separately
+        if (val !== null && val !== undefined && val !== "") {
+          merged[key] = val;
+        }
+      }
+      merged.confidence_scores = firstRow.confidence_scores || {};
+      setExtractedData(merged);
     } catch (err) {
       console.warn("[LeaseUpload] extraction error:", err?.message);
       setExtractedData({ ...EMPTY_LEASE });
