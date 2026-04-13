@@ -169,7 +169,7 @@
     - Test performance and scalability with large documents
     - _Requirements: 2.7, 3.1, 3.2, 3.3_
 
-  - [x] 4.3 Create property-based tests for robustness
+  - [-] 4.3 Create property-based tests for robustness
     - Generate random file uploads across all supported formats
     - Test AI interpretation with various document content types
     - Test custom field creation with various field types and validation rules
