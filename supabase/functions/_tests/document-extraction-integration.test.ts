@@ -646,9 +646,10 @@ Deno.test("Integration Test 9: Custom field workflow integration", async () => {
   });
 
   assertEquals(autoCreateResponse.error, null, 'Auto-creation should succeed');
-  assertExists(autoCreateResponse.data.processing_summary, 'Should have processing summary');
+  assertExists(autoCreateResponse.data, 'Should have response data');
+  assertExists(autoCreateResponse.data!.processing_summary, 'Should have processing summary');
 
-  const summary = autoCreateResponse.data.processing_summary;
+  const summary = autoCreateResponse.data!.processing_summary;
   assert(summary.total_records > 0, 'Should process at least one record');
   assert(summary.suggestions_count >= 0, 'Should have suggestion count');
 
@@ -736,7 +737,7 @@ Deno.test("Integration Test 10: Error recovery and resilience", async () => {
         errorHandled: true
       });
       
-      console.log(`${scenario.name}: Exception handled - ${error.message}`);
+      console.log(`${scenario.name}: Exception handled - ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
