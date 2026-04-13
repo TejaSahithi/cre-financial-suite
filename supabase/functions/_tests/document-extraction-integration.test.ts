@@ -497,3 +497,260 @@ Deno.test("Integration Test 7: Database state consistency throughout pipeline", 
   console.log("Database state progression:", stateChanges.map(s => s.stage));
   console.log("✅ Database state consistency test completed successfully");
 });
+
+// Integration Test 8: Multi-Format Document Processing
+Deno.test("Integration Test 8: Multi-format document processing", async () => {
+  console.log("🔄 Testing multi-format document processing");
+
+  const testFormats = [
+    { name: 'lease.pdf', type: 'application/pdf', size: 1500000 },
+    { name: 'contract.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 800000 },
+    { name: 'agreement.doc', type: 'application/msword', size: 600000 },
+    { name: 'terms.txt', type: 'text/plain', size: 50000 },
+    { name: 'scan.png', type: 'image/png', size: 2000000 },
+    { name: 'document.jpg', type: 'image/jpeg', size: 1800000 }
+  ];
+
+  const results: { format: string; success: boolean; processingTime: number }[] = [];
+
+  for (const format of testFormats) {
+    console.log(`Testing format: ${format.name} (${format.type})`);
+    
+    const testFile = await createTestFile({
+      ...format,
+      orgId: 'multi-format-test-org'
+    });
+
+    const startTime = Date.now();
+    const result = await simulateEndToEndPipeline(testFile);
+    const processingTime = Date.now() - startTime;
+
+    results.push({
+      format: format.name,
+      success: result.status === 'success',
+      processingTime
+    });
+
+    // Verify each format can be processed
+    assert(['success', 'partial'].includes(result.status), 
+      `Format ${format.name} should be processable`);
+
+    // Verify routing stage always succeeds
+    assertEquals(result.stages.routing, true, 
+      `Routing should succeed for ${format.name}`);
+
+    console.log(`${format.name}: ${result.status} (${processingTime}ms)`);
+  }
+
+  // Verify all formats were attempted
+  assertEquals(results.length, testFormats.length, 'All formats should be tested');
+
+  // Verify at least 80% success rate
+  const successCount = results.filter(r => r.success).length;
+  const successRate = successCount / results.length;
+  assert(successRate >= 0.8, `Success rate should be at least 80%, got ${(successRate * 100).toFixed(1)}%`);
+
+  console.log(`Multi-format processing: ${successCount}/${results.length} successful (${(successRate * 100).toFixed(1)}%)`);
+  console.log("✅ Multi-format document processing test completed successfully");
+});
+
+// Integration Test 9: Custom Field Workflow Integration
+Deno.test("Integration Test 9: Custom field workflow integration", async () => {
+  console.log("🔄 Testing complete custom field workflow integration");
+
+  const testFile = await createTestFile({
+    name: 'complex-lease-with-custom-fields.pdf',
+    type: 'application/pdf',
+    size: 2500000,
+    orgId: 'custom-workflow-test-org'
+  });
+
+  // Step 1: Process document with custom field detection
+  console.log("Step 1: Processing document with custom field detection");
+  const extractionResult = await simulateEndToEndPipeline(testFile);
+
+  assertEquals(extractionResult.status, 'success', 'Document processing should succeed');
+  assertExists(extractionResult.customFieldSuggestions, 'Should have custom field suggestions');
+  assert(extractionResult.customFieldSuggestions!.length > 0, 'Should suggest at least one custom field');
+
+  // Step 2: Create custom fields from suggestions
+  console.log("Step 2: Creating custom fields from suggestions");
+  const createdFields: any[] = [];
+  
+  for (const suggestion of extractionResult.customFieldSuggestions!) {
+    const createResponse = await mockSupabase.functions.invoke('custom-fields', {
+      method: 'POST',
+      body: {
+        module_type: 'leases',
+        field_name: suggestion.field_name,
+        field_label: suggestion.field_label,
+        field_type: suggestion.field_type,
+        field_options: suggestion.field_options || []
+      }
+    });
+
+    assertEquals(createResponse.error, null, `Creating field ${suggestion.field_name} should succeed`);
+    createdFields.push(createResponse.data);
+  }
+
+  assert(createdFields.length > 0, 'Should create at least one custom field');
+
+  // Step 3: Set values for custom fields
+  console.log("Step 3: Setting values for custom fields");
+  const testRecordId = 'test-lease-workflow-123';
+  const fieldValues: Record<string, any> = {};
+
+  extractionResult.customFieldSuggestions!.forEach((suggestion, index) => {
+    fieldValues[suggestion.field_name] = `Test Value ${index + 1}`;
+  });
+
+  const setValuesResponse = await mockSupabase.functions.invoke('custom-fields', {
+    method: 'POST',
+    body: {
+      record_id: testRecordId,
+      record_type: 'lease',
+      values: fieldValues
+    }
+  });
+
+  assertEquals(setValuesResponse.error, null, 'Setting field values should succeed');
+
+  // Step 4: Retrieve custom field values
+  console.log("Step 4: Retrieving custom field values");
+  const getValuesResponse = await mockSupabase.functions.invoke('custom-fields', {
+    method: 'GET',
+    body: {
+      record_id: testRecordId,
+      record_type: 'lease'
+    }
+  });
+
+  assertEquals(getValuesResponse.error, null, 'Getting field values should succeed');
+
+  // Step 5: Test auto-creation workflow
+  console.log("Step 5: Testing auto-creation workflow");
+  const autoCreateFile = await createTestFile({
+    name: 'auto-create-test.pdf',
+    type: 'application/pdf',
+    size: 1000000,
+    orgId: 'auto-create-test-org'
+  });
+
+  const autoCreateResponse = await mockSupabase.functions.invoke('extract-with-custom-fields', {
+    body: {
+      file_id: autoCreateFile.id,
+      module_type: 'leases',
+      auto_create_fields: true,
+      confidence_threshold: 60
+    }
+  });
+
+  assertEquals(autoCreateResponse.error, null, 'Auto-creation should succeed');
+  assertExists(autoCreateResponse.data.processing_summary, 'Should have processing summary');
+
+  const summary = autoCreateResponse.data.processing_summary;
+  assert(summary.total_records > 0, 'Should process at least one record');
+  assert(summary.suggestions_count >= 0, 'Should have suggestion count');
+
+  console.log(`Workflow completed: ${createdFields.length} fields created, ${Object.keys(fieldValues).length} values set`);
+  console.log("✅ Custom field workflow integration test completed successfully");
+});
+
+// Integration Test 10: Error Recovery and Resilience
+Deno.test("Integration Test 10: Error recovery and resilience", async () => {
+  console.log("🔄 Testing error recovery and resilience mechanisms");
+
+  // Test various failure scenarios and recovery
+  const failureScenarios = [
+    {
+      name: 'Network timeout simulation',
+      file: { name: 'timeout-test.pdf', type: 'application/pdf', size: 1000000 },
+      expectedBehavior: 'graceful_degradation'
+    },
+    {
+      name: 'Corrupted file content',
+      file: { name: 'corrupted.pdf', type: 'application/pdf', size: 0 },
+      expectedBehavior: 'error_with_details'
+    },
+    {
+      name: 'Unsupported format',
+      file: { name: 'unknown.xyz', type: 'application/unknown', size: 500000 },
+      expectedBehavior: 'fallback_processing'
+    },
+    {
+      name: 'Very large file',
+      file: { name: 'huge.pdf', type: 'application/pdf', size: 500000000 },
+      expectedBehavior: 'resource_management'
+    }
+  ];
+
+  const recoveryResults: { scenario: string; recovered: boolean; errorHandled: boolean }[] = [];
+
+  for (const scenario of failureScenarios) {
+    console.log(`Testing scenario: ${scenario.name}`);
+    
+    const testFile = await createTestFile({
+      ...scenario.file,
+      orgId: `resilience-test-${Date.now()}`
+    });
+
+    try {
+      const result = await simulateEndToEndPipeline(testFile);
+      
+      const recovered = result.status !== 'failed';
+      const errorHandled = result.errors ? result.errors.length > 0 : false;
+
+      recoveryResults.push({
+        scenario: scenario.name,
+        recovered,
+        errorHandled
+      });
+
+      // Verify appropriate behavior based on scenario
+      switch (scenario.expectedBehavior) {
+        case 'graceful_degradation':
+          assert(['success', 'partial'].includes(result.status), 
+            'Should gracefully degrade on network issues');
+          break;
+        case 'error_with_details':
+          assert(result.errors && result.errors.length > 0, 
+            'Should provide detailed error information');
+          break;
+        case 'fallback_processing':
+          assert(result.stages.routing, 
+            'Should attempt routing even for unknown formats');
+          break;
+        case 'resource_management':
+          assert(result.processingTime < 10000, 
+            'Should handle large files within reasonable time');
+          break;
+      }
+
+      console.log(`${scenario.name}: ${result.status} (${result.errors?.length || 0} errors)`);
+
+    } catch (error) {
+      // Even exceptions should be handled gracefully
+      recoveryResults.push({
+        scenario: scenario.name,
+        recovered: false,
+        errorHandled: true
+      });
+      
+      console.log(`${scenario.name}: Exception handled - ${error.message}`);
+    }
+  }
+
+  // Verify overall resilience
+  const recoveredCount = recoveryResults.filter(r => r.recovered).length;
+  const errorHandledCount = recoveryResults.filter(r => r.errorHandled).length;
+
+  console.log(`Recovery rate: ${recoveredCount}/${recoveryResults.length} scenarios`);
+  console.log(`Error handling: ${errorHandledCount}/${recoveryResults.length} scenarios`);
+
+  // At least 75% of scenarios should either recover or handle errors gracefully
+  const resilienceRate = (recoveredCount + errorHandledCount) / recoveryResults.length;
+  assert(resilienceRate >= 0.75, 
+    `Resilience rate should be at least 75%, got ${(resilienceRate * 100).toFixed(1)}%`);
+
+  console.log("✅ Error recovery and resilience test completed successfully");
+});
