@@ -173,7 +173,7 @@ async function simulateEndToEndPipeline(testFile: TestFile): Promise<PipelineRes
     }
 
   } catch (error) {
-    result.errors?.push(`Pipeline error: ${error.message}`);
+    result.errors?.push(`Pipeline error: ${error instanceof Error ? error.message : String(error)}`);
     result.status = 'failed';
   }
 
