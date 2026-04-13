@@ -22,7 +22,7 @@ const ALL_FILE_TYPES = [
   { value: "budgets", label: "Budget" },
 ];
 
-const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".tsv"];
+const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".tsv", ".doc", ".docx", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".gif", ".bmp"];
 const DEFAULT_ACCEPT = ACCEPTED_EXTENSIONS.join(",");
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
@@ -311,7 +311,7 @@ export default function FileUploader({
             {multiple ? "Drag and drop files here, or click to select" : "Drag and drop a file here, or click to select"}
           </p>
           <p className="text-xs text-slate-400">
-            Accepted: .csv, .xls, .xlsx, .pdf, .txt, .tsv - Max 50 MB each
+            CSV, Excel, PDF, Word, images (JPG/PNG/TIFF) &mdash; Max 50 MB
           </p>
           <input
             ref={fileInputRef}

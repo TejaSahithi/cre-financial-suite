@@ -104,21 +104,30 @@ function decideRoute(detection: DetectionResult): RoutingDecision {
 
   switch (fileFormat) {
     case "csv":
+    case "text":
+      // Pure text/CSV — fast path through existing CSV parser
+      return { route: "parse-file", reason: `${fileFormat} file → CSV parser` };
+
     case "xls":
     case "xlsx":
-      return { route: "parse-file", reason: `${fileFormat} file → existing CSV/Excel parser` };
-
-    case "text":
-      // Plain text files are treated as CSV (tab or comma separated)
-      return { route: "parse-file", reason: "plain text file → CSV parser (tab/comma fallback)" };
+      // Excel — route through Docling which handles binary Excel natively
+      // (our CSV parser can't read binary .xlsx)
+      return { route: "parse-pdf-docling", reason: `${fileFormat} file → Docling (handles Excel binary format)` };
 
     case "pdf":
-      return { route: "parse-pdf-docling", reason: "PDF file → Docling OCR extraction" };
+      return { route: "parse-pdf-docling", reason: "PDF → Docling OCR extraction" };
+
+    case "docx":
+    case "doc":
+      return { route: "parse-pdf-docling", reason: `${fileFormat} Word document → Docling extraction` };
+
+    case "image":
+      return { route: "parse-pdf-docling", reason: "Image → Docling OCR extraction" };
 
     case "unknown":
     default:
-      // Last resort: try CSV parser — it will fail gracefully if the content is not parseable
-      return { route: "parse-file", reason: "unknown format → attempting CSV parser as fallback" };
+      // Unknown binary format — try Docling first; it handles many formats
+      return { route: "parse-pdf-docling", reason: "Unknown format → Docling (best-effort extraction)" };
   }
 }
 

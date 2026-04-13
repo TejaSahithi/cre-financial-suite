@@ -17,7 +17,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type FileFormat = 'csv' | 'xlsx' | 'xls' | 'pdf' | 'text' | 'unknown';
+export type FileFormat = 'csv' | 'xlsx' | 'xls' | 'pdf' | 'text' | 'docx' | 'doc' | 'image' | 'unknown';
 
 export type ModuleType =
   | 'leases'
@@ -50,6 +50,14 @@ const MIME_TO_FORMAT: Record<string, FileFormat> = {
   'application/vnd.ms-excel': 'xls',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'image/jpeg': 'image',
+  'image/png': 'image',
+  'image/tiff': 'image',
+  'image/webp': 'image',
+  'image/gif': 'image',
+  'image/bmp': 'image',
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +71,16 @@ const EXT_TO_FORMAT: Record<string, FileFormat> = {
   pdf: 'pdf',
   txt: 'text',
   tsv: 'text',
+  doc: 'doc',
+  docx: 'docx',
+  jpg: 'image',
+  jpeg: 'image',
+  png: 'image',
+  tiff: 'image',
+  tif: 'image',
+  webp: 'image',
+  gif: 'image',
+  bmp: 'image',
 };
 
 // ---------------------------------------------------------------------------
@@ -85,10 +103,26 @@ function detectFormatFromMagicBytes(bytes: Uint8Array): FileFormat | null {
   if (startsWith(bytes, '25504446')) return 'pdf';
 
   // XLSX / DOCX (ZIP-based Office): PK\x03\x04
-  if (startsWith(bytes, '504B0304')) return 'xlsx';
+  // We can't distinguish xlsx from docx by magic bytes alone — use extension as tiebreaker
+  if (startsWith(bytes, '504B0304')) return 'xlsx'; // caller refines to docx via extension
 
-  // XLS (Compound Document): D0CF11E0
-  if (startsWith(bytes, 'D0CF11E0')) return 'xls';
+  // XLS (Compound Document): D0CF11E0 — also used by .doc
+  if (startsWith(bytes, 'D0CF11E0')) return 'xls'; // caller refines to doc via extension
+
+  // JPEG: FF D8 FF
+  if (startsWith(bytes, 'FFD8FF')) return 'image';
+
+  // PNG: 89 50 4E 47
+  if (startsWith(bytes, '89504E47')) return 'image';
+
+  // GIF: GIF8
+  if (startsWith(bytes, '47494638')) return 'image';
+
+  // TIFF: 49 49 2A 00 (little-endian) or 4D 4D 00 2A (big-endian)
+  if (startsWith(bytes, '49492A00') || startsWith(bytes, '4D4D002A')) return 'image';
+
+  // BMP: BM
+  if (startsWith(bytes, '424D')) return 'image';
 
   // UTF-8 BOM (often CSV)
   if (startsWith(bytes, 'EFBBBF')) return 'csv';
@@ -192,6 +226,18 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
       fileFormat = magic;
       formatSource = 'magic_bytes';
     }
+  }
+
+  // 1d. Refine ZIP-based formats using extension (xlsx vs docx both start with PK)
+  if (fileFormat === 'xlsx' && formatSource === 'magic_bytes') {
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    if (ext === 'docx') { fileFormat = 'docx'; }
+    else if (ext === 'doc') { fileFormat = 'doc'; }
+  }
+  // Refine compound-doc formats (xls vs doc both start with D0CF11E0)
+  if (fileFormat === 'xls' && formatSource === 'magic_bytes') {
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    if (ext === 'doc') { fileFormat = 'doc'; }
   }
 
   // ── 2. Module type detection ─────────────────────────────────────────────

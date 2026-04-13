@@ -103,7 +103,7 @@ interface DoclingOutput {
  * If DOCLING_API_URL is not set, a mock response is returned so the
  * function can be tested without a live Docling instance.
  */
-async function callDoclingAPI(pdfBytes: Uint8Array, fileName: string): Promise<DoclingOutput> {
+async function callDoclingAPI(fileBytes: Uint8Array, fileName: string, mimeType = "application/pdf"): Promise<DoclingOutput> {
   const doclingUrl = Deno.env.get("DOCLING_API_URL");
 
   // ── Mock mode (no Docling service configured) ──────────────────────────
@@ -118,7 +118,7 @@ async function callDoclingAPI(pdfBytes: Uint8Array, fileName: string): Promise<D
   const formData = new FormData();
   formData.append(
     "file",
-    new Blob([pdfBytes], { type: "application/pdf" }),
+    new Blob([fileBytes], { type: mimeType }),
     fileName,
   );
   // Request all output types: text, tables, and key-value fields
@@ -302,23 +302,9 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 4. Validate that this is a PDF file
-    const mimeType: string = fileRecord.mime_type ?? "";
-    const fileName: string = fileRecord.file_name ?? "document.pdf";
-
-    if (
-      mimeType !== "application/pdf" &&
-      !fileName.toLowerCase().endsWith(".pdf")
-    ) {
-      return new Response(
-        JSON.stringify({
-          error: true,
-          message: `File is not a PDF. mime_type='${mimeType}', file_name='${fileName}'`,
-          error_code: "NOT_A_PDF",
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
+    // 4. Accept any file format — Docling handles PDF, Word, Excel, images, text
+    const fileName: string = fileRecord.file_name ?? "document";
+    const mimeType: string = fileRecord.mime_type ?? "application/octet-stream";
 
     // 5. Update status → 'parsing' (reuses existing pipeline status)
     await supabaseAdmin
@@ -352,8 +338,9 @@ Deno.serve(async (req: Request) => {
       const pdfBytes = new Uint8Array(await fileBlob.arrayBuffer());
 
       // 7. Call Docling to extract structured data
-      console.log(`[parse-pdf-docling] Calling Docling for file_id=${file_id}, size=${pdfBytes.length} bytes`);
-      const doclingOutput = await callDoclingAPI(pdfBytes, fileName);
+      //    Docling handles PDF, Word, Excel, images, and plain text natively.
+      console.log(`[parse-pdf-docling] Calling Docling for file_id=${file_id}, name=${fileName}, size=${pdfBytes.length} bytes`);
+      const doclingOutput = await callDoclingAPI(pdfBytes, fileName, mimeType);
 
       // 8. Store raw Docling output in uploaded_files for debugging.
       //    We use a new column `docling_raw` (JSONB).

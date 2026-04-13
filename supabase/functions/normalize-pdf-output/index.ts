@@ -179,28 +179,30 @@ Deno.serve(async (req: Request) => {
         moduleType,
       );
 
-      // Step 1b: Vertex AI fallback — if Docling produced sparse results and
-      // VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY are available, use Gemini to extract from full_text
+      // Step 1b: Vertex AI — always use if available and Docling output is sparse OR
+      // if the module type is leases (AI extraction is always better for leases)
       let finalRows = normResult.rows;
       let normSource = normResult.source;
       const warnings = [...normResult.warnings];
 
-      if (normResult.rowCount < 2 && Deno.env.get("VERTEX_PROJECT_ID") && Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY")) {
-        const fullText = fileRecord.docling_raw?.full_text ?? "";
-        if (fullText.length > 100) {
-          console.log(`[normalize-pdf-output] Docling sparse (${normResult.rowCount} rows) — trying Vertex AI`);
-          try {
-            const vertexRows = await extractWithVertexAI(fullText, moduleType);
-            if (vertexRows && vertexRows.length > 0) {
-              finalRows = vertexRows;
-              normSource = "vertex_ai";
-              warnings.push("Vertex AI (Gemini) used for extraction (Docling output was sparse)");
-              console.log(`[normalize-pdf-output] Vertex AI extracted ${vertexRows.length} rows`);
-            }
-          } catch (vertexErr) {
-            warnings.push(`Vertex AI extraction failed: ${vertexErr.message}`);
-            console.error("[normalize-pdf-output] Vertex AI error:", vertexErr.message);
+      const hasVertexAI = !!Deno.env.get("VERTEX_PROJECT_ID") && !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+      const doclingIsSparse = normResult.rowCount < 3;
+      const isLeaseModule = moduleType === "leases";
+      const fullText = fileRecord.docling_raw?.full_text ?? "";
+
+      if (hasVertexAI && (doclingIsSparse || isLeaseModule) && fullText.length > 50) {
+        console.log(`[normalize-pdf-output] Using Vertex AI for extraction (sparse=${doclingIsSparse}, lease=${isLeaseModule})`);
+        try {
+          const vertexRows = await extractWithVertexAI(fullText, moduleType);
+          if (vertexRows && vertexRows.length > 0) {
+            finalRows = vertexRows;
+            normSource = "vertex_ai";
+            warnings.push(`Vertex AI (Gemini) extracted ${vertexRows.length} record(s)`);
+            console.log(`[normalize-pdf-output] Vertex AI extracted ${vertexRows.length} rows`);
           }
+        } catch (vertexErr) {
+          warnings.push(`Vertex AI extraction failed: ${vertexErr.message}`);
+          console.error("[normalize-pdf-output] Vertex AI error:", vertexErr.message);
         }
       }
 
