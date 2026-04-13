@@ -169,14 +169,14 @@
     - Test performance and scalability with large documents
     - _Requirements: 2.7, 3.1, 3.2, 3.3_
 
-  - [-] 4.3 Create property-based tests for robustness
+  - [x] 4.3 Create property-based tests for robustness
     - Generate random file uploads across all supported formats
     - Test AI interpretation with various document content types
     - Test custom field creation with various field types and validation rules
     - Generate random existing data operations to verify preservation
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
 
-- [x] 5. Checkpoint - Ensure all tests pass
+- [-] 5. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise
   - Verify complete document extraction pipeline functionality
   - Verify preservation of existing system behavior
