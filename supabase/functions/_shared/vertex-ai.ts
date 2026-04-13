@@ -151,6 +151,13 @@ export interface VertexAIOptions {
   temperature?: number;
 }
 
+export interface VertexAIFileOptions extends VertexAIOptions {
+  /** Raw file bytes to send as an inline part */
+  fileBytes: Uint8Array;
+  /** MIME type of the file (e.g. "application/pdf", "image/jpeg") */
+  fileMimeType: string;
+}
+
 export interface VertexAIResponse {
   content: string;
   model: string;
@@ -237,6 +244,92 @@ export async function callVertexAIJSON<T = unknown>(opts: VertexAIOptions): Prom
     return JSON.parse(text) as T;
   } catch {
     console.error("[vertex-ai] Failed to parse JSON response:", text.slice(0, 300));
+    return null;
+  }
+}
+
+/**
+ * Call Vertex AI Gemini with a file (PDF, image, etc.) as an inline part.
+ * Gemini 1.5 Pro natively understands PDFs, images, Word docs, and more.
+ * Returns the text response.
+ */
+export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<VertexAIResponse> {
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID");
+  const location = Deno.env.get("VERTEX_LOCATION") ?? "us-central1";
+
+  if (!projectId) {
+    throw new Error("VERTEX_PROJECT_ID environment variable is not set");
+  }
+
+  const model = opts.model ?? DEFAULT_MODEL;
+  const accessToken = await getAccessToken();
+
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  // Encode file bytes as base64
+  const base64Data = btoa(String.fromCharCode(...opts.fileBytes));
+
+  const requestBody: Record<string, unknown> = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            inlineData: {
+              mimeType: opts.fileMimeType,
+              data: base64Data,
+            },
+          },
+          { text: opts.userPrompt },
+        ],
+      },
+    ],
+    generationConfig: {
+      maxOutputTokens: opts.maxOutputTokens ?? 4096,
+      temperature: opts.temperature ?? 0,
+      responseMimeType: "application/json",
+    },
+  };
+
+  if (opts.systemPrompt) {
+    requestBody.systemInstruction = {
+      parts: [{ text: opts.systemPrompt }],
+    };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "unknown error");
+    throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
+  }
+
+  const data = await response.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+
+  return { content, model, inputTokens, outputTokens };
+}
+
+/**
+ * Call Vertex AI with a file and parse the response as JSON.
+ */
+export async function callVertexAIFileJSON<T = unknown>(opts: VertexAIFileOptions): Promise<T | null> {
+  const response = await callVertexAIWithFile(opts);
+  let text = response.content.trim();
+  text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    console.error("[vertex-ai] Failed to parse file JSON response:", text.slice(0, 300));
     return null;
   }
 }

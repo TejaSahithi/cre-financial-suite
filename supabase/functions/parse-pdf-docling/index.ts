@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { callVertexAIFileJSON } from "../_shared/vertex-ai.ts";
 
 /**
  * parse-pdf-docling Edge Function
@@ -106,10 +107,10 @@ interface DoclingOutput {
 async function callDoclingAPI(fileBytes: Uint8Array, fileName: string, mimeType = "application/pdf"): Promise<DoclingOutput> {
   const doclingUrl = Deno.env.get("DOCLING_API_URL");
 
-  // ── Mock mode (no Docling service configured) ──────────────────────────
+  // ── Mock mode (no Docling service configured) — try Gemini native ────────
   if (!doclingUrl) {
-    console.warn("[parse-pdf-docling] DOCLING_API_URL not set — returning mock output");
-    return buildMockOutput(fileName);
+    console.warn("[parse-pdf-docling] DOCLING_API_URL not set — trying Gemini native extraction");
+    return extractWithGeminiNative(fileBytes, fileName, mimeType);
   }
 
   // ── Real Docling call ──────────────────────────────────────────────────
@@ -137,9 +138,8 @@ async function callDoclingAPI(fileBytes: Uint8Array, fileName: string, mimeType 
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "unknown error");
-    throw new Error(
-      `Docling API returned ${response.status}: ${errText}`,
-    );
+    console.error(`[parse-pdf-docling] Docling API returned ${response.status}: ${errText} — falling back to Gemini`);
+    return extractWithGeminiNative(fileBytes, fileName, mimeType);
   }
 
   const raw = await response.json();
@@ -216,9 +216,73 @@ function normaliseDoclingResponse(
 }
 
 /**
- * Returns a mock DoclingOutput for development/testing when no Docling
- * service is available. Mimics a typical commercial lease PDF.
+ * Gemini-native file extraction — used when DOCLING_API_URL is not set.
+ * Sends the raw file bytes directly to Gemini 1.5 Pro which natively
+ * understands PDFs, images, and many document formats.
  */
+async function extractWithGeminiNative(
+  fileBytes: Uint8Array,
+  fileName: string,
+  mimeType: string,
+): Promise<DoclingOutput> {
+  const hasVertexAI = !!Deno.env.get("VERTEX_PROJECT_ID") && !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+
+  if (!hasVertexAI) {
+    console.warn("[parse-pdf-docling] No Docling and no Vertex AI — returning mock output");
+    return buildMockOutput(fileName);
+  }
+
+  console.log(`[parse-pdf-docling] Using Gemini native extraction for ${fileName} (${mimeType})`);
+
+  const systemPrompt = `You are a document data extraction engine for commercial real estate.
+Extract ALL structured data from the document. Return ONLY valid JSON, no explanation.
+The first character must be "{" and the last must be "}".`;
+
+  const userPrompt = `Extract all data from this document and return a JSON object with:
+{
+  "full_text": "complete text content of the document",
+  "fields": [
+    {"key": "field_name", "value": "field_value", "confidence": 0.95}
+  ],
+  "tables": [
+    {
+      "table_index": 0,
+      "headers": ["col1", "col2"],
+      "rows": [["val1", "val2"]],
+      "markdown": "| col1 | col2 |\\n|---|---|\\n| val1 | val2 |"
+    }
+  ],
+  "text_blocks": [
+    {"block_index": 0, "type": "paragraph", "text": "...", "page": 1}
+  ],
+  "page_count": 1
+}
+
+Extract every field, table, and text block you can find. For CRE documents look for:
+tenant names, dates, rent amounts, square footage, lease terms, escalation rates, CAM details.`;
+
+  try {
+    const result = await callVertexAIFileJSON<Record<string, unknown>>({
+      systemPrompt,
+      userPrompt,
+      fileBytes,
+      fileMimeType: mimeType,
+      maxOutputTokens: 8192,
+      temperature: 0,
+    });
+
+    if (!result) {
+      console.warn("[parse-pdf-docling] Gemini returned null — using mock");
+      return buildMockOutput(fileName);
+    }
+
+    // Normalise the Gemini response into DoclingOutput shape
+    return normaliseDoclingResponse(result as Record<string, unknown>, fileName);
+  } catch (err) {
+    console.error("[parse-pdf-docling] Gemini native extraction error:", err.message);
+    return buildMockOutput(fileName);
+  }
+}
 function buildMockOutput(fileName: string): DoclingOutput {
   return {
     model_version: "mock-1.0",
