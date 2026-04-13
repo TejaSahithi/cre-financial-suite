@@ -118,7 +118,7 @@ export default function Portfolios() {
     type: "commercial",
     geography: "",
     fiscal_year: "jan_dec",
-    intent: "asset_management",
+    intents: [],
     notes: "",
   };
   const [form, setForm] = useState(defaultForm);
@@ -720,25 +720,62 @@ export default function Portfolios() {
               </div>
 
               <div>
-                <Label>Primary Intent</Label>
-                <Select value={form.intent} onValueChange={(value) => setForm({ ...form, intent: value })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="asset_management">General Asset Management</SelectItem>
-                    <SelectItem value="budgeting_cam">Budgeting & CAM Recovery</SelectItem>
-                    <SelectItem value="leasing">Leasing & Rent Roll Focus</SelectItem>
-                    <SelectItem value="acquisition">Acquisition Modeling</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>Primary Intent <span className="text-slate-400 font-normal">(select all that apply)</span></Label>
+                <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  {[
+                    { value: "asset_management", label: "Asset Management" },
+                    { value: "budgeting_cam", label: "Budgeting & CAM Recovery" },
+                    { value: "leasing", label: "Leasing & Rent Roll" },
+                    { value: "acquisition", label: "Acquisition Modeling" },
+                    { value: "disposition", label: "Disposition / Sale" },
+                    { value: "development", label: "Development / Construction" },
+                    { value: "value_add", label: "Value-Add Strategy" },
+                    { value: "core_hold", label: "Core Hold / Stabilized" },
+                    { value: "debt_financing", label: "Debt / Financing" },
+                    { value: "investor_reporting", label: "Investor Reporting" },
+                  ].map(({ value, label }) => (
+                    <label key={value} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors text-xs font-medium ${(form.intents || []).includes(value) ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 hover:border-slate-300 text-slate-600"}`}>
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={(form.intents || []).includes(value)}
+                        onChange={() => {
+                          const current = form.intents || [];
+                          setForm({ ...form, intents: current.includes(value) ? current.filter(v => v !== value) : [...current, value] });
+                        }}
+                      />
+                      <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${(form.intents || []).includes(value) ? "bg-blue-500 border-blue-500" : "border-slate-300"}`}>
+                        {(form.intents || []).includes(value) && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                      </span>
+                      {label}
+                    </label>
+                  ))}
+                </div>
               </div>
 
               <div>
                 <Label>Geography / Region</Label>
-                <Input
-                  value={form.geography}
-                  onChange={(event) => setForm({ ...form, geography: event.target.value })}
-                  placeholder="e.g. Southwest US, New York"
-                />
+                <Select value={form.geography} onValueChange={(value) => setForm({ ...form, geography: value })}>
+                  <SelectTrigger><SelectValue placeholder="Select region..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="northeast_us">Northeast US</SelectItem>
+                    <SelectItem value="southeast_us">Southeast US</SelectItem>
+                    <SelectItem value="midwest_us">Midwest US</SelectItem>
+                    <SelectItem value="southwest_us">Southwest US</SelectItem>
+                    <SelectItem value="west_coast_us">West Coast US</SelectItem>
+                    <SelectItem value="mountain_west">Mountain West</SelectItem>
+                    <SelectItem value="texas">Texas</SelectItem>
+                    <SelectItem value="florida">Florida</SelectItem>
+                    <SelectItem value="new_york">New York Metro</SelectItem>
+                    <SelectItem value="california">California</SelectItem>
+                    <SelectItem value="chicago_metro">Chicago Metro</SelectItem>
+                    <SelectItem value="national">National (Multi-Region)</SelectItem>
+                    <SelectItem value="canada">Canada</SelectItem>
+                    <SelectItem value="europe">Europe</SelectItem>
+                    <SelectItem value="asia_pacific">Asia Pacific</SelectItem>
+                    <SelectItem value="other">Other / International</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
@@ -783,7 +820,7 @@ export default function Portfolios() {
                   form.type && `Type: ${form.type}`,
                   form.geography && `Region: ${form.geography}`,
                   form.fiscal_year && `FY: ${form.fiscal_year}`,
-                  form.intent && `Intent: ${form.intent}`,
+                  form.intents?.length > 0 && `Intent: ${form.intents.join(", ")}`,
                 ].filter(Boolean).join(" | ");
                 const description = [form.description, extras].filter(Boolean).join(" — ") || undefined;
 

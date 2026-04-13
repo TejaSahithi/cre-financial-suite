@@ -496,8 +496,8 @@ export default function BuildingsUnits() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredBuildings.map((building) => {
             const buildingUnits = getBuildingUnits(building.id);
-            const leased = buildingUnits.filter((unit) => unit.occupancy_status === "leased").length;
-            const vacant = buildingUnits.filter((unit) => unit.occupancy_status === "vacant").length;
+            const leased = buildingUnits.filter((unit) => unit.occupancy_status === "leased" || unit.status === "leased").length;
+            const vacant = buildingUnits.filter((unit) => unit.occupancy_status === "vacant" || unit.status === "vacant").length;
 
             return (
               <Card key={building.id} className="overflow-hidden hover:shadow-lg transition-all border-slate-200/80">
@@ -552,14 +552,14 @@ export default function BuildingsUnits() {
                           <div className="flex items-center gap-1">
                             <Badge
                               className={`text-[10px] ${
-                                unit.occupancy_status === "leased"
+                                (unit.occupancy_status === "leased" || unit.status === "leased")
                                   ? "bg-emerald-100 text-emerald-700"
-                                  : unit.occupancy_status === "vacant"
+                                  : (unit.occupancy_status === "vacant" || unit.status === "vacant")
                                     ? "bg-amber-100 text-amber-700"
                                     : "bg-slate-100 text-slate-600"
                               }`}
                             >
-                              {unit.occupancy_status}
+                              {unit.occupancy_status || unit.status || "unknown"}
                             </Badge>
                             <Button
                               variant="ghost"

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Entity CRUD Service Layer — Production-Ready
  *
  * Features:
@@ -358,6 +358,13 @@ const ALLOWED_COLUMNS = {
     'base_year_amount', 'expense_stop_amount',
     'hvac_responsibility', 'sales_reporting_frequency',
     'extraction_data', 'confidence_score', 'low_confidence_fields', 'extracted_fields',
+    // Approval / signature columns (20260413_lease_approval_and_documents.sql)
+    'signed_by', 'signed_at', 'approval_comments', 'approval_document_url',
+  ]),
+  Document: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'property_id', 'lease_id', 'type', 'name', 'status',
+    'signed_by', 'signed_at', 'comments', 'document_url',
   ]),
   Tenant: new Set([
     ...COMMON_BASE_COLUMNS,
