@@ -12,12 +12,25 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
 const ALLOWED_MIME_TYPES = [
+  // Text / CSV
   'text/csv',
   'application/csv',
   'text/plain',
+  // Excel
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  // PDF
   'application/pdf',
+  // Word
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  // Images (for scanned documents)
+  'image/jpeg',
+  'image/png',
+  'image/tiff',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
   // browsers sometimes send octet-stream for unknown types
   'application/octet-stream',
 ];
@@ -75,9 +88,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Validate file format — accept CSV, Excel, PDF, plain text
+    // Validate file format — accept all formats Docling can handle
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    const allowedExtensions = ['csv', 'xls', 'xlsx', 'pdf', 'txt', 'tsv'];
+    const allowedExtensions = [
+      'csv', 'xls', 'xlsx', 'pdf', 'txt', 'tsv',
+      'doc', 'docx',
+      'jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp', 'gif', 'bmp',
+    ];
     const mimeAllowed = ALLOWED_MIME_TYPES.includes(file.type);
     const extAllowed = allowedExtensions.includes(ext);
 
@@ -85,7 +102,7 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({ 
           error: true, 
-          message: `Unsupported file format. Supported formats: CSV, Excel (.xls, .xlsx), PDF, plain text (.txt, .tsv)` 
+          message: `Unsupported file format. Supported: CSV, Excel, PDF, Word (.doc/.docx), images (JPG/PNG/TIFF), plain text` 
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
