@@ -210,6 +210,105 @@ ${rawText.slice(0, 24000)}
 OUTPUT ONLY VALID JSON. NO EXPLANATION.`;
 }
 
+// ── Rule-based fallback extractor (no AI needed) ─────────────────────────────
+// Used when Vertex AI is not configured. Handles common lease document patterns.
+
+function extractLeaseFieldsRuleBased(text: string, moduleType: string): Record<string, unknown>[] {
+  if (moduleType !== "lease") return [];
+
+  const t = text;
+  const row: Record<string, unknown> = {};
+
+  // Tenant name
+  const tenantMatch = t.match(/Tenant[:\s]+([A-Z][^\n,]{2,60}(?:LLC|Inc|Corp|Ltd|LLP|LP|Co\.?)?)/i)
+    || t.match(/Lessee[:\s]+([A-Z][^\n,]{2,60})/i);
+  if (tenantMatch) row.tenant_name = tenantMatch[1].trim();
+
+  // Lease type
+  if (/gross\s+lease|full[\s-]service/i.test(t)) row.lease_type = "gross";
+  else if (/triple[\s-]net|nnn/i.test(t)) row.lease_type = "nnn";
+  else if (/modified[\s-]gross/i.test(t)) row.lease_type = "modified_gross";
+  else if (/double[\s-]net|nn\b/i.test(t)) row.lease_type = "nn";
+
+  // Dates — "January 1, 2025" or "01/01/2025" or "2025-01-01"
+  const MONTHS: Record<string, string> = {
+    january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
+    jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"
+  };
+  function parseDate(s: string): string | null {
+    s = s.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (us) return `${us[3]}-${us[1].padStart(2,"0")}-${us[2].padStart(2,"0")}`;
+    const long = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+    if (long) {
+      const m = MONTHS[long[1].toLowerCase()];
+      if (m) return `${long[3]}-${m}-${long[2].padStart(2,"0")}`;
+    }
+    return null;
+  }
+
+  const startMatch = t.match(/(?:Start\s*Date|Commencement\s*Date|Lease\s*Start)[:\s]+([A-Za-z0-9\/\-,\s]+?)(?:\n|$)/i);
+  if (startMatch) { const d = parseDate(startMatch[1]); if (d) row.start_date = d; }
+
+  const endMatch = t.match(/(?:End\s*Date|Expir(?:ation|y)\s*Date|Lease\s*End)[:\s]+([A-Za-z0-9\/\-,\s]+?)(?:\n|$)/i);
+  if (endMatch) { const d = parseDate(endMatch[1]); if (d) row.end_date = d; }
+
+  // Monthly rent — "$5,000 per month" or "Base Rent: $5,000"
+  const rentMatch = t.match(/(?:Base\s*Rent|Monthly\s*Rent)[:\s]*\$?([\d,]+(?:\.\d{2})?)\s*(?:per\s*month)?/i)
+    || t.match(/\$\s*([\d,]+(?:\.\d{2})?)\s*per\s*month/i);
+  if (rentMatch) {
+    const n = parseFloat(rentMatch[1].replace(/,/g, ""));
+    if (!isNaN(n)) row.monthly_rent = n;
+  }
+
+  // Square footage
+  const sfMatch = t.match(/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|SF|RSF)/i);
+  if (sfMatch) {
+    const n = parseFloat(sfMatch[1].replace(/,/g, ""));
+    if (!isNaN(n)) row.square_footage = n;
+  }
+
+  // Security deposit
+  const depMatch = t.match(/(?:Security\s*Deposit)[:\s]*\$?([\d,]+(?:\.\d{2})?)/i);
+  if (depMatch) {
+    const n = parseFloat(depMatch[1].replace(/,/g, ""));
+    if (!isNaN(n)) row.security_deposit = n;
+  }
+
+  // Escalation
+  const escMatch = t.match(/(?:escalation|increase)[:\s]*([\d.]+)\s*%/i);
+  if (escMatch) row.escalation_rate = parseFloat(escMatch[1]);
+
+  // Free rent
+  const freeMatch = t.match(/(?:Free\s*Rent)[:\s]*(?:None|(\d+)\s*months?)/i);
+  if (freeMatch) row.free_rent_months = freeMatch[1] ? parseInt(freeMatch[1]) : 0;
+
+  // Late fee
+  const lateMatch = t.match(/(?:Late\s*Fee)[:\s]*([\d.]+)\s*%/i);
+  if (lateMatch) row.notes = (row.notes ? row.notes + "; " : "") + `Late fee: ${lateMatch[1]}%`;
+
+  // Utilities included → gross lease indicator
+  if (/utilities[:\s]+included/i.test(t) && !row.lease_type) row.lease_type = "gross";
+
+  // Derive annual_rent from monthly
+  if (row.monthly_rent) {
+    row.annual_rent = Math.round((row.monthly_rent as number) * 12 * 100) / 100;
+  }
+
+  // Confidence scores — higher for fields we found, lower for missing
+  const confidence_scores: Record<string, number> = {};
+  const fields = ["tenant_name","start_date","end_date","monthly_rent","annual_rent",
+    "square_footage","lease_type","security_deposit","escalation_rate","free_rent_months"];
+  for (const f of fields) {
+    confidence_scores[f] = row[f] != null ? 82 : 40;
+  }
+  row.confidence_scores = confidence_scores;
+
+  return Object.keys(row).length > 1 ? [row] : [];
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -236,7 +335,12 @@ Deno.serve(async (req: Request) => {
       !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
 
     if (!hasVertexAI) {
-      console.warn("[extract-document-fields] Vertex AI not configured");
+      console.warn("[extract-document-fields] Vertex AI not configured — using rule-based fallback");
+      // Rule-based extraction for common lease fields when AI is unavailable
+      const fallbackRows = extractLeaseFieldsRuleBased(rawText, moduleType);
+      if (fallbackRows.length > 0) {
+        return respond({ rows: fallbackRows, method: "fallback", model: "rule-based" });
+      }
       return respond({ error: "Vertex AI is not configured on this server.", rows: [], method: "fallback" });
     }
 

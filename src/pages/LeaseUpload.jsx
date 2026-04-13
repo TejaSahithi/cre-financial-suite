@@ -259,7 +259,8 @@ export default function LeaseUpload() {
         ...firstRow,
         confidence_scores: firstRow.confidence_scores || {},
       });
-    } catch {
+    } catch (err) {
+      console.warn("[LeaseUpload] extraction error:", err?.message);
       setExtractedData({ ...EMPTY_LEASE });
     } finally {
       setExtracting(false);
