@@ -238,7 +238,15 @@ export async function extractFromFile(file, moduleType) {
   }
 
   // ── CRITICAL: Run all calculations on every row regardless of source ───────
+  // Preserve confidence_scores before normalization (parsingEngine may drop them)
+  const confidenceScoresMap = rawRows.map(r => r?.confidence_scores || null);
   const normalizedRows = normalizeAndCalculate(moduleType, rawRows);
+  // Re-attach confidence_scores after normalization
+  normalizedRows.forEach((row, i) => {
+    if (confidenceScoresMap[i]) {
+      row.confidence_scores = confidenceScoresMap[i];
+    }
+  });
 
   return { rows: normalizedRows, method };
 }

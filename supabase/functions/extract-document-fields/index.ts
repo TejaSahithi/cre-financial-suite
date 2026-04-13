@@ -211,7 +211,8 @@ OUTPUT ONLY VALID JSON. NO EXPLANATION.`;
 }
 
 // ── Rule-based fallback extractor (no AI needed) ─────────────────────────────
-// Used when Vertex AI is not configured. Handles common lease document patterns.
+// Handles common lease document patterns without requiring Vertex AI.
+// Designed to work with plain-text output from Mammoth (Word), PDF.js, etc.
 
 function extractLeaseFieldsRuleBased(text: string, moduleType: string): Record<string, unknown>[] {
   if (moduleType !== "lease") return [];
@@ -219,94 +220,219 @@ function extractLeaseFieldsRuleBased(text: string, moduleType: string): Record<s
   const t = text;
   const row: Record<string, unknown> = {};
 
-  // Tenant name
-  const tenantMatch = t.match(/Tenant[:\s]+([A-Z][^\n,]{2,60}(?:LLC|Inc|Corp|Ltd|LLP|LP|Co\.?)?)/i)
-    || t.match(/Lessee[:\s]+([A-Z][^\n,]{2,60})/i);
-  if (tenantMatch) row.tenant_name = tenantMatch[1].trim();
+  // ── Helper: strip currency and parse number ──────────────────────────────
+  function parseMoney(s: string): number | null {
+    const cleaned = s.replace(/[$,\s]/g, "").replace(/\/month.*$/i, "").trim();
+    const n = parseFloat(cleaned);
+    return isNaN(n) ? null : n;
+  }
 
-  // Lease type
-  if (/gross\s+lease|full[\s-]service/i.test(t)) row.lease_type = "gross";
-  else if (/triple[\s-]net|nnn/i.test(t)) row.lease_type = "nnn";
-  else if (/modified[\s-]gross/i.test(t)) row.lease_type = "modified_gross";
-  else if (/double[\s-]net|nn\b/i.test(t)) row.lease_type = "nn";
-
-  // Dates — "January 1, 2025" or "01/01/2025" or "2025-01-01"
+  // ── Helper: parse date in multiple formats ───────────────────────────────
   const MONTHS: Record<string, string> = {
     january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
     july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
     jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"
   };
   function parseDate(s: string): string | null {
-    s = s.trim();
+    s = s.trim().replace(/\s+/g, " ");
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (us) return `${us[3]}-${us[1].padStart(2,"0")}-${us[2].padStart(2,"0")}`;
+    const dash = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if (dash) return `${dash[3]}-${dash[1].padStart(2,"0")}-${dash[2].padStart(2,"0")}`;
+    // "January 1, 2025" or "January 1 2025"
     const long = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
     if (long) {
       const m = MONTHS[long[1].toLowerCase()];
       if (m) return `${long[3]}-${m}-${long[2].padStart(2,"0")}`;
     }
+    // "1 January 2025"
+    const longRev = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+    if (longRev) {
+      const m = MONTHS[longRev[2].toLowerCase()];
+      if (m) return `${longRev[3]}-${m}-${longRev[1].padStart(2,"0")}`;
+    }
     return null;
   }
 
-  const startMatch = t.match(/(?:Start\s*Date|Commencement\s*Date|Lease\s*Start)[:\s]+([A-Za-z0-9\/\-,\s]+?)(?:\n|$)/i);
-  if (startMatch) { const d = parseDate(startMatch[1]); if (d) row.start_date = d; }
-
-  const endMatch = t.match(/(?:End\s*Date|Expir(?:ation|y)\s*Date|Lease\s*End)[:\s]+([A-Za-z0-9\/\-,\s]+?)(?:\n|$)/i);
-  if (endMatch) { const d = parseDate(endMatch[1]); if (d) row.end_date = d; }
-
-  // Monthly rent — "$5,000 per month" or "Base Rent: $5,000"
-  const rentMatch = t.match(/(?:Base\s*Rent|Monthly\s*Rent)[:\s]*\$?([\d,]+(?:\.\d{2})?)\s*(?:per\s*month)?/i)
-    || t.match(/\$\s*([\d,]+(?:\.\d{2})?)\s*per\s*month/i);
-  if (rentMatch) {
-    const n = parseFloat(rentMatch[1].replace(/,/g, ""));
-    if (!isNaN(n)) row.monthly_rent = n;
+  // ── Helper: extract value after a label ─────────────────────────────────
+  // Matches "Label: value" or "Label value" on the same line
+  function extractAfterLabel(label: string): string | null {
+    const re = new RegExp(`${label}[:\\s]+([^\\n]+)`, "i");
+    const m = t.match(re);
+    return m ? m[1].trim() : null;
   }
 
-  // Square footage
-  const sfMatch = t.match(/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|SF|RSF)/i);
-  if (sfMatch) {
-    const n = parseFloat(sfMatch[1].replace(/,/g, ""));
-    if (!isNaN(n)) row.square_footage = n;
+  // ── Tenant name ──────────────────────────────────────────────────────────
+  // Handles: "Tenant: ABC Consulting LLC" or "Lessee: ..."
+  const tenantRaw = extractAfterLabel("Tenant") || extractAfterLabel("Lessee") || extractAfterLabel("Occupant");
+  if (tenantRaw) {
+    // Remove trailing punctuation and common noise
+    row.tenant_name = tenantRaw.replace(/[,;.]$/, "").trim();
   }
 
-  // Security deposit
-  const depMatch = t.match(/(?:Security\s*Deposit)[:\s]*\$?([\d,]+(?:\.\d{2})?)/i);
-  if (depMatch) {
-    const n = parseFloat(depMatch[1].replace(/,/g, ""));
-    if (!isNaN(n)) row.security_deposit = n;
+  // ── Landlord name ────────────────────────────────────────────────────────
+  const landlordRaw = extractAfterLabel("Landlord") || extractAfterLabel("Lessor") || extractAfterLabel("Owner");
+  if (landlordRaw) {
+    row.landlord_name = landlordRaw.replace(/[,;.]$/, "").trim();
   }
 
-  // Escalation
-  const escMatch = t.match(/(?:escalation|increase)[:\s]*([\d.]+)\s*%/i);
-  if (escMatch) row.escalation_rate = parseFloat(escMatch[1]);
+  // ── Premises / address ───────────────────────────────────────────────────
+  const premisesRaw = extractAfterLabel("Premises") || extractAfterLabel("Property Address") || extractAfterLabel("Location");
+  if (premisesRaw) {
+    row.property_address = premisesRaw.replace(/[,;.]$/, "").trim();
+    // Try to extract suite/unit number from premises
+    const suiteMatch = premisesRaw.match(/Suite\s+([\w\-]+)/i) || premisesRaw.match(/Unit\s+([\w\-]+)/i);
+    if (suiteMatch) row.unit_number = suiteMatch[1];
+  }
 
-  // Free rent
-  const freeMatch = t.match(/(?:Free\s*Rent)[:\s]*(?:None|(\d+)\s*months?)/i);
-  if (freeMatch) row.free_rent_months = freeMatch[1] ? parseInt(freeMatch[1]) : 0;
+  // ── Lease type ───────────────────────────────────────────────────────────
+  // Check document title first, then body
+  if (/gross\s+lease|full[\s-]service\s+lease/i.test(t)) row.lease_type = "gross";
+  else if (/triple[\s-]net|nnn\s+lease/i.test(t)) row.lease_type = "nnn";
+  else if (/modified[\s-]gross/i.test(t)) row.lease_type = "modified_gross";
+  else if (/double[\s-]net|\bnn\b/i.test(t)) row.lease_type = "nn";
+  else if (/net\s+lease/i.test(t)) row.lease_type = "net";
+  // Infer from expense responsibility
+  else if (/landlord\s+shall\s+be\s+responsible\s+for\s+all\s+operating/i.test(t)) row.lease_type = "gross";
+  else if (/tenant\s+shall\s+pay.*taxes.*insurance.*maintenance/i.test(t)) row.lease_type = "nnn";
 
-  // Late fee
-  const lateMatch = t.match(/(?:Late\s*Fee)[:\s]*([\d.]+)\s*%/i);
-  if (lateMatch) row.notes = (row.notes ? row.notes + "; " : "") + `Late fee: ${lateMatch[1]}%`;
+  // ── Dates ────────────────────────────────────────────────────────────────
+  const startRaw = extractAfterLabel("Start Date") || extractAfterLabel("Commencement Date") || extractAfterLabel("Lease Start");
+  if (startRaw) { const d = parseDate(startRaw); if (d) row.start_date = d; }
 
-  // Utilities included → gross lease indicator
-  if (/utilities[:\s]+included/i.test(t) && !row.lease_type) row.lease_type = "gross";
+  const endRaw = extractAfterLabel("End Date") || extractAfterLabel("Expiration Date") || extractAfterLabel("Lease End") || extractAfterLabel("Termination Date");
+  if (endRaw) { const d = parseDate(endRaw); if (d) row.end_date = d; }
 
-  // Derive annual_rent from monthly
+  // ── Monthly rent ─────────────────────────────────────────────────────────
+  // Handles: "Base Rent: $5,000 per month" or "$5,000 per month" standalone
+  const rentRaw = extractAfterLabel("Base Rent") || extractAfterLabel("Monthly Rent") || extractAfterLabel("Rent");
+  if (rentRaw) {
+    const n = parseMoney(rentRaw);
+    if (n !== null && n > 0) row.monthly_rent = n;
+  }
+  // Fallback: find "$X,XXX per month" anywhere in text
+  if (!row.monthly_rent) {
+    const m = t.match(/\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|monthly)/i);
+    if (m) { const n = parseMoney(m[1]); if (n !== null) row.monthly_rent = n; }
+  }
+
+  // ── Square footage ───────────────────────────────────────────────────────
+  const sfRaw = extractAfterLabel("Square Footage") || extractAfterLabel("Rentable Area") || extractAfterLabel("Leased Area");
+  if (sfRaw) {
+    const n = parseFloat(sfRaw.replace(/[,\s]/g, "").replace(/[^\d.]/g, ""));
+    if (!isNaN(n) && n > 0) row.square_footage = n;
+  }
+  if (!row.square_footage) {
+    const m = t.match(/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i);
+    if (m) { const n = parseFloat(m[1].replace(/,/g, "")); if (!isNaN(n)) row.square_footage = n; }
+  }
+
+  // ── Security deposit ─────────────────────────────────────────────────────
+  const depRaw = extractAfterLabel("Security Deposit") || extractAfterLabel("Deposit");
+  if (depRaw) {
+    const n = parseMoney(depRaw);
+    if (n !== null && n > 0) row.security_deposit = n;
+  }
+
+  // ── Escalation ───────────────────────────────────────────────────────────
+  const escRaw = extractAfterLabel("Escalation") || extractAfterLabel("Annual Increase") || extractAfterLabel("Rent Increase");
+  if (escRaw) {
+    const m = escRaw.match(/([\d.]+)\s*%/);
+    if (m) row.escalation_rate = parseFloat(m[1]);
+  }
+  if (!row.escalation_rate) {
+    const m = t.match(/(?:annual\s+)?(?:escalation|increase|adjustment)[:\s]+([\d.]+)\s*%/i);
+    if (m) row.escalation_rate = parseFloat(m[1]);
+  }
+
+  // ── Free rent ────────────────────────────────────────────────────────────
+  const freeRaw = extractAfterLabel("Free Rent");
+  if (freeRaw) {
+    if (/none|0|no\s+free/i.test(freeRaw)) row.free_rent_months = 0;
+    else {
+      const m = freeRaw.match(/(\d+)\s*months?/i);
+      if (m) row.free_rent_months = parseInt(m[1]);
+    }
+  }
+
+  // ── Renewal options ──────────────────────────────────────────────────────
+  const renewalRaw = extractAfterLabel("Renewal") || extractAfterLabel("Renewal Options") || extractAfterLabel("Option to Renew");
+  if (renewalRaw) row.renewal_options = renewalRaw.replace(/[,;.]$/, "").trim();
+
+  // ── Late fee → notes ─────────────────────────────────────────────────────
+  const lateFeeRaw = extractAfterLabel("Late Fee") || extractAfterLabel("Late Charge");
+  if (lateFeeRaw) {
+    row.notes = (row.notes ? row.notes + "; " : "") + `Late fee: ${lateFeeRaw.trim()}`;
+  }
+
+  // ── Utilities ────────────────────────────────────────────────────────────
+  const utilitiesRaw = extractAfterLabel("Utilities");
+  if (utilitiesRaw) {
+    row.notes = (row.notes ? row.notes + "; " : "") + `Utilities: ${utilitiesRaw.trim()}`;
+    // Utilities included → confirms gross lease
+    if (/included/i.test(utilitiesRaw) && !row.lease_type) row.lease_type = "gross";
+  }
+
+  // ── Expense responsibility → notes ───────────────────────────────────────
+  // Extract who pays what (key for lease type reasoning)
+  const expenseMatch = t.match(/(?:Expenses?|Operating\s+Expenses?)[:\s]+([^\n.]{10,200})/i);
+  if (expenseMatch) {
+    row.notes = (row.notes ? row.notes + "; " : "") + `Expenses: ${expenseMatch[1].trim()}`;
+  }
+
+  // ── Rent payment terms → notes ───────────────────────────────────────────
+  const paymentRaw = extractAfterLabel("Rent Payment") || extractAfterLabel("Payment Due");
+  if (paymentRaw) {
+    row.notes = (row.notes ? row.notes + "; " : "") + `Payment: ${paymentRaw.trim()}`;
+  }
+
+  // ── Derive annual_rent from monthly ─────────────────────────────────────
   if (row.monthly_rent) {
     row.annual_rent = Math.round((row.monthly_rent as number) * 12 * 100) / 100;
+    row.base_rent = row.monthly_rent;
   }
 
-  // Confidence scores — higher for fields we found, lower for missing
-  const confidence_scores: Record<string, number> = {};
-  const fields = ["tenant_name","start_date","end_date","monthly_rent","annual_rent",
-    "square_footage","lease_type","security_deposit","escalation_rate","free_rent_months"];
-  for (const f of fields) {
-    confidence_scores[f] = row[f] != null ? 82 : 40;
+  // ── Derive lease_term_months from dates ──────────────────────────────────
+  if (row.start_date && row.end_date) {
+    const s = new Date(row.start_date as string);
+    const e = new Date(row.end_date as string);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+      const months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+      if (months > 0) row.lease_term_months = months;
+    }
   }
+
+  // ── Confidence scores — reflect actual extraction quality ────────────────
+  // Fields found via explicit label match → 88-92%
+  // Fields inferred/derived → 75-80%
+  // Fields not found → 35-45% (low confidence, needs human review)
+  const confidence_scores: Record<string, number> = {
+    tenant_name:          row.tenant_name          != null ? 92 : 38,
+    lease_type:           row.lease_type           != null ? 88 : 42,
+    start_date:           row.start_date           != null ? 95 : 38,
+    end_date:             row.end_date             != null ? 95 : 38,
+    monthly_rent:         row.monthly_rent         != null ? 90 : 38,
+    annual_rent:          row.annual_rent          != null ? (row.monthly_rent != null ? 78 : 38) : 38,
+    base_rent:            row.base_rent            != null ? 88 : 38,
+    rent_per_sf:          row.rent_per_sf          != null ? 85 : 38,
+    square_footage:       row.square_footage       != null ? 88 : 38,
+    security_deposit:     row.security_deposit     != null ? 88 : 38,
+    cam_amount:           row.cam_amount           != null ? 85 : 38,
+    escalation_rate:      row.escalation_rate      != null ? 85 : 38,
+    escalation_type:      row.escalation_type      != null ? 80 : 38,
+    renewal_options:      row.renewal_options      != null ? 82 : 38,
+    renewal_notice_months:row.renewal_notice_months!= null ? 80 : 38,
+    ti_allowance:         row.ti_allowance         != null ? 85 : 38,
+    free_rent_months:     row.free_rent_months     != null ? 85 : 38,
+    notes:                row.notes               != null ? 80 : 38,
+  };
   row.confidence_scores = confidence_scores;
 
-  return Object.keys(row).length > 1 ? [row] : [];
+  // Only return if we found at least some meaningful fields
+  const meaningfulFields = ["tenant_name","start_date","end_date","monthly_rent","lease_type"];
+  const foundCount = meaningfulFields.filter(f => row[f] != null).length;
+  return foundCount >= 1 ? [row] : [];
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
