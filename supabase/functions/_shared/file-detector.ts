@@ -43,27 +43,44 @@ export interface DetectionResult {
 // MIME → format map
 // ---------------------------------------------------------------------------
 
+/** Enhanced MIME type to format mapping with more comprehensive coverage */
 const MIME_TO_FORMAT: Record<string, FileFormat> = {
   'text/csv': 'csv',
   'application/csv': 'csv',
+  'text/comma-separated-values': 'csv',
   'text/plain': 'text',
+  'text/tab-separated-values': 'text',
   'application/vnd.ms-excel': 'xls',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/pdf': 'pdf',
   'application/msword': 'doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/rtf': 'text',
+  'text/rtf': 'text',
+  // Image formats
   'image/jpeg': 'image',
+  'image/jpg': 'image',
   'image/png': 'image',
   'image/tiff': 'image',
   'image/webp': 'image',
   'image/gif': 'image',
   'image/bmp': 'image',
+  'image/svg+xml': 'image',
+  'image/x-icon': 'image',
+  'image/vnd.microsoft.icon': 'image',
+  // Additional text formats
+  'text/markdown': 'text',
+  'text/x-log': 'text',
+  'application/x-log': 'text',
+  // Generic fallbacks
+  'application/octet-stream': 'unknown', // Will be refined by extension/magic bytes
 };
 
 // ---------------------------------------------------------------------------
 // Extension → format map
 // ---------------------------------------------------------------------------
 
+/** Enhanced file extension to format mapping with more formats */
 const EXT_TO_FORMAT: Record<string, FileFormat> = {
   csv: 'csv',
   xls: 'xls',
@@ -71,8 +88,10 @@ const EXT_TO_FORMAT: Record<string, FileFormat> = {
   pdf: 'pdf',
   txt: 'text',
   tsv: 'text',
+  tab: 'text',
   doc: 'doc',
   docx: 'docx',
+  rtf: 'text', // Rich Text Format - treat as text
   jpg: 'image',
   jpeg: 'image',
   png: 'image',
@@ -81,6 +100,19 @@ const EXT_TO_FORMAT: Record<string, FileFormat> = {
   webp: 'image',
   gif: 'image',
   bmp: 'image',
+  svg: 'image',
+  ico: 'image',
+  // Additional text formats
+  log: 'text',
+  md: 'text',
+  markdown: 'text',
+  // Additional office formats
+  ppt: 'unknown', // PowerPoint - not supported yet but recognized
+  pptx: 'unknown',
+  // Archive formats that might contain documents
+  zip: 'unknown',
+  rar: 'unknown',
+  '7z': 'unknown',
 };
 
 // ---------------------------------------------------------------------------
@@ -96,6 +128,7 @@ function startsWith(bytes: Uint8Array, hex: string): boolean {
   return true;
 }
 
+/** Enhanced magic bytes detection with more comprehensive format support */
 function detectFormatFromMagicBytes(bytes: Uint8Array): FileFormat | null {
   if (bytes.length < 4) return null;
 
@@ -115,7 +148,7 @@ function detectFormatFromMagicBytes(bytes: Uint8Array): FileFormat | null {
   // PNG: 89 50 4E 47
   if (startsWith(bytes, '89504E47')) return 'image';
 
-  // GIF: GIF8
+  // GIF: GIF8 (GIF87a or GIF89a)
   if (startsWith(bytes, '47494638')) return 'image';
 
   // TIFF: 49 49 2A 00 (little-endian) or 4D 4D 00 2A (big-endian)
@@ -124,13 +157,50 @@ function detectFormatFromMagicBytes(bytes: Uint8Array): FileFormat | null {
   // BMP: BM
   if (startsWith(bytes, '424D')) return 'image';
 
+  // WebP: RIFF....WEBP
+  if (bytes.length >= 12 && startsWith(bytes, '52494646') && 
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return 'image';
+  }
+
   // UTF-8 BOM (often CSV)
   if (startsWith(bytes, 'EFBBBF')) return 'csv';
 
-  // Plain text heuristic: all bytes in printable ASCII range
-  const sample = bytes.slice(0, Math.min(512, bytes.length));
-  const isPrintable = Array.from(sample).every(b => b === 9 || b === 10 || b === 13 || (b >= 32 && b <= 126));
-  if (isPrintable) return 'csv'; // assume CSV for printable text
+  // UTF-16 BOM (little-endian and big-endian)
+  if (startsWith(bytes, 'FFFE') || startsWith(bytes, 'FEFF')) return 'text';
+
+  // Enhanced plain text heuristic with better detection
+  const sample = bytes.slice(0, Math.min(1024, bytes.length)); // Increased sample size
+  let printableCount = 0;
+  let totalCount = 0;
+  
+  for (const b of sample) {
+    totalCount++;
+    // Allow common text characters: tab, newline, carriage return, printable ASCII
+    if (b === 9 || b === 10 || b === 13 || (b >= 32 && b <= 126)) {
+      printableCount++;
+    }
+    // Allow common UTF-8 continuation bytes
+    else if (b >= 128 && b <= 191) {
+      printableCount += 0.5; // Partial credit for UTF-8
+    }
+  }
+  
+  const printableRatio = printableCount / totalCount;
+  
+  // If >90% printable characters, likely text/CSV
+  if (printableRatio > 0.9) {
+    // Check for CSV indicators
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(sample);
+    const hasCommas = (text.match(/,/g) || []).length > 3;
+    const hasQuotes = (text.match(/"/g) || []).length > 1;
+    const hasNewlines = (text.match(/\n/g) || []).length > 0;
+    
+    if (hasCommas && (hasQuotes || hasNewlines)) {
+      return 'csv';
+    }
+    return 'text';
+  }
 
   return null;
 }
@@ -196,30 +266,22 @@ export interface DetectOptions {
   contentPreview?: string;
 }
 
+/** Enhanced main detection function with better fallback logic */
 export function detectFileType(opts: DetectOptions): DetectionResult {
   const { mimeType = '', fileName = '', explicitModuleType, fileBytes, contentPreview = '' } = opts;
 
-  // ── 1. File format detection ─────────────────────────────────────────────
+  // ── 1. File format detection with enhanced logic ────────────────────────
 
   let fileFormat: FileFormat = 'unknown';
   let formatSource: DetectionResult['formatSource'] = 'fallback';
 
-  // 1a. MIME type
-  if (mimeType && MIME_TO_FORMAT[mimeType]) {
+  // 1a. MIME type (but be more selective about trusting it)
+  if (mimeType && MIME_TO_FORMAT[mimeType] && mimeType !== 'application/octet-stream') {
     fileFormat = MIME_TO_FORMAT[mimeType];
     formatSource = 'mime';
   }
 
-  // 1b. File extension (overrides only if MIME was unknown/generic)
-  if (fileFormat === 'unknown' || mimeType === 'application/octet-stream') {
-    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-    if (EXT_TO_FORMAT[ext]) {
-      fileFormat = EXT_TO_FORMAT[ext];
-      formatSource = 'extension';
-    }
-  }
-
-  // 1c. Magic bytes (overrides extension if we have bytes)
+  // 1b. Magic bytes (highest priority when available - most reliable)
   if (fileBytes && fileBytes.length >= 4) {
     const magic = detectFormatFromMagicBytes(fileBytes);
     if (magic) {
@@ -228,19 +290,58 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
     }
   }
 
-  // 1d. Refine ZIP-based formats using extension (xlsx vs docx both start with PK)
+  // 1c. File extension (fallback when MIME is generic or magic bytes unavailable)
+  if (fileFormat === 'unknown' || (mimeType === 'application/octet-stream' && formatSource !== 'magic_bytes')) {
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    if (EXT_TO_FORMAT[ext]) {
+      // Only override if we don't have a confident magic byte detection
+      if (formatSource !== 'magic_bytes') {
+        fileFormat = EXT_TO_FORMAT[ext];
+        formatSource = 'extension';
+      }
+    }
+  }
+
+  // 1d. Enhanced refinement for ZIP-based and compound document formats
   if (fileFormat === 'xlsx' && formatSource === 'magic_bytes') {
     const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-    if (ext === 'docx') { fileFormat = 'docx'; }
-    else if (ext === 'doc') { fileFormat = 'doc'; }
+    if (ext === 'docx') { 
+      fileFormat = 'docx'; 
+    } else if (ext === 'doc') { 
+      fileFormat = 'doc'; 
+    }
+    // Keep xlsx as default for PK magic bytes
   }
+  
   // Refine compound-doc formats (xls vs doc both start with D0CF11E0)
   if (fileFormat === 'xls' && formatSource === 'magic_bytes') {
     const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-    if (ext === 'doc') { fileFormat = 'doc'; }
+    if (ext === 'doc') { 
+      fileFormat = 'doc'; 
+    }
+    // Keep xls as default for compound document magic bytes
   }
 
-  // ── 2. Module type detection ─────────────────────────────────────────────
+  // 1e. Content-based fallback detection for edge cases
+  if (fileFormat === 'unknown' && contentPreview) {
+    // Check for CSV patterns in content
+    const csvIndicators = [',', '"', '\n'].every(char => contentPreview.includes(char));
+    const tabIndicators = contentPreview.includes('\t') && contentPreview.includes('\n');
+    
+    if (csvIndicators) {
+      fileFormat = 'csv';
+      formatSource = 'fallback';
+    } else if (tabIndicators) {
+      fileFormat = 'text';
+      formatSource = 'fallback';
+    } else if (contentPreview.trim().length > 0) {
+      // Has readable content, likely text
+      fileFormat = 'text';
+      formatSource = 'fallback';
+    }
+  }
+
+  // ── 2. Module type detection (unchanged but with better confidence) ──────
 
   let moduleType: ModuleType = 'unknown';
   let moduleSource: DetectionResult['moduleSource'] = 'fallback';
@@ -272,7 +373,7 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
     }
   }
 
-  // ── 3. Confidence score ──────────────────────────────────────────────────
+  // ── 3. Enhanced confidence scoring ───────────────────────────────────────
 
   const formatConfidence =
     formatSource === 'magic_bytes' ? 0.95 :
@@ -284,7 +385,16 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
     moduleSource === 'content_keyword' ? 0.85 :
     moduleSource === 'filename_keyword' ? 0.70 : 0.3;
 
-  const confidence = (formatConfidence + moduleConfidence) / 2;
+  // Boost confidence if multiple detection methods agree
+  let confidenceBoost = 0;
+  if (formatSource === 'magic_bytes' && fileName.split('.').pop()?.toLowerCase() === fileFormat) {
+    confidenceBoost += 0.05; // Magic bytes and extension agree
+  }
+  if (formatSource === 'mime' && fileName.split('.').pop()?.toLowerCase() === fileFormat) {
+    confidenceBoost += 0.03; // MIME and extension agree
+  }
+
+  const confidence = Math.min(1.0, (formatConfidence + moduleConfidence) / 2 + confidenceBoost);
 
   return { fileFormat, moduleType, formatSource, moduleSource, confidence };
 }
