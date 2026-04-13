@@ -1,7 +1,8 @@
 import React, { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
-import FileUploader from "@/components/FileUploader";
+import EnhancedFileUploader from "@/components/EnhancedFileUploader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
@@ -12,6 +13,7 @@ async function fetchProperties() {
 }
 
 export default function PipelineUpload() {
+  const location = useLocation();
   const location = useLocation();
   const urlParams = new URLSearchParams(location.search);
   const [selectedPropertyId, setSelectedPropertyId] = useState(urlParams.get("property") || "");
@@ -24,9 +26,10 @@ export default function PipelineUpload() {
   return (
     <div className="p-6 space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Upload Data Files</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Enhanced Data Upload & Processing</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Upload CSV or Excel files to import leases, expenses, properties, or revenue data
+          Upload files with AI-powered extraction and custom field support. 
+          CSV/Excel files use standard processing, while documents (PDF, Word, images) get enhanced AI extraction.
         </p>
       </div>
 
@@ -53,7 +56,7 @@ export default function PipelineUpload() {
         </p>
       </div>
 
-      <FileUploader propertyId={selectedPropertyId || undefined} />
+      <EnhancedFileUploader propertyId={selectedPropertyId || undefined} />
     </div>
   );
 }
