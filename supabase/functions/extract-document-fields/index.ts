@@ -131,17 +131,25 @@ Deno.serve(async (req: Request) => {
     // Prefer structured DoclingOutput when available
     if (doclingOutput && typeof doclingOutput === "object") {
       input.docling = doclingOutput;
-    } else if (rawText && typeof rawText === "string" && rawText.trim().length > 0) {
-      input.rawText = rawText;
-    } else if (fileBase64 && typeof fileBase64 === "string") {
-      input.fileBase64 = fileBase64;
-      input.fileMimeType = fileMimeType || "application/pdf";
-      input.rawText = ""; // explicitly empty text
     } else {
-      return respond({
-        error: "Either 'doclingOutput', 'rawText', or 'fileBase64' must be provided",
-        rows: [],
-      }, 400);
+      const hasRawText = rawText && typeof rawText === "string" && rawText.trim().length > 0;
+      const hasFileBase64 = fileBase64 && typeof fileBase64 === "string";
+
+      if (hasRawText) {
+        input.rawText = rawText;
+      }
+
+      if (hasFileBase64) {
+        input.fileBase64 = fileBase64;
+        input.fileMimeType = fileMimeType || "application/pdf";
+      }
+
+      if (!hasRawText && !hasFileBase64) {
+        return respond({
+          error: "Either 'doclingOutput', 'rawText', or 'fileBase64' must be provided",
+          rows: [],
+        }, 400);
+      }
     }
 
     const extractionOptions: ExtractionOptions = {
@@ -154,7 +162,7 @@ Deno.serve(async (req: Request) => {
 
     console.log(
       `[extract-document-fields] ${moduleType} | "${fileName}" | ` +
-      `docling=${!!doclingOutput} | rawText=${rawText.length} chars | ` +
+      `docling=${!!doclingOutput} | rawText=${rawText.length} chars | fileBase64=${!!fileBase64} | ` +
       `suggestCustomFields=${suggestCustomFields}`,
     );
 

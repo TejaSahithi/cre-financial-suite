@@ -177,6 +177,8 @@ export async function runExtractionPipeline(
 
   if (input.docling) {
     rawDocling = input.docling;
+  } else if ((input.rawText ?? "").trim().length > 0) {
+    rawDocling = rawTextToDocling(input.rawText ?? "");
   } else if (input.fileBase64) {
     log.info("No docling output provided — parsing raw file bytes");
     // Convert base64 to Uint8Array
