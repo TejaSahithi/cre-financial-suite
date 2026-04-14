@@ -28,7 +28,7 @@ import { normalizeAndCalculate } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-const PDF_VISION_MAX_BYTES = 12 * 1024 * 1024;
+const PDF_VISION_MAX_BYTES = 20 * 1024 * 1024;
 const PDF_MIN_MEANINGFUL_CHARS_PER_PAGE = 120;
 const PDF_MIN_TEXT_COVERAGE_RATIO = 0.7;
 const PDF_MIN_TOTAL_MEANINGFUL_CHARS = 500;
