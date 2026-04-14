@@ -59,15 +59,15 @@ function applyTenantCamCap(tenantCam: number, camCap: number | null): number {
 
 const camCapArb = fc.record({
   squareFootage: fc.integer({ min: 100, max: 50000 }),
-  camPerSf: fc.float({ min: 0.01, max: 10, noNaN: true }),
-  camCap: fc.float({ min: 0, max: 5000, noNaN: true }),
+  camPerSf: fc.float({ min: Math.fround(0.01), max: Math.fround(10), noNaN: true, noDefaultInfinity: true }),
+  camCap: fc.float({ min: Math.fround(0), max: Math.fround(5000), noNaN: true, noDefaultInfinity: true }),
   startDate: fc.constant("2024-01-01"),
   endDate: fc.constant("2024-12-31"),
 });
 
 const tenantCamArb = fc.record({
-  tenantCam: fc.float({ min: 0, max: 100000, noNaN: true }),
-  camCap: fc.float({ min: 0, max: 50000, noNaN: true }),
+  tenantCam: fc.float({ min: Math.fround(0), max: Math.fround(100000), noNaN: true, noDefaultInfinity: true }),
+  camCap: fc.float({ min: Math.fround(0), max: Math.fround(50000), noNaN: true, noDefaultInfinity: true }),
 });
 
 // ---------------------------------------------------------------------------
@@ -116,9 +116,9 @@ Deno.test({
       fc.property(
         fc.record({
           squareFootage: fc.integer({ min: 100, max: 1000 }),
-          camPerSf: fc.float({ min: 0.01, max: 1, noNaN: true }),
+          camPerSf: fc.float({ min: Math.fround(0.01), max: Math.fround(1), noNaN: true, noDefaultInfinity: true }),
           // cap is always larger than raw cam (sqft * camPerSf <= 1000)
-          camCap: fc.float({ min: 1001, max: 100000, noNaN: true }),
+          camCap: fc.float({ min: Math.fround(1001), max: Math.fround(100000), noNaN: true, noDefaultInfinity: true }),
         }),
         ({ squareFootage, camPerSf, camCap }) => {
           const rawCam = squareFootage * camPerSf;
@@ -144,8 +144,8 @@ Deno.test({
         fc.record({
           // raw cam = sqft * camPerSf; ensure raw > cap
           squareFootage: fc.integer({ min: 10000, max: 50000 }),
-          camPerSf: fc.float({ min: 5, max: 10, noNaN: true }),
-          camCap: fc.float({ min: 1, max: 100, noNaN: true }),
+          camPerSf: fc.float({ min: Math.fround(5), max: Math.fround(10), noNaN: true, noDefaultInfinity: true }),
+          camCap: fc.float({ min: Math.fround(1), max: Math.fround(100), noNaN: true, noDefaultInfinity: true }),
         }),
         ({ squareFootage, camPerSf, camCap }) => {
           const schedule = computeCamCharges(squareFootage, camPerSf, camCap, "2024-01-01", "2024-03-31");
