@@ -1,31 +1,21 @@
 // @ts-nocheck
 /**
- * Extraction Pipeline — Main Orchestrator
+ * Extraction Pipeline — Main Orchestrator (v3)
  *
- * Coordinates the 6-step hybrid extraction flow:
+ * Responsibility split (enforced):
+ *   Docling   → parsing only (text + table structure)
+ *   Rule/Table → PRIMARY extraction (deterministic, highest confidence)
+ *   LLM        → FALLBACK only for missing fields (never primary)
+ *   Code       → validation, normalization, all calculations
  *
- *   ┌──────────────────────────────────────────────────────────────┐
- *   │  DoclingOutput                                              │
- *   │    │                                                        │
- *   │    ├─ Step 1: Rule-Based Extraction (regex / patterns)      │
- *   │    │    → deterministic, highest confidence                 │
- *   │    │                                                        │
- *   │    ├─ Step 2: Table-Based Extraction (Docling tables)       │
- *   │    │    → multi-row support, header mapping                 │
- *   │    │                                                        │
- *   │    ├─ Step 3: LLM Extraction (ONLY missing fields)          │
- *   │    │    → field-wise prompts, targeted chunks               │
- *   │    │                                                        │
- *   │    ├─ Step 4: Merge (rule > table > llm by confidence)      │
- *   │    │                                                        │
- *   │    ├─ Step 5: Validate (types, ranges, required fields)     │
- *   │    │                                                        │
- *   │    └─ Step 6: Calculate Derived Fields (deterministic)      │
- *   │         → annual_rent, lease_term, rent_per_sf              │
- *   └──────────────────────────────────────────────────────────────┘
- *
- * Input:  ExtractionInput (DoclingOutput + moduleType + options)
- * Output: ExtractionPipelineResult (rows + metadata + errors)
+ * Pipeline steps:
+ *   Step 0: Normalize  — clean Docling output (OCR noise, whitespace, dedup)
+ *   Step 1: Rule-Based — regex + label patterns against normalized text
+ *   Step 2: Table      — structured table extraction (highest priority for tabular docs)
+ *   Step 3: LLM        — ONLY for fields still missing after Steps 1+2
+ *   Step 4: Merge      — rule > table > llm by confidence
+ *   Step 5: Validate   — types, ranges, schema enforcement
+ *   Step 6: Calculate  — derived fields (code only, never overwrites extracted values)
  */
 
 import type {
@@ -41,6 +31,77 @@ import { extractWithLLM } from "./llm-extractor.ts";
 import { mergeResults, findMissingFields } from "./merger.ts";
 import { validateRecords, flattenRecords } from "./validator.ts";
 import { computeDerivedFields } from "./calculator.ts";
+
+// ── Step 0: Normalize Docling output ─────────────────────────────────────────
+
+/**
+ * Normalize Docling output before extraction.
+ *
+ * Problems solved:
+ *   - OCR noise (control chars, repeated whitespace, hyphenation artifacts)
+ *   - Inconsistent line structure (merged lines, split words)
+ *   - Deduplication of repeated header/footer text blocks
+ *   - Ensure `full_text` is always populated for rule-based extraction
+ */
+function normalizeDoclingOutput(docling: DoclingOutput): DoclingOutput {
+  const normalized = { ...docling };
+
+  // 1. Normalize each text block
+  const seenTexts = new Set<string>();
+  const normalizedBlocks = (docling.text_blocks ?? [])
+    .map((block) => {
+      let text = block.text ?? "";
+      // Remove control characters and null bytes
+      text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ");
+      // Normalize whitespace (preserve line breaks)
+      text = text.replace(/[ \t]+/g, " ").trim();
+      // Fix hyphenated line breaks: "some- \nthing" → "something"
+      text = text.replace(/-\s*\n\s*/g, "");
+      return { ...block, text };
+    })
+    .filter((block) => {
+      // Remove empty blocks
+      if (!block.text || block.text.length < 3) return false;
+      // Deduplicate repeated blocks (headers/footers that repeat on every page)
+      const key = block.text.toLowerCase().slice(0, 80);
+      if (seenTexts.has(key)) return false;
+      seenTexts.add(key);
+      return true;
+    });
+
+  normalized.text_blocks = normalizedBlocks;
+
+  // 2. Rebuild full_text from normalized blocks
+  const fullText = normalizedBlocks.map((b) => b.text).join("\n");
+  normalized.full_text = fullText;
+
+  // 3. Normalize tables: clean header cells and trim values
+  if (docling.tables && docling.tables.length > 0) {
+    normalized.tables = docling.tables.map((table) => ({
+      ...table,
+      headers: (table.headers ?? []).map((h) =>
+        h.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "").trim()
+      ),
+      rows: (table.rows ?? []).map((row) =>
+        row.map((cell) => (cell ?? "").toString().trim())
+      ),
+    }));
+  }
+
+  // 4. Normalize Docling key-value fields
+  if (docling.fields && docling.fields.length > 0) {
+    normalized.fields = docling.fields
+      .filter((f) => f.key && f.value)
+      .map((f) => ({
+        ...f,
+        key: f.key.trim(),
+        value: f.value.toString().trim(),
+        confidence: f.confidence ?? 0.85,
+      }));
+  }
+
+  return normalized;
+}
 
 // ── Convert raw text to minimal DoclingOutput (backward compat) ──────────────
 
@@ -60,10 +121,32 @@ function rawTextToDocling(rawText: string): DoclingOutput {
   };
 }
 
+// ── Debug logger ──────────────────────────────────────────────────────────────
+
+function createLogger(moduleType: string, fileName: string) {
+  const prefix = `[pipeline:${moduleType}:${fileName}]`;
+  return {
+    step: (step: number, name: string, detail = "") =>
+      console.log(`${prefix} STEP ${step}: ${name}${detail ? ` — ${detail}` : ""}`),
+    info: (msg: string) => console.log(`${prefix} ${msg}`),
+    warn: (msg: string) => console.warn(`${prefix} WARN: ${msg}`),
+    result: (label: string, count: number, fields: string[] = []) =>
+      console.log(
+        `${prefix} ✓ ${label}: ${count} field(s)` +
+        (fields.length > 0 ? ` [${fields.slice(0, 8).join(", ")}${fields.length > 8 ? "…" : ""}]` : "")
+      ),
+  };
+}
+
 // ── Main pipeline ────────────────────────────────────────────────────────────
 
 /**
  * Run the full hybrid extraction pipeline.
+ *
+ * Priority order enforced:
+ *   1. Rule-based (regex/patterns) — always runs first
+ *   2. Table-based (Docling tables) — always runs second, may override rule results with higher confidence
+ *   3. LLM — ONLY for fields still missing after 1+2
  *
  * Accepts either structured DoclingOutput or raw text (backward compat).
  * Returns flat row objects ready for the API response.
@@ -83,12 +166,24 @@ export async function runExtractionPipeline(
     confidenceThreshold = 0.4,
   } = options;
 
+  const fileName = input.fileName ?? "document";
+  const log = createLogger(input.moduleType, fileName);
+
   // ── Normalize input ──────────────────────────────────────────────────────
-  const docling: DoclingOutput = input.docling ?? rawTextToDocling(input.rawText ?? "");
+  log.info(`Starting pipeline: moduleType=${input.moduleType}, rawText=${(input.rawText ?? "").length} chars, docling=${!!input.docling}`);
+
+  const rawDocling: DoclingOutput = input.docling ?? rawTextToDocling(input.rawText ?? "");
   const moduleType: ModuleType = input.moduleType;
 
-  const fullText = docling.full_text ?? docling.text_blocks.map((b) => b.text).join("\n");
+  // ── STEP 0: Normalize ────────────────────────────────────────────────────
+  log.step(0, "Normalization", `text_blocks=${rawDocling.text_blocks?.length ?? 0}, tables=${rawDocling.tables?.length ?? 0}`);
+  const docling = normalizeDoclingOutput(rawDocling);
+
+  const fullText = docling.full_text ?? "";
+  log.info(`Normalized: ${fullText.length} chars, ${docling.text_blocks?.length ?? 0} blocks, ${docling.tables?.length ?? 0} tables`);
+
   if (fullText.trim().length < 10) {
+    log.warn("Document text too short — aborting pipeline");
     return {
       rows: [],
       method: "fallback",
@@ -106,37 +201,39 @@ export async function runExtractionPipeline(
     };
   }
 
-  // ── Step 1: Rule-Based Extraction ────────────────────────────────────────
-  console.log(`[extraction-pipeline] Step 1: Rule-based extraction for ${moduleType}`);
+  // ── STEP 1: Rule-Based Extraction ────────────────────────────────────────
+  log.step(1, "Rule-Based Extraction");
   const ruleResult = extractRuleBased(docling, moduleType);
   allWarnings.push(...ruleResult.warnings);
 
   const ruleFieldCount = ruleResult.records.reduce(
     (sum, r) => sum + Object.keys(r.fields).length, 0,
   );
-  console.log(`[extraction-pipeline] Step 1 complete: ${ruleFieldCount} fields from ${ruleResult.records.length} records`);
+  const ruleFieldNames = ruleResult.records.flatMap((r) => Object.keys(r.fields));
+  log.result("Rule extraction", ruleFieldCount, ruleFieldNames);
 
-  // ── Step 2: Table-Based Extraction ───────────────────────────────────────
-  console.log(`[extraction-pipeline] Step 2: Table-based extraction`);
+  // ── STEP 2: Table-Based Extraction ───────────────────────────────────────
+  log.step(2, "Table-Based Extraction", `tables=${docling.tables?.length ?? 0}`);
   const tableResult = extractFromTables(docling.tables ?? [], moduleType);
   allWarnings.push(...tableResult.warnings);
 
   const tableFieldCount = tableResult.records.reduce(
     (sum, r) => sum + Object.keys(r.fields).length, 0,
   );
-  console.log(`[extraction-pipeline] Step 2 complete: ${tableFieldCount} fields from ${tableResult.records.length} records`);
+  const tableFieldNames = tableResult.records.flatMap((r) => Object.keys(r.fields));
+  log.result("Table extraction", tableFieldCount, tableFieldNames);
 
-  // ── Step 3: LLM Extraction (only missing fields) ────────────────────────
+  // ── STEP 3: LLM Extraction (FALLBACK for missing fields only) ───────────
   let llmResult = { records: [], warnings: [] as string[] };
   let llmFieldCount = 0;
   let chunksProcessed = 0;
 
   if (!skipLLM) {
     const missingFields = findMissingFields(ruleResult, tableResult, moduleType);
-    console.log(`[extraction-pipeline] Step 3: LLM extraction for ${missingFields.length} missing fields: [${missingFields.join(", ")}]`);
+    log.step(3, "LLM Extraction (fallback)", `missing=${missingFields.length} fields: [${missingFields.join(", ")}]`);
 
     if (missingFields.length > 0) {
-      // Merge existing records for context (so LLM knows how many rows to expect)
+      // Merge existing records for context
       const existingMerge = mergeResults(ruleResult, tableResult, { records: [], warnings: [] }, moduleType);
 
       llmResult = await extractWithLLM(
@@ -148,33 +245,72 @@ export async function runExtractionPipeline(
       );
       allWarnings.push(...llmResult.warnings);
 
+      // Check if LLM was skipped (Vertex AI not configured)
+      const llmSkipped = llmResult.warnings.some((w) =>
+        w.toLowerCase().includes("vertex ai not configured") ||
+        w.toLowerCase().includes("skipping llm")
+      );
+      if (llmSkipped) {
+        log.warn("LLM skipped — Vertex AI not configured. Only rule/table extraction results available.");
+        allWarnings.push(
+          "⚠️ LLM extraction was skipped because Vertex AI (VERTEX_PROJECT_ID / GOOGLE_SERVICE_ACCOUNT_KEY) is not configured. " +
+          "Fields not found by rule-based or table extraction will be empty. " +
+          "Configure Vertex AI to enable full AI extraction."
+        );
+      }
+
       llmFieldCount = llmResult.records.reduce(
         (sum, r) => sum + Object.keys(r.fields).length, 0,
       );
+      const llmFieldNames = llmResult.records.flatMap((r) => Object.keys(r.fields));
+      log.result("LLM extraction", llmFieldCount, llmFieldNames);
     } else {
-      console.log(`[extraction-pipeline] Step 3 skipped: all fields already extracted`);
+      log.info("Step 3 skipped — all fields already extracted by rule/table steps");
     }
   } else {
-    console.log(`[extraction-pipeline] Step 3 skipped: LLM disabled`);
+    log.info("Step 3 skipped — LLM disabled by options");
     allWarnings.push("LLM extraction was skipped (disabled by options)");
   }
-  console.log(`[extraction-pipeline] Step 3 complete: ${llmFieldCount} fields`);
 
-  // ── Step 4: Merge Results ────────────────────────────────────────────────
-  console.log(`[extraction-pipeline] Step 4: Merging results`);
+  // ── STEP 4: Merge Results ────────────────────────────────────────────────
+  log.step(4, "Merge", "rule > table > llm by confidence");
   const merged = mergeResults(ruleResult, tableResult, llmResult, moduleType);
   allWarnings.push(...merged.warnings);
-  console.log(`[extraction-pipeline] Step 4 complete: ${merged.records.length} merged records`);
+  log.info(`Merged: ${merged.records.length} record(s)`);
 
-  // ── Step 5: Validate ─────────────────────────────────────────────────────
-  console.log(`[extraction-pipeline] Step 5: Validating`);
+  // Log extracted fields for debugging
+  if (merged.records.length > 0) {
+    const fieldSummary = Object.entries(merged.records[0].fields)
+      .map(([k, v]) => `${k}=${JSON.stringify(v.value)}@${Math.round(v.confidence * 100)}%`)
+      .join(", ");
+    log.info(`Record[0] fields: ${fieldSummary}`);
+  }
+
+  // ── STEP 5: Validate ─────────────────────────────────────────────────────
+  log.step(5, "Validation");
   const validated = validateRecords(merged.records, moduleType);
-  console.log(`[extraction-pipeline] Step 5 complete: ${validated.errors.length} validation errors`);
 
-  // ── Step 6: Calculate Derived Fields ─────────────────────────────────────
-  console.log(`[extraction-pipeline] Step 6: Computing derived fields`);
+  if (validated.errors.length > 0) {
+    log.warn(`${validated.errors.length} validation error(s):`);
+    for (const err of validated.errors.slice(0, 5)) {
+      log.warn(`  field="${err.field}" — ${err.message} (received: ${JSON.stringify(err.receivedValue)})`);
+    }
+  } else {
+    log.info("Validation passed — no errors");
+  }
+
+  // ── STEP 6: Calculate Derived Fields ─────────────────────────────────────
+  log.step(6, "Calculate Derived Fields");
   const flatRows = flattenRecords(validated.records, moduleType);
   computeDerivedFields(flatRows, moduleType);
+
+  const derivedLog = flatRows.length > 0
+    ? Object.entries(flatRows[0])
+        .filter(([k]) => !k.startsWith("_") && k !== "confidence_score" && k !== "extraction_notes")
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join(", ")
+    : "no rows";
+  log.info(`Final row[0]: ${derivedLog}`);
 
   // ── Build method indicator ───────────────────────────────────────────────
   let method: ExtractionPipelineResult["method"] = "hybrid";
@@ -191,9 +327,10 @@ export async function runExtractionPipeline(
     : 0;
 
   const processingTimeMs = Date.now() - startTime;
-  console.log(
-    `[extraction-pipeline] Complete: ${flatRows.length} rows, method=${method}, ` +
-    `confidence=${avgConfidence}%, time=${processingTimeMs}ms`,
+  log.info(
+    `Pipeline complete: ${flatRows.length} rows, method=${method}, ` +
+    `confidence=${avgConfidence}%, time=${processingTimeMs}ms, ` +
+    `rule=${ruleFieldCount}f / table=${tableFieldCount}f / llm=${llmFieldCount}f`,
   );
 
   return {

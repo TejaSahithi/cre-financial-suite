@@ -9,13 +9,18 @@
  *   .docx        → Mammoth.js → raw text → Vertex AI (Gemini)
  *   .pdf         → PDF.js → raw text → Vertex AI (Gemini)
  *
- * ALL rows from ALL sources pass through normalizeAndCalculate() so that
- * derived fields (annual_rent, rent_per_sf, lease_term_months, cap_rate, etc.)
- * are always computed correctly regardless of file format.
+ * Responsibility split (enforced):
+ *   CSV/Excel → parsingEngine normalizeAndCalculate (client-side)
+ *   PDF/Word  → extract-document-fields Edge Function (server-side)
+ *     The edge function handles its own normalization + calculations.
+ *     We NEVER run normalizeAndCalculate on AI rows to avoid overwriting.
  *
- * Returns: { rows, method, warning? }
- *   rows   — fully normalized array of record objects
- *   method — 'csv_parser' | 'excel_parser' | 'ai_gemini' | 'text_parser'
+ * Returns: { rows, method, warnings?, validationErrors?, extractionSummary? }
+ *   rows              — fully normalized array of record objects
+ *   method            — 'csv_parser' | 'excel_parser' | 'ai_gemini' | 'text_parser'
+ *   warnings          — non-fatal issues from extraction (e.g. LLM skipped)
+ *   validationErrors  — fields the pipeline rejected and why
+ *   extractionSummary — stats from edge function (rule/table/llm field counts)
  */
 
 import * as parsers from "@/services/parsingEngine";
@@ -124,37 +129,62 @@ async function extractWithAI(rawText, moduleType, fileName) {
     );
   }
 
-  // Normalize AI rows: the extraction pipeline stores per-field confidence in
-  // `_field_confidences` but the rest of the app expects `confidence_scores`.
+  // ── Debug: log raw AI response ────────────────────────────────────────────
+  console.log("[documentExtractor] AI raw response:", {
+    rows: data.rows.length,
+    method: data.method,
+    warnings: data.warnings,
+    validationErrors: data.validationErrors,
+    extractionSummary: data.extraction_summary,
+    row0: data.rows[0],
+  });
+
+  // ── Normalize AI rows ─────────────────────────────────────────────────────
+  // The extraction pipeline stores per-field confidence in `_field_confidences`
+  // (0–1 float range). The rest of the app expects `confidence_scores` (0–100 int).
   const normalizedRows = data.rows.map((row) => {
     const r = { ...row };
-    // Map _field_confidences → confidence_scores (convert 0-1 scale if needed)
+    // Map _field_confidences → confidence_scores
     if (r._field_confidences && !r.confidence_scores) {
       const scores = {};
       for (const [field, conf] of Object.entries(r._field_confidences)) {
         // Pipeline uses 0–1 range; UI expects 0–100
-        scores[field] = typeof conf === "number" && conf <= 1 ? Math.round(conf * 100) : conf;
+        scores[field] = typeof conf === "number" && conf <= 1
+          ? Math.round(conf * 100)
+          : conf;
       }
       r.confidence_scores = scores;
     }
-    // Clean up internal metadata keys that shouldn't flow into UI state
+    // Remove internal metadata keys — they don't belong in UI state
     delete r._field_confidences;
     delete r._field_sources;
     return r;
   });
 
-  return { rows: normalizedRows, method: "ai_gemini", model: data.model };
+  return {
+    rows: normalizedRows,
+    method: "ai_gemini",
+    model: data.model,
+    // Surface pipeline diagnostics to the caller
+    warnings: data.warnings || [],
+    validationErrors: data.validationErrors || [],
+    extractionSummary: data.extraction_summary || null,
+  };
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 /**
  * Extract structured records from a File object for a given CRE module.
- * ALL rows pass through normalizeAndCalculate() before being returned.
+ *
+ * CSV/Excel rows are normalized via normalizeAndCalculate() (client-side).
+ * PDF/Word/AI rows are NOT re-normalized — the edge function already handles
+ * all calculations server-side. Running normalizeAndCalculate() again would
+ * overwrite correctly extracted values with potentially wrong recalculations.
  *
  * @param {File}   file        — The uploaded File
  * @param {string} moduleType  — 'property' | 'lease' | 'tenant' | 'unit' | ...
- * @returns {{ rows: object[], method: string, warning?: string }}
+ * @returns {{ rows, method, warnings?, validationErrors?, extractionSummary? }}
  */
 export async function extractFromFile(file, moduleType) {
   const ext    = (file.name.split(".").pop() ?? "").toLowerCase();
@@ -162,6 +192,8 @@ export async function extractFromFile(file, moduleType) {
 
   let rawRows;
   let method;
+  let aiMeta = { warnings: [], validationErrors: [], extractionSummary: null };
+  let isAIResult = false;
 
   // ── CSV / TXT ─────────────────────────────────────────────────────────────
   if (ext === "csv" || ext === "txt") {
@@ -179,8 +211,10 @@ export async function extractFromFile(file, moduleType) {
     if (!rawRows) {
       console.warn("[documentExtractor] CSV parser found 0 rows — trying AI");
       const aiResult = await extractWithAI(text, moduleType, file.name);
-      rawRows = aiResult.rows;
-      method  = aiResult.method;
+      rawRows  = aiResult.rows;
+      method   = aiResult.method;
+      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      isAIResult = true;
     }
   }
 
@@ -199,8 +233,10 @@ export async function extractFromFile(file, moduleType) {
     // If local parser found nothing, send to AI
     if (!rawRows) {
       const aiResult = await extractWithAI(csvText, moduleType, file.name);
-      rawRows = aiResult.rows;
-      method  = aiResult.method;
+      rawRows  = aiResult.rows;
+      method   = aiResult.method;
+      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      isAIResult = true;
     }
   }
 
@@ -209,8 +245,10 @@ export async function extractFromFile(file, moduleType) {
     const rawText  = await extractDocx(file);
     try {
       const aiResult = await extractWithAI(rawText, moduleType, file.name);
-      rawRows = aiResult.rows;
-      method  = aiResult.method;
+      rawRows  = aiResult.rows;
+      method   = aiResult.method;
+      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      isAIResult = true;
     } catch (err) {
       if (parser) {
         const fallbackResult = parser(rawText);
@@ -231,8 +269,10 @@ export async function extractFromFile(file, moduleType) {
     const rawText  = await extractPdf(file);
     try {
       const aiResult = await extractWithAI(rawText, moduleType, file.name);
-      rawRows = aiResult.rows;
-      method  = aiResult.method;
+      rawRows  = aiResult.rows;
+      method   = aiResult.method;
+      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      isAIResult = true;
     } catch (err) {
       if (parser) {
         const fallbackResult = parser(rawText);
@@ -256,22 +296,57 @@ export async function extractFromFile(file, moduleType) {
     );
   }
 
-  // ── CRITICAL: Run all calculations on every row regardless of source ───────
-  // Preserve confidence_scores (and singular confidence_score) before normalization
-  const confidenceScoresMap  = rawRows.map(r => r?.confidence_scores  || null);
-  const confidenceScoreMap   = rawRows.map(r => r?.confidence_score   ?? null);
-  const extractionNotesMap   = rawRows.map(r => r?.extraction_notes   || null);
+  // ── Post-processing ───────────────────────────────────────────────────────
+  // For AI results: the edge function already ran calculations server-side.
+  // DO NOT run normalizeAndCalculate() again — it would overwrite correct values.
+  // For CSV/Excel/text results: run client-side normalization as usual.
 
-  const normalizedRows = normalizeAndCalculate(moduleType, rawRows);
+  let finalRows;
 
-  // Re-attach confidence metadata after normalization
-  normalizedRows.forEach((row, i) => {
-    if (confidenceScoresMap[i])  row.confidence_scores  = confidenceScoresMap[i];
-    if (confidenceScoreMap[i] !== null) row.confidence_score = confidenceScoreMap[i];
-    if (extractionNotesMap[i])   row.extraction_notes   = extractionNotesMap[i];
+  if (isAIResult) {
+    // AI result: preserve confidence metadata + extraction_notes
+    // Only re-attach metadata that normalizeAndCalculate would strip
+    finalRows = rawRows.map((row) => {
+      const r = { ...row };
+      // Ensure confidence_score is preserved (it comes from the edge function)
+      return r;
+    });
+    console.log("[documentExtractor] AI result — skipping normalizeAndCalculate to preserve extracted values");
+  } else {
+    // CSV / Excel / text result: run full normalization including derived field calculation
+    // Preserve confidence_scores (and any other metadata) before normalization
+    const confidenceScoresMap  = rawRows.map(r => r?.confidence_scores  || null);
+    const confidenceScoreMap   = rawRows.map(r => r?.confidence_score   ?? null);
+    const extractionNotesMap   = rawRows.map(r => r?.extraction_notes   || null);
+
+    finalRows = normalizeAndCalculate(moduleType, rawRows);
+
+    // Re-attach confidence metadata after normalization
+    finalRows.forEach((row, i) => {
+      if (confidenceScoresMap[i])          row.confidence_scores  = confidenceScoresMap[i];
+      if (confidenceScoreMap[i] !== null)  row.confidence_score   = confidenceScoreMap[i];
+      if (extractionNotesMap[i])           row.extraction_notes   = extractionNotesMap[i];
+    });
+
+    console.log("[documentExtractor] CSV/Excel result — normalizeAndCalculate applied");
+  }
+
+  console.log("[documentExtractor] Final result:", {
+    rows: finalRows.length,
+    method,
+    isAIResult,
+    warnings: aiMeta.warnings?.length,
+    validationErrors: aiMeta.validationErrors?.length,
+    row0: finalRows[0],
   });
 
-  return { rows: normalizedRows, method };
+  return {
+    rows: finalRows,
+    method,
+    warnings: aiMeta.warnings,
+    validationErrors: aiMeta.validationErrors,
+    extractionSummary: aiMeta.extractionSummary,
+  };
 }
 
 // ── UI Helper exports ─────────────────────────────────────────────────────────
@@ -281,13 +356,13 @@ export function methodLabel(method) {
   switch (method) {
     case "csv_parser":    return "CSV Parser";
     case "excel_parser":  return "Excel Parser (SheetJS)";
-    case "ai_gemini":     return "AI Extraction (Gemini 1.5 Pro)";
+    case "ai_gemini":     return "AI Extraction (Gemini)";
     case "text_parser":   return "Text Parser";
     default:              return method ?? "Unknown";
   }
 }
 
-/** Tailwind badge class for the extraction method. */
+/** Badge class for the extraction method. */
 export function methodBadgeClass(method) {
   switch (method) {
     case "csv_parser":

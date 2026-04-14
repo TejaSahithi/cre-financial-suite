@@ -316,11 +316,111 @@ export default function BulkImportModal({
     // produce so they map to our canonical MODULE_FIELDS key before the
     // strict filter below would otherwise drop them.
     const ALIAS_MAP = {
-      property: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
-      building: { total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf' },
-      unit:     { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', status: 'occupancy_status' },
-      lease:    { total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage', sqft: 'square_footage', leased_sf: 'square_footage' },
-      invoice:  { total_amount: 'amount', total: 'amount', amount_due: 'amount', invoice_date: 'issued_date' },
+      property: {
+        // Name
+        property_name: 'name', building_name: 'name', asset_name: 'name',
+        // SF
+        total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
+        rentable_sf: 'total_sf', gla: 'total_sf', gross_leasable_area: 'total_sf', nra: 'total_sf',
+        // Address
+        street: 'address', street_address: 'address', location: 'address', full_address: 'address',
+        // Type
+        asset_type: 'property_type', building_type: 'property_type', use_type: 'property_type',
+        // Year
+        built: 'year_built', construction_year: 'year_built', year_constructed: 'year_built',
+        // Owner / manager
+        property_manager: 'manager', managed_by: 'manager',
+        // Status
+        asset_status: 'status', property_status: 'status',
+      },
+      building: {
+        building_name: 'name', asset_name: 'name',
+        total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
+        street: 'address', location: 'address',
+        built: 'year_built',
+        building_status: 'status', asset_status: 'status',
+      },
+      unit: {
+        // Unit number
+        suite: 'unit_number', suite_number: 'unit_number', space: 'unit_number', space_number: 'unit_number',
+        unit_id_code: 'unit_number', unit_no: 'unit_number',
+        // SF
+        total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage',
+        sqft: 'square_footage', rsf: 'square_footage', rentable_sf: 'square_footage',
+        // Status
+        status: 'occupancy_status', occupancy: 'occupancy_status', availability: 'occupancy_status',
+        // Rent
+        rent: 'monthly_rent', base_rent: 'monthly_rent', rent_per_month: 'monthly_rent',
+        // Type
+        type: 'unit_type',
+      },
+      lease: {
+        // Tenant
+        tenant: 'tenant_name', lessee: 'tenant_name', occupant: 'tenant_name', company: 'tenant_name',
+        // Property / unit
+        property: 'property_name', building: 'property_name', premises: 'property_name',
+        suite: 'unit_number', suite_number: 'unit_number', space: 'unit_number',
+        // SF
+        total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage',
+        sqft: 'square_footage', leased_sf: 'square_footage', rentable_sf: 'square_footage', rsf: 'square_footage', area: 'square_footage',
+        // Dates
+        commencement_date: 'start_date', commence: 'start_date', effective_date: 'start_date',
+        expiration_date: 'end_date', termination_date: 'end_date', expiry: 'end_date',
+        // Rent
+        rent: 'monthly_rent', base_rent: 'monthly_rent', rent_per_month: 'monthly_rent', base_monthly_rent: 'monthly_rent',
+        annual_base_rent: 'annual_rent', base_rent_per_year: 'annual_rent', yearly_rent: 'annual_rent',
+        // CAM / Deposit / TI
+        cam: 'cam_amount', cam_charges: 'cam_amount', operating_expenses: 'cam_amount',
+        deposit: 'security_deposit', security: 'security_deposit',
+        ti: 'ti_allowance', tenant_improvement: 'ti_allowance', tenant_improvement_allowance: 'ti_allowance',
+        free_rent: 'free_rent_months', abatement_months: 'free_rent_months', rent_abatement_months: 'free_rent_months',
+        // Escalation
+        rent_escalation: 'escalation_rate', annual_escalation: 'escalation_rate', cpi_adjustment: 'escalation_rate',
+        // Renewal
+        renewal: 'renewal_options', option_to_renew: 'renewal_options',
+        // Type
+        type: 'lease_type',
+      },
+      tenant: {
+        // Name
+        tenant_name: 'name', company_name: 'name', entity_name: 'name', business_name: 'name',
+        // Contact
+        contact: 'contact_name', primary_contact: 'contact_name', contact_person: 'contact_name',
+        // Phone
+        phone_number: 'phone', telephone: 'phone', mobile: 'phone', cell: 'phone',
+        // Other
+        sector: 'industry', business_type: 'industry',
+        credit_score: 'credit_rating', credit: 'credit_rating',
+        tenant_status: 'status',
+      },
+      invoice: {
+        total_amount: 'amount', total: 'amount', amount_due: 'amount', balance_due: 'amount', invoice_total: 'amount',
+        invoice_date: 'issued_date', date_issued: 'issued_date', date: 'issued_date',
+        payment_due: 'due_date', due: 'due_date',
+        invoice_no: 'invoice_number', inv_number: 'invoice_number', invoice_num: 'invoice_number',
+        period: 'billing_period', billing_month: 'billing_period',
+        tenant: 'tenant_name', property: 'property_name',
+        invoice_status: 'status',
+      },
+      expense: {
+        expense_date: 'date', transaction_date: 'date', paid_date: 'date',
+        expense_amount: 'amount', total_amount: 'amount', cost: 'amount',
+        expense_category: 'category', type: 'category',
+        vendor_name: 'vendor', payee: 'vendor', supplier: 'vendor',
+        expense_description: 'description', detail: 'description',
+        recovery_type: 'classification', recoverable: 'classification',
+        gl_account: 'gl_code', account_code: 'gl_code', account: 'gl_code',
+        property: 'property_name', building: 'property_name',
+        year: 'fiscal_year',
+      },
+      revenue: {
+        revenue_amount: 'amount', payment_amount: 'amount', total: 'amount', income: 'amount',
+        revenue_date: 'date', payment_date: 'date', received_date: 'date',
+        revenue_type: 'type', income_type: 'type',
+        property: 'property_name', building: 'property_name',
+        tenant: 'tenant_name', lessee: 'tenant_name',
+        year: 'fiscal_year',
+      },
     };
     const aliases = ALIAS_MAP[moduleType] || {};
 

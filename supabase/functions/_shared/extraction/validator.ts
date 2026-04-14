@@ -59,7 +59,7 @@ function validateDate(value: unknown): string | null {
     const d = new Date(s + "T00:00:00Z");
     if (isNaN(d.getTime())) return null;
     const year = d.getUTCFullYear();
-    if (year < 1900 || year > 2100) return null;
+    if (year < 1900 || year > 2200) return null;
     return s;
   }
 

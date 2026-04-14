@@ -16,11 +16,18 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const EMPTY_LEASE = {
+  // Core parties
   tenant_name: "",
   landlord_name: "",
+  // Property / location (populated by AI extraction)
+  property_name: "",
+  unit_number: "",
+  property_address: "",
+  // Lease terms
   lease_type: "triple_net",
   start_date: "",
   end_date: "",
+  // Financials
   monthly_rent: 0,
   annual_rent: 0,
   base_rent: 0,
@@ -30,13 +37,16 @@ const EMPTY_LEASE = {
   cam_amount: 0,
   escalation_rate: 0,
   escalation_type: "fixed_pct",
+  // Renewal
   renewal_type: "",
   renewal_options: "",
   renewal_notice_months: 0,
+  // Incentives
   ti_allowance: 0,
   free_rent_months: 0,
-  property_address: "",
+  // Notes
   notes: "",
+  // Extraction metadata (never rendered as a field row)
   confidence_scores: {},
 };
 
@@ -123,6 +133,11 @@ export default function LeaseUpload() {
   const [savedLeaseId, setSavedLeaseId] = useState(null);
   const [editingField, setEditingField] = useState(null);
   const [draftFieldValue, setDraftFieldValue] = useState("");
+  // Extraction diagnostics surfaced from the edge function
+  const [extractionWarnings, setExtractionWarnings] = useState([]);
+  const [extractionValidationErrors, setExtractionValidationErrors] = useState([]);
+  const [extractionMethod, setExtractionMethod] = useState(null);
+  const [showValidationPanel, setShowValidationPanel] = useState(false);
   const [scopeProperty, setScopeProperty] = useState(queryPropertyId || "all");
   const [scopeBuilding, setScopeBuilding] = useState(queryBuildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(queryUnitId || "all");
@@ -245,6 +260,83 @@ export default function LeaseUpload() {
     cancelFieldEdit();
   };
 
+  // Keys that are internal pipeline metadata — never written to UI state fields
+  const SKIP_KEYS = new Set([
+    "confidence_scores", "confidence_score", "extraction_notes",
+    "_row", "_field_confidences", "_field_sources",
+    "lease_term_months", "total_sf", "square_feet",
+    "cam_per_month", "total_cam", "effective_rent",
+  ]);
+
+  // Canonical field aliases: AI may return these alternative keys
+  // Map alias → EMPTY_LEASE canonical key
+  const FIELD_ALIASES = {
+    // Landlord
+    landlord: "landlord_name",
+    lessor: "landlord_name",
+    landlord_entity: "landlord_name",
+    // Tenant
+    tenant: "tenant_name",
+    lessee: "tenant_name",
+    occupant: "tenant_name",
+    company: "tenant_name",
+    // Property / unit
+    property: "property_name",
+    building: "property_name",
+    building_name: "property_name",
+    premises: "property_name",
+    suite: "unit_number",
+    suite_number: "unit_number",
+    space: "unit_number",
+    space_number: "unit_number",
+    // Address
+    address: "property_address",
+    location: "property_address",
+    full_address: "property_address",
+    street_address: "property_address",
+    // Rent
+    base_monthly_rent: "monthly_rent",
+    rent: "monthly_rent",
+    rent_per_month: "monthly_rent",
+    base_rent_per_year: "annual_rent",
+    annual_base_rent: "annual_rent",
+    // SF
+    rsf: "square_footage",
+    rentable_sf: "square_footage",
+    leased_sf: "square_footage",
+    area: "square_footage",
+    sqft: "square_footage",
+    // Escalation
+    rent_escalation: "escalation_rate",
+    annual_escalation: "escalation_rate",
+    cpi_adjustment: "escalation_rate",
+    // Deposit
+    deposit: "security_deposit",
+    security: "security_deposit",
+    // CAM
+    cam: "cam_amount",
+    cam_charges: "cam_amount",
+    operating_expenses: "cam_amount",
+    // Renewal
+    renewal: "renewal_options",
+    option_to_renew: "renewal_options",
+    // TI
+    tenant_improvement: "ti_allowance",
+    ti: "ti_allowance",
+    tenant_improvement_allowance: "ti_allowance",
+    // Free rent
+    free_rent: "free_rent_months",
+    rent_abatement_months: "free_rent_months",
+    abatement_months: "free_rent_months",
+    // Dates
+    commencement_date: "start_date",
+    commence: "start_date",
+    effective_date: "start_date",
+    expiration_date: "end_date",
+    termination_date: "end_date",
+    expiry: "end_date",
+  };
+
   const handleFileSelect = async (e) => {
     const selectedFile = e.target.files[0];
     if (!selectedFile) return;
@@ -252,54 +344,72 @@ export default function LeaseUpload() {
     setFile(selectedFile);
     setStep(2);
     setExtracting(true);
+    setExtractionWarnings([]);
+    setExtractionValidationErrors([]);
+    setExtractionMethod(null);
 
     try {
       const result = await extractFromFile(selectedFile, "lease");
       const firstRow = result.rows?.[0] || {};
 
-      // Internal metadata keys from the extraction pipeline — never merge into UI state
-      const SKIP_KEYS = new Set([
-        "confidence_scores", "confidence_score", "extraction_notes",
-        "_row", "_field_confidences", "_field_sources", "lease_term_months",
-        "total_sf", "square_feet", "cam_per_month", "total_cam", "effective_rent",
-      ]);
+      // Store extraction diagnostics
+      setExtractionWarnings(result.warnings || []);
+      setExtractionValidationErrors(result.validationErrors || []);
+      setExtractionMethod(result.method || null);
 
-      // Merge: extracted values win over EMPTY_LEASE defaults, but only if non-null/undefined
+      if (result.validationErrors?.length > 0) {
+        setShowValidationPanel(true);
+      }
+
+      // Debug: log raw first row
+      console.log("[LeaseUpload] firstRow from extraction:", firstRow);
+
+      // Start from a clean EMPTY_LEASE slate
       const merged = { ...EMPTY_LEASE };
+
+      // Phase 1: Apply canonical field values (exact EMPTY_LEASE key matches)
       for (const [key, val] of Object.entries(firstRow)) {
         if (SKIP_KEYS.has(key)) continue;
+        if (!(key in EMPTY_LEASE)) continue; // only exact matches in phase 1
         if (val !== null && val !== undefined && val !== "") {
           merged[key] = val;
         }
       }
 
-      // Handle field aliases that may come from AI extraction
-      // AI returns "landlord" or "lessor" but EMPTY_LEASE uses "landlord_name"
-      if (!merged.landlord_name && (firstRow.landlord || firstRow.lessor)) {
-        merged.landlord_name = firstRow.landlord || firstRow.lessor;
-      }
-      // AI may return "property_name" or "address" instead of "property_address"
-      if (!merged.property_address && (firstRow.property_name || firstRow.address)) {
-        merged.property_address = firstRow.property_name || firstRow.address || "";
+      // Phase 2: Apply alias mappings for non-canonical keys
+      for (const [rawKey, val] of Object.entries(firstRow)) {
+        if (SKIP_KEYS.has(rawKey)) continue;
+        const canonical = FIELD_ALIASES[rawKey];
+        if (!canonical) continue;
+        if (!(canonical in EMPTY_LEASE)) continue;
+        // Only apply alias if the canonical field is still at its default value
+        const defaultVal = EMPTY_LEASE[canonical];
+        const currentVal = merged[canonical];
+        const isDefaulted = currentVal === defaultVal || currentVal === "" || currentVal === 0 || currentVal === null;
+        if (isDefaulted && val !== null && val !== undefined && val !== "") {
+          merged[canonical] = val;
+          console.log(`[LeaseUpload] alias: ${rawKey} → ${canonical} = ${JSON.stringify(val)}`);
+        }
       }
 
-      // Build confidence_scores: use the per-field map if available,
-      // or fall back to a uniform score derived from the overall confidence_score
-      let confScores = firstRow.confidence_scores || {};
+      // Build confidence_scores: per-field if available, else uniform from overall score
+      let confScores = { ...(firstRow.confidence_scores || {}) };
       if (Object.keys(confScores).length === 0 && firstRow.confidence_score) {
-        // Populate a uniform score for every non-empty extracted field
         const uniformScore = firstRow.confidence_score;
-        for (const key of Object.keys(merged)) {
-          if (!SKIP_KEYS.has(key) && merged[key] !== null && merged[key] !== undefined && merged[key] !== "" && merged[key] !== 0) {
+        for (const key of Object.keys(EMPTY_LEASE)) {
+          if (key === "confidence_scores") continue;
+          if (merged[key] !== null && merged[key] !== undefined && merged[key] !== "" && merged[key] !== 0) {
             confScores[key] = uniformScore;
           }
         }
       }
       merged.confidence_scores = confScores;
 
+      console.log("[LeaseUpload] merged state:", merged);
       setExtractedData(merged);
     } catch (err) {
-      console.warn("[LeaseUpload] extraction error:", err?.message);
+      console.error("[LeaseUpload] extraction error:", err?.message, err);
+      setExtractionWarnings([`Extraction failed: ${err?.message || "Unknown error"}`]);
       setExtractedData({ ...EMPTY_LEASE });
     } finally {
       setExtracting(false);
@@ -482,6 +592,11 @@ export default function LeaseUpload() {
                 <div className="text-center">
                   <FileText className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <p className="text-sm text-slate-400">{file?.name}</p>
+                  {extractionMethod && (
+                    <p className="text-xs text-slate-400 mt-1">
+                      Method: <span className="font-medium">{extractionMethod.replace(/_/g, " ")}</span>
+                    </p>
+                  )}
                   <p className="text-xs text-slate-300 mt-1">Document Preview</p>
                 </div>
               </div>
@@ -491,9 +606,58 @@ export default function LeaseUpload() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-slate-900">Extraction Results</h2>
               <div className="flex gap-2 text-xs">
+                {extractionMethod && (
+                  <Badge className="bg-violet-50 text-violet-700">{extractionMethod.replace(/_/g, " ")}</Badge>
+                )}
                 <Badge className="bg-emerald-50 text-emerald-700">review all fields</Badge>
               </div>
             </div>
+
+            {/* Extraction warnings (LLM skipped, Vertex AI not configured, etc.) */}
+            {extractionWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-xs font-semibold text-amber-800 mb-1">Extraction Warnings</p>
+                    {extractionWarnings.slice(0, 3).map((w, i) => (
+                      <p key={i} className="text-xs text-amber-700">{w}</p>
+                    ))}
+                    {extractionWarnings.length > 3 && (
+                      <p className="text-xs text-amber-500 mt-1">+{extractionWarnings.length - 3} more</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Validation errors from edge function (fields the pipeline rejected and why) */}
+            {extractionValidationErrors.length > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <button
+                  onClick={() => setShowValidationPanel((p) => !p)}
+                  className="flex items-center gap-2 w-full text-left"
+                >
+                  <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                  <p className="text-xs font-semibold text-red-800 flex-1">
+                    {extractionValidationErrors.length} field{extractionValidationErrors.length > 1 ? "s" : ""} rejected by validator
+                  </p>
+                  <span className="text-xs text-red-500">{showValidationPanel ? "▲ hide" : "▼ show"}</span>
+                </button>
+                {showValidationPanel && (
+                  <ul className="mt-2 space-y-1">
+                    {extractionValidationErrors.map((err, i) => (
+                      <li key={i} className="text-xs text-red-700">
+                        <span className="font-mono font-semibold">{err.field}</span>: {err.message}
+                        {err.receivedValue != null && (
+                          <span className="text-red-400"> (received: {JSON.stringify(err.receivedValue)})</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             {Object.entries(extractedData)
               .filter(([key]) => key !== "confidence_scores")
               .map(([key, value]) => (
