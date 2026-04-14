@@ -256,15 +256,47 @@ export default function LeaseUpload() {
     try {
       const result = await extractFromFile(selectedFile, "lease");
       const firstRow = result.rows?.[0] || {};
+
+      // Internal metadata keys from the extraction pipeline — never merge into UI state
+      const SKIP_KEYS = new Set([
+        "confidence_scores", "confidence_score", "extraction_notes",
+        "_row", "_field_confidences", "_field_sources", "lease_term_months",
+        "total_sf", "square_feet", "cam_per_month", "total_cam", "effective_rent",
+      ]);
+
       // Merge: extracted values win over EMPTY_LEASE defaults, but only if non-null/undefined
       const merged = { ...EMPTY_LEASE };
       for (const [key, val] of Object.entries(firstRow)) {
-        if (key === "confidence_scores") continue; // handled separately
+        if (SKIP_KEYS.has(key)) continue;
         if (val !== null && val !== undefined && val !== "") {
           merged[key] = val;
         }
       }
-      merged.confidence_scores = firstRow.confidence_scores || {};
+
+      // Handle field aliases that may come from AI extraction
+      // AI returns "landlord" or "lessor" but EMPTY_LEASE uses "landlord_name"
+      if (!merged.landlord_name && (firstRow.landlord || firstRow.lessor)) {
+        merged.landlord_name = firstRow.landlord || firstRow.lessor;
+      }
+      // AI may return "property_name" or "address" instead of "property_address"
+      if (!merged.property_address && (firstRow.property_name || firstRow.address)) {
+        merged.property_address = firstRow.property_name || firstRow.address || "";
+      }
+
+      // Build confidence_scores: use the per-field map if available,
+      // or fall back to a uniform score derived from the overall confidence_score
+      let confScores = firstRow.confidence_scores || {};
+      if (Object.keys(confScores).length === 0 && firstRow.confidence_score) {
+        // Populate a uniform score for every non-empty extracted field
+        const uniformScore = firstRow.confidence_score;
+        for (const key of Object.keys(merged)) {
+          if (!SKIP_KEYS.has(key) && merged[key] !== null && merged[key] !== undefined && merged[key] !== "" && merged[key] !== 0) {
+            confScores[key] = uniformScore;
+          }
+        }
+      }
+      merged.confidence_scores = confScores;
+
       setExtractedData(merged);
     } catch (err) {
       console.warn("[LeaseUpload] extraction error:", err?.message);
@@ -470,9 +502,15 @@ export default function LeaseUpload() {
                     <div className="flex-1 pr-4">
                       <div className="flex items-center gap-2">
                         <p className="text-[10px] font-semibold text-slate-500 uppercase">{key.replace(/_/g, " ")}</p>
-                        <Badge className={`text-[10px] ${confidenceColor(extractedData.confidence_scores?.[key] || 85)}`}>
-                          {extractedData.confidence_scores?.[key] || 85}%
-                        </Badge>
+                        {extractedData.confidence_scores?.[key] != null ? (
+                          <Badge className={`text-[10px] ${confidenceColor(extractedData.confidence_scores[key])}`}>
+                            {extractedData.confidence_scores[key]}%
+                          </Badge>
+                        ) : (
+                          <Badge className="text-[10px] bg-slate-100 text-slate-400">
+                            manual
+                          </Badge>
+                        )}
                       </div>
                       {editingField === key ? (
                         hasLeaseFieldOptions(key) ? (
