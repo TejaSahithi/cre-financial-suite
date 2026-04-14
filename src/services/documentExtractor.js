@@ -71,7 +71,7 @@ async function extractPdf(file) {
 
   const pageTexts = [];
   for (let i = 1; i <= pdf.numPages; i++) {
-    const page    = await pdf.getPage(i);
+    const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     // Preserve line breaks by grouping items with significant y-gaps
     let lastY = null;
@@ -142,8 +142,8 @@ async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, f
   }
   if (data?.error) throw new Error(`AI extraction error: ${data.error}`);
   if (!data?.rows || data.rows.length === 0) {
-    const isMissingConfig = (data.warnings || []).some(w => 
-      w.toLowerCase().includes("vertex ai not configured") || 
+    const isMissingConfig = (data.warnings || []).some(w =>
+      w.toLowerCase().includes("vertex ai not configured") ||
       w.toLowerCase().includes("missing env vars")
     );
 
@@ -221,7 +221,7 @@ async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, f
  * @returns {{ rows, method, warnings?, validationErrors?, extractionSummary? }}
  */
 export async function extractFromFile(file, moduleType) {
-  const ext    = (file.name.split(".").pop() ?? "").toLowerCase();
+  const ext = (file.name.split(".").pop() ?? "").toLowerCase();
   const parser = parsers.PARSER_MAP?.[moduleType];
 
   let rawRows;
@@ -237,7 +237,7 @@ export async function extractFromFile(file, moduleType) {
       const result = parser(text);
       if (result.rows.length > 0) {
         rawRows = result.rows;
-        method  = result.method || "csv_parser";
+        method = result.method || "csv_parser";
       }
     }
 
@@ -245,9 +245,9 @@ export async function extractFromFile(file, moduleType) {
     if (!rawRows) {
       console.warn("[documentExtractor] CSV parser found 0 rows — trying AI");
       const aiResult = await extractWithAI(text, moduleType, file.name);
-      rawRows  = aiResult.rows;
-      method   = aiResult.method;
-      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      rawRows = aiResult.rows;
+      method = aiResult.method;
+      aiMeta = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
       isAIResult = true;
     }
   }
@@ -260,28 +260,28 @@ export async function extractFromFile(file, moduleType) {
       const result = parser(csvText);
       if (result.rows.length > 0) {
         rawRows = result.rows;
-        method  = result.method || "excel_parser";
+        method = result.method || "excel_parser";
       }
     }
 
     // If local parser found nothing, send to AI
     if (!rawRows) {
       const aiResult = await extractWithAI(csvText, moduleType, file.name);
-      rawRows  = aiResult.rows;
-      method   = aiResult.method;
-      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      rawRows = aiResult.rows;
+      method = aiResult.method;
+      aiMeta = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
       isAIResult = true;
     }
   }
 
   // ── Word DOCX ─────────────────────────────────────────────────────────────
   else if (ext === "docx" || ext === "doc") {
-    const rawText  = await extractDocx(file);
+    const rawText = await extractDocx(file);
     try {
       const aiResult = await extractWithAI(rawText, moduleType, file.name);
-      rawRows  = aiResult.rows;
-      method   = aiResult.method;
-      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      rawRows = aiResult.rows;
+      method = aiResult.method;
+      aiMeta = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
       isAIResult = true;
     } catch (err) {
       if (parser) {
@@ -303,7 +303,7 @@ export async function extractFromFile(file, moduleType) {
     let pdfRawText = "";
     let pdfBase64 = null;
     let pdfMimeType = null;
-    
+
     const pdfTextOrObj = await extractPdf(file);
     if (typeof pdfTextOrObj === "string") {
       pdfRawText = pdfTextOrObj;
@@ -315,9 +315,9 @@ export async function extractFromFile(file, moduleType) {
 
     try {
       const aiResult = await extractWithAI(pdfRawText, moduleType, file.name, pdfBase64, pdfMimeType);
-      rawRows  = aiResult.rows;
-      method   = aiResult.method;
-      aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
+      rawRows = aiResult.rows;
+      method = aiResult.method;
+      aiMeta = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
       isAIResult = true;
     } catch (err) {
       if (parser && pdfRawText.length > 50) {
@@ -379,17 +379,17 @@ export async function extractFromFile(file, moduleType) {
   } else {
     // CSV / Excel / text result: run full normalization including derived field calculation
     // Preserve confidence_scores (and any other metadata) before normalization
-    const confidenceScoresMap  = rawRows.map(r => r?.confidence_scores  || null);
-    const confidenceScoreMap   = rawRows.map(r => r?.confidence_score   ?? null);
-    const extractionNotesMap   = rawRows.map(r => r?.extraction_notes   || null);
+    const confidenceScoresMap = rawRows.map(r => r?.confidence_scores || null);
+    const confidenceScoreMap = rawRows.map(r => r?.confidence_score ?? null);
+    const extractionNotesMap = rawRows.map(r => r?.extraction_notes || null);
 
     finalRows = normalizeAndCalculate(moduleType, rawRows);
 
     // Re-attach confidence metadata after normalization
     finalRows.forEach((row, i) => {
-      if (confidenceScoresMap[i])          row.confidence_scores  = confidenceScoresMap[i];
-      if (confidenceScoreMap[i] !== null)  row.confidence_score   = confidenceScoreMap[i];
-      if (extractionNotesMap[i])           row.extraction_notes   = extractionNotesMap[i];
+      if (confidenceScoresMap[i]) row.confidence_scores = confidenceScoresMap[i];
+      if (confidenceScoreMap[i] !== null) row.confidence_score = confidenceScoreMap[i];
+      if (extractionNotesMap[i]) row.extraction_notes = extractionNotesMap[i];
     });
 
     console.log("[documentExtractor] CSV/Excel result — normalizeAndCalculate applied");
@@ -418,11 +418,11 @@ export async function extractFromFile(file, moduleType) {
 /** Human-readable label for the extraction method. */
 export function methodLabel(method) {
   switch (method) {
-    case "csv_parser":    return "CSV Parser";
-    case "excel_parser":  return "Excel Parser (SheetJS)";
-    case "ai_gemini":     return "AI Extraction (Gemini)";
-    case "text_parser":   return "Text Parser";
-    default:              return method ?? "Unknown";
+    case "csv_parser": return "CSV Parser";
+    case "excel_parser": return "Excel Parser (SheetJS)";
+    case "ai_gemini": return "AI Extraction (Gemini)";
+    case "text_parser": return "Text Parser";
+    default: return method ?? "Unknown";
   }
 }
 
@@ -431,8 +431,8 @@ export function methodBadgeClass(method) {
   switch (method) {
     case "csv_parser":
     case "excel_parser":
-    case "text_parser":   return "bg-slate-100 text-slate-700";
-    case "ai_gemini":     return "bg-violet-100 text-violet-700";
-    default:              return "bg-slate-100 text-slate-500";
+    case "text_parser": return "bg-slate-100 text-slate-700";
+    case "ai_gemini": return "bg-violet-100 text-violet-700";
+    default: return "bg-slate-100 text-slate-500";
   }
 }
