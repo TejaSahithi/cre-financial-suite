@@ -28,6 +28,51 @@ import { normalizeAndCalculate } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
+const PDF_VISION_MAX_BYTES = 12 * 1024 * 1024;
+const PDF_MIN_MEANINGFUL_CHARS_PER_PAGE = 120;
+const PDF_MIN_TEXT_COVERAGE_RATIO = 0.7;
+const PDF_MIN_TOTAL_MEANINGFUL_CHARS = 500;
+
+async function readFileAsBase64(file) {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = (error) => reject(error);
+  });
+}
+
+function analyzePdfTextCoverage(pageTexts) {
+  const meaningfulCharCounts = pageTexts.map((text) =>
+    (text.match(/[A-Za-z0-9]/g) || []).length
+  );
+  const pagesWithMeaningfulText = meaningfulCharCounts.filter(
+    (count) => count >= PDF_MIN_MEANINGFUL_CHARS_PER_PAGE
+  ).length;
+  const totalMeaningfulChars = meaningfulCharCounts.reduce((sum, count) => sum + count, 0);
+  const pageCount = pageTexts.length || 1;
+
+  return {
+    pageCount,
+    totalMeaningfulChars,
+    pagesWithMeaningfulText,
+    averageMeaningfulCharsPerPage: totalMeaningfulChars / pageCount,
+    textCoverageRatio: pagesWithMeaningfulText / pageCount,
+  };
+}
+
+function shouldAttachPdfForVision(file, pdfMetrics) {
+  if (file.size > PDF_VISION_MAX_BYTES) {
+    return false;
+  }
+
+  return (
+    pdfMetrics.totalMeaningfulChars < PDF_MIN_TOTAL_MEANINGFUL_CHARS ||
+    pdfMetrics.averageMeaningfulCharsPerPage < PDF_MIN_MEANINGFUL_CHARS_PER_PAGE ||
+    pdfMetrics.textCoverageRatio < PDF_MIN_TEXT_COVERAGE_RATIO
+  );
+}
+
 // ── Excel / SheetJS ──────────────────────────────────────────────────────────
 
 async function extractExcel(file) {
@@ -87,18 +132,23 @@ async function extractPdf(file) {
   }
 
   const fullText = pageTexts.join("\n\n").replace(/\s{3,}/g, "  ").trim();
+  const pdfMetrics = analyzePdfTextCoverage(pageTexts);
+  const shouldUseVision = shouldAttachPdfForVision(file, pdfMetrics);
 
-  if (fullText.length < 50) {
-    // If it's a scanned PDF, we convert the original file to Base64 
-    // so the edge function can use Gemini Vision.
-    const fileBase64 = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = error => reject(error);
+  if (shouldUseVision) {
+    const fileBase64 = await readFileAsBase64(file);
+    console.warn("[documentExtractor] Low-text PDF detected, attaching original PDF for Gemini Vision fallback.", {
+      fileName: file.name,
+      pageCount: pdfMetrics.pageCount,
+      totalMeaningfulChars: pdfMetrics.totalMeaningfulChars,
+      averageMeaningfulCharsPerPage: Math.round(pdfMetrics.averageMeaningfulCharsPerPage),
+      textCoverageRatio: Number(pdfMetrics.textCoverageRatio.toFixed(2)),
     });
-    console.warn("[documentExtractor] Scanned PDF detected, passing as Base64 image payload.");
-    return { rawText: "", fileBase64, fileMimeType: "application/pdf" };
+    return {
+      rawText: fullText,
+      fileBase64,
+      fileMimeType: "application/pdf",
+    };
   }
   return fullText;
 }
@@ -106,12 +156,7 @@ async function extractPdf(file) {
 // ── Images / Generic Base64 ──────────────────────────────────────────────────
 
 async function extractImage(file) {
-  const fileBase64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = (error) => reject(error);
-  });
+  const fileBase64 = await readFileAsBase64(file);
   return { rawText: "", fileBase64, fileMimeType: file.type || "image/png" };
 }
 
