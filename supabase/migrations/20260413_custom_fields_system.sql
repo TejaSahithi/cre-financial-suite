@@ -252,8 +252,6 @@ ORDER BY cf.display_order, cf.field_label;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.custom_fields TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.custom_field_values TO authenticated;
 GRANT SELECT ON public.custom_fields_with_values TO authenticated;
-GRANT USAGE ON SEQUENCE public.custom_fields_id_seq TO authenticated;
-GRANT USAGE ON SEQUENCE public.custom_field_values_id_seq TO authenticated;
 
 -- Add comments for documentation
 COMMENT ON TABLE public.custom_fields IS 'Defines custom field schemas for different modules when extracted data doesn''t match existing UI fields';

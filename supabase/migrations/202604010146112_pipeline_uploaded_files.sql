@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.uploaded_files (
 ALTER TABLE public.uploaded_files ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "uploaded_files_select" ON public.uploaded_files
-  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
 CREATE POLICY "uploaded_files_insert" ON public.uploaded_files
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "uploaded_files_update" ON public.uploaded_files
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS public.computation_snapshots (
 ALTER TABLE public.computation_snapshots ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "computation_snapshots_select" ON public.computation_snapshots
-  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
 CREATE POLICY "computation_snapshots_insert" ON public.computation_snapshots
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 

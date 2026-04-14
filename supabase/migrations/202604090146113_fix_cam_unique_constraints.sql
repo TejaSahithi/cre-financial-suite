@@ -108,7 +108,7 @@ DROP POLICY IF EXISTS "property_config_delete" ON public.property_config;
 CREATE POLICY "property_config_select" ON public.property_config
   FOR SELECT USING (
     public.is_super_admin()
-    OR org_id = ANY(public.get_my_org_ids())
+    OR org_id IN (SELECT public.get_my_org_ids())
   );
 
 CREATE POLICY "property_config_insert" ON public.property_config
@@ -138,7 +138,7 @@ DROP POLICY IF EXISTS "lease_config_delete" ON public.lease_config;
 CREATE POLICY "lease_config_select" ON public.lease_config
   FOR SELECT USING (
     public.is_super_admin()
-    OR org_id = ANY(public.get_my_org_ids())
+    OR org_id IN (SELECT public.get_my_org_ids())
   );
 
 CREATE POLICY "lease_config_insert" ON public.lease_config

@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 );
 
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
-CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (org_id = ANY(public.get_my_org_ids()));
+CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (org_id IN (SELECT public.get_my_org_ids()));
 
 -- 2. AUDIT LOGS
 CREATE TABLE IF NOT EXISTS public.audit_logs (
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
 );
 
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "audit_logs_select_admin" ON public.audit_logs FOR SELECT USING (public.is_super_admin() OR org_id = ANY(public.get_my_org_ids()));
+CREATE POLICY "audit_logs_select_admin" ON public.audit_logs FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
 
 -- 3. PROPERTIES & PORTFOLIOS
 CREATE TABLE IF NOT EXISTS public.portfolios (
@@ -211,7 +211,7 @@ BEGIN
 
         -- SELECT policy: any org member can read
         EXECUTE format(
-          'CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id = ANY(public.get_my_org_ids()))',
+          'CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()))',
           t, t
         );
 

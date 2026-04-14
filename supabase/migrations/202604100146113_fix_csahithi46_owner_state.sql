@@ -12,7 +12,8 @@ BEGIN
    LIMIT 1;
 
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'No auth user found for %', v_email;
+    RAISE NOTICE 'Skipping owner state fix: No auth user found for %', v_email;
+    RETURN;
   END IF;
 
   SELECT company_name

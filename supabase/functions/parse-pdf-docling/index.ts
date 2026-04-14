@@ -602,7 +602,6 @@ Deno.serve(async (req: Request) => {
 
     try {
       // 6. Download the PDF from Supabase Storage
-      //    The file_url is the public URL; derive the storage path from it.
       const storagePath = fileRecord.file_url.replace(
         /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
         "",
@@ -619,73 +618,14 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const pdfBytes = new Uint8Array(await fileBlob.arrayBuffer());
+      const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
 
-      // 7. Enhanced Docling/Gemini extraction with comprehensive error handling
-      //    Docling handles PDF, Word, Excel, images, and plain text natively.
-      console.log(`[parse-pdf-docling] Starting extraction for file_id=${file_id}, name=${fileName}, size=${pdfBytes.length} bytes, type=${mimeType}`);
-      
-      let doclingOutput: DoclingOutput;
-      let extractionMethod = "unknown";
-      
-      try {
-        doclingOutput = await callDoclingAPI(pdfBytes, fileName, mimeType);
-        extractionMethod = doclingOutput.raw_response?._mock ? "mock" : 
-                          Deno.env.get("DOCLING_API_URL") ? "docling" : "gemini";
-        
-        console.log(`[parse-pdf-docling] Extraction completed using ${extractionMethod} method`);
-        
-        // Validation: Detect if document is scanned using Docling text blocks density
-        const textBlocksCount = doclingOutput.text_blocks?.length || 0;
-        if (textBlocksCount < 5 && (mimeType.includes("pdf") || mimeType.startsWith("image/"))) {
-          console.log("[parse-pdf-docling] Using OCR fallback for scanned PDF");
-          
-          // Create local temp file for paddleocr script to scan
-          const tempFilePath = await Deno.makeTempFile({ suffix: mimeType.includes("pdf") ? ".pdf" : ".png" });
-          await Deno.writeFile(tempFilePath, pdfBytes);
-          
-          try {
-            const { runPaddleOCR } = await import("../_shared/ocr/paddle-ocr.ts");
-            const ocrText = await runPaddleOCR(tempFilePath);
-            
-            // Re-assign docling body structure with unified OCR format
-            doclingOutput.full_text = ocrText;
-            doclingOutput.raw_response = { ...doclingOutput.raw_response, source: "ocr" };
-            
-            // Spoof a single text block
-            doclingOutput.text_blocks = [{
-              block_index: 0,
-              type: "paragraph",
-              text: ocrText,
-              page: 1
-            }];
-            
-            extractionMethod = "paddle_ocr";
-          } catch (ocrErr) {
-             console.error("[parse-pdf-docling] OCR fallback failed:", ocrErr.message);
-          } finally {
-             // Sweep temp file
-             await Deno.remove(tempFilePath).catch(() => {});
-          }
-        }
+      // 7. Call shared parsing utility (includes OCR fallback)
+      const { parseDocument } = await import("../_shared/extraction/parser.ts");
+      const doclingOutput = await parseDocument(fileBytes, fileName, mimeType);
+      const extractionMethod = doclingOutput.extraction_method || "unknown";
 
-        // Validate extraction results
-        if (!doclingOutput.full_text && !doclingOutput.tables.length && !doclingOutput.fields.length) {
-          console.warn(`[parse-pdf-docling] Extraction returned no content, this may indicate a processing issue`);
-        }
-        
-      } catch (extractionError) {
-        console.error(`[parse-pdf-docling] Extraction failed:`, extractionError.message);
-        
-        // Try one more fallback to mock if everything else failed
-        console.log(`[parse-pdf-docling] Using mock output as final fallback`);
-        doclingOutput = buildMockOutput(fileName, mimeType);
-        extractionMethod = "mock_fallback";
-      }
-
-      // 8. Enhanced storage of extraction results with metadata
-      //    Store raw Docling output in uploaded_files for debugging and processing.
-      //    Set status to 'pdf_parsed' — intermediate status indicating extraction complete.
+      // 8. Store extraction results with metadata
       const extractionMetadata = {
         extraction_method: extractionMethod,
         file_format: mimeType,
@@ -705,7 +645,7 @@ Deno.serve(async (req: Request) => {
             ...doclingOutput,
             _metadata: extractionMetadata
           },
-          parsed_data: [],                      // will be filled by normaliser
+          parsed_data: [],
           row_count: doclingOutput.tables.reduce((n, t) => n + t.rows.length, 0),
           processing_completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),

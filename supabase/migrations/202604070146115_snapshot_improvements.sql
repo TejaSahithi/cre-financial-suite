@@ -19,6 +19,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_unique_org
 -- ── latest_snapshot view ──────────────────────────────────────────────────
 -- Returns the single most-recent snapshot per (org, property, engine, year).
 -- Frontend and other functions can query this instead of doing ORDER BY + LIMIT.
+DROP VIEW IF EXISTS public.latest_snapshots;
 CREATE OR REPLACE VIEW public.latest_snapshots AS
 SELECT DISTINCT ON (org_id, property_id, engine_type, fiscal_year)
   id,
