@@ -74,13 +74,15 @@ FIELDS TO EXTRACT (return null if not found):
 ${fieldDescriptions}
 }
 
-TEXT SNIPPET:
+TEXT SNIPPET (May contain OCR fragments/errors):
 ───────────────────────────
 ${textSnippet || "[No text provided, refer to the attached visual document]"}
 ───────────────────────────
 
+IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Use context to infer the correct values where possible.
 Return ONLY a JSON object with the field keys above. Nothing else.`;
 }
+
 
 // ── Prompt builder for multi-row extraction from table text ───────────────────
 
@@ -113,13 +115,15 @@ ${fieldDescriptions}
 Return a JSON ARRAY of objects. Each distinct record = one object.
 If there is only one record, still return an array with one object.
 
-TEXT:
+TEXT (May contain OCR fragments/errors):
 ───────────────────────────
 ${textSnippet}
 ───────────────────────────
 
+IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Carefully reconstruct the records from the fragments.
 Return ONLY the JSON array. Nothing else.`;
 }
+
 
 // ── Parse LLM response safely ────────────────────────────────────────────────
 
@@ -159,7 +163,6 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
  * Uses targeted prompts with relevant text snippets.
  *
  * @param docling      Full Docling output
- * @param missingFields Fields not yet extracted (by record index)
  * @param moduleType   The module being extracted
  * @param existingRecords  Records from Steps 1+2 (for context on how many rows to expect)
  */

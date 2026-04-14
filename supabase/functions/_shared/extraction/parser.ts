@@ -17,8 +17,9 @@ export async function parseDocument(
   let extractionMethod = "unknown";
   const warnings: string[] = [];
 
-  // 1. Try Docling API if configured
-  if (doclingUrl) {
+  // 1. Try Docling API if configured (Skip for images - go straight to OCR)
+  const isImage = mimeType.startsWith("image/");
+  if (doclingUrl && !isImage) {
     try {
       console.log(`[parser] Calling Docling for ${fileName} (${mimeType})`);
       
