@@ -9,7 +9,7 @@ export async function runPaddleOCR(filePath: string): Promise<string> {
   console.log(`[paddle-ocr] Running OCR on: ${filePath}`);
 
   // Resolve the path to the python script correctly in the edge/local context
-  const scriptPath = new URL('./ocr_script.py', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const scriptPath = decodeURIComponent(new URL('./ocr_script.py', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1');
 
   const isWindows = Deno.build.os === "windows";
   const cmd = isWindows ? "py" : "python3";

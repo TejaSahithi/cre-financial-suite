@@ -90,16 +90,36 @@ async function getAccessToken(): Promise<string> {
     return _cachedToken.token;
   }
 
-  const saKeyRaw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
-  if (!saKeyRaw) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY environment variable is not set");
-  }
-
+  let saKeyRaw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
   let saKey: ServiceAccountKey;
-  try {
-    saKey = JSON.parse(saKeyRaw);
-  } catch {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON");
+
+  if (!saKeyRaw) {
+    // Fallback: try to construct from individual environment variables
+    const clientEmail = Deno.env.get("GOOGLE_CLIENT_EMAIL");
+    const privateKey = Deno.env.get("GOOGLE_PRIVATE_KEY")?.replace(/\\n/g, "\n");
+    const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+
+    if (clientEmail && privateKey && projectId) {
+      console.log("[vertex-ai] Constructing service account key from individual environment variables");
+      saKey = {
+        client_email: clientEmail,
+        private_key: privateKey,
+        project_id: projectId,
+        type: "service_account",
+        private_key_id: "synthesized",
+        client_id: "synthesized",
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+      };
+    } else {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY environment variable is not set and fallback variables are missing");
+    }
+  } else {
+    try {
+      saKey = JSON.parse(saKeyRaw);
+    } catch {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON");
+    }
   }
 
   const iat = now;
