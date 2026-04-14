@@ -179,7 +179,7 @@ export async function extractWithLLM(
   // Check if Vertex AI is available
   const hasVertexAI =
     (!!Deno.env.get("VERTEX_PROJECT_ID") || !!Deno.env.get("GOOGLE_PROJECT_ID")) &&
-    !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+    (!!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || (!!Deno.env.get("GOOGLE_CLIENT_EMAIL") && !!Deno.env.get("GOOGLE_PRIVATE_KEY")));
 
   if (!hasVertexAI) {
     const missingVars: string[] = [];

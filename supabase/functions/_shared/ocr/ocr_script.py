@@ -10,7 +10,7 @@ def process_document(file_path):
         
         # Initialize OCR (use_angle_cls=True to automatically rotate slanted images)
         # We specify lang='en', and show_log=False to prevent debug info in stdout
-        ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+        ocr = PaddleOCR(use_angle_cls=True, lang='en')
         
         # Run inference
         result = ocr.ocr(file_path, cls=True)
