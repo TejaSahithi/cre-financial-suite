@@ -327,12 +327,9 @@ export async function extractFromFile(file, moduleType) {
           method = fallbackResult.method || "text_parser";
         } else {
           throw err;
-        }
-      } else {
-        throw err;
+      }
     }
   }
-
   // ── Images (PNG, JPG, etc.) ───────────────────────────────────────────────
   else if (ext === "png" || ext === "jpg" || ext === "jpeg") {
     const { rawText, fileBase64, fileMimeType } = await extractImage(file);
