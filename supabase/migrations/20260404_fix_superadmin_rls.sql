@@ -8,7 +8,6 @@
 -- ============================================================
 
 -- Fix 1: get_my_org_ids() — super_admins get ALL org_ids
-DROP FUNCTION IF EXISTS public.get_my_org_ids();
 CREATE OR REPLACE FUNCTION public.get_my_org_ids()
 RETURNS SETOF UUID AS $$
   SELECT CASE

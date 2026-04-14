@@ -237,7 +237,7 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS "%s_delete" ON public.%I', t, t);
 
     EXECUTE format(
-      'CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id = ANY(public.get_my_org_ids()))',
+      'CREATE POLICY "%s_select" ON public.%I FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()))',
       t, t
     );
     EXECUTE format(

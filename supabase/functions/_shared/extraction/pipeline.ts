@@ -31,6 +31,7 @@ import { extractWithLLM } from "./llm-extractor.ts";
 import { mergeResults, findMissingFields } from "./merger.ts";
 import { validateRecords, flattenRecords } from "./validator.ts";
 import { computeDerivedFields } from "./calculator.ts";
+import { parseDocument } from "./parser.ts";
 
 // ── Step 0: Normalize Docling output ─────────────────────────────────────────
 
@@ -169,10 +170,26 @@ export async function runExtractionPipeline(
   const fileName = input.fileName ?? "document";
   const log = createLogger(input.moduleType, fileName);
 
-  // ── Normalize input ──────────────────────────────────────────────────────
-  log.info(`Starting pipeline: moduleType=${input.moduleType}, rawText=${(input.rawText ?? "").length} chars, docling=${!!input.docling}`);
+  // ── Normalize/Parse input ──────────────────────────────────────────────────────
+  log.info(`Starting pipeline: moduleType=${input.moduleType}, rawText=${(input.rawText ?? "").length} chars, docling=${!!input.docling}, fileBase64=${!!input.fileBase64}`);
 
-  const rawDocling: DoclingOutput = input.docling ?? rawTextToDocling(input.rawText ?? "");
+  let rawDocling: DoclingOutput;
+
+  if (input.docling) {
+    rawDocling = input.docling;
+  } else if (input.fileBase64) {
+    log.info("No docling output provided — parsing raw file bytes");
+    // Convert base64 to Uint8Array
+    const binaryString = atob(input.fileBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    rawDocling = await parseDocument(bytes, input.fileName || "document", input.fileMimeType || "application/pdf");
+  } else {
+    rawDocling = rawTextToDocling(input.rawText ?? "");
+  }
+
   const moduleType: ModuleType = input.moduleType;
 
   // ── STEP 0: Normalize ────────────────────────────────────────────────────
@@ -346,6 +363,8 @@ export async function runExtractionPipeline(
       totalRecords: flatRows.length,
       avgConfidence,
       chunksProcessed,
+      parsingMethod: rawDocling.extraction_method || "text",
+      charCount: fullText.length,
       processingTimeMs,
     },
   };

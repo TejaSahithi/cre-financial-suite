@@ -179,8 +179,9 @@ Deno.serve(async (req: Request) => {
     return respond({
       rows: result.rows,
       method: result.method,
+      parsing_method: result.metadata.parsingMethod || "text",
       model: "gemini-1.5-pro-002",
-      charCount: rawText.length || 0,
+      charCount: result.metadata.charCount || rawText.length || 0,
       warnings: result.warnings.length > 0 ? result.warnings : undefined,
       validationErrors: result.validationErrors.length > 0 ? result.validationErrors : undefined,
       customFieldSuggestions: customFieldSuggestions?.length ? customFieldSuggestions : undefined,

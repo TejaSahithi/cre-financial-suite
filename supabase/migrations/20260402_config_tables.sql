@@ -38,7 +38,7 @@ ALTER TABLE public.lease_config ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies for property_config
 CREATE POLICY "property_config_select" ON public.property_config
-  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
 
 CREATE POLICY "property_config_insert" ON public.property_config
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
@@ -51,7 +51,7 @@ CREATE POLICY "property_config_delete" ON public.property_config
 
 -- RLS Policies for lease_config
 CREATE POLICY "lease_config_select" ON public.lease_config
-  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
 
 CREATE POLICY "lease_config_insert" ON public.lease_config
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));

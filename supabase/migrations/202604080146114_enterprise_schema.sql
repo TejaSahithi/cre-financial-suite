@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS public.user_access (
 ALTER TABLE public.user_access ENABLE ROW LEVEL SECURITY;
 
 -- Users can see their own access grants; org_admins can see all in their org
+DROP POLICY IF EXISTS "user_access_select" ON public.user_access;
 CREATE POLICY "user_access_select" ON public.user_access
   FOR SELECT USING (
     public.is_super_admin()
@@ -180,18 +181,21 @@ CREATE POLICY "user_access_select" ON public.user_access
   );
 
 -- Only org_admins and super_admins can grant access
+DROP POLICY IF EXISTS "user_access_insert" ON public.user_access;
 CREATE POLICY "user_access_insert" ON public.user_access
   FOR INSERT WITH CHECK (
     public.is_super_admin()
     OR public.is_org_admin(org_id)
   );
 
+DROP POLICY IF EXISTS "user_access_update" ON public.user_access;
 CREATE POLICY "user_access_update" ON public.user_access
   FOR UPDATE USING (
     public.is_super_admin()
     OR public.is_org_admin(org_id)
   );
 
+DROP POLICY IF EXISTS "user_access_delete" ON public.user_access;
 CREATE POLICY "user_access_delete" ON public.user_access
   FOR DELETE USING (
     public.is_super_admin()
@@ -219,6 +223,7 @@ CREATE TABLE IF NOT EXISTS public.pipeline_logs (
 
 ALTER TABLE public.pipeline_logs ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "pipeline_logs_select" ON public.pipeline_logs;
 CREATE POLICY "pipeline_logs_select" ON public.pipeline_logs
   FOR SELECT USING (
     public.is_super_admin()
@@ -228,6 +233,7 @@ CREATE POLICY "pipeline_logs_select" ON public.pipeline_logs
     )
   );
 
+DROP POLICY IF EXISTS "pipeline_logs_insert" ON public.pipeline_logs;
 CREATE POLICY "pipeline_logs_insert" ON public.pipeline_logs
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 
