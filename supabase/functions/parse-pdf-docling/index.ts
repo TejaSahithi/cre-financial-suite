@@ -635,6 +635,40 @@ Deno.serve(async (req: Request) => {
         
         console.log(`[parse-pdf-docling] Extraction completed using ${extractionMethod} method`);
         
+        // Validation: Detect if document is scanned using Docling text blocks density
+        const textBlocksCount = doclingOutput.text_blocks?.length || 0;
+        if (textBlocksCount < 5 && (mimeType.includes("pdf") || mimeType.startsWith("image/"))) {
+          console.log("[parse-pdf-docling] Using OCR fallback for scanned PDF");
+          
+          // Create local temp file for paddleocr script to scan
+          const tempFilePath = await Deno.makeTempFile({ suffix: mimeType.includes("pdf") ? ".pdf" : ".png" });
+          await Deno.writeFile(tempFilePath, pdfBytes);
+          
+          try {
+            const { runPaddleOCR } = await import("../_shared/ocr/paddle-ocr.ts");
+            const ocrText = await runPaddleOCR(tempFilePath);
+            
+            // Re-assign docling body structure with unified OCR format
+            doclingOutput.full_text = ocrText;
+            doclingOutput.raw_response = { ...doclingOutput.raw_response, source: "ocr" };
+            
+            // Spoof a single text block
+            doclingOutput.text_blocks = [{
+              block_index: 0,
+              type: "paragraph",
+              text: ocrText,
+              page: 1
+            }];
+            
+            extractionMethod = "paddle_ocr";
+          } catch (ocrErr) {
+             console.error("[parse-pdf-docling] OCR fallback failed:", ocrErr.message);
+          } finally {
+             // Sweep temp file
+             await Deno.remove(tempFilePath).catch(() => {});
+          }
+        }
+
         // Validate extraction results
         if (!doclingOutput.full_text && !doclingOutput.tables.length && !doclingOutput.fields.length) {
           console.warn(`[parse-pdf-docling] Extraction returned no content, this may indicate a processing issue`);
