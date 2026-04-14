@@ -124,7 +124,26 @@ async function extractWithAI(rawText, moduleType, fileName) {
     );
   }
 
-  return { rows: data.rows, method: "ai_gemini", model: data.model };
+  // Normalize AI rows: the extraction pipeline stores per-field confidence in
+  // `_field_confidences` but the rest of the app expects `confidence_scores`.
+  const normalizedRows = data.rows.map((row) => {
+    const r = { ...row };
+    // Map _field_confidences → confidence_scores (convert 0-1 scale if needed)
+    if (r._field_confidences && !r.confidence_scores) {
+      const scores = {};
+      for (const [field, conf] of Object.entries(r._field_confidences)) {
+        // Pipeline uses 0–1 range; UI expects 0–100
+        scores[field] = typeof conf === "number" && conf <= 1 ? Math.round(conf * 100) : conf;
+      }
+      r.confidence_scores = scores;
+    }
+    // Clean up internal metadata keys that shouldn't flow into UI state
+    delete r._field_confidences;
+    delete r._field_sources;
+    return r;
+  });
+
+  return { rows: normalizedRows, method: "ai_gemini", model: data.model };
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -238,14 +257,18 @@ export async function extractFromFile(file, moduleType) {
   }
 
   // ── CRITICAL: Run all calculations on every row regardless of source ───────
-  // Preserve confidence_scores before normalization (parsingEngine may drop them)
-  const confidenceScoresMap = rawRows.map(r => r?.confidence_scores || null);
+  // Preserve confidence_scores (and singular confidence_score) before normalization
+  const confidenceScoresMap  = rawRows.map(r => r?.confidence_scores  || null);
+  const confidenceScoreMap   = rawRows.map(r => r?.confidence_score   ?? null);
+  const extractionNotesMap   = rawRows.map(r => r?.extraction_notes   || null);
+
   const normalizedRows = normalizeAndCalculate(moduleType, rawRows);
-  // Re-attach confidence_scores after normalization
+
+  // Re-attach confidence metadata after normalization
   normalizedRows.forEach((row, i) => {
-    if (confidenceScoresMap[i]) {
-      row.confidence_scores = confidenceScoresMap[i];
-    }
+    if (confidenceScoresMap[i])  row.confidence_scores  = confidenceScoresMap[i];
+    if (confidenceScoreMap[i] !== null) row.confidence_score = confidenceScoreMap[i];
+    if (extractionNotesMap[i])   row.extraction_notes   = extractionNotesMap[i];
   });
 
   return { rows: normalizedRows, method };
