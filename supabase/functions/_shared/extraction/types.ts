@@ -98,6 +98,8 @@ export type ModuleType =
 export interface ExtractionInput {
   docling?: DoclingOutput;
   rawText?: string;        // backward compat — converted to minimal DoclingOutput
+  fileBase64?: string;     // Base64 file contents for Gemini Vision fallback
+  fileMimeType?: string;   // MimeType for the Base64 file contents
   fileName: string;
   moduleType: ModuleType;
   suggestCustomFields?: boolean;

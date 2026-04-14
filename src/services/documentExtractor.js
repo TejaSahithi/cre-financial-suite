@@ -89,17 +89,23 @@ async function extractPdf(file) {
   const fullText = pageTexts.join("\n\n").replace(/\s{3,}/g, "  ").trim();
 
   if (fullText.length < 50) {
-    throw new Error(
-      "This PDF has no selectable text — it appears to be a scanned image. " +
-      "Please open it in Adobe Acrobat or Google Drive and use 'Make Searchable PDF' / OCR, then re-upload."
-    );
+    // If it's a scanned PDF, we convert the original file to Base64 
+    // so the edge function can use Gemini Vision.
+    const fileBase64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = error => reject(error);
+    });
+    console.warn("[documentExtractor] Scanned PDF detected, passing as Base64 image payload.");
+    return { rawText: "", fileBase64, fileMimeType: "application/pdf" };
   }
   return fullText;
 }
 
 // ── Vertex AI call via Supabase Edge Function ─────────────────────────────────
 
-async function extractWithAI(rawText, moduleType, fileName) {
+async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, fileMimeType = null) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
     throw new Error("AI extraction requires an authenticated session.");
@@ -113,7 +119,7 @@ async function extractWithAI(rawText, moduleType, fileName) {
       "Authorization": `Bearer ${session.access_token}`,
       "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({ moduleType, rawText, fileName }),
+    body: JSON.stringify({ moduleType, rawText, fileName, fileBase64, fileMimeType }),
   });
 
   const data = await res.json().catch(() => ({}));
@@ -266,16 +272,28 @@ export async function extractFromFile(file, moduleType) {
 
   // ── PDF ───────────────────────────────────────────────────────────────────
   else if (ext === "pdf") {
-    const rawText  = await extractPdf(file);
+    let pdfRawText = "";
+    let pdfBase64 = null;
+    let pdfMimeType = null;
+    
+    const pdfTextOrObj = await extractPdf(file);
+    if (typeof pdfTextOrObj === "string") {
+      pdfRawText = pdfTextOrObj;
+    } else {
+      pdfRawText = pdfTextOrObj.rawText;
+      pdfBase64 = pdfTextOrObj.fileBase64;
+      pdfMimeType = pdfTextOrObj.fileMimeType;
+    }
+
     try {
-      const aiResult = await extractWithAI(rawText, moduleType, file.name);
+      const aiResult = await extractWithAI(pdfRawText, moduleType, file.name, pdfBase64, pdfMimeType);
       rawRows  = aiResult.rows;
       method   = aiResult.method;
       aiMeta   = { warnings: aiResult.warnings, validationErrors: aiResult.validationErrors, extractionSummary: aiResult.extractionSummary };
       isAIResult = true;
     } catch (err) {
-      if (parser) {
-        const fallbackResult = parser(rawText);
+      if (parser && pdfRawText.length > 50) {
+        const fallbackResult = parser(pdfRawText);
         if (fallbackResult.rows.length > 0) {
           rawRows = fallbackResult.rows;
           method = fallbackResult.method || "text_parser";

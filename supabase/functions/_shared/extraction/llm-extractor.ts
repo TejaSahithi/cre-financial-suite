@@ -21,10 +21,11 @@ import type {
   StepResult,
   ModuleType,
   TextChunk,
+  ExtractionInput,
 } from "./types.ts";
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
-import { callVertexAIJSON } from "../vertex-ai.ts";
+import { callVertexAIJSON, callVertexAIFileJSON } from "../vertex-ai.ts";
 
 // ── System prompt — short, strict, no room for hallucination ─────────────────
 
@@ -75,7 +76,7 @@ ${fieldDescriptions}
 
 TEXT SNIPPET:
 ───────────────────────────
-${textSnippet}
+${textSnippet || "[No text provided, refer to the attached visual document]"}
 ───────────────────────────
 
 Return ONLY a JSON object with the field keys above. Nothing else.`;
@@ -163,6 +164,7 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
  * @param existingRecords  Records from Steps 1+2 (for context on how many rows to expect)
  */
 export async function extractWithLLM(
+  input: ExtractionInput,
   docling: DoclingOutput,
   missingFields: string[],
   moduleType: ModuleType,
@@ -215,19 +217,20 @@ export async function extractWithLLM(
   if (isMultiRow) {
     // Fill missing fields for existing records using field-group prompts
     return await fillMissingFieldsForRecords(
-      docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings,
+      input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings,
     );
   }
 
   // Single-record or no existing records → extract per group
   return await extractFieldGroups(
-    docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings,
+    input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings,
   );
 }
 
 // ── Strategy A: Fill missing fields for existing multi-row records ────────────
 
 async function fillMissingFieldsForRecords(
+  input: ExtractionInput,
   docling: DoclingOutput,
   groups: FieldGroup[],
   schema: Record<string, FieldDef>,
@@ -251,12 +254,24 @@ async function fillMissingFieldsForRecords(
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
 
     try {
-      const result = await callVertexAIJSON({
-        systemPrompt: LLM_SYSTEM_PROMPT,
-        userPrompt: prompt,
-        maxOutputTokens: 4096,
-        temperature,
-      });
+      let result;
+      if (input.fileBase64) {
+        result = await callVertexAIFileJSON({
+          systemPrompt: LLM_SYSTEM_PROMPT,
+          userPrompt: prompt,
+          maxOutputTokens: 4096,
+          temperature,
+          fileBytes: Uint8Array.from(atob(input.fileBase64), c => c.charCodeAt(0)),
+          fileMimeType: input.fileMimeType || "application/pdf"
+        });
+      } else {
+        result = await callVertexAIJSON({
+          systemPrompt: LLM_SYSTEM_PROMPT,
+          userPrompt: prompt,
+          maxOutputTokens: 4096,
+          temperature,
+        });
+      }
 
       const parsed = parseLLMArrayResponse(result, group.fields);
 
@@ -287,6 +302,7 @@ async function fillMissingFieldsForRecords(
 // ── Strategy B: Extract field groups for single-record documents ──────────────
 
 async function extractFieldGroups(
+  input: ExtractionInput,
   docling: DoclingOutput,
   groups: FieldGroup[],
   schema: Record<string, FieldDef>,
@@ -312,12 +328,24 @@ async function extractFieldGroups(
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType);
 
     try {
-      const result = await callVertexAIJSON({
-        systemPrompt: LLM_SYSTEM_PROMPT,
-        userPrompt: prompt,
-        maxOutputTokens: 2048,
-        temperature,
-      });
+      let result;
+      if (input.fileBase64) {
+        result = await callVertexAIFileJSON({
+          systemPrompt: LLM_SYSTEM_PROMPT,
+          userPrompt: prompt,
+          maxOutputTokens: 2048,
+          temperature,
+          fileBytes: Uint8Array.from(atob(input.fileBase64), c => c.charCodeAt(0)),
+          fileMimeType: input.fileMimeType || "application/pdf"
+        });
+      } else {
+        result = await callVertexAIJSON({
+          systemPrompt: LLM_SYSTEM_PROMPT,
+          userPrompt: prompt,
+          maxOutputTokens: 2048,
+          temperature,
+        });
+      }
 
       const parsed = parseLLMResponse(result, group.fields);
       if (parsed) {

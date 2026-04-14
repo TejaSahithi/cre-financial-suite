@@ -113,6 +113,8 @@ Deno.serve(async (req: Request) => {
     const {
       moduleType = "property",
       rawText = "",
+      fileBase64 = null,
+      fileMimeType = null,
       doclingOutput,
       fileName = "document",
       suggestCustomFields = false,
@@ -131,9 +133,13 @@ Deno.serve(async (req: Request) => {
       input.docling = doclingOutput;
     } else if (rawText && typeof rawText === "string" && rawText.trim().length > 0) {
       input.rawText = rawText;
+    } else if (fileBase64 && typeof fileBase64 === "string") {
+      input.fileBase64 = fileBase64;
+      input.fileMimeType = fileMimeType || "application/pdf";
+      input.rawText = ""; // explicitly empty text
     } else {
       return respond({
-        error: "Either 'doclingOutput' or 'rawText' must be provided",
+        error: "Either 'doclingOutput', 'rawText', or 'fileBase64' must be provided",
         rows: [],
       }, 400);
     }

@@ -237,6 +237,7 @@ export async function runExtractionPipeline(
       const existingMerge = mergeResults(ruleResult, tableResult, { records: [], warnings: [] }, moduleType);
 
       llmResult = await extractWithLLM(
+        input,
         docling,
         missingFields,
         moduleType,
