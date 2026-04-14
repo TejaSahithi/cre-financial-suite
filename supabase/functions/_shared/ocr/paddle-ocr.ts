@@ -1,59 +1,95 @@
+// @ts-nocheck
 /**
  * supabase/functions/_shared/ocr/paddle-ocr.ts
- * 
- * Invokes a local Python script running PaddleOCR to extract text
- * from a scanned PDF or image.
+ *
+ * OCR text extraction using Google Gemini Vision.
+ *
+ * Replaces the previous Deno.Command + Python subprocess approach
+ * which cannot run in Supabase Edge Functions (Deno Deploy).
+ * Gemini 1.5 natively understands PDFs, images, and scanned documents
+ * and is already configured in this project via Vertex AI.
  */
 
-export async function runPaddleOCR(filePath: string): Promise<string> {
-  console.log(`[paddle-ocr] Running OCR on: ${filePath}`);
+import { callVertexAIWithFile } from "../vertex-ai.ts";
 
-  // Resolve the path to the python script correctly in the edge/local context
-  const scriptPath = decodeURIComponent(new URL('./ocr_script.py', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1');
+const OCR_SYSTEM_PROMPT = `You are a precise OCR engine. Extract ALL visible text from this document exactly as it appears.
 
-  const isWindows = Deno.build.os === "windows";
-  const cmd = isWindows ? "py" : "python3";
-  // On Windows, try to force 3.12 for PaddleOCR compatibility
-  const cmdArgs = isWindows ? ["-3.12", scriptPath, filePath] : [scriptPath, filePath];
+RULES:
+1. Preserve the original reading order (top to bottom, left to right).
+2. Preserve paragraph breaks as double newlines.
+3. Preserve table structure using tab-separated values where possible.
+4. Do NOT interpret, summarize, or modify the content — extract verbatim.
+5. If text is partially illegible, provide your best reading in [brackets].
+6. Return ONLY the extracted text. No JSON, no markdown fences, no explanation.`;
 
-  const command = new Deno.Command(cmd, {
-    args: cmdArgs,
-    stdout: "piped",
-    stderr: "piped",
-  });
+/**
+ * Extract text from a scanned PDF or image using Gemini Vision.
+ *
+ * @param fileBytes - Raw file bytes (PDF or image)
+ * @param mimeType - MIME type of the file (e.g. "application/pdf", "image/png")
+ * @returns Extracted text content
+ */
+export async function runPaddleOCR(fileBytes: Uint8Array, mimeType: string = "application/pdf"): Promise<string> {
+  console.log(`[ocr] Running Gemini Vision OCR (${mimeType}, ${fileBytes.length} bytes)`);
 
-  const { code, stdout, stderr } = await command.output();
-  const errorText = new TextDecoder().decode(stderr);
-  
-  if (code !== 0) {
-    let msg = `[paddle-ocr] OCR failed with exit code ${code}.`;
-    if (errorText.toLowerCase().includes("module not found") || errorText.toLowerCase().includes("no module named 'paddleocr'")) {
-      msg += " ERROR: 'paddleocr' module is not installed. Please run 'pip install paddleocr paddlepaddle'.";
-    } else {
-      msg += ` Detail: ${errorText}`;
-    }
-    throw new Error(msg);
+  const hasVertexAI = !!(
+    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
+  ) && !!(
+    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  );
+
+  if (!hasVertexAI) {
+    throw new Error(
+      "OCR requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+    );
   }
 
-  let extractedText = new TextDecoder().decode(stdout);
-  
-  return cleanOCRText(extractedText);
+  try {
+    const response = await callVertexAIWithFile({
+      systemPrompt: OCR_SYSTEM_PROMPT,
+      userPrompt: "Extract all text from this document. Return only the raw text, nothing else.",
+      fileBytes,
+      fileMimeType: mimeType,
+      maxOutputTokens: 8192,
+      temperature: 0,
+      responseMimeType: "text/plain",
+    });
+
+    const text = response.content?.trim() ?? "";
+
+    console.log(
+      `[ocr] Gemini Vision OCR complete: ${text.length} chars, ` +
+      `input=${response.inputTokens} tokens, output=${response.outputTokens} tokens`
+    );
+
+    if (!text || text.length < 5) {
+      throw new Error("Gemini Vision returned empty text — document may be blank or unreadable.");
+    }
+
+    return cleanOCRText(text);
+  } catch (err) {
+    // Re-throw with clear context
+    if (err.message?.includes("Vertex AI")) {
+      throw err;
+    }
+    throw new Error(`Gemini Vision OCR failed: ${err.message}`);
+  }
 }
 
 /**
- * Removes excess whitespace, weird OCR artifacts, and normalizes output.
+ * Removes excess whitespace, OCR artifacts, and normalizes output.
  */
 function cleanOCRText(text: string): string {
   if (!text) return "";
-  
-  // Replace multiple newlines with a single newline
-  let cleaned = text.replace(/\n{3,}/g, '\n\n');
-  
-  // Replace multiple spaces with a single space
-  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ');
-  
-  // Strip out meaningless noise/symbols if necessary
-  cleaned = cleaned.replace(/[\x00-\x09\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, '');
+
+  // Remove control characters and null bytes
+  let cleaned = text.replace(/[\x00-\x09\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, "");
+
+  // Replace multiple newlines with double newline (paragraph break)
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+
+  // Replace multiple spaces/tabs with single space
+  cleaned = cleaned.replace(/[ \t]{2,}/g, " ");
 
   return cleaned.trim();
 }

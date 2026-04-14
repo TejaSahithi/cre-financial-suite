@@ -169,6 +169,8 @@ export interface VertexAIOptions {
   model?: string;
   maxOutputTokens?: number;
   temperature?: number;
+  /** Response MIME type — "application/json" (default) or "text/plain" for raw text output */
+  responseMimeType?: string;
 }
 
 export interface VertexAIFileOptions extends VertexAIOptions {
@@ -313,6 +315,18 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
     throw new Error("Must provide either fileBase64 or fileBytes");
   }
 
+  const genConfig: Record<string, unknown> = {
+    maxOutputTokens: opts.maxOutputTokens ?? 4096,
+    temperature: opts.temperature ?? 0,
+  };
+
+  // Only set responseMimeType when JSON is requested (default).
+  // For plain text (OCR), omitting it avoids Gemini wrapping text in JSON.
+  const mimeTypeResp = opts.responseMimeType ?? "application/json";
+  if (mimeTypeResp === "application/json") {
+    genConfig.responseMimeType = "application/json";
+  }
+
   const requestBody: Record<string, unknown> = {
     contents: [
       {
@@ -328,11 +342,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
         ],
       },
     ],
-    generationConfig: {
-      maxOutputTokens: opts.maxOutputTokens ?? 4096,
-      temperature: opts.temperature ?? 0,
-      responseMimeType: "application/json",
-    },
+    generationConfig: genConfig,
   };
 
   if (opts.systemPrompt) {
