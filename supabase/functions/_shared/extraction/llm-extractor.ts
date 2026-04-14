@@ -180,7 +180,14 @@ export async function extractWithLLM(
     !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
 
   if (!hasVertexAI) {
-    warnings.push("Vertex AI not configured — skipping LLM extraction");
+    const missingVars: string[] = [];
+    if (!Deno.env.get("VERTEX_PROJECT_ID")) missingVars.push("VERTEX_PROJECT_ID");
+    if (!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY")) missingVars.push("GOOGLE_SERVICE_ACCOUNT_KEY");
+    const msg =
+      `Vertex AI not configured — missing env vars: [${missingVars.join(", ")}]. ` +
+      `LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
+    console.warn(`[llm-extractor] ${msg}`);
+    warnings.push(msg);
     return { records: [], warnings };
   }
 

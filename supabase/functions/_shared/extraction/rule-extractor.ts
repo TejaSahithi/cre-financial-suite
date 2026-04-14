@@ -78,16 +78,26 @@ export function parseMoney(s: string): number | null {
   if (!s) return null;
   let cleaned = s.replace(/[$€£,\s]/g, "").replace(/\/month.*$/i, "").replace(/\/yr.*$/i, "").trim();
 
+  // Handle accounting-style negatives: (12500) → -12500
+  const accounting = cleaned.match(/^\(([0-9.]+)\)$/);
+  if (accounting) return -parseFloat(accounting[1]);
+
+  // Handle leading minus: -12500
+  const isNegative = cleaned.startsWith("-");
+  if (isNegative) cleaned = cleaned.slice(1);
+
   // Handle "$1.2M" or "$500K"
   const multiplier = cleaned.match(/([\d.]+)\s*([MmKk])$/);
   if (multiplier) {
     const base = parseFloat(multiplier[1]);
     const mult = /[Mm]/.test(multiplier[2]) ? 1_000_000 : 1_000;
-    return isNaN(base) ? null : base * mult;
+    if (isNaN(base)) return null;
+    return isNegative ? -(base * mult) : base * mult;
   }
 
   const n = parseFloat(cleaned);
-  return isNaN(n) ? null : n;
+  if (isNaN(n)) return null;
+  return isNegative ? -n : n;
 }
 
 /** Parse a percentage value: "3%" → 3, "350 bps" → 3.5 */
