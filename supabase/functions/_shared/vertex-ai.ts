@@ -171,11 +171,11 @@ export interface VertexAIResponse {
  * Call Vertex AI Gemini and return the text response.
  */
 export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIResponse> {
-  const projectId = Deno.env.get("VERTEX_PROJECT_ID");
-  const location = Deno.env.get("VERTEX_LOCATION") ?? "us-central1";
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+  const location = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
 
   if (!projectId) {
-    throw new Error("VERTEX_PROJECT_ID environment variable is not set");
+    throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
   }
 
   const model = opts.model ?? DEFAULT_MODEL;
@@ -256,11 +256,11 @@ export async function callVertexAIJSON<T = unknown>(opts: VertexAIOptions): Prom
  * Returns the text response.
  */
 export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<VertexAIResponse> {
-  const projectId = Deno.env.get("VERTEX_PROJECT_ID");
-  const location = Deno.env.get("VERTEX_LOCATION") ?? "us-central1";
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+  const location = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
 
   if (!projectId) {
-    throw new Error("VERTEX_PROJECT_ID environment variable is not set");
+    throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
   }
 
   const model = opts.model ?? DEFAULT_MODEL;
