@@ -1,24 +1,24 @@
 /**
- * Scratch script to test PaddleOCR bridge independently.
- * Run with: deno run --allow-all test_ocr.ts
+ * Scratch script to test Gemini Vision OCR bridge independently.
+ * Run with: deno run --allow-all --allow-env test_ocr.ts
  */
 
 // Use relative path from the scratch directory to the shared functions
 import { runPaddleOCR } from "../../../../../supabase/functions/_shared/ocr/paddle-ocr.ts";
 
 async function test() {
-  console.log("Starting PaddleOCR test...");
-  
-  // path to the image we generated
-  const testFile = "test_scanned.png"; 
-  
+  console.log("Starting Gemini Vision OCR test...");
+
+  // Read a test image file
+  const testFile = "test_scanned.png";
+
   try {
-    const result = await runPaddleOCR(testFile);
-    console.log("OCR Result Found Blocks:", result.text_blocks.length);
-    console.log("OCR Full Text Snippet:", result.full_text.substring(0, 100));
-    console.log("Source Verified:", result.raw_response?.source);
+    const fileBytes = await Deno.readFile(testFile);
+    const result = await runPaddleOCR(fileBytes, "image/png");
+    console.log("OCR Result Length:", result.length, "chars");
+    console.log("OCR Text Snippet:", result.substring(0, 200));
   } catch (err) {
-    console.error("Test failed:", err.message);
+    console.error("Test failed:", (err as Error).message);
   }
 }
 

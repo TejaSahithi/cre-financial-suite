@@ -4,7 +4,7 @@ import { runPaddleOCR } from "../ocr/paddle-ocr.ts";
 
 /**
  * Shared Document Parsing Utility
- * Calls Docling API (primary) and falls back to PaddleOCR (scanned documents)
+ * Calls Docling API (primary) and falls back to Gemini Vision OCR (scanned documents)
  */
 
 export async function parseDocument(
@@ -58,16 +58,12 @@ export async function parseDocument(
   console.log(`[parser] textBlocksCount=${textBlocksCount}, isScanned=${isScanned}, mimeType=${mimeType}`);
 
   if (isScanned) {
-    console.log("[parser] Using OCR fallback (Docling output insufficient or missing)");
-    
-    const tempFilePath = await Deno.makeTempFile({ 
-      suffix: mimeType.includes("pdf") ? ".pdf" : ".png" 
-    });
-    
+    console.log("[parser] Using Gemini Vision OCR fallback (Docling output insufficient or missing)");
+
     try {
-      await Deno.writeFile(tempFilePath, fileBytes);
-      const ocrText = await runPaddleOCR(tempFilePath);
-      
+      // runPaddleOCR now uses Gemini Vision — no subprocess, no temp files
+      const ocrText = await runPaddleOCR(fileBytes, mimeType);
+
       // Initialize or merge into Docling shape
       if (!doclingOutput) {
         doclingOutput = {
@@ -80,21 +76,21 @@ export async function parseDocument(
       }
 
       doclingOutput.full_text = ocrText;
-      doclingOutput.text_blocks = [{
-        block_index: 0,
+      // Split OCR text into paragraph-like blocks for rule-based extraction
+      const paragraphs = ocrText.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+      doclingOutput.text_blocks = paragraphs.map((text, i) => ({
+        block_index: i,
         type: "paragraph",
-        text: ocrText,
-        page: 1
-      }];
-      doclingOutput.extraction_method = "paddle_ocr";
-      console.log("[parser] OCR fallback complete");
+        text: text.trim(),
+        page: 1,
+      }));
+      doclingOutput.extraction_method = "gemini_vision_ocr";
+      console.log(`[parser] Gemini Vision OCR complete: ${ocrText.length} chars, ${paragraphs.length} blocks`);
       return doclingOutput;
     } catch (ocrErr) {
-      const msg = `OCR fallback failed: ${ocrErr.message}`;
+      const msg = `OCR fallback failed: ${(ocrErr as Error).message}`;
       console.error(`[parser] ${msg}`);
       warnings.push(msg);
-    } finally {
-      await Deno.remove(tempFilePath).catch(() => {});
     }
   }
 
@@ -105,11 +101,20 @@ export async function parseDocument(
     return doclingOutput;
   }
 
-  // Final fallback: Mock
-  console.warn("[parser] All parsing methods failed — returning mock");
-  const mock = buildMockOutput(fileName, mimeType);
-  mock.warnings = warnings;
-  return mock;
+  // Final fallback: return empty output with warnings (not mock data)
+  console.warn("[parser] All parsing methods failed — returning empty output with warnings");
+  return {
+    text_blocks: [],
+    tables: [],
+    fields: [],
+    full_text: "",
+    page_count: 1,
+    extraction_method: "none",
+    warnings: [
+      ...warnings,
+      "All parsing methods failed. Ensure Vertex AI (VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY) is configured for OCR support.",
+    ],
+  };
 }
 
 function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {
@@ -148,12 +153,3 @@ function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {
   };
 }
 
-function buildMockOutput(fileName: string, mimeType: string): DoclingOutput {
-  return {
-    text_blocks: [{ block_index: 0, type: "paragraph", text: "Mock content for " + fileName }],
-    tables: [],
-    fields: [],
-    full_text: "Mock content for " + fileName,
-    page_count: 1,
-  };
-}

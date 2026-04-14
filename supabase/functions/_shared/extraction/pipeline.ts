@@ -199,8 +199,8 @@ export async function runExtractionPipeline(
   const fullText = docling.full_text ?? "";
   log.info(`Normalized: ${fullText.length} chars, ${docling.text_blocks?.length ?? 0} blocks, ${docling.tables?.length ?? 0} tables`);
 
-  if (fullText.trim().length < 10) {
-    log.warn("Document text too short — aborting pipeline");
+  if (fullText.trim().length < 10 && !input.fileBase64) {
+    log.warn("Document text too short and no file bytes available — aborting pipeline");
     return {
       rows: [],
       method: "fallback",
@@ -216,6 +216,10 @@ export async function runExtractionPipeline(
         processingTimeMs: Date.now() - startTime,
       },
     };
+  }
+
+  if (fullText.trim().length < 10 && input.fileBase64) {
+    log.info("Document text too short but fileBase64 present — skipping rule/table, delegating to LLM Vision");
   }
 
   // ── STEP 1: Rule-Based Extraction ────────────────────────────────────────
