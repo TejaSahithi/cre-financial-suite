@@ -11,10 +11,9 @@ export async function runPaddleOCR(filePath: string): Promise<string> {
   // Resolve the path to the python script correctly in the edge/local context
   const scriptPath = new URL('./ocr_script.py', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
-  // Detect platform correctly to map binary runner specifically for Python 3.12 
-  // on local environments vs containerized supabase functions 
   const isWindows = Deno.build.os === "windows";
   const cmd = isWindows ? "py" : "python3";
+  // On Windows, try to force 3.12 for PaddleOCR compatibility
   const cmdArgs = isWindows ? ["-3.12", scriptPath, filePath] : [scriptPath, filePath];
 
   const command = new Deno.Command(cmd, {
@@ -27,7 +26,13 @@ export async function runPaddleOCR(filePath: string): Promise<string> {
   const errorText = new TextDecoder().decode(stderr);
   
   if (code !== 0) {
-    throw new Error(`[paddle-ocr] OCR failed with exit code ${code}: ${errorText}`);
+    let msg = `[paddle-ocr] OCR failed with exit code ${code}.`;
+    if (errorText.toLowerCase().includes("module not found") || errorText.toLowerCase().includes("no module named 'paddleocr'")) {
+      msg += " ERROR: 'paddleocr' module is not installed. Please run 'pip install paddleocr paddlepaddle'.";
+    } else {
+      msg += ` Detail: ${errorText}`;
+    }
+    throw new Error(msg);
   }
 
   let extractedText = new TextDecoder().decode(stdout);

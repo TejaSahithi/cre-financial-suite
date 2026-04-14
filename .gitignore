@@ -39,3 +39,8 @@ supabase/.temp/
 *.tsbuildinfo
 add_demo_column.sql
 .vercel
+.venv/
+.env/
+env/
+__pycache__/
+*.pyc

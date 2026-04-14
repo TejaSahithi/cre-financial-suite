@@ -15,6 +15,7 @@ export async function parseDocument(
   const doclingUrl = Deno.env.get("DOCLING_API_URL");
   let doclingOutput: DoclingOutput | null = null;
   let extractionMethod = "unknown";
+  const warnings: string[] = [];
 
   // 1. Try Docling API if configured
   if (doclingUrl) {
@@ -88,7 +89,9 @@ export async function parseDocument(
       console.log("[parser] OCR fallback complete");
       return doclingOutput;
     } catch (ocrErr) {
-      console.error("[parser] OCR fallback failed:", ocrErr.message);
+      const msg = `OCR fallback failed: ${ocrErr.message}`;
+      console.error(`[parser] ${msg}`);
+      warnings.push(msg);
     } finally {
       await Deno.remove(tempFilePath).catch(() => {});
     }
@@ -97,12 +100,15 @@ export async function parseDocument(
   // If we have docling output (and it wasn't scanned enough to trigger OCR or OCR failed)
   if (doclingOutput) {
     doclingOutput.extraction_method = extractionMethod;
+    doclingOutput.warnings = (doclingOutput.warnings || []).concat(warnings);
     return doclingOutput;
   }
 
   // Final fallback: Mock
   console.warn("[parser] All parsing methods failed — returning mock");
-  return buildMockOutput(fileName, mimeType);
+  const mock = buildMockOutput(fileName, mimeType);
+  mock.warnings = warnings;
+  return mock;
 }
 
 function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {

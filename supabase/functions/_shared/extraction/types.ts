@@ -70,6 +70,8 @@ export interface DoclingOutput {
   tables: DoclingTable[];
   fields: DoclingField[];
   full_text?: string;
+  extraction_method?: string;
+  warnings?: string[];
   raw_response?: Record<string, unknown>;
 }
 

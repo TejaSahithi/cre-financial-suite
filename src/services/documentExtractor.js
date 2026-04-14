@@ -141,9 +141,12 @@ async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, f
       );
     }
 
+    const hasWarnings = (data.warnings || []).length > 0;
+    const warningText = hasWarnings ? ` (Reason: ${data.warnings[0]})` : "";
+
     throw new Error(
-      "Gemini could not find structured data in this document. " +
-      "Make sure the document contains identifiable fields."
+      `Gemini could not find structured data in this document.${warningText} ` +
+      "Make sure the document contains identifiable fields and all OCR dependencies are installed."
     );
   }
 
