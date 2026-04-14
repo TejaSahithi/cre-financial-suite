@@ -85,7 +85,7 @@ function computeLeaseSchedule(
     const monthTotal = Math.round((escalatedRent + camCharge) * 100) / 100;
     rentSchedule.push({
       month,
-      base_rent: baseRent,
+      base_rent: Math.round(baseRent * 100) / 100,
       escalated_rent: Math.round(escalatedRent * 100) / 100,
       cam_charge: Math.round(camCharge * 100) / 100,
       total_rent: monthTotal,
@@ -99,7 +99,7 @@ function computeLeaseSchedule(
 // ---------------------------------------------------------------------------
 
 const leaseArb = fc.record({
-  monthly_rent: fc.float({ min: 1, max: 100000, noNaN: true }),
+  monthly_rent: fc.float({ min: Math.fround(1), max: Math.fround(100000), noNaN: true, noDefaultInfinity: true }),
   square_footage: fc.integer({ min: 0, max: 50000 }),
   start_date: fc.constant("2024-01-01"),
   end_date: fc.constantFrom("2024-06-30", "2024-12-31", "2025-12-31", "2026-12-31"),
@@ -132,7 +132,7 @@ Deno.test({
   name: "Property 17: total_rent >= base_rent with CAM charges present",
   fn: () => {
     const leaseWithCamArb = fc.record({
-      monthly_rent: fc.float({ min: 1, max: 50000, noNaN: true }),
+      monthly_rent: fc.float({ min: Math.fround(1), max: Math.fround(50000), noNaN: true, noDefaultInfinity: true }),
       square_footage: fc.integer({ min: 100, max: 20000 }),
       start_date: fc.constant("2024-01-01"),
       end_date: fc.constant("2024-12-31"),

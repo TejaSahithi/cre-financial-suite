@@ -73,8 +73,8 @@ function computeCpiEscalationSchedule(
 // ---------------------------------------------------------------------------
 
 const cpiLeaseArb = fc.record({
-  baseRent: fc.float({ min: 100, max: 50000, noNaN: true }),
-  cpiRatePct: fc.float({ min: 0.1, max: 15, noNaN: true }),
+  baseRent: fc.float({ min: Math.fround(100), max: Math.fround(50000), noNaN: true, noDefaultInfinity: true }),
+  cpiRatePct: fc.float({ min: Math.fround(0.1), max: Math.fround(15), noNaN: true, noDefaultInfinity: true }),
   startDate: fc.constant("2022-01-01"),
   endDate: fc.constant("2025-12-31"),
 });
@@ -140,8 +140,8 @@ Deno.test({
     fc.assert(
       fc.property(
         fc.record({
-          baseRent: fc.float({ min: 100, max: 10000, noNaN: true }),
-          ratePct: fc.float({ min: 1, max: 10, noNaN: true }),
+          baseRent: fc.float({ min: Math.fround(100), max: Math.fround(10000), noNaN: true, noDefaultInfinity: true }),
+          ratePct: fc.float({ min: Math.fround(1), max: Math.fround(10), noNaN: true, noDefaultInfinity: true }),
         }),
         ({ baseRent, ratePct }) => {
           const rate = ratePct / 100;
