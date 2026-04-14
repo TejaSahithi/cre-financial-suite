@@ -559,7 +559,7 @@ export default function LeaseUpload() {
               The extractor will pull all identifiable lease fields for review.
             </p>
             <label>
-              <input type="file" accept=".csv,.xlsx,.xls,.pdf,.docx,.doc,.txt" className="hidden" onChange={handleFileSelect} />
+              <input type="file" accept=".csv,.xlsx,.xls,.pdf,.docx,.doc,.txt,image/png,image/jpeg" className="hidden" onChange={handleFileSelect} />
               <Button asChild className="bg-[#1a2744] hover:bg-[#243b67] cursor-pointer">
                 <span>Browse Files</span>
               </Button>

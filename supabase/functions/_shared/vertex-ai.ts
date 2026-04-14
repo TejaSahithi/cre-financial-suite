@@ -189,65 +189,79 @@ export interface VertexAIResponse {
 
 /**
  * Call Vertex AI Gemini and return the text response.
+ * Implements robust fallback logic for models and locations to handle 404s.
  */
 export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIResponse> {
   const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
-  const location = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
-
   if (!projectId) {
     throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
   }
 
-  const model = opts.model ?? DEFAULT_MODEL;
+  const primaryLocation = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
+  const primaryModel = opts.model ?? DEFAULT_MODEL;
+
+  // Ordered list of (location, model) to try if primary fails with 404
+  const attempts = [
+    { loc: primaryLocation, mod: primaryModel },
+    { loc: primaryLocation, mod: "gemini-1.5-flash-001" },
+    { loc: "us-east4", mod: "gemini-1.5-flash" },
+    { loc: "us-central1", mod: "gemini-1.5-pro" },
+  ];
+
   const accessToken = await getAccessToken();
+  let lastError: Error | null = null;
 
-  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+  for (const { loc, mod } of attempts) {
+    try {
+      console.log(`[vertex-ai] Trying ${mod} in ${loc}...`);
+      const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${loc}/publishers/google/models/${mod}:generateContent`;
 
-  // Build the request body
-  const contents: unknown[] = [];
+      const requestBody: Record<string, unknown> = {
+        contents: [{ role: "user", parts: [{ text: opts.userPrompt }] }],
+        generationConfig: {
+          maxOutputTokens: opts.maxOutputTokens ?? 2048,
+          temperature: opts.temperature ?? 0,
+          responseMimeType: "application/json",
+        },
+      };
 
-  // System instruction (Gemini 1.5 supports systemInstruction)
-  const requestBody: Record<string, unknown> = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: opts.userPrompt }],
-      },
-    ],
-    generationConfig: {
-      maxOutputTokens: opts.maxOutputTokens ?? 2048,
-      temperature: opts.temperature ?? 0,
-      responseMimeType: "application/json", // Request JSON output directly
-    },
-  };
+      if (opts.systemPrompt) {
+        requestBody.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
+      }
 
-  if (opts.systemPrompt) {
-    requestBody.systemInstruction = {
-      parts: [{ text: opts.systemPrompt }],
-    };
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+        const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+        console.log(`[vertex-ai] Success with ${mod} in ${loc}`);
+        return { content, model: mod, inputTokens, outputTokens };
+      }
+
+      if (response.status === 404) {
+        console.warn(`[vertex-ai] 404 NOT FOUND: Project=${projectId}, Model=${mod}, Loc=${loc}, URL=${url}. Ensure Vertex AI API is enabled in this project.`);
+        continue;
+      }
+
+      const errText = await response.text().catch(() => "unknown error");
+      throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
+    } catch (err) {
+      lastError = err;
+      if (err.message.includes("404")) continue;
+      throw err;
+    }
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "unknown error");
-    throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
-  const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
-
-  return { content, model, inputTokens, outputTokens };
+  throw lastError || new Error("All Vertex AI model attempts failed with 404");
 }
 
 /**

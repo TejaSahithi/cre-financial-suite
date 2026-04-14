@@ -103,6 +103,19 @@ async function extractPdf(file) {
   return fullText;
 }
 
+// ── Images / Generic Base64 ──────────────────────────────────────────────────
+
+async function extractImage(file) {
+  const fileBase64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = (error) => reject(error);
+  });
+  return { rawText: "", fileBase64, fileMimeType: file.type || "image/png" };
+}
+
+
 // ── Vertex AI call via Supabase Edge Function ─────────────────────────────────
 
 async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, fileMimeType = null) {
@@ -317,9 +330,27 @@ export async function extractFromFile(file, moduleType) {
         }
       } else {
         throw err;
-      }
     }
   }
+
+  // ── Images (PNG, JPG, etc.) ───────────────────────────────────────────────
+  else if (ext === "png" || ext === "jpg" || ext === "jpeg") {
+    const { rawText, fileBase64, fileMimeType } = await extractImage(file);
+    try {
+      const aiResult = await extractWithAI(rawText, moduleType, file.name, fileBase64, fileMimeType);
+      rawRows = aiResult.rows;
+      method = aiResult.method;
+      aiMeta = {
+        warnings: aiResult.warnings,
+        validationErrors: aiResult.validationErrors,
+        extractionSummary: aiResult.extractionSummary,
+      };
+      isAIResult = true;
+    } catch (err) {
+      throw err;
+    }
+  }
+
 
   // ── Unsupported ───────────────────────────────────────────────────────────
   else {
