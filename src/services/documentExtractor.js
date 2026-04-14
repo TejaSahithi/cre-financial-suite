@@ -129,6 +129,18 @@ async function extractWithAI(rawText, moduleType, fileName, fileBase64 = null, f
   }
   if (data?.error) throw new Error(`AI extraction error: ${data.error}`);
   if (!data?.rows || data.rows.length === 0) {
+    const isMissingConfig = (data.warnings || []).some(w => 
+      w.toLowerCase().includes("vertex ai not configured") || 
+      w.toLowerCase().includes("missing env vars")
+    );
+
+    if (isMissingConfig) {
+      throw new Error(
+        "AI Extraction (Gemini) is not configured. Please ensure VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY " +
+        "are set in your Supabase project secrets."
+      );
+    }
+
     throw new Error(
       "Gemini could not find structured data in this document. " +
       "Make sure the document contains identifiable fields."
