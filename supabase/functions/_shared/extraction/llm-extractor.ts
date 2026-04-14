@@ -261,7 +261,7 @@ async function fillMissingFieldsForRecords(
           userPrompt: prompt,
           maxOutputTokens: 4096,
           temperature,
-          fileBytes: Uint8Array.from(atob(input.fileBase64), c => c.charCodeAt(0)),
+          fileBase64: input.fileBase64,
           fileMimeType: input.fileMimeType || "application/pdf"
         });
       } else {
@@ -335,7 +335,7 @@ async function extractFieldGroups(
           userPrompt: prompt,
           maxOutputTokens: 2048,
           temperature,
-          fileBytes: Uint8Array.from(atob(input.fileBase64), c => c.charCodeAt(0)),
+          fileBase64: input.fileBase64,
           fileMimeType: input.fileMimeType || "application/pdf"
         });
       } else {

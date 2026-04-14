@@ -153,7 +153,9 @@ export interface VertexAIOptions {
 
 export interface VertexAIFileOptions extends VertexAIOptions {
   /** Raw file bytes to send as an inline part */
-  fileBytes: Uint8Array;
+  fileBytes?: Uint8Array;
+  /** Raw base64 string */
+  fileBase64?: string;
   /** MIME type of the file (e.g. "application/pdf", "image/jpeg") */
   fileMimeType: string;
 }
@@ -266,8 +268,16 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
 
   const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
 
-  // Encode file bytes as base64
-  const base64Data = btoa(String.fromCharCode(...opts.fileBytes));
+  // Encode file bytes as base64 safely
+  let base64Data: string;
+  if (opts.fileBase64) {
+    base64Data = opts.fileBase64;
+  } else if (opts.fileBytes) {
+    // Avoid "Maximum call stack size exceeded" by avoiding spread operator
+    base64Data = btoa(Array.from(opts.fileBytes).map(b => String.fromCharCode(b)).join(""));
+  } else {
+    throw new Error("Must provide either fileBase64 or fileBytes");
+  }
 
   const requestBody: Record<string, unknown> = {
     contents: [
