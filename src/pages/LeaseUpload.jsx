@@ -177,25 +177,29 @@ export default function LeaseUpload() {
 
   useEffect(() => {
     if (!fileId || fileRecord?.status !== "uploaded" || retriedUploadedFiles.current.has(fileId)) {
-      return;
+      return undefined;
     }
 
     retriedUploadedFiles.current.add(fileId);
-    supabase.functions
-      .invoke("ingest-file", {
-        body: {
-          file_id: fileId,
-          module_type: "leases",
-        },
-      })
-      .then(({ data, error }) => {
-        if (error || data?.error) {
-          toast.error(data?.message || error?.message || "Could not start lease extraction.");
-          return;
-        }
-        toast.success("Lease extraction restarted.");
-        fetchFileRecord(fileId);
-      });
+    const retryTimer = window.setTimeout(() => {
+      supabase.functions
+        .invoke("ingest-file", {
+          body: {
+            file_id: fileId,
+            module_type: "leases",
+          },
+        })
+        .then(({ data, error }) => {
+          if (error || data?.error) {
+            toast.error(data?.message || error?.message || "Could not start lease extraction.");
+            return;
+          }
+          toast.success("Lease extraction restarted.");
+          fetchFileRecord(fileId);
+        });
+    }, 8000);
+
+    return () => window.clearTimeout(retryTimer);
   }, [fileId, fileRecord?.status]);
 
   const handleUploadComplete = (result) => {

@@ -41,6 +41,19 @@ function normalizeFileType(value) {
   return value === "budget" ? "budgets" : value;
 }
 
+function getProcessingError(ingestData, ingestError) {
+  return (
+    ingestData?.message ||
+    ingestData?.error_details ||
+    ingestData?.steps?.normalization?.data?.message ||
+    ingestData?.steps?.extraction?.data?.message ||
+    ingestData?.steps?.validation?.data?.message ||
+    ingestData?.steps?.storage?.data?.message ||
+    ingestError?.message ||
+    "Processing could not be started."
+  );
+}
+
 /**
  * Reusable file upload component that sends files to the upload-handler
  * Edge Function and auto-triggers ingestion on success.
@@ -197,36 +210,27 @@ export default function FileUploader({
       const { data, error } = await supabase.functions.invoke("upload-handler", { body: formData });
       if (error) throw error;
 
-      let ingestResult = null;
-      let processingError = null;
       if (data?.file_id) {
-        const { data: ingestData, error: ingestError } = await supabase.functions.invoke("ingest-file", {
-          body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
-        });
-
-        ingestResult = ingestData;
-        if (ingestError || ingestData?.error) {
-          processingError =
-            ingestData?.message ||
-            ingestData?.error_details ||
-            ingestData?.steps?.normalization?.data?.message ||
-            ingestData?.steps?.extraction?.data?.message ||
-            ingestData?.steps?.validation?.data?.message ||
-            ingestData?.steps?.storage?.data?.message ||
-            ingestError?.message ||
-            "Processing could not be started.";
-          console.error("[FileUploader] ingest-file failed:", {
-            error: ingestError,
-            data: ingestData,
-            message: processingError,
+        supabase.functions
+          .invoke("ingest-file", {
+            body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
+          })
+          .then(({ data: ingestData, error: ingestError }) => {
+            if (ingestError || ingestData?.error) {
+              const processingError = getProcessingError(ingestData, ingestError);
+              console.error("[FileUploader] ingest-file failed:", {
+                error: ingestError,
+                data: ingestData,
+                message: processingError,
+              });
+              toast.error(`${file.name}: ${processingError}`);
+            }
           });
-        }
       }
 
       return {
         ...data,
-        ingest_result: ingestResult,
-        processing_error: processingError,
+        processing_started: Boolean(data?.file_id),
       };
     },
     [fileType, propertyId, resolvedOrgId]
@@ -254,9 +258,6 @@ export default function FileUploader({
       try {
         const result = await uploadSingleFile(file);
         results.push({ file_name: file.name, ...result });
-        if (result?.processing_error) {
-          errors.push({ file_name: file.name, message: result.processing_error, file_id: result.file_id });
-        }
       } catch (error) {
         console.error("[FileUploader] upload failed:", error);
         const message =
@@ -270,7 +271,7 @@ export default function FileUploader({
 
     if (results.length > 0 && errors.length === 0) {
       setUploadState("success");
-      toast.success(`${results.length} file${results.length === 1 ? "" : "s"} uploaded successfully.`);
+      toast.success(`${results.length} file${results.length === 1 ? "" : "s"} uploaded. Extraction is running.`);
       if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
       return;
     }
@@ -420,7 +421,7 @@ export default function FileUploader({
                   uploadState === "success" ? "text-emerald-800" : "text-amber-800"
                 }`}>
                   {uploadState === "success"
-                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}`
+                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; extraction is running`
                     : `Uploaded ${uploadResults.length} of ${files.length} files`}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-2">
