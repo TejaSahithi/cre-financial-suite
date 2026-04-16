@@ -66,7 +66,20 @@ Deno.serve(async (req: Request) => {
     }
 
     // Validate file_type
-    const validFileTypes = ['leases', 'expenses', 'properties', 'revenue', 'cam', 'budgets'];
+    const validFileTypes = [
+      'leases',
+      'expenses',
+      'properties',
+      'revenue',
+      'cam',
+      'budgets',
+      'buildings',
+      'units',
+      'tenants',
+      'invoices',
+      'gl_accounts',
+      'documents',
+    ];
     if (!validFileTypes.includes(fileType)) {
       return new Response(
         JSON.stringify({ 

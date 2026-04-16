@@ -20,7 +20,12 @@ const REQUIRED_FIELDS: Record<string, string[]> = {
   leases: ["tenant_name", "start_date", "end_date", "monthly_rent"],
   expenses: ["category", "amount", "date"],
   properties: ["name"],
-  revenue: ["revenue_type", "amount"],
+  revenue: ["amount"],
+  buildings: ["name"],
+  units: ["unit_number"],
+  tenants: ["name"],
+  invoices: ["amount"],
+  gl_accounts: ["code", "name"],
 };
 
 // Fields that must be valid dates
@@ -29,14 +34,24 @@ const DATE_FIELDS: Record<string, string[]> = {
   expenses: ["date"],
   properties: [],
   revenue: [],
+  buildings: [],
+  units: [],
+  tenants: [],
+  invoices: ["issued_date", "due_date"],
+  gl_accounts: [],
 };
 
 // Fields that must be numeric
 const NUMERIC_FIELDS: Record<string, string[]> = {
   leases: ["monthly_rent", "square_footage"],
   expenses: ["amount"],
-  properties: ["square_footage"],
+  properties: ["square_footage", "total_sqft", "total_sf"],
   revenue: ["amount"],
+  buildings: ["total_sqft", "total_sf", "floors", "year_built"],
+  units: ["square_footage", "monthly_rent", "floor"],
+  tenants: [],
+  invoices: ["amount"],
+  gl_accounts: [],
 };
 
 // Fields that must be non-empty strings (beyond required check)
@@ -44,7 +59,12 @@ const STRING_FIELDS: Record<string, string[]> = {
   leases: ["tenant_name"],
   expenses: ["category"],
   properties: ["name"],
-  revenue: ["revenue_type"],
+  revenue: [],
+  buildings: ["name"],
+  units: ["unit_number"],
+  tenants: ["name"],
+  invoices: [],
+  gl_accounts: ["code", "name"],
 };
 
 // ---------------------------------------------------------------------------

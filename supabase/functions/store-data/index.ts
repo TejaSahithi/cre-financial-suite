@@ -22,6 +22,11 @@ function getTableName(moduleType: string): string {
     expenses: "expenses",
     properties: "properties",
     revenue: "revenues",
+    buildings: "buildings",
+    units: "units",
+    tenants: "tenants",
+    invoices: "invoices",
+    gl_accounts: "gl_accounts",
   };
   const table = tableMap[moduleType];
   if (!table) {
@@ -122,6 +127,70 @@ function mapRow(
         property_type: row.property_type ?? null,
         total_sqft: row.square_footage ?? row.total_sqft ?? null,
         year_built: row.year_built ?? null,
+      };
+
+    case "buildings":
+      return {
+        ...base,
+        property_id: row.property_id ?? null,
+        name: row.name ?? row.building_name ?? "Unnamed Building",
+        address: row.address ?? null,
+        total_sqft: row.total_sqft ?? row.total_sf ?? row.square_footage ?? null,
+        floors: row.floors ?? null,
+        year_built: row.year_built ?? null,
+        status: row.status ?? "active",
+      };
+
+    case "units":
+      return {
+        ...base,
+        property_id: row.property_id ?? null,
+        building_id: row.building_id ?? null,
+        unit_number: row.unit_number ?? row.suite ?? row.space ?? "Unknown",
+        floor: row.floor ?? null,
+        square_footage: row.square_footage ?? row.total_sf ?? row.total_sqft ?? null,
+        unit_type: row.unit_type ?? row.type ?? null,
+        occupancy_status: row.occupancy_status ?? row.status ?? "vacant",
+        monthly_rent: row.monthly_rent ?? row.rent ?? null,
+        notes: row.notes ?? null,
+      };
+
+    case "tenants":
+      return {
+        ...base,
+        name: row.name ?? row.tenant_name ?? row.company ?? "Unnamed Tenant",
+        company: row.company ?? null,
+        contact_name: row.contact_name ?? row.contact ?? null,
+        email: row.email ?? null,
+        phone: row.phone ?? null,
+        industry: row.industry ?? null,
+        credit_rating: row.credit_rating ?? null,
+        status: row.status ?? "active",
+        notes: row.notes ?? null,
+      };
+
+    case "invoices":
+      return {
+        ...base,
+        tenant_id: row.tenant_id ?? null,
+        property_id: row.property_id ?? null,
+        amount: row.amount ?? row.total ?? 0,
+        status: row.status ?? "pending",
+        due_date: row.due_date ?? null,
+        issued_date: row.issued_date ?? row.date ?? null,
+      };
+
+    case "gl_accounts":
+      return {
+        ...base,
+        code: row.code ?? row.gl_code ?? row.account_code ?? "",
+        name: row.name ?? row.account_name ?? row.description ?? "",
+        type: row.type ?? "expense",
+        category: row.category ?? null,
+        normal_balance: row.normal_balance ?? null,
+        is_active: row.is_active ?? true,
+        is_recoverable: row.is_recoverable ?? false,
+        notes: row.notes ?? null,
       };
 
     case "revenue":
