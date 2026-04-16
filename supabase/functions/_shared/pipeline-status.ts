@@ -17,9 +17,11 @@ export type PipelineStatus =
   | "uploaded"
   | "parsing"
   | "parsed"
-  | "pdf_parsed"      // PDF-specific: Docling done, normalisation pending
+  | "pdf_parsed"         // PDF-specific: Docling done, normalisation pending
   | "validating"
   | "validated"
+  | "review_required"    // waiting on human approval (lease-sensitive docs)
+  | "approved"           // operator cleared, ready for storing
   | "storing"
   | "stored"
   | "computing"
@@ -27,33 +29,39 @@ export type PipelineStatus =
   | "failed";
 
 export const STATUS_PROGRESS: Record<PipelineStatus, number> = {
-  uploaded:   5,
-  parsing:    15,
-  parsed:     30,
-  pdf_parsed: 35,
-  validating: 45,
-  validated:  60,
-  storing:    70,
-  stored:     80,
-  computing:  90,
-  completed:  100,
-  failed:     0,   // overridden at call-site with the last known progress
+  uploaded:         5,
+  parsing:          15,
+  parsed:           30,
+  pdf_parsed:       35,
+  validating:       45,
+  validated:        55,
+  review_required:  60,   // parked; waiting on human
+  approved:         65,   // cleared by reviewer, moving to storing
+  storing:          70,
+  stored:           80,
+  computing:        90,
+  completed:        100,
+  failed:           0,    // overridden at call-site with the last known progress
 };
 
 /** Valid forward transitions — prevents accidental status regression */
 const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[]>> = {
-  uploaded:   ["parsing", "failed"],
-  parsing:    ["parsed", "pdf_parsed", "failed"],
-  parsed:     ["validating", "failed"],
-  pdf_parsed: ["validating", "failed"],
-  validating: ["validated", "failed"],
-  validated:  ["storing", "failed"],
-  storing:    ["stored", "failed"],
-  stored:     ["computing", "failed"],
-  computing:  ["completed", "failed"],
+  uploaded:         ["parsing", "failed"],
+  parsing:          ["parsed", "pdf_parsed", "failed"],
+  parsed:           ["validating", "failed"],
+  pdf_parsed:       ["validating", "failed"],
+  validating:       ["validated", "failed"],
+  // After validation we either park for review or go straight to storing.
+  validated:        ["validating", "review_required", "storing", "failed"],
+  // Reviewer either approves (→ approved → storing) or rejects (→ failed).
+  review_required:  ["approved", "failed"],
+  approved:         ["validating", "storing", "failed"],
+  storing:          ["stored", "failed"],
+  stored:           ["computing", "failed"],
+  computing:        ["completed", "failed"],
   // terminal states — no further transitions
-  completed:  [],
-  failed:     [],
+  completed:        [],
+  failed:           [],
 };
 
 /**
@@ -79,6 +87,16 @@ export async function setStatus(
   // Set processing_started_at on the first active step
   if (status === "parsing" || status === "validating" || status === "storing") {
     patch.processing_started_at = patch.processing_started_at ?? now;
+  }
+
+  // Review states also record an audit timestamp on the file row.
+  if (status === "review_required") {
+    patch.review_required = true;
+    patch.review_status = patch.review_status ?? "pending";
+  }
+  if (status === "approved") {
+    patch.review_status = "approved";
+    patch.approved_at = patch.approved_at ?? now;
   }
 
   // Set processing_completed_at on terminal steps

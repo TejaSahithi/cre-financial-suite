@@ -1,275 +1,300 @@
 // @ts-nocheck
-import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { normalizeExtractedData } from "../_shared/normalizer.ts";
-import { callVertexAIJSON } from "../_shared/vertex-ai.ts";
-import { parseLeases } from "../_shared/parsers/lease-parser.ts";
-import { parseExpenses } from "../_shared/parsers/expense-parser.ts";
-import { parseProperties } from "../_shared/parsers/property-parser.ts";
-import { parseRevenues } from "../_shared/parsers/revenue-parser.ts";
-import type { ModuleType } from "../_shared/file-detector.ts";
-
 /**
- * normalize-pdf-output — Step 3 of PDF ingestion
+ * normalize-pdf-output — Step 3 of the canonical pipeline
  *
- * Reads the raw Docling output stored in uploaded_files.docling_raw,
- * normalizes it into canonical rows, runs it through the existing module
- * parser, then writes parsed_data and sets status = 'parsed'.
+ * Input:  uploaded_files row in status='pdf_parsed' with `docling_raw`
+ * Output: uploaded_files row in status='review_required' or 'validated',
+ *         with `normalized_output`, `ui_review_payload`, and `parsed_data`
+ *         populated so store-data / the reviewer can pick up from here.
  *
- * If VERTEX_PROJECT_ID is set and the Docling output is sparse (< 2 rows),
- * Vertex AI (Gemini) is used as a fallback to extract structured fields from the full text.
+ * This function is now a THIN orchestrator over `runExtractionPipeline()`
+ * — it no longer owns any extraction logic of its own. All rule/table/LLM
+ * work happens inside `_shared/extraction/pipeline.ts`, which is the one
+ * and only extraction engine in the system.
  *
- * Flow:
- *   parse-pdf-docling (status=pdf_parsed)
- *     → [this function]
- *     → status=parsed, parsed_data populated
- *     → validate-data (unchanged)
- *     → store-data (unchanged)
- *     → compute engines (unchanged)
+ * Review gate:
+ *   - If uploaded_files.review_required = TRUE  → status := 'review_required'
+ *     (the reviewer will call review-approve which flips to 'approved' and
+ *      fires validate-data / store-data).
+ *   - Otherwise                                  → status := 'validated'
+ *     (validate-data / store-data run automatically via the existing chain).
  */
 
-// ---------------------------------------------------------------------------
-// Module parser dispatch
-// ---------------------------------------------------------------------------
+import { corsHeaders } from "../_shared/cors.ts";
+import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
+import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 
-function applyModuleParser(
-  rows: Array<Record<string, string | null>>,
-  moduleType: ModuleType,
-): { rows: unknown[]; errors: unknown[] } {
+function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
-    case "leases":
-      return parseLeases(rows);
-    case "expenses":
-    case "cam":
-      return parseExpenses(rows);
-    case "properties":
-      return parseProperties(rows);
-    case "revenue":
-    case "budgets":
-      return parseRevenues(rows);
-    default:
-      return { rows, errors: [] };
+    case "leases": return "lease";
+    case "expenses": return "expense";
+    case "properties": return "property";
+    case "revenue": return "revenue";
+    case "building":
+    case "buildings": return "building";
+    case "unit":
+    case "units": return "unit";
+    case "tenant":
+    case "tenants": return "tenant";
+    case "gl_account":
+    case "gl_accounts": return "gl_account";
+    default: return "property";
   }
 }
 
-// ---------------------------------------------------------------------------
-// Vertex AI extraction — converts full document text into canonical rows
-// ---------------------------------------------------------------------------
+/**
+ * Build the review payload consumed by the frontend review screen.
+ * Structured so the UI can render a field-by-field grid with source and
+ * confidence badges, and so we can diff it after the reviewer edits.
+ */
+function buildReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string | null;
+  extractionMethod: string | null;
+  result: {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  };
+}) {
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, result } = opts;
 
-const MODULE_PROMPTS: Record<string, string> = {
-  leases: `Extract all lease records from the document. Return a JSON array where each element is one lease with these fields:
-tenant_name, start_date (YYYY-MM-DD), end_date (YYYY-MM-DD), monthly_rent (number), square_footage (number),
-lease_type (triple_net|gross|modified_gross), escalation_type (fixed|cpi|none), escalation_rate (number, e.g. 3 for 3%),
-property_id (null if not found), unit_id (null if not found).
-Set missing fields to null. Return ONLY a JSON array, no explanation.`,
-
-  expenses: `Extract all expense records from the document. Return a JSON array where each element is one expense with these fields:
-category, amount (number), date (YYYY-MM-DD), vendor, classification (recoverable|non_recoverable|conditional),
-gl_code, fiscal_year (number), month (number 1-12), property_id (null if not found).
-Set missing fields to null. Return ONLY a JSON array, no explanation.`,
-
-  properties: `Extract all property records from the document. Return a JSON array where each element is one property with these fields:
-name, address, city, state, zip_code, square_footage (number), property_type, year_built (number), number_of_units (number).
-Set missing fields to null. Return ONLY a JSON array, no explanation.`,
-
-  revenue: `Extract all revenue records from the document. Return a JSON array where each element is one revenue entry with these fields:
-revenue_type, amount (number), period (YYYY-MM-DD), property_id (null if not found), lease_id (null if not found),
-fiscal_year (number), month (number 1-12), notes.
-Set missing fields to null. Return ONLY a JSON array, no explanation.`,
-};
-
-async function extractWithVertexAI(
-  fullText: string,
-  moduleType: ModuleType,
-): Promise<Array<Record<string, unknown>>> {
-  const modulePrompt = MODULE_PROMPTS[moduleType] ?? MODULE_PROMPTS.leases;
-
-  const result = await callVertexAIJSON<Array<Record<string, unknown>>>({
-    systemPrompt: "You are a commercial real estate data extraction specialist. Extract structured data from document text accurately. Return only valid JSON arrays.",
-    userPrompt: `${modulePrompt}\n\nDOCUMENT TEXT:\n---\n${fullText.slice(0, 10000)}\n---`,
-    maxOutputTokens: 2048,
-    temperature: 0,
-  });
-
-  if (!Array.isArray(result)) {
-    if (result && typeof result === "object") return [result as Record<string, unknown>];
-    return [];
-  }
-
-  return result;
+  return {
+    schema_version: 1,
+    file_id: fileId,
+    file_name: fileName,
+    module_type: moduleType,
+    document_subtype: documentSubtype,
+    extraction_method: extractionMethod ?? result.method,
+    pipeline_method: result.method,
+    rows: result.rows.map((r, index) => ({
+      row_index: index,
+      // The flattened row values used for storage
+      values: stripInternalKeys(r),
+      // Confidence surfaced so the reviewer can triage low-confidence rows
+      confidence: (r.confidence_score as number | undefined) ?? null,
+      notes: (r.extraction_notes as string | undefined) ?? null,
+    })),
+    warnings: result.warnings,
+    validation_errors: result.validationErrors,
+    metadata: result.metadata,
+    built_at: new Date().toISOString(),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Main handler
-// ---------------------------------------------------------------------------
+function stripInternalKeys(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (k.startsWith("_")) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin);
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const { file_id } = body;
 
     if (!file_id) {
-      return new Response(
-        JSON.stringify({ error: true, message: "file_id is required", error_code: "MISSING_FILE_ID" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      return jsonResponse(
+        { error: true, message: "file_id is required", error_code: "MISSING_FILE_ID" },
+        400,
       );
     }
 
     // Fetch file record (org_id isolation)
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, module_type, status, docling_raw")
+      .select(
+        "id, org_id, module_type, status, docling_raw, file_name, " +
+        "document_subtype, review_required, extraction_method",
+      )
       .eq("id", file_id)
       .eq("org_id", orgId)
       .single();
 
     if (fetchError || !fileRecord) {
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           error: true,
           message: `File not found: ${fetchError?.message ?? "Invalid file_id"}`,
           error_code: "FILE_NOT_FOUND",
-        }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        },
+        404,
       );
     }
 
     // Must be in pdf_parsed state
     if (fileRecord.status !== "pdf_parsed") {
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           error: true,
           message: `File status must be 'pdf_parsed'. Current: '${fileRecord.status}'`,
           error_code: "INVALID_STATUS",
-        }),
-        { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        },
+        422,
       );
     }
 
     if (!fileRecord.docling_raw) {
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           error: true,
           message: "No Docling output found. Run parse-pdf-docling first.",
           error_code: "NO_DOCLING_OUTPUT",
-        }),
-        { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        },
+        422,
       );
     }
 
-    const moduleType = (fileRecord.module_type ?? "unknown") as ModuleType;
+    const moduleType = fileRecord.module_type ?? "unknown";
+    const extractionModuleType = toExtractionModuleType(moduleType);
+    const fileName = fileRecord.file_name ?? "document";
 
-    // Update status to 'parsing' while we work
-    await supabaseAdmin
-      .from("uploaded_files")
-      .update({ status: "parsing", updated_at: new Date().toISOString() })
-      .eq("id", file_id);
+    // Transition to 'validating' while the pipeline runs.
+    // (pdf_parsed → validating is allowed in the FSM.)
+    await setStatus(supabaseAdmin, file_id, "validating");
 
     try {
-      // Step 1: Normalize Docling output → canonical rows
-      const normResult = normalizeExtractedData(
-        { doclingOutput: fileRecord.docling_raw },
-        moduleType,
+      // Run the canonical extraction pipeline.
+      // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
+      const result = await runExtractionPipeline(
+        {
+          moduleType: extractionModuleType,
+          fileName,
+          docling: fileRecord.docling_raw,
+        },
+        {
+          // Conservative defaults — tune per-module if needed later.
+          maxLLMChunks: 6,
+          chunkSize: 1500,
+          llmTemperature: 0,
+        },
       );
 
-      // Step 1b: Vertex AI — always use if available and Docling output is sparse OR
-      // if the module type is leases (AI extraction is always better for leases)
-      let finalRows = normResult.rows;
-      let normSource = normResult.source;
-      const warnings = [...normResult.warnings];
-
-      const hasVertexAI = !!Deno.env.get("VERTEX_PROJECT_ID") && !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
-      const doclingIsSparse = normResult.rowCount < 3;
-      const isLeaseModule = moduleType === "leases";
-      const fullText = fileRecord.docling_raw?.full_text ?? "";
-
-      if (hasVertexAI && (doclingIsSparse || isLeaseModule) && fullText.length > 50) {
-        console.log(`[normalize-pdf-output] Using Vertex AI for extraction (sparse=${doclingIsSparse}, lease=${isLeaseModule})`);
-        try {
-          const vertexRows = await extractWithVertexAI(fullText, moduleType);
-          if (vertexRows && vertexRows.length > 0) {
-            finalRows = vertexRows;
-            normSource = "vertex_ai";
-            warnings.push(`Vertex AI (Gemini) extracted ${vertexRows.length} record(s)`);
-            console.log(`[normalize-pdf-output] Vertex AI extracted ${vertexRows.length} rows`);
-          }
-        } catch (vertexErr) {
-          warnings.push(`Vertex AI extraction failed: ${vertexErr.message}`);
-          console.error("[normalize-pdf-output] Vertex AI error:", vertexErr.message);
-        }
-      }
-
-      if (finalRows.length === 0) {
+      if (!result.rows || result.rows.length === 0) {
         throw new Error(
-          `Normalization produced 0 rows. Warnings: ${warnings.join("; ")}`,
+          `Extraction produced 0 rows. Warnings: ${result.warnings.join("; ")}`,
         );
       }
 
-      // Step 2: Run through the existing module parser
-      // (handles date normalization, currency stripping, column mapping)
-      const parseResult = applyModuleParser(finalRows, moduleType);
+      const uiReviewPayload = buildReviewPayload({
+        fileId: file_id,
+        fileName,
+        moduleType,
+        documentSubtype: fileRecord.document_subtype ?? null,
+        extractionMethod: fileRecord.extraction_method ?? null,
+        result,
+      });
 
-      // Step 3: Write parsed_data and set status = 'parsed'
-      // From here the file is identical to a parsed CSV — same pipeline continues.
-      const { error: updateError } = await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "parsed",
-          parsed_data: parseResult.rows,
-          row_count: parseResult.rows.length,
+      // Decide the next status based on the review gate decided at ingest.
+      const reviewRequired = !!fileRecord.review_required;
+      const nextStatus = reviewRequired ? "review_required" : "validated";
+
+      // FSM: 'validating' → 'validated' is allowed; 'validating' → 'review_required'
+      // is NOT a valid transition in the FSM (validated is the intermediate).
+      // So we always land on 'validated' first, then flip to 'review_required'
+      // if a human gate is required.
+      const { error: validatedErr } = await setStatus(
+        supabaseAdmin,
+        file_id,
+        "validated",
+        {
+          parsed_data: result.rows,
+          normalized_output: result,
+          ui_review_payload: uiReviewPayload,
+          row_count: result.rows.length,
+          valid_count: result.rows.length - (result.validationErrors?.length ?? 0),
+          error_count: result.validationErrors?.length ?? 0,
+          validation_errors: result.validationErrors ?? [],
+          error_message: null,
           processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
-
-      if (updateError) {
-        throw new Error(`Failed to save parsed data: ${updateError.message}`);
-      }
-
-      return new Response(
-        JSON.stringify({
-          error: false,
-          file_id,
-          processing_status: "parsed",
-          module_type: moduleType,
-          normalization_source: normSource,
-          row_count: parseResult.rows.length,
-          warnings,
-          parser_errors: parseResult.errors,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        },
       );
 
-    } catch (normError) {
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "failed",
-          error_message: normError.message,
-          processing_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      if (validatedErr) {
+        throw new Error(`Failed to save normalized output: ${validatedErr.message}`);
+      }
 
+      if (reviewRequired) {
+        const { error: reviewErr } = await setStatus(
+          supabaseAdmin,
+          file_id,
+          "review_required",
+          {
+            review_status: "pending",
+          },
+        );
+        if (reviewErr) {
+          // Not fatal — the row is still in 'validated'; we'll surface the
+          // warning rather than rolling back the normalization work.
+          console.warn(
+            `[normalize-pdf-output] Could not transition to review_required: ${reviewErr.message}`,
+          );
+        }
+      }
+
+      console.log(
+        `[normalize-pdf-output] OK file_id=${file_id} module=${moduleType} ` +
+        `rows=${result.rows.length} method=${result.method} ` +
+        `confidence=${result.metadata.avgConfidence}% nextStatus=${nextStatus}`,
+      );
+
+      return jsonResponse({
+        error: false,
+        file_id,
+        processing_status: nextStatus,
+        module_type: moduleType,
+        document_subtype: fileRecord.document_subtype,
+        review_required: reviewRequired,
+        method: result.method,
+        row_count: result.rows.length,
+        warnings: result.warnings,
+        validation_errors: result.validationErrors,
+        metadata: result.metadata,
+      });
+    } catch (normError) {
+      console.error(
+        `[normalize-pdf-output] Failed for file_id=${file_id}: ${normError.message}`,
+      );
+      await setFailed(
+        supabaseAdmin,
+        file_id,
+        normError.message,
+        "normalize",
+        35,
+      );
       throw normError;
     }
-
   } catch (err) {
     console.error("[normalize-pdf-output] Error:", err.message);
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
         error: true,
         message: err.message,
         error_code: "NORMALIZATION_FAILED",
-      }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      },
+      400,
     );
   }
 });
