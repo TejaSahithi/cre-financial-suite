@@ -1,7 +1,14 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { detectFileType, type DetectionResult, type FileFormat, type ModuleType } from "../_shared/file-detector.ts";
+import {
+  detectFileType,
+  classifyDocumentSubtype,
+  type DetectionResult,
+  type FileFormat,
+  type ModuleType,
+  type DocumentSubtype,
+} from "../_shared/file-detector.ts";
 
 /**
  * ingest-file — Unified File Ingestion Router
@@ -42,6 +49,7 @@ async function callEdgeFunction(
   retries = 3,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
+  const authorization = authToken.match(/^Bearer\s+/i) ? authToken : `Bearer ${authToken}`;
   
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -51,7 +59,7 @@ async function callEdgeFunction(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${authToken}`,
+          "Authorization": authorization,
           "apikey": Deno.env.get("SUPABASE_ANON_KEY") ?? "",
         },
         body: JSON.stringify(body),
@@ -196,7 +204,11 @@ Deno.serve(async (req: Request) => {
 
     // 2. Parse request
     const body = await req.json();
-    const { file_id, module_type: explicitModuleType } = body;
+    const {
+      file_id,
+      module_type: explicitModuleType,
+      document_subtype: explicitSubtype,   // optional override from caller (UI)
+    } = body;
 
     if (!file_id) {
       return new Response(
@@ -245,6 +257,10 @@ Deno.serve(async (req: Request) => {
       contentPreview,
     });
 
+    // 7. Decide routing before subtype persistence so deterministic CSV/text
+    // imports do not accidentally inherit the legal-document review gate.
+    const routing = decideRoute(detection);
+
     // 7. If module_type was detected and differs from what's stored, update it
     if (
       detection.moduleType !== "unknown" &&
@@ -257,17 +273,42 @@ Deno.serve(async (req: Request) => {
         .eq("id", file_id);
     }
 
-    // 8. Decide routing with enhanced error handling
-    const routing = decideRoute(detection);
+    // 7b. Classify document subtype + review-gate requirement.
+    // This runs once, here, before extraction begins — downstream functions
+    // consume the persisted subtype rather than re-classifying.
+    const subtypeResult = classifyDocumentSubtype({
+      fileName: fileRecord.file_name ?? "",
+      contentPreview,
+      moduleType: (detection.moduleType === "unknown"
+        ? (fileRecord.module_type as ModuleType) || "unknown"
+        : detection.moduleType) as ModuleType,
+      explicitSubtype,
+    });
 
-    // Enhanced status tracking - update file status to processing
+    const reviewRequired =
+      routing.route === "parse-pdf-docling" && subtypeResult.reviewRequired;
+
     await supabaseAdmin
       .from("uploaded_files")
       .update({
-        status: "processing",
+        document_subtype: subtypeResult.subtype,
+        review_required: reviewRequired,
+        review_status: reviewRequired ? "pending" : "not_required",
         updated_at: new Date().toISOString(),
       })
       .eq("id", file_id);
+
+    console.log(
+      `[ingest-file] subtype=${subtypeResult.subtype} ` +
+      `source=${subtypeResult.source} ` +
+      `confidence=${subtypeResult.confidence.toFixed(2)} ` +
+      `reviewRequired=${reviewRequired}`,
+    );
+
+    // NOTE: status is left at 'uploaded' here. The next function in the
+    // chain (parse-file / parse-pdf-docling) transitions to 'parsing' via
+    // the FSM in _shared/pipeline-status.ts. Writing an ad-hoc status
+    // here breaks the CHECK constraint.
 
     if (routing.route === "unsupported") {
       // Mark as failed with detailed error information
@@ -294,7 +335,15 @@ Deno.serve(async (req: Request) => {
 
     // 9. Call the appropriate downstream function(s)
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const downstreamAuthToken =
+      req.headers.get("Authorization") ??
+      req.headers.get("x-supabase-auth") ??
+      req.headers.get("x-user-jwt") ??
+      "";
+
+    if (!downstreamAuthToken) {
+      throw new Error("Missing downstream auth token");
+    }
 
     console.log(
       `[ingest-file] Routing file_id=${file_id} (${detection.fileFormat}/${detection.moduleType}) → ${routing.route}`,
@@ -313,7 +362,7 @@ Deno.serve(async (req: Request) => {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
       
       // Step 1: Docling extraction with enhanced error handling
-      const doclingResult = await callEdgeFunction(supabaseUrl, "parse-pdf-docling", { file_id }, serviceKey);
+      const doclingResult = await callEdgeFunction(supabaseUrl, "parse-pdf-docling", { file_id }, downstreamAuthToken);
       
       if (!doclingResult.ok) {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
@@ -345,33 +394,55 @@ Deno.serve(async (req: Request) => {
       console.log(`[ingest-file] Docling extraction succeeded, starting normalization`);
       
       // Step 2: Normalization with enhanced error handling
-      const normalizeResult = await callEdgeFunction(supabaseUrl, "normalize-pdf-output", { file_id }, serviceKey);
+      const normalizeResult = await callEdgeFunction(supabaseUrl, "normalize-pdf-output", { file_id }, downstreamAuthToken);
       
       if (!normalizeResult.ok) {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
-        
-        // Update file status with detailed error
+
+        // Only record error_message here; normalize-pdf-output itself sets
+        // status='failed' through the FSM so we don't double-transition.
         await supabaseAdmin
           .from("uploaded_files")
           .update({
-            status: "failed", 
             error_message: `Document normalization failed: ${normalizeResult.error || 'Unknown error'}`,
             updated_at: new Date().toISOString(),
           })
           .eq("id", file_id);
       } else {
-        console.log(`[ingest-file] Document processing completed successfully`);
-        
-        // Update file status to completed
-        await supabaseAdmin
-          .from("uploaded_files")
-          .update({
-            status: "completed",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", file_id);
+        // normalize-pdf-output is the source of truth for the post-parse
+        // status: it sets 'review_required' for lease-sensitive subtypes
+        // or 'validated' for deterministic ones. Do NOT force 'completed'
+        // here — that would short-circuit the review gate.
+        console.log(
+          `[ingest-file] Document processing handed off to normalize-pdf-output; ` +
+          `final status will be review_required or validated.`,
+        );
       }
-      
+
+      if (normalizeResult.ok && !(normalizeResult.data as any)?.review_required) {
+        console.log("[ingest-file] Normalization succeeded; running validate-data then store-data");
+        const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);
+        const storeResult = validateResult.ok
+          ? await callEdgeFunction(supabaseUrl, "store-data", { file_id }, downstreamAuthToken)
+          : { ok: false, status: validateResult.status, data: {}, error: "store-data skipped because validate-data failed" };
+
+        return new Response(
+          JSON.stringify({
+            error: !storeResult.ok,
+            file_id,
+            detection: detectionSummary,
+            routing: { routed_to: routing.route, reason: routing.reason },
+            steps: {
+              extraction: { success: doclingResult.ok, data: doclingResult.data, error: doclingResult.error },
+              normalization: { success: normalizeResult.ok, data: normalizeResult.data, error: normalizeResult.error },
+              validation: { success: validateResult.ok, data: validateResult.data, error: validateResult.error },
+              storage: { success: storeResult.ok, data: storeResult.data, error: storeResult.error },
+            },
+          }),
+          { status: storeResult.ok ? 200 : storeResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       return new Response(
         JSON.stringify({
           error: !normalizeResult.ok,
@@ -398,31 +469,45 @@ Deno.serve(async (req: Request) => {
     // CSV / Excel / text: enhanced single step processing
     console.log(`[ingest-file] Starting structured data processing for ${detection.fileFormat} file`);
     
-    const downstreamResult = await callEdgeFunction(supabaseUrl, routing.route, { file_id }, serviceKey);
+    const downstreamResult = await callEdgeFunction(supabaseUrl, routing.route, { file_id }, downstreamAuthToken);
     
     if (!downstreamResult.ok) {
       console.error(`[ingest-file] Structured data processing failed:`, downstreamResult.error);
-      
-      // Update file status with detailed error
+
+      // parse-file sets status='failed' via FSM on failure. Only attach an
+      // error_message here if it didn't.
       await supabaseAdmin
         .from("uploaded_files")
         .update({
-          status: "failed",
           error_message: `Structured data processing failed: ${downstreamResult.error || 'Unknown error'}`,
           updated_at: new Date().toISOString(),
         })
         .eq("id", file_id);
     } else {
-      console.log(`[ingest-file] Structured data processing completed successfully`);
-      
-      // Update file status to completed
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "completed",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      console.log("[ingest-file] Structured parsing succeeded; running validate-data then store-data");
+      const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);
+      const storeResult = validateResult.ok
+        ? await callEdgeFunction(supabaseUrl, "store-data", { file_id }, downstreamAuthToken)
+        : { ok: false, status: validateResult.status, data: {}, error: "store-data skipped because validate-data failed" };
+
+      return new Response(
+        JSON.stringify({
+          error: !storeResult.ok,
+          file_id,
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          steps: {
+            parsing: { success: downstreamResult.ok, data: downstreamResult.data, error: downstreamResult.error },
+            validation: { success: validateResult.ok, data: validateResult.data, error: validateResult.error },
+            storage: { success: storeResult.ok, data: storeResult.data, error: storeResult.error },
+          },
+          processing_completed: storeResult.ok,
+        }),
+        {
+          status: storeResult.ok ? 200 : storeResult.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     // 10. Return enhanced result with detailed status information

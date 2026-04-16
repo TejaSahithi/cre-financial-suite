@@ -22,6 +22,11 @@ export type ModuleType =
 interface ComputeJob {
   functionName: string;
   body: Record<string, unknown>;
+  /** engine_type column in compute_runs — derived from functionName */
+  engineType: ComputeEngineType;
+  /** property_id + fiscal_year for the compute_runs row */
+  propertyId?: string | null;
+  fiscalYear?: number | null;
 }
 
 interface JobResult {
@@ -29,10 +34,146 @@ interface JobResult {
   ok: boolean;
   attempts: number;
   lastError: string;
+  /** compute_runs row id; null if the insert failed (non-fatal) */
+  runId: string | null;
+  startedAt: number;
 }
+
+type ComputeEngineType =
+  | "lease"
+  | "revenue"
+  | "budget"
+  | "expense"
+  | "cam"
+  | "reconciliation";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000; // 1s, 2s, 4s
+
+/** Map the edge function name to the engine_type value stored in compute_runs. */
+function engineTypeForFunction(fn: string): ComputeEngineType {
+  if (fn === "compute-lease") return "lease";
+  if (fn === "compute-revenue") return "revenue";
+  if (fn === "compute-budget") return "budget";
+  if (fn === "compute-expense") return "expense";
+  if (fn === "compute-cam") return "cam";
+  if (fn === "compute-reconciliation") return "reconciliation";
+  // Default to the module it most closely resembles to satisfy the CHECK.
+  return "reconciliation";
+}
+
+/**
+ * Stable fingerprint for the compute inputs. Any change to a stored row
+ * that belongs to the same (org, property, fiscal_year, engine) tuple
+ * produces a new fingerprint, which is how the UI detects stale results.
+ *
+ * Note: this file-triggered fingerprint is intentionally compact today.
+ * It can be expanded later to include the exact sorted source row IDs
+ * and updated_at pairs returned by each compute engine.
+ */
+async function fingerprint(parts: Array<string | number | null | undefined>): Promise<string> {
+  const source = parts
+    .map((p) => (p === undefined || p === null ? "" : String(p)))
+    .join("|");
+  const bytes = new TextEncoder().encode(source);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Insert the starting compute_runs row. Returns the new row id, or null
+ * if the insert fails — compute execution proceeds either way since the
+ * audit row is advisory, not required for correctness.
+ */
+async function recordRunStart(args: {
+  supabaseAdmin: any;
+  orgId: string;
+  fileId: string;
+  job: ComputeJob;
+}): Promise<string | null> {
+  try {
+    const { supabaseAdmin, orgId, fileId, job } = args;
+    const fp = await fingerprint([
+      orgId,
+      job.propertyId ?? "",
+      job.fiscalYear ?? "",
+      job.engineType,
+      fileId,
+    ]);
+    const { data, error } = await supabaseAdmin
+      .from("compute_runs")
+      .insert({
+        org_id: orgId,
+        property_id: job.propertyId ?? null,
+        engine_type: job.engineType,
+        fiscal_year: job.fiscalYear ?? null,
+        source_file_id: fileId,
+        triggered_by: "upload",
+        input_fingerprint: fp,
+        input_summary: { body: job.body },
+        status: "running",
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      console.warn(`[compute-orchestrator] compute_runs insert failed: ${error.message}`);
+      return null;
+    }
+    return data?.id ?? null;
+  } catch (err) {
+    console.warn(`[compute-orchestrator] compute_runs insert threw: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Close out a compute_runs row with the terminal status + duration.
+ * Best-effort — logs but never throws.
+ */
+async function recordRunFinish(args: {
+  supabaseAdmin: any;
+  runId: string | null;
+  ok: boolean;
+  attempts: number;
+  startedAt: number;
+  errorMessage?: string;
+}): Promise<void> {
+  if (!args.runId) return;
+  const durationMs = Math.max(0, Date.now() - args.startedAt);
+  const status = args.ok ? "completed" : "failed";
+  try {
+    const { error } = await args.supabaseAdmin
+      .from("compute_runs")
+      .update({
+        status,
+        completed_at: new Date().toISOString(),
+        duration_ms: durationMs,
+        output_summary: { attempts: args.attempts },
+        error_message: args.ok ? null : args.errorMessage?.slice(0, 500) ?? null,
+      })
+      .eq("id", args.runId);
+    if (error) {
+      console.warn(
+        `[compute-orchestrator] compute_runs finish update failed: ${error.message}`,
+      );
+    }
+  } catch (err) {
+    console.warn(`[compute-orchestrator] compute_runs finish threw: ${err.message}`);
+  }
+}
+
+function createComputeJob(functionName: string, body: Record<string, unknown>, propertyId: string, fiscalYear: number): ComputeJob {
+  return {
+    functionName,
+    body,
+    engineType: engineTypeForFunction(functionName),
+    propertyId,
+    fiscalYear,
+  };
+}
 
 function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYear: number): ComputeJob[] {
   const jobs: ComputeJob[] = [];
@@ -41,25 +182,25 @@ function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYea
   for (const pid of propertyIds) {
     switch (moduleType) {
       case "leases":
-        jobs.push({ functionName: "compute-lease",   body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        jobs.push(createComputeJob("compute-lease", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-revenue", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "expenses":
-        jobs.push({ functionName: "compute-expense", body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-cam",     body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        jobs.push(createComputeJob("compute-expense", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-cam", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "revenue":
-        jobs.push({ functionName: "compute-revenue", body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-budget",  body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        jobs.push(createComputeJob("compute-revenue", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "cam":
-        jobs.push({ functionName: "compute-cam",    body: { property_id: pid, fiscal_year: fiscalYear } });
-        jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        jobs.push(createComputeJob("compute-cam", { property_id: pid, fiscal_year: fiscalYear }, pid, fiscalYear));
+        jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "budgets":
-        jobs.push({ functionName: "compute-budget", body: { property_id: pid, fiscal_year: fiscalYear, action: "generate" } });
+        jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "properties":
         break; // reference data — no compute needed
@@ -242,8 +383,23 @@ export async function triggerComputePipeline(opts: {
 
     for (const job of jobs) {
       await log.info(`compute:${job.functionName}`, `Starting ${job.functionName}`, { body: job.body });
+      const startedAt = Date.now();
+      const runId = await recordRunStart({
+        supabaseAdmin,
+        orgId,
+        fileId,
+        job,
+      });
       const result = await callWithRetry(supabaseUrl, job.functionName, job.body, serviceKey);
-      results.push({ job, ...result });
+      await recordRunFinish({
+        supabaseAdmin,
+        runId,
+        ok: result.ok,
+        attempts: result.attempts,
+        startedAt,
+        errorMessage: result.lastError,
+      });
+      results.push({ job, ...result, runId, startedAt });
       if (result.ok) {
         await log.info(`compute:${job.functionName}`, `Completed in ${result.attempts} attempt(s)`);
       } else {

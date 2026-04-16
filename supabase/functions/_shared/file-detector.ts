@@ -398,3 +398,187 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
 
   return { fileFormat, moduleType, formatSource, moduleSource, confidence };
 }
+
+// ---------------------------------------------------------------------------
+// DocumentSubtype classifier
+// ---------------------------------------------------------------------------
+
+/**
+ * Document subtype: narrower than moduleType. Drives the review gate and
+ * the document_links / lease_amendments / lease_assignments routing in
+ * the canonical pipeline.
+ *
+ * Source of truth for accepted values: the `uploaded_files_document_subtype_check`
+ * constraint in 20260416_review_pipeline.sql. Keep them in sync.
+ */
+export type DocumentSubtype =
+  | 'base_lease'
+  | 'amendment'
+  | 'assignment'
+  | 'consent'
+  | 'extension'
+  | 'addendum'
+  | 'expense_backup'
+  | 'cam_support'
+  | 'budget_support'
+  | 'rent_roll'
+  | 'generic';
+
+export interface SubtypeDetectionResult {
+  subtype: DocumentSubtype;
+  /** Whether this subtype must go through the human review gate. */
+  reviewRequired: boolean;
+  /** How the subtype was determined. */
+  source: 'filename_keyword' | 'content_keyword' | 'module_default' | 'fallback';
+  /** Confidence 0–1 */
+  confidence: number;
+}
+
+/**
+ * Keyword rules are deliberately specific to avoid false matches with
+ * the base lease. Order matters: the more specific subtypes are listed
+ * before "base_lease" so that an amendment is never misclassified as a
+ * base lease just because it contains the word "lease".
+ */
+const SUBTYPE_FILENAME_RULES: Array<{ subtype: DocumentSubtype; keywords: string[] }> = [
+  { subtype: 'assignment',     keywords: ['assignment', 'assign ', 'novation', 'substitution'] },
+  { subtype: 'consent',        keywords: ['consent', 'landlord approval', 'landlord consent'] },
+  { subtype: 'amendment',      keywords: ['amendment', 'amended', 'modification', 'modif'] },
+  { subtype: 'extension',      keywords: ['extension', 'renewal', 'renew '] },
+  { subtype: 'addendum',       keywords: ['addendum', 'addenda', 'rider'] },
+  { subtype: 'expense_backup', keywords: ['invoice', 'receipt', 'utility bill', 'expense backup', 'ap backup'] },
+  { subtype: 'cam_support',    keywords: ['cam recon', 'cam reconciliation', 'cam support', 'common area'] },
+  { subtype: 'budget_support', keywords: ['budget memo', 'budget support', 'budget narrative'] },
+  { subtype: 'rent_roll',      keywords: ['rent roll', 'rent-roll', 'rentroll'] },
+  { subtype: 'base_lease',     keywords: ['lease agreement', 'lease contract', 'base lease', 'original lease'] },
+];
+
+const SUBTYPE_CONTENT_RULES: Array<{ subtype: DocumentSubtype; keywords: string[] }> = [
+  { subtype: 'assignment',     keywords: ['assignment of lease', 'hereby assigns', 'assignor', 'assignee'] },
+  { subtype: 'consent',        keywords: ['landlord hereby consents', 'consent to assignment', 'consent of landlord'] },
+  { subtype: 'amendment',      keywords: ['this amendment', 'hereby amended', 'amendment no.', 'first amendment', 'second amendment'] },
+  { subtype: 'extension',      keywords: ['option to extend', 'extension term', 'renewal term', 'hereby extended'] },
+  { subtype: 'addendum',       keywords: ['this addendum', 'addendum to lease'] },
+  { subtype: 'expense_backup', keywords: ['invoice number', 'invoice date', 'remit to', 'amount due', 'bill date'] },
+  { subtype: 'cam_support',    keywords: ['cam reconciliation', 'common area maintenance reconciliation', 'pro rata share'] },
+  { subtype: 'budget_support', keywords: ['annual budget', 'operating budget', 'budget variance'] },
+  { subtype: 'rent_roll',      keywords: ['rent roll', 'monthly rent', 'tenant suite', 'lease expiration'] },
+  { subtype: 'base_lease',     keywords: ['lease agreement', 'this lease', 'premises demised', 'commencement date'] },
+];
+
+/**
+ * Subtypes that should route to the human-review UI before storing.
+ * Anything that could rewrite an existing lease record is in here.
+ */
+const REVIEW_REQUIRED_SUBTYPES = new Set<DocumentSubtype>([
+  'base_lease',
+  'amendment',
+  'assignment',
+  'consent',
+  'extension',
+  'addendum',
+]);
+
+/**
+ * Fallback subtype when keyword rules don't match. We pick the least
+ * destructive subtype for the given module so the document still gets
+ * attached to the right entity.
+ */
+function defaultSubtypeForModule(moduleType: ModuleType): DocumentSubtype {
+  switch (moduleType) {
+    case 'leases':     return 'base_lease';
+    case 'expenses':   return 'expense_backup';
+    case 'cam':        return 'cam_support';
+    case 'budgets':    return 'budget_support';
+    case 'revenue':    return 'rent_roll';
+    case 'properties': return 'generic';
+    default:           return 'generic';
+  }
+}
+
+function matchSubtype(
+  text: string,
+  rules: Array<{ subtype: DocumentSubtype; keywords: string[] }>,
+): { subtype: DocumentSubtype; score: number } | null {
+  const lower = text.toLowerCase();
+  let best: { subtype: DocumentSubtype; score: number } | null = null;
+  for (const { subtype, keywords } of rules) {
+    const score = keywords.filter(kw => lower.includes(kw)).length;
+    if (score > 0 && (!best || score > best.score)) {
+      best = { subtype, score };
+    }
+  }
+  return best;
+}
+
+export interface ClassifySubtypeOptions {
+  fileName?: string;
+  contentPreview?: string;
+  moduleType: ModuleType;
+  explicitSubtype?: DocumentSubtype | string;
+}
+
+/**
+ * Classify a document's subtype given the filename, a preview of its
+ * contents, and the already-known moduleType. Called from ingest-file
+ * immediately after detectFileType() so the subtype is persisted on the
+ * `uploaded_files` row before extraction begins.
+ */
+export function classifyDocumentSubtype(opts: ClassifySubtypeOptions): SubtypeDetectionResult {
+  const { fileName = '', contentPreview = '', moduleType, explicitSubtype } = opts;
+
+  // Explicit override wins (e.g. caller already knows from UI context).
+  if (explicitSubtype) {
+    const valid: DocumentSubtype[] = [
+      'base_lease', 'amendment', 'assignment', 'consent', 'extension', 'addendum',
+      'expense_backup', 'cam_support', 'budget_support', 'rent_roll', 'generic',
+    ];
+    if (valid.includes(explicitSubtype as DocumentSubtype)) {
+      const subtype = explicitSubtype as DocumentSubtype;
+      return {
+        subtype,
+        reviewRequired: REVIEW_REQUIRED_SUBTYPES.has(subtype),
+        source: 'filename_keyword',
+        confidence: 1.0,
+      };
+    }
+  }
+
+  // Filename rules first — usually the strongest signal.
+  const fromName = matchSubtype(fileName, SUBTYPE_FILENAME_RULES);
+  if (fromName && fromName.score > 0) {
+    return {
+      subtype: fromName.subtype,
+      reviewRequired: REVIEW_REQUIRED_SUBTYPES.has(fromName.subtype),
+      source: 'filename_keyword',
+      confidence: Math.min(0.9, 0.5 + 0.1 * fromName.score),
+    };
+  }
+
+  // Content rules next — works well once the PDF/Docling preview is available.
+  const fromContent = contentPreview
+    ? matchSubtype(contentPreview, SUBTYPE_CONTENT_RULES)
+    : null;
+  if (fromContent && fromContent.score > 0) {
+    return {
+      subtype: fromContent.subtype,
+      reviewRequired: REVIEW_REQUIRED_SUBTYPES.has(fromContent.subtype),
+      source: 'content_keyword',
+      confidence: Math.min(0.85, 0.45 + 0.1 * fromContent.score),
+    };
+  }
+
+  // Fall back to the module default so downstream linking still works.
+  const fallback = defaultSubtypeForModule(moduleType);
+  return {
+    subtype: fallback,
+    reviewRequired: REVIEW_REQUIRED_SUBTYPES.has(fallback),
+    source: 'module_default',
+    confidence: 0.35,
+  };
+}
+
+/** Exposed for callers that need to check the gate without re-classifying. */
+export function isReviewRequiredSubtype(subtype: DocumentSubtype): boolean {
+  return REVIEW_REQUIRED_SUBTYPES.has(subtype);
+}

@@ -174,10 +174,34 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 4. Ensure the file has been validated before storing
-    if (fileRecord.status !== "validated") {
+    // 4. Ensure the file is cleared for storage.
+    // Legacy paths arrive in 'validated'. The new review pipeline arrives in
+    // 'approved' after a human clears it via review-approve. Both are valid.
+    // Anything else (especially 'review_required') blocks here.
+    const storableStatuses = new Set(["validated", "approved"]);
+    if (!storableStatuses.has(fileRecord.status)) {
+      if (fileRecord.status === "review_required") {
+        throw new Error(
+          `File ${file_id} is awaiting human review — cannot store until approved. ` +
+          `Call review-approve to clear it.`
+        );
+      }
       throw new Error(
-        `File status must be 'validated' before storing. Current status: ${fileRecord.status}`
+        `File status must be 'validated' or 'approved' before storing. ` +
+        `Current status: ${fileRecord.status}`
+      );
+    }
+
+    // Extra defense-in-depth: if review was required at any point, demand
+    // that it actually ended in an approval. This prevents legacy callers
+    // from sneaking around the gate by landing rows in 'validated'.
+    if (
+      fileRecord.review_required === true &&
+      fileRecord.review_status !== "approved"
+    ) {
+      throw new Error(
+        `File ${file_id} requires human review (review_status=${fileRecord.review_status}). ` +
+        `Call review-approve to clear it before storing.`
       );
     }
 
