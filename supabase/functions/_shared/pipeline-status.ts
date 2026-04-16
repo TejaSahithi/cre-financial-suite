@@ -64,6 +64,39 @@ const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[]>> = {
   failed:           [],
 };
 
+const REVIEW_PIPELINE_COLUMNS = new Set([
+  "extraction_method",
+  "document_subtype",
+  "normalized_output",
+  "ui_review_payload",
+  "review_required",
+  "review_status",
+  "approved_by",
+  "approved_at",
+  "rejected_by",
+  "rejected_at",
+  "reject_reason",
+  "parent_file_id",
+]);
+
+function looksLikeMissingOptionalColumn(error: any): boolean {
+  const message = String(error?.message || error?.details || "");
+  const code = String(error?.code || "");
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    [...REVIEW_PIPELINE_COLUMNS].some((column) => message.includes(column))
+  );
+}
+
+function stripReviewPipelineColumns(patch: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...patch };
+  for (const column of REVIEW_PIPELINE_COLUMNS) {
+    delete next[column];
+  }
+  return next;
+}
+
 /**
  * Update uploaded_files.status and related metadata.
  * Returns the Supabase update error (if any) — callers decide whether to throw.
@@ -104,10 +137,22 @@ export async function setStatus(
     patch.processing_completed_at = patch.processing_completed_at ?? now;
   }
 
-  const { error } = await supabaseAdmin
+  let { error } = await supabaseAdmin
     .from("uploaded_files")
     .update(patch)
     .eq("id", fileId);
+
+  if (error && looksLikeMissingOptionalColumn(error)) {
+    console.warn(
+      `[pipeline-status] Optional review-pipeline column missing while setting ${status}; ` +
+      `retrying without review metadata. Original: ${error.message}`,
+    );
+    const retry = await supabaseAdmin
+      .from("uploaded_files")
+      .update(stripReviewPipelineColumns(patch))
+      .eq("id", fileId);
+    error = retry.error;
+  }
 
   if (error) {
     console.error(`[pipeline-status] setStatus(${status}) failed for file ${fileId}:`, error.message);

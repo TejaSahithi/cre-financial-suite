@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS public.compute_runs (
 ALTER TABLE public.compute_runs ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "compute_runs_select" ON public.compute_runs
-  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
 CREATE POLICY "compute_runs_insert" ON public.compute_runs
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "compute_runs_update" ON public.compute_runs
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS public.document_links (
 ALTER TABLE public.document_links ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "document_links_select" ON public.document_links
-  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
 CREATE POLICY "document_links_insert" ON public.document_links
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "document_links_delete" ON public.document_links
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS public.lease_amendments (
 ALTER TABLE public.lease_amendments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "lease_amendments_select" ON public.lease_amendments
-  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
 CREATE POLICY "lease_amendments_insert" ON public.lease_amendments
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "lease_amendments_update" ON public.lease_amendments
@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS public.lease_assignments (
 ALTER TABLE public.lease_assignments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "lease_assignments_select" ON public.lease_assignments
-  FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (org_id = ANY(public.get_my_org_ids()));
 CREATE POLICY "lease_assignments_insert" ON public.lease_assignments
   FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "lease_assignments_update" ON public.lease_assignments

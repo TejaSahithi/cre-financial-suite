@@ -158,10 +158,7 @@ Deno.serve(async (req: Request) => {
     // Fetch file record (org_id isolation)
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
-      .select(
-        "id, org_id, module_type, status, docling_raw, file_name, " +
-        "document_subtype, review_required, extraction_method",
-      )
+      .select("*")
       .eq("id", file_id)
       .eq("org_id", orgId)
       .single();

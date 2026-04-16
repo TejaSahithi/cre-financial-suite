@@ -523,7 +523,7 @@ export default function BulkImportModal({
 
       const { data: fileRecord, error: recordError } = await supabase
         .from('uploaded_files')
-        .select('id,status,review_required,review_status,extraction_method,valid_data,parsed_data,ui_review_payload,error_message')
+        .select('*')
         .eq('id', uploadData.file_id)
         .single();
       if (recordError) throw recordError;
