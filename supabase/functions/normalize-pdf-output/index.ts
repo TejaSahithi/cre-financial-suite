@@ -45,6 +45,38 @@ function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   }
 }
 
+function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
+  switch (moduleType) {
+    case "leases":
+      return {
+        tenant_name: null,
+        property_name: null,
+        unit_number: null,
+        start_date: null,
+        end_date: null,
+        monthly_rent: null,
+        square_footage: null,
+        lease_type: null,
+        notes: null,
+      };
+    case "expenses":
+    case "invoices":
+      return {
+        vendor: null,
+        invoice_number: null,
+        date: null,
+        amount: null,
+        category: null,
+        classification: null,
+        description: null,
+      };
+    case "properties":
+      return { name: null, address: null, city: null, state: null, zip: null, total_sqft: null };
+    default:
+      return { notes: null };
+  }
+}
+
 /**
  * Build the review payload consumed by the frontend review screen.
  * Structured so the UI can render a field-by-field grid with source and
@@ -192,6 +224,19 @@ Deno.serve(async (req: Request) => {
           llmTemperature: 0,
         },
       );
+
+      if ((!result.rows || result.rows.length === 0) && fileRecord.review_required) {
+        result.rows = [buildFallbackReviewRow(moduleType)];
+        result.warnings = [
+          ...(result.warnings ?? []),
+          "No structured fields were extracted automatically. This document is available for manual review.",
+        ];
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          totalRecords: 1,
+          avgConfidence: 0,
+        };
+      }
 
       if (!result.rows || result.rows.length === 0) {
         throw new Error(
