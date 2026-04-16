@@ -123,7 +123,9 @@ Deno.serve(async (req: Request) => {
 
     // Generate unique file ID
     const fileId = crypto.randomUUID();
-    const storagePath = `financial-uploads/${orgId}/${fileId}`;
+    // Object key inside the `financial-uploads` bucket. The bucket name is
+    // already part of the public URL, so do not duplicate it in the key.
+    const storagePath = `${orgId}/${fileId}`;
 
     // Store file in Supabase Storage (Requirement 1.1)
     const fileBuffer = await file.arrayBuffer();

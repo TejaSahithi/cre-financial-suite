@@ -167,6 +167,11 @@ export default function LeaseUpload() {
     if (!result?.file_id) return;
     setFileId(result.file_id);
     setFileRecord(null);
+    if (result.processing_error) {
+      toast.error(`Lease uploaded, but parsing failed: ${result.processing_error}`);
+      fetchFileRecord(result.file_id);
+      return;
+    }
     toast.success("Lease uploaded. The canonical extraction pipeline is running.");
   };
 

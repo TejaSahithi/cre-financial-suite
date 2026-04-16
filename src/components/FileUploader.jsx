@@ -197,18 +197,37 @@ export default function FileUploader({
       const { data, error } = await supabase.functions.invoke("upload-handler", { body: formData });
       if (error) throw error;
 
+      let ingestResult = null;
+      let processingError = null;
       if (data?.file_id) {
-        try {
-          await supabase.functions.invoke("ingest-file", {
-            body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
+        const { data: ingestData, error: ingestError } = await supabase.functions.invoke("ingest-file", {
+          body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
+        });
+
+        ingestResult = ingestData;
+        if (ingestError || ingestData?.error) {
+          processingError =
+            ingestData?.message ||
+            ingestData?.error_details ||
+            ingestData?.steps?.normalization?.data?.message ||
+            ingestData?.steps?.extraction?.data?.message ||
+            ingestData?.steps?.validation?.data?.message ||
+            ingestData?.steps?.storage?.data?.message ||
+            ingestError?.message ||
+            "Processing could not be started.";
+          console.error("[FileUploader] ingest-file failed:", {
+            error: ingestError,
+            data: ingestData,
+            message: processingError,
           });
-        } catch (ingestError) {
-          console.error("[FileUploader] ingest-file invocation failed:", ingestError);
-          toast.warning(`"${file.name}" uploaded, but processing could not be started automatically.`);
         }
       }
 
-      return data;
+      return {
+        ...data,
+        ingest_result: ingestResult,
+        processing_error: processingError,
+      };
     },
     [fileType, propertyId, resolvedOrgId]
   );
@@ -235,6 +254,9 @@ export default function FileUploader({
       try {
         const result = await uploadSingleFile(file);
         results.push({ file_name: file.name, ...result });
+        if (result?.processing_error) {
+          errors.push({ file_name: file.name, message: result.processing_error, file_id: result.file_id });
+        }
       } catch (error) {
         console.error("[FileUploader] upload failed:", error);
         const message =
