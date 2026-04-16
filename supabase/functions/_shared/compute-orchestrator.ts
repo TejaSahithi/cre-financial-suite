@@ -17,7 +17,13 @@ export type ModuleType =
   | "properties"
   | "revenue"
   | "cam"
-  | "budgets";
+  | "budgets"
+  | "buildings"
+  | "units"
+  | "tenants"
+  | "invoices"
+  | "gl_accounts"
+  | "documents";
 
 interface ComputeJob {
   functionName: string;
@@ -203,6 +209,12 @@ function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYea
         jobs.push(createComputeJob("compute-budget", { property_id: pid, fiscal_year: fiscalYear, action: "generate" }, pid, fiscalYear));
         break;
       case "properties":
+      case "buildings":
+      case "units":
+      case "tenants":
+      case "invoices":
+      case "gl_accounts":
+      case "documents":
         break; // reference data — no compute needed
     }
   }
@@ -305,6 +317,9 @@ export async function resolvePropertyIds(
     leases: "leases",
     expenses: "expenses",
     revenue: "revenues",
+    buildings: "buildings",
+    units: "units",
+    invoices: "invoices",
   };
   const table = tableMap[moduleType];
   if (table) {

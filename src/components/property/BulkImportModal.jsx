@@ -12,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CSV_TEMPLATES } from "@/services/parsingEngine";
-import { extractFromFile, methodLabel, methodBadgeClass } from "@/services/documentExtractor";
 import { supabase } from "@/services/supabaseClient";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
@@ -156,6 +155,48 @@ MODULE_FIELDS.gl = MODULE_FIELDS.gl_account;
 
 const ACCEPT_ATTR = '.csv,.xlsx,.xls,.pdf,.docx,.doc,.txt';
 
+const PIPELINE_MODULE_MAP = {
+  property: 'properties',
+  building: 'buildings',
+  unit: 'units',
+  lease: 'leases',
+  tenant: 'tenants',
+  revenue: 'revenue',
+  expense: 'expenses',
+  invoice: 'invoices',
+  gl_account: 'gl_accounts',
+  gl: 'gl_accounts',
+};
+
+function methodLabel(method) {
+  const labels = {
+    canonical_pipeline: 'Canonical Pipeline',
+    review_required: 'Review Required',
+    docling: 'Docling',
+    gemini_vision: 'Gemini Vision OCR',
+    hybrid: 'Hybrid OCR',
+    csv: 'CSV Parser',
+    excel: 'Excel Parser',
+  };
+  return labels[method] || (method ? String(method).replace(/_/g, ' ') : 'Pipeline');
+}
+
+function methodBadgeClass(method) {
+  if (method === 'review_required') return 'bg-amber-100 text-amber-700 border-amber-200';
+  if (['gemini_vision', 'hybrid'].includes(method)) return 'bg-purple-100 text-purple-700 border-purple-200';
+  return 'bg-blue-100 text-blue-700 border-blue-200';
+}
+
+function extractRowsFromUploadedFile(record) {
+  if (Array.isArray(record?.valid_data) && record.valid_data.length) return record.valid_data;
+  if (Array.isArray(record?.parsed_data) && record.parsed_data.length) return record.parsed_data;
+  const payloadRows = record?.ui_review_payload?.rows;
+  if (Array.isArray(payloadRows)) {
+    return payloadRows.map((row) => row.values || row.fields || row).filter(Boolean);
+  }
+  return [];
+}
+
 // ── Template download ─────────────────────────────────────────────────────────
 function downloadTemplate(moduleType) {
   const content = CSV_TEMPLATES?.[moduleType];
@@ -165,33 +206,6 @@ function downloadTemplate(moduleType) {
   const a    = document.createElement('a');
   a.href = url; a.download = `${moduleType}_template.csv`; a.click();
   URL.revokeObjectURL(url);
-}
-
-// ── Resolve org_id directly from Supabase (most reliable) ────────────────────
-async function resolveOrgId() {
-  try {
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) return null;
-
-    // Check app_metadata first (set by backend on invite/approval)
-    if (authUser.app_metadata?.org_id) return authUser.app_metadata.org_id;
-
-    // Query memberships table directly
-    const { data: mem } = await supabase
-      .from('memberships')
-      .select('org_id')
-      .eq('user_id', authUser.id)
-      .limit(1)
-      .maybeSingle();
-
-    if (mem?.org_id) return mem.org_id;
-
-    // Fallback: Pick the first available organization (crucial for SuperAdmins who don't have a specific membership)
-    const { data: org } = await supabase.from('organizations').select('id').limit(1).maybeSingle();
-    return org?.id || null;
-  } catch {
-    return null;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -250,6 +264,9 @@ export default function BulkImportModal({
   // rows: array of plain objects keyed by field key
   const [rows, setRows]       = useState(null);
   const [method, setMethod]   = useState(null);
+  const [pipelineFileId, setPipelineFileId] = useState(null);
+  const [pipelineReviewRequired, setPipelineReviewRequired] = useState(false);
+  const [pipelineStored, setPipelineStored] = useState(false);
   // Target property selected inside the modal (only used when no contextual propertyId)
   const [targetPropertyId, setTargetPropertyId] = useState('');
   const [propertyOptions, setPropertyOptions] = useState([]);
@@ -305,7 +322,15 @@ export default function BulkImportModal({
     return () => { cancelled = true; };
   }, [propertyId, targetPropertyId, propertyOptions]);
 
-  const reset = () => { setRows(null); setFile(null); setMethod(null); setTargetPropertyId(''); };
+  const reset = () => {
+    setRows(null);
+    setFile(null);
+    setMethod(null);
+    setTargetPropertyId('');
+    setPipelineFileId(null);
+    setPipelineReviewRequired(false);
+    setPipelineStored(false);
+  };
 
   // ── Merge extracted rows with full field template ─────────────────────────
   const buildRows = useCallback((extractedRows) => {
@@ -454,19 +479,79 @@ export default function BulkImportModal({
     e.target.value = '';
     setRows(null);
     setMethod(null);
-    setTargetPropertyId('');
     setFile(f);
     setLoading(true);
 
     try {
-      const result = await extractFromFile(f, moduleType);
-      if (!result.rows?.length) {
+      if (REQUIRES_PROPERTY.has(moduleType) && !propertyId && !targetPropertyId) {
+        toast.error('Pick a target property before uploading this file.');
+        return;
+      }
+
+      const canonicalModuleType = PIPELINE_MODULE_MAP[moduleType];
+      if (!canonicalModuleType) {
+        throw new Error(`Unsupported import module: ${moduleType}`);
+      }
+
+      const formData = new FormData();
+      formData.append('file', f);
+      formData.append('file_type', canonicalModuleType);
+      const uploadPropertyId = propertyId || targetPropertyId;
+      if (uploadPropertyId) formData.append('property_id', uploadPropertyId);
+
+      const { data: uploadData, error: uploadError } = await supabase.functions.invoke('upload-handler', {
+        body: formData,
+      });
+      if (uploadError) throw uploadError;
+      if (uploadData?.error) throw new Error(uploadData.message || 'Upload failed.');
+      if (!uploadData?.file_id) throw new Error('Upload completed without a file_id.');
+
+      const { data: ingestData, error: ingestError } = await supabase.functions.invoke('ingest-file', {
+        body: { file_id: uploadData.file_id, module_type: canonicalModuleType },
+      });
+      if (ingestError) throw ingestError;
+      if (ingestData?.error) {
+        throw new Error(
+          ingestData?.steps?.storage?.error ||
+          ingestData?.steps?.validation?.error ||
+          ingestData?.steps?.normalization?.error ||
+          ingestData?.steps?.parsing?.error ||
+          ingestData?.error_details ||
+          'Ingestion failed.'
+        );
+      }
+
+      const { data: fileRecord, error: recordError } = await supabase
+        .from('uploaded_files')
+        .select('id,status,review_required,review_status,extraction_method,valid_data,parsed_data,ui_review_payload,error_message')
+        .eq('id', uploadData.file_id)
+        .single();
+      if (recordError) throw recordError;
+      if (fileRecord?.status === 'failed') throw new Error(fileRecord.error_message || 'Pipeline failed.');
+
+      const extractedRows = extractRowsFromUploadedFile(fileRecord);
+      if (!extractedRows.length) {
         toast.warning('No records found. Try a different file or format.');
         return;
       }
-      setRows(buildRows(result.rows));
-      setMethod(result.method);
-      toast.success(`${result.rows.length} record${result.rows.length !== 1 ? 's' : ''} extracted — review and edit below.`);
+      const reviewRequired = fileRecord.status === 'review_required' || fileRecord.review_required === true;
+      const stored =
+        ingestData?.steps?.storage?.success ||
+        ['stored', 'computing', 'completed'].includes(fileRecord.status);
+
+      setRows(buildRows(extractedRows));
+      setMethod(reviewRequired ? 'review_required' : (fileRecord.extraction_method || 'canonical_pipeline'));
+      setPipelineFileId(uploadData.file_id);
+      setPipelineReviewRequired(reviewRequired);
+      setPipelineStored(Boolean(stored) && !reviewRequired);
+
+      if (reviewRequired) {
+        toast.warning(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} extracted and waiting for review approval.`);
+      } else if (stored) {
+        toast.success(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} imported through the canonical pipeline.`);
+      } else {
+        toast.success(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} extracted. Review and edit below.`);
+      }
     } catch (err) {
       toast.error(err.message || 'Failed to process file.');
     } finally {
@@ -531,6 +616,53 @@ export default function BulkImportModal({
     if (!canImport) return;
 
     setImporting(true);
+    if (pipelineFileId) {
+      try {
+        if (pipelineReviewRequired) {
+          const editedRows = rows.map(({ _row, ...row }) => ({
+            ...row,
+            ...(effectivePropertyId && !row.property_id ? { property_id: effectivePropertyId } : {}),
+            ...(buildingId && !row.building_id ? { building_id: buildingId } : {}),
+            ...(unitId && !row.unit_id ? { unit_id: unitId } : {}),
+          }));
+
+          const { data, error } = await supabase.functions.invoke('review-approve', {
+            body: { file_id: pipelineFileId, action: 'approve', edited_rows: editedRows },
+          });
+          if (error) throw error;
+          if (data?.error) throw new Error(data.message || 'Review approval failed.');
+          toast.success(`Approved and imported ${editedRows.length} ${title}.`);
+        } else if (pipelineStored) {
+          toast.success(`${title} already imported through the canonical pipeline.`);
+        } else {
+          toast.success(`${title} processed through the canonical pipeline.`);
+        }
+
+        const ENTITY_KEYS = {
+          property: ['Property', 'bu-properties', 'property'],
+          building: ['Building', 'bu-buildings', 'buildings'],
+          unit:     ['Unit', 'bu-units', 'units'],
+          lease:    ['Lease', 'leases-prop'],
+          tenant:   ['Tenant'],
+          invoice:  ['Invoice', 'invoices'],
+          revenue:  ['Revenue'],
+          expense:  ['Expense', 'expenses-prop'],
+          gl_account: ['GLAccount'],
+          gl:       ['GLAccount'],
+        };
+        const keys = ENTITY_KEYS[moduleType] || [];
+        if (keys.length === 0) queryClient.invalidateQueries();
+        else keys.forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
+        onClose();
+        reset();
+      } catch (err) {
+        toast.error(err.message || 'Failed to finalize pipeline import.');
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
+
     const writableOrgId = await resolveWritableOrgId(contextOrgId);
     const tenantIdCache = new Map();
     const propertyIdCache = new Map();
@@ -679,7 +811,7 @@ export default function BulkImportModal({
     }
   };
 
-  const isAI = method === 'ai_gemini';
+  const isAI = ['gemini_vision', 'hybrid', 'review_required'].includes(method);
 
   return (
     <Dialog open={isOpen} onOpenChange={v => { if (!v) { onClose(); reset(); } }}>

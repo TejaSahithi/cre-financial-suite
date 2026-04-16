@@ -1478,7 +1478,8 @@ function normalizeGLAccount(row) {
 
 /**
  * Map of moduleType ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ parser function.
- * Used by documentExtractor.js to route CSV/Excel files to the right parser.
+ * Kept for local CSV/Excel parsing utilities; canonical imports now use
+ * upload-handler + ingest-file.
  */
 
 export const PARSER_MAP = {

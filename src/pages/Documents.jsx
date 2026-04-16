@@ -1,7 +1,7 @@
-import React, { useState } from "react";
-import { documentService } from "@/services/documentService";
+import React, { useEffect, useState } from "react";
 import { supabase } from "@/services/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,32 +14,113 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Search, Upload, FolderOpen, FileText, Receipt, BarChart3, Loader2, Trash2, ExternalLink } from "lucide-react";
 
+function documentTypeToSubtype(type) {
+  if (type === "lease" || type === "contract") return "base_lease";
+  if (type === "invoice" || type === "receipt" || type === "vendor_invoice") return "expense_backup";
+  if (type === "cam_report") return "cam_support";
+  return "generic";
+}
+
+function subtypeToDocumentType(subtype) {
+  if (subtype === "base_lease") return "lease";
+  if (subtype === "expense_backup") return "invoice";
+  if (subtype === "cam_support") return "cam_report";
+  return "other";
+}
+
 export default function Documents() {
   const [search, setSearch] = useState("");
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadForm, setUploadForm] = useState({ name: "", type: "other", description: "", property_id: "", tenant_name: "", vendor_name: "" });
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [uploadForm, setUploadForm] = useState({
+    name: "",
+    type: "other",
+    description: "",
+    property_id: "",
+    tenant_name: "",
+    vendor_name: "",
+  });
   const [tagFilter, setTagFilter] = useState("all");
   const queryClient = useQueryClient();
   const { orgId } = useOrgId();
 
-  const { data: documents = [] } = useOrgQuery("Document");
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: vendors = [] } = useOrgQuery("Vendor");
 
-  // Combine uploaded documents with lease PDFs
+  const loadUploadedFiles = async () => {
+    if (!orgId) {
+      setUploadedFiles([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("uploaded_files")
+      .select("id,file_name,file_url,module_type,document_subtype,status,property_id,normalized_output,created_at")
+      .eq("org_id", orgId)
+      .eq("module_type", "documents")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[Documents] Failed to load uploaded_files:", error.message);
+      setUploadedFiles([]);
+      return;
+    }
+    setUploadedFiles(data || []);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!orgId) {
+      setUploadedFiles([]);
+      return () => { cancelled = true; };
+    }
+
+    supabase
+      .from("uploaded_files")
+      .select("id,file_name,file_url,module_type,document_subtype,status,property_id,normalized_output,created_at")
+      .eq("org_id", orgId)
+      .eq("module_type", "documents")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error("[Documents] Failed to load uploaded_files:", error.message);
+          setUploadedFiles([]);
+        } else {
+          setUploadedFiles(data || []);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [orgId]);
+
   const leaseDocuments = leases.filter(l => l.pdf_url).map(l => ({
     id: `lease-${l.id}`,
     name: `Lease - ${l.tenant_name}`,
     type: "lease",
-    description: `${l.lease_type} lease · ${l.start_date} - ${l.end_date}`,
+    description: `${l.lease_type} lease - ${l.start_date} - ${l.end_date}`,
     file_url: l.pdf_url,
     created_date: l.created_date,
     source: "lease",
   }));
 
-  const allDocs = [...documents, ...leaseDocuments];
+  const pipelineDocuments = uploadedFiles.map((f) => {
+    const meta = f.normalized_output?.document_metadata || {};
+    return {
+      id: `upload-${f.id}`,
+      raw_id: f.id,
+      name: meta.name || f.file_name,
+      type: meta.type || subtypeToDocumentType(f.document_subtype),
+      description: meta.description || `Pipeline status: ${f.status}`,
+      file_url: f.file_url,
+      created_date: f.created_at,
+      source: "uploaded_file",
+    };
+  });
+
+  const allDocs = [...pipelineDocuments, ...leaseDocuments];
 
   const filtered = allDocs.filter(d => {
     const matchSearch = !search || d.name?.toLowerCase().includes(search.toLowerCase()) || d.description?.toLowerCase().includes(search.toLowerCase());
@@ -58,42 +139,91 @@ export default function Documents() {
 
   const countByType = (type) => allDocs.filter(d => d.type === type).length;
 
-  const handleUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploading(true);
-    let file_url = "";
-    try {
-      const fileName = `documents/${Date.now()}-${file.name}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('documents')
-        .upload(fileName, file, { upsert: true });
-      if (!uploadError && uploadData) {
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
-        file_url = urlData?.publicUrl || "";
-      } else if (uploadError) {
-        // Storage bucket missing or unavailable — fall back to local blob URL
-        file_url = URL.createObjectURL(file);
-      }
-    } catch {
-      file_url = URL.createObjectURL(file);
-    }
-    await documentService.create({
-      ...uploadForm,
-      name: uploadForm.name || file.name,
-      file_url,
-      org_id: orgId || "",
+  const resetUploadForm = () => {
+    setUploadForm({
+      name: "",
+      type: "other",
+      description: "",
+      property_id: "",
+      tenant_name: "",
+      vendor_name: "",
     });
-    queryClient.invalidateQueries({ queryKey: ['Document', orgId] });
-    setUploading(false);
-    setShowUpload(false);
-    setUploadForm({ name: "", type: "other", description: "", property_id: "", tenant_name: "", vendor_name: "" });
   };
 
-  const deleteMutation = useMutation({
-    mutationFn: (id) => documentService.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['Document', orgId] }),
-  });
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("file_type", "documents");
+      if (uploadForm.property_id) formData.append("property_id", uploadForm.property_id);
+
+      const { data, error } = await supabase.functions.invoke("upload-handler", { body: formData });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.message || "Upload failed.");
+      if (!data?.file_id) throw new Error("Upload completed without a file_id.");
+
+      const { error: updateError } = await supabase
+        .from("uploaded_files")
+        .update({
+          normalized_output: {
+            document_metadata: {
+              name: uploadForm.name || file.name,
+              type: uploadForm.type || "other",
+              description: uploadForm.description || "",
+              tenant_name: uploadForm.tenant_name || "",
+              vendor_name: uploadForm.vendor_name || "",
+            },
+          },
+          document_subtype: documentTypeToSubtype(uploadForm.type),
+          review_required: false,
+          review_status: "not_required",
+        })
+        .eq("id", data.file_id)
+        .eq("org_id", orgId);
+      if (updateError) throw updateError;
+
+      if (uploadForm.property_id) {
+        const { error: linkError } = await supabase.from("document_links").insert({
+          org_id: orgId,
+          file_id: data.file_id,
+          property_id: uploadForm.property_id,
+          link_type: uploadForm.type || "document",
+        });
+        if (linkError) console.warn("[Documents] document_links insert failed:", linkError.message);
+      }
+
+      await loadUploadedFiles();
+      queryClient.invalidateQueries({ queryKey: ["Document", orgId] });
+      toast.success("Document uploaded through the canonical pipeline.");
+      setShowUpload(false);
+      resetUploadForm();
+    } catch (err) {
+      console.error("[Documents] Upload failed:", err);
+      toast.error(err.message || "Upload failed.");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const deleteUploadedFile = async (doc) => {
+    if (doc.source !== "uploaded_file") return;
+    const { error } = await supabase
+      .from("uploaded_files")
+      .delete()
+      .eq("id", doc.raw_id)
+      .eq("org_id", orgId);
+    if (error) {
+      toast.error(error.message || "Could not delete document.");
+      return;
+    }
+    setUploadedFiles(prev => prev.filter(f => f.id !== doc.raw_id));
+    toast.success("Document removed.");
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -113,11 +243,16 @@ export default function Documents() {
           { label: "Invoices", value: countByType("invoice"), icon: Receipt, color: "bg-emerald-50 text-emerald-600" },
           { label: "Contracts", value: countByType("contract"), icon: FolderOpen, color: "bg-purple-50 text-purple-600" },
           { label: "Reports", value: countByType("report"), icon: BarChart3, color: "bg-amber-50 text-amber-600" },
-        ].map((s, i) => (
-          <Card key={i}>
+        ].map((s) => (
+          <Card key={s.label}>
             <CardContent className="p-4 flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.color}`}><s.icon className="w-5 h-5" /></div>
-              <div><p className="text-[10px] font-semibold text-slate-500 uppercase">{s.label}</p><p className="text-xl font-bold">{s.value}</p></div>
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.color}`}>
+                <s.icon className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase">{s.label}</p>
+                <p className="text-xl font-bold">{s.value}</p>
+              </div>
             </CardContent>
           </Card>
         ))}
@@ -132,8 +267,8 @@ export default function Documents() {
           <SelectTrigger className="w-36 h-9 text-xs"><SelectValue placeholder="All Types" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
-            {["lease","invoice","receipt","report","contract","cam_report","vendor_invoice","other"].map(t => (
-              <SelectItem key={t} value={t}>{t.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</SelectItem>
+            {["lease", "invoice", "receipt", "report", "contract", "cam_report", "vendor_invoice", "other"].map(t => (
+              <SelectItem key={t} value={t}>{t.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -155,7 +290,7 @@ export default function Documents() {
               {filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-12 text-slate-400 text-sm">
-                    {search ? 'No documents match your search' : 'No documents uploaded yet. Upload your first document to get started.'}
+                    {search ? "No documents match your search" : "No documents uploaded yet. Upload your first document to get started."}
                   </TableCell>
                 </TableRow>
               ) : filtered.map((d) => (
@@ -171,7 +306,7 @@ export default function Documents() {
                       {d.type}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-sm text-slate-500 max-w-[200px] truncate">{d.description || '—'}</TableCell>
+                  <TableCell className="text-sm text-slate-500 max-w-[200px] truncate">{d.description || "-"}</TableCell>
                   <TableCell className="text-sm text-slate-500">{d.created_date?.substring(0, 10)}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
@@ -182,12 +317,12 @@ export default function Documents() {
                           </Button>
                         </a>
                       )}
-                      {!d.source && (
+                      {d.source === "uploaded_file" && (
                         <Button
                           variant="ghost"
                           size="sm"
                           className="text-xs h-7 px-2 text-red-500"
-                          onClick={() => deleteMutation.mutate(d.id)}
+                          onClick={() => deleteUploadedFile(d)}
                         >
                           <Trash2 className="w-3 h-3" />
                         </Button>
@@ -201,7 +336,6 @@ export default function Documents() {
         </CardContent>
       </Card>
 
-      {/* Upload Dialog */}
       <Dialog open={showUpload} onOpenChange={setShowUpload}>
         <DialogContent>
           <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
@@ -231,10 +365,10 @@ export default function Documents() {
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <Label>Property</Label>
-                <Select value={uploadForm.property_id} onValueChange={v => setUploadForm({ ...uploadForm, property_id: v })}>
+                <Select value={uploadForm.property_id || "none"} onValueChange={v => setUploadForm({ ...uploadForm, property_id: v === "none" ? "" : v })}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={null}>None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -245,10 +379,10 @@ export default function Documents() {
               </div>
               <div>
                 <Label>Vendor</Label>
-                <Select value={uploadForm.vendor_name} onValueChange={v => setUploadForm({ ...uploadForm, vendor_name: v })}>
+                <Select value={uploadForm.vendor_name || "none"} onValueChange={v => setUploadForm({ ...uploadForm, vendor_name: v === "none" ? "" : v })}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={null}>None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {vendors.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}
                   </SelectContent>
                 </Select>

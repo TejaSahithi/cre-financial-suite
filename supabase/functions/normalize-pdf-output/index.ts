@@ -30,6 +30,7 @@ function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
     case "leases": return "lease";
     case "expenses": return "expense";
+    case "invoices": return "expense";
     case "properties": return "property";
     case "revenue": return "revenue";
     case "building":

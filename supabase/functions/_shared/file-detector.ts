@@ -4,7 +4,8 @@
  *
  * Detects:
  *   - fileFormat: 'csv' | 'xlsx' | 'xls' | 'pdf' | 'text' | 'unknown'
- *   - moduleType: 'leases' | 'expenses' | 'properties' | 'revenue' | 'cam' | 'budgets' | 'unknown'
+ *   - moduleType: business module inferred from explicit caller input,
+ *     filename, or preview text.
  *
  * Detection strategy (in priority order):
  *   1. MIME type (most reliable when set correctly)
@@ -26,6 +27,12 @@ export type ModuleType =
   | 'revenue'
   | 'cam'
   | 'budgets'
+  | 'buildings'
+  | 'units'
+  | 'tenants'
+  | 'invoices'
+  | 'gl_accounts'
+  | 'documents'
   | 'unknown';
 
 export interface DetectionResult {
@@ -216,6 +223,12 @@ const MODULE_FILENAME_KEYWORDS: Record<ModuleType, string[]> = {
   revenue: ['revenue', 'income', 'receipt', 'billing'],
   cam: ['cam', 'common area', 'maintenance', 'reconcil'],
   budgets: ['budget', 'forecast', 'plan', 'projection'],
+  buildings: ['building', 'buildings', 'structure', 'tower'],
+  units: ['unit', 'units', 'suite', 'suites', 'space', 'spaces'],
+  tenants: ['tenant', 'tenants', 'occupant', 'occupants', 'customer'],
+  invoices: ['invoice', 'invoices', 'billing', 'bill', 'statement'],
+  gl_accounts: ['gl', 'general ledger', 'account', 'accounts', 'chart of accounts', 'coa'],
+  documents: ['document', 'documents', 'agreement', 'support', 'backup'],
   unknown: [],
 };
 
@@ -226,6 +239,12 @@ const MODULE_CONTENT_KEYWORDS: Record<ModuleType, string[]> = {
   revenue: ['revenue_type', 'revenue type', 'income_type', 'cam_recovery', 'base_rent'],
   cam: ['cam_calculation', 'cam_per_sf', 'admin_fee', 'gross_up', 'cam_cap'],
   budgets: ['budget_year', 'fiscal_year', 'total_revenue', 'total_expenses', 'noi'],
+  buildings: ['building_name', 'building name', 'floors', 'year_built', 'total_sqft'],
+  units: ['unit_number', 'suite', 'square_footage', 'occupancy_status', 'monthly_rent'],
+  tenants: ['tenant_name', 'tenant name', 'contact_name', 'credit_rating', 'industry'],
+  invoices: ['invoice_number', 'invoice #', 'amount_due', 'due_date', 'billing_period'],
+  gl_accounts: ['account code', 'gl_code', 'normal_balance', 'is_recoverable', 'chart of accounts'],
+  documents: ['document', 'description', 'attachment', 'evidence', 'supporting'],
   unknown: [],
 };
 
@@ -348,7 +367,20 @@ export function detectFileType(opts: DetectOptions): DetectionResult {
 
   // 2a. Explicit module type from caller (highest priority)
   if (explicitModuleType) {
-    const valid: ModuleType[] = ['leases', 'expenses', 'properties', 'revenue', 'cam', 'budgets'];
+    const valid: ModuleType[] = [
+      'leases',
+      'expenses',
+      'properties',
+      'revenue',
+      'cam',
+      'budgets',
+      'buildings',
+      'units',
+      'tenants',
+      'invoices',
+      'gl_accounts',
+      'documents',
+    ];
     if (valid.includes(explicitModuleType as ModuleType)) {
       moduleType = explicitModuleType as ModuleType;
       moduleSource = 'explicit';
@@ -488,10 +520,12 @@ function defaultSubtypeForModule(moduleType: ModuleType): DocumentSubtype {
   switch (moduleType) {
     case 'leases':     return 'base_lease';
     case 'expenses':   return 'expense_backup';
+    case 'invoices':   return 'expense_backup';
     case 'cam':        return 'cam_support';
     case 'budgets':    return 'budget_support';
     case 'revenue':    return 'rent_roll';
     case 'properties': return 'generic';
+    case 'documents':  return 'generic';
     default:           return 'generic';
   }
 }
