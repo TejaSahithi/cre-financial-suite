@@ -552,8 +552,35 @@ const SCHEMA_MAP: Record<ModuleType, ModuleSchema> = {
   gl_account: GL_ACCOUNT_SCHEMA,
 };
 
+function normalizeModuleType(moduleType: string): ModuleType {
+  const aliases: Record<string, ModuleType> = {
+    leases: "lease",
+    lease: "lease",
+    expenses: "expense",
+    invoices: "expense",
+    expense: "expense",
+    properties: "property",
+    property: "property",
+    revenue: "revenue",
+    revenues: "revenue",
+    buildings: "building",
+    building: "building",
+    units: "unit",
+    unit: "unit",
+    tenants: "tenant",
+    tenant: "tenant",
+    gl_accounts: "gl_account",
+    gl_account: "gl_account",
+    cam: "expense",
+    budgets: "expense",
+    documents: "lease",
+  };
+
+  return aliases[moduleType] ?? (moduleType as ModuleType);
+}
+
 export function getSchema(moduleType: ModuleType): ModuleSchema {
-  return SCHEMA_MAP[moduleType] ?? PROPERTY_SCHEMA;
+  return SCHEMA_MAP[normalizeModuleType(moduleType as string)] ?? PROPERTY_SCHEMA;
 }
 
 // ── Field groups for LLM extraction ──────────────────────────────────────────
@@ -599,13 +626,14 @@ const GROUP_MAP: Record<ModuleType, FieldGroup[]> = {
 };
 
 export function getFieldGroups(moduleType: ModuleType): FieldGroup[] {
-  const groups = GROUP_MAP[moduleType] ?? SIMPLE_GROUP;
+  const normalizedModuleType = normalizeModuleType(moduleType as string);
+  const groups = GROUP_MAP[normalizedModuleType] ?? SIMPLE_GROUP;
 
   // For simple groups, populate fields from schema
   if (groups === SIMPLE_GROUP || (groups.length === 1 && groups[0].fields.length === 0)) {
-    const schema = getSchema(moduleType);
+    const schema = getSchema(normalizedModuleType);
     const allFields = Object.keys(schema).filter((f) => !schema[f].derived);
-    return [{ name: "all", fields: allFields, hint: `Extract all ${moduleType} fields.` }];
+    return [{ name: "all", fields: allFields, hint: `Extract all ${normalizedModuleType} fields.` }];
   }
 
   return groups;

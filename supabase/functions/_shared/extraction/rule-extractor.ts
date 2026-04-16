@@ -341,7 +341,7 @@ export function extractRuleBased(
   }
 
   // Special lease-type inference
-  if (moduleType === "lease" && !merged.lease_type) {
+  if ((moduleType === "lease" || moduleType === "leases") && !merged.lease_type) {
     const inferred = inferLeaseType(fullText);
     if (inferred) merged.lease_type = inferred;
   }
