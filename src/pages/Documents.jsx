@@ -57,7 +57,7 @@ export default function Documents() {
 
     const { data, error } = await supabase
       .from("uploaded_files")
-      .select("id,file_name,file_url,module_type,document_subtype,status,property_id,normalized_output,created_at")
+      .select("*")
       .eq("org_id", orgId)
       .eq("module_type", "documents")
       .order("created_at", { ascending: false });
@@ -79,7 +79,7 @@ export default function Documents() {
 
     supabase
       .from("uploaded_files")
-      .select("id,file_name,file_url,module_type,document_subtype,status,property_id,normalized_output,created_at")
+      .select("*")
       .eq("org_id", orgId)
       .eq("module_type", "documents")
       .order("created_at", { ascending: false })
@@ -184,7 +184,9 @@ export default function Documents() {
         })
         .eq("id", data.file_id)
         .eq("org_id", orgId);
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.warn("[Documents] Metadata update skipped:", updateError.message);
+      }
 
       if (uploadForm.property_id) {
         const { error: linkError } = await supabase.from("document_links").insert({

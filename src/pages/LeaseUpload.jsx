@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, CheckCircle2, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,6 +38,7 @@ export default function LeaseUpload() {
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const retriedUploadedFiles = useRef(new Set());
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -123,7 +124,7 @@ export default function LeaseUpload() {
   const fetchFileRecord = async (id) => {
     if (!id) return;
     setLoadingRecord(true);
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("uploaded_files")
       .select(
         "id, file_name, status, error_message, review_required, review_status, " +
@@ -131,6 +132,17 @@ export default function LeaseUpload() {
       )
       .eq("id", id)
       .maybeSingle();
+
+    if (error) {
+      const fallback = await supabase
+        .from("uploaded_files")
+        .select("id, file_name, status, error_message, row_count, updated_at")
+        .eq("id", id)
+        .maybeSingle();
+      data = fallback.data;
+      error = fallback.error;
+    }
+
     setLoadingRecord(false);
 
     if (error) {
@@ -161,6 +173,29 @@ export default function LeaseUpload() {
       cancelled = true;
       window.clearInterval(interval);
     };
+  }, [fileId, fileRecord?.status]);
+
+  useEffect(() => {
+    if (!fileId || fileRecord?.status !== "uploaded" || retriedUploadedFiles.current.has(fileId)) {
+      return;
+    }
+
+    retriedUploadedFiles.current.add(fileId);
+    supabase.functions
+      .invoke("ingest-file", {
+        body: {
+          file_id: fileId,
+          module_type: "leases",
+        },
+      })
+      .then(({ data, error }) => {
+        if (error || data?.error) {
+          toast.error(data?.message || error?.message || "Could not start lease extraction.");
+          return;
+        }
+        toast.success("Lease extraction restarted.");
+        fetchFileRecord(fileId);
+      });
   }, [fileId, fileRecord?.status]);
 
   const handleUploadComplete = (result) => {
