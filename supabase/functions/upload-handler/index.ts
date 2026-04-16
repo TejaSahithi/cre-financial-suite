@@ -4,211 +4,246 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 
 /**
  * Upload Handler Edge Function
- * Receives file uploads, stores to Supabase Storage, creates uploaded_files record
- * 
- * Requirements: 1.1, 1.2, 1.4, 1.6
- * Task: 2.1
+ *
+ * Single responsibility:
+ *   1. Authenticate the user.
+ *   2. Store the original file in the financial-uploads bucket.
+ *   3. Register the file in uploaded_files with status='uploaded'.
+ *
+ * Parsing happens after this function returns.
  */
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+
 const ALLOWED_MIME_TYPES = [
-  // Text / CSV
-  'text/csv',
-  'application/csv',
-  'text/plain',
-  // Excel
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  // PDF
-  'application/pdf',
-  // Word
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  // Images (for scanned documents)
-  'image/jpeg',
-  'image/png',
-  'image/tiff',
-  'image/webp',
-  'image/gif',
-  'image/bmp',
-  // browsers sometimes send octet-stream for unknown types
-  'application/octet-stream',
+  "text/csv",
+  "application/csv",
+  "text/plain",
+  "text/tab-separated-values",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/jpeg",
+  "image/png",
+  "image/tiff",
+  "image/webp",
+  "image/gif",
+  "image/bmp",
+  "application/octet-stream",
 ];
 
+const ALLOWED_EXTENSIONS = [
+  "csv",
+  "xls",
+  "xlsx",
+  "pdf",
+  "txt",
+  "tsv",
+  "doc",
+  "docx",
+  "jpg",
+  "jpeg",
+  "png",
+  "tiff",
+  "tif",
+  "webp",
+  "gif",
+  "bmp",
+];
+
+const VALID_FILE_TYPES = [
+  "leases",
+  "expenses",
+  "properties",
+  "revenue",
+  "cam",
+  "budgets",
+  "buildings",
+  "units",
+  "tenants",
+  "invoices",
+  "gl_accounts",
+  "documents",
+];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function normalizeOptionalUuid(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "all" || trimmed === "__none__" || trimmed === "undefined" || trimmed === "null") {
+    return null;
+  }
+  return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
+function getExtension(fileName: string): string {
+  return fileName.split(".").pop()?.toLowerCase() ?? "";
+}
+
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin);
 
-    // Parse multipart form data
     const formData = await req.formData();
-    const file = formData.get('file') as File;
-    const fileType = formData.get('file_type') as string;
-    const propertyId = (formData.get('property_id') as string) || null;
+    const file = formData.get("file") as File | null;
+    const fileType = String(formData.get("file_type") || "");
+    const propertyId = normalizeOptionalUuid(formData.get("property_id"));
 
-    // Validate required parameters
     if (!file) {
-      return new Response(
-        JSON.stringify({ error: true, message: 'Missing file parameter' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: true, message: "Missing file parameter" }, 400);
     }
 
     if (!fileType) {
-      return new Response(
-        JSON.stringify({ error: true, message: 'Missing file_type parameter' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: true, message: "Missing file_type parameter" }, 400);
     }
 
-    // Validate file_type
-    const validFileTypes = [
-      'leases',
-      'expenses',
-      'properties',
-      'revenue',
-      'cam',
-      'budgets',
-      'buildings',
-      'units',
-      'tenants',
-      'invoices',
-      'gl_accounts',
-      'documents',
-    ];
-    if (!validFileTypes.includes(fileType)) {
-      return new Response(
-        JSON.stringify({ 
-          error: true, 
-          message: `Invalid file_type. Must be one of: ${validFileTypes.join(', ')}` 
-        }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!VALID_FILE_TYPES.includes(fileType)) {
+      return jsonResponse({
+        error: true,
+        message: `Invalid file_type. Must be one of: ${VALID_FILE_TYPES.join(", ")}`,
+      }, 400);
     }
 
-    // Enforce 50MB file size limit (Requirement 1.6)
     if (file.size > MAX_FILE_SIZE) {
-      return new Response(
-        JSON.stringify({ 
-          error: true, 
-          message: `File size exceeds 50MB limit. File size: ${(file.size / 1024 / 1024).toFixed(2)}MB` 
-        }),
-        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({
+        error: true,
+        message: `File size exceeds 50MB limit. File size: ${(file.size / 1024 / 1024).toFixed(2)}MB`,
+      }, 413);
     }
 
-    // Validate file format — accept all formats Docling can handle
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    const allowedExtensions = [
-      'csv', 'xls', 'xlsx', 'pdf', 'txt', 'tsv',
-      'doc', 'docx',
-      'jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp', 'gif', 'bmp',
-    ];
-    const mimeAllowed = ALLOWED_MIME_TYPES.includes(file.type);
-    const extAllowed = allowedExtensions.includes(ext);
+    const ext = getExtension(file.name);
+    const mimeAllowed = !file.type || ALLOWED_MIME_TYPES.includes(file.type);
+    const extAllowed = ALLOWED_EXTENSIONS.includes(ext);
 
     if (!mimeAllowed && !extAllowed) {
-      return new Response(
-        JSON.stringify({ 
-          error: true, 
-          message: `Unsupported file format. Supported: CSV, Excel, PDF, Word (.doc/.docx), images (JPG/PNG/TIFF), plain text` 
-        }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({
+        error: true,
+        message: "Unsupported file format. Supported: CSV, Excel, PDF, Word (.doc/.docx), images (JPG/PNG/TIFF), plain text",
+      }, 400);
     }
 
-    // Generate unique file ID
     const fileId = crypto.randomUUID();
-    // Object key inside the `financial-uploads` bucket. The bucket name is
-    // already part of the public URL, so do not duplicate it in the key.
     const storagePath = `${orgId}/${fileId}`;
-
-    // Store file in Supabase Storage (Requirement 1.1)
     const fileBuffer = await file.arrayBuffer();
-    const { error: storageError } = await supabaseAdmin.storage
-      .from('financial-uploads')
+    const uploadContentType = file.type || "application/octet-stream";
+
+    let { error: storageError } = await supabaseAdmin.storage
+      .from("financial-uploads")
       .upload(storagePath, fileBuffer, {
-        contentType: file.type,
-        upsert: false
+        contentType: uploadContentType,
+        upsert: false,
       });
+
+    if (storageError && uploadContentType !== "application/octet-stream") {
+      console.warn(
+        `[upload-handler] Storage rejected ${uploadContentType}; retrying ${file.name} as application/octet-stream`,
+        storageError,
+      );
+
+      const retry = await supabaseAdmin.storage
+        .from("financial-uploads")
+        .upload(storagePath, fileBuffer, {
+          contentType: "application/octet-stream",
+          upsert: false,
+        });
+      storageError = retry.error;
+    }
 
     if (storageError) {
       console.error("[upload-handler] Storage error:", storageError);
-      return new Response(
-        JSON.stringify({ 
-          error: true, 
-          message: `Failed to store file: ${storageError.message}` 
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({
+        error: true,
+        error_code: "STORAGE_UPLOAD_FAILED",
+        message: `Failed to store file: ${storageError.message}`,
+        details: storageError,
+      }, 500);
     }
 
-    // Get the public URL for the file
     const { data: urlData } = supabaseAdmin.storage
-      .from('financial-uploads')
+      .from("financial-uploads")
       .getPublicUrl(storagePath);
 
-    // Create uploaded_files record (Requirement 1.2)
-    const { data: uploadRecord, error: dbError } = await supabaseAdmin
-      .from('uploaded_files')
-      .insert({
-        id: fileId,
-        org_id: orgId,
-        module_type: fileType,
-        file_name: file.name,
-        file_url: urlData.publicUrl,
-        file_size: file.size,
-        mime_type: file.type,
-        uploaded_by: user.email,
-        property_id: propertyId,   // stored at upload time — used by compute pipeline
-        status: 'uploaded',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
+    const now = new Date().toISOString();
+    const insertPayload = {
+      id: fileId,
+      org_id: orgId,
+      module_type: fileType,
+      file_name: file.name,
+      file_url: urlData.publicUrl,
+      file_size: file.size,
+      mime_type: file.type || "application/octet-stream",
+      uploaded_by: user.email,
+      property_id: propertyId,
+      status: "uploaded",
+      created_at: now,
+      updated_at: now,
+    };
+
+    let { data: uploadRecord, error: dbError } = await supabaseAdmin
+      .from("uploaded_files")
+      .insert(insertPayload)
       .select()
       .single();
 
-    if (dbError) {
-      console.error("[upload-handler] Database error:", dbError);
-      
-      // Clean up storage if database insert fails
-      await supabaseAdmin.storage
-        .from('financial-uploads')
-        .remove([storagePath]);
-
-      return new Response(
-        JSON.stringify({ 
-          error: true, 
-          message: `Failed to create upload record: ${dbError.message}` 
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    if (dbError && propertyId) {
+      console.warn(
+        `[upload-handler] Insert failed with property_id=${propertyId}; retrying without optional property scope`,
+        dbError,
       );
+
+      const retry = await supabaseAdmin
+        .from("uploaded_files")
+        .insert({ ...insertPayload, property_id: null })
+        .select()
+        .single();
+
+      uploadRecord = retry.data;
+      dbError = retry.error;
     }
 
-    // Return success response with file_id and storage_path
-    return new Response(
-      JSON.stringify({ 
-        error: false,
-        file_id: fileId,
-        storage_path: storagePath,
-        file_name: file.name,
-        file_size: file.size,
-        property_id: propertyId,
-        processing_status: 'uploaded',
-        created_at: uploadRecord.created_at
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    if (dbError) {
+      console.error("[upload-handler] Database error:", dbError);
+      await supabaseAdmin.storage.from("financial-uploads").remove([storagePath]);
 
+      return jsonResponse({
+        error: true,
+        error_code: "UPLOAD_RECORD_FAILED",
+        message: `Failed to create upload record: ${dbError.message}`,
+        details: dbError,
+      }, 500);
+    }
+
+    return jsonResponse({
+      error: false,
+      file_id: fileId,
+      storage_path: storagePath,
+      file_name: file.name,
+      file_size: file.size,
+      property_id: uploadRecord.property_id,
+      processing_status: "uploaded",
+      created_at: uploadRecord.created_at,
+    });
   } catch (err) {
     console.error("[upload-handler] Error:", err.message);
-    return new Response(
-      JSON.stringify({ error: true, message: err.message }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({
+      error: true,
+      error_code: "UPLOAD_HANDLER_ERROR",
+      message: err.message,
+    }, 400);
   }
 });

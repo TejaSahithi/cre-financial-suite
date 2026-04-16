@@ -25,6 +25,7 @@ const ALL_FILE_TYPES = [
 const ACCEPTED_EXTENSIONS = [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".tsv", ".doc", ".docx", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".gif", ".bmp"];
 const DEFAULT_ACCEPT = ACCEPTED_EXTENSIONS.join(",");
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -41,6 +42,12 @@ function normalizeFileType(value) {
   return value === "budget" ? "budgets" : value;
 }
 
+function normalizeOptionalUuid(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
 function getProcessingError(ingestData, ingestError) {
   return (
     ingestData?.message ||
@@ -52,6 +59,35 @@ function getProcessingError(ingestData, ingestError) {
     ingestError?.message ||
     "Processing could not be started."
   );
+}
+
+async function invokeUploadHandler(formData) {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+
+  if (!supabaseUrl || !supabaseAnonKey || !accessToken) {
+    throw new Error("Missing Supabase session. Please refresh and sign in again.");
+  }
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/upload-handler`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: supabaseAnonKey,
+    },
+    body: formData,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.error) {
+    const error = new Error(payload?.message || `Upload failed with HTTP ${response.status}`);
+    error.context = payload;
+    throw error;
+  }
+
+  return payload;
 }
 
 /**
@@ -203,12 +239,12 @@ export default function FileUploader({
         formData.append("org_id", resolvedOrgId);
       }
 
-      if (propertyId) {
-        formData.append("property_id", propertyId);
+      const safePropertyId = normalizeOptionalUuid(propertyId);
+      if (safePropertyId) {
+        formData.append("property_id", safePropertyId);
       }
 
-      const { data, error } = await supabase.functions.invoke("upload-handler", { body: formData });
-      if (error) throw error;
+      const data = await invokeUploadHandler(formData);
 
       if (data?.file_id) {
         supabase.functions
