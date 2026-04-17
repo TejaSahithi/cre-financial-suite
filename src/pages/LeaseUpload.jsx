@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
 
 const ACTIVE_STATUSES = new Set([
@@ -186,20 +187,20 @@ export default function LeaseUpload() {
 
     retriedUploadedFiles.current.add(fileId);
     const retryTimer = window.setTimeout(() => {
-      supabase.functions
-        .invoke("ingest-file", {
-          body: {
-            file_id: fileId,
-            module_type: "leases",
-          },
-        })
-        .then(({ data, error }) => {
-          if (error || data?.error) {
-            toast.error(data?.message || error?.message || "Could not start lease extraction.");
+      invokeEdgeFunction("ingest-file", {
+        file_id: fileId,
+        module_type: "leases",
+      })
+        .then((data) => {
+          if (data?.error) {
+            toast.error(data?.message || "Could not start lease extraction.");
             return;
           }
           toast.success("Lease extraction restarted.");
           fetchFileRecord(fileId);
+        })
+        .catch((error) => {
+          toast.error(error?.message || "Could not start lease extraction.");
         });
     }, 8000);
 
@@ -221,85 +222,98 @@ export default function LeaseUpload() {
   const saveReview = async (reviewPayload) => {
     if (!fileId) return;
     setSavingReview(true);
-    const { data, error } = await supabase.functions.invoke("review-approve", {
-      body: {
+    try {
+      const data = await invokeEdgeFunction("review-approve", {
         file_id: fileId,
         action: "save",
         review_payload: reviewPayload,
-      },
-    });
-    setSavingReview(false);
+      });
 
-    if (error || data?.error) {
-      toast.error(data?.message || error?.message || "Review save failed");
-      return;
+      if (data?.error) {
+        toast.error(data?.message || "Review save failed");
+        return;
+      }
+
+      toast.success("Review draft saved.");
+      await fetchFileRecord(fileId);
+    } catch (error) {
+      toast.error(error?.message || "Review save failed");
+    } finally {
+      setSavingReview(false);
     }
-
-    toast.success("Review draft saved.");
-    await fetchFileRecord(fileId);
   };
 
   const approveReview = async (reviewPayload) => {
     if (!fileId) return;
     setApproving(true);
-    const { data, error } = await supabase.functions.invoke("review-approve", {
-      body: {
+    try {
+      const data = await invokeEdgeFunction("review-approve", {
         file_id: fileId,
         action: "approve",
         review_payload: reviewPayload,
-      },
-    });
-    setApproving(false);
+      });
 
-    if (error || data?.error) {
-      toast.error(data?.message || error?.message || "Review approval failed");
-      return;
+      if (data?.error) {
+        toast.error(data?.message || "Review approval failed");
+        return;
+      }
+
+      toast.success("Lease review approved and storage started.");
+      await fetchFileRecord(fileId);
+    } catch (error) {
+      toast.error(error?.message || "Review approval failed");
+    } finally {
+      setApproving(false);
     }
-
-    toast.success("Lease review approved and storage started.");
-    await fetchFileRecord(fileId);
   };
 
   const rejectReview = async (reason) => {
     if (!fileId) return;
     setRejecting(true);
-    const { data, error } = await supabase.functions.invoke("review-approve", {
-      body: {
+    try {
+      const data = await invokeEdgeFunction("review-approve", {
         file_id: fileId,
         action: "reject",
         reject_reason: reason,
-      },
-    });
-    setRejecting(false);
+      });
 
-    if (error || data?.error) {
-      toast.error(data?.message || error?.message || "Review rejection failed");
-      return;
+      if (data?.error) {
+        toast.error(data?.message || "Review rejection failed");
+        return;
+      }
+
+      toast.success("Lease extraction rejected.");
+      await fetchFileRecord(fileId);
+    } catch (error) {
+      toast.error(error?.message || "Review rejection failed");
+    } finally {
+      setRejecting(false);
     }
-
-    toast.success("Lease extraction rejected.");
-    await fetchFileRecord(fileId);
   };
 
   const retryExtraction = async () => {
     if (!fileId) return;
     setRetryingExtraction(true);
-    const { data, error } = await supabase.functions.invoke("ingest-file", {
-      body: {
+    try {
+      const data = await invokeEdgeFunction("ingest-file", {
         file_id: fileId,
         module_type: "leases",
-      },
-    });
-    setRetryingExtraction(false);
+      });
 
-    if (error || data?.error) {
-      toast.error(data?.message || error?.message || "Could not restart extraction.");
+      if (data?.error) {
+        toast.error(data?.message || "Could not restart extraction.");
+        await fetchFileRecord(fileId);
+        return;
+      }
+
+      toast.success("Extraction restarted.");
       await fetchFileRecord(fileId);
-      return;
+    } catch (error) {
+      toast.error(error?.message || "Could not restart extraction.");
+      await fetchFileRecord(fileId);
+    } finally {
+      setRetryingExtraction(false);
     }
-
-    toast.success("Extraction restarted.");
-    await fetchFileRecord(fileId);
   };
 
   const statusLabel = fileRecord?.status ? fileRecord.status.replace(/_/g, " ") : "waiting";
@@ -309,12 +323,19 @@ export default function LeaseUpload() {
     reviewPayload?.extraction_method === "manual_review_fallback" ||
     reviewPayload?.metadata?.manualReviewFallback === true;
   const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
+  const isEmptyExtractionFallback =
+    isManualReviewFallback ||
+    reviewPayload?.extraction_method === "none" ||
+    reviewPayload?.pipeline_method === "fallback" ||
+    fallbackWarnings.some((warning) =>
+      /text is too short|no structured fields|manual review/i.test(String(warning)),
+    );
 
   useEffect(() => {
     if (
       !fileId ||
       fileRecord?.status !== "review_required" ||
-      !isManualReviewFallback ||
+      !isEmptyExtractionFallback ||
       retriedManualFallbackFiles.current.has(fileId)
     ) {
       return undefined;
@@ -323,7 +344,10 @@ export default function LeaseUpload() {
     const staleStatusHelperBug = fallbackWarnings.some((warning) =>
       String(warning).includes(".catch is not a function"),
     );
-    if (!staleStatusHelperBug) return undefined;
+    const emptyExtraction = fallbackWarnings.some((warning) =>
+      /text is too short|no structured fields/i.test(String(warning)),
+    );
+    if (!staleStatusHelperBug && !emptyExtraction) return undefined;
 
     retriedManualFallbackFiles.current.add(fileId);
     const retryTimer = window.setTimeout(() => {
@@ -331,7 +355,7 @@ export default function LeaseUpload() {
     }, 750);
 
     return () => window.clearTimeout(retryTimer);
-  }, [fileId, fileRecord?.status, isManualReviewFallback, fallbackWarnings]);
+  }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -430,11 +454,11 @@ export default function LeaseUpload() {
         </Card>
       )}
 
-      {fileRecord?.status === "review_required" && isManualReviewFallback && (
+      {fileRecord?.status === "review_required" && isEmptyExtractionFallback && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
             <span>
-              Automatic extraction did not return mapped values for this file. Retry after the parser fix, or continue manually below.
+              Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or continue manually below.
             </span>
             <Button
               variant="outline"

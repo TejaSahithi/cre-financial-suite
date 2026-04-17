@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CSV_TEMPLATES } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
@@ -499,17 +500,14 @@ export default function BulkImportModal({
       const uploadPropertyId = propertyId || targetPropertyId;
       if (uploadPropertyId) formData.append('property_id', uploadPropertyId);
 
-      const { data: uploadData, error: uploadError } = await supabase.functions.invoke('upload-handler', {
-        body: formData,
-      });
-      if (uploadError) throw uploadError;
+      const uploadData = await invokeEdgeFunctionFormData('upload-handler', formData);
       if (uploadData?.error) throw new Error(uploadData.message || 'Upload failed.');
       if (!uploadData?.file_id) throw new Error('Upload completed without a file_id.');
 
-      const { data: ingestData, error: ingestError } = await supabase.functions.invoke('ingest-file', {
-        body: { file_id: uploadData.file_id, module_type: canonicalModuleType },
+      const ingestData = await invokeEdgeFunction('ingest-file', {
+        file_id: uploadData.file_id,
+        module_type: canonicalModuleType,
       });
-      if (ingestError) throw ingestError;
       if (ingestData?.error) {
         throw new Error(
           ingestData?.steps?.storage?.error ||
@@ -626,10 +624,11 @@ export default function BulkImportModal({
             ...(unitId && !row.unit_id ? { unit_id: unitId } : {}),
           }));
 
-          const { data, error } = await supabase.functions.invoke('review-approve', {
-            body: { file_id: pipelineFileId, action: 'approve', edited_rows: editedRows },
+          const data = await invokeEdgeFunction('review-approve', {
+            file_id: pipelineFileId,
+            action: 'approve',
+            edited_rows: editedRows,
           });
-          if (error) throw error;
           if (data?.error) throw new Error(data.message || 'Review approval failed.');
           toast.success(`Approved and imported ${editedRows.length} ${title}.`);
         } else if (pipelineStored) {

@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -247,20 +248,27 @@ export default function FileUploader({
       const data = await invokeUploadHandler(formData);
 
       if (data?.file_id) {
-        supabase.functions
-          .invoke("ingest-file", {
-            body: { file_id: data.file_id, module_type: normalizeFileType(fileType) },
-          })
-          .then(({ data: ingestData, error: ingestError }) => {
-            if (ingestError || ingestData?.error) {
-              const processingError = getProcessingError(ingestData, ingestError);
+        invokeEdgeFunction("ingest-file", {
+          file_id: data.file_id,
+          module_type: normalizeFileType(fileType),
+        })
+          .then((ingestData) => {
+            if (ingestData?.error) {
+              const processingError = getProcessingError(ingestData, null);
               console.error("[FileUploader] ingest-file failed:", {
-                error: ingestError,
                 data: ingestData,
                 message: processingError,
               });
               toast.error(`${file.name}: ${processingError}`);
             }
+          })
+          .catch((ingestError) => {
+            const processingError = getProcessingError(null, ingestError);
+            console.error("[FileUploader] ingest-file failed:", {
+              error: ingestError,
+              message: processingError,
+            });
+            toast.error(`${file.name}: ${processingError}`);
           });
       }
 

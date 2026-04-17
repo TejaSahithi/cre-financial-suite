@@ -1,6 +1,6 @@
 import { supabase } from "@/services/supabaseClient";
 
-export async function invokeEdgeFunction(fnName, body) {
+export async function getFreshAccessToken() {
   // Refresh the session so the edge function never receives an expired JWT.
   // supabase.functions.invoke reads the token from the client's internal state,
   // but that state can go stale if the tab was idle.
@@ -11,7 +11,21 @@ export async function invokeEdgeFunction(fnName, body) {
 
   // Explicitly pass the access token so the invocation uses the refreshed JWT
   // even if the client's internal state hasn't propagated yet.
-  const accessToken = refreshData?.session?.access_token;
+  let accessToken = refreshData?.session?.access_token;
+  if (!accessToken) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    accessToken = sessionData?.session?.access_token;
+  }
+
+  if (!accessToken) {
+    throw new Error("Missing Supabase session. Please refresh and sign in again.");
+  }
+
+  return accessToken;
+}
+
+export async function invokeEdgeFunction(fnName, body) {
+  const accessToken = await getFreshAccessToken();
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 
   const { data, error } = await supabase.functions.invoke(fnName, { body, headers });
@@ -41,4 +55,30 @@ export async function invokeEdgeFunction(fnName, body) {
   }
 
   return data || {};
+}
+
+export async function invokeEdgeFunctionFormData(fnName, formData) {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const accessToken = await getFreshAccessToken();
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Missing Supabase configuration. Please check environment variables.");
+  }
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: supabaseAnonKey,
+    },
+    body: formData,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.error) {
+    throw new Error(payload?.message || payload?.error || `${fnName} failed with HTTP ${response.status}`);
+  }
+
+  return payload;
 }
