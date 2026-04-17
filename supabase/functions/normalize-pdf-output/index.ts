@@ -48,10 +48,13 @@ function toExtractionModuleType(moduleType: string): ExtractionModuleType {
 
 function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
   switch (moduleType) {
+    case "lease":
     case "leases":
       return {
         tenant_name: null,
+        landlord_name: null,
         property_name: null,
+        property_address: null,
         assignor_name: null,
         assignee_name: null,
         assignment_effective_date: null,
@@ -62,8 +65,18 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
         start_date: null,
         end_date: null,
         monthly_rent: null,
+        annual_rent: null,
+        lease_term_months: null,
+        rent_per_sf: null,
         square_footage: null,
         lease_type: null,
+        security_deposit: null,
+        cam_amount: null,
+        escalation_rate: null,
+        renewal_options: null,
+        ti_allowance: null,
+        free_rent_months: null,
+        status: null,
         notes: null,
       };
     case "expenses":

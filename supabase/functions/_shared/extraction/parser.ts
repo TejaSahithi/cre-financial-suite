@@ -55,6 +55,14 @@ export async function parseDocument(
   fileName: string,
   mimeType: string = "application/pdf",
 ): Promise<DoclingOutput> {
+  const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
+  if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
+    console.log(
+      `[parser] Native PDF parser extracted ${nativePdfOutput.full_text?.length ?? 0} chars from "${fileName}"`,
+    );
+    return tag(nativePdfOutput, "pdf_text");
+  }
+
   const officeOutput = await parseOfficeOpenXml(fileBytes, fileName, mimeType);
   if (officeOutput && (officeOutput.full_text?.trim().length ?? 0) > 20) {
     console.log(
@@ -457,6 +465,218 @@ function scoreOutput(out: DoclingOutput | null): number {
 function tag(out: DoclingOutput, method: string): DoclingOutput {
   out.extraction_method = method;
   return out;
+}
+
+async function parseNativePdfText(
+  fileBytes: Uint8Array,
+  fileName: string,
+  mimeType: string,
+): Promise<DoclingOutput | null> {
+  const lowerName = fileName.toLowerCase();
+  if (!mimeType.includes("pdf") && !lowerName.endsWith(".pdf")) return null;
+
+  try {
+    const decoder = new TextDecoder("latin1", { fatal: false });
+    const rawPdf = decoder.decode(fileBytes);
+    const textParts: string[] = [];
+
+    textParts.push(extractPdfOperatorText(rawPdf));
+
+    for (const streamMatch of rawPdf.matchAll(/<<(?:.|\n|\r)*?>>\s*stream\r?\n?([\s\S]*?)\r?\n?endstream/g)) {
+      const objectText = streamMatch[0];
+      const streamText = streamMatch[1] ?? "";
+      if (!/\/FlateDecode\b/i.test(objectText)) continue;
+
+      const streamStart = streamMatch.index! + objectText.indexOf(streamText);
+      const encoded = fileBytes.slice(streamStart, streamStart + streamText.length);
+      const decodedStream = await decodePdfStream(encoded, objectText);
+      if (!decodedStream) continue;
+      textParts.push(extractPdfOperatorText(decoder.decode(decodedStream)));
+    }
+
+    const text = cleanExtractedPdfText(textParts.join("\n"));
+    return text.trim().length > 0 ? textToDocling(text) : null;
+  } catch (err) {
+    console.warn(`[parser] Native PDF text parse failed for "${fileName}": ${err.message}`);
+    return null;
+  }
+}
+
+async function decodePdfStream(
+  bytes: Uint8Array,
+  objectText: string,
+): Promise<Uint8Array | null> {
+  let current = trimPdfStreamBytes(bytes);
+
+  // ReportLab and several office/PDF generators wrap content as
+  // /ASCII85Decode then /FlateDecode. Decode filters in stream order before
+  // pulling text operators from BT/ET sections.
+  const filters = [...objectText.matchAll(/\/([A-Za-z0-9]+Decode)\b/g)].map((match) =>
+    match[1].toLowerCase()
+  );
+
+  for (const filter of filters) {
+    if (filter === "ascii85decode") {
+      current = decodeAscii85(current);
+      continue;
+    }
+
+    if (filter === "asciihexdecode") {
+      current = decodeAsciiHex(current);
+      continue;
+    }
+
+    if (filter === "flatedecode") {
+      const inflated = await inflatePdfStream(current);
+      if (!inflated) return null;
+      current = inflated;
+    }
+  }
+
+  return current;
+}
+
+async function inflatePdfStream(bytes: Uint8Array): Promise<Uint8Array | null> {
+  const trimmed = trimPdfStreamBytes(bytes);
+  for (const format of ["deflate", "deflate-raw"] as const) {
+    try {
+      const stream = new Blob([trimmed]).stream().pipeThrough(
+        new DecompressionStream(format),
+      );
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      // Try the next deflate wrapper.
+    }
+  }
+  return null;
+}
+
+function trimPdfStreamBytes(bytes: Uint8Array): Uint8Array {
+  let start = 0;
+  let end = bytes.length;
+  while (start < end && (bytes[start] === 10 || bytes[start] === 13 || bytes[start] === 32)) start++;
+  while (end > start && (bytes[end - 1] === 10 || bytes[end - 1] === 13 || bytes[end - 1] === 32)) end--;
+  return bytes.slice(start, end);
+}
+
+function decodeAscii85(bytes: Uint8Array): Uint8Array {
+  let text = new TextDecoder("latin1", { fatal: false }).decode(bytes).trim();
+  if (text.startsWith("<~")) text = text.slice(2);
+  const terminator = text.indexOf("~>");
+  if (terminator >= 0) text = text.slice(0, terminator);
+  text = text.replace(/\s+/g, "");
+
+  const out: number[] = [];
+  let group: number[] = [];
+
+  for (const char of text) {
+    if (char === "z" && group.length === 0) {
+      out.push(0, 0, 0, 0);
+      continue;
+    }
+
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 117) continue;
+    group.push(code - 33);
+
+    if (group.length === 5) {
+      let value = 0;
+      for (const digit of group) value = value * 85 + digit;
+      out.push(
+        (value >>> 24) & 0xff,
+        (value >>> 16) & 0xff,
+        (value >>> 8) & 0xff,
+        value & 0xff,
+      );
+      group = [];
+    }
+  }
+
+  if (group.length > 0) {
+    const originalLength = group.length;
+    while (group.length < 5) group.push(84);
+    let value = 0;
+    for (const digit of group) value = value * 85 + digit;
+    const decoded = [
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff,
+    ];
+    out.push(...decoded.slice(0, originalLength - 1));
+  }
+
+  return new Uint8Array(out);
+}
+
+function decodeAsciiHex(bytes: Uint8Array): Uint8Array {
+  const text = new TextDecoder("latin1", { fatal: false })
+    .decode(bytes)
+    .replace(/>.*/, "")
+    .replace(/[^0-9A-Fa-f]/g, "");
+  const out: number[] = [];
+  for (let i = 0; i < text.length; i += 2) {
+    out.push(parseInt(text.slice(i, i + 2).padEnd(2, "0"), 16));
+  }
+  return new Uint8Array(out.filter((byte) => !Number.isNaN(byte)));
+}
+
+function extractPdfOperatorText(pdfText: string): string {
+  const chunks: string[] = [];
+  const sections = [...pdfText.matchAll(/BT([\s\S]*?)ET/g)].map((match) => match[1]);
+  const sources = sections.length > 0 ? sections : [pdfText];
+
+  for (const source of sources) {
+    for (const match of source.matchAll(/\((?:\\.|[^\\)])*\)\s*Tj/g)) {
+      chunks.push(decodePdfLiteral(match[0].replace(/\s*Tj\s*$/, "")));
+    }
+    for (const match of source.matchAll(/\[((?:.|\n|\r)*?)\]\s*TJ/g)) {
+      for (const stringMatch of match[1].matchAll(/\((?:\\.|[^\\)])*\)/g)) {
+        chunks.push(decodePdfLiteral(stringMatch[0]));
+      }
+    }
+    for (const match of source.matchAll(/<([0-9A-Fa-f\s]+)>\s*Tj/g)) {
+      chunks.push(decodePdfHex(match[1]));
+    }
+  }
+
+  return chunks.join("\n");
+}
+
+function decodePdfLiteral(value: string): string {
+  let text = value.replace(/^\(/, "").replace(/\)$/, "");
+  text = text
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\b/g, "\b")
+    .replace(/\\f/g, "\f")
+    .replace(/\\([()\\])/g, "$1")
+    .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+  return text;
+}
+
+function decodePdfHex(hex: string): string {
+  const clean = hex.replace(/\s+/g, "");
+  const bytes: number[] = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    const byte = parseInt(clean.slice(i, i + 2).padEnd(2, "0"), 16);
+    if (!Number.isNaN(byte)) bytes.push(byte);
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(bytes));
+}
+
+function cleanExtractedPdfText(text: string): string {
+  return text
+    .replace(/\u0000/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 // OpenXML (.docx / .xlsx) parser. This is intentionally small and local:
