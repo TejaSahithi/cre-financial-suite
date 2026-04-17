@@ -32,7 +32,7 @@ import type {
   DoclingTable,
   DoclingField,
 } from "./types.ts";
-import { extractDocumentWithVision } from "../ocr/paddle-ocr.ts";
+import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
 
 const MIN_DIGITAL_BLOCKS = 5;       // below this, a PDF is treated as scanned
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned

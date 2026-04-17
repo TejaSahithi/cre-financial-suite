@@ -1,7 +1,7 @@
 /**
  * scratch/verify_extraction_e2e.ts
  * 
- * Direct test for the extraction pipeline using local PaddleOCR and Vertex AI.
+ * Direct test for the extraction pipeline using Gemini Vision OCR and Vertex AI.
  * Bypasses the UI to verify the backend logic.
  */
 
@@ -19,7 +19,7 @@ async function runTest() {
     console.log(`[test] Reading ${TEST_FILE}...`);
     const fileBytes = await Deno.readFile(TEST_FILE);
     
-    // 2. Parse (should trigger PaddleOCR since it's an image)
+    // 2. Parse (should trigger Gemini Vision OCR since it's an image)
     console.log("[test] Calling parseDocument...");
     const parsed = await parseDocument(fileBytes, TEST_FILE, "image/png");
     

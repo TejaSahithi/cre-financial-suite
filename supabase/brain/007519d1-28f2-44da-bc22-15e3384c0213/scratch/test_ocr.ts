@@ -4,7 +4,7 @@
  */
 
 // Use relative path from the scratch directory to the shared functions
-import { runPaddleOCR } from "../../../../../supabase/functions/_shared/ocr/paddle-ocr.ts";
+import { runVisionOCR } from "../../../../../supabase/functions/_shared/ocr/vision-ocr.ts";
 
 async function test() {
   console.log("Starting Gemini Vision OCR test...");
@@ -14,7 +14,7 @@ async function test() {
 
   try {
     const fileBytes = await Deno.readFile(testFile);
-    const result = await runPaddleOCR(fileBytes, "image/png");
+    const result = await runVisionOCR(fileBytes, "image/png");
     console.log("OCR Result Length:", result.length, "chars");
     console.log("OCR Text Snippet:", result.substring(0, 200));
   } catch (err) {
