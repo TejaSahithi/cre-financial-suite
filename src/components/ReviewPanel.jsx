@@ -442,14 +442,37 @@ export default function ReviewPanel({
           )}
 
           {rejectedCount > 0 && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => addCustomField(0)}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add custom field
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowRejected((value) => !value)}
+              >
+                <EyeOff className="mr-2 h-4 w-4" />
+                {showRejected ? "Hide rejected fields" : "Show rejected fields"}
+              </Button>
+            </div>
+          )}
+
+          {rejectedCount === 0 && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setShowRejected((value) => !value)}
+              onClick={() => addCustomField(0)}
             >
-              <EyeOff className="mr-2 h-4 w-4" />
-              {showRejected ? "Hide rejected fields" : "Show rejected fields"}
+              <Plus className="mr-2 h-4 w-4" />
+              Add custom field
             </Button>
           )}
         </CardContent>
@@ -462,18 +485,9 @@ export default function ReviewPanel({
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">Record {recordIndex + 1}</h3>
                 <p className="text-xs text-slate-500">
-                  Accept, reject, edit, or add fields before approval.
+                  Standard UI fields are mapped first. Extra interpreted document fields appear as custom fields.
                 </p>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => addCustomField(recordIndex)}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add custom field
-              </Button>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
