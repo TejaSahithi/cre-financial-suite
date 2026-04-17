@@ -14,7 +14,7 @@
  *   const result = await callVertexAIJSON({ systemPrompt, userPrompt });
  */
 
-const DEFAULT_MODEL = "gemini-1.5-flash";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 // ---------------------------------------------------------------------------
 // Service account → OAuth2 access token
@@ -79,9 +79,24 @@ async function signJWT(payload: Record<string, unknown>, privateKeyPem: string):
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
 
-function buildServiceAccountFromFallbackVars(): ServiceAccountKey | null {
+function cleanSecretValue(value: string | undefined | null): string | null {
+  if (!value) return null;
+  let cleaned = String(value).trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  return cleaned.replace(/\\n/g, "\n");
+}
+
+function buildServiceAccountFromFallbackVars(privateKeyOverride?: string | null): ServiceAccountKey | null {
   const clientEmail = Deno.env.get("GOOGLE_CLIENT_EMAIL");
-  const privateKey = Deno.env.get("GOOGLE_PRIVATE_KEY")?.replace(/\\n/g, "\n");
+  const privateKey =
+    cleanSecretValue(privateKeyOverride)?.includes("PRIVATE KEY")
+      ? cleanSecretValue(privateKeyOverride)
+      : cleanSecretValue(Deno.env.get("GOOGLE_PRIVATE_KEY"));
   const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
 
   if (!clientEmail || !privateKey || !projectId) return null;
@@ -100,9 +115,11 @@ function buildServiceAccountFromFallbackVars(): ServiceAccountKey | null {
 }
 
 function parseServiceAccountKey(raw: string): ServiceAccountKey | null {
+  const cleanedRaw = cleanSecretValue(raw) ?? raw;
   const candidates = [
     raw,
-    raw.replace(/\\n/g, "\n"),
+    raw.trim(),
+    cleanedRaw,
   ];
 
   try {
@@ -111,9 +128,19 @@ function parseServiceAccountKey(raw: string): ServiceAccountKey | null {
     // Not base64; ignore.
   }
 
+  try {
+    candidates.push(decodeURIComponent(raw));
+    candidates.push(decodeURIComponent(cleanedRaw));
+  } catch {
+    // Not URL-encoded; ignore.
+  }
+
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate);
+      let parsed = JSON.parse(candidate);
+      if (typeof parsed === "string") {
+        parsed = JSON.parse(parsed);
+      }
       if (parsed?.client_email && parsed?.private_key) {
         return {
           ...parsed,
@@ -147,7 +174,7 @@ async function getAccessToken(): Promise<string> {
     if (!fallbackKey) throw new Error("Vertex AI service account is not configured");
     saKey = fallbackKey;
   } else {
-    const parsedKey = parseServiceAccountKey(saKeyRaw) ?? buildServiceAccountFromFallbackVars();
+    const parsedKey = parseServiceAccountKey(saKeyRaw) ?? buildServiceAccountFromFallbackVars(saKeyRaw);
     if (!parsedKey) throw new Error("Vertex AI service account configuration is invalid");
     saKey = parsedKey;
   }
@@ -233,12 +260,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
   const primaryModel = opts.model ?? DEFAULT_MODEL;
 
   // Ordered list of (location, model) to try if primary fails with 404
-  const attempts = [
-    { loc: primaryLocation, mod: primaryModel },
-    { loc: primaryLocation, mod: "gemini-1.5-flash-001" },
-    { loc: "us-east4", mod: "gemini-1.5-flash" },
-    { loc: "us-central1", mod: "gemini-1.5-pro" },
-  ];
+  const attempts = buildVertexAttempts(primaryLocation, primaryModel);
 
   const accessToken = await getAccessToken();
   let lastError: Error | null = null;
@@ -323,16 +345,14 @@ export async function callVertexAIJSON<T = unknown>(opts: VertexAIOptions): Prom
  */
 export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<VertexAIResponse> {
   const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
-  const location = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
+  const primaryLocation = Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
 
   if (!projectId) {
     throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
   }
 
-  const model = opts.model ?? DEFAULT_MODEL;
+  const primaryModel = opts.model ?? DEFAULT_MODEL;
   const accessToken = await getAccessToken();
-
-  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
 
   // Encode file bytes as base64 safely
   let base64Data: string;
@@ -381,26 +401,72 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
     };
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let lastError: Error | null = null;
+  for (const { loc, mod } of buildVertexAttempts(primaryLocation, primaryModel)) {
+    const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${loc}/publishers/google/models/${mod}:generateContent`;
+    try {
+      console.log(`[vertex-ai] Trying file model ${mod} in ${loc}...`);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "unknown error");
-    throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+        const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+        console.log(`[vertex-ai] File success with ${mod} in ${loc}`);
+        return { content, model: mod, inputTokens, outputTokens };
+      }
+
+      const errText = await response.text().catch(() => "unknown error");
+      lastError = new Error(`Vertex AI API error ${response.status}: ${errText}`);
+      if (response.status === 404 || response.status === 400) {
+        console.warn(`[vertex-ai] File model failed (${response.status}) ${mod} in ${loc}: ${errText.slice(0, 220)}`);
+        continue;
+      }
+      throw lastError;
+    } catch (err) {
+      lastError = err;
+      if (String(err.message || "").includes("404") || String(err.message || "").includes("400")) {
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const data = await response.json();
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
-  const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+  throw lastError || new Error("All Vertex AI file model attempts failed");
+}
 
-  return { content, model, inputTokens, outputTokens };
+function buildVertexAttempts(primaryLocation: string, primaryModel: string) {
+  const locations = uniqueStrings([primaryLocation, "global", "us-central1", "us-east4"]);
+  const models = uniqueStrings([
+    primaryModel,
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-002",
+  ]);
+
+  const attempts: Array<{ loc: string; mod: string }> = [];
+  for (const loc of locations) {
+    for (const mod of models) {
+      attempts.push({ loc, mod });
+    }
+  }
+  return attempts;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean).map((value) => String(value).trim()).filter(Boolean))];
 }
 
 /**

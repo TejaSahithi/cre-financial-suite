@@ -98,6 +98,12 @@ const LEASE_STANDARD_FIELDS = [
   { key: "landlord_name", label: "Landlord", required: true },
   { key: "property_name", label: "Property Name", required: false },
   { key: "property_address", label: "Property Address / Premises", required: true },
+  { key: "assignor_name", label: "Assignor", required: false },
+  { key: "assignee_name", label: "Assignee", required: false },
+  { key: "assignment_effective_date", label: "Assignment Effective Date", required: false },
+  { key: "landlord_consent", label: "Landlord Consent", required: false },
+  { key: "assignee_notice_address", label: "Assignee Notice Address", required: false },
+  { key: "assumption_scope", label: "Assumption Scope", required: false },
   { key: "unit_number", label: "Unit / Suite", required: false },
   { key: "start_date", label: "Start Date", required: true },
   { key: "end_date", label: "End Date", required: true },
@@ -124,6 +130,23 @@ const CANONICAL_FIELD_ALIASES = {
   tenant: "tenant_name",
   tenant_name: "tenant_name",
   lessee: "tenant_name",
+  assignor: "assignor_name",
+  assignor_name: "assignor_name",
+  assignor_tenant: "assignor_name",
+  assignor_assignor: "assignor_name",
+  assignee: "assignee_name",
+  assignee_name: "assignee_name",
+  assignee_tenant: "assignee_name",
+  assignee_assignee: "assignee_name",
+  assignment_date: "assignment_effective_date",
+  effective_date: "assignment_effective_date",
+  assignment_effective_date: "assignment_effective_date",
+  landlord_consent: "landlord_consent",
+  consent: "landlord_consent",
+  assignee_notice_address: "assignee_notice_address",
+  notice_address: "assignee_notice_address",
+  assumption_scope: "assumption_scope",
+  assumption: "assumption_scope",
   premises: "property_address",
   property_address: "property_address",
   premises_address: "property_address",
@@ -154,9 +177,36 @@ function canonicalFieldKey(key) {
   return CANONICAL_FIELD_ALIASES[normalized] || normalized;
 }
 
+function compactKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function isAddressLike(value) {
   return /\d{1,6}\s+[^,\n]{2,80}\s+(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|suite|city|plaza|boulevard|blvd\.?)/i
     .test(String(value || ""));
+}
+
+function isCamClauseCustom(field) {
+  const text = `${field.field_key || ""} ${field.value || ""}`;
+  return /(^|\b)(pro[\s_-]?rata|common area maintenance|\bcam\b)(\b|$)/i.test(text);
+}
+
+function isBrokenContinuationCustom(field, standardByKey) {
+  const key = compactKey(field.field_key);
+  const value = String(field.value || "");
+  if (!key || key.length < 4) return true;
+  if (/^[a-z]/.test(value) && key.length <= 10) return true;
+
+  const propertyName = compactKey(standardByKey.get("property_name")?.value);
+  if (propertyName && key.startsWith(propertyName) && /lease term|start date|leased area|suite|unit/i.test(value)) {
+    return true;
+  }
+
+  return false;
 }
 
 function normalizeLeaseReviewFields(record, index, standardFields, customFields) {
@@ -195,6 +245,23 @@ function normalizeLeaseReviewFields(record, index, standardFields, customFields)
   const remainingCustomFields = [];
   for (const field of customFields) {
     const canonicalKey = canonicalFieldKey(field.field_key);
+    if (isCamClauseCustom(field)) {
+      const notes = standardByKey.get("notes");
+      if (notes && isBlank(notes.value) && !isBlank(field.value)) {
+        standardByKey.set("notes", {
+          ...notes,
+          value: String(field.value),
+          original_value: field.original_value ?? field.value,
+          confidence: field.confidence,
+          source: field.source,
+          status: field.status === "rejected" ? "pending" : field.status,
+          accepted: false,
+          rejected: false,
+        });
+      }
+      continue;
+    }
+    if (isBrokenContinuationCustom(field, standardByKey)) continue;
     if (standardByKey.has(canonicalKey)) {
       const existing = standardByKey.get(canonicalKey);
       if (isBlank(existing.value) && !isBlank(field.value)) {

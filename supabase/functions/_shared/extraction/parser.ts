@@ -32,7 +32,7 @@ import type {
   DoclingTable,
   DoclingField,
 } from "./types.ts";
-import { runPaddleOCR } from "../ocr/paddle-ocr.ts";
+import { extractVisibleKeyValues, runPaddleOCR } from "../ocr/paddle-ocr.ts";
 
 const MIN_DIGITAL_BLOCKS = 5;       // below this, a PDF is treated as scanned
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
@@ -206,7 +206,9 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
   }
   try {
     const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
-    return tag(ocrTextToDocling(ocrText), "gemini_vision");
+    const output = ocrTextToDocling(ocrText);
+    output.fields = await safeExtractVisibleFields(ctx);
+    return tag(output, "gemini_vision");
   } catch (err) {
     console.warn(`[parser] Vision OCR failed: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
@@ -234,6 +236,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
   try {
     const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
     visionOutput = ocrTextToDocling(ocrText);
+    visionOutput.fields = await safeExtractVisibleFields(ctx);
   } catch (err) {
     console.warn(`[parser] Vision-first OCR failed, falling back to Docling: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
@@ -266,6 +269,21 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
   }
 
   return tag(visionOutput, "gemini_vision");
+}
+
+async function safeExtractVisibleFields(ctx: ParseContext): Promise<DoclingField[]> {
+  try {
+    const fields = await extractVisibleKeyValues(ctx.fileBytes, ctx.mimeType);
+    return fields.map((field) => ({
+      key: field.key,
+      value: field.value,
+      confidence: field.confidence,
+      page: field.page,
+    }));
+  } catch (err) {
+    console.warn(`[parser] Vision key-value extraction failed: ${err.message}`);
+    return [];
+  }
 }
 
 /**
