@@ -45,6 +45,15 @@ function statusClass(status) {
   return "bg-slate-100 text-slate-600";
 }
 
+function sanitizeReviewWarning(warning) {
+  const text = String(warning || "");
+  if (/no tables found/i.test(text)) return null;
+  if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {
+    return "AI fallback extraction is unavailable. Deterministic document parsing still ran.";
+  }
+  return text;
+}
+
 function normalizeLegacyValues(record) {
   if (record?.values && typeof record.values === "object") return record.values;
   if (record?.fields && typeof record.fields === "object") {
@@ -84,15 +93,166 @@ function normalizeField(field, recordIndex, kind) {
   };
 }
 
-function normalizeRecord(record, index) {
+const LEASE_STANDARD_FIELDS = [
+  { key: "tenant_name", label: "Tenant Name", required: true },
+  { key: "landlord_name", label: "Landlord", required: true },
+  { key: "property_name", label: "Property Name", required: false },
+  { key: "property_address", label: "Property Address / Premises", required: true },
+  { key: "unit_number", label: "Unit / Suite", required: false },
+  { key: "start_date", label: "Start Date", required: true },
+  { key: "end_date", label: "End Date", required: true },
+  { key: "monthly_rent", label: "Monthly Rent", required: true },
+  { key: "annual_rent", label: "Annual Rent", required: false },
+  { key: "lease_term_months", label: "Lease Term Months", required: false },
+  { key: "rent_per_sf", label: "Rent/SF", required: false },
+  { key: "square_footage", label: "Square Footage", required: false },
+  { key: "lease_type", label: "Lease Type", required: false },
+  { key: "security_deposit", label: "Security Deposit", required: false },
+  { key: "cam_amount", label: "CAM Amount", required: false },
+  { key: "escalation_rate", label: "Escalation Rate", required: false },
+  { key: "renewal_options", label: "Renewal Options", required: false },
+  { key: "ti_allowance", label: "TI Allowance", required: false },
+  { key: "free_rent_months", label: "Free Rent Months", required: false },
+  { key: "status", label: "Status", required: false },
+  { key: "notes", label: "Notes", required: false },
+];
+
+const CANONICAL_FIELD_ALIASES = {
+  landlord: "landlord_name",
+  landlord_name: "landlord_name",
+  lessor: "landlord_name",
+  tenant: "tenant_name",
+  tenant_name: "tenant_name",
+  lessee: "tenant_name",
+  premises: "property_address",
+  property_address: "property_address",
+  premises_address: "property_address",
+  address: "property_address",
+  annual_rent: "annual_rent",
+  yearly_rent: "annual_rent",
+  lease_term_months: "lease_term_months",
+  term_months: "lease_term_months",
+  lease_term: "lease_term_months",
+  monthly_rent: "monthly_rent",
+  base_rent: "monthly_rent",
+  start_date: "start_date",
+  commencement_date: "start_date",
+  end_date: "end_date",
+  expiration_date: "end_date",
+  suite: "unit_number",
+  unit: "unit_number",
+  lease_type: "lease_type",
+};
+
+function canonicalFieldKey(key) {
+  const normalized = String(key || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[#%]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return CANONICAL_FIELD_ALIASES[normalized] || normalized;
+}
+
+function isAddressLike(value) {
+  return /\d{1,6}\s+[^,\n]{2,80}\s+(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|suite|city|plaza|boulevard|blvd\.?)/i
+    .test(String(value || ""));
+}
+
+function normalizeLeaseReviewFields(record, index, standardFields, customFields) {
+  const standardByKey = new Map();
+  for (const field of standardFields) {
+    standardByKey.set(canonicalFieldKey(field.field_key), {
+      ...field,
+      field_key: canonicalFieldKey(field.field_key),
+      is_standard: true,
+    });
+  }
+
+  for (const template of LEASE_STANDARD_FIELDS) {
+    if (!standardByKey.has(template.key)) {
+      standardByKey.set(
+        template.key,
+        normalizeField(
+          {
+            field_key: template.key,
+            label: template.label,
+            value: "",
+            original_value: "",
+            required: template.required,
+            is_standard: true,
+            confidence: 0,
+            source: "system",
+            status: "missing",
+          },
+          index,
+          "standard",
+        ),
+      );
+    }
+  }
+
+  const remainingCustomFields = [];
+  for (const field of customFields) {
+    const canonicalKey = canonicalFieldKey(field.field_key);
+    if (standardByKey.has(canonicalKey)) {
+      const existing = standardByKey.get(canonicalKey);
+      if (isBlank(existing.value) && !isBlank(field.value)) {
+        standardByKey.set(canonicalKey, {
+          ...existing,
+          value: field.value,
+          original_value: field.original_value ?? field.value,
+          confidence: field.confidence,
+          source: field.source,
+          status: field.status === "rejected" ? "pending" : field.status,
+          accepted: false,
+          rejected: false,
+        });
+      }
+    } else {
+      remainingCustomFields.push(field);
+    }
+  }
+
+  const propertyName = standardByKey.get("property_name");
+  const propertyAddress = standardByKey.get("property_address");
+  if (propertyName && propertyAddress && isBlank(propertyAddress.value) && isAddressLike(propertyName.value)) {
+    standardByKey.set("property_address", {
+      ...propertyAddress,
+      value: propertyName.value,
+      original_value: propertyName.original_value ?? propertyName.value,
+      confidence: propertyName.confidence,
+      source: propertyName.source,
+      status: propertyName.status,
+    });
+    standardByKey.set("property_name", {
+      ...propertyName,
+      value: "",
+      original_value: "",
+      confidence: 0,
+      source: "system",
+      status: "missing",
+      accepted: false,
+      rejected: false,
+    });
+  }
+
+  return {
+    ...record,
+    standard_fields: LEASE_STANDARD_FIELDS.map((field) => standardByKey.get(field.key)),
+    custom_fields: remainingCustomFields,
+  };
+}
+
+function normalizeRecord(record, index, moduleType) {
   if (Array.isArray(record?.standard_fields) || Array.isArray(record?.custom_fields)) {
-    const standardFields = (record.standard_fields || []).map((field) =>
+    let standardFields = (record.standard_fields || []).map((field) =>
       normalizeField(field, index, "standard"),
     );
-    const customFields = (record.custom_fields || []).map((field) =>
+    let customFields = (record.custom_fields || []).map((field) =>
       normalizeField(field, index, "custom"),
     );
-    return {
+    let normalizedRecord = {
       ...record,
       record_index: record.record_index ?? record.row_index ?? index,
       row_index: record.row_index ?? record.record_index ?? index,
@@ -104,6 +264,15 @@ function normalizeRecord(record, index) {
         .map((field) => field.field_key),
       warnings: record.warnings || [],
     };
+    if (moduleType === "leases" || moduleType === "lease") {
+      normalizedRecord = normalizeLeaseReviewFields(normalizedRecord, index, standardFields, customFields);
+      standardFields = normalizedRecord.standard_fields || [];
+      customFields = normalizedRecord.custom_fields || [];
+      normalizedRecord.missing_required = standardFields
+        .filter((field) => field.required && field.status !== "rejected" && isBlank(field.value))
+        .map((field) => field.field_key);
+    }
+    return normalizedRecord;
   }
 
   const values = normalizeLegacyValues(record);
@@ -153,7 +322,9 @@ export default function ReviewPanel({
   saving = false,
 }) {
   const initialRecords = useMemo(
-    () => (payload?.records || payload?.rows || []).map(normalizeRecord),
+    () => (payload?.records || payload?.rows || []).map((record, index) =>
+      normalizeRecord(record, index, payload?.module_type),
+    ),
     [payload],
   );
   const [records, setRecords] = useState(initialRecords);
@@ -174,7 +345,9 @@ export default function ReviewPanel({
     );
   }
 
-  const warnings = payload.global_warnings || payload.warnings || [];
+  const warnings = [...new Set((payload.global_warnings || payload.warnings || [])
+    .map(sanitizeReviewWarning)
+    .filter(Boolean))];
   const validationErrors = payload.validation_errors || payload.validationErrors || [];
   const allFields = records.flatMap((record) => [
     ...(record.standard_fields || []),
@@ -204,13 +377,14 @@ export default function ReviewPanel({
   };
 
   const editValue = (recordIndex, kind, field, value) => {
+    const changed = value !== field.original_value;
     updateField(recordIndex, kind, field.id, {
       value,
-      status: value === field.original_value ? "pending" : "edited",
-      accepted: value !== field.original_value,
+      status: changed ? "edited" : "pending",
+      accepted: kind === "custom" ? false : changed,
       rejected: false,
-      source: value === field.original_value ? field.source : "user",
-      user_edit: value === field.original_value
+      source: changed ? "user" : field.source,
+      user_edit: !changed
         ? null
         : {
             previous: field.original_value,
@@ -225,7 +399,7 @@ export default function ReviewPanel({
       field_key: fieldKey,
       label: humanizeFieldName(fieldKey),
       status: "edited",
-      accepted: true,
+      accepted: false,
       source: "user",
     });
   };
@@ -277,8 +451,8 @@ export default function ReviewPanel({
               confidence: 1,
               source: "user",
               evidence: null,
-              status: "edited",
-              accepted: true,
+              status: "pending",
+              accepted: false,
               rejected: false,
               user_edit: {
                 previous: null,
@@ -314,6 +488,7 @@ export default function ReviewPanel({
     if (field.status === "rejected" && !showRejected) return null;
     const score = confidencePercent(field.confidence);
     const isCustom = kind === "custom";
+    const showCustomActions = isCustom && field.status !== "accepted" && field.status !== "rejected";
 
     return (
       <div
@@ -361,7 +536,7 @@ export default function ReviewPanel({
             >
               <RotateCcw className="h-4 w-4" />
             </Button>
-          ) : isCustom ? (
+          ) : showCustomActions ? (
             <>
               <Button
                 type="button"
