@@ -42,6 +42,7 @@ export default function LeaseUpload() {
   const [rejecting, setRejecting] = useState(false);
   const [retryingExtraction, setRetryingExtraction] = useState(false);
   const retriedUploadedFiles = useRef(new Set());
+  const retriedManualFallbackFiles = useRef(new Set());
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -303,6 +304,34 @@ export default function LeaseUpload() {
 
   const statusLabel = fileRecord?.status ? fileRecord.status.replace(/_/g, " ") : "waiting";
   const reviewPayload = fileRecord?.ui_review_payload || null;
+  const isManualReviewFallback =
+    reviewPayload?.pipeline_method === "manual_review_fallback" ||
+    reviewPayload?.extraction_method === "manual_review_fallback" ||
+    reviewPayload?.metadata?.manualReviewFallback === true;
+  const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
+
+  useEffect(() => {
+    if (
+      !fileId ||
+      fileRecord?.status !== "review_required" ||
+      !isManualReviewFallback ||
+      retriedManualFallbackFiles.current.has(fileId)
+    ) {
+      return undefined;
+    }
+
+    const staleStatusHelperBug = fallbackWarnings.some((warning) =>
+      String(warning).includes(".catch is not a function"),
+    );
+    if (!staleStatusHelperBug) return undefined;
+
+    retriedManualFallbackFiles.current.add(fileId);
+    const retryTimer = window.setTimeout(() => {
+      retryExtraction();
+    }, 750);
+
+    return () => window.clearTimeout(retryTimer);
+  }, [fileId, fileRecord?.status, isManualReviewFallback, fallbackWarnings]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -396,6 +425,26 @@ export default function LeaseUpload() {
             >
               {retryingExtraction && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Retry extraction
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {fileRecord?.status === "review_required" && isManualReviewFallback && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
+            <span>
+              Automatic extraction did not return mapped values for this file. Retry after the parser fix, or continue manually below.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={retryExtraction}
+              disabled={retryingExtraction}
+              className="border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+            >
+              {retryingExtraction && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Retry automatic extraction
             </Button>
           </CardContent>
         </Card>

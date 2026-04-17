@@ -175,7 +175,7 @@ export async function setFailed(
   lastProgress = 0,
 ): Promise<void> {
   const now = new Date().toISOString();
-  await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from("uploaded_files")
     .update({
       status: "failed",
@@ -185,8 +185,9 @@ export async function setFailed(
       processing_completed_at: now,
       updated_at: now,
     })
-    .eq("id", fileId)
-    .catch((e: any) => {
-      console.error(`[pipeline-status] setFailed update error for ${fileId}:`, e.message);
-    });
+    .eq("id", fileId);
+
+  if (error) {
+    console.error(`[pipeline-status] setFailed update error for ${fileId}:`, error.message);
+  }
 }
