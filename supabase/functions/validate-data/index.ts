@@ -246,6 +246,19 @@ function validateRow(
   };
 }
 
+function coerceInvalidApprovedRow(
+  row: Record<string, unknown>,
+  errors: ValidationError[],
+): Record<string, unknown> {
+  const approvedRow = { ...row };
+  for (const error of errors) {
+    if (error.type === "type" || error.type === "format") {
+      approvedRow[error.field] = null;
+    }
+  }
+  return approvedRow;
+}
+
 // ---------------------------------------------------------------------------
 // Referential integrity check for property_id
 // ---------------------------------------------------------------------------
@@ -348,6 +361,9 @@ Deno.serve(async (req: Request) => {
     if (!REQUIRED_FIELDS[moduleType]) {
       throw new Error(`Unsupported module_type: ${moduleType}`);
     }
+    const reviewerApproved =
+      fileRecord.review_required === true &&
+      fileRecord.review_status === "approved";
 
     // Update status to 'validating'
     await setStatus(supabaseAdmin, file_id, "validating", {
@@ -382,6 +398,13 @@ Deno.serve(async (req: Request) => {
           validRows.push(result.normalizedRow);
           validRowOriginalIndices.push(i);
           rowErrorMap.set(i, false);
+        } else if (reviewerApproved) {
+          // Human-approved review output is allowed to continue even if
+          // standard fields are still missing. Keep the row, but coerce
+          // invalid typed values to null so DB inserts do not explode.
+          validRows.push(coerceInvalidApprovedRow(result.normalizedRow, result.errors));
+          validRowOriginalIndices.push(i);
+          rowErrorMap.set(i, true);
         } else {
           rowErrorMap.set(i, true);
         }
@@ -400,6 +423,12 @@ Deno.serve(async (req: Request) => {
       if (refErrors.length > 0) {
         allErrors.push(...refErrors);
 
+        if (reviewerApproved) {
+          console.warn(
+            `[validate-data] Reviewer-approved file ${file_id} has referential warnings; continuing.`,
+            refErrors,
+          );
+        } else {
         // Remove rows that failed referential integrity from validRows
         const failedRefRows = new Set(refErrors.map((e) => e.row));
         const finalValidRows: Record<string, unknown>[] = [];
@@ -411,6 +440,7 @@ Deno.serve(async (req: Request) => {
         }
         validRows.length = 0;
         validRows.push(...finalValidRows);
+        }
       }
 
       // -----------------------------------------------------------------------
