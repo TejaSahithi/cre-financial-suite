@@ -96,9 +96,22 @@ Deno.serve(async (req: Request) => {
       }
 
       const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
+      const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
+        .storage
+        .from("financial-uploads")
+        .createSignedUrl(storagePath, 60 * 60);
+
+      if (signedUrlError) {
+        console.warn(
+          `[parse-pdf-docling] Could not create signed extraction URL for ${file_id}: ` +
+          signedUrlError.message,
+        );
+      }
 
       // 6. Delegate to the canonical parser (Docling → Gemini Vision fallback)
-      const doclingOutput = await parseDocument(fileBytes, fileName, mimeType);
+      const doclingOutput = await parseDocument(fileBytes, fileName, mimeType, {
+        fileUrl: signedUrlData?.signedUrl ?? fileRecord.file_url,
+      });
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
 
       // 7. Persist raw output + metadata + transition to 'pdf_parsed'

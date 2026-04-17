@@ -37,6 +37,9 @@ import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
 const MIN_DIGITAL_BLOCKS = 5;       // below this, a PDF is treated as scanned
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
 const MAX_DOCLING_SUPPLEMENT_BYTES = 8 * 1024 * 1024;
+const MAX_INLINE_VISION_PDF_BYTES = 8 * 1024 * 1024;
+const MAX_NATIVE_PDF_TEXT_BYTES = 4 * 1024 * 1024;
+const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 15 * 1024 * 1024;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";
 
@@ -44,6 +47,7 @@ interface ParseContext {
   fileBytes: Uint8Array;
   fileName: string;
   mimeType: string;
+  fileUrl?: string;
   hasDocling: boolean;
   hasVision: boolean;
   strategy: Strategy;
@@ -55,6 +59,7 @@ export async function parseDocument(
   fileBytes: Uint8Array,
   fileName: string,
   mimeType: string = "application/pdf",
+  options: { fileUrl?: string } = {},
 ): Promise<DoclingOutput> {
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   const hasVision = !!(
@@ -63,7 +68,7 @@ export async function parseDocument(
   );
   const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
 
-  if (!likelyScannedPdf) {
+  if (!likelyScannedPdf && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
     const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
     if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
       console.log(
@@ -81,11 +86,18 @@ export async function parseDocument(
     return tag(officeOutput, "openxml");
   }
 
-  const strategy = pickStrategy({ mimeType, fileBytes, hasDocling, hasVision });
+  const strategy = pickStrategy({
+    mimeType,
+    fileBytes,
+    fileUrl: options.fileUrl,
+    hasDocling,
+    hasVision,
+  });
   const ctx: ParseContext = {
     fileBytes,
     fileName,
     mimeType,
+    fileUrl: options.fileUrl,
     hasDocling,
     hasVision,
     strategy,
@@ -109,10 +121,11 @@ export async function parseDocument(
 function pickStrategy(args: {
   mimeType: string;
   fileBytes: Uint8Array;
+  fileUrl?: string;
   hasDocling: boolean;
   hasVision: boolean;
 }): Strategy {
-  const { mimeType, fileBytes, hasDocling, hasVision } = args;
+  const { mimeType, fileBytes, fileUrl, hasDocling, hasVision } = args;
 
   // 0. Hard availability constraints
   if (!hasDocling && !hasVision) {
@@ -140,6 +153,23 @@ function pickStrategy(args: {
 
   // 3. PDFs — look at the bytes to decide
   if (mimeType.includes("pdf")) {
+    // For public files below Vertex's HTTP document limit, prefer Gemini
+    // Vision for scanned PDFs without inline base64 memory pressure.
+    if (
+      fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
+      fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES &&
+      fileUrl &&
+      hasVision &&
+      looksLikeScannedPdf(fileBytes)
+    ) {
+      return "vision_first";
+    }
+
+    // Inline Gemini Vision sends the full PDF as base64 inside one JSON
+    // request. For larger files without a URL path, use Docling first.
+    if (fileBytes.length > MAX_INLINE_VISION_PDF_BYTES && hasDocling) {
+      return "docling_only";
+    }
     return looksLikeScannedPdf(fileBytes) ? "vision_first" : "docling_only";
   }
 
@@ -191,7 +221,15 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
 
   // Docling returned empty/sparse output — promote to vision fallback if we
   // actually have Vision configured. Otherwise return what we have.
-  if (ctx.hasVision && canVisionHandle(ctx.mimeType)) {
+  if (
+    ctx.hasVision &&
+    canVisionHandle(ctx.mimeType) &&
+    !(
+      ctx.mimeType.includes("pdf") &&
+      ctx.fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
+      !(ctx.fileUrl && ctx.fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES)
+    )
+  ) {
     console.warn(
       `[parser] Docling returned ${doclingOutput?.text_blocks?.length ?? 0} blocks — ` +
       `promoting to Vision fallback`,
@@ -199,7 +237,18 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
     return await runVisionFirst({ ...ctx, strategy: "vision_first" });
   }
 
-  return tag(doclingOutput ?? emptyOutput(), "docling");
+  const output = doclingOutput ?? emptyOutput();
+  if (
+    ctx.mimeType.includes("pdf") &&
+    ctx.fileBytes.length > MAX_INLINE_VISION_PDF_BYTES &&
+    !(ctx.fileUrl && ctx.fileBytes.length <= MAX_VERTEX_HTTP_DOCUMENT_BYTES)
+  ) {
+    output.warnings = [
+      ...(output.warnings ?? []),
+      "Large PDF was not sent to inline Gemini Vision to avoid Edge Function resource exhaustion.",
+    ];
+  }
+  return tag(output, "docling");
 }
 
 async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
@@ -209,7 +258,7 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
     ]), "none");
   }
   try {
-    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType);
+    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
     const output = ocrTextToDocling(extracted.text);
     output.fields = extracted.fields;
     output.warnings = extracted.warnings;
@@ -239,7 +288,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
 
   let visionOutput: DoclingOutput | null = null;
   try {
-    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType);
+    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
     visionOutput = ocrTextToDocling(extracted.text);
     visionOutput.fields = extracted.fields;
     visionOutput.warnings = extracted.warnings;
@@ -285,7 +334,7 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
   const [doclingRes, visionRes] = await Promise.allSettled([
     canDoclingHandle(ctx.mimeType) ? callDocling(ctx) : Promise.resolve(null),
     canVisionHandle(ctx.mimeType)
-      ? extractDocumentWithVision(ctx.fileBytes, ctx.mimeType).then((extracted) => {
+      ? extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl).then((extracted) => {
         const out = ocrTextToDocling(extracted.text);
         out.fields = extracted.fields;
         out.warnings = extracted.warnings;
