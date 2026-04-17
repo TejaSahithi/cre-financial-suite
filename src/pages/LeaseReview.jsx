@@ -1,7 +1,6 @@
 ﻿import React, { useState, useEffect } from "react";
 import { leaseService } from "@/services/leaseService";
 import { NotificationService, createEntityService } from "@/services/api";
-import { supabase } from "@/services/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -17,9 +16,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, CheckCircle2, AlertTriangle, Send, Pencil, Loader2, FileX, Plus } from "lucide-react";
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 const documentService = createEntityService("Document");
 
@@ -32,6 +32,7 @@ const confidenceColor = (score, isEdited = false) => {
 
 export default function LeaseReview() {
   const location = useLocation();
+  const navigate = useNavigate();
   const urlParams = new URLSearchParams(location.search);
   const leaseId = urlParams.get("id");
   const queryClient = useQueryClient();
@@ -55,6 +56,10 @@ export default function LeaseReview() {
   const [approvalSignedAt, setApprovalSignedAt] = useState("");
   const [approvalComments, setApprovalComments] = useState("");
   const [approvalDocumentUrl, setApprovalDocumentUrl] = useState("");
+  const [signatureRecipientId, setSignatureRecipientId] = useState("");
+  const [signatureMessage, setSignatureMessage] = useState("");
+  const [sendingSignature, setSendingSignature] = useState(false);
+  const [sendingTeamReview, setSendingTeamReview] = useState(false);
 
   const { data: lease, isLoading } = useQuery({
     queryKey: ['lease', leaseId],
@@ -210,6 +215,121 @@ export default function LeaseReview() {
   }
 
   const passCount = validationChecks.filter(v => v.pass).length;
+  const scopedStakeholders = stakeholders.filter((stakeholder) =>
+    !stakeholder.property_id || !lease.property_id || stakeholder.property_id === lease.property_id
+  );
+  const reviewRecipientRoles = new Set(["property_manager", "asset_manager", "leasing_agent"]);
+  const teamReviewRecipients = scopedStakeholders
+    .filter((stakeholder) => reviewRecipientRoles.has(stakeholder.role) && stakeholder.email)
+    .sort((a, b) => {
+      const rank = { property_manager: 0, asset_manager: 1, leasing_agent: 2 };
+      return (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
+    });
+  const primaryPropertyManager =
+    teamReviewRecipients.find((stakeholder) => stakeholder.role === "property_manager") ||
+    scopedStakeholders.find((stakeholder) => stakeholder.role === "property_manager" && stakeholder.email) ||
+    null;
+  const signatureRecipients = scopedStakeholders.filter((stakeholder) => stakeholder.email);
+  const teamRecipientSummary = teamReviewRecipients.length > 0
+    ? teamReviewRecipients.map((stakeholder) => `${stakeholder.name} <${stakeholder.email}>`).join(", ")
+    : "No property manager / asset manager / leasing agent email is configured for this property.";
+
+  const sendTeamReviewRequest = async () => {
+    setSendingTeamReview(true);
+    try {
+      const lowConfidenceFields = allFieldsFlat
+        .filter((field) => field.confidence < 75)
+        .map((field) => `${field.label}: ${field.confidence}%`);
+      const reviewUrl = window.location.origin + createPageUrl("LeaseReview", { id: lease.id });
+      const recipientEmails = teamReviewRecipients.map((stakeholder) => stakeholder.email);
+
+      await NotificationService.create({
+        org_id: lease.org_id,
+        type: "review_request",
+        title: "Lease Review Sent to Team",
+        message: `Lease review for ${lease.tenant_name || "Unknown tenant"} was sent to ${teamRecipientSummary}. ${lowConf} low-confidence field(s) need attention.`,
+        link: createPageUrl("LeaseReview", { id: lease.id }),
+        priority: "high"
+      });
+
+      if (recipientEmails.length > 0) {
+        await invokeEdgeFunction("send-email", {
+          to: recipientEmails,
+          subject: `[Action Required] Lease Review: ${lease.tenant_name || "Lease"}`,
+          html: `<h2>Lease Review Sent to Team</h2>
+            <p>A lease review requires attention before final approval.</p>
+            <p><strong>Tenant:</strong> ${lease.tenant_name || "Unknown"}</p>
+            <p><strong>Recipients:</strong> ${teamRecipientSummary}</p>
+            <p><strong>Low-confidence fields:</strong> ${lowConf}</p>
+            ${lowConfidenceFields.length > 0 ? `<ul>${lowConfidenceFields.map((field) => `<li>${field}</li>`).join("")}</ul>` : ""}
+            <p><a href="${reviewUrl}" style="background:#dc2626;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:12px;">Open Lease Review</a></p>`,
+        });
+      }
+
+      setNotificationSent(true);
+      toast.success(
+        recipientEmails.length > 0
+          ? `Review sent to ${teamReviewRecipients.length} recipient${teamReviewRecipients.length === 1 ? "" : "s"}: ${teamReviewRecipients.map((r) => r.name).join(", ")}`
+          : "In-app team review alert created. Add a property manager email to send mail."
+      );
+    } catch (err) {
+      console.error("[LeaseReview] Flag for review error:", err);
+      toast.error(err?.message || "Failed to send review request");
+    } finally {
+      setSendingTeamReview(false);
+    }
+  };
+
+  const sendSignatureRequest = async () => {
+    const recipient = signatureRecipients.find((stakeholder) => stakeholder.id === signatureRecipientId);
+    if (!recipient) {
+      toast.error("Select a signature recipient.");
+      return;
+    }
+
+    setSendingSignature(true);
+    try {
+      const reviewUrl = window.location.origin + createPageUrl("LeaseReview", { id: lease.id });
+      await NotificationService.create({
+        org_id: lease.org_id,
+        type: "signature_request",
+        title: "Lease Signature Requested",
+        message: `Signature requested from ${recipient.name} <${recipient.email}> for ${lease.tenant_name || "lease"}.`,
+        link: createPageUrl("LeaseReview", { id: lease.id }),
+        priority: "high"
+      });
+
+      await invokeEdgeFunction("send-email", {
+        to: recipient.email,
+        subject: `[Signature Requested] ${lease.tenant_name || "Lease"}`,
+        html: `<h2>Lease Signature Requested</h2>
+          <p>You have been asked to review and sign a lease.</p>
+          <p><strong>Tenant:</strong> ${lease.tenant_name || "Unknown"}</p>
+          <p><strong>Requested by:</strong> CRE Platform</p>
+          ${signatureMessage ? `<p><strong>Message:</strong> ${signatureMessage}</p>` : ""}
+          <p><a href="${reviewUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:12px;">Open Signature Request</a></p>
+          <p style="color:#64748b;font-size:12px;margin-top:16px;">DocuSign integration is not yet connected, so this sends a tracked email/request and records the action in the platform.</p>`,
+      });
+
+      toast.success(`Signature request sent to ${recipient.name} <${recipient.email}>`);
+      setShowSignature(false);
+      setSignatureRecipientId("");
+      setSignatureMessage("");
+    } catch (err) {
+      console.error("[LeaseReview] Signature request error:", err);
+      toast.error(err?.message || "Failed to send signature request");
+    } finally {
+      setSendingSignature(false);
+    }
+  };
+
+  const handleReuploadPdf = () => {
+    const params = new URLSearchParams();
+    if (lease.property_id) params.set("property", lease.property_id);
+    if (lease.building_id) params.set("building", lease.building_id);
+    if (lease.unit_id) params.set("unit", lease.unit_id);
+    navigate(`${createPageUrl("LeaseUpload")}${params.toString() ? `?${params.toString()}` : ""}`);
+  };
 
   const handleApprove = async () => {
     // Block approval if no signature info provided
@@ -337,7 +457,7 @@ export default function LeaseReview() {
           <p className="text-sm text-slate-500">{lease.tenant_name} — {totalSf ? `${Number(totalSf).toLocaleString()} SF` : ''} · {getLeaseFieldLabel("lease_type", lease.lease_type) || 'Unknown type'}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">Re-Upload PDF</Button>
+          <Button variant="outline" onClick={handleReuploadPdf}>Re-Upload PDF</Button>
           <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setShowSignature(true)}><Send className="w-4 h-4 mr-1" />Request Signature</Button>
           <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowApproval(true)}><CheckCircle2 className="w-4 h-4 mr-1" />Approve Lease</Button>
         </div>
@@ -358,45 +478,16 @@ export default function LeaseReview() {
               size="sm" 
               variant="destructive" 
               className="bg-red-600 hover:bg-red-700"
-              onClick={async () => {
-                try {
-                  // 1. In-app notification to the whole org
-                  await NotificationService.create({
-                    org_id: lease.org_id,
-                    type: "review_request",
-                    title: "Manual Review Requested",
-                    message: `Manual review requested for lease extraction: ${lease.tenant_name} — ${lowConf} low-confidence field(s) need attention.`,
-                    link: createPageUrl("LeaseReview", { id: lease.id }),
-                    priority: "high"
-                  });
-
-                  // 2. Email the assigned property manager (stakeholder with role=property_manager)
-                  const pmStakeholder = stakeholders.find(s => s.role === "property_manager");
-                  if (pmStakeholder?.email) {
-                    const reviewUrl = window.location.origin + createPageUrl("LeaseReview", { id: lease.id });
-                    await supabase.functions.invoke("send-email", {
-                      body: {
-                        to: pmStakeholder.email,
-                        subject: `[Action Required] Lease Review Flagged: ${lease.tenant_name}`,
-                        html: `<h2>Lease Review Flagged for Team Review</h2>
-                          <p>A lease extraction for <strong>${lease.tenant_name}</strong> has been flagged and requires your attention.</p>
-                          <p><strong>${lowConf} field(s)</strong> scored below the 70% confidence threshold and must be corrected before the lease can be approved.</p>
-                          <p><a href="${reviewUrl}" style="background:#dc2626;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:12px;">Review Lease Now</a></p>`,
-                      },
-                    });
-                  }
-
-                  toast.success("Review request sent to team" + (pmStakeholder?.email ? " and property manager" : ""));
-                } catch (err) {
-                  console.error("[LeaseReview] Flag for review error:", err);
-                  toast.error("Failed to send review request");
-                }
-              }}
+              onClick={sendTeamReviewRequest}
+              disabled={sendingTeamReview}
             >
-              <AlertTriangle className="w-4 h-4 mr-1.5" />
-              Flag for Team Review
+              {sendingTeamReview ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <AlertTriangle className="w-4 h-4 mr-1.5" />}
+              {notificationSent ? "Review Sent to Team" : "Send to Team Review"}
             </Button>
           </div>
+          <p className="text-xs text-red-700">
+            Team recipients: {teamRecipientSummary}
+          </p>
         </div>
       )}
 
@@ -513,21 +604,37 @@ export default function LeaseReview() {
           <div className="space-y-4 mt-2">
             <div>
               <Label>Send To</Label>
-              <Select>
+              <Select value={signatureRecipientId} onValueChange={setSignatureRecipientId}>
                 <SelectTrigger><SelectValue placeholder="Select stakeholder" /></SelectTrigger>
                 <SelectContent>
-                  {stakeholders.map(s => <SelectItem key={s.id} value={s.id}>{s.name} ({s.role?.replace('_', ' ')})</SelectItem>)}
+                  {signatureRecipients.map(s => <SelectItem key={s.id} value={s.id}>{s.name} ({s.role?.replace('_', ' ')}) · {s.email}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {signatureRecipients.length === 0 && (
+                <p className="mt-1 text-xs text-amber-600">No stakeholders with email are configured for this property.</p>
+              )}
             </div>
+            {primaryPropertyManager && (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-800">
+                Property manager: {primaryPropertyManager.name} &lt;{primaryPropertyManager.email}&gt;
+              </div>
+            )}
             <div>
               <Label>Message (optional)</Label>
-              <Textarea placeholder="Please review and sign the lease for Suite A-302..." rows={3} />
+              <Textarea
+                placeholder="Please review and sign this lease after validating the extracted terms..."
+                rows={3}
+                value={signatureMessage}
+                onChange={(event) => setSignatureMessage(event.target.value)}
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSignature(false)}>Cancel</Button>
-            <Button className="bg-blue-600 hover:bg-blue-700">Send Request</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={sendSignatureRequest} disabled={sendingSignature || signatureRecipients.length === 0}>
+              {sendingSignature && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
+              Send Request
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -258,8 +258,21 @@ export default function LeaseUpload() {
         return;
       }
 
-      toast.success("Lease review approved and storage started.");
+      const insertedLeaseId =
+        data?.store_result?.inserted_ids?.[0] ||
+        data?.store_result?.insertedIds?.[0] ||
+        null;
+
+      if (data?.already_approved) {
+        toast.info("This extraction was already sent to Lease Review.");
+      } else {
+        toast.success("Lease draft sent to Lease Review.");
+      }
       await fetchFileRecord(fileId);
+
+      if (insertedLeaseId) {
+        navigate(createPageUrl("LeaseReview", { id: insertedLeaseId }));
+      }
     } catch (error) {
       toast.error(error?.message || "Review approval failed");
     } finally {
@@ -480,6 +493,8 @@ export default function LeaseUpload() {
           approving={approving}
           saving={savingReview}
           rejecting={rejecting}
+          approveLabel="Send to Lease Review"
+          approveDescription="Creates a reviewed lease draft, then opens Lease Review for confidence checks, team review, and signature approval."
           onApprove={approveReview}
           onSave={saveReview}
           onReject={rejectReview}
