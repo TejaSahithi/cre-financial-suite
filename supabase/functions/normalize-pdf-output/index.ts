@@ -23,6 +23,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { getSchema } from "../_shared/extraction/schemas.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 
@@ -94,6 +95,7 @@ function buildReviewPayload(opts: {
   moduleType: string;
   documentSubtype: string | null;
   extractionMethod: string | null;
+  reviewRequired: boolean;
   result: {
     rows: Record<string, unknown>[];
     method: string;
@@ -102,28 +104,131 @@ function buildReviewPayload(opts: {
     metadata: Record<string, unknown>;
   };
 }) {
-  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, result } = opts;
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, result } = opts;
+  const extractionModuleType = toExtractionModuleType(moduleType);
+  const schema = getSchema(extractionModuleType);
+  const schemaEntries = Object.entries(schema)
+    .filter(([, def]) => !def.derived);
+  const schemaKeys = new Set(schemaEntries.map(([key]) => key));
+  const requiredFields = schemaEntries
+    .filter(([, def]) => def.required)
+    .map(([key]) => key);
+  const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
+  const source = sourceFromMethod(extractionMethod ?? result.method);
+  const rows = result.rows.map((r, index) => {
+    const values = stripInternalKeys(r);
+    const rowConfidence = normalizeConfidence(
+      r.confidence_score ?? result.metadata?.avgConfidence,
+    ) ?? avgConfidence;
+    const standardFields = schemaEntries.map(([fieldKey, def]) => {
+      const value = values[fieldKey] ?? null;
+      return buildReviewField({
+        recordIndex: index,
+        fieldKey,
+        value,
+        confidence: rowConfidence,
+        source,
+        isStandard: true,
+        required: !!def.required,
+        fieldType: def.type ?? "string",
+        description: def.description,
+      });
+    });
+    const customFields = Object.entries(values)
+      .filter(([key]) => !schemaKeys.has(key) && !isInternalReviewKey(key))
+      .map(([fieldKey, value]) =>
+        buildReviewField({
+          recordIndex: index,
+          fieldKey,
+          value,
+          confidence: rowConfidence,
+          source,
+          isStandard: false,
+          required: false,
+          fieldType: inferFieldType(value),
+          description: "Useful extracted content that does not map to a standard field.",
+        })
+      );
+    const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
+
+    return {
+      row_index: index,
+      record_index: index,
+      values,
+      fields: Object.fromEntries(
+        [...standardFields, ...customFields].map((field) => [
+          field.field_key,
+          {
+            value: field.value,
+            confidence: field.confidence,
+            source: field.source,
+            evidence: field.evidence,
+            status: field.status,
+          },
+        ]),
+      ),
+      standard_fields: standardFields,
+      custom_fields: customFields,
+      missing_required: missingRequired,
+      rejected_fields: [],
+      warnings: missingRequired.length > 0
+        ? [`Missing required fields: ${missingRequired.join(", ")}`]
+        : [],
+      confidence: rowConfidence,
+      notes: (r.extraction_notes as string | undefined) ?? null,
+    };
+  });
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     file_id: fileId,
     file_name: fileName,
     module_type: moduleType,
     document_subtype: documentSubtype,
     extraction_method: extractionMethod ?? result.method,
     pipeline_method: result.method,
-    rows: result.rows.map((r, index) => ({
-      row_index: index,
-      // The flattened row values used for storage
-      values: stripInternalKeys(r),
-      // Confidence surfaced so the reviewer can triage low-confidence rows
-      confidence: (r.confidence_score as number | undefined) ?? null,
-      notes: (r.extraction_notes as string | undefined) ?? null,
-    })),
+    avg_confidence: avgConfidence,
+    review_required: reviewRequired,
+    review_status: "pending",
+    records: rows,
+    rows,
+    global_warnings: result.warnings,
     warnings: result.warnings,
     validation_errors: result.validationErrors,
     metadata: result.metadata,
     built_at: new Date().toISOString(),
+  };
+}
+
+function buildReviewField(opts: {
+  recordIndex: number;
+  fieldKey: string;
+  value: unknown;
+  confidence: number | null;
+  source: string;
+  isStandard: boolean;
+  required: boolean;
+  fieldType: string;
+  description?: string;
+}) {
+  const blank = isBlank(opts.value);
+  return {
+    id: `${opts.recordIndex}:${opts.isStandard ? "standard" : "custom"}:${opts.fieldKey}`,
+    field_key: opts.fieldKey,
+    label: humanizeFieldName(opts.fieldKey),
+    value: opts.value ?? null,
+    original_value: opts.value ?? null,
+    field_type: opts.fieldType,
+    description: opts.description ?? null,
+    required: opts.required,
+    is_standard: opts.isStandard,
+    confidence: opts.confidence,
+    source: blank ? "system" : opts.source,
+    evidence: null,
+    status: blank ? "missing" : "pending",
+    accepted: false,
+    rejected: false,
+    user_edit: null,
   };
 }
 
@@ -134,6 +239,47 @@ function stripInternalKeys(row: Record<string, unknown>): Record<string, unknown
     out[k] = v;
   }
   return out;
+}
+
+function isInternalReviewKey(key: string): boolean {
+  return [
+    "confidence_score",
+    "extraction_notes",
+    "source",
+    "warnings",
+    "validation_errors",
+  ].includes(key);
+}
+
+function normalizeConfidence(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  if (value <= 1) return Math.max(0, Math.min(1, value));
+  return Math.max(0, Math.min(1, value / 100));
+}
+
+function sourceFromMethod(method: string | null): string {
+  const lower = String(method ?? "").toLowerCase();
+  if (lower.includes("vision") || lower.includes("ocr")) return "vision";
+  if (lower.includes("llm") || lower.includes("gemini") || lower.includes("vertex")) return "llm";
+  if (lower.includes("table")) return "table";
+  return "rule";
+}
+
+function inferFieldType(value: unknown): string {
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
+  return "string";
+}
+
+function humanizeFieldName(fieldName: string): string {
+  return fieldName
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isBlank(value: unknown): boolean {
+  return value == null || (typeof value === "string" && value.trim() === "");
 }
 
 Deno.serve(async (req: Request) => {
@@ -253,6 +399,7 @@ Deno.serve(async (req: Request) => {
         moduleType,
         documentSubtype: fileRecord.document_subtype ?? null,
         extractionMethod: fileRecord.extraction_method ?? null,
+        reviewRequired: !!fileRecord.review_required,
         result,
       });
 

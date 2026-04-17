@@ -158,6 +158,184 @@ async function downloadTextPreview(
   }
 }
 
+const MANUAL_REVIEW_FIELDS: Record<string, string[]> = {
+  leases: [
+    "tenant_name",
+    "property_name",
+    "assignor_name",
+    "assignee_name",
+    "assignment_effective_date",
+    "unit_number",
+    "start_date",
+    "end_date",
+    "monthly_rent",
+    "square_footage",
+    "lease_type",
+    "notes",
+  ],
+  expenses: ["vendor", "invoice_number", "date", "amount", "category", "classification", "description"],
+  invoices: ["vendor", "invoice_number", "date", "amount", "category", "description"],
+  properties: ["name", "address", "city", "state", "zip", "total_sqft", "notes"],
+  revenue: ["tenant_name", "property_name", "type", "amount", "date", "notes"],
+  buildings: ["name", "address", "total_sqft", "floors", "notes"],
+  units: ["unit_number", "square_footage", "monthly_rent", "tenant_name", "notes"],
+  tenants: ["name", "company", "contact_name", "email", "phone", "notes"],
+  gl_accounts: ["code", "name", "type", "category", "notes"],
+};
+
+function buildManualReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string;
+  extractionMethod: string;
+  reason: string;
+}) {
+  const fields = MANUAL_REVIEW_FIELDS[opts.moduleType] ?? ["document_notes"];
+  const standardFields = fields.map((fieldKey) => ({
+    id: `0:standard:${fieldKey}`,
+    field_key: fieldKey,
+    label: humanizeFieldName(fieldKey),
+    value: null,
+    original_value: null,
+    field_type: inferFieldType(fieldKey),
+    required: ["tenant_name", "start_date", "end_date", "monthly_rent", "amount", "date", "name"].includes(fieldKey),
+    is_standard: true,
+    confidence: 0,
+    source: "system",
+    evidence: null,
+    status: "missing",
+    accepted: false,
+    rejected: false,
+    user_edit: null,
+  }));
+  const missingRequired = standardFields
+    .filter((field) => field.required)
+    .map((field) => field.field_key);
+  const record = {
+    record_index: 0,
+    row_index: 0,
+    values: Object.fromEntries(standardFields.map((field) => [field.field_key, null])),
+    fields: Object.fromEntries(
+      standardFields.map((field) => [
+        field.field_key,
+        {
+          value: null,
+          confidence: 0,
+          source: "system",
+          evidence: null,
+          status: "missing",
+        },
+      ]),
+    ),
+    standard_fields: standardFields,
+    custom_fields: [],
+    rejected_fields: [],
+    missing_required: missingRequired,
+    warnings: [opts.reason],
+    confidence: 0,
+    notes: opts.reason,
+  };
+
+  return {
+    schema_version: 2,
+    file_id: opts.fileId,
+    file_name: opts.fileName,
+    module_type: opts.moduleType,
+    document_subtype: opts.documentSubtype,
+    extraction_method: opts.extractionMethod,
+    pipeline_method: "manual_review_fallback",
+    avg_confidence: 0,
+    review_required: true,
+    review_status: "pending",
+    records: [record],
+    rows: [record],
+    global_warnings: [
+      "Automatic extraction did not finish. You can still enter, accept, reject, and add fields manually.",
+      opts.reason,
+    ],
+    warnings: [
+      "Automatic extraction did not finish. You can still enter, accept, reject, and add fields manually.",
+      opts.reason,
+    ],
+    validation_errors: [],
+    metadata: {
+      totalRecords: 1,
+      avgConfidence: 0,
+      manualReviewFallback: true,
+    },
+    built_at: new Date().toISOString(),
+  };
+}
+
+async function parkForManualReview(args: {
+  supabaseAdmin: any;
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string;
+  extractionMethod: string;
+  reason: string;
+}) {
+  const payload = buildManualReviewPayload({
+    fileId: args.fileId,
+    fileName: args.fileName,
+    moduleType: args.moduleType,
+    documentSubtype: args.documentSubtype,
+    extractionMethod: args.extractionMethod,
+    reason: args.reason,
+  });
+
+  const { error } = await args.supabaseAdmin
+    .from("uploaded_files")
+    .update({
+      status: "review_required",
+      progress_percentage: 60,
+      review_required: true,
+      review_status: "pending",
+      extraction_method: args.extractionMethod,
+      ui_review_payload: payload,
+      normalized_output: {
+        method: "manual_review_fallback",
+        rows: payload.rows.map((row: any) => row.values),
+        warnings: payload.global_warnings,
+        validationErrors: [],
+        metadata: payload.metadata,
+      },
+      parsed_data: payload.rows.map((row: any) => row.values),
+      row_count: 1,
+      valid_count: 0,
+      error_count: 0,
+      error_message: null,
+      failed_step: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", args.fileId);
+
+  if (error) {
+    throw new Error(`Manual review fallback failed: ${error.message}`);
+  }
+
+  return payload;
+}
+
+function humanizeFieldName(fieldName: string): string {
+  return String(fieldName)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function inferFieldType(fieldName: string): string {
+  if (fieldName.includes("date")) return "date";
+  if (
+    fieldName.includes("amount") ||
+    fieldName.includes("rent") ||
+    fieldName.includes("sqft") ||
+    fieldName.includes("footage")
+  ) return "number";
+  return "string";
+}
+
 // ---------------------------------------------------------------------------
 // Routing decision
 // ---------------------------------------------------------------------------
@@ -367,6 +545,10 @@ Deno.serve(async (req: Request) => {
       module_source: detection.moduleSource,
       confidence: detection.confidence,
     };
+    const effectiveModuleType =
+      detection.moduleType !== "unknown"
+        ? detection.moduleType
+        : (fileRecord.module_type ?? explicitModuleType ?? "documents");
 
     // PDF and document processing: enhanced two-step with better error handling
     if (routing.route === "parse-pdf-docling") {
@@ -377,28 +559,31 @@ Deno.serve(async (req: Request) => {
       
       if (!doclingResult.ok) {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
-        
-        // Update file status with detailed error
-        await supabaseAdmin
-          .from("uploaded_files")
-          .update({
-            status: "failed",
-            error_message: `Document extraction failed: ${doclingResult.error || 'Unknown error'}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", file_id);
+
+        const reason = `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
+        const payload = await parkForManualReview({
+          supabaseAdmin,
+          fileId: file_id,
+          fileName: fileRecord.file_name ?? "document",
+          moduleType: effectiveModuleType,
+          documentSubtype: subtypeResult.subtype,
+          extractionMethod: "manual_review_fallback",
+          reason,
+        });
         
         return new Response(
           JSON.stringify({ 
-            error: true, 
+            error: false,
             file_id, 
             detection: detectionSummary, 
             routing: { routed_to: routing.route, reason: routing.reason }, 
             result: doclingResult.data,
             error_details: doclingResult.error,
-            stage: "extraction"
+            stage: "extraction",
+            manual_review: true,
+            ui_review_payload: payload,
           }),
-          { status: doclingResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
       
@@ -410,15 +595,31 @@ Deno.serve(async (req: Request) => {
       if (!normalizeResult.ok) {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
 
-        // Only record error_message here; normalize-pdf-output itself sets
-        // status='failed' through the FSM so we don't double-transition.
-        await supabaseAdmin
-          .from("uploaded_files")
-          .update({
-            error_message: `Document normalization failed: ${normalizeResult.error || 'Unknown error'}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", file_id);
+        const reason = `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
+        const payload = await parkForManualReview({
+          supabaseAdmin,
+          fileId: file_id,
+          fileName: fileRecord.file_name ?? "document",
+          moduleType: effectiveModuleType,
+          documentSubtype: subtypeResult.subtype,
+          extractionMethod: "manual_review_fallback",
+          reason,
+        });
+
+        return new Response(
+          JSON.stringify({
+            error: false,
+            file_id,
+            detection: detectionSummary,
+            routing: { routed_to: routing.route, reason: routing.reason },
+            result: normalizeResult.data,
+            error_details: normalizeResult.error,
+            stage: "normalization",
+            manual_review: true,
+            ui_review_payload: payload,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       } else {
         // normalize-pdf-output is the source of truth for the post-parse
         // status: it sets 'review_required' for lease-sensitive subtypes
@@ -485,15 +686,31 @@ Deno.serve(async (req: Request) => {
     if (!downstreamResult.ok) {
       console.error(`[ingest-file] Structured data processing failed:`, downstreamResult.error);
 
-      // parse-file sets status='failed' via FSM on failure. Only attach an
-      // error_message here if it didn't.
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          error_message: `Structured data processing failed: ${downstreamResult.error || 'Unknown error'}`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      const reason = `Structured data processing failed: ${downstreamResult.error || "Unknown error"}`;
+      const payload = await parkForManualReview({
+        supabaseAdmin,
+        fileId: file_id,
+        fileName: fileRecord.file_name ?? "document",
+        moduleType: effectiveModuleType,
+        documentSubtype: subtypeResult.subtype,
+        extractionMethod: "manual_review_fallback",
+        reason,
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: false,
+          file_id,
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          result: downstreamResult.data,
+          error_details: downstreamResult.error,
+          stage: "parsing",
+          manual_review: true,
+          ui_review_payload: payload,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     } else {
       console.log("[ingest-file] Structured parsing succeeded; running validate-data then store-data");
       const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);

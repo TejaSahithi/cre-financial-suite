@@ -38,6 +38,7 @@ export default function LeaseUpload() {
   const [fileRecord, setFileRecord] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [retryingExtraction, setRetryingExtraction] = useState(false);
   const retriedUploadedFiles = useRef(new Set());
@@ -130,7 +131,7 @@ export default function LeaseUpload() {
       .from("uploaded_files")
       .select(
         "id, file_name, status, error_message, review_required, review_status, " +
-        "document_subtype, extraction_method, ui_review_payload, row_count, updated_at",
+        "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, updated_at",
       )
       .eq("id", id)
       .maybeSingle();
@@ -216,14 +217,35 @@ export default function LeaseUpload() {
     toast.success("Lease uploaded. The canonical extraction pipeline is running.");
   };
 
-  const approveReview = async (editedRows) => {
+  const saveReview = async (reviewPayload) => {
+    if (!fileId) return;
+    setSavingReview(true);
+    const { data, error } = await supabase.functions.invoke("review-approve", {
+      body: {
+        file_id: fileId,
+        action: "save",
+        review_payload: reviewPayload,
+      },
+    });
+    setSavingReview(false);
+
+    if (error || data?.error) {
+      toast.error(data?.message || error?.message || "Review save failed");
+      return;
+    }
+
+    toast.success("Review draft saved.");
+    await fetchFileRecord(fileId);
+  };
+
+  const approveReview = async (reviewPayload) => {
     if (!fileId) return;
     setApproving(true);
     const { data, error } = await supabase.functions.invoke("review-approve", {
       body: {
         file_id: fileId,
         action: "approve",
-        edited_rows: editedRows,
+        review_payload: reviewPayload,
       },
     });
     setApproving(false);
@@ -383,8 +405,10 @@ export default function LeaseUpload() {
         <ReviewPanel
           payload={reviewPayload}
           approving={approving}
+          saving={savingReview}
           rejecting={rejecting}
           onApprove={approveReview}
+          onSave={saveReview}
           onReject={rejectReview}
         />
       )}

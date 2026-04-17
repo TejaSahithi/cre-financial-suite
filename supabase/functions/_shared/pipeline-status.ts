@@ -69,6 +69,8 @@ const REVIEW_PIPELINE_COLUMNS = new Set([
   "document_subtype",
   "normalized_output",
   "ui_review_payload",
+  "reviewed_output",
+  "review_audit",
   "review_required",
   "review_status",
   "approved_by",
