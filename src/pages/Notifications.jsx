@@ -12,7 +12,8 @@ const typeIcons = {
   reconciliation_pending: Clock, expense_threshold: DollarSign,
   access_request: Info, cpi_change: Info, system: Info, info: Info,
   warning: AlertTriangle, success: CheckCircle2,
-  low_confidence_alert: AlertTriangle, draft_lease_created: Clock
+  low_confidence_alert: AlertTriangle, draft_lease_created: Clock,
+  review_request: AlertTriangle, signature_request: Clock,
 };
 const typeColors = {
   lease_expiry: "border-l-red-500 bg-red-50", budget_approval: "border-l-blue-500 bg-blue-50",
@@ -21,7 +22,9 @@ const typeColors = {
   system: "border-l-slate-400 bg-slate-50", info: "border-l-blue-500 bg-blue-50",
   warning: "border-l-amber-500 bg-amber-50", success: "border-l-emerald-500 bg-emerald-50",
   low_confidence_alert: "border-l-amber-500 bg-amber-50",
-  draft_lease_created: "border-l-blue-500 bg-blue-50"
+  draft_lease_created: "border-l-blue-500 bg-blue-50",
+  review_request: "border-l-red-500 bg-red-50",
+  signature_request: "border-l-blue-500 bg-blue-50",
 };
 
 export default function Notifications() {
