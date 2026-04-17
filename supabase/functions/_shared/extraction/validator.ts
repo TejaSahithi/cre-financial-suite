@@ -78,8 +78,10 @@ function validateBoolean(value: unknown): boolean | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "boolean") return value;
   const s = String(value).toLowerCase().trim();
-  if (["true", "yes", "y", "1"].includes(s)) return true;
-  if (["false", "no", "n", "0"].includes(s)) return false;
+  if (["true", "yes", "y", "1", "granted", "received", "approved"].includes(s)) return true;
+  if (["false", "no", "n", "0", "denied", "not granted", "not approved"].includes(s)) return false;
+  if (/\b(consents?|consented|approval|approved|grants?|granted)\b/i.test(String(value))) return true;
+  if (/\b(does not consent|not approved|denied|withheld)\b/i.test(String(value))) return false;
   return null;
 }
 
