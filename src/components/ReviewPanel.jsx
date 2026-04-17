@@ -141,21 +141,39 @@ const CANONICAL_FIELD_ALIASES = {
   assignment_date: "assignment_effective_date",
   effective_date: "assignment_effective_date",
   assignment_effective_date: "assignment_effective_date",
+  date_of_assignment: "assignment_effective_date",
   landlord_consent: "landlord_consent",
   consent: "landlord_consent",
   assignee_notice_address: "assignee_notice_address",
+  assignee_address: "assignee_notice_address",
   notice_address: "assignee_notice_address",
+  address_for_notices: "assignee_notice_address",
   assumption_scope: "assumption_scope",
   assumption: "assumption_scope",
   premises: "property_address",
   property_address: "property_address",
   premises_address: "property_address",
+  premises_location: "property_address",
   address: "property_address",
   annual_rent: "annual_rent",
   yearly_rent: "annual_rent",
+  base_rent_additional_year: "annual_rent",
+  additional_year_base_rent: "annual_rent",
+  new_lease_expiration_date: "end_date",
+  lease_expiration_date: "end_date",
+  original_lease_date: "start_date",
+  premises_rentable_square_feet: "square_footage",
+  rentable_square_feet: "square_footage",
+  assignee_security_deposit_amount: "security_deposit",
   lease_term_months: "lease_term_months",
   term_months: "lease_term_months",
   lease_term: "lease_term_months",
+  lease_term_extension_duration: "renewal_options",
+  cam: "cam_amount",
+  cam_charges: "cam_amount",
+  common_area_maintenance: "cam_amount",
+  common_area_maintenance_amount: "cam_amount",
+  cam_amount: "cam_amount",
   monthly_rent: "monthly_rent",
   base_rent: "monthly_rent",
   start_date: "start_date",
@@ -209,6 +227,69 @@ function isBrokenContinuationCustom(field, standardByKey) {
   return false;
 }
 
+function normalizeComparableValue(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.;:]$/g, "");
+}
+
+function dateLikeParts(value) {
+  const text = String(value ?? "").trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return { year: iso[1], month: iso[2], day: String(Number(iso[3])) };
+  const long = text.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (long) {
+    const months = {
+      january: "01", february: "02", march: "03", april: "04", may: "05", june: "06",
+      july: "07", august: "08", september: "09", october: "10", november: "11", december: "12",
+    };
+    return { year: long[3], month: months[long[1].toLowerCase()] || long[1].toLowerCase(), day: String(Number(long[2])) };
+  }
+  return null;
+}
+
+function isDuplicateCustomField(field, standardByKey) {
+  const key = compactKey(field.field_key);
+  const value = normalizeComparableValue(field.value);
+  if (!key || !value) return false;
+
+  if (/_(day|month|year)$/.test(key)) {
+    const baseKey = key.replace(/_(day|month|year)$/, "");
+    const canonicalDateKey = canonicalFieldKey(baseKey);
+    const standardDate = standardByKey.get(canonicalDateKey);
+    if (!standardDate || isBlank(standardDate.value)) return false;
+    const parts = dateLikeParts(standardDate.value);
+    if (!parts) return false;
+    if (key.endsWith("_day")) return value.replace(/\D/g, "") === parts.day;
+    if (key.endsWith("_year")) return value === parts.year;
+    if (key.endsWith("_month")) {
+      const monthNames = {
+        january: "01", february: "02", march: "03", april: "04", may: "05", june: "06",
+        july: "07", august: "08", september: "09", october: "10", november: "11", december: "12",
+      };
+      const normalizedMonth = monthNames[value] || value;
+      const month = value.padStart(2, "0");
+      return month === parts.month || normalizedMonth === parts.month || value === parts.month;
+    }
+  }
+
+  for (const standard of standardByKey.values()) {
+    if (standard?.is_standard === false || isBlank(standard?.value)) continue;
+    const standardValue = normalizeComparableValue(standard.value);
+    if (!standardValue) continue;
+    if (value === standardValue) return true;
+    if (standardValue.length > 8 && value.length > 8 && (standardValue.includes(value) || value.includes(standardValue))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function normalizeLeaseReviewFields(record, index, standardFields, customFields) {
   const standardByKey = new Map();
   for (const field of standardFields) {
@@ -245,12 +326,14 @@ function normalizeLeaseReviewFields(record, index, standardFields, customFields)
   const remainingCustomFields = [];
   for (const field of customFields) {
     const canonicalKey = canonicalFieldKey(field.field_key);
-    if (isCamClauseCustom(field)) {
-      const notes = standardByKey.get("notes");
-      if (notes && isBlank(notes.value) && !isBlank(field.value)) {
-        standardByKey.set("notes", {
-          ...notes,
-          value: String(field.value),
+    if (isBrokenContinuationCustom(field, standardByKey)) continue;
+    if (isDuplicateCustomField(field, standardByKey)) continue;
+    if (standardByKey.has(canonicalKey)) {
+      const existing = standardByKey.get(canonicalKey);
+      if (isBlank(existing.value) && !isBlank(field.value)) {
+        standardByKey.set(canonicalKey, {
+          ...existing,
+          value: field.value,
           original_value: field.original_value ?? field.value,
           confidence: field.confidence,
           source: field.source,
@@ -261,13 +344,12 @@ function normalizeLeaseReviewFields(record, index, standardFields, customFields)
       }
       continue;
     }
-    if (isBrokenContinuationCustom(field, standardByKey)) continue;
-    if (standardByKey.has(canonicalKey)) {
-      const existing = standardByKey.get(canonicalKey);
-      if (isBlank(existing.value) && !isBlank(field.value)) {
-        standardByKey.set(canonicalKey, {
-          ...existing,
-          value: field.value,
+    if (isCamClauseCustom(field)) {
+      const notes = standardByKey.get("notes");
+      if (notes && isBlank(notes.value) && !isBlank(field.value)) {
+        standardByKey.set("notes", {
+          ...notes,
+          value: String(field.value),
           original_value: field.original_value ?? field.value,
           confidence: field.confidence,
           source: field.source,

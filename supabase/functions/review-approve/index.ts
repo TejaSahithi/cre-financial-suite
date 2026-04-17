@@ -67,11 +67,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
-      .select(
-        "id, org_id, module_type, status, review_required, review_status, " +
-        "ui_review_payload, reviewed_output, review_audit, valid_data, parsed_data, " +
-        "property_id, building_id, unit_id, file_name, document_subtype",
-      )
+      .select("*")
       .eq("id", file_id)
       .eq("org_id", orgId)
       .single();
@@ -175,7 +171,10 @@ Deno.serve(async (req: Request) => {
             status: "draft",
           },
           review_audit: audit,
-          review_status: "saved",
+          // Keep the database FSM in a reviewable state. "saved" is a UI
+          // draft state in ui_review_payload, not an uploaded_files.review_status
+          // value in the pipeline constraint.
+          review_status: "pending",
           valid_data: finalRows,
           parsed_data: finalRows,
           row_count: finalRows.length,

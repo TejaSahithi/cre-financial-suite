@@ -76,6 +76,78 @@ export async function runPaddleOCR(fileBytes: Uint8Array, mimeType: string = "ap
   }
 }
 
+export async function extractDocumentWithVision(
+  fileBytes: Uint8Array,
+  mimeType: string = "application/pdf",
+): Promise<{
+  text: string;
+  fields: Array<{ key: string; value: string; confidence?: number; page?: number }>;
+  warnings: string[];
+}> {
+  console.log(`[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes)`);
+
+  const hasVertexAI = !!(
+    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
+  ) && !!(
+    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  );
+
+  if (!hasVertexAI) {
+    throw new Error(
+      "OCR requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+    );
+  }
+
+  const result = await callVertexAIFileJSON<{
+    text?: string;
+    fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number }>;
+    warnings?: string[];
+  }>({
+    systemPrompt: `You extract data from commercial real estate documents for a review UI.
+
+Return JSON only:
+{"text":"important OCR text and clauses", "fields":[{"key":"field_name","value":"field value","confidence":0.0,"page":1}], "warnings":[]}
+
+Rules:
+1. Extract every meaningful field/value pair you can see: parties, tenant, landlord, assignor, assignee, property, premises, address, suite/unit, dates, lease term, rent, annual rent, rent per SF, square footage, security deposit, CAM, options, consent, notices, exhibits, signatures, and notary information.
+2. Map obvious labels to concise snake_case keys.
+3. Do not invent values. If not visible, omit it.
+4. Keep values exact, especially names, dates, addresses, and money.
+5. Put important surrounding lease/assignment clauses in "text"; do not include boilerplate if the output would be too long.
+6. Return valid JSON only. No markdown.`,
+    userPrompt: "Extract all reviewable fields and the important OCR text from this document.",
+    fileBytes,
+    fileMimeType: mimeType,
+    maxOutputTokens: 16384,
+    temperature: 0,
+  });
+
+  const fields = Array.isArray(result?.fields) ? result.fields : [];
+  const cleanedFields = fields
+    .map((field) => ({
+      key: String(field?.key ?? "").trim(),
+      value: String(field?.value ?? "").trim(),
+      confidence: typeof field?.confidence === "number" ? field.confidence : 0.78,
+      page: typeof field?.page === "number" ? field.page : undefined,
+    }))
+    .filter((field) => field.key.length > 0 && field.value.length > 0)
+    .slice(0, 200);
+
+  const textFromFields = cleanedFields.map((field) => `${field.key}: ${field.value}`).join("\n");
+  const text = cleanOCRText([result?.text, textFromFields].filter(Boolean).join("\n"));
+
+  if (!text && cleanedFields.length === 0) {
+    throw new Error("Gemini Vision returned no text or fields.");
+  }
+
+  console.log(`[ocr] Combined Gemini extraction complete: ${text.length} chars, ${cleanedFields.length} fields`);
+  return {
+    text,
+    fields: cleanedFields,
+    warnings: Array.isArray(result?.warnings) ? result.warnings.map(String) : [],
+  };
+}
+
 export async function extractVisibleKeyValues(
   fileBytes: Uint8Array,
   mimeType: string = "application/pdf",
