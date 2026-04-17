@@ -132,6 +132,10 @@ export function validateRecords(
   const errors: ValidationError[] = [];
 
   for (const record of records) {
+    if (moduleType === "lease") {
+      normalizeLeaseContextualFields(record);
+    }
+
     for (const [fieldName, extracted] of Object.entries(record.fields)) {
       const def = schema[fieldName];
       if (!def) continue; // unmapped field, skip validation
@@ -170,6 +174,98 @@ export function validateRecords(
   }
 
   return { records, errors };
+}
+
+function normalizeLeaseContextualFields(record: ExtractedRecord): void {
+  const fields = record.fields;
+  const startIso = parseDate(String(fields.start_date?.value ?? ""));
+  const rawEnd = fields.end_date?.value;
+  const inferredEnd = inferEndDate(rawEnd, startIso);
+  if (inferredEnd && fields.end_date) {
+    fields.end_date.value = inferredEnd;
+    fields.end_date.confidence = Math.max(fields.end_date.confidence ?? 0.7, 0.82);
+  }
+
+  const termField = fields.lease_term_months;
+  const termMonths = inferLeaseTermMonths(termField?.value);
+  if (termField && termMonths != null) {
+    termField.value = termMonths;
+    termField.confidence = Math.max(termField.confidence ?? 0.7, 0.82);
+  }
+
+  const normalizedTerm = termMonths ?? inferLeaseTermMonths(fields.renewal_options?.value);
+  if ((!fields.end_date || fields.end_date.value == null) && startIso && normalizedTerm) {
+    fields.end_date = {
+      value: addMonthsInclusiveEnd(startIso, normalizedTerm),
+      source: "rule",
+      confidence: 0.78,
+      sourceText: "Derived from start date and lease term",
+    };
+  }
+}
+
+function inferEndDate(value: unknown, startIso: string | null): string | null {
+  if (value == null) return null;
+  const parsed = parseDate(String(value));
+  if (parsed) return parsed;
+  if (!startIso) return null;
+
+  const text = String(value).trim();
+  const match = text.match(/\b([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\b|,|\s)/i);
+  if (!match) return null;
+
+  const month = monthNumber(match[1]);
+  const day = Number(match[2]);
+  if (!month || !day || day < 1 || day > 31) return null;
+
+  const start = new Date(startIso + "T00:00:00Z");
+  if (isNaN(start.getTime())) return null;
+
+  let year = start.getUTCFullYear();
+  let candidate = new Date(Date.UTC(year, month - 1, day));
+  if (candidate <= start) {
+    year += 1;
+    candidate = new Date(Date.UTC(year, month - 1, day));
+  }
+  return candidate.toISOString().slice(0, 10);
+}
+
+function inferLeaseTermMonths(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  const text = String(value).toLowerCase().trim();
+  if (!text) return null;
+  if (/year\s*to\s*year|year-to-year|annual|one\s+year|1\s+year/.test(text)) return 12;
+  const months = text.match(/(\d{1,3})\s*(?:months?|mos?\.?)/);
+  if (months) return Number(months[1]);
+  const years = text.match(/(\d{1,2})\s*(?:years?|yrs?\.?)/);
+  if (years) return Number(years[1]) * 12;
+  return null;
+}
+
+function addMonthsInclusiveEnd(startIso: string, months: number): string {
+  const start = new Date(startIso + "T00:00:00Z");
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + months, start.getUTCDate()));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return end.toISOString().slice(0, 10);
+}
+
+function monthNumber(name: string): number | null {
+  const months: Record<string, number> = {
+    january: 1, jan: 1,
+    february: 2, feb: 2,
+    march: 3, mar: 3,
+    april: 4, apr: 4,
+    may: 5,
+    june: 6, jun: 6,
+    july: 7, jul: 7,
+    august: 8, aug: 8,
+    september: 9, sep: 9,
+    october: 10, oct: 10,
+    november: 11, nov: 11,
+    december: 12, dec: 12,
+  };
+  return months[String(name || "").toLowerCase()] ?? null;
 }
 
 /**

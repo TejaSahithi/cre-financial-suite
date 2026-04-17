@@ -150,8 +150,16 @@ export function coerceValue(raw: string, fieldDef: FieldDef): unknown {
       if (fieldDef.max !== undefined && n > fieldDef.max) return null;
       return n;
     }
-    case "date":
-      return parseDate(trimmed);
+    case "date": {
+      const parsed = parseDate(trimmed);
+      // Preserve lease date phrases like "January 31st of each year" so the
+      // row-aware validator can infer the concrete year from start_date.
+      if (parsed) return parsed;
+      if (/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(trimmed)) {
+        return trimmed;
+      }
+      return null;
+    }
     case "boolean": {
       const b = trimmed.toLowerCase();
       if (["true", "yes", "y", "1", "granted", "received", "approved"].includes(b)) return true;
