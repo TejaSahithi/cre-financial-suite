@@ -64,6 +64,7 @@ function mapRow(
         monthly_rent: row.monthly_rent ?? row.base_rent ?? 0,
         square_footage: row.square_footage ?? row.total_sf ?? 0,
         lease_type: row.lease_type ?? null,
+        status: row.status === "expired" || row.status === "budget_ready" ? row.status : "draft",
         property_id: row.property_id ?? null,
         building_id: row.building_id ?? null,
         unit_id: row.unit_id ?? null,

@@ -490,9 +490,11 @@ export default function Expenses() {
                         <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source}</TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            <Button variant="ghost" size="sm" className="text-[10px] h-6 px-1.5">
-                              <Pencil className="w-3 h-3" />
-                            </Button>
+                            <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
+                              <Button variant="ghost" size="sm" className="text-[10px] h-6 px-1.5">
+                                <Pencil className="w-3 h-3" />
+                              </Button>
+                            </Link>
                             <Button
                               variant="ghost"
                               size="sm"

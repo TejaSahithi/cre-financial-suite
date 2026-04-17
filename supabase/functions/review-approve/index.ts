@@ -833,7 +833,7 @@ function buildLeaseReviewDraftPayload(
     monthly_rent: monthlyRent ?? 0,
     square_footage: squareFootage ?? 0,
     lease_type: row.lease_type ?? null,
-    status: "pending_review",
+    status: "draft",
     created_by: user.email ?? user.id,
     created_at: now,
     updated_at: now,

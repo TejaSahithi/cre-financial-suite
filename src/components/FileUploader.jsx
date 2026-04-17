@@ -427,18 +427,24 @@ export default function FileUploader({
           <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
             File Type
           </label>
-          <Select value={fileType} onValueChange={(value) => setFileType(normalizeFileType(value))}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select file type..." />
-            </SelectTrigger>
-            <SelectContent>
-              {typeOptions.map((fileTypeOption) => (
-                <SelectItem key={fileTypeOption.value} value={fileTypeOption.value}>
-                  {fileTypeOption.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {typeOptions.length === 1 ? (
+            <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700">
+              {typeOptions[0].label}
+            </div>
+          ) : (
+            <Select value={fileType} onValueChange={(value) => setFileType(normalizeFileType(value))}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select file type..." />
+              </SelectTrigger>
+              <SelectContent>
+                {typeOptions.map((fileTypeOption) => (
+                  <SelectItem key={fileTypeOption.value} value={fileTypeOption.value}>
+                    {fileTypeOption.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {uploadState === "idle" && (
