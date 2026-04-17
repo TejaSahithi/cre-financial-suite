@@ -178,6 +178,19 @@ export function validateRecords(
 
 function normalizeLeaseContextualFields(record: ExtractedRecord): void {
   const fields = record.fields;
+  if (fields.assignment_effective_date?.value && fields.assignee_name?.value) {
+    const tenant = String(fields.tenant_name?.value ?? "").trim().toLowerCase();
+    const assignor = String(fields.assignor_name?.value ?? "").trim().toLowerCase();
+    if (!tenant || (assignor && tenant === assignor)) {
+      fields.tenant_name = {
+        value: fields.assignee_name.value,
+        source: "rule",
+        confidence: Math.max(fields.assignee_name.confidence ?? 0.8, 0.9),
+        sourceText: "Assignment current tenant derived from assignee",
+      };
+    }
+  }
+
   const startIso = parseDate(String(fields.start_date?.value ?? ""));
   const rawEnd = fields.end_date?.value;
   const inferredEnd = inferEndDate(rawEnd, startIso);
