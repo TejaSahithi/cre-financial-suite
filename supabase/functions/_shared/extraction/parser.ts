@@ -55,6 +55,14 @@ export async function parseDocument(
   fileName: string,
   mimeType: string = "application/pdf",
 ): Promise<DoclingOutput> {
+  const officeOutput = await parseOfficeOpenXml(fileBytes, fileName, mimeType);
+  if (officeOutput && (officeOutput.full_text?.trim().length ?? 0) > 20) {
+    console.log(
+      `[parser] OpenXML parser extracted ${officeOutput.full_text?.length ?? 0} chars from "${fileName}"`,
+    );
+    return tag(officeOutput, "openxml");
+  }
+
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   const hasVision = !!(
     (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
@@ -449,4 +457,227 @@ function scoreOutput(out: DoclingOutput | null): number {
 function tag(out: DoclingOutput, method: string): DoclingOutput {
   out.extraction_method = method;
   return out;
+}
+
+// OpenXML (.docx / .xlsx) parser. This is intentionally small and local:
+// these files are ZIP containers, so extracting text from their XML is much
+// more reliable than sending them through OCR.
+async function parseOfficeOpenXml(
+  fileBytes: Uint8Array,
+  fileName: string,
+  mimeType: string,
+): Promise<DoclingOutput | null> {
+  const lowerName = fileName.toLowerCase();
+  const isDocx =
+    lowerName.endsWith(".docx") ||
+    mimeType.includes("officedocument.wordprocessingml");
+  const isXlsx =
+    lowerName.endsWith(".xlsx") ||
+    mimeType.includes("officedocument.spreadsheetml");
+
+  if (!isDocx && !isXlsx) return null;
+
+  try {
+    const entries = await readZipEntries(fileBytes);
+    return isDocx
+      ? buildDocxOutput(entries)
+      : buildXlsxOutput(entries);
+  } catch (err) {
+    console.warn(`[parser] OpenXML parse failed for "${fileName}": ${err.message}`);
+    return null;
+  }
+}
+
+async function readZipEntries(bytes: Uint8Array): Promise<Map<string, Uint8Array>> {
+  const entries = new Map<string, Uint8Array>();
+  const eocdOffset = findEndOfCentralDirectory(bytes);
+  if (eocdOffset < 0) throw new Error("ZIP end-of-central-directory not found");
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  const centralDirOffset = view.getUint32(eocdOffset + 16, true);
+  let offset = centralDirOffset;
+
+  for (let i = 0; i < entryCount; i++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) break;
+
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const nameBytes = bytes.slice(offset + 46, offset + 46 + fileNameLength);
+    const entryName = new TextDecoder().decode(nameBytes);
+
+    const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+    const data = await inflateZipEntry(compressed, method);
+    entries.set(entryName, data);
+
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+
+  return entries;
+}
+
+function findEndOfCentralDirectory(bytes: Uint8Array): number {
+  const min = Math.max(0, bytes.length - 65557);
+  for (let i = bytes.length - 22; i >= min; i--) {
+    if (
+      bytes[i] === 0x50 &&
+      bytes[i + 1] === 0x4b &&
+      bytes[i + 2] === 0x05 &&
+      bytes[i + 3] === 0x06
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+async function inflateZipEntry(compressed: Uint8Array, method: number): Promise<Uint8Array> {
+  if (method === 0) return compressed;
+  if (method !== 8) return new Uint8Array(0);
+
+  const stream = new Blob([compressed]).stream().pipeThrough(
+    new DecompressionStream("deflate-raw"),
+  );
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+function buildDocxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
+  const decoder = new TextDecoder("utf-8");
+  const xmlParts: string[] = [];
+  const wanted = [
+    "word/document.xml",
+    ...[...entries.keys()].filter((name) =>
+      /^word\/(?:header|footer)\d+\.xml$/i.test(name)
+    ),
+  ];
+
+  for (const name of wanted) {
+    const data = entries.get(name);
+    if (data) xmlParts.push(decoder.decode(data));
+  }
+
+  const text = cleanExtractedXmlText(xmlParts.map(xmlToText).join("\n\n"));
+  return textToDocling(text);
+}
+
+function buildXlsxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
+  const decoder = new TextDecoder("utf-8");
+  const sharedStrings = parseSharedStrings(
+    entries.get("xl/sharedStrings.xml")
+      ? decoder.decode(entries.get("xl/sharedStrings.xml")!)
+      : "",
+  );
+  const sheetNames = [...entries.keys()]
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort();
+  const tables: DoclingTable[] = [];
+  const textParts: string[] = [];
+
+  for (const sheetName of sheetNames) {
+    const xml = decoder.decode(entries.get(sheetName)!);
+    const rows = parseSheetRows(xml, sharedStrings);
+    if (rows.length === 0) continue;
+    const headers = rows[0];
+    const dataRows = rows.slice(1);
+    tables.push({
+      table_index: tables.length,
+      headers,
+      rows: dataRows,
+      markdown: rows.map((row) => row.join("\t")).join("\n"),
+    });
+    textParts.push(rows.map((row) => row.join("\t")).join("\n"));
+  }
+
+  return {
+    ...textToDocling(cleanExtractedXmlText(textParts.join("\n\n"))),
+    tables,
+  };
+}
+
+function parseSharedStrings(xml: string): string[] {
+  if (!xml) return [];
+  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((match) =>
+    cleanExtractedXmlText(xmlToText(match[1])),
+  );
+}
+
+function parseSheetRows(xml: string, sharedStrings: string[]): string[][] {
+  const rows: string[][] = [];
+  for (const rowMatch of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    const cells: string[] = [];
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const attrs = cellMatch[1];
+      const cellXml = cellMatch[2];
+      const type = attrs.match(/\bt="([^"]+)"/)?.[1] ?? "";
+      const rawValue = cellXml.match(/<v[^>]*>([\s\S]*?)<\/v>/)?.[1] ??
+        cellXml.match(/<t[^>]*>([\s\S]*?)<\/t>/)?.[1] ??
+        "";
+      const value = type === "s"
+        ? sharedStrings[Number(rawValue)] ?? ""
+        : decodeXmlEntities(rawValue);
+      cells.push(value.trim());
+    }
+    if (cells.some((cell) => cell.length > 0)) rows.push(cells);
+  }
+  return rows;
+}
+
+function xmlToText(xml: string): string {
+  return decodeXmlEntities(
+    xml
+      .replace(/<w:tab\s*\/>/g, "\t")
+      .replace(/<w:br\s*\/>|<w:cr\s*\/>/g, "\n")
+      .replace(/<\/w:p>/g, "\n")
+      .replace(/<\/w:tr>/g, "\n")
+      .replace(/<\/w:tc>/g, "\t")
+      .replace(/<[^>]+>/g, ""),
+  );
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)));
+}
+
+function cleanExtractedXmlText(text: string): string {
+  return text
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function textToDocling(text: string): DoclingOutput {
+  const blocks = text
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  return {
+    text_blocks: blocks.map((block, index) => ({
+      block_index: index,
+      type: "paragraph",
+      text: block,
+      page: 1,
+    })),
+    tables: [],
+    fields: [],
+    full_text: text,
+    page_count: 1,
+  };
 }
