@@ -359,8 +359,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   if (opts.fileBase64) {
     base64Data = opts.fileBase64;
   } else if (opts.fileBytes) {
-    // Avoid "Maximum call stack size exceeded" by avoiding spread operator
-    base64Data = btoa(Array.from(opts.fileBytes).map(b => String.fromCharCode(b)).join(""));
+    base64Data = uint8ToBase64(opts.fileBytes);
   } else {
     throw new Error("Must provide either fileBase64 or fileBytes");
   }
@@ -441,6 +440,22 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   }
 
   throw lastError || new Error("All Vertex AI file model attempts failed");
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  // Supabase Edge isolates are memory constrained. Avoid Array.from(bytes)
+  // because it creates a second full-size JS number array before encoding.
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    let chunkString = "";
+    for (let j = 0; j < chunk.length; j++) {
+      chunkString += String.fromCharCode(chunk[j]);
+    }
+    binary += chunkString;
+  }
+  return btoa(binary);
 }
 
 function buildVertexAttempts(primaryLocation: string, primaryModel: string) {

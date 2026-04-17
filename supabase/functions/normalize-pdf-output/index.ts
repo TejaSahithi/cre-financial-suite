@@ -175,6 +175,7 @@ function buildReviewPayload(opts: {
       schemaKeys,
       recordIndex: index,
       existingKeys: new Set(customFieldsFromRows.map((field) => normalizeKey(field.field_key))),
+      standardValues: values,
     });
     const customFields = [...customFieldsFromRows, ...customFieldsFromDocument];
     const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
@@ -307,8 +308,9 @@ function buildCustomFieldsFromDocument(args: {
   schemaKeys: Set<string>;
   recordIndex: number;
   existingKeys: Set<string>;
+  standardValues: Record<string, unknown>;
 }) {
-  const { doclingRaw, schema, schemaKeys, recordIndex, existingKeys } = args;
+  const { doclingRaw, schema, schemaKeys, recordIndex, existingKeys, standardValues } = args;
   if (!doclingRaw) return [];
 
   const standardAliases = buildStandardAliases(schema);
@@ -343,6 +345,7 @@ function buildCustomFieldsFromDocument(args: {
     if (!normalized || schemaKeys.has(normalized)) continue;
     if (existingKeys.has(normalized) || seen.has(normalized)) continue;
     if (standardAliases.has(normalized)) continue;
+    if (duplicatesStandardValue(candidate.key, candidate.value, standardValues)) continue;
     if (looksLikeNoise(candidate.key, candidate.value)) continue;
 
     seen.add(normalized);
@@ -365,6 +368,36 @@ function buildCustomFieldsFromDocument(args: {
   return out;
 }
 
+function duplicatesStandardValue(key: string, value: unknown, standardValues: Record<string, unknown>) {
+  const normalizedKey = normalizeKey(key);
+  const normalizedValue = normalizeComparableValue(value);
+  if (!normalizedValue) return false;
+
+  if (/_(day|month|year)$/.test(normalizedKey)) {
+    const baseKey = normalizedKey.replace(/_(day|month|year)$/, "");
+    const candidateStandardKeys = [baseKey, `${baseKey}_date`];
+    if (candidateStandardKeys.some((candidate) => !isBlank(standardValues[candidate]))) {
+      return true;
+    }
+  }
+
+  for (const standardValue of Object.values(standardValues)) {
+    if (isBlank(standardValue)) continue;
+    const comparable = normalizeComparableValue(standardValue);
+    if (!comparable) continue;
+    if (normalizedValue === comparable) return true;
+    if (
+      normalizedValue.length > 8 &&
+      comparable.length > 8 &&
+      (normalizedValue.includes(comparable) || comparable.includes(normalizedValue))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function buildStandardAliases(schema: Record<string, any>) {
   const aliases = new Set<string>();
   for (const [fieldKey, def] of Object.entries(schema)) {
@@ -383,6 +416,16 @@ function normalizeKey(key: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 64);
+}
+
+function normalizeComparableValue(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.;:]$/g, "");
 }
 
 function looksLikeNoise(key: string, value: unknown): boolean {

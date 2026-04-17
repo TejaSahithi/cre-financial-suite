@@ -32,10 +32,11 @@ import type {
   DoclingTable,
   DoclingField,
 } from "./types.ts";
-import { extractVisibleKeyValues, runPaddleOCR } from "../ocr/paddle-ocr.ts";
+import { extractDocumentWithVision } from "../ocr/paddle-ocr.ts";
 
 const MIN_DIGITAL_BLOCKS = 5;       // below this, a PDF is treated as scanned
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
+const MAX_DOCLING_SUPPLEMENT_BYTES = 8 * 1024 * 1024;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";
 
@@ -55,12 +56,21 @@ export async function parseDocument(
   fileName: string,
   mimeType: string = "application/pdf",
 ): Promise<DoclingOutput> {
-  const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
-  if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
-    console.log(
-      `[parser] Native PDF parser extracted ${nativePdfOutput.full_text?.length ?? 0} chars from "${fileName}"`,
-    );
-    return tag(nativePdfOutput, "pdf_text");
+  const hasDocling = !!Deno.env.get("DOCLING_API_URL");
+  const hasVision = !!(
+    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+  );
+  const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
+
+  if (!likelyScannedPdf) {
+    const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
+    if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
+      console.log(
+        `[parser] Native PDF parser extracted ${nativePdfOutput.full_text?.length ?? 0} chars from "${fileName}"`,
+      );
+      return tag(nativePdfOutput, "pdf_text");
+    }
   }
 
   const officeOutput = await parseOfficeOpenXml(fileBytes, fileName, mimeType);
@@ -70,12 +80,6 @@ export async function parseDocument(
     );
     return tag(officeOutput, "openxml");
   }
-
-  const hasDocling = !!Deno.env.get("DOCLING_API_URL");
-  const hasVision = !!(
-    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
-  );
 
   const strategy = pickStrategy({ mimeType, fileBytes, hasDocling, hasVision });
   const ctx: ParseContext = {
@@ -205,9 +209,10 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
     ]), "none");
   }
   try {
-    const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
-    const output = ocrTextToDocling(ocrText);
-    output.fields = await safeExtractVisibleFields(ctx);
+    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType);
+    const output = ocrTextToDocling(extracted.text);
+    output.fields = extracted.fields;
+    output.warnings = extracted.warnings;
     return tag(output, "gemini_vision");
   } catch (err) {
     console.warn(`[parser] Vision OCR failed: ${err.message}`);
@@ -234,9 +239,10 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
 
   let visionOutput: DoclingOutput | null = null;
   try {
-    const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
-    visionOutput = ocrTextToDocling(ocrText);
-    visionOutput.fields = await safeExtractVisibleFields(ctx);
+    const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType);
+    visionOutput = ocrTextToDocling(extracted.text);
+    visionOutput.fields = extracted.fields;
+    visionOutput.warnings = extracted.warnings;
   } catch (err) {
     console.warn(`[parser] Vision-first OCR failed, falling back to Docling: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
@@ -246,7 +252,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
     return tag(emptyOutput([`Vision OCR failed: ${err.message}`]), "none");
   }
 
-  if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType)) {
+  if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType) || ctx.fileBytes.length > MAX_DOCLING_SUPPLEMENT_BYTES) {
     return tag(visionOutput, "gemini_vision");
   }
 
@@ -271,21 +277,6 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
   return tag(visionOutput, "gemini_vision");
 }
 
-async function safeExtractVisibleFields(ctx: ParseContext): Promise<DoclingField[]> {
-  try {
-    const fields = await extractVisibleKeyValues(ctx.fileBytes, ctx.mimeType);
-    return fields.map((field) => ({
-      key: field.key,
-      value: field.value,
-      confidence: field.confidence,
-      page: field.page,
-    }));
-  } catch (err) {
-    console.warn(`[parser] Vision key-value extraction failed: ${err.message}`);
-    return [];
-  }
-}
-
 /**
  * Parallel: race both backends when we can't tell which is right.
  * Pick the output with the higher combined (text_blocks + tables) count.
@@ -294,7 +285,12 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
   const [doclingRes, visionRes] = await Promise.allSettled([
     canDoclingHandle(ctx.mimeType) ? callDocling(ctx) : Promise.resolve(null),
     canVisionHandle(ctx.mimeType)
-      ? runPaddleOCR(ctx.fileBytes, ctx.mimeType).then(ocrTextToDocling)
+      ? extractDocumentWithVision(ctx.fileBytes, ctx.mimeType).then((extracted) => {
+        const out = ocrTextToDocling(extracted.text);
+        out.fields = extracted.fields;
+        out.warnings = extracted.warnings;
+        return out;
+      })
       : Promise.resolve(null),
   ]);
 

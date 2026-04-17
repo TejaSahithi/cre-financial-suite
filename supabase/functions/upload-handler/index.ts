@@ -103,6 +103,8 @@ Deno.serve(async (req: Request) => {
     const file = formData.get("file") as File | null;
     const fileType = String(formData.get("file_type") || "");
     const propertyId = normalizeOptionalUuid(formData.get("property_id"));
+    const buildingId = normalizeOptionalUuid(formData.get("building_id"));
+    const unitId = normalizeOptionalUuid(formData.get("unit_id"));
 
     if (!file) {
       return jsonResponse({ error: true, message: "Missing file parameter" }, 400);
@@ -189,6 +191,8 @@ Deno.serve(async (req: Request) => {
       mime_type: file.type || "application/octet-stream",
       uploaded_by: user.email,
       property_id: propertyId,
+      building_id: buildingId,
+      unit_id: unitId,
       status: "uploaded",
       created_at: now,
       updated_at: now,
@@ -200,15 +204,41 @@ Deno.serve(async (req: Request) => {
       .select()
       .single();
 
+    if (dbError && looksLikeMissingScopeColumn(dbError)) {
+      console.warn(
+        "[upload-handler] Upload scope columns are not migrated yet; retrying without building/unit scope",
+        dbError,
+      );
+
+      const retryPayload = { ...insertPayload };
+      delete retryPayload.building_id;
+      delete retryPayload.unit_id;
+
+      const retry = await supabaseAdmin
+        .from("uploaded_files")
+        .insert(retryPayload)
+        .select()
+        .single();
+
+      uploadRecord = retry.data;
+      dbError = retry.error;
+    }
+
     if (dbError && propertyId) {
       console.warn(
         `[upload-handler] Insert failed with property_id=${propertyId}; retrying without optional property scope`,
         dbError,
       );
 
+      const scopedFallback = { ...insertPayload, property_id: null };
+      if (looksLikeMissingScopeColumn(dbError)) {
+        delete scopedFallback.building_id;
+        delete scopedFallback.unit_id;
+      }
+
       const retry = await supabaseAdmin
         .from("uploaded_files")
-        .insert({ ...insertPayload, property_id: null })
+        .insert(scopedFallback)
         .select()
         .single();
 
@@ -235,6 +265,8 @@ Deno.serve(async (req: Request) => {
       file_name: file.name,
       file_size: file.size,
       property_id: uploadRecord.property_id,
+      building_id: uploadRecord.building_id ?? null,
+      unit_id: uploadRecord.unit_id ?? null,
       processing_status: "uploaded",
       created_at: uploadRecord.created_at,
     });
@@ -247,3 +279,9 @@ Deno.serve(async (req: Request) => {
     }, 400);
   }
 });
+
+function looksLikeMissingScopeColumn(error: any): boolean {
+  const message = String(error?.message || error?.details || "");
+  const code = String(error?.code || "");
+  return code === "42703" || code === "PGRST204" || /uploaded_files\.(building_id|unit_id)|building_id|unit_id/i.test(message);
+}

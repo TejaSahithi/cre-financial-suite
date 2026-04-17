@@ -133,7 +133,8 @@ export default function LeaseUpload() {
       .from("uploaded_files")
       .select(
         "id, file_name, status, error_message, review_required, review_status, " +
-        "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, updated_at",
+        "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
+        "property_id, building_id, unit_id, updated_at",
       )
       .eq("id", id)
       .maybeSingle();
@@ -419,6 +420,8 @@ export default function LeaseUpload() {
           defaultFileType="leases"
           allowedFileTypes={["leases"]}
           propertyId={effectivePropertyId || undefined}
+          buildingId={scopeBuilding !== "all" ? scopeBuilding : undefined}
+          unitId={scopeUnit !== "all" ? scopeUnit : undefined}
           multiple={false}
           onUploadComplete={handleUploadComplete}
           title="Upload Lease Document"

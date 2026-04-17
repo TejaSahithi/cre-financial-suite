@@ -100,6 +100,8 @@ async function invokeUploadHandler(formData) {
  * @param {string}   [props.defaultFileType]
  * @param {string[]} [props.allowedFileTypes]
  * @param {string}   [props.propertyId]
+ * @param {string}   [props.buildingId]
+ * @param {string}   [props.unitId]
  * @param {string}   [props.orgId]
  * @param {boolean}  [props.multiple]
  * @param {string}   [props.accept]
@@ -109,6 +111,8 @@ export default function FileUploader({
   defaultFileType,
   allowedFileTypes,
   propertyId,
+  buildingId,
+  unitId,
   orgId: orgIdOverride,
   multiple = false,
   accept = DEFAULT_ACCEPT,
@@ -244,6 +248,14 @@ export default function FileUploader({
       if (safePropertyId) {
         formData.append("property_id", safePropertyId);
       }
+      const safeBuildingId = normalizeOptionalUuid(buildingId);
+      if (safeBuildingId) {
+        formData.append("building_id", safeBuildingId);
+      }
+      const safeUnitId = normalizeOptionalUuid(unitId);
+      if (safeUnitId) {
+        formData.append("unit_id", safeUnitId);
+      }
 
       const data = await invokeUploadHandler(formData);
 
@@ -277,7 +289,7 @@ export default function FileUploader({
         processing_started: Boolean(data?.file_id),
       };
     },
-    [fileType, propertyId, resolvedOrgId]
+    [buildingId, fileType, propertyId, resolvedOrgId, unitId]
   );
 
   const handleUpload = useCallback(async () => {
