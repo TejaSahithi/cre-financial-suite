@@ -51,6 +51,12 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
       return {
         tenant_name: null,
         property_name: null,
+        assignor_name: null,
+        assignee_name: null,
+        assignment_effective_date: null,
+        landlord_consent: null,
+        assumption_scope: null,
+        assignee_notice_address: null,
         unit_number: null,
         start_date: null,
         end_date: null,
