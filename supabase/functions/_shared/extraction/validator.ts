@@ -140,16 +140,21 @@ export function validateRecords(
       const def = schema[fieldName];
       if (!def) continue; // unmapped field, skip validation
 
+      if (moduleType === "lease") {
+        extracted.value = sanitizeLeaseFieldValue(fieldName, extracted.value);
+      }
       const validated = validateField(extracted.value, def);
 
       if (validated === null && extracted.value !== null && extracted.value !== undefined) {
         // Value was present but failed validation — reject it
-        errors.push({
-          field: fieldName,
-          message: `Invalid ${def.type} value for "${fieldName}": ${JSON.stringify(extracted.value)}`,
-          receivedValue: extracted.value,
-          rowIndex: record.rowIndex,
-        });
+        if (def.required) {
+          errors.push({
+            field: fieldName,
+            message: `Invalid ${def.type} value for "${fieldName}": ${JSON.stringify(extracted.value)}`,
+            receivedValue: extracted.value,
+            rowIndex: record.rowIndex,
+          });
+        }
         extracted.value = null;
         extracted.confidence = 0;
       } else {
@@ -174,6 +179,62 @@ export function validateRecords(
   }
 
   return { records, errors };
+}
+
+function sanitizeLeaseFieldValue(fieldName: string, value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName)) {
+    return cleanPartyName(value);
+  }
+
+  if (fieldName === "property_address") {
+    return cleanAddress(value);
+  }
+
+  if (fieldName === "property_name" && looksLikeAddressOrPremisesClause(value)) {
+    return null;
+  }
+
+  if (fieldName === "landlord_consent" && /^\s*required\s*$/i.test(String(value))) {
+    return null;
+  }
+
+  return value;
+}
+
+function cleanPartyName(value: unknown): string {
+  let text = String(value ?? "").trim();
+  if (!text) return "";
+
+  text = text
+    .replace(/\s+-\s+\d{3}[-.\s]\d{3}[-.\s]\d{4}.*$/i, "")
+    .replace(/\s+\d{3}[-.\s]\d{3}[-.\s]\d{4}.*$/i, "")
+    .replace(/\s+\d{3,6}\s+[A-Za-z0-9 .#-]+(?:Road|Rd|Street|St|Avenue|Ave|Lane|Ln|Drive|Dr|Boulevard|Blvd)\b.*$/i, "")
+    .replace(/\b(?:contact|phone|telephone|tel|address)\b\s*:.*$/i, "")
+    .trim();
+
+  const entityMatch = text.match(/^(.+?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.))\b/i);
+  return (entityMatch ? entityMatch[1] : text).trim().replace(/[,\s]+$/, "");
+}
+
+function cleanAddress(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/^(?:of\s+)?(?:landlord|tenant|premises|property)\s*:?\s*/i, "")
+    .replace(/^the\s+buildings?\s+of\s+which\s+the\s+premises\s+are\s+a\s+part\s+is\s+located\s+at\s+/i, "")
+    .replace(/^located\s+at\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeAddressOrPremisesClause(value: unknown): boolean {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  if (/\b(?:road|rd|street|st|avenue|ave|lane|ln|drive|dr|boulevard|blvd|suite|knoxville|tn|[A-Z]{2}\s+\d{5})\b/i.test(text)) {
+    return true;
+  }
+  return /\b(?:premises|buildings?\s+of\s+which|located\s+at|part\s+is\s+located)\b/i.test(text);
 }
 
 function normalizeLeaseContextualFields(record: ExtractedRecord): void {

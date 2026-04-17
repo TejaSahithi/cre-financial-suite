@@ -352,6 +352,15 @@ const CANONICAL_LEASE_FIELD_ALIASES: Record<string, string> = {
 };
 
 function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): unknown {
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName)) {
+    raw = cleanPartyName(raw);
+  }
+  if (fieldName === "property_address") {
+    raw = cleanPropertyAddress(raw);
+  }
+  if (fieldName === "property_name" && looksLikeAddressOrPremisesClause(raw)) {
+    return null;
+  }
   if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName) && looksLikeClauseNotName(raw)) {
     return null;
   }
@@ -371,6 +380,45 @@ function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): u
   return coerceValue(raw, fieldDef);
 }
 
+function cleanPartyName(raw: unknown): string {
+  let text = String(raw ?? "").trim();
+  if (!text) return "";
+
+  // Gemini/OCR can combine adjacent contact/address text into the tenant name.
+  // Keep the legal entity portion and leave contact person/phone/address as
+  // custom fields.
+  text = text
+    .replace(/\s+-\s+\d{3}[-.\s]\d{3}[-.\s]\d{4}.*$/i, "")
+    .replace(/\s+\d{3}[-.\s]\d{3}[-.\s]\d{4}.*$/i, "")
+    .replace(/\s+\d{3,6}\s+[A-Za-z0-9 .#-]+(?:Road|Rd|Street|St|Avenue|Ave|Lane|Ln|Drive|Dr|Boulevard|Blvd)\b.*$/i, "")
+    .replace(/\b(?:contact|phone|telephone|tel|address)\b\s*:.*$/i, "")
+    .trim();
+
+  const entityMatch = text.match(/^(.+?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.))\b/i);
+  if (entityMatch) return entityMatch[1].trim().replace(/[,\s]+$/, "");
+
+  return text.replace(/[,\s]+$/, "");
+}
+
+function cleanPropertyAddress(raw: unknown): string {
+  return String(raw ?? "")
+    .trim()
+    .replace(/^(?:of\s+)?(?:landlord|tenant|premises|property)\s*:?\s*/i, "")
+    .replace(/^the\s+buildings?\s+of\s+which\s+the\s+premises\s+are\s+a\s+part\s+is\s+located\s+at\s+/i, "")
+    .replace(/^located\s+at\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeAddressOrPremisesClause(raw: unknown): boolean {
+  const text = String(raw ?? "").trim();
+  if (!text) return false;
+  if (/\b(?:road|rd|street|st|avenue|ave|lane|ln|drive|dr|boulevard|blvd|suite|knoxville|tn|[A-Z]{2}\s+\d{5})\b/i.test(text)) {
+    return true;
+  }
+  return /\b(?:premises|buildings?\s+of\s+which|located\s+at|part\s+is\s+located)\b/i.test(text);
+}
+
 function looksLikeClauseNotName(raw: unknown): boolean {
   const text = String(raw ?? "").trim();
   if (!text) return false;
@@ -381,6 +429,11 @@ function looksLikeClauseNotName(raw: unknown): boolean {
 function looksLikeNoticeClause(raw: unknown): boolean {
   const text = String(raw ?? "").trim();
   return /\b(for\s+assignee|notice|notices|purposes\s+under\s+the\s+lease)\b/i.test(text);
+}
+
+function normalizedConfidence(value: unknown, fallback: number): number {
+  const confidence = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(confidence) && confidence > 0 ? confidence : fallback;
 }
 
 function inferTermMonths(raw: unknown): number | null {
@@ -408,7 +461,7 @@ function extractFromDoclingFields(
       const value = coerceFieldValue(directFieldName, docField.value, schema[directFieldName]);
       if (value !== null && value !== undefined) {
         const existing = result[directFieldName];
-        const newConf = docField.confidence ?? 0.92;
+        const newConf = normalizedConfidence(docField.confidence, 0.92);
         if (!existing || newConf > existing.confidence) {
           result[directFieldName] = {
             value,
@@ -434,7 +487,7 @@ function extractFromDoclingFields(
         if (value !== null && value !== undefined) {
           // Only overwrite if higher confidence
           const existing = result[fieldName];
-          const newConf = docField.confidence ?? 0.90;
+          const newConf = normalizedConfidence(docField.confidence, 0.90);
           if (!existing || newConf > existing.confidence) {
             result[fieldName] = {
               value,

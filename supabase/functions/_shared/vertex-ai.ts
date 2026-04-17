@@ -235,6 +235,8 @@ export interface VertexAIFileOptions extends VertexAIOptions {
   fileBytes?: Uint8Array;
   /** Raw base64 string */
   fileBase64?: string;
+  /** Public HTTP(S) URL or Cloud Storage URI to avoid inline base64 uploads */
+  fileUri?: string;
   /** MIME type of the file (e.g. "application/pdf", "image/jpeg") */
   fileMimeType: string;
 }
@@ -354,15 +356,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   const primaryModel = opts.model ?? DEFAULT_MODEL;
   const accessToken = await getAccessToken();
 
-  // Encode file bytes as base64 safely
-  let base64Data: string;
-  if (opts.fileBase64) {
-    base64Data = opts.fileBase64;
-  } else if (opts.fileBytes) {
-    base64Data = uint8ToBase64(opts.fileBytes);
-  } else {
-    throw new Error("Must provide either fileBase64 or fileBytes");
-  }
+  const filePart = buildFilePart(opts);
 
   const genConfig: Record<string, unknown> = {
     maxOutputTokens: opts.maxOutputTokens ?? 4096,
@@ -382,10 +376,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
         role: "user",
         parts: [
           {
-            inlineData: {
-              mimeType: opts.fileMimeType,
-              data: base64Data,
-            },
+            ...filePart,
           },
           { text: opts.userPrompt },
         ],
@@ -442,20 +433,48 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   throw lastError || new Error("All Vertex AI file model attempts failed");
 }
 
+function buildFilePart(opts: VertexAIFileOptions): Record<string, unknown> {
+  if (opts.fileUri) {
+    console.log(`[vertex-ai] Using fileData URI for ${opts.fileMimeType}`);
+    return {
+      fileData: {
+        mimeType: opts.fileMimeType,
+        fileUri: opts.fileUri,
+      },
+    };
+  }
+
+  let base64Data: string;
+  if (opts.fileBase64) {
+    base64Data = opts.fileBase64;
+  } else if (opts.fileBytes) {
+    base64Data = uint8ToBase64(opts.fileBytes);
+  } else {
+    throw new Error("Must provide fileUri, fileBase64, or fileBytes");
+  }
+
+  return {
+    inlineData: {
+      mimeType: opts.fileMimeType,
+      data: base64Data,
+    },
+  };
+}
+
 function uint8ToBase64(bytes: Uint8Array): string {
   // Supabase Edge isolates are memory constrained. Avoid Array.from(bytes)
-  // because it creates a second full-size JS number array before encoding.
-  const chunkSize = 0x8000;
-  let binary = "";
+  // and avoid creating one giant binary string before btoa().
+  const chunkSize = 0x6000; // multiple of 3 so only the final chunk is padded
+  const encodedChunks: string[] = [];
   for (let i = 0; i < bytes.length; i += chunkSize) {
     const chunk = bytes.subarray(i, i + chunkSize);
     let chunkString = "";
     for (let j = 0; j < chunk.length; j++) {
       chunkString += String.fromCharCode(chunk[j]);
     }
-    binary += chunkString;
+    encodedChunks.push(btoa(chunkString));
   }
-  return btoa(binary);
+  return encodedChunks.join("");
 }
 
 function buildVertexAttempts(primaryLocation: string, primaryModel: string) {

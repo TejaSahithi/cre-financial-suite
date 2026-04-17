@@ -27,7 +27,11 @@ RULES:
  * @param mimeType - MIME type of the file (e.g. "application/pdf", "image/png")
  * @returns Extracted text content
  */
-export async function runVisionOCR(fileBytes: Uint8Array, mimeType: string = "application/pdf"): Promise<string> {
+export async function runVisionOCR(
+  fileBytes: Uint8Array,
+  mimeType: string = "application/pdf",
+  fileUri?: string,
+): Promise<string> {
   console.log(`[ocr] Running Gemini Vision OCR (${mimeType}, ${fileBytes.length} bytes)`);
 
   const hasVertexAI = !!(
@@ -47,6 +51,7 @@ export async function runVisionOCR(fileBytes: Uint8Array, mimeType: string = "ap
       systemPrompt: OCR_SYSTEM_PROMPT,
       userPrompt: "Extract all text from this document. Return only the raw text, nothing else.",
       fileBytes,
+      fileUri,
       fileMimeType: mimeType,
       maxOutputTokens: 8192,
       temperature: 0,
@@ -76,12 +81,14 @@ export async function runVisionOCR(fileBytes: Uint8Array, mimeType: string = "ap
 export async function extractDocumentWithVision(
   fileBytes: Uint8Array,
   mimeType: string = "application/pdf",
+  fileUri?: string,
 ): Promise<{
   text: string;
   fields: Array<{ key: string; value: string; confidence?: number; page?: number }>;
   warnings: string[];
 }> {
   console.log(`[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes)`);
+  const isLargeInlineFile = !fileUri && fileBytes.length > 8 * 1024 * 1024;
 
   const hasVertexAI = !!(
     Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
@@ -121,8 +128,9 @@ Rules:
 7. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all reviewable fields and the important OCR text from this document.",
     fileBytes,
+    fileUri,
     fileMimeType: mimeType,
-    maxOutputTokens: 16384,
+    maxOutputTokens: isLargeInlineFile ? 8192 : 16384,
     temperature: 0,
   });
 
@@ -155,6 +163,7 @@ Rules:
 export async function extractVisibleKeyValues(
   fileBytes: Uint8Array,
   mimeType: string = "application/pdf",
+  fileUri?: string,
 ): Promise<Array<{ key: string; value: string; confidence?: number; page?: number }>> {
   console.log(`[ocr] Extracting visible key-value pairs (${mimeType}, ${fileBytes.length} bytes)`);
 
@@ -187,6 +196,7 @@ Rules:
 6. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all meaningful field/value pairs from this document for a review UI.",
     fileBytes,
+    fileUri,
     fileMimeType: mimeType,
     maxOutputTokens: 8192,
     temperature: 0,
