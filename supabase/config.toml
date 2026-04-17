@@ -71,6 +71,10 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+[functions.review-approve]
+enabled = true
+verify_jwt = false
+
 # Onboarding & Auth Functions
 [functions.first-login]
 enabled = true

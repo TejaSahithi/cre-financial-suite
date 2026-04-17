@@ -190,6 +190,8 @@ function buildReviewPayload(opts: {
     };
   });
 
+  const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
+
   return {
     schema_version: 2,
     file_id: fileId,
@@ -203,12 +205,27 @@ function buildReviewPayload(opts: {
     review_status: "pending",
     records: rows,
     rows,
-    global_warnings: result.warnings,
-    warnings: result.warnings,
+    global_warnings: userWarnings,
+    warnings: userWarnings,
     validation_errors: result.validationErrors,
     metadata: result.metadata,
     built_at: new Date().toISOString(),
   };
+}
+
+function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
+  const out: string[] = [];
+  for (const warning of warnings) {
+    const text = String(warning || "");
+    if (rowCount > 0 && /no tables found/i.test(text)) continue;
+    if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {
+      const sanitized = "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
+      if (!out.includes(sanitized)) out.push(sanitized);
+      continue;
+    }
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
 }
 
 function buildReviewField(opts: {

@@ -139,6 +139,21 @@ function createLogger(moduleType: string, fileName: string) {
   };
 }
 
+function sanitizeUserWarning(warning: string): string {
+  const text = String(warning || "");
+  if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|Vertex AI|JWT|private_key/i.test(text)) {
+    return "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
+  }
+  return text;
+}
+
+function addWarnings(target: string[], warnings: string[]) {
+  for (const warning of warnings || []) {
+    const sanitized = sanitizeUserWarning(warning);
+    if (sanitized && !target.includes(sanitized)) target.push(sanitized);
+  }
+}
+
 // ── Main pipeline ────────────────────────────────────────────────────────────
 
 /**
@@ -227,7 +242,7 @@ export async function runExtractionPipeline(
   // ── STEP 1: Rule-Based Extraction ────────────────────────────────────────
   log.step(1, "Rule-Based Extraction");
   const ruleResult = extractRuleBased(docling, moduleType);
-  allWarnings.push(...ruleResult.warnings);
+  addWarnings(allWarnings, ruleResult.warnings);
 
   const ruleFieldCount = ruleResult.records.reduce(
     (sum, r) => sum + Object.keys(r.fields).length, 0,
@@ -238,7 +253,7 @@ export async function runExtractionPipeline(
   // ── STEP 2: Table-Based Extraction ───────────────────────────────────────
   log.step(2, "Table-Based Extraction", `tables=${docling.tables?.length ?? 0}`);
   const tableResult = extractFromTables(docling.tables ?? [], moduleType);
-  allWarnings.push(...tableResult.warnings);
+  addWarnings(allWarnings, tableResult.warnings);
 
   const tableFieldCount = tableResult.records.reduce(
     (sum, r) => sum + Object.keys(r.fields).length, 0,
@@ -267,7 +282,7 @@ export async function runExtractionPipeline(
         existingMerge.records,
         { maxChunks: maxLLMChunks, temperature: llmTemperature },
       );
-      allWarnings.push(...llmResult.warnings);
+      addWarnings(allWarnings, llmResult.warnings);
 
       // Check if LLM was skipped (Vertex AI not configured)
       const llmSkipped = llmResult.warnings.some((w) =>
@@ -276,11 +291,11 @@ export async function runExtractionPipeline(
       );
       if (llmSkipped) {
         log.warn("LLM skipped — Vertex AI not configured. Only rule/table extraction results available.");
-        allWarnings.push(
+        addWarnings(allWarnings, [
           "⚠️ LLM extraction was skipped because Vertex AI (VERTEX_PROJECT_ID / GOOGLE_SERVICE_ACCOUNT_KEY) is not configured. " +
           "Fields not found by rule-based or table extraction will be empty. " +
           "Configure Vertex AI to enable full AI extraction."
-        );
+        ]);
       }
 
       llmFieldCount = llmResult.records.reduce(
@@ -293,13 +308,13 @@ export async function runExtractionPipeline(
     }
   } else {
     log.info("Step 3 skipped — LLM disabled by options");
-    allWarnings.push("LLM extraction was skipped (disabled by options)");
+    addWarnings(allWarnings, ["LLM extraction was skipped (disabled by options)"]);
   }
 
   // ── STEP 4: Merge Results ────────────────────────────────────────────────
   log.step(4, "Merge", "rule > table > llm by confidence");
   const merged = mergeResults(ruleResult, tableResult, llmResult, moduleType);
-  allWarnings.push(...merged.warnings);
+  addWarnings(allWarnings, merged.warnings);
   log.info(`Merged: ${merged.records.length} record(s)`);
 
   // Log extracted fields for debugging

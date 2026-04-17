@@ -56,9 +56,27 @@ export const LEASE_SCHEMA: ModuleSchema = {
   },
   property_name: {
     type: "string",
-    labels: ["property", "property name", "building", "building name", "premises"],
+    labels: ["property", "property name", "building", "building name"],
     tableHeaders: ["property", "property_name", "property name", "building"],
     description: "Name of the property or building",
+  },
+  property_address: {
+    type: "string",
+    required: true,
+    labels: ["property address", "premises", "premises address", "address", "location", "street address"],
+    tableHeaders: ["property_address", "property address", "premises", "address", "location", "street address"],
+    patterns: [
+      /(?:premises|property\s+address|premises\s+address|street\s+address|address)[:\s]+([^\n]{4,180})/i,
+    ],
+    description: "Street address or premises description for the leased property",
+  },
+  landlord_name: {
+    type: "string",
+    required: true,
+    labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
+    tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
+    patterns: [/(?:landlord|lessor|owner)[:\s]+([^\n]{2,120})/i],
+    description: "Name of the landlord, lessor, or property owner",
   },
   assignor_name: {
     type: "string",
@@ -137,9 +155,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
   annual_rent: {
     type: "number",
     min: 0,
-    derived: true,
-    labels: [],
-    description: "Annual rent (computed: monthly_rent × 12)",
+    labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year"],
+    tableHeaders: ["annual_rent", "annual rent", "yearly rent", "annual base rent"],
+    patterns: [
+      /(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i,
+    ],
+    description: "Annual rent in USD. Can be extracted or computed from monthly rent.",
   },
   rent_per_sf: {
     type: "number",
@@ -215,9 +237,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
   lease_term_months: {
     type: "number",
     min: 0,
-    derived: true,
-    labels: [],
-    description: "Lease term in months (computed from start/end dates)",
+    labels: ["lease term months", "term months", "lease term", "term"],
+    tableHeaders: ["lease_term_months", "term months", "lease term", "term"],
+    patterns: [
+      /(?:lease\s+term\s+months|term\s+months)[:\s]+(\d{1,3})/i,
+      /(?:lease\s+term|term)[:\s]+(\d{1,3})\s*(?:months|mos?\.?)/i,
+    ],
+    description: "Lease term in months. Can be extracted or computed from start/end dates.",
   },
   status: {
     type: "enum",
@@ -629,11 +655,11 @@ export function getSchema(moduleType: ModuleType): ModuleSchema {
 // Each group is one LLM call — keeps prompts focused and reduces hallucination
 
 const LEASE_GROUPS: FieldGroup[] = [
-  { name: "parties", fields: ["tenant_name", "property_name", "unit_number"], hint: "Identify the tenant, property, and unit/suite." },
+  { name: "parties", fields: ["tenant_name", "landlord_name", "property_name", "property_address", "unit_number"], hint: "Identify the tenant, landlord, property name, property address/premises, and unit/suite." },
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, and notice address." },
   { name: "dates", fields: ["start_date", "end_date"], hint: "Find lease commencement and expiration dates." },
-  { name: "financial", fields: ["monthly_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"], hint: "Extract rent amounts, deposits, CAM charges, and escalation rates." },
-  { name: "terms", fields: ["square_footage", "lease_type", "renewal_options", "ti_allowance", "free_rent_months", "status"], hint: "Find space size, lease type, renewal terms, and TI allowance." },
+  { name: "financial", fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"], hint: "Extract monthly rent, annual rent, deposits, CAM charges, and escalation rates." },
+  { name: "terms", fields: ["square_footage", "lease_type", "lease_term_months", "renewal_options", "ti_allowance", "free_rent_months", "status"], hint: "Find space size, lease type, term months, renewal terms, and TI allowance." },
 ];
 
 const EXPENSE_GROUPS: FieldGroup[] = [

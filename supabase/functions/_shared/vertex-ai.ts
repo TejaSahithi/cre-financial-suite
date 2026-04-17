@@ -79,6 +79,55 @@ async function signJWT(payload: Record<string, unknown>, privateKeyPem: string):
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
 
+function buildServiceAccountFromFallbackVars(): ServiceAccountKey | null {
+  const clientEmail = Deno.env.get("GOOGLE_CLIENT_EMAIL");
+  const privateKey = Deno.env.get("GOOGLE_PRIVATE_KEY")?.replace(/\\n/g, "\n");
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+
+  if (!clientEmail || !privateKey || !projectId) return null;
+
+  console.log("[vertex-ai] Constructing service account key from individual environment variables");
+  return {
+    client_email: clientEmail,
+    private_key: privateKey,
+    project_id: projectId,
+    type: "service_account",
+    private_key_id: "synthesized",
+    client_id: "synthesized",
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+  };
+}
+
+function parseServiceAccountKey(raw: string): ServiceAccountKey | null {
+  const candidates = [
+    raw,
+    raw.replace(/\\n/g, "\n"),
+  ];
+
+  try {
+    candidates.push(atob(raw));
+  } catch {
+    // Not base64; ignore.
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed?.client_email && parsed?.private_key) {
+        return {
+          ...parsed,
+          private_key: String(parsed.private_key).replace(/\\n/g, "\n"),
+        };
+      }
+    } catch {
+      // Try the next representation.
+    }
+  }
+
+  return null;
+}
+
 /**
  * Get a Google OAuth2 access token from the service account key.
  * Caches the token until 5 minutes before expiry.
@@ -90,36 +139,17 @@ async function getAccessToken(): Promise<string> {
     return _cachedToken.token;
   }
 
-  let saKeyRaw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+  const saKeyRaw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
   let saKey: ServiceAccountKey;
 
   if (!saKeyRaw) {
-    // Fallback: try to construct from individual environment variables
-    const clientEmail = Deno.env.get("GOOGLE_CLIENT_EMAIL");
-    const privateKey = Deno.env.get("GOOGLE_PRIVATE_KEY")?.replace(/\\n/g, "\n");
-    const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
-
-    if (clientEmail && privateKey && projectId) {
-      console.log("[vertex-ai] Constructing service account key from individual environment variables");
-      saKey = {
-        client_email: clientEmail,
-        private_key: privateKey,
-        project_id: projectId,
-        type: "service_account",
-        private_key_id: "synthesized",
-        client_id: "synthesized",
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-      };
-    } else {
-      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY environment variable is not set and fallback variables are missing");
-    }
+    const fallbackKey = buildServiceAccountFromFallbackVars();
+    if (!fallbackKey) throw new Error("Vertex AI service account is not configured");
+    saKey = fallbackKey;
   } else {
-    try {
-      saKey = JSON.parse(saKeyRaw);
-    } catch {
-      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON");
-    }
+    const parsedKey = parseServiceAccountKey(saKeyRaw) ?? buildServiceAccountFromFallbackVars();
+    if (!parsedKey) throw new Error("Vertex AI service account configuration is invalid");
+    saKey = parsedKey;
   }
 
   const iat = now;

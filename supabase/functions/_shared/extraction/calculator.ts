@@ -79,9 +79,12 @@ function computeLeaseDerived(row: Row): void {
     const s = new Date(startDate + "T00:00:00Z");
     const e = new Date(endDate + "T00:00:00Z");
     if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && e > s) {
-      const months =
-        (e.getUTCFullYear() - s.getUTCFullYear()) * 12 +
-        (e.getUTCMonth() - s.getUTCMonth());
+      const exclusiveEnd = new Date(e);
+      exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+      let months =
+        (exclusiveEnd.getUTCFullYear() - s.getUTCFullYear()) * 12 +
+        (exclusiveEnd.getUTCMonth() - s.getUTCMonth());
+      if (exclusiveEnd.getUTCDate() < s.getUTCDate()) months -= 1;
       if (months > 0) row.lease_term_months = months;
     }
   }
