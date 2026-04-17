@@ -47,6 +47,7 @@ async function callEdgeFunction(
   body: Record<string, unknown>,
   authToken: string,
   retries = 3,
+  timeoutMs = 120000,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
   const authorization = authToken.match(/^Bearer\s+/i) ? authToken : `Bearer ${authToken}`;
@@ -63,7 +64,7 @@ async function callEdgeFunction(
           "apikey": Deno.env.get("SUPABASE_ANON_KEY") ?? "",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30000), // 30 second timeout
+        signal: AbortSignal.timeout(timeoutMs),
       });
       
       const data = await res.json().catch(() => ({}));
@@ -76,7 +77,12 @@ async function callEdgeFunction(
       // If it's a client error (4xx), don't retry
       if (res.status >= 400 && res.status < 500) {
         console.log(`[ingest-file] ${functionName} failed with client error ${res.status}, not retrying`);
-        return { ok: false, status: res.status, data, error: `Client error: ${res.status}` };
+        const message =
+          (data as any)?.message ||
+          (data as any)?.error_details ||
+          (data as any)?.error_code ||
+          `Client error: ${res.status}`;
+        return { ok: false, status: res.status, data, error: message };
       }
       
       // Server error (5xx) - retry with exponential backoff
@@ -87,7 +93,12 @@ async function callEdgeFunction(
         continue;
       }
       
-      return { ok: false, status: res.status, data, error: `Server error after ${retries} attempts` };
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: (data as any)?.message || (data as any)?.error_details || `Server error after ${retries} attempts`,
+      };
       
     } catch (err) {
       console.error(`[ingest-file] ${functionName} attempt ${attempt} failed:`, err.message);

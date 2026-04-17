@@ -60,6 +60,48 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["property", "property_name", "property name", "building"],
     description: "Name of the property or building",
   },
+  assignor_name: {
+    type: "string",
+    labels: ["assignor", "original tenant", "current tenant", "seller", "transferor"],
+    tableHeaders: ["assignor", "assignor_name", "original tenant", "transferor"],
+    patterns: [/(?:assignor|original tenant|transferor)[:\s]+([^\n]{2,120})/i],
+    description: "For lease assignments, the party assigning or transferring the lease",
+  },
+  assignee_name: {
+    type: "string",
+    labels: ["assignee", "new tenant", "successor tenant", "buyer", "transferee"],
+    tableHeaders: ["assignee", "assignee_name", "new tenant", "transferee"],
+    patterns: [/(?:assignee|new tenant|transferee)[:\s]+([^\n]{2,120})/i],
+    description: "For lease assignments, the party receiving or assuming the lease",
+  },
+  assignment_effective_date: {
+    type: "date",
+    labels: ["assignment effective date", "effective date", "date of assignment", "assignment date"],
+    tableHeaders: ["assignment_effective_date", "effective date", "assignment date"],
+    patterns: [
+      /(?:assignment\s+effective\s+date|date\s+of\s+assignment|assignment\s+date)[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+    ],
+    description: "For lease assignments, the assignment effective date in YYYY-MM-DD",
+  },
+  landlord_consent: {
+    type: "boolean",
+    labels: ["landlord consent", "consent", "consent required", "landlord approval"],
+    tableHeaders: ["landlord_consent", "consent", "landlord approval"],
+    patterns: [/(?:landlord\s+consent|landlord\s+approval|consent)[:\s]+(yes|no|true|false|required|received|granted)/i],
+    description: "Whether landlord consent or approval is stated for the assignment",
+  },
+  assumption_scope: {
+    type: "string",
+    labels: ["assumption", "assumption scope", "assumes", "obligations assumed", "scope of assumption"],
+    tableHeaders: ["assumption_scope", "assumption", "obligations assumed"],
+    description: "Assignment assumption language or obligations assumed by the assignee",
+  },
+  assignee_notice_address: {
+    type: "string",
+    labels: ["assignee notice address", "notice address", "address for notices", "assignee address"],
+    tableHeaders: ["assignee_notice_address", "notice address", "assignee address"],
+    description: "Notice address for the assignee or new tenant",
+  },
   unit_number: {
     type: "string",
     labels: ["unit", "suite", "space", "unit number", "suite number", "space number"],
@@ -588,6 +630,7 @@ export function getSchema(moduleType: ModuleType): ModuleSchema {
 
 const LEASE_GROUPS: FieldGroup[] = [
   { name: "parties", fields: ["tenant_name", "property_name", "unit_number"], hint: "Identify the tenant, property, and unit/suite." },
+  { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, and notice address." },
   { name: "dates", fields: ["start_date", "end_date"], hint: "Find lease commencement and expiration dates." },
   { name: "financial", fields: ["monthly_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"], hint: "Extract rent amounts, deposits, CAM charges, and escalation rates." },
   { name: "terms", fields: ["square_footage", "lease_type", "renewal_options", "ti_allowance", "free_rent_months", "status"], hint: "Find space size, lease type, renewal terms, and TI allowance." },

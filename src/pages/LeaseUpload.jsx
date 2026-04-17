@@ -7,6 +7,7 @@ import ReviewPanel from "@/components/ReviewPanel";
 import ScopeSelector from "@/components/ScopeSelector";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { createPageUrl } from "@/utils";
@@ -38,6 +39,7 @@ export default function LeaseUpload() {
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [retryingExtraction, setRetryingExtraction] = useState(false);
   const retriedUploadedFiles = useRef(new Set());
 
   const { data: properties = [] } = useOrgQuery("Property");
@@ -256,6 +258,27 @@ export default function LeaseUpload() {
     await fetchFileRecord(fileId);
   };
 
+  const retryExtraction = async () => {
+    if (!fileId) return;
+    setRetryingExtraction(true);
+    const { data, error } = await supabase.functions.invoke("ingest-file", {
+      body: {
+        file_id: fileId,
+        module_type: "leases",
+      },
+    });
+    setRetryingExtraction(false);
+
+    if (error || data?.error) {
+      toast.error(data?.message || error?.message || "Could not restart extraction.");
+      await fetchFileRecord(fileId);
+      return;
+    }
+
+    toast.success("Extraction restarted.");
+    await fetchFileRecord(fileId);
+  };
+
   const statusLabel = fileRecord?.status ? fileRecord.status.replace(/_/g, " ") : "waiting";
   const reviewPayload = fileRecord?.ui_review_payload || null;
 
@@ -340,8 +363,18 @@ export default function LeaseUpload() {
 
       {fileRecord?.status === "failed" && (
         <Card className="border-red-200 bg-red-50">
-          <CardContent className="p-4 text-sm text-red-700">
-            {fileRecord.error_message || "Processing failed."}
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-red-700">
+            <span>{fileRecord.error_message || "Processing failed."}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={retryExtraction}
+              disabled={retryingExtraction}
+              className="border-red-200 bg-white text-red-700 hover:bg-red-100"
+            >
+              {retryingExtraction && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Retry extraction
+            </Button>
           </CardContent>
         </Card>
       )}
