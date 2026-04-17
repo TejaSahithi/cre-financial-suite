@@ -188,8 +188,19 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
       "No parser backend available. Set DOCLING_API_URL or Vertex AI credentials.",
     ]), "none");
   }
-  const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
-  return tag(ocrTextToDocling(ocrText), "gemini_vision");
+  try {
+    const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
+    return tag(ocrTextToDocling(ocrText), "gemini_vision");
+  } catch (err) {
+    console.warn(`[parser] Vision OCR failed: ${err.message}`);
+    if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
+      const doclingOutput = await callDocling(ctx);
+      if (doclingOutput) {
+        return tag(doclingOutput, "docling");
+      }
+    }
+    return tag(emptyOutput([`Vision OCR failed: ${err.message}`]), "none");
+  }
 }
 
 /**
@@ -203,8 +214,18 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
     return await runDoclingOnly(ctx);
   }
 
-  const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
-  const visionOutput = ocrTextToDocling(ocrText);
+  let visionOutput: DoclingOutput | null = null;
+  try {
+    const ocrText = await runPaddleOCR(ctx.fileBytes, ctx.mimeType);
+    visionOutput = ocrTextToDocling(ocrText);
+  } catch (err) {
+    console.warn(`[parser] Vision-first OCR failed, falling back to Docling: ${err.message}`);
+    if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
+      const doclingOutput = await callDocling(ctx);
+      if (doclingOutput) return tag(doclingOutput, "docling");
+    }
+    return tag(emptyOutput([`Vision OCR failed: ${err.message}`]), "none");
+  }
 
   if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType)) {
     return tag(visionOutput, "gemini_vision");
