@@ -96,6 +96,7 @@ function buildReviewPayload(opts: {
   documentSubtype: string | null;
   extractionMethod: string | null;
   reviewRequired: boolean;
+  doclingRaw?: Record<string, unknown> | null;
   result: {
     rows: Record<string, unknown>[];
     method: string;
@@ -104,7 +105,7 @@ function buildReviewPayload(opts: {
     metadata: Record<string, unknown>;
   };
 }) {
-  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, result } = opts;
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, doclingRaw, result } = opts;
   const extractionModuleType = toExtractionModuleType(moduleType);
   const schema = getSchema(extractionModuleType);
   const schemaEntries = Object.entries(schema)
@@ -117,6 +118,8 @@ function buildReviewPayload(opts: {
   const source = sourceFromMethod(extractionMethod ?? result.method);
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
+    const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
+    const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
     const rowConfidence = normalizeConfidence(
       r.confidence_score ?? result.metadata?.avgConfidence,
     ) ?? avgConfidence;
@@ -126,29 +129,37 @@ function buildReviewPayload(opts: {
         recordIndex: index,
         fieldKey,
         value,
-        confidence: rowConfidence,
-        source,
+        confidence: normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence,
+        source: fieldSources[fieldKey] ?? source,
         isStandard: true,
         required: !!def.required,
         fieldType: def.type ?? "string",
         description: def.description,
       });
     });
-    const customFields = Object.entries(values)
+    const customFieldsFromRows = Object.entries(values)
       .filter(([key]) => !schemaKeys.has(key) && !isInternalReviewKey(key))
       .map(([fieldKey, value]) =>
         buildReviewField({
           recordIndex: index,
           fieldKey,
           value,
-          confidence: rowConfidence,
-          source,
+          confidence: normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence,
+          source: fieldSources[fieldKey] ?? source,
           isStandard: false,
           required: false,
           fieldType: inferFieldType(value),
           description: "Useful extracted content that does not map to a standard field.",
         })
       );
+    const customFieldsFromDocument = buildCustomFieldsFromDocument({
+      doclingRaw,
+      schema,
+      schemaKeys,
+      recordIndex: index,
+      existingKeys: new Set(customFieldsFromRows.map((field) => normalizeKey(field.field_key))),
+    });
+    const customFields = [...customFieldsFromRows, ...customFieldsFromDocument];
     const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
 
     return {
@@ -245,10 +256,107 @@ function isInternalReviewKey(key: string): boolean {
   return [
     "confidence_score",
     "extraction_notes",
+    "_field_confidences",
+    "_field_sources",
     "source",
     "warnings",
     "validation_errors",
   ].includes(key);
+}
+
+function buildCustomFieldsFromDocument(args: {
+  doclingRaw?: Record<string, unknown> | null;
+  schema: Record<string, any>;
+  schemaKeys: Set<string>;
+  recordIndex: number;
+  existingKeys: Set<string>;
+}) {
+  const { doclingRaw, schema, schemaKeys, recordIndex, existingKeys } = args;
+  if (!doclingRaw) return [];
+
+  const standardAliases = buildStandardAliases(schema);
+  const candidates: Array<{ key: string; value: unknown; confidence: number; source: string }> = [];
+
+  for (const field of Array.isArray((doclingRaw as any).fields) ? (doclingRaw as any).fields : []) {
+    const key = String(field?.key ?? field?.label ?? "").trim();
+    const value = field?.value ?? field?.text ?? null;
+    if (!key || isBlank(value)) continue;
+    candidates.push({
+      key,
+      value,
+      confidence: normalizeConfidence(field?.confidence) ?? 0.72,
+      source: "document",
+    });
+  }
+
+  const fullText = String((doclingRaw as any).full_text ?? "");
+  for (const line of fullText.split(/\n/).slice(0, 300)) {
+    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9 /&().#-]{2,48})\s*[:\-]\s*(.{2,160})\s*$/);
+    if (!match) continue;
+    const key = match[1].trim();
+    const value = match[2].trim();
+    if (!key || isBlank(value)) continue;
+    candidates.push({ key, value, confidence: 0.6, source: "document_text" });
+  }
+
+  const out = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = normalizeKey(candidate.key);
+    if (!normalized || schemaKeys.has(normalized)) continue;
+    if (existingKeys.has(normalized) || seen.has(normalized)) continue;
+    if (standardAliases.has(normalized)) continue;
+    if (looksLikeNoise(candidate.key, candidate.value)) continue;
+
+    seen.add(normalized);
+    out.push(
+      buildReviewField({
+        recordIndex,
+        fieldKey: normalized,
+        value: candidate.value,
+        confidence: candidate.confidence,
+        source: candidate.source,
+        isStandard: false,
+        required: false,
+        fieldType: inferFieldType(candidate.value),
+        description: "Extra field interpreted from the document and available for user approval.",
+      }),
+    );
+    if (out.length >= 20) break;
+  }
+
+  return out;
+}
+
+function buildStandardAliases(schema: Record<string, any>) {
+  const aliases = new Set<string>();
+  for (const [fieldKey, def] of Object.entries(schema)) {
+    aliases.add(normalizeKey(fieldKey));
+    for (const label of def?.labels ?? []) aliases.add(normalizeKey(label));
+    for (const header of def?.tableHeaders ?? []) aliases.add(normalizeKey(header));
+  }
+  return aliases;
+}
+
+function normalizeKey(key: string): string {
+  return String(key)
+    .trim()
+    .toLowerCase()
+    .replace(/[#%]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+}
+
+function looksLikeNoise(key: string, value: unknown): boolean {
+  const normalized = normalizeKey(key);
+  if (!normalized || normalized.length < 3) return true;
+  if (["page", "date", "signature", "initials"].includes(normalized)) return false;
+  if (/^(the|and|or|of|to|from|for|in|on|with)$/.test(normalized)) return true;
+  const stringValue = String(value ?? "").trim();
+  if (stringValue.length < 2) return true;
+  if (stringValue.length > 240) return true;
+  return false;
 }
 
 function normalizeConfidence(value: unknown): number | null {
@@ -400,6 +508,7 @@ Deno.serve(async (req: Request) => {
         documentSubtype: fileRecord.document_subtype ?? null,
         extractionMethod: fileRecord.extraction_method ?? null,
         reviewRequired: !!fileRecord.review_required,
+        doclingRaw: fileRecord.docling_raw ?? null,
         result,
       });
 

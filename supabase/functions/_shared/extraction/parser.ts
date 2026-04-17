@@ -148,7 +148,17 @@ function looksLikeScannedPdf(bytes: Uint8Array): boolean {
     if (b === 9 || b === 10 || b === 13 || (b >= 32 && b <= 126)) printable++;
   }
   const ratio = printable / sampleLen;
-  return ratio < SCAN_TEXT_RATIO_THRESHOLD;
+  if (ratio < SCAN_TEXT_RATIO_THRESHOLD) return true;
+
+  const sampleText = new TextDecoder("latin1", { fatal: false })
+    .decode(bytes.slice(0, sampleLen));
+  const imageMarkers = (sampleText.match(/\/(?:Image|XObject|DCTDecode|JPXDecode|FlateDecode)/g) ?? []).length;
+  const textOperators = (sampleText.match(/\b(?:BT|ET|Tj|TJ|Tf|Td|Tm)\b/g) ?? []).length;
+
+  // Scanned leases are usually image streams wrapped in a PDF shell.
+  // They can still have a high printable ratio because PDF syntax itself is
+  // printable, so use image-vs-text structure as the stronger signal.
+  return imageMarkers >= 3 && textOperators < 5;
 }
 
 // ── Strategy implementations ────────────────────────────────────────────────
@@ -271,7 +281,7 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
   if (!canDoclingHandle(ctx.mimeType)) return null;
 
   const apiKey = Deno.env.get("DOCLING_API_KEY");
-  const maxRetries = 2;
+  const maxRetries = 1;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -291,7 +301,7 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
       if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
 
       const response = await fetch(`${doclingUrl}/api/v1/convert`, {
         method: "POST",
