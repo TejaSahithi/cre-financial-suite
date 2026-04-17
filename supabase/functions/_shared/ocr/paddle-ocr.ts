@@ -10,7 +10,7 @@
  * and is already configured in this project via Vertex AI.
  */
 
-import { callVertexAIWithFile } from "../vertex-ai.ts";
+import { callVertexAIFileJSON, callVertexAIWithFile } from "../vertex-ai.ts";
 
 const OCR_SYSTEM_PROMPT = `You are a precise OCR engine. Extract ALL visible text from this document exactly as it appears.
 
@@ -74,6 +74,61 @@ export async function runPaddleOCR(fileBytes: Uint8Array, mimeType: string = "ap
     }
     throw new Error(`Gemini Vision OCR failed: ${err.message}`);
   }
+}
+
+export async function extractVisibleKeyValues(
+  fileBytes: Uint8Array,
+  mimeType: string = "application/pdf",
+): Promise<Array<{ key: string; value: string; confidence?: number; page?: number }>> {
+  console.log(`[ocr] Extracting visible key-value pairs (${mimeType}, ${fileBytes.length} bytes)`);
+
+  const hasVertexAI = !!(
+    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
+  ) && !!(
+    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  );
+
+  if (!hasVertexAI) {
+    throw new Error(
+      "Key-value extraction requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+    );
+  }
+
+  const result = await callVertexAIFileJSON<{
+    fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number }>;
+  }>({
+    systemPrompt: `You extract structured data from commercial real estate legal documents.
+
+Return JSON only with this shape:
+{"fields":[{"key":"field name exactly as seen or clearly implied","value":"field value exactly as seen","confidence":0.0,"page":1}]}
+
+Rules:
+1. Extract every visible meaningful field/value pair, party, date, address, legal reference, premises, suite/unit, rent, term, assignment, assignor, assignee, landlord, tenant, consent, notice address, CAM, exhibits, signatures, and notary details.
+2. Do not invent values. If a value is not visible, omit that field.
+3. Preserve names and addresses exactly.
+4. Split compound clauses into useful field/value pairs when possible.
+5. Use snake_case-like concise keys when the document has no explicit label.
+6. Return valid JSON only. No markdown.`,
+    userPrompt: "Extract all meaningful field/value pairs from this document for a review UI.",
+    fileBytes,
+    fileMimeType: mimeType,
+    maxOutputTokens: 8192,
+    temperature: 0,
+  });
+
+  const fields = Array.isArray(result?.fields) ? result.fields : [];
+  const cleaned = fields
+    .map((field) => ({
+      key: String(field?.key ?? "").trim(),
+      value: String(field?.value ?? "").trim(),
+      confidence: typeof field?.confidence === "number" ? field.confidence : 0.72,
+      page: typeof field?.page === "number" ? field.page : undefined,
+    }))
+    .filter((field) => field.key.length > 0 && field.value.length > 0)
+    .slice(0, 120);
+
+  console.log(`[ocr] Gemini key-value extraction complete: ${cleaned.length} fields`);
+  return cleaned;
 }
 
 /**

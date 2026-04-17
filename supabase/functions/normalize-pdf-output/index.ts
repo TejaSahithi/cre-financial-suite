@@ -131,6 +131,10 @@ function buildReviewPayload(opts: {
   const source = sourceFromMethod(extractionMethod ?? result.method);
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
+    if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
+      const camNote = extractCamNoteFromText(doclingRaw);
+      if (camNote) values.notes = camNote;
+    }
     const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
     const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
     const rowConfidence = normalizeConfidence(
@@ -231,6 +235,9 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   for (const warning of warnings) {
     const text = String(warning || "");
     if (rowCount > 0 && /no tables found/i.test(text)) continue;
+    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT|Vertex AI|AI fallback/i.test(text)) {
+      continue;
+    }
     if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {
       const sanitized = "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
       if (!out.includes(sanitized)) out.push(sanitized);
@@ -380,13 +387,37 @@ function normalizeKey(key: string): string {
 
 function looksLikeNoise(key: string, value: unknown): boolean {
   const normalized = normalizeKey(key);
-  if (!normalized || normalized.length < 3) return true;
+  if (!normalized || normalized.length < 4) return true;
   if (["page", "date", "signature", "initials"].includes(normalized)) return false;
   if (/^(the|and|or|of|to|from|for|in|on|with)$/.test(normalized)) return true;
   const stringValue = String(value ?? "").trim();
   if (stringValue.length < 2) return true;
   if (stringValue.length > 240) return true;
+  if (/^(pro|cam|nnn|sf|psf)$/.test(normalized)) return true;
+  if (/(common area maintenance|\bcam\b|pro[\s-]?rata)/i.test(`${key} ${stringValue}`)) return true;
+  if (/^[a-z]/.test(stringValue) && normalized.length <= 10) return true;
   return false;
+}
+
+function extractCamNoteFromText(doclingRaw?: Record<string, unknown> | null): string | null {
+  const text = String((doclingRaw as any)?.full_text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return null;
+
+  const patterns = [
+    /(?:pro[\s-]?rata[^.]{0,220}(?:common area maintenance|\bcam\b)[^.]{0,220}\.)/i,
+    /(?:(?:common area maintenance|\bcam\b)[^.]{0,260}\.)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[0]) {
+      return match[0].replace(/\s+/g, " ").trim().slice(0, 300);
+    }
+  }
+
+  return null;
 }
 
 function normalizeConfidence(value: unknown): number | null {

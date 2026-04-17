@@ -72,9 +72,16 @@ function normalizeDoclingOutput(docling: DoclingOutput): DoclingOutput {
 
   normalized.text_blocks = normalizedBlocks;
 
-  // 2. Rebuild full_text from normalized blocks
-  const fullText = normalizedBlocks.map((b) => b.text).join("\n");
-  normalized.full_text = fullText;
+  // 2. Rebuild full_text from normalized blocks plus explicit key/value fields.
+  // Scanned PDFs can return sparse OCR text but rich Vision key/value pairs;
+  // those fields must still feed rule extraction and prevent false
+  // "document text too short" fallback.
+  const blockText = normalizedBlocks.map((b) => b.text).join("\n");
+  const fieldText = (docling.fields ?? [])
+    .filter((f) => f?.key && f?.value)
+    .map((f) => `${String(f.key).trim()}: ${String(f.value).trim()}`)
+    .join("\n");
+  normalized.full_text = [blockText, fieldText].filter(Boolean).join("\n");
 
   // 3. Normalize tables: clean header cells and trim values
   if (docling.tables && docling.tables.length > 0) {
@@ -214,9 +221,10 @@ export async function runExtractionPipeline(
   const docling = normalizeDoclingOutput(rawDocling);
 
   const fullText = docling.full_text ?? "";
+  const hasStructuredFields = (docling.fields?.length ?? 0) > 0;
   log.info(`Normalized: ${fullText.length} chars, ${docling.text_blocks?.length ?? 0} blocks, ${docling.tables?.length ?? 0} tables`);
 
-  if (fullText.trim().length < 10 && !input.fileBase64) {
+  if (fullText.trim().length < 10 && !input.fileBase64 && !hasStructuredFields) {
     log.warn("Document text too short and no file bytes available — aborting pipeline");
     return {
       rows: [],
@@ -235,7 +243,7 @@ export async function runExtractionPipeline(
     };
   }
 
-  if (fullText.trim().length < 10 && input.fileBase64) {
+  if (fullText.trim().length < 10 && input.fileBase64 && !hasStructuredFields) {
     log.info("Document text too short but fileBase64 present — skipping rule/table, delegating to LLM Vision");
   }
 

@@ -69,7 +69,8 @@ Deno.serve(async (req: Request) => {
       .from("uploaded_files")
       .select(
         "id, org_id, module_type, status, review_required, review_status, " +
-        "ui_review_payload, reviewed_output, review_audit, valid_data, parsed_data",
+        "ui_review_payload, reviewed_output, review_audit, valid_data, parsed_data, " +
+        "property_id, building_id, unit_id, file_name, document_subtype",
       )
       .eq("id", file_id)
       .eq("org_id", orgId)
@@ -98,11 +99,17 @@ Deno.serve(async (req: Request) => {
     }
 
     if (fileRecord.review_status === "approved" && action !== "save") {
-      const existingRows = Array.isArray(fileRecord.valid_data)
-        ? fileRecord.valid_data
-        : Array.isArray(fileRecord.parsed_data)
-          ? fileRecord.parsed_data
-          : [];
+      const existingRows = getExistingReviewedRows(fileRecord);
+      let storeResult: unknown = null;
+      if (isLeaseModule(fileRecord.module_type)) {
+        storeResult = await ensureLeaseReviewDrafts(
+          supabaseAdmin,
+          fileRecord,
+          existingRows,
+          fileRecord.reviewed_output ?? null,
+          user,
+        );
+      }
       return jsonResponse({
         error: false,
         file_id,
@@ -110,6 +117,8 @@ Deno.serve(async (req: Request) => {
         review_status: "approved",
         already_approved: true,
         message: `File ${file_id} has already been approved.`,
+        store_result: storeResult,
+        store_triggered: !!storeResult,
         reviewed_output: {
           accepted_count: 0,
           rejected_count: 0,
@@ -277,6 +286,44 @@ Deno.serve(async (req: Request) => {
     );
     if (approveErr) {
       throw new Error(`Approve status transition failed: ${approveErr.message}`);
+    }
+
+    if (isLeaseModule(fileRecord.module_type)) {
+      const leaseStoreResult = await ensureLeaseReviewDrafts(
+        supabaseAdmin,
+        fileRecord,
+        finalRows,
+        reviewedOutput,
+        user,
+      );
+
+      await setStatus(supabaseAdmin, file_id, "storing");
+      await setStatus(supabaseAdmin, file_id, "stored", {
+        reviewed_output: {
+          ...reviewedOutput,
+          status: "approved",
+          lease_review_ids: leaseStoreResult.inserted_ids,
+        },
+      });
+
+      return jsonResponse({
+        error: false,
+        file_id,
+        action,
+        review_status: "approved",
+        validate_result: {
+          skipped: true,
+          reason: "Lease documents are routed to Lease Review before final approval.",
+        },
+        store_result: leaseStoreResult,
+        store_triggered: true,
+        reviewed_output: {
+          accepted_count: reviewedOutput.accepted_fields.length,
+          rejected_count: reviewedOutput.rejected_fields.length,
+          custom_count: reviewedOutput.custom_fields.length,
+          row_count: finalRows.length,
+        },
+      });
     }
 
     const authHeader =
@@ -625,6 +672,301 @@ function dedupeFields(fields: any[]) {
 function appendAudit(existing: unknown, event: Record<string, unknown>) {
   const current = Array.isArray(existing) ? existing : [];
   return [...current, event];
+}
+
+function isLeaseModule(moduleType: string | null | undefined): boolean {
+  return moduleType === "leases" || moduleType === "lease";
+}
+
+function getExistingReviewedRows(fileRecord: any): Record<string, unknown>[] {
+  if (Array.isArray(fileRecord.reviewed_output?.final_records)) {
+    return fileRecord.reviewed_output.final_records;
+  }
+  if (Array.isArray(fileRecord.valid_data)) return fileRecord.valid_data;
+  if (Array.isArray(fileRecord.parsed_data)) return fileRecord.parsed_data;
+  const records = fileRecord.ui_review_payload?.records ?? fileRecord.ui_review_payload?.rows;
+  if (Array.isArray(records)) {
+    return records.map((record: any) =>
+      record?.values && typeof record.values === "object"
+        ? record.values
+        : flattenFields([
+          ...(record?.standard_fields ?? []),
+          ...(record?.custom_fields ?? []),
+        ], { includeMissingStandard: true })
+    );
+  }
+  return [];
+}
+
+async function ensureLeaseReviewDrafts(
+  supabaseAdmin: any,
+  fileRecord: any,
+  rows: Record<string, unknown>[],
+  reviewedOutput: any,
+  user: any,
+) {
+  const now = new Date().toISOString();
+  const existingIds = Array.isArray(reviewedOutput?.lease_review_ids)
+    ? reviewedOutput.lease_review_ids.filter(Boolean)
+    : [];
+  if (existingIds.length > 0) {
+    return {
+      table: "leases",
+      inserted_count: 0,
+      inserted_ids: existingIds,
+      existing: true,
+      draft_created: false,
+      route: "lease_review",
+    };
+  }
+
+  const finalRows = Array.isArray(rows) && rows.length > 0 ? rows : [buildEmptyLeaseReviewRow()];
+  const insertedIds: string[] = [];
+  let createdCount = 0;
+
+  for (const row of finalRows) {
+    const existingLeaseId = await findExistingLeaseDraft(supabaseAdmin, fileRecord, row);
+    if (existingLeaseId) {
+      insertedIds.push(existingLeaseId);
+      continue;
+    }
+
+    const leasePayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now);
+    const inserted = await insertLeaseDraft(supabaseAdmin, leasePayload);
+    insertedIds.push(inserted.id);
+    createdCount += 1;
+  }
+
+  return {
+    table: "leases",
+    inserted_count: createdCount,
+    inserted_ids: insertedIds,
+    existing: createdCount === 0,
+    draft_created: createdCount > 0,
+    route: "lease_review",
+  };
+}
+
+function buildEmptyLeaseReviewRow() {
+  return {
+    tenant_name: "Lease Review Draft",
+    start_date: null,
+    end_date: null,
+    monthly_rent: null,
+    square_footage: null,
+    lease_type: null,
+    notes: "Created from an approved document review with no structured fields.",
+  };
+}
+
+async function findExistingLeaseDraft(supabaseAdmin: any, fileRecord: any, row: Record<string, unknown>) {
+  const reviewedIds = Array.isArray(fileRecord.reviewed_output?.lease_review_ids)
+    ? fileRecord.reviewed_output.lease_review_ids.filter(Boolean)
+    : [];
+  if (reviewedIds.length > 0) return reviewedIds[0];
+
+  const sourceLookup = await supabaseAdmin
+    .from("leases")
+    .select("id")
+    .eq("org_id", fileRecord.org_id)
+    .eq("extraction_data->>source_file_id", fileRecord.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!sourceLookup.error && sourceLookup.data?.id) return sourceLookup.data.id;
+
+  const tenantName = String(row.tenant_name ?? "").trim();
+  if (!tenantName) return null;
+
+  let query = supabaseAdmin
+    .from("leases")
+    .select("id")
+    .eq("org_id", fileRecord.org_id)
+    .eq("tenant_name", tenantName)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  const propertyId = row.property_id ?? fileRecord.property_id;
+  if (propertyId) query = query.eq("property_id", propertyId);
+  if (row.start_date) query = query.eq("start_date", row.start_date);
+  if (row.end_date) query = query.eq("end_date", row.end_date);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    console.warn(`[review-approve] Existing lease lookup failed: ${error.message}`);
+    return null;
+  }
+  return data?.id ?? null;
+}
+
+function buildLeaseReviewDraftPayload(
+  fileRecord: any,
+  row: Record<string, unknown>,
+  reviewedOutput: any,
+  user: any,
+  now: string,
+) {
+  const confidenceScores = collectConfidenceScores(reviewedOutput);
+  const lowConfidenceFields = Object.entries(confidenceScores)
+    .filter(([, score]) => typeof score === "number" && score < 75)
+    .map(([field]) => field);
+  const customFields = Array.isArray(reviewedOutput?.custom_fields)
+    ? reviewedOutput.custom_fields.filter((field: any) => field?.status !== "rejected")
+    : [];
+  const rejectedFields = Array.isArray(reviewedOutput?.rejected_fields)
+    ? reviewedOutput.rejected_fields
+    : [];
+
+  const monthlyRent = toNumber(row.monthly_rent ?? row.base_rent);
+  const annualRent = toNumber(row.annual_rent) ?? (monthlyRent != null ? monthlyRent * 12 : null);
+  const squareFootage = toNumber(row.square_footage ?? row.total_sf);
+  const rentPerSf = toNumber(row.rent_per_sf) ??
+    (annualRent != null && squareFootage ? roundMoney(annualRent / squareFootage) : null);
+
+  return stripUndefined({
+    org_id: fileRecord.org_id,
+    property_id: row.property_id ?? fileRecord.property_id ?? null,
+    building_id: row.building_id ?? fileRecord.building_id ?? null,
+    unit_id: row.unit_id ?? fileRecord.unit_id ?? null,
+    tenant_name: row.tenant_name ?? "Lease Review Draft",
+    start_date: normalizeDate(row.start_date ?? row.lease_start),
+    end_date: normalizeDate(row.end_date ?? row.lease_end),
+    monthly_rent: monthlyRent ?? 0,
+    square_footage: squareFootage ?? 0,
+    lease_type: row.lease_type ?? null,
+    status: "pending_review",
+    created_by: user.email ?? user.id,
+    created_at: now,
+    updated_at: now,
+    annual_rent: annualRent,
+    rent_per_sf: rentPerSf,
+    lease_term_months: toInteger(row.lease_term_months),
+    security_deposit: toNumber(row.security_deposit),
+    cam_amount: toNumber(row.cam_amount),
+    nnn_amount: toNumber(row.nnn_amount),
+    escalation_rate: toNumber(row.escalation_rate),
+    renewal_options: row.renewal_options ?? null,
+    ti_allowance: toNumber(row.ti_allowance),
+    free_rent_months: toInteger(row.free_rent_months),
+    notes: row.notes ?? null,
+    escalation_type: row.escalation_type ?? null,
+    escalation_timing: row.escalation_timing ?? null,
+    cam_applicable: row.cam_applicable ?? null,
+    cam_cap: toNumber(row.cam_cap),
+    cam_cap_type: row.cam_cap_type ?? null,
+    cam_cap_rate: toNumber(row.cam_cap_rate),
+    admin_fee_pct: toNumber(row.admin_fee_pct),
+    management_fee_pct: toNumber(row.management_fee_pct),
+    management_fee_basis: row.management_fee_basis ?? null,
+    gross_up_clause: row.gross_up_clause ?? null,
+    allocation_method: row.allocation_method ?? null,
+    weight_factor: toNumber(row.weight_factor),
+    base_year_amount: toNumber(row.base_year_amount),
+    expense_stop_amount: toNumber(row.expense_stop_amount),
+    hvac_responsibility: row.hvac_responsibility ?? null,
+    sales_reporting_frequency: row.sales_reporting_frequency ?? null,
+    extraction_data: {
+      source: "document_review",
+      source_file_id: fileRecord.id,
+      source_file_name: fileRecord.file_name ?? null,
+      document_subtype: fileRecord.document_subtype ?? null,
+      confidence_scores: confidenceScores,
+      custom_fields: customFields,
+      rejected_fields: rejectedFields,
+      reviewed_at: reviewedOutput?.reviewed_at ?? now,
+      reviewed_by: reviewedOutput?.reviewed_by ?? user.id,
+    },
+    confidence_score: averageConfidence(confidenceScores),
+    low_confidence_fields: lowConfidenceFields,
+    extracted_fields: row,
+  });
+}
+
+async function insertLeaseDraft(supabaseAdmin: any, payload: Record<string, unknown>) {
+  let { data, error } = await supabaseAdmin
+    .from("leases")
+    .insert(payload)
+    .select("id")
+    .single();
+
+  if (error && looksLikeMissingLeaseMetadataColumn(error)) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.extraction_data;
+    delete fallbackPayload.confidence_score;
+    delete fallbackPayload.low_confidence_fields;
+    delete fallbackPayload.extracted_fields;
+    const retry = await supabaseAdmin
+      .from("leases")
+      .insert(fallbackPayload)
+      .select("id")
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error || !data?.id) {
+    throw new Error(`Failed to create lease review draft: ${error?.message ?? "No inserted id returned"}`);
+  }
+
+  return data;
+}
+
+function looksLikeMissingLeaseMetadataColumn(error: any): boolean {
+  const message = String(error?.message || error?.details || "");
+  const code = String(error?.code || "");
+  return code === "42703" ||
+    code === "PGRST204" ||
+    /extraction_data|confidence_score|low_confidence_fields|extracted_fields/i.test(message);
+}
+
+function collectConfidenceScores(reviewedOutput: any): Record<string, number> {
+  const scores: Record<string, number> = {};
+  const fields = [
+    ...(reviewedOutput?.accepted_fields ?? []),
+    ...(reviewedOutput?.user_edited_fields ?? []),
+  ];
+  for (const field of fields) {
+    if (!field?.field_key) continue;
+    const score = normalizeConfidence(field.confidence);
+    if (score == null) continue;
+    scores[field.field_key] = score <= 1 ? Math.round(score * 100) : Math.round(score);
+  }
+  return scores;
+}
+
+function averageConfidence(scores: Record<string, number>): number | null {
+  const values = Object.values(scores).filter((score) => typeof score === "number" && !Number.isNaN(score));
+  if (values.length === 0) return null;
+  return Math.round(values.reduce((sum, score) => sum + score, 0) / values.length);
+}
+
+function toNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const parsed = Number(String(value).replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toInteger(value: unknown): number | null {
+  const parsed = toNumber(value);
+  return parsed == null ? null : Math.round(parsed);
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeDate(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function stripUndefined(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined));
 }
 
 function normalizeConfidence(value: unknown): number | null {
