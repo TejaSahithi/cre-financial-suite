@@ -154,8 +154,10 @@ export function coerceValue(raw: string, fieldDef: FieldDef): unknown {
       return parseDate(trimmed);
     case "boolean": {
       const b = trimmed.toLowerCase();
-      if (["true", "yes", "y", "1"].includes(b)) return true;
-      if (["false", "no", "n", "0"].includes(b)) return false;
+      if (["true", "yes", "y", "1", "granted", "received", "approved"].includes(b)) return true;
+      if (["false", "no", "n", "0", "denied", "not granted", "not approved"].includes(b)) return false;
+      if (/\b(consents?|consented|approval|approved|grants?|granted)\b/i.test(trimmed)) return true;
+      if (/\b(does not consent|not approved|denied|withheld)\b/i.test(trimmed)) return false;
       return null;
     }
     case "enum":
@@ -180,8 +182,8 @@ function extractFromDoclingFields(
     for (const [fieldName, fieldDef] of Object.entries(schema)) {
       if (fieldDef.derived) continue;
 
-      const isMatch = fieldDef.labels.some(
-        (label) => keyLower === label || keyLower.includes(label) || label.includes(keyLower),
+      const isMatch = fieldDef.labels.some((label) =>
+        fieldKeyMatchesLabel(docField.key, label, fieldName, fieldDef),
       );
 
       if (isMatch) {
@@ -205,6 +207,50 @@ function extractFromDoclingFields(
   }
 
   return result;
+}
+
+function normalizeMatchKey(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[#%]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function fieldKeyMatchesLabel(
+  rawKey: string,
+  rawLabel: string,
+  fieldName: string,
+  fieldDef: FieldDef,
+): boolean {
+  const key = normalizeMatchKey(rawKey);
+  const label = normalizeMatchKey(rawLabel);
+  if (!key || !label) return false;
+
+  if (fieldDef.type === "date" && /_(day|month|year)$/.test(key)) {
+    return false;
+  }
+
+  if (fieldName === "property_address" && /(rentable|square|sq_ft|feet|area|sf)/.test(key)) {
+    return false;
+  }
+
+  if (fieldName === "monthly_rent" && /(annual|year|yearly|additional_year)/.test(key)) {
+    return false;
+  }
+
+  if (fieldName === "ti_allowance" && !/(^|_)ti($|_)|tenant_improvement|allowance|build_out/.test(key)) {
+    return false;
+  }
+
+  if (key === label) return true;
+  if (key.startsWith(`${label}_`) || key.endsWith(`_${label}`)) return true;
+  if (label.length >= 5 && key.includes(`_${label}_`)) return true;
+
+  // Very short labels like "ti", "sf", or "cam" are too dangerous for
+  // substring matching; "effective" contains "ti" and should never map to TI.
+  return false;
 }
 
 // ── Step 1b: Extract via regex patterns from text ────────────────────────────

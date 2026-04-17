@@ -155,7 +155,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   annual_rent: {
     type: "number",
     min: 0,
-    labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year"],
+    labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year", "base rent additional year", "additional year base rent"],
     tableHeaders: ["annual_rent", "annual rent", "yearly rent", "annual base rent"],
     patterns: [
       /(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
@@ -173,7 +173,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   square_footage: {
     type: "number",
     min: 0,
-    labels: ["square footage", "rentable area", "leased area", "sq ft", "rsf", "usable area", "area"],
+    labels: ["square footage", "rentable area", "leased area", "premises rentable square feet", "rentable square feet", "sq ft", "rsf", "usable area", "area"],
     tableHeaders: ["square_footage", "sqft", "sq ft", "sf", "rsf", "area", "square footage", "rentable sf"],
     patterns: [/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i],
     description: "Leased area in square feet (plain number)",
