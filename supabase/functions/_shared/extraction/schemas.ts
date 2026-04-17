@@ -75,7 +75,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     required: true,
     labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
     tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
-    patterns: [/(?:landlord|lessor|owner)[:\s]+([^\n]{2,120})/i],
+    patterns: [/(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i],
     description: "Name of the landlord, lessor, or property owner",
   },
   assignor_name: {

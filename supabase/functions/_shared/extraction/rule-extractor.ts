@@ -249,15 +249,28 @@ function extractViaLabels(
   schema: ModuleSchema,
 ): Record<string, ExtractedField> {
   const result: Record<string, ExtractedField> = {};
+  const allLabels = Object.values(schema)
+    .flatMap((fieldDef) => fieldDef.labels ?? [])
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const nextLabelLookahead = allLabels.length > 0
+    ? `(?=\\s+(?:${allLabels.join("|")})\\s*(?::|-|\\t| {2,})|\\n|$)`
+    : "(?=\\n|$)";
 
   for (const [fieldName, fieldDef] of Object.entries(schema)) {
     if (fieldDef.derived || result[fieldName]) continue;
     if (fieldDef.labels.length === 0) continue;
 
-    for (const label of fieldDef.labels) {
-      // Match "Label: value" or "Label  value" on the same line
+    const labelsBySpecificity = [...fieldDef.labels].sort((a, b) => b.length - a.length);
+    for (const label of labelsBySpecificity) {
+      // Match "Label: value", "Label - value", or table-like "Label  value".
+      // Do not treat normal prose like "Landlord and Tenant..." as a field.
       const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`${escaped}[:\\s]\\s*([^\\n]{1,200})`, "i");
+      const re = new RegExp(
+        `\\b${escaped}\\b\\s*(?::|-|\\t| {2,})\\s*([^\\n]{1,200}?)${nextLabelLookahead}`,
+        "i",
+      );
       const match = text.match(re);
 
       if (match) {
