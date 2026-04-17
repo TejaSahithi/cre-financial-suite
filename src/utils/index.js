@@ -5,10 +5,22 @@
 /**
  * Create a URL path for a page name.
  * @param {string} pageName - The page name (e.g., "Dashboard", "Properties")
- * @returns {string} The URL path (e.g., "/Dashboard")
+ * @param {Record<string, string | number | null | undefined>} [params]
+ * @returns {string} The URL path (e.g., "/Dashboard" or "/LeaseReview?id=...")
  */
-export function createPageUrl(pageName) {
-  return `/${pageName}`;
+export function createPageUrl(pageName, params = undefined) {
+  const path = `/${String(pageName).replace(/ /g, "-")}`;
+  if (!params || typeof params !== "object") return path;
+
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== null && value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 /**

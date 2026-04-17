@@ -98,14 +98,25 @@ Deno.serve(async (req: Request) => {
     }
 
     if (fileRecord.review_status === "approved" && action !== "save") {
-      return jsonResponse(
-        {
-          error: true,
-          message: `File ${file_id} has already been approved.`,
-          error_code: "ALREADY_APPROVED",
+      const existingRows = Array.isArray(fileRecord.valid_data)
+        ? fileRecord.valid_data
+        : Array.isArray(fileRecord.parsed_data)
+          ? fileRecord.parsed_data
+          : [];
+      return jsonResponse({
+        error: false,
+        file_id,
+        action,
+        review_status: "approved",
+        already_approved: true,
+        message: `File ${file_id} has already been approved.`,
+        reviewed_output: {
+          accepted_count: 0,
+          rejected_count: 0,
+          custom_count: 0,
+          row_count: existingRows.length,
         },
-        409,
-      );
+      });
     }
 
     if (fileRecord.review_status === "rejected" && action !== "save") {

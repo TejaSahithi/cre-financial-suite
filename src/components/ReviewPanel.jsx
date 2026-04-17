@@ -317,6 +317,8 @@ export default function ReviewPanel({
   onApprove,
   onReject,
   onSave,
+  approveLabel = "Approve and Store",
+  approveDescription = "Save the reviewed rows and continue the workflow.",
   approving = false,
   rejecting = false,
   saving = false,
@@ -682,6 +684,11 @@ export default function ReviewPanel({
             className="min-h-[72px] w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
           />
           <div className="flex flex-wrap justify-end gap-2">
+            {approveDescription && (
+              <p className="mr-auto max-w-xl self-center text-xs text-slate-500">
+                {approveDescription}
+              </p>
+            )}
             <Button
               variant="outline"
               onClick={() => onReject?.(rejectReason || "Rejected during review")}
@@ -704,7 +711,7 @@ export default function ReviewPanel({
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               {approving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-              Approve and Store
+              {approveLabel}
             </Button>
           </div>
         </CardContent>

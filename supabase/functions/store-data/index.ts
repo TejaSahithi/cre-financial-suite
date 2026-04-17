@@ -362,6 +362,7 @@ Deno.serve(async (req: Request) => {
           file_id,
           processing_status: "stored",
           inserted_count: insertedCount,
+          inserted_ids: (insertedData ?? []).map((row: any) => row.id).filter(Boolean),
           table: tableName,
           compute_triggered: true,
         }),
