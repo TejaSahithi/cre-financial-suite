@@ -175,6 +175,225 @@ export function coerceValue(raw: string, fieldDef: FieldDef): unknown {
   }
 }
 
+const CANONICAL_LEASE_FIELD_ALIASES: Record<string, string> = {
+  tenant: "tenant_name",
+  tenant_name: "tenant_name",
+  tenant_legal_name: "tenant_name",
+  tenant_company: "tenant_name",
+  tenant_entity: "tenant_name",
+  lessee: "tenant_name",
+  lessee_name: "tenant_name",
+  occupant: "tenant_name",
+  customer: "tenant_name",
+
+  landlord: "landlord_name",
+  landlord_name: "landlord_name",
+  landlord_legal_name: "landlord_name",
+  lessor: "landlord_name",
+  lessor_name: "landlord_name",
+  owner: "landlord_name",
+  owner_name: "landlord_name",
+
+  property: "property_name",
+  property_name: "property_name",
+  project_name: "property_name",
+  building_name: "property_name",
+  shopping_center: "property_name",
+  center_name: "property_name",
+
+  property_address: "property_address",
+  property_location: "property_address",
+  street_address: "property_address",
+  premises: "property_address",
+  premises_address: "property_address",
+  premises_location: "property_address",
+  leased_premises: "property_address",
+  leased_premises_address: "property_address",
+  building_address: "property_address",
+  suite_address: "property_address",
+
+  unit: "unit_number",
+  unit_number: "unit_number",
+  suite: "unit_number",
+  suite_number: "unit_number",
+  suite_no: "unit_number",
+  space: "unit_number",
+  space_number: "unit_number",
+  premises_suite: "unit_number",
+
+  start_date: "start_date",
+  lease_start: "start_date",
+  lease_start_date: "start_date",
+  commencement: "start_date",
+  commencement_date: "start_date",
+  lease_commencement_date: "start_date",
+  possession_date: "start_date",
+  rent_commencement_date: "start_date",
+
+  end_date: "end_date",
+  lease_end: "end_date",
+  lease_end_date: "end_date",
+  expiration: "end_date",
+  expiration_date: "end_date",
+  expiry: "end_date",
+  expiry_date: "end_date",
+  lease_expiration: "end_date",
+  lease_expiration_date: "end_date",
+  termination_date: "end_date",
+
+  monthly_rent: "monthly_rent",
+  rent: "monthly_rent",
+  base_rent: "monthly_rent",
+  monthly_base_rent: "monthly_rent",
+  minimum_rent: "monthly_rent",
+  fixed_minimum_rent: "monthly_rent",
+  rent_per_month: "monthly_rent",
+  monthly_payment: "monthly_rent",
+
+  annual_rent: "annual_rent",
+  yearly_rent: "annual_rent",
+  annual_base_rent: "annual_rent",
+  base_annual_rent: "annual_rent",
+  annual_minimum_rent: "annual_rent",
+  rent_per_year: "annual_rent",
+  base_rent_additional_year: "annual_rent",
+  additional_year_base_rent: "annual_rent",
+
+  rent_per_sf: "rent_per_sf",
+  rent_per_square_foot: "rent_per_sf",
+  rent_psf: "rent_per_sf",
+  psf: "rent_per_sf",
+  annual_psf: "rent_per_sf",
+
+  square_footage: "square_footage",
+  square_feet: "square_footage",
+  sqft: "square_footage",
+  sq_ft: "square_footage",
+  sf: "square_footage",
+  rsf: "square_footage",
+  leased_area: "square_footage",
+  rentable_area: "square_footage",
+  rentable_square_feet: "square_footage",
+  premises_rentable_square_feet: "square_footage",
+  premises_area: "square_footage",
+
+  lease_type: "lease_type",
+  type_of_lease: "lease_type",
+  lease_structure: "lease_type",
+  rent_type: "lease_type",
+
+  security_deposit: "security_deposit",
+  deposit: "security_deposit",
+  assignee_security_deposit_amount: "security_deposit",
+
+  cam: "cam_amount",
+  cam_amount: "cam_amount",
+  cam_charges: "cam_amount",
+  common_area_maintenance: "cam_amount",
+  common_area_maintenance_amount: "cam_amount",
+
+  escalation: "escalation_rate",
+  escalation_rate: "escalation_rate",
+  rent_increase: "escalation_rate",
+  annual_increase: "escalation_rate",
+  annual_escalation: "escalation_rate",
+  rent_increase_percentage: "escalation_rate",
+
+  renewal: "renewal_options",
+  renewal_option: "renewal_options",
+  renewal_options: "renewal_options",
+  option_to_renew: "renewal_options",
+
+  ti: "ti_allowance",
+  ti_allowance: "ti_allowance",
+  tenant_improvement: "ti_allowance",
+  tenant_improvement_allowance: "ti_allowance",
+  build_out_allowance: "ti_allowance",
+
+  free_rent: "free_rent_months",
+  free_rent_months: "free_rent_months",
+  rent_abatement: "free_rent_months",
+
+  lease_term: "lease_term_months",
+  term: "lease_term_months",
+  initial_term: "lease_term_months",
+  lease_term_months: "lease_term_months",
+  term_months: "lease_term_months",
+
+  status: "status",
+  lease_status: "status",
+
+  assignor: "assignor_name",
+  assignor_name: "assignor_name",
+  original_tenant: "assignor_name",
+  transferor: "assignor_name",
+
+  assignee: "assignee_name",
+  assignee_name: "assignee_name",
+  new_tenant: "assignee_name",
+  transferee: "assignee_name",
+
+  assignment_date: "assignment_effective_date",
+  date_of_assignment: "assignment_effective_date",
+  assignment_effective_date: "assignment_effective_date",
+
+  landlord_consent: "landlord_consent",
+  landlord_approval: "landlord_consent",
+  consent: "landlord_consent",
+
+  assumption: "assumption_scope",
+  assumption_scope: "assumption_scope",
+  obligations_assumed: "assumption_scope",
+
+  assignee_notice_address: "assignee_notice_address",
+  assignee_address: "assignee_notice_address",
+  notice_address: "assignee_notice_address",
+  address_for_notices: "assignee_notice_address",
+};
+
+function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): unknown {
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName) && looksLikeClauseNotName(raw)) {
+    return null;
+  }
+  if (fieldName === "property_address" && looksLikeNoticeClause(raw)) {
+    return null;
+  }
+  if (fieldName === "monthly_rent" && /\b(?:annual|yearly|per\s+year|\/yr|annually)\b/i.test(String(raw))) {
+    return null;
+  }
+  if (fieldName === "annual_rent" && /\b(?:monthly|per\s+month|\/mo)\b/i.test(String(raw))) {
+    return null;
+  }
+  if (fieldName === "lease_term_months") {
+    const inferred = inferTermMonths(raw);
+    if (inferred != null) return inferred;
+  }
+  return coerceValue(raw, fieldDef);
+}
+
+function looksLikeClauseNotName(raw: unknown): boolean {
+  const text = String(raw ?? "").trim();
+  if (!text) return false;
+  if (text.length > 90) return true;
+  return /\b(hereby|effective as of|terms? and conditions|under the lease|transfers? and assigns?|assumes?|obligations?|contained in said lease)\b/i.test(text);
+}
+
+function looksLikeNoticeClause(raw: unknown): boolean {
+  const text = String(raw ?? "").trim();
+  return /\b(for\s+assignee|notice|notices|purposes\s+under\s+the\s+lease)\b/i.test(text);
+}
+
+function inferTermMonths(raw: unknown): number | null {
+  const text = String(raw ?? "").toLowerCase().trim();
+  if (!text) return null;
+  if (/year\s*to\s*year|year-to-year|annual|one\s+year|1\s+year/.test(text)) return 12;
+  const months = text.match(/(\d{1,3})\s*(?:months?|mos?\.?)/);
+  if (months) return Number(months[1]);
+  const years = text.match(/(\d{1,2})\s*(?:years?|yrs?\.?)/);
+  if (years) return Number(years[1]) * 12;
+  return null;
+}
+
 // ── Step 1a: Extract from Docling key-value fields ───────────────────────────
 
 function extractFromDoclingFields(
@@ -184,7 +403,23 @@ function extractFromDoclingFields(
   const result: Record<string, ExtractedField> = {};
 
   for (const docField of fields) {
-    const keyLower = docField.key.toLowerCase().trim();
+    const directFieldName = CANONICAL_LEASE_FIELD_ALIASES[normalizeMatchKey(docField.key)];
+    if (directFieldName && schema[directFieldName] && !schema[directFieldName].derived) {
+      const value = coerceFieldValue(directFieldName, docField.value, schema[directFieldName]);
+      if (value !== null && value !== undefined) {
+        const existing = result[directFieldName];
+        const newConf = docField.confidence ?? 0.92;
+        if (!existing || newConf > existing.confidence) {
+          result[directFieldName] = {
+            value,
+            source: "rule",
+            confidence: newConf,
+            sourceText: `${docField.key}: ${docField.value}`,
+          };
+        }
+      }
+      continue;
+    }
 
     // Find which schema field this Docling field maps to
     for (const [fieldName, fieldDef] of Object.entries(schema)) {
@@ -195,7 +430,7 @@ function extractFromDoclingFields(
       );
 
       if (isMatch) {
-        const value = coerceValue(docField.value, fieldDef);
+        const value = coerceFieldValue(fieldName, docField.value, fieldDef);
         if (value !== null && value !== undefined) {
           // Only overwrite if higher confidence
           const existing = result[fieldName];

@@ -110,11 +110,18 @@ Return JSON only:
 
 Rules:
 1. Extract every meaningful field/value pair you can see: parties, tenant, landlord, assignor, assignee, property, premises, address, suite/unit, dates, lease term, rent, annual rent, rent per SF, square footage, security deposit, CAM, options, consent, notices, exhibits, signatures, and notary information.
-2. Map obvious labels to concise snake_case keys.
-3. Do not invent values. If not visible, omit it.
-4. Keep values exact, especially names, dates, addresses, and money.
-5. Put important surrounding lease/assignment clauses in "text"; do not include boilerplate if the output would be too long.
-6. Return valid JSON only. No markdown.`,
+2. For standard lease fields, prefer these exact keys whenever applicable:
+   tenant_name, landlord_name, property_name, property_address, unit_number,
+   start_date, end_date, monthly_rent, annual_rent, rent_per_sf, square_footage,
+   lease_type, security_deposit, cam_amount, escalation_rate, renewal_options,
+   ti_allowance, free_rent_months, lease_term_months, status,
+   assignor_name, assignee_name, assignment_effective_date, landlord_consent,
+   assumption_scope, assignee_notice_address.
+3. For anything useful that is not a standard field, still extract it with a concise snake_case key so it can appear as a custom field.
+4. Do not invent values. If not visible, omit it.
+5. Keep values exact, especially names, dates, addresses, and money.
+6. Put important surrounding lease/assignment clauses in "text"; do not include boilerplate if the output would be too long.
+7. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all reviewable fields and the important OCR text from this document.",
     fileBytes,
     fileMimeType: mimeType,
