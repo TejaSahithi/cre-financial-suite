@@ -41,6 +41,7 @@ export default function Stakeholders() {
   const [showInvite, setShowInvite] = useState(false);
   const [search, setSearch] = useState("");
   const [form, setForm] = useState({ name: "", email: "", role: "property_manager" });
+  const [editingStakeholder, setEditingStakeholder] = useState(null);
   const queryClient = useQueryClient();
 
   const { data: stakeholders = [], isLoading } = useQuery({
@@ -51,6 +52,16 @@ export default function Stakeholders() {
   const createMutation = useMutation({
     mutationFn: (data) => StakeholderService.create(data),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['stakeholders'] }); setShowInvite(false); setForm({ name: "", email: "", role: "property_manager" }); }
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => StakeholderService.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stakeholders'] });
+      setEditingStakeholder(null);
+      setShowInvite(false);
+      setForm({ name: "", email: "", role: "property_manager" });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -70,7 +81,16 @@ export default function Stakeholders() {
           <h1 className="text-2xl font-bold text-slate-900">Stakeholders</h1>
           <p className="text-sm text-slate-500">{stakeholders.length} assigned</p>
         </div>
-        <Button onClick={() => setShowInvite(true)} className="bg-blue-600 hover:bg-blue-700"><Plus className="w-4 h-4 mr-2" />Invite Stakeholder</Button>
+        <Button
+          onClick={() => {
+            setEditingStakeholder(null);
+            setForm({ name: "", email: "", role: "property_manager" });
+            setShowInvite(true);
+          }}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          <Plus className="w-4 h-4 mr-2" />Invite Stakeholder
+        </Button>
       </div>
 
       <div className="relative max-w-sm">
@@ -113,7 +133,18 @@ export default function Stakeholders() {
                 <Button variant="ghost" size="icon" className="h-8 w-8">
                   {s.notify_lease_expiry ? <Bell className="w-4 h-4 text-slate-400" /> : <BellOff className="w-4 h-4 text-slate-300" />}
                 </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8"><Pencil className="w-4 h-4 text-slate-400" /></Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => {
+                    setEditingStakeholder(s);
+                    setForm({ name: s.name || "", email: s.email || "", role: s.role || "property_manager" });
+                    setShowInvite(true);
+                  }}
+                >
+                  <Pencil className="w-4 h-4 text-slate-400" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deleteMutation.mutate(s.id)}><Trash2 className="w-4 h-4 text-red-400" /></Button>
               </div>
             </div>
@@ -168,10 +199,10 @@ export default function Stakeholders() {
         </div>
       </div>
 
-      {/* Invite Dialog */}
+      {/* Invite / Edit Dialog */}
       <Dialog open={showInvite} onOpenChange={setShowInvite}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Invite Stakeholder</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingStakeholder ? "Edit Stakeholder" : "Invite Stakeholder"}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div><Label>Full Name *</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Richard Martinez" /></div>
             <div><Label>Email *</Label><Input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="r.martinez@company.com" /></div>
@@ -186,9 +217,29 @@ export default function Stakeholders() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowInvite(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate({ ...form, org_id: "default" })} disabled={!form.name || !form.email || createMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
-              {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Invite
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowInvite(false);
+                setEditingStakeholder(null);
+                setForm({ name: "", email: "", role: "property_manager" });
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (editingStakeholder) {
+                  updateMutation.mutate({ id: editingStakeholder.id, data: form });
+                  return;
+                }
+                createMutation.mutate({ ...form, org_id: "default" });
+              }}
+              disabled={!form.name || !form.email || createMutation.isPending || updateMutation.isPending}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              {editingStakeholder ? "Save Changes" : "Invite"}
             </Button>
           </DialogFooter>
         </DialogContent>

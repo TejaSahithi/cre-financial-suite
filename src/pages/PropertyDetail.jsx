@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { toast } from "sonner";
 
 import { PropertyService, LeaseService, ExpenseService, UnitService, BuildingService, StakeholderService } from "@/services/api";
 import { createPageUrl } from "@/utils";
@@ -20,6 +21,18 @@ import { createPageUrl } from "@/utils";
 import PropertyExpensesTab from "@/components/property/PropertyExpensesTab";
 import PropertyCAMTab from "@/components/property/PropertyCAMTab";
 import PropertyBudgetsTab from "@/components/property/PropertyBudgetsTab";
+
+function deriveLeaseStatus(lease) {
+  const raw = String(lease?.status || "").toLowerCase();
+  if (raw === "budget_ready") return "budget_ready";
+  if (raw === "validated" || raw === "active" || raw === "approved") return "validated";
+  if (raw === "expired") return "expired";
+  if (lease?.end_date) {
+    const end = new Date(lease.end_date);
+    if (!Number.isNaN(end.getTime()) && end < new Date()) return "expired";
+  }
+  return "draft";
+}
 
 export default function PropertyDetail() {
   const location = useLocation();
@@ -32,6 +45,17 @@ export default function PropertyDetail() {
   const [selectedBuildingId, setSelectedBuildingId] = useState(null);
   const [buildingForm, setBuildingForm] = useState({ name: "", total_sf: "", floors: 1 });
   const [unitForm, setUnitForm] = useState({ unit_number: "", square_footage: "", status: "vacant" });
+  const [showEditProperty, setShowEditProperty] = useState(false);
+  const [propertyForm, setPropertyForm] = useState({
+    name: "",
+    address: "",
+    city: "",
+    state: "",
+    zip: "",
+    property_type: "office",
+    total_sqft: "",
+    year_built: "",
+  });
 
   const { data: property, isLoading } = useQuery({
     queryKey: ['property', propertyId],
@@ -79,6 +103,17 @@ export default function PropertyDetail() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); }
   });
 
+  const updatePropertyMutation = useMutation({
+    mutationFn: (data) => PropertyService.update(propertyId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['property', propertyId] });
+      queryClient.invalidateQueries({ queryKey: ['Property'] });
+      setShowEditProperty(false);
+      toast.success("Property updated successfully");
+    },
+    onError: (err) => toast.error(`Failed to update property: ${err?.message || "Unknown error"}`),
+  });
+
   if (isLoading) return <div className="flex items-center justify-center h-96"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
   if (!property) return <div className="p-6 text-center text-slate-400">Property not found</div>;
 
@@ -106,6 +141,20 @@ export default function PropertyDetail() {
     draft: "bg-slate-100 text-slate-600", extracted: "bg-blue-100 text-blue-700",
     validated: "bg-amber-100 text-amber-700", budget_ready: "bg-emerald-100 text-emerald-700",
     expired: "bg-red-100 text-red-700", none: "bg-slate-100 text-slate-400"
+  };
+
+  const openEditProperty = () => {
+    setPropertyForm({
+      name: property.name || "",
+      address: property.address || "",
+      city: property.city || "",
+      state: property.state || "",
+      zip: property.zip || "",
+      property_type: property.property_type || "office",
+      total_sqft: property.total_sqft || property.total_sf || "",
+      year_built: property.year_built || "",
+    });
+    setShowEditProperty(true);
   };
 
   return (
@@ -137,7 +186,7 @@ export default function PropertyDetail() {
               </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm"><Pencil className="w-4 h-4 mr-1" />Edit Property</Button>
+              <Button variant="outline" size="sm" onClick={openEditProperty}><Pencil className="w-4 h-4 mr-1" />Edit Property</Button>
               <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => { setSelectedBuildingId(buildings[0]?.id || null); setShowAddUnit(true); }}><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
             </div>
           </div>
@@ -395,7 +444,9 @@ export default function PropertyDetail() {
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
                             {u.lease_id ? (
-                              <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50">View Lease</Button>
+                              <Link to={createPageUrl("LeaseReview", { id: u.lease_id })}>
+                                <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50">View Lease</Button>
+                              </Link>
                             ) : u.status === 'vacant' ? (
                               <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&unit=${u.id}`}>
                                 <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50">Add Lease</Button>
@@ -431,7 +482,14 @@ export default function PropertyDetail() {
             <CardContent className="p-6">
               <div className="flex justify-between items-center mb-4">
                 <p className="text-sm text-slate-500">{leases.length} leases for this property</p>
-                <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}`}><Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Upload className="w-4 h-4 mr-1" />Upload Lease</Button></Link>
+                <div className="flex gap-2">
+                  <Link to={createPageUrl("Leases", { property: propertyId })}>
+                    <Button size="sm" variant="outline">Open Lease List</Button>
+                  </Link>
+                  <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}`}>
+                    <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Upload className="w-4 h-4 mr-1" />Upload Lease</Button>
+                  </Link>
+                </div>
               </div>
               <Table>
                 <TableHeader>
@@ -443,21 +501,31 @@ export default function PropertyDetail() {
                     <TableHead className="text-[11px]">END</TableHead>
                     <TableHead className="text-[11px]">ANNUAL RENT</TableHead>
                     <TableHead className="text-[11px]">STATUS</TableHead>
+                    <TableHead className="text-[11px] text-right">ACTIONS</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {leases.map(l => (
+                  {leases.map(l => {
+                    const derivedStatus = deriveLeaseStatus(l);
+                    const unit = l.unit_id ? units.find((item) => item.id === l.unit_id) : null;
+                    return (
                     <TableRow key={l.id}>
-                      <TableCell className="text-sm font-medium">{l.tenant_name}</TableCell>
+                      <TableCell className="text-sm font-medium">{l.tenant_name || "Draft lease"}</TableCell>
                       <TableCell className="text-sm">{l.unit_id?.substring(0, 8) || '—'}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-[10px]">{l.lease_type}</Badge></TableCell>
+                      <TableCell><Badge variant="outline" className="text-[10px]">{l.lease_type || "—"}</Badge></TableCell>
                       <TableCell className="text-sm">{l.start_date || '—'}</TableCell>
                       <TableCell className="text-sm">{l.end_date || '—'}</TableCell>
                       <TableCell className="text-sm font-mono">${l.annual_rent?.toLocaleString() || '—'}</TableCell>
-                      <TableCell><Badge className={`${leaseStatusColors[l.status]} text-[10px] uppercase`}>{l.status?.replace('_', '-')}</Badge></TableCell>
+                      <TableCell><Badge className={`${leaseStatusColors[derivedStatus]} text-[10px] uppercase`}>{derivedStatus.replace("_", "-")}</Badge></TableCell>
+                      <TableCell className="text-right">
+                        <Link to={createPageUrl("LeaseReview", { id: l.id })}>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs">Review/Edit</Button>
+                        </Link>
+                      </TableCell>
                     </TableRow>
-                  ))}
-                  {leases.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400 text-sm">No leases yet</TableCell></TableRow>}
+                    );
+                  })}
+                  {leases.length === 0 && <TableRow><TableCell colSpan={8} className="text-center py-8 text-slate-400 text-sm">No leases yet</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </CardContent>
@@ -491,6 +559,54 @@ export default function PropertyDetail() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Edit Property Dialog */}
+      <Dialog open={showEditProperty} onOpenChange={setShowEditProperty}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Property</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div><Label>Property Name *</Label><Input value={propertyForm.name} onChange={e => setPropertyForm({ ...propertyForm, name: e.target.value })} /></div>
+            <div><Label>Address</Label><Input value={propertyForm.address} onChange={e => setPropertyForm({ ...propertyForm, address: e.target.value })} /></div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><Label>City</Label><Input value={propertyForm.city} onChange={e => setPropertyForm({ ...propertyForm, city: e.target.value })} /></div>
+              <div><Label>State</Label><Input value={propertyForm.state} onChange={e => setPropertyForm({ ...propertyForm, state: e.target.value })} /></div>
+              <div><Label>ZIP</Label><Input value={propertyForm.zip} onChange={e => setPropertyForm({ ...propertyForm, zip: e.target.value })} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Type</Label>
+                <Select value={propertyForm.property_type} onValueChange={value => setPropertyForm({ ...propertyForm, property_type: value })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="office">Office</SelectItem>
+                    <SelectItem value="retail">Retail</SelectItem>
+                    <SelectItem value="industrial">Industrial</SelectItem>
+                    <SelectItem value="mixed_use">Mixed Use</SelectItem>
+                    <SelectItem value="multifamily">Multifamily</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div><Label>Total SF</Label><Input type="number" value={propertyForm.total_sqft} onChange={e => setPropertyForm({ ...propertyForm, total_sqft: e.target.value })} /></div>
+              <div><Label>Year Built</Label><Input type="number" value={propertyForm.year_built} onChange={e => setPropertyForm({ ...propertyForm, year_built: e.target.value })} /></div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditProperty(false)}>Cancel</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={!propertyForm.name || updatePropertyMutation.isPending}
+              onClick={() => updatePropertyMutation.mutate({
+                ...propertyForm,
+                total_sqft: propertyForm.total_sqft ? Number(propertyForm.total_sqft) : null,
+                year_built: propertyForm.year_built ? Number(propertyForm.year_built) : null,
+              })}
+            >
+              {updatePropertyMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
+              Save Property
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Building Dialog */}
       <Dialog open={showAddBuilding} onOpenChange={setShowAddBuilding}>

@@ -70,8 +70,11 @@ export default function AddExpense() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const urlParams = new URLSearchParams(location.search);
+  const editExpenseId = urlParams.get("id");
 
   const { data: vendors = [], orgId } = useOrgQuery("Vendor");
+  const { data: expenses = [] } = useOrgQuery("Expense");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
@@ -100,8 +103,14 @@ export default function AddExpense() {
     category: "other",
     payment_terms: "net_30",
   });
+  const editingExpense = useMemo(
+    () => expenses.find((expense) => expense.id === editExpenseId) || null,
+    [expenses, editExpenseId]
+  );
+  const isEditing = Boolean(editExpenseId);
 
   useEffect(() => {
+    if (isEditing) return;
     setForm((current) => ({
       ...current,
       portfolio_id: scope.portfolioId || current.portfolio_id || "",
@@ -109,7 +118,25 @@ export default function AddExpense() {
       building_id: scope.buildingId || current.building_id || "",
       unit_id: scope.unitId || current.unit_id || "",
     }));
-  }, [scope.portfolioId, scope.propertyId, scope.buildingId, scope.unitId]);
+  }, [isEditing, scope.portfolioId, scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useEffect(() => {
+    if (!editingExpense) return;
+    setForm({
+      date: editingExpense.date || "",
+      amount: editingExpense.amount ?? "",
+      category: editingExpense.category || "",
+      vendor: editingExpense.vendor || "",
+      vendor_id: editingExpense.vendor_id || "",
+      description: editingExpense.description || "",
+      classification: editingExpense.classification || "recoverable",
+      portfolio_id: editingExpense.portfolio_id || "",
+      property_id: editingExpense.property_id || "",
+      building_id: editingExpense.building_id || "",
+      unit_id: editingExpense.unit_id || "",
+    });
+    setAttachmentUrl(editingExpense.attachment_url || "");
+  }, [editingExpense]);
 
   const visibleProperties = scope.scopedProperties;
   const visibleBuildings = form.property_id
@@ -123,6 +150,9 @@ export default function AddExpense() {
 
   const createMutation = useMutation({
     mutationFn: (data) => expenseService.create(data),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => expenseService.update(id, data),
   });
 
   const createVendorMutation = useMutation({
@@ -138,6 +168,37 @@ export default function AddExpense() {
   const handleSubmit = async (addAnother) => {
     const writableOrgId = await resolveWritableOrgId(orgId);
     const property = form.property_id ? scope.propertyById.get(form.property_id) ?? null : null;
+
+    if (isEditing) {
+      updateMutation.mutate(
+        {
+          id: editExpenseId,
+          data: {
+            ...form,
+            amount: parseFloat(form.amount),
+            attachment_url: attachmentUrl,
+            ...(writableOrgId ? { org_id: writableOrgId } : {}),
+            portfolio_id: property?.portfolio_id || form.portfolio_id || null,
+            property_id: form.property_id || null,
+            building_id: form.building_id || null,
+            unit_id: form.unit_id || null,
+            source: form.source || "manual",
+            fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
+          },
+        },
+        {
+          onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["Expense"] });
+            toast.success("Expense updated successfully");
+            navigate(createPageUrl("Expenses") + location.search);
+          },
+          onError: (err) => {
+            toast.error(`Failed to update expense: ${err?.message || "Unknown error"}`);
+          },
+        }
+      );
+      return;
+    }
 
     createMutation.mutate(
       {
@@ -243,7 +304,7 @@ export default function AddExpense() {
         <ArrowLeft className="w-4 h-4" />
         Back to Expenses
       </Link>
-      <h1 className="text-2xl font-bold text-slate-900">Add Expense</h1>
+      <h1 className="text-2xl font-bold text-slate-900">{isEditing ? "Edit Expense" : "Add Expense"}</h1>
 
       <Card>
         <CardHeader>
@@ -425,13 +486,13 @@ export default function AddExpense() {
             Cancel
           </Button>
         </Link>
-        <Button variant="outline" onClick={() => handleSubmit(true)} disabled={!isValid || createMutation.isPending}>
+        <Button variant="outline" onClick={() => handleSubmit(true)} disabled={isEditing || !isValid || createMutation.isPending}>
           <Plus className="w-4 h-4 mr-1" />
           Save & Add Another
         </Button>
-        <Button onClick={() => handleSubmit(false)} disabled={!isValid || createMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700">
-          {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-          Save Expense
+        <Button onClick={() => handleSubmit(false)} disabled={!isValid || createMutation.isPending || updateMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700">
+          {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+          {isEditing ? "Save Changes" : "Save Expense"}
         </Button>
       </div>
 

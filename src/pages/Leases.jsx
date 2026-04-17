@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { differenceInDays } from "date-fns";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Upload, Search, Loader2, Download, Plus, FileText, Trash2 } from "lucide-react";
+import { Upload, Search, Loader2, Download, Plus, FileText, Trash2, Pencil } from "lucide-react";
 
 import PipelineActions, { LEASE_ACTIONS } from "@/components/PipelineActions";
 import PageHeader from "@/components/PageHeader";
@@ -20,6 +20,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createPageUrl, downloadCSV } from "@/utils";
 import { leaseService } from "@/services/leaseService";
+
+function deriveLeaseStatus(lease) {
+  const raw = String(lease?.status || "").toLowerCase();
+  if (raw === "budget_ready") return "budget_ready";
+  if (raw === "validated" || raw === "active" || raw === "approved") return "validated";
+  if (raw === "expired") return "expired";
+
+  if (lease?.end_date) {
+    const end = new Date(lease.end_date);
+    if (!Number.isNaN(end.getTime()) && end < new Date()) return "expired";
+  }
+
+  return "draft";
+}
 
 export default function Leases() {
   const queryClient = useQueryClient();
@@ -63,6 +77,9 @@ export default function Leases() {
   }, [leases]);
 
   const statusColors = {
+    budget_ready: "bg-emerald-100 text-emerald-700",
+    validated: "bg-amber-100 text-amber-700",
+    draft: "bg-slate-100 text-slate-600",
     expired: "bg-red-100 text-red-700",
     new: "bg-slate-100 text-slate-600",
   };
@@ -105,7 +122,8 @@ export default function Leases() {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
 
-    const matchFilter = filter === "all" || lease.status === filter;
+    const derivedStatus = deriveLeaseStatus(lease);
+    const matchFilter = filter === "all" || derivedStatus === filter;
     return matchSearch && matchFilter;
   });
 
@@ -168,14 +186,10 @@ export default function Leases() {
   });
 
   const statusCounts = {
-    budget_ready: selectorFilteredLeases.filter((lease) => lease.status === "budget_ready").length,
-    validated: selectorFilteredLeases.filter((lease) => lease.status === "validated").length,
-    draft: selectorFilteredLeases.filter((lease) => lease.status === "draft").length,
-    expiring: selectorFilteredLeases.filter((lease) => {
-      if (!lease.end_date) return false;
-      const days = differenceInDays(new Date(lease.end_date), new Date());
-      return days < 180 && days > 0;
-    }).length,
+    budget_ready: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "budget_ready").length,
+    validated: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "validated").length,
+    draft: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "draft").length,
+    expired: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "expired").length,
   };
 
   const subtitleScope = getScopeSubtitle(scope, {
@@ -238,12 +252,16 @@ export default function Leases() {
 
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Budget-Ready", count: statusCounts.budget_ready, color: "border-l-emerald-500 bg-emerald-50" },
-          { label: "Validated", count: statusCounts.validated, color: "border-l-amber-500 bg-amber-50" },
-          { label: "Draft", count: statusCounts.draft, color: "border-l-slate-400 bg-slate-50" },
-          { label: "Expiring < 6mo", count: statusCounts.expiring, color: "border-l-red-500 bg-red-50" },
+          { label: "Budget Ready", value: "budget_ready", count: statusCounts.budget_ready, color: "border-l-emerald-500 bg-emerald-50" },
+          { label: "Validated", value: "validated", count: statusCounts.validated, color: "border-l-amber-500 bg-amber-50" },
+          { label: "Draft", value: "draft", count: statusCounts.draft, color: "border-l-slate-400 bg-slate-50" },
+          { label: "Expired", value: "expired", count: statusCounts.expired, color: "border-l-red-500 bg-red-50" },
         ].map((statusCard) => (
-          <Card key={statusCard.label} className={`border-l-4 ${statusCard.color}`}>
+          <Card
+            key={statusCard.label}
+            className={`cursor-pointer border-l-4 transition-shadow hover:shadow-sm ${statusCard.color} ${filter === statusCard.value ? "ring-2 ring-blue-200" : ""}`}
+            onClick={() => setFilter(statusCard.value)}
+          >
             <CardContent className="p-4">
               <p className="text-2xl font-bold text-slate-900">{statusCard.count}</p>
               <p className="text-xs font-medium text-slate-500">{statusCard.label}</p>
@@ -332,6 +350,7 @@ export default function Leases() {
                 const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
                 const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
+                const derivedStatus = deriveLeaseStatus(lease);
                 const annualRent = Number(lease.annual_rent || Number(lease.monthly_rent || 0) * 12 || 0);
                 const leasedSf = Number(lease.total_sf || lease.square_footage || 0);
                 const rentPerSf = Number(lease.rent_per_sf || (annualRent > 0 && leasedSf > 0 ? annualRent / leasedSf : 0));
@@ -376,8 +395,8 @@ export default function Leases() {
                       ${Number(lease.cam_amount || lease.cam_per_month || 0).toLocaleString()}
                     </TableCell>
                     <TableCell>
-                      <Badge className={`${getStatusColor(lease.status)} text-[10px] uppercase whitespace-nowrap`}>
-                        {lease.status?.replace("_", "-") || "NEW"}
+                      <Badge className={`${getStatusColor(derivedStatus)} text-[10px] uppercase whitespace-nowrap`}>
+                        {derivedStatus.replace("_", "-")}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -407,6 +426,7 @@ export default function Leases() {
                         </Link>
                         <Link to={createPageUrl("LeaseReview") + `?id=${lease.id}`}>
                           <Button variant="ghost" size="sm" className="text-xs h-7 px-2">
+                            <Pencil className="mr-1 h-3.5 w-3.5" />
                             Edit
                           </Button>
                         </Link>
