@@ -639,11 +639,13 @@ export default function BulkImportModal({
         ingestData?.steps?.storage?.success ||
         ['stored', 'computing', 'completed'].includes(fileRecord.status);
 
+      const isPropertyImport = moduleType === 'property';
+
       setRows(buildRows(extractedRows));
       setMethod(reviewRequired ? 'review_required' : (fileRecord.extraction_method || 'canonical_pipeline'));
-      setPipelineFileId(uploadData.file_id);
-      setPipelineReviewRequired(reviewRequired);
-      setPipelineStored(moduleType === 'property' ? false : Boolean(stored) && !reviewRequired);
+      setPipelineFileId(isPropertyImport ? null : uploadData.file_id);
+      setPipelineReviewRequired(isPropertyImport ? false : reviewRequired);
+      setPipelineStored(isPropertyImport ? false : Boolean(stored) && !reviewRequired);
 
       if (reviewRequired) {
         toast.warning(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} extracted and waiting for review approval.`);
@@ -718,7 +720,9 @@ export default function BulkImportModal({
     if (!canImport) return;
 
     setImporting(true);
-    if (pipelineFileId && moduleType !== 'property') {
+    const usePipelineFinalize = Boolean(pipelineFileId) && moduleType !== 'property';
+
+    if (usePipelineFinalize) {
       try {
         if (pipelineReviewRequired) {
           const editedRows = rows.map(({ _row, ...row }) => ({
