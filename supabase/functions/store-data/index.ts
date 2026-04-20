@@ -126,8 +126,22 @@ function mapRow(
         state: row.state ?? null,
         zip: row.zip_code ?? row.zip ?? null,
         property_type: row.property_type ?? null,
-        total_sqft: row.square_footage ?? row.total_sqft ?? null,
+        structure_type: row.structure_type ?? null,
+        total_sqft: row.square_footage ?? row.total_sqft ?? row.total_sf ?? null,
+        leased_sf: row.leased_sf ?? row.occupied_sf ?? null,
+        total_buildings: row.total_buildings ?? row.building_count ?? null,
+        total_units: row.total_units ?? row.unit_count ?? null,
+        occupancy_pct: row.occupancy_pct ?? row.occupancy ?? null,
+        floors: row.floors ?? null,
         year_built: row.year_built ?? null,
+        status: row.status ?? "active",
+        purchase_price: row.purchase_price ?? null,
+        market_value: row.market_value ?? null,
+        noi: row.noi ?? null,
+        cap_rate: row.cap_rate ?? null,
+        manager: row.manager ?? row.property_manager ?? null,
+        owner: row.owner ?? row.owner_name ?? null,
+        notes: row.notes ?? null,
       };
 
     case "buildings":
