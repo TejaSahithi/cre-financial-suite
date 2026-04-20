@@ -46,8 +46,12 @@ const MODULE_FIELDS = {
     { key: 'state',          label: 'State',           required: false, placeholder: 'AZ' },
     { key: 'zip',            label: 'ZIP',             required: false, placeholder: '85001' },
     { key: 'property_type',  label: 'Type',            required: false, placeholder: 'office / retail / industrial…' },
+    { key: 'structure_type', label: 'Structure',       required: false, placeholder: 'single / multi' },
     { key: 'total_sf',       label: 'Total SF',        required: false, placeholder: '50000' },
+    { key: 'leased_sf',      label: 'Leased SF',       required: false, placeholder: '45000' },
+    { key: 'total_buildings',label: 'Buildings',       required: false, placeholder: '1' },
     { key: 'total_units',    label: 'Units',           required: false, placeholder: '10' },
+    { key: 'occupancy_pct',  label: 'Occupancy %',     required: false, placeholder: '90' },
     { key: 'floors',         label: 'Floors',          required: false, placeholder: '5' },
     { key: 'year_built',     label: 'Year Built',      required: false, placeholder: '1998' },
     { key: 'status',         label: 'Status',          required: false, placeholder: 'active' },
@@ -154,7 +158,7 @@ const MODULE_FIELDS = {
 };
 MODULE_FIELDS.gl = MODULE_FIELDS.gl_account;
 
-const ACCEPT_ATTR = '.csv,.xlsx,.xls,.pdf,.docx,.doc,.txt';
+const ACCEPT_ATTR = '.csv,.tsv,.xlsx,.xls,.pdf,.docx,.doc,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp,.bmp,.gif';
 
 const PIPELINE_MODULE_MAP = {
   property: 'properties',
@@ -188,14 +192,74 @@ function methodBadgeClass(method) {
   return 'bg-blue-100 text-blue-700 border-blue-200';
 }
 
-function extractRowsFromUploadedFile(record) {
-  if (Array.isArray(record?.valid_data) && record.valid_data.length) return record.valid_data;
-  if (Array.isArray(record?.parsed_data) && record.parsed_data.length) return record.parsed_data;
-  const payloadRows = record?.ui_review_payload?.rows;
-  if (Array.isArray(payloadRows)) {
-    return payloadRows.map((row) => row.values || row.fields || row).filter(Boolean);
+function fieldValue(entry) {
+  if (entry == null) return null;
+  if (typeof entry !== 'object') return entry;
+  if ('value' in entry) return entry.value;
+  if ('display_value' in entry) return entry.display_value;
+  if ('raw_value' in entry) return entry.raw_value;
+  return null;
+}
+
+function normalizeFieldKey(key) {
+  return String(key || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function rowFromReviewRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  if (record.values && typeof record.values === 'object') return record.values;
+  if (record.row && typeof record.row === 'object') return record.row;
+
+  const output = {};
+  const addField = (key, entry) => {
+    const normalizedKey = normalizeFieldKey(key);
+    if (!normalizedKey) return;
+    if (entry?.status === 'rejected' || entry?.accepted === false || entry?.rejected === true) return;
+    const value = fieldValue(entry);
+    if (value == null || value === '') return;
+    output[normalizedKey] = value;
+  };
+
+  if (record.fields && typeof record.fields === 'object' && !Array.isArray(record.fields)) {
+    Object.entries(record.fields).forEach(([key, entry]) => addField(key, entry));
   }
-  return [];
+
+  const addArrayField = (entry) => {
+    const key = entry?.field_key || entry?.key || entry?.name || entry?.label;
+    addField(key, entry);
+  };
+  if (Array.isArray(record.standard_fields)) record.standard_fields.forEach(addArrayField);
+  if (Array.isArray(record.custom_fields)) record.custom_fields.forEach(addArrayField);
+  if (Array.isArray(record.extracted_fields)) record.extracted_fields.forEach(addArrayField);
+
+  return Object.keys(output).length ? output : null;
+}
+
+function extractRowsFromUploadedFile(record) {
+  const candidates = [
+    record?.valid_data,
+    record?.parsed_data,
+    record?.normalized_output?.records,
+    record?.normalized_output?.rows,
+    record?.ui_review_payload?.records,
+    record?.ui_review_payload?.rows,
+    record?.reviewed_output?.final_records,
+    record?.reviewed_output?.records,
+  ];
+
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate) || candidate.length === 0) continue;
+    const rows = candidate.map(rowFromReviewRecord).filter(Boolean);
+    if (rows.length) return rows;
+  }
+
+  const singleRecord = rowFromReviewRecord(record?.ui_review_payload?.record || record?.normalized_output?.record);
+  return singleRecord ? [singleRecord] : [];
 }
 
 // ── Template download ─────────────────────────────────────────────────────────
@@ -344,18 +408,35 @@ export default function BulkImportModal({
     const ALIAS_MAP = {
       property: {
         // Name
-        property_name: 'name', building_name: 'name', asset_name: 'name',
+        property: 'name', property_name: 'name', building_name: 'name', asset_name: 'name',
+        asset: 'name', project_name: 'name', site_name: 'name',
         // SF
-        total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
-        rentable_sf: 'total_sf', gla: 'total_sf', gross_leasable_area: 'total_sf', nra: 'total_sf',
+        total_sqft: 'total_sf', total_square_feet: 'total_sf', square_footage: 'total_sf',
+        square_feet: 'total_sf', sqft: 'total_sf', sf: 'total_sf',
+        rentable_sf: 'total_sf', rentable_square_feet: 'total_sf',
+        gla: 'total_sf', gross_leasable_area: 'total_sf', nra: 'total_sf',
         // Address
-        street: 'address', street_address: 'address', location: 'address', full_address: 'address',
+        property_address: 'address', premises_address: 'address', mailing_address: 'address',
+        address_line_1: 'address', address1: 'address', street: 'address',
+        street_address: 'address', location: 'address', full_address: 'address',
+        zipcode: 'zip', zip_code: 'zip', postal_code: 'zip',
         // Type
-        asset_type: 'property_type', building_type: 'property_type', use_type: 'property_type',
+        type: 'property_type', asset_type: 'property_type', building_type: 'property_type',
+        use_type: 'property_type', property_use: 'property_type',
+        // Counts
+        units: 'total_units', unit_count: 'total_units', number_of_units: 'total_units',
+        buildings: 'total_buildings', building_count: 'total_buildings', number_of_buildings: 'total_buildings',
         // Year
         built: 'year_built', construction_year: 'year_built', year_constructed: 'year_built',
+        year: 'year_built',
+        // Value / performance
+        acquisition_price: 'purchase_price', cost_basis: 'purchase_price',
+        appraised_value: 'market_value', current_value: 'market_value', assessed_value: 'market_value',
+        net_operating_income: 'noi', annual_noi: 'noi',
+        capitalization_rate: 'cap_rate',
         // Owner / manager
-        property_manager: 'manager', managed_by: 'manager',
+        property_manager: 'manager', manager_name: 'manager', managed_by: 'manager',
+        owner_name: 'owner', ownership: 'owner', owner_entity: 'owner',
         // Status
         asset_status: 'status', property_status: 'status',
       },
@@ -454,7 +535,8 @@ export default function BulkImportModal({
       // 1. Apply per-module aliases (without overwriting an existing canonical value)
       const aliased = {};
       Object.entries(extracted).forEach(([k, v]) => {
-        const targetKey = aliases[k] || k;
+        const sourceKey = normalizeFieldKey(k);
+        const targetKey = aliases[sourceKey] || sourceKey;
         if (aliased[targetKey] === undefined || aliased[targetKey] === null) {
           aliased[targetKey] = v;
         }
@@ -480,6 +562,9 @@ export default function BulkImportModal({
     e.target.value = '';
     setRows(null);
     setMethod(null);
+    setPipelineFileId(null);
+    setPipelineReviewRequired(false);
+    setPipelineStored(false);
     setFile(f);
     setLoading(true);
 

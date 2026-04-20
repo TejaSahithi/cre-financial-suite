@@ -380,6 +380,13 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
     tableHeaders: ["property_type", "type", "asset type", "asset class"],
     description: "One of: office, retail, industrial, mixed_use, multifamily, hotel, land, other",
   },
+  structure_type: {
+    type: "enum",
+    enumValues: ["single", "multi"],
+    labels: ["structure type", "structure", "building structure", "single tenant", "multi tenant"],
+    tableHeaders: ["structure_type", "structure", "building structure"],
+    description: "Whether the property is single-building/single-tenant or multi-building/multi-tenant when stated",
+  },
   total_sqft: {
     type: "number",
     min: 0,
@@ -387,6 +394,20 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
     tableHeaders: ["total_sqft", "sqft", "square_footage", "total area", "sf", "gla"],
     patterns: [/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bGLA\b)/i],
     description: "Total square footage (plain number)",
+  },
+  leased_sf: {
+    type: "number",
+    min: 0,
+    labels: ["leased sf", "leased square footage", "occupied sf", "occupied square feet"],
+    tableHeaders: ["leased_sf", "leased sf", "occupied sf", "leased square footage"],
+    description: "Leased or occupied square footage when provided",
+  },
+  total_buildings: {
+    type: "number",
+    min: 0,
+    labels: ["total buildings", "number of buildings", "buildings", "building count"],
+    tableHeaders: ["total_buildings", "buildings", "building count", "number of buildings"],
+    description: "Number of buildings on the property",
   },
   year_built: {
     type: "number",
@@ -402,6 +423,14 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
     labels: ["total units", "number of units", "units", "unit count"],
     tableHeaders: ["total_units", "units", "unit count", "number of units"],
     description: "Number of units",
+  },
+  occupancy_pct: {
+    type: "number",
+    min: 0,
+    max: 100,
+    labels: ["occupancy", "occupancy percent", "occupancy pct", "occupied percentage"],
+    tableHeaders: ["occupancy_pct", "occupancy", "occupancy percent", "occupancy pct"],
+    description: "Occupancy percentage as a plain number (90 for 90%)",
   },
   floors: {
     type: "number",
@@ -669,8 +698,8 @@ const EXPENSE_GROUPS: FieldGroup[] = [
 ];
 
 const PROPERTY_GROUPS: FieldGroup[] = [
-  { name: "identity", fields: ["name", "address", "city", "state", "zip", "property_type"], hint: "Find the property name, address, and type." },
-  { name: "physical", fields: ["total_sqft", "year_built", "total_units", "floors", "status"], hint: "Find physical characteristics: size, age, units, floors." },
+  { name: "identity", fields: ["name", "address", "city", "state", "zip", "property_type", "structure_type"], hint: "Find the property name, address, type, and structure." },
+  { name: "physical", fields: ["total_sqft", "leased_sf", "total_buildings", "year_built", "total_units", "occupancy_pct", "floors", "status"], hint: "Find physical characteristics: size, leased/occupied area, building count, age, units, occupancy, and floors." },
   { name: "financial", fields: ["purchase_price", "market_value", "noi", "cap_rate"], hint: "Find financial metrics: price, value, NOI, cap rate." },
   { name: "management", fields: ["manager", "owner"], hint: "Find manager and owner names." },
 ];

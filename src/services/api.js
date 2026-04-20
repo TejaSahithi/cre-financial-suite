@@ -325,6 +325,7 @@ const ALLOWED_COLUMNS = {
     'portfolio_id', 'name', 'address', 'city', 'state', 'zip',
     'property_type', 'total_sqft', 'year_built', 'status',
     'structure_type', 'total_buildings', 'total_units', 'occupancy_pct',
+    'leased_sf',
     'address_verified', 'address_verification_note', 'property_id_code',
     // Bulk-import enrichment columns (added in 20260408_bulk_import_columns.sql)
     'purchase_price', 'market_value', 'noi', 'cap_rate',

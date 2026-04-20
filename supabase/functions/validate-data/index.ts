@@ -45,7 +45,7 @@ const DATE_FIELDS: Record<string, string[]> = {
 const NUMERIC_FIELDS: Record<string, string[]> = {
   leases: ["monthly_rent", "square_footage"],
   expenses: ["amount"],
-  properties: ["square_footage", "total_sqft", "total_sf"],
+  properties: ["square_footage", "total_sqft", "total_sf", "leased_sf"],
   revenue: ["amount"],
   buildings: ["total_sqft", "total_sf", "floors", "year_built"],
   units: ["square_footage", "monthly_rent", "floor"],
