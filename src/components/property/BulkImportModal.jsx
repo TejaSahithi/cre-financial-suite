@@ -608,6 +608,7 @@ export default function BulkImportModal({
       const ingestData = await invokeEdgeFunction('ingest-file', {
         file_id: uploadData.file_id,
         module_type: canonicalModuleType,
+        defer_store: moduleType === 'property',
       });
       if (ingestData?.error) {
         throw new Error(
@@ -642,10 +643,12 @@ export default function BulkImportModal({
       setMethod(reviewRequired ? 'review_required' : (fileRecord.extraction_method || 'canonical_pipeline'));
       setPipelineFileId(uploadData.file_id);
       setPipelineReviewRequired(reviewRequired);
-      setPipelineStored(Boolean(stored) && !reviewRequired);
+      setPipelineStored(moduleType === 'property' ? false : Boolean(stored) && !reviewRequired);
 
       if (reviewRequired) {
         toast.warning(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} extracted and waiting for review approval.`);
+      } else if (moduleType === 'property') {
+        toast.success(`${extractedRows.length} propert${extractedRows.length === 1 ? 'y' : 'ies'} extracted. Review and click Import to add them to this portfolio.`);
       } else if (stored) {
         toast.success(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} imported through the canonical pipeline.`);
       } else {
@@ -715,7 +718,7 @@ export default function BulkImportModal({
     if (!canImport) return;
 
     setImporting(true);
-    if (pipelineFileId) {
+    if (pipelineFileId && moduleType !== 'property') {
       try {
         if (pipelineReviewRequired) {
           const editedRows = rows.map(({ _row, ...row }) => ({

@@ -397,6 +397,7 @@ Deno.serve(async (req: Request) => {
       file_id,
       module_type: explicitModuleType,
       document_subtype: explicitSubtype,   // optional override from caller (UI)
+      defer_store = false,
     } = body;
 
     if (!file_id) {
@@ -631,6 +632,26 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      if (normalizeResult.ok && defer_store) {
+        console.log("[ingest-file] defer_store=true; skipping validate-data/store-data so the caller can review and import rows with page context");
+        return new Response(
+          JSON.stringify({
+            error: false,
+            file_id,
+            deferred_store: true,
+            detection: detectionSummary,
+            routing: { routed_to: routing.route, reason: routing.reason },
+            steps: {
+              extraction: { success: doclingResult.ok, data: doclingResult.data, error: doclingResult.error },
+              normalization: { success: normalizeResult.ok, data: normalizeResult.data, error: normalizeResult.error },
+              validation: { success: false, skipped: true, reason: "defer_store=true" },
+              storage: { success: false, skipped: true, reason: "defer_store=true" },
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       if (normalizeResult.ok && !(normalizeResult.data as any)?.review_required) {
         console.log("[ingest-file] Normalization succeeded; running validate-data then store-data");
         const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);
@@ -708,6 +729,23 @@ Deno.serve(async (req: Request) => {
           stage: "parsing",
           manual_review: true,
           ui_review_payload: payload,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    } else if (defer_store) {
+      console.log("[ingest-file] Structured parsing succeeded; defer_store=true so validate-data/store-data are skipped");
+      return new Response(
+        JSON.stringify({
+          error: false,
+          file_id,
+          deferred_store: true,
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          steps: {
+            parsing: { success: downstreamResult.ok, data: downstreamResult.data, error: downstreamResult.error },
+            validation: { success: false, skipped: true, reason: "defer_store=true" },
+            storage: { success: false, skipped: true, reason: "defer_store=true" },
+          },
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
