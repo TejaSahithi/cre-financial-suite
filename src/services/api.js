@@ -329,7 +329,8 @@ const ALLOWED_COLUMNS = {
     'address_verified', 'address_verification_note', 'property_id_code',
     // Bulk-import enrichment columns (added in 20260408_bulk_import_columns.sql)
     'purchase_price', 'market_value', 'noi', 'cap_rate',
-    'manager', 'owner', 'contact', 'notes',
+    'manager', 'owner', 'contact', 'phone', 'email', 'acquired_date', 'parcel_tax_id',
+    'parking_spaces', 'amenities', 'insurance_policy', 'notes',
   ]),
   Building: new Set([
     ...COMMON_BASE_COLUMNS,

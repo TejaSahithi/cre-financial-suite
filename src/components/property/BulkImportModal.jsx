@@ -40,6 +40,7 @@ const MODULE_TITLES = {
 // { key, label, required, placeholder }
 const MODULE_FIELDS = {
   property: [
+    { key: 'property_id_code', label: 'Property ID',   required: false, placeholder: 'PROP-1001' },
     { key: 'name',           label: 'Property Name',  required: true,  placeholder: 'e.g. Sunset Plaza' },
     { key: 'address',        label: 'Address',         required: false, placeholder: '123 Main St' },
     { key: 'city',           label: 'City',            required: false, placeholder: 'Phoenix' },
@@ -61,6 +62,14 @@ const MODULE_FIELDS = {
     { key: 'cap_rate',       label: 'Cap Rate %',      required: false, placeholder: '5.5' },
     { key: 'manager',        label: 'Property Manager',required: false, placeholder: 'Manager name' },
     { key: 'owner',          label: 'Owner',           required: false, placeholder: 'Owner / entity' },
+    { key: 'contact',        label: 'Contact',         required: false, placeholder: 'Phone / email' },
+    { key: 'phone',          label: 'Phone',           required: false, placeholder: '(716) 555-0148' },
+    { key: 'email',          label: 'Email',           required: false, placeholder: 'manager@example.com' },
+    { key: 'acquired_date',  label: 'Acquired Date',   required: false, placeholder: 'YYYY-MM-DD' },
+    { key: 'parcel_tax_id',  label: 'Parcel / Tax ID', required: false, placeholder: '110.42-3-15' },
+    { key: 'parking_spaces', label: 'Parking Spaces',  required: false, placeholder: '102' },
+    { key: 'amenities',      label: 'Amenities',       required: false, placeholder: 'Pool; Gym' },
+    { key: 'insurance_policy', label: 'Insurance Policy', required: false, placeholder: 'INS-NY-44018' },
     { key: 'notes',          label: 'Notes',           required: false, placeholder: 'Additional info…' },
   ],
   building: [
@@ -408,6 +417,7 @@ export default function BulkImportModal({
     const ALIAS_MAP = {
       property: {
         // Name
+        property_id: 'property_id_code', property_code: 'property_id_code', asset_id: 'property_id_code',
         property: 'name', property_name: 'name', building_name: 'name', asset_name: 'name',
         asset: 'name', project_name: 'name', site_name: 'name',
         // SF
@@ -437,6 +447,12 @@ export default function BulkImportModal({
         // Owner / manager
         property_manager: 'manager', manager_name: 'manager', managed_by: 'manager',
         owner_name: 'owner', ownership: 'owner', owner_entity: 'owner',
+        property_contact: 'contact', telephone: 'phone', phone_number: 'phone', email_address: 'email',
+        acquisition_date: 'acquired_date', purchase_date: 'acquired_date',
+        parcel_id: 'parcel_tax_id', tax_id: 'parcel_tax_id', parcel_tax: 'parcel_tax_id',
+        parking: 'parking_spaces', parking_count: 'parking_spaces',
+        features: 'amenities',
+        policy_number: 'insurance_policy', insurance: 'insurance_policy',
         // Status
         asset_status: 'status', property_status: 'status',
       },

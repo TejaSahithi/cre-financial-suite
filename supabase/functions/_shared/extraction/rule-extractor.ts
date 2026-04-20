@@ -131,6 +131,13 @@ export function parseEnum(s: string, allowed: string[]): string | null {
     "double net": "nn", "double-net": "nn",
     "non recoverable": "non_recoverable", "non-recoverable": "non_recoverable",
     "not recoverable": "non_recoverable",
+    "commercial office": "office",
+    "office center": "office",
+    "single family": "single_family",
+    "single-family": "single_family",
+    "single family portfolio": "single_family",
+    "single-family portfolio": "single_family",
+    "under renovation": "under_renovation",
   };
   return ENUM_ALIASES[lower] ?? null;
 }

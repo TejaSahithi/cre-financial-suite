@@ -835,6 +835,7 @@ async function inflateZipEntry(compressed: Uint8Array, method: number): Promise<
 function buildDocxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
   const decoder = new TextDecoder("utf-8");
   const xmlParts: string[] = [];
+  const tables: DoclingTable[] = [];
   const wanted = [
     "word/document.xml",
     ...[...entries.keys()].filter((name) =>
@@ -844,11 +845,53 @@ function buildDocxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
 
   for (const name of wanted) {
     const data = entries.get(name);
-    if (data) xmlParts.push(decoder.decode(data));
+    if (data) {
+      const xml = decoder.decode(data);
+      xmlParts.push(xml);
+      tables.push(...extractWordTables(xml, tables.length));
+    }
   }
 
   const text = cleanExtractedXmlText(xmlParts.map(xmlToText).join("\n\n"));
-  return textToDocling(text);
+  return {
+    ...textToDocling(text),
+    tables,
+  };
+}
+
+function extractWordTables(xml: string, startIndex = 0): DoclingTable[] {
+  const tables: DoclingTable[] = [];
+  for (const tableMatch of xml.matchAll(/<w:tbl\b[\s\S]*?<\/w:tbl>/g)) {
+    const tableXml = tableMatch[0];
+    const rows: string[][] = [];
+
+    for (const rowMatch of tableXml.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)) {
+      const rowXml = rowMatch[0];
+      const cells: string[] = [];
+      for (const cellMatch of rowXml.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)) {
+        const value = cleanExtractedXmlText(xmlToText(cellMatch[0]));
+        cells.push(value);
+      }
+      if (cells.some((cell) => cell.trim())) rows.push(cells);
+    }
+
+    if (rows.length < 2) continue;
+    const width = Math.max(...rows.map((row) => row.length));
+    const paddedRows = rows.map((row) => [
+      ...row,
+      ...Array(Math.max(0, width - row.length)).fill(""),
+    ]);
+    const headers = paddedRows[0].map((header) => header.trim());
+    const dataRows = paddedRows.slice(1);
+
+    tables.push({
+      table_index: startIndex + tables.length,
+      headers,
+      rows: dataRows,
+      markdown: paddedRows.map((row) => row.join("\t")).join("\n"),
+    });
+  }
+  return tables;
 }
 
 function buildXlsxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
