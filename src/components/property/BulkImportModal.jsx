@@ -1045,22 +1045,24 @@ export default function BulkImportModal({
         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
 
           {/* Target property picker — required for buildings/units when no page context */}
-          {needsPropertyPick && (
+          {(needsPropertyPick || canUseOptionalPropertyPick) && (
             <div className="mb-4 p-3 rounded-lg border border-blue-200 bg-blue-50/60">
               <label className="block text-xs font-bold text-blue-900 mb-1.5 uppercase tracking-wide">
-                Target Property <span className="text-red-500">*</span>
+                Target Property {needsPropertyPick && <span className="text-red-500">*</span>}
               </label>
               <p className="text-[11px] text-blue-700/80 mb-2">
-                {moduleType === 'building'
-                  ? 'Buildings must belong to a property. Pick the parent property for these rows.'
-                  : 'Units must belong to a property. Pick the parent property for these rows.'}
+                {canUseOptionalPropertyPick
+                  ? 'Optional: select one parent property for all building rows. Leave blank when the file includes Parent Property or Property ID per row.'
+                  : moduleType === 'building'
+                    ? 'Buildings must belong to a property. Pick the parent property for these rows.'
+                    : 'Units must belong to a property. Pick the parent property for these rows.'}
               </p>
               <select
                 value={targetPropertyId}
                 onChange={e => setTargetPropertyId(e.target.value)}
                 className="w-full text-sm px-3 py-2 rounded border border-blue-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
-                <option value="">— Select a property —</option>
+                <option value="">{canUseOptionalPropertyPick ? 'Resolve from each row' : 'Select a property'}</option>
                 {propertyOptions.map(p => (
                   <option key={p.id} value={p.id}>
                     {p.name}{p.address ? ` — ${p.address}` : ''}
@@ -1275,6 +1277,12 @@ export default function BulkImportModal({
               {missingTargetProperty && allErrors.length === 0 && (
                 <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3"/>Pick a target property above before importing
+                </span>
+              )}
+              {missingRowPropertyReference && allErrors.length === 0 && !missingTargetProperty && (
+                <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3"/>
+                  Add Parent Property, Property ID, or select one target property for {rowsMissingPropertyReference} building row{rowsMissingPropertyReference !== 1 ? 's' : ''}
                 </span>
               )}
               <Button
