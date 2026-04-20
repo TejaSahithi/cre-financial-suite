@@ -760,7 +760,7 @@ export default function BulkImportModal({
     if (!canImport) return;
 
     setImporting(true);
-    const usePipelineFinalize = Boolean(pipelineFileId) && moduleType !== 'property';
+    const usePipelineFinalize = Boolean(pipelineFileId) && !DEFER_STORE_MODULES.has(moduleType);
 
     if (usePipelineFinalize) {
       try {
@@ -813,12 +813,52 @@ export default function BulkImportModal({
     const writableOrgId = await resolveWritableOrgId(contextOrgId);
     const tenantIdCache = new Map();
     const propertyIdCache = new Map();
+    let importPropertyOptions = propertyOptions;
     let count = 0, skipped = 0;
     const failures = [];
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    const normalizeLookupValue = (value) =>
+      String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+    const ensurePropertyOptions = async () => {
+      if (Array.isArray(importPropertyOptions) && importPropertyOptions.length > 0) {
+        return importPropertyOptions;
+      }
+      const list = await PropertyService.list();
+      importPropertyOptions = Array.isArray(list) ? list : [];
+      return importPropertyOptions;
+    };
+
+    const resolvePropertyIdForRow = async (data) => {
+      const existingId = String(data.property_id || '').trim();
+      if (uuidRegex.test(existingId)) return existingId;
+
+      const propertyCode = normalizeLookupValue(data.property_id_code);
+      const propertyName = normalizeLookupValue(data.property_name);
+      if (!propertyCode && !propertyName) return null;
+
+      const cacheKey = propertyCode ? `code:${propertyCode}` : `name:${propertyName}`;
+      if (propertyIdCache.has(cacheKey)) return propertyIdCache.get(cacheKey);
+
+      const properties = await ensurePropertyOptions();
+      const byCode = propertyCode
+        ? properties.find((property) => normalizeLookupValue(property.property_id_code) === propertyCode)
+        : null;
+      const byName = propertyName
+        ? properties.find((property) => normalizeLookupValue(property.name) === propertyName)
+        : null;
+      const byAddress = propertyName
+        ? properties.find((property) => normalizeLookupValue(property.address) === propertyName)
+        : null;
+
+      const match = byCode || byName || byAddress || null;
+      propertyIdCache.set(cacheKey, match?.id || null);
+      return match?.id || null;
+    };
 
     for (const row of rows) {
       const { _row, ...data } = row;
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
       if (writableOrgId) data.org_id = writableOrgId;
 
@@ -864,6 +904,26 @@ export default function BulkImportModal({
           delete cleanData[k];
         }
       });
+
+      if (moduleType === 'building' && !effectivePropertyId) {
+        const resolvedPropertyId = await resolvePropertyIdForRow(cleanData);
+        if (resolvedPropertyId) {
+          cleanData.property_id = resolvedPropertyId;
+        } else {
+          const propertyReference = cleanData.property_id_code || cleanData.property_name || cleanData.property_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match parent property "${propertyReference}". Select one property or use an exact Property Name / Property ID in the file.`,
+          });
+          skipped++;
+          continue;
+        }
+      }
+
+      if (moduleType === 'building') {
+        delete cleanData.property_name;
+        delete cleanData.property_id_code;
+      }
 
       if (moduleType === 'invoice') {
         if (cleanData.billing_period && !cleanData.issued_date) {
