@@ -834,7 +834,7 @@ export default function BulkImportModal({
       const existingId = String(data.property_id || '').trim();
       if (uuidRegex.test(existingId)) return existingId;
 
-      const propertyCode = normalizeLookupValue(data.property_id_code);
+      const propertyCode = normalizeLookupValue(data.property_id_code || existingId);
       const propertyName = normalizeLookupValue(data.property_name);
       if (!propertyCode && !propertyName) return null;
 
