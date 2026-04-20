@@ -674,6 +674,9 @@ export const TENANT_SCHEMA: ModuleSchema = {
 };
 
 export const BUILDING_SCHEMA: ModuleSchema = {
+  property_id: { type: "string", labels: ["property id", "parent property id"], tableHeaders: ["property_id", "property uuid", "parent property id"], description: "Existing parent property UUID when present" },
+  property_id_code: { type: "string", labels: ["property id", "property code", "parent property code"], tableHeaders: ["property id", "property_id_code", "property code", "parent property id", "asset id"], description: "Business identifier/code for the parent property" },
+  property_name: { type: "string", labels: ["property", "property name", "parent property", "site"], tableHeaders: ["property", "property_name", "property name", "parent property", "parent property name", "site"], description: "Name of the parent property the building belongs to" },
   name: { type: "string", required: true, labels: ["building name", "name"], tableHeaders: ["name", "building", "building name"], description: "Building name" },
   address: { type: "string", labels: ["address", "street"], tableHeaders: ["address", "street"], description: "Street address" },
   total_sqft: { type: "number", min: 0, labels: ["sqft", "total sqft", "area"], tableHeaders: ["sqft", "total_sqft", "area", "sf"], description: "Total square footage" },
