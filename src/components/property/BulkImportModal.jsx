@@ -73,6 +73,9 @@ const MODULE_FIELDS = {
     { key: 'notes',          label: 'Notes',           required: false, placeholder: 'Additional info…' },
   ],
   building: [
+    { key: 'property_id',      label: 'Property UUID',    required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'property_name',    label: 'Parent Property', required: false, placeholder: 'Sunset Plaza' },
+    { key: 'property_id_code', label: 'Property ID',      required: false, placeholder: 'PROP-1001' },
     { key: 'name',       label: 'Building Name', required: true,  placeholder: 'Building A' },
     { key: 'address',    label: 'Address',       required: false, placeholder: '123 Main St' },
     { key: 'total_sf',   label: 'Total SF',      required: false, placeholder: '50000' },
@@ -315,8 +318,11 @@ const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onCh
 EditableCell.displayName = 'EditableCell';
 
 // Modules whose DB row REQUIRES a property_id (NOT NULL FK).
-// When no propertyId context is provided, the user must pick one in the modal.
+// Buildings may resolve their parent property per row from extracted
+// property_name/property_id_code, so they do not need one global picker.
 const REQUIRES_PROPERTY = new Set(['building', 'unit']);
+const CAN_RESOLVE_PROPERTY_PER_ROW = new Set(['building']);
+const DEFER_STORE_MODULES = new Set(['property', 'building', 'unit']);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
@@ -353,18 +359,25 @@ export default function BulkImportModal({
 
   // The property_id we'll attach to each row (context wins over modal selection)
   const effectivePropertyId = propertyId || targetPropertyId || null;
-  const needsPropertyPick = REQUIRES_PROPERTY.has(moduleType) && !propertyId;
+  const needsPropertyPick =
+    REQUIRES_PROPERTY.has(moduleType) &&
+    !propertyId &&
+    !CAN_RESOLVE_PROPERTY_PER_ROW.has(moduleType);
+  const canUseOptionalPropertyPick =
+    REQUIRES_PROPERTY.has(moduleType) &&
+    !propertyId &&
+    CAN_RESOLVE_PROPERTY_PER_ROW.has(moduleType);
 
   // Load property options for the in-modal picker (only when needed)
   useEffect(() => {
-    if (!isOpen || !needsPropertyPick) return;
+    if (!isOpen || (!needsPropertyPick && !canUseOptionalPropertyPick)) return;
     let cancelled = false;
     PropertyService.list().then(list => {
       if (cancelled) return;
       setPropertyOptions(Array.isArray(list) ? list : []);
     }).catch(() => { if (!cancelled) setPropertyOptions([]); });
     return () => { cancelled = true; };
-  }, [isOpen, needsPropertyPick]);
+  }, [isOpen, needsPropertyPick, canUseOptionalPropertyPick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -457,7 +470,11 @@ export default function BulkImportModal({
         asset_status: 'status', property_status: 'status',
       },
       building: {
-        building_name: 'name', asset_name: 'name',
+        property_id: 'property_id',
+        property: 'property_name', property_name: 'property_name', parent_property: 'property_name',
+        parent_property_name: 'property_name', asset_property: 'property_name', site_name: 'property_name',
+        property_code: 'property_id_code', property_id_code: 'property_id_code', parent_property_id: 'property_id_code',
+        building_name: 'name', asset_name: 'name', building: 'name',
         total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
         street: 'address', location: 'address',
         built: 'year_built',
@@ -585,7 +602,7 @@ export default function BulkImportModal({
     setLoading(true);
 
     try {
-      if (REQUIRES_PROPERTY.has(moduleType) && !propertyId && !targetPropertyId) {
+      if (REQUIRES_PROPERTY.has(moduleType) && !propertyId && !targetPropertyId && !CAN_RESOLVE_PROPERTY_PER_ROW.has(moduleType)) {
         toast.error('Pick a target property before uploading this file.');
         return;
       }
@@ -608,7 +625,7 @@ export default function BulkImportModal({
       const ingestData = await invokeEdgeFunction('ingest-file', {
         file_id: uploadData.file_id,
         module_type: canonicalModuleType,
-        defer_store: moduleType === 'property',
+        defer_store: DEFER_STORE_MODULES.has(moduleType),
       });
       if (ingestData?.error) {
         throw new Error(
@@ -639,18 +656,18 @@ export default function BulkImportModal({
         ingestData?.steps?.storage?.success ||
         ['stored', 'computing', 'completed'].includes(fileRecord.status);
 
-      const isPropertyImport = moduleType === 'property';
+      const isLocalReviewImport = DEFER_STORE_MODULES.has(moduleType);
 
       setRows(buildRows(extractedRows));
       setMethod(reviewRequired ? 'review_required' : (fileRecord.extraction_method || 'canonical_pipeline'));
-      setPipelineFileId(isPropertyImport ? null : uploadData.file_id);
-      setPipelineReviewRequired(isPropertyImport ? false : reviewRequired);
-      setPipelineStored(isPropertyImport ? false : Boolean(stored) && !reviewRequired);
+      setPipelineFileId(isLocalReviewImport ? null : uploadData.file_id);
+      setPipelineReviewRequired(isLocalReviewImport ? false : reviewRequired);
+      setPipelineStored(isLocalReviewImport ? false : Boolean(stored) && !reviewRequired);
 
       if (reviewRequired) {
         toast.warning(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} extracted and waiting for review approval.`);
-      } else if (moduleType === 'property') {
-        toast.success(`${extractedRows.length} propert${extractedRows.length === 1 ? 'y' : 'ies'} extracted. Review and click Import to add them to this portfolio.`);
+      } else if (isLocalReviewImport) {
+        toast.success(`${extractedRows.length} ${title.toLowerCase()} record${extractedRows.length !== 1 ? 's' : ''} extracted. Review and click Import to add them.`);
       } else if (stored) {
         toast.success(`${extractedRows.length} record${extractedRows.length !== 1 ? 's' : ''} imported through the canonical pipeline.`);
       } else {
@@ -692,9 +709,32 @@ export default function BulkImportModal({
   ) : [];
 
   // Block import if this module needs a property and the user hasn't picked one yet
-  const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
+  const rowHasPropertyReference = (row) => {
+    if (!row) return false;
+    return Boolean(
+      String(row.property_id || '').trim() ||
+      String(row.property_id_code || '').trim() ||
+      String(row.property_name || '').trim()
+    );
+  };
 
-  const canImport = rows && rows.length > 0 && allErrors.length === 0 && !importing && !missingTargetProperty;
+  const rowsMissingPropertyReference =
+    moduleType === 'building' &&
+    !effectivePropertyId &&
+    Array.isArray(rows)
+      ? rows.filter(row => !rowHasPropertyReference(row)).length
+      : 0;
+
+  const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
+  const missingRowPropertyReference = rowsMissingPropertyReference > 0;
+
+  const canImport =
+    rows &&
+    rows.length > 0 &&
+    allErrors.length === 0 &&
+    !importing &&
+    !missingTargetProperty &&
+    !missingRowPropertyReference;
   const hasMismatchedBuildingAddresses =
     moduleType === "building" &&
     !!selectedPropertyAddress &&
