@@ -32,7 +32,7 @@ const REQUIRED_FIELDS: Record<string, string[]> = {
 const DATE_FIELDS: Record<string, string[]> = {
   leases: ["start_date", "end_date"],
   expenses: ["date"],
-  properties: [],
+  properties: ["acquired_date"],
   revenue: [],
   buildings: [],
   units: [],
@@ -45,7 +45,7 @@ const DATE_FIELDS: Record<string, string[]> = {
 const NUMERIC_FIELDS: Record<string, string[]> = {
   leases: ["monthly_rent", "square_footage"],
   expenses: ["amount"],
-  properties: ["square_footage", "total_sqft", "total_sf", "leased_sf"],
+  properties: ["square_footage", "total_sqft", "total_sf", "leased_sf", "parking_spaces"],
   revenue: ["amount"],
   buildings: ["total_sqft", "total_sf", "floors", "year_built"],
   units: ["square_footage", "monthly_rent", "floor"],

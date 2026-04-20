@@ -122,6 +122,41 @@ function extractRow(
   return hasValue ? { fields, rowIndex } : null;
 }
 
+function mergePropertyRecords(records: ExtractedRecord[]): ExtractedRecord[] {
+  const byCode = new Map<string, ExtractedRecord>();
+  const passthrough: ExtractedRecord[] = [];
+
+  for (const record of records) {
+    const codeValue = record.fields?.property_id_code?.value;
+    const code = String(codeValue ?? "").trim();
+    if (!code) {
+      passthrough.push(record);
+      continue;
+    }
+
+    const existing = byCode.get(code);
+    if (!existing) {
+      byCode.set(code, { ...record, fields: { ...record.fields } });
+      continue;
+    }
+
+    for (const [fieldName, field] of Object.entries(record.fields ?? {})) {
+      const current = existing.fields[fieldName];
+      const currentBlank = current?.value === null ||
+        current?.value === undefined ||
+        String(current?.value ?? "").trim() === "";
+      if (!current || currentBlank || (field.confidence ?? 0) > (current.confidence ?? 0)) {
+        existing.fields[fieldName] = field;
+      }
+    }
+  }
+
+  return [...byCode.values(), ...passthrough].map((record, index) => ({
+    ...record,
+    rowIndex: index,
+  }));
+}
+
 // ── Main: Table-based extraction ─────────────────────────────────────────────
 
 /**
@@ -159,7 +194,12 @@ export function extractFromTables(
 
   // Use the best-matching table (or merge multiple if scores are close)
   const allRecords: ExtractedRecord[] = [];
-  const processedTables = scored.filter((s) => s.score >= scored[0].score * 0.8);
+  const processedTables = moduleType === "property"
+    ? scored.filter((s) =>
+      s.mappings.some((mapping) => mapping.fieldName === "property_id_code") ||
+      s.score >= scored[0].score * 0.8
+    )
+    : scored.filter((s) => s.score >= scored[0].score * 0.8);
 
   for (const { table, mappings, score } of processedTables) {
     if (mappings.length === 0) continue;
@@ -178,5 +218,15 @@ export function extractFromTables(
     warnings.push("Tables matched but no valid data rows extracted");
   }
 
-  return { records: allRecords, warnings };
+  const records = moduleType === "property"
+    ? mergePropertyRecords(allRecords)
+    : allRecords;
+
+  if (moduleType === "property" && records.length !== allRecords.length) {
+    warnings.push(
+      `Merged ${allRecords.length} property table rows into ${records.length} records by Property ID`,
+    );
+  }
+
+  return { records, warnings };
 }

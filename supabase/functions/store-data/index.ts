@@ -120,6 +120,7 @@ function mapRow(
     case "properties":
       return {
         ...base,
+        property_id_code: row.property_id_code ?? row.property_id ?? null,
         name: row.name ?? "Unnamed Property",
         address: row.address ?? null,
         city: row.city ?? null,
@@ -141,6 +142,14 @@ function mapRow(
         cap_rate: row.cap_rate ?? null,
         manager: row.manager ?? row.property_manager ?? null,
         owner: row.owner ?? row.owner_name ?? null,
+        contact: row.contact ?? ([row.phone, row.email].filter(Boolean).join(" / ") || null),
+        phone: row.phone ?? null,
+        email: row.email ?? null,
+        acquired_date: row.acquired_date ?? row.acquisition_date ?? null,
+        parcel_tax_id: row.parcel_tax_id ?? row.parcel_id ?? row.tax_id ?? null,
+        parking_spaces: row.parking_spaces ?? row.parking ?? null,
+        amenities: row.amenities ?? null,
+        insurance_policy: row.insurance_policy ?? row.insurance ?? null,
         notes: row.notes ?? null,
       };
 

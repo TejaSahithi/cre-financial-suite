@@ -342,6 +342,12 @@ export const EXPENSE_SCHEMA: ModuleSchema = {
 // ── Property schema ──────────────────────────────────────────────────────────
 
 export const PROPERTY_SCHEMA: ModuleSchema = {
+  property_id_code: {
+    type: "string",
+    labels: ["property id", "property code", "property number", "asset id"],
+    tableHeaders: ["property id", "property_id", "property_id_code", "property code", "asset id"],
+    description: "Property identifier or code from the source document",
+  },
   name: {
     type: "string",
     required: true,
@@ -375,7 +381,7 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
   },
   property_type: {
     type: "enum",
-    enumValues: ["office", "retail", "industrial", "mixed_use", "multifamily", "hotel", "land", "other"],
+    enumValues: ["office", "retail", "industrial", "mixed_use", "multifamily", "single_family", "hotel", "land", "other"],
     labels: ["property type", "type", "asset type", "asset class"],
     tableHeaders: ["property_type", "type", "asset type", "asset class"],
     description: "One of: office, retail, industrial, mixed_use, multifamily, hotel, land, other",
@@ -441,10 +447,10 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
   },
   status: {
     type: "enum",
-    enumValues: ["active", "inactive", "under_construction", "sold"],
-    labels: ["status", "property status"],
+    enumValues: ["active", "inactive", "under_construction", "under_renovation", "sold"],
+    labels: ["status", "property status", "renovation status"],
     tableHeaders: ["status", "property status"],
-    description: "One of: active, inactive, under_construction, sold",
+    description: "One of: active, inactive, under_construction, under_renovation, sold",
   },
   purchase_price: {
     type: "number",
@@ -476,19 +482,69 @@ export const PROPERTY_SCHEMA: ModuleSchema = {
   },
   manager: {
     type: "string",
-    labels: ["manager", "property manager", "management company"],
-    tableHeaders: ["manager", "property_manager", "management"],
+    labels: ["manager", "manager name", "property manager", "management company"],
+    tableHeaders: ["manager", "manager name", "manager_name", "property_manager", "management"],
     description: "Property manager name",
   },
   owner: {
     type: "string",
-    labels: ["owner", "ownership", "owner name", "landlord"],
-    tableHeaders: ["owner", "ownership", "owner name", "landlord"],
+    labels: ["owner", "ownership", "owner name", "owner entity", "landlord"],
+    tableHeaders: ["owner", "ownership", "owner name", "owner entity", "landlord"],
     description: "Owner name or entity",
+  },
+  contact: {
+    type: "string",
+    labels: ["contact", "property contact"],
+    tableHeaders: ["contact", "property contact"],
+    description: "Property contact phone/email or contact summary",
+  },
+  phone: {
+    type: "string",
+    labels: ["phone", "telephone"],
+    tableHeaders: ["phone", "telephone", "phone number"],
+    description: "Property manager or owner phone number",
+  },
+  email: {
+    type: "string",
+    labels: ["email", "email address"],
+    tableHeaders: ["email", "email address"],
+    description: "Property manager or owner email address",
+  },
+  acquired_date: {
+    type: "date",
+    labels: ["acquired date", "acquisition date", "purchase date"],
+    tableHeaders: ["acquired date", "acquired_date", "acquisition date", "purchase date"],
+    description: "Date the property was acquired",
+  },
+  parcel_tax_id: {
+    type: "string",
+    labels: ["parcel id", "tax id", "parcel / tax id", "parcel number"],
+    tableHeaders: ["parcel / tax id", "parcel tax id", "parcel_tax_id", "parcel id", "tax id"],
+    description: "Parcel or tax identifier",
+  },
+  parking_spaces: {
+    type: "number",
+    min: 0,
+    labels: ["parking spaces", "parking count", "parking"],
+    tableHeaders: ["parking spaces", "parking", "parking count"],
+    description: "Number of parking spaces",
+  },
+  amenities: {
+    type: "string",
+    labels: ["amenities", "features"],
+    tableHeaders: ["amenities", "features"],
+    description: "Property amenities or features",
+  },
+  insurance_policy: {
+    type: "string",
+    labels: ["insurance policy", "policy number", "insurance"],
+    tableHeaders: ["insurance policy", "insurance_policy", "policy number", "insurance"],
+    description: "Insurance policy identifier",
   },
   notes: {
     type: "string",
-    labels: [],
+    labels: ["notes", "comments"],
+    tableHeaders: ["notes", "comments"],
     description: "Additional notes",
   },
 };
@@ -698,10 +754,10 @@ const EXPENSE_GROUPS: FieldGroup[] = [
 ];
 
 const PROPERTY_GROUPS: FieldGroup[] = [
-  { name: "identity", fields: ["name", "address", "city", "state", "zip", "property_type", "structure_type"], hint: "Find the property name, address, type, and structure." },
-  { name: "physical", fields: ["total_sqft", "leased_sf", "total_buildings", "year_built", "total_units", "occupancy_pct", "floors", "status"], hint: "Find physical characteristics: size, leased/occupied area, building count, age, units, occupancy, and floors." },
+  { name: "identity", fields: ["property_id_code", "name", "address", "city", "state", "zip", "property_type", "structure_type"], hint: "Find the property identifier, name, address, type, and structure." },
+  { name: "physical", fields: ["total_sqft", "leased_sf", "total_buildings", "year_built", "total_units", "occupancy_pct", "floors", "status", "parking_spaces", "amenities"], hint: "Find physical characteristics: size, leased/occupied area, building count, age, units, occupancy, floors, parking, and amenities." },
   { name: "financial", fields: ["purchase_price", "market_value", "noi", "cap_rate"], hint: "Find financial metrics: price, value, NOI, cap rate." },
-  { name: "management", fields: ["manager", "owner"], hint: "Find manager and owner names." },
+  { name: "management", fields: ["manager", "owner", "contact", "phone", "email", "acquired_date", "parcel_tax_id", "insurance_policy", "notes"], hint: "Find manager, owner, contact details, phone, email, acquisition date, parcel/tax ID, insurance policy, and notes." },
 ];
 
 const REVENUE_GROUPS: FieldGroup[] = [
