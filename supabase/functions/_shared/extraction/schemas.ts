@@ -611,11 +611,53 @@ export const REVENUE_SCHEMA: ModuleSchema = {
 // ── Unit schema ──────────────────────────────────────────────────────────────
 
 export const UNIT_SCHEMA: ModuleSchema = {
+  property_id: {
+    type: "string",
+    labels: ["property uuid", "parent property uuid"],
+    tableHeaders: ["property uuid", "property_uuid", "parent property uuid"],
+    description: "Existing parent property UUID when present",
+  },
+  property_id_code: {
+    type: "string",
+    labels: ["property id", "property code", "parent property code"],
+    tableHeaders: ["property id", "property_id", "property_id_code", "property code", "parent property id", "asset id"],
+    description: "Business identifier/code for the parent property",
+  },
+  property_name: {
+    type: "string",
+    labels: ["property", "property name", "parent property", "site"],
+    tableHeaders: ["property", "property_name", "property name", "parent property", "parent property name", "site"],
+    description: "Name of the parent property",
+  },
+  building_id: {
+    type: "string",
+    labels: ["building uuid", "parent building uuid"],
+    tableHeaders: ["building uuid", "building_uuid", "parent building uuid"],
+    description: "Existing parent building UUID when present",
+  },
+  building_id_code: {
+    type: "string",
+    labels: ["building id", "building code", "parent building code"],
+    tableHeaders: ["building id", "building_id", "building_id_code", "building code", "parent building id"],
+    description: "Business identifier/code for the parent building",
+  },
+  building_name: {
+    type: "string",
+    labels: ["building", "building name", "parent building"],
+    tableHeaders: ["building", "building_name", "building name", "parent building", "parent building name"],
+    description: "Name of the parent building",
+  },
+  unit_id_code: {
+    type: "string",
+    labels: ["unit id", "unit code"],
+    tableHeaders: ["unit id", "unit_id", "unit_id_code", "unit code"],
+    description: "Business identifier/code for the unit",
+  },
   unit_number: {
     type: "string",
     required: true,
-    labels: ["unit", "suite", "space", "unit number"],
-    tableHeaders: ["unit", "suite", "space", "unit_number", "unit number", "suite #"],
+    labels: ["unit", "suite", "space", "unit number", "unit no"],
+    tableHeaders: ["unit", "suite", "space", "unit_number", "unit number", "unit no", "unit no.", "unit #", "suite #"],
     description: "Unit or suite identifier",
   },
   floor: {
@@ -628,8 +670,14 @@ export const UNIT_SCHEMA: ModuleSchema = {
     type: "number",
     min: 0,
     labels: ["sqft", "square footage", "area", "sf"],
-    tableHeaders: ["sqft", "sf", "square_footage", "area", "square footage"],
+    tableHeaders: ["sqft", "sq ft", "sf", "square_footage", "area", "square footage", "square feet"],
     description: "Rentable square footage",
+  },
+  bedroom_bathroom: {
+    type: "string",
+    labels: ["bed bath", "bed/bath", "beds baths"],
+    tableHeaders: ["bed/bath", "bed bath", "beds/baths", "bedroom_bathroom"],
+    description: "Bedroom/bathroom description",
   },
   unit_type: {
     type: "enum",
@@ -640,16 +688,16 @@ export const UNIT_SCHEMA: ModuleSchema = {
   },
   status: {
     type: "enum",
-    enumValues: ["vacant", "occupied", "under_renovation"],
+    enumValues: ["vacant", "occupied", "notice", "under_renovation"],
     labels: ["status", "occupancy"],
-    tableHeaders: ["status", "occupancy"],
+    tableHeaders: ["status", "occupancy", "lease status", "occupancy status"],
     description: "One of: vacant, occupied, under_renovation",
   },
   monthly_rent: {
     type: "number",
     min: 0,
-    labels: ["rent", "monthly rent", "asking rent"],
-    tableHeaders: ["rent", "monthly_rent", "monthly rent", "asking rent"],
+    labels: ["rent", "monthly rent", "asking rent", "market rent"],
+    tableHeaders: ["rent", "monthly_rent", "monthly rent", "asking rent", "market rent"],
     description: "Monthly rent in USD",
   },
   tenant_name: {
@@ -657,6 +705,18 @@ export const UNIT_SCHEMA: ModuleSchema = {
     labels: ["tenant", "occupant"],
     tableHeaders: ["tenant", "tenant_name", "occupant"],
     description: "Current tenant name (if occupied)",
+  },
+  lease_start: {
+    type: "date",
+    labels: ["lease start", "start date"],
+    tableHeaders: ["lease start", "lease_start", "start date"],
+    description: "Lease start date",
+  },
+  lease_end: {
+    type: "date",
+    labels: ["lease end", "end date"],
+    tableHeaders: ["lease end", "lease_end", "end date"],
+    description: "Lease end date",
   },
 };
 
@@ -677,6 +737,7 @@ export const BUILDING_SCHEMA: ModuleSchema = {
   property_id: { type: "string", labels: ["property uuid", "parent property uuid"], tableHeaders: ["property uuid", "property_uuid", "parent property uuid"], description: "Existing parent property UUID when present" },
   property_id_code: { type: "string", labels: ["property id", "property code", "parent property code"], tableHeaders: ["property id", "property_id_code", "property code", "parent property id", "asset id"], description: "Business identifier/code for the parent property" },
   property_name: { type: "string", labels: ["property", "property name", "parent property", "site"], tableHeaders: ["property", "property_name", "property name", "parent property", "parent property name", "site"], description: "Name of the parent property the building belongs to" },
+  building_id_code: { type: "string", labels: ["building id", "building code"], tableHeaders: ["building id", "building_id", "building_id_code", "building code"], description: "Business identifier/code for the building" },
   name: { type: "string", required: true, labels: ["building name", "name"], tableHeaders: ["name", "building", "building name"], description: "Building name" },
   address: { type: "string", labels: ["address", "street"], tableHeaders: ["address", "street"], description: "Street address" },
   total_sqft: { type: "number", min: 0, labels: ["sqft", "total sqft", "area"], tableHeaders: ["sqft", "total_sqft", "area", "sf"], description: "Total square footage" },

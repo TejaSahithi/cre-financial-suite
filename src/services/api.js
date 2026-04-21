@@ -334,14 +334,14 @@ const ALLOWED_COLUMNS = {
   ]),
   Building: new Set([
     ...COMMON_BASE_COLUMNS,
-    'property_id', 'name', 'total_sqft', 'floors',
+    'property_id', 'building_id_code', 'name', 'total_sqft', 'floors',
     'address', 'year_built', 'status', 'description',
   ]),
   Unit: new Set([
     ...COMMON_BASE_COLUMNS,
-    'property_id', 'building_id', 'unit_number', 'square_footage',
+    'property_id', 'building_id', 'unit_id_code', 'unit_number', 'square_footage',
     'status', 'tenant_id', 'floor', 'unit_type', 'occupancy_status',
-    'lease_id', 'monthly_rent', 'lease_start', 'lease_end', 'notes',
+    'lease_id', 'monthly_rent', 'lease_start', 'lease_end', 'bedroom_bathroom', 'notes',
   ]),
   Lease: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -464,7 +464,7 @@ export function createEntityService(entityName) {
     // 3. Global Strip List (Relational aliases and UI-only artifacts)
     const toStrip = [
       'total_sf', 'square_feet', 'sqft', 'sf', 'leased_sf', 'area',
-      'property_name', 'building_name', 'unit_id_code', 'property_id_code',
+      'property_name', 'building_name',
       '_row' // Used by BulkImportModal UI
     ];
 
