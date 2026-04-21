@@ -76,6 +76,7 @@ const MODULE_FIELDS = {
     { key: 'property_id',      label: 'Property UUID',    required: false, placeholder: 'Auto / existing UUID' },
     { key: 'property_name',    label: 'Parent Property', required: false, placeholder: 'Sunset Plaza' },
     { key: 'property_id_code', label: 'Property ID',      required: false, placeholder: 'PROP-1001' },
+    { key: 'building_id_code', label: 'Building ID',      required: false, placeholder: 'BLDG-2001' },
     { key: 'name',       label: 'Building Name', required: true,  placeholder: 'Building A' },
     { key: 'address',    label: 'Address',       required: false, placeholder: '123 Main St' },
     { key: 'total_sf',   label: 'Total SF',      required: false, placeholder: '50000' },
@@ -84,13 +85,23 @@ const MODULE_FIELDS = {
     { key: 'status',     label: 'Status',        required: false, placeholder: 'active' },
   ],
   unit: [
+    { key: 'property_id',      label: 'Property UUID',    required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'property_name',    label: 'Parent Property', required: false, placeholder: 'Sunset Plaza' },
+    { key: 'property_id_code', label: 'Property ID',      required: false, placeholder: 'PROP-1001' },
+    { key: 'building_id',      label: 'Building UUID',    required: false, placeholder: 'Auto / existing UUID' },
+    { key: 'building_name',    label: 'Parent Building', required: false, placeholder: 'Tower A' },
+    { key: 'building_id_code', label: 'Building ID',      required: false, placeholder: 'BLDG-2001' },
+    { key: 'unit_id_code',    label: 'Unit ID',        required: false, placeholder: 'UNIT-3001' },
     { key: 'unit_number',    label: 'Unit #',        required: true,  placeholder: '101' },
+    { key: 'bedroom_bathroom', label: 'Bed/Bath',     required: false, placeholder: '2 / 1' },
     { key: 'floor',          label: 'Floor',         required: false, placeholder: '1' },
     { key: 'square_footage', label: 'Square Feet',   required: false, placeholder: '1200' },
     { key: 'unit_type',      label: 'Unit Type',     required: false, placeholder: 'office' },
     { key: 'occupancy_status', label: 'Status',        required: false, placeholder: 'vacant / occupied' },
     { key: 'monthly_rent',   label: 'Monthly Rent',  required: false, placeholder: '2500' },
     { key: 'tenant_name',    label: 'Tenant Name',   required: false, placeholder: 'Acme Corp' },
+    { key: 'lease_start',    label: 'Lease Start',   required: false, placeholder: 'YYYY-MM-DD' },
+    { key: 'lease_end',      label: 'Lease End',     required: false, placeholder: 'YYYY-MM-DD' },
   ],
   lease: [
     { key: 'tenant_name',      label: 'Tenant Name',    required: true,  placeholder: 'Acme Corp' },
@@ -318,10 +329,10 @@ const EditableCell = React.memo(({ value, placeholder, isRequired, isEmpty, onCh
 EditableCell.displayName = 'EditableCell';
 
 // Modules whose DB row REQUIRES a property_id (NOT NULL FK).
-// Buildings may resolve their parent property per row from extracted
-// property_name/property_id_code, so they do not need one global picker.
+// Buildings/units may resolve their parent scope per row from extracted
+// property/building names/codes, so they do not need one global picker.
 const REQUIRES_PROPERTY = new Set(['building', 'unit']);
-const CAN_RESOLVE_PROPERTY_PER_ROW = new Set(['building']);
+const CAN_RESOLVE_PROPERTY_PER_ROW = new Set(['building', 'unit']);
 const DEFER_STORE_MODULES = new Set(['property', 'building', 'unit']);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +361,7 @@ export default function BulkImportModal({
   // Target property selected inside the modal (only used when no contextual propertyId)
   const [targetPropertyId, setTargetPropertyId] = useState('');
   const [propertyOptions, setPropertyOptions] = useState([]);
+  const [buildingOptions, setBuildingOptions] = useState([]);
   const [selectedPropertyAddress, setSelectedPropertyAddress] = useState("");
 
   const title   = MODULE_TITLES[moduleType] || moduleType;
@@ -378,6 +390,16 @@ export default function BulkImportModal({
     }).catch(() => { if (!cancelled) setPropertyOptions([]); });
     return () => { cancelled = true; };
   }, [isOpen, needsPropertyPick, canUseOptionalPropertyPick]);
+
+  useEffect(() => {
+    if (!isOpen || moduleType !== 'unit') return;
+    let cancelled = false;
+    BuildingService.list().then(list => {
+      if (cancelled) return;
+      setBuildingOptions(Array.isArray(list) ? list : []);
+    }).catch(() => { if (!cancelled) setBuildingOptions([]); });
+    return () => { cancelled = true; };
+  }, [isOpen, moduleType]);
 
   useEffect(() => {
     let cancelled = false;
@@ -474,6 +496,7 @@ export default function BulkImportModal({
         property: 'property_name', property_name: 'property_name', parent_property: 'property_name',
         parent_property_name: 'property_name', asset_property: 'property_name', site_name: 'property_name',
         property_code: 'property_id_code', property_id_code: 'property_id_code', parent_property_id: 'property_id_code',
+        building_id: 'building_id_code', building_code: 'building_id_code', building_id_code: 'building_id_code',
         building_name: 'name', asset_name: 'name', building: 'name',
         total_sqft: 'total_sf', square_feet: 'total_sf', sqft: 'total_sf',
         street: 'address', location: 'address',
@@ -481,18 +504,31 @@ export default function BulkImportModal({
         building_status: 'status', asset_status: 'status',
       },
       unit: {
+        // Parent scope
+        property_id: 'property_id', property_uuid: 'property_id', parent_property_id: 'property_id_code',
+        property_code: 'property_id_code', property_id_code: 'property_id_code',
+        property: 'property_name', property_name: 'property_name', parent_property: 'property_name',
+        building_id: 'building_id', building_uuid: 'building_id', parent_building_id: 'building_id_code',
+        building_code: 'building_id_code', building_id_code: 'building_id_code',
+        building: 'building_name', building_name: 'building_name', parent_building: 'building_name',
+        unit_id: 'unit_id_code', unit_code: 'unit_id_code',
         // Unit number
         suite: 'unit_number', suite_number: 'unit_number', space: 'unit_number', space_number: 'unit_number',
-        unit_id_code: 'unit_number', unit_no: 'unit_number',
+        unit_no: 'unit_number', unit_no_: 'unit_number',
+        unit_number: 'unit_number',
+        // Bed/bath
+        bed_bath: 'bedroom_bathroom', beds_baths: 'bedroom_bathroom', bedroom_bathroom: 'bedroom_bathroom',
         // SF
         total_sf: 'square_footage', total_sqft: 'square_footage', square_feet: 'square_footage',
-        sqft: 'square_footage', rsf: 'square_footage', rentable_sf: 'square_footage',
+        sqft: 'square_footage', sq_ft: 'square_footage', rsf: 'square_footage', rentable_sf: 'square_footage',
         // Status
-        status: 'occupancy_status', occupancy: 'occupancy_status', availability: 'occupancy_status',
+        status: 'occupancy_status', lease_status: 'occupancy_status', occupancy: 'occupancy_status', availability: 'occupancy_status',
         // Rent
-        rent: 'monthly_rent', base_rent: 'monthly_rent', rent_per_month: 'monthly_rent',
+        rent: 'monthly_rent', market_rent: 'monthly_rent', base_rent: 'monthly_rent', rent_per_month: 'monthly_rent',
         // Type
         type: 'unit_type',
+        // Lease dates
+        lease_start: 'lease_start', start_date: 'lease_start', lease_end: 'lease_end', end_date: 'lease_end',
       },
       lease: {
         // Tenant
@@ -719,14 +755,31 @@ export default function BulkImportModal({
   };
 
   const rowsMissingPropertyReference =
-    moduleType === 'building' &&
+    ['building', 'unit'].includes(moduleType) &&
     !effectivePropertyId &&
     Array.isArray(rows)
       ? rows.filter(row => !rowHasPropertyReference(row)).length
       : 0;
 
+  const rowHasBuildingReference = (row) => {
+    if (!row) return false;
+    return Boolean(
+      String(row.building_id || '').trim() ||
+      String(row.building_id_code || '').trim() ||
+      String(row.building_name || '').trim()
+    );
+  };
+
+  const rowsMissingBuildingReference =
+    moduleType === 'unit' &&
+    !buildingId &&
+    Array.isArray(rows)
+      ? rows.filter(row => !rowHasBuildingReference(row)).length
+      : 0;
+
   const missingTargetProperty = needsPropertyPick && !effectivePropertyId;
   const missingRowPropertyReference = rowsMissingPropertyReference > 0;
+  const missingRowBuildingReference = rowsMissingBuildingReference > 0;
 
   const canImport =
     rows &&
@@ -734,7 +787,8 @@ export default function BulkImportModal({
     allErrors.length === 0 &&
     !importing &&
     !missingTargetProperty &&
-    !missingRowPropertyReference;
+    !missingRowPropertyReference &&
+    !missingRowBuildingReference;
   const hasMismatchedBuildingAddresses =
     moduleType === "building" &&
     !!selectedPropertyAddress &&
@@ -813,7 +867,9 @@ export default function BulkImportModal({
     const writableOrgId = await resolveWritableOrgId(contextOrgId);
     const tenantIdCache = new Map();
     const propertyIdCache = new Map();
+    const buildingIdCache = new Map();
     let importPropertyOptions = propertyOptions;
+    let importBuildingOptions = buildingOptions;
     let count = 0, skipped = 0;
     const failures = [];
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -828,6 +884,15 @@ export default function BulkImportModal({
       const list = await PropertyService.list();
       importPropertyOptions = Array.isArray(list) ? list : [];
       return importPropertyOptions;
+    };
+
+    const ensureBuildingOptions = async () => {
+      if (Array.isArray(importBuildingOptions) && importBuildingOptions.length > 0) {
+        return importBuildingOptions;
+      }
+      const list = await BuildingService.list();
+      importBuildingOptions = Array.isArray(list) ? list : [];
+      return importBuildingOptions;
     };
 
     const resolvePropertyIdForRow = async (data) => {
@@ -854,6 +919,33 @@ export default function BulkImportModal({
 
       const match = byCode || byName || byAddress || null;
       propertyIdCache.set(cacheKey, match?.id || null);
+      return match?.id || null;
+    };
+
+    const resolveBuildingIdForRow = async (data, resolvedPropertyId) => {
+      const existingId = String(data.building_id || '').trim();
+      if (uuidRegex.test(existingId)) return existingId;
+
+      const buildingCode = normalizeLookupValue(data.building_id_code || existingId);
+      const buildingName = normalizeLookupValue(data.building_name);
+      if (!buildingCode && !buildingName) return null;
+
+      const cacheKey = `${resolvedPropertyId || 'any'}|${buildingCode ? `code:${buildingCode}` : `name:${buildingName}`}`;
+      if (buildingIdCache.has(cacheKey)) return buildingIdCache.get(cacheKey);
+
+      const buildings = await ensureBuildingOptions();
+      const scopedBuildings = resolvedPropertyId
+        ? buildings.filter((building) => building.property_id === resolvedPropertyId)
+        : buildings;
+      const byCode = buildingCode
+        ? scopedBuildings.find((building) => normalizeLookupValue(building.building_id_code) === buildingCode)
+        : null;
+      const byName = buildingName
+        ? scopedBuildings.find((building) => normalizeLookupValue(building.name) === buildingName)
+        : null;
+
+      const match = byCode || byName || null;
+      buildingIdCache.set(cacheKey, match?.id || null);
       return match?.id || null;
     };
 
@@ -923,6 +1015,58 @@ export default function BulkImportModal({
       if (moduleType === 'building') {
         delete cleanData.property_name;
         delete cleanData.property_id_code;
+      }
+
+      if (moduleType === 'unit') {
+        let resolvedPropertyId = cleanData.property_id || effectivePropertyId || null;
+        if (!resolvedPropertyId || !uuidRegex.test(String(resolvedPropertyId))) {
+          resolvedPropertyId = await resolvePropertyIdForRow(cleanData);
+        }
+
+        let resolvedBuildingId = cleanData.building_id || buildingId || null;
+        if (!resolvedBuildingId || !uuidRegex.test(String(resolvedBuildingId))) {
+          resolvedBuildingId = await resolveBuildingIdForRow(cleanData, resolvedPropertyId);
+        }
+
+        if (!resolvedBuildingId && buildingId) {
+          resolvedBuildingId = buildingId;
+        }
+
+        if (resolvedBuildingId && !resolvedPropertyId) {
+          const buildings = await ensureBuildingOptions();
+          const matchedBuilding = buildings.find((building) => building.id === resolvedBuildingId);
+          resolvedPropertyId = matchedBuilding?.property_id || null;
+        }
+
+        if (!resolvedPropertyId || !uuidRegex.test(String(resolvedPropertyId))) {
+          const propertyReference = cleanData.property_id_code || cleanData.property_name || cleanData.property_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match parent property "${propertyReference}". Select one property or use an exact Property Name / Property ID in the file.`,
+          });
+          skipped++;
+          continue;
+        }
+
+        if (!resolvedBuildingId || !uuidRegex.test(String(resolvedBuildingId))) {
+          const buildingReference = cleanData.building_id_code || cleanData.building_name || cleanData.building_id || 'missing';
+          failures.push({
+            row: _row,
+            message: `Could not match parent building "${buildingReference}". Select one building or use an exact Building Name / Building ID in the file.`,
+          });
+          skipped++;
+          continue;
+        }
+
+        cleanData.property_id = resolvedPropertyId;
+        cleanData.building_id = resolvedBuildingId;
+        if (cleanData.occupancy_status && !cleanData.status) {
+          cleanData.status = cleanData.occupancy_status;
+        }
+        delete cleanData.property_name;
+        delete cleanData.property_id_code;
+        delete cleanData.building_name;
+        delete cleanData.building_id_code;
       }
 
       if (moduleType === 'invoice') {
@@ -1052,7 +1196,7 @@ export default function BulkImportModal({
               </label>
               <p className="text-[11px] text-blue-700/80 mb-2">
                 {canUseOptionalPropertyPick
-                  ? 'Optional: select one parent property for all building rows. Leave blank when the file includes Parent Property or Property ID per row.'
+                  ? 'Optional: select one parent property for all rows. Leave blank when the file includes Parent Property or Property ID per row.'
                   : moduleType === 'building'
                     ? 'Buildings must belong to a property. Pick the parent property for these rows.'
                     : 'Units must belong to a property. Pick the parent property for these rows.'}
@@ -1282,7 +1426,13 @@ export default function BulkImportModal({
               {missingRowPropertyReference && allErrors.length === 0 && !missingTargetProperty && (
                 <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3"/>
-                  Add Parent Property, Property ID, or select one target property for {rowsMissingPropertyReference} building row{rowsMissingPropertyReference !== 1 ? 's' : ''}
+                  Add Parent Property, Property ID, or select one target property for {rowsMissingPropertyReference} row{rowsMissingPropertyReference !== 1 ? 's' : ''}
+                </span>
+              )}
+              {missingRowBuildingReference && allErrors.length === 0 && !missingTargetProperty && !missingRowPropertyReference && (
+                <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3"/>
+                  Add Parent Building, Building ID, or open a selected building before importing {rowsMissingBuildingReference} unit row{rowsMissingBuildingReference !== 1 ? 's' : ''}
                 </span>
               )}
               <Button
