@@ -4,8 +4,6 @@ import { OrganizationService } from "@/services/api";
 import { MODULE_DEFINITIONS, getModuleForPage, isPageInEnabledModules } from "./moduleConfig";
 import { MANDATORY_SETUP_PAGES } from "./rbac";
 
-const EMPTY_OBJECT = {};
-
 const ModuleAccessContext = createContext({
   enabledModules: [],
   assignedPagesByModule: {},
@@ -26,9 +24,26 @@ function normalizeAccessLevel(value) {
   return "none";
 }
 
+function coerceToObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  return {};
+}
+
 function getActiveMembership(user) {
-  if (!user?.memberships?.length) return null;
-  return user.memberships.find((membership) => membership.org_id === user.org_id) || user.memberships[0];
+  const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
+  if (memberships.length === 0) return null;
+  return memberships.find((membership) => membership?.org_id === user?.org_id) || memberships[0];
 }
 
 function buildAssignedPagesByModule({ pagePermissions, enabledModules, hasExplicitPagePermissions }) {
@@ -97,13 +112,13 @@ export function ModuleAccessProvider({ children }) {
         let orgEnabledModules = [];
         if (user.org_id) {
           const orgs = await OrganizationService.filter({ id: user.org_id });
-          if (orgs.length > 0 && Array.isArray(orgs[0].enabled_modules)) {
+          if (Array.isArray(orgs) && orgs.length > 0 && Array.isArray(orgs[0]?.enabled_modules)) {
             orgEnabledModules = orgs[0].enabled_modules;
           }
         }
 
-        const rawModulePermissions = membership?.module_permissions || EMPTY_OBJECT;
-        const rawPagePermissions = membership?.page_permissions || EMPTY_OBJECT;
+        const rawModulePermissions = coerceToObject(membership?.module_permissions);
+        const rawPagePermissions = coerceToObject(membership?.page_permissions);
 
         const explicitModuleKeys = Object.entries(rawModulePermissions)
           .filter(([, value]) => normalizeAccessLevel(value) !== "none")

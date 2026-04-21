@@ -265,6 +265,7 @@ function deriveStatus(member) {
 }
 
 function parseJsonSafely(value) {
+  if (value == null) return null;
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -318,7 +319,11 @@ function getMemberPagePerms(member) {
 }
 
 function getHighestSigningLevel(signingPrivs) {
-  return Math.max(0, ...Object.values(signingPrivs));
+  const values = Object.values(signingPrivs || {})
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v));
+  if (values.length === 0) return 0;
+  return Math.max(0, ...values);
 }
 
 function parseCSV(text) {
@@ -1620,7 +1625,8 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
 export default function UserManagement() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const isSuperAdmin = user?.memberships?.some(m => m.role === "super_admin");
+  const userMemberships = Array.isArray(user?.memberships) ? user.memberships : [];
+  const isSuperAdmin = userMemberships.some(m => m?.role === "super_admin");
   const defaultOrgId = user?.activeOrg?.id || user?.org_id;
 
   const [selectedOrgId, setSelectedOrgId] = useState(defaultOrgId);
@@ -1660,8 +1666,8 @@ export default function UserManagement() {
         .neq("role", "super_admin");
       if (membershipError) throw membershipError;
 
-      const baseMembers = membershipRows || [];
-      const userIds = [...new Set(baseMembers.map(member => member.user_id).filter(Boolean))];
+      const baseMembers = Array.isArray(membershipRows) ? membershipRows : [];
+      const userIds = [...new Set(baseMembers.map(member => member?.user_id).filter(Boolean))];
 
       const [profilesResult, invitationsResult] = await Promise.all([
         userIds.length > 0
@@ -2013,7 +2019,7 @@ export default function UserManagement() {
                 const pagePerms = getMemberPagePerms(member);
                 const signingPrivs = getMemberSigningPrivileges(member);
                 const highestSigning = getHighestSigningLevel(signingPrivs);
-                const highestSlvl = SIGNING_LEVELS[highestSigning];
+                const highestSlvl = SIGNING_LEVELS[highestSigning] || SIGNING_LEVELS[0];
                 const isSelected = selectedIds.has(member.user_id);
                 const canOpenDetails = !member.isInvitationOnly;
                 const initials = (member.profiles?.full_name || member.profiles?.email || "?")
