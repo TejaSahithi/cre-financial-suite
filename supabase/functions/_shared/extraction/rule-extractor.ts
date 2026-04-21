@@ -383,6 +383,8 @@ function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): u
   if (fieldName === "lease_term_months") {
     const inferred = inferTermMonths(raw);
     if (inferred != null) return inferred;
+    if (/^\s*\d{1,3}\s*$/.test(String(raw))) return Number(String(raw).trim());
+    return null;
   }
   return coerceValue(raw, fieldDef);
 }
@@ -512,6 +514,38 @@ function extractFromDoclingFields(
   return result;
 }
 
+function extractFromKeyValueTables(
+  tables: DoclingOutput["tables"],
+  schema: ModuleSchema,
+): Record<string, ExtractedField> {
+  const fields: DoclingField[] = [];
+
+  for (const table of tables ?? []) {
+    const pairs: string[][] = [];
+    if (Array.isArray(table.headers) && table.headers.length >= 2) {
+      pairs.push([String(table.headers[0] ?? ""), String(table.headers[1] ?? "")]);
+    }
+    if (Array.isArray(table.rows)) {
+      for (const row of table.rows) {
+        if (Array.isArray(row) && row.length >= 2) {
+          pairs.push([String(row[0] ?? ""), String(row[1] ?? "")]);
+        }
+      }
+    }
+
+    for (const [key, value] of pairs) {
+      if (!key.trim() || !value.trim()) continue;
+      fields.push({
+        key,
+        value,
+        confidence: 0.96,
+      } as DoclingField);
+    }
+  }
+
+  return extractFromDoclingFields(fields, schema);
+}
+
 function normalizeMatchKey(value: string): string {
   return String(value || "")
     .trim()
@@ -573,7 +607,7 @@ function extractViaPatterns(
         const match = text.match(pattern);
         if (match) {
           const raw = match[1] ?? match[0];
-          const value = coerceValue(raw, fieldDef);
+          const value = coerceFieldValue(fieldName, raw, fieldDef);
           if (value !== null) {
             result[fieldName] = {
               value,
@@ -617,14 +651,14 @@ function extractViaLabels(
       // Do not treat normal prose like "Landlord and Tenant..." as a field.
       const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(
-        `\\b${escaped}\\b\\s*(?::|-|\\t| {2,})\\s*([^\\n]{1,200}?)${nextLabelLookahead}`,
+        `\\b${escaped}\\b\\s*(?::|-|\\t| {2,}|\\n\\s*)\\s*([^\\n]{1,200}?)${nextLabelLookahead}`,
         "i",
       );
       const match = text.match(re);
 
       if (match) {
         const rawValue = match[1].trim().replace(/[,;.]$/, "");
-        const value = coerceValue(rawValue, fieldDef);
+        const value = coerceFieldValue(fieldName, rawValue, fieldDef);
         if (value !== null) {
           result[fieldName] = {
             value,
@@ -688,13 +722,14 @@ export function extractRuleBased(
 
   // Run all three sub-steps
   const fromFields = extractFromDoclingFields(docling.fields ?? [], schema);
+  const fromKeyValueTables = extractFromKeyValueTables(docling.tables ?? [], schema);
   const fromPatterns = extractViaPatterns(fullText, schema);
   const fromLabels = extractViaLabels(fullText, schema);
 
-  // Merge: Docling fields > patterns > labels (by confidence)
+  // Merge: Docling fields / key-value tables > patterns > labels (by confidence)
   const merged: Record<string, ExtractedField> = {};
 
-  for (const source of [fromLabels, fromPatterns, fromFields]) {
+  for (const source of [fromLabels, fromPatterns, fromKeyValueTables, fromFields]) {
     for (const [key, field] of Object.entries(source)) {
       if (!merged[key] || field.confidence > merged[key].confidence) {
         merged[key] = field;

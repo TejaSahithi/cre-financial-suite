@@ -147,7 +147,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent"],
     tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent"],
     patterns: [
-      /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
+      /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /(?:monthly|base)\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
     ],
     description: "Base rent per month in USD (plain number, no $ or commas)",
