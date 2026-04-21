@@ -81,6 +81,7 @@ export default function CreateBudget() {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
   const [rejectTargetId, setRejectTargetId] = useState(null);
+  const [historicalFileIds, setHistoricalFileIds] = useState([]);
 
   const { orgId } = useOrgQuery("Budget");
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
@@ -176,9 +177,17 @@ export default function CreateBudget() {
           period: form.period,
           method,
           leases: scopeLeases.map((lease) => ({ tenant_name: lease.tenant_name, annual_rent: lease.annual_rent })),
+          historical_file_ids: method === "historical_ai" ? historicalFileIds : [],
         },
         ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
       });
+      if (error) {
+        console.error("[CreateBudget] generate-budget error:", error);
+        toast.error(error.message || "Failed to generate budget from historical data");
+      } else if (result?.error) {
+        console.error("[CreateBudget] generate-budget returned error:", result);
+        toast.error(result.message || "Failed to generate budget from historical data");
+      }
       if (!error && result && !result.error) {
         data = result;
       }
@@ -547,15 +556,18 @@ export default function CreateBudget() {
                   <CardContent className="p-4">
                     <p className="text-sm font-medium text-slate-700 mb-2">Upload Historical Budget or Actuals (optional)</p>
                     <div className="mt-2 max-w-sm">
-                      <FileUploader 
-                        orgId={orgId} 
-                        propertyId={form.property_id} 
+                      <FileUploader
+                        orgId={orgId}
+                        propertyId={form.property_id}
                         defaultFileType="budgets"
                         allowedFileTypes={["budgets", "expenses", "revenue"]}
                         multiple
                         accept=".csv,.pdf,.xls,.xlsx"
                         onUploadComplete={(data) => {
-                          const uploadCount = Array.isArray(data) ? data.length : data?.uploads?.length || 1;
+                          const results = Array.isArray(data) ? data : data ? [data] : [];
+                          const ids = results.map((result) => result?.file_id).filter(Boolean);
+                          setHistoricalFileIds((current) => Array.from(new Set([...current, ...ids])));
+                          const uploadCount = ids.length || results.length || 1;
                           toast.success(`${uploadCount} historical file${uploadCount === 1 ? "" : "s"} queued for AI processing.`);
                         }}
                       />
