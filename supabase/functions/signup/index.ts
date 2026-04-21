@@ -17,18 +17,6 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
 
-const OWNER_ROLE_ALIASES = new Set([
-  "admin",
-  "org_admin",
-  "super_admin",
-  "owner",
-  "landlord",
-  "organization_owner",
-  "admin_(landlord)",
-  "landlord_admin",
-  "admin_landlord",
-]);
-
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin || "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -489,21 +477,6 @@ async function findAuthUserByEmail(admin: any, email: string) {
   return null;
 }
 
-function normalizeRole(role: string | null | undefined) {
-  return String(role || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-}
-
-function isOwnerLikeRole(role: string | null | undefined) {
-  const normalizedRole = normalizeRole(role);
-  if (!normalizedRole) return false;
-  if (OWNER_ROLE_ALIASES.has(normalizedRole)) return true;
-  if (normalizedRole.startsWith("admin_") || normalizedRole.endsWith("_admin")) return true;
-  return normalizedRole.includes("owner");
-}
-
 async function resolveOnboardingType(admin: any, email: string, requestedType?: string) {
   const normalizedRequestedType = String(requestedType || "").trim().toLowerCase();
 
@@ -527,8 +500,8 @@ async function resolveOnboardingType(admin: any, email: string, requestedType?: 
         .maybeSingle(),
     ]);
 
+    if (accessRequest) return "owner";
     if (invitation) return "invited";
-    if (isOwnerLikeRole(accessRequest?.role)) return "owner";
   } catch (error: any) {
     console.warn("[signup] resolveOnboardingType warning:", error?.message || error);
   }
@@ -547,6 +520,12 @@ async function detectRegistrationFlow(admin: any, email: string, userId?: string
         .ilike("email", email)
         .maybeSingle(),
       admin
+        .from("access_requests")
+        .select("id, status")
+        .ilike("email", email)
+        .eq("status", "approved")
+        .limit(1),
+      admin
         .from("invitations")
         .select("id, status")
         .ilike("email", email)
@@ -563,11 +542,13 @@ async function detectRegistrationFlow(admin: any, email: string, userId?: string
       );
     }
 
-    const [profileRes, inviteRes, membershipRes] = await Promise.all(queries as any);
+    const [profileRes, accessRequestRes, inviteRes, membershipRes] = await Promise.all(queries as any);
     const profile = profileRes?.data;
+    const accessRequests = accessRequestRes?.data || [];
     const invitations = inviteRes?.data || [];
     const memberships = membershipRes?.data || [];
 
+    if (accessRequests.length > 0) return "signup";
     if (profile?.onboarding_type === "invited") return "invite";
     if (memberships.length > 0) return "invite";
     if (invitations.length > 0 && !userId) return "invite";
