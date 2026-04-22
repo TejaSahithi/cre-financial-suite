@@ -754,13 +754,6 @@ export default function BulkImportModal({
     );
   };
 
-  const rowsMissingPropertyReference =
-    ['building', 'unit'].includes(moduleType) &&
-    !effectivePropertyId &&
-    Array.isArray(rows)
-      ? rows.filter(row => !rowHasPropertyReference(row)).length
-      : 0;
-
   const rowHasBuildingReference = (row) => {
     if (!row) return false;
     return Boolean(
@@ -769,6 +762,16 @@ export default function BulkImportModal({
       String(row.building_name || '').trim()
     );
   };
+
+  const rowsMissingPropertyReference =
+    ['building', 'unit'].includes(moduleType) &&
+    !effectivePropertyId &&
+    Array.isArray(rows)
+      ? rows.filter(row => {
+          if (moduleType === 'unit' && rowHasBuildingReference(row)) return false;
+          return !rowHasPropertyReference(row);
+        }).length
+      : 0;
 
   const rowsMissingBuildingReference =
     moduleType === 'unit' &&
@@ -1426,7 +1429,9 @@ export default function BulkImportModal({
               {missingRowPropertyReference && allErrors.length === 0 && !missingTargetProperty && (
                 <span className="text-[11px] text-amber-700 flex-1 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3"/>
-                  Add Parent Property, Property ID, or select one target property for {rowsMissingPropertyReference} row{rowsMissingPropertyReference !== 1 ? 's' : ''}
+                  {moduleType === 'unit'
+                    ? `Add Parent Property, Property ID, Parent Building, Building ID, or select one target property for ${rowsMissingPropertyReference} row${rowsMissingPropertyReference !== 1 ? 's' : ''}`
+                    : `Add Parent Property, Property ID, or select one target property for ${rowsMissingPropertyReference} row${rowsMissingPropertyReference !== 1 ? 's' : ''}`}
                 </span>
               )}
               {missingRowBuildingReference && allErrors.length === 0 && !missingTargetProperty && !missingRowPropertyReference && (
