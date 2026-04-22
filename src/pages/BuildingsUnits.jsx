@@ -360,6 +360,11 @@ export default function BuildingsUnits({ mode = "combined" }) {
               <Upload className="w-4 h-4 mr-1" />
               Import Units
             </Button>
+          ) : mode === "buildings" ? (
+            <Button variant="outline" size="sm" onClick={() => openImport("building")}>
+              <Upload className="w-4 h-4 mr-1" />
+              Import Buildings
+            </Button>
           ) : (
             <>
               <Button variant="outline" size="sm" onClick={() => openImport("building")}>
