@@ -915,10 +915,13 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
+      const nextStatus = member.status === "invited"
+        ? "invited"
+        : (selectedRoles.length > 0 ? "active" : "no_access");
       const { error } = await supabase.from("memberships").update({
         role: primaryRole,
         page_permissions: pagePerms,
-        status: selectedRoles.length > 0 ? "active" : member.status,
+        status: nextStatus,
         capabilities: {
           ...(member.capabilities || {}),
           roles: selectedRoles,
@@ -1093,8 +1096,12 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
                     await invokeInviteUser({
                       email: member.profiles?.email,
                       full_name: member.profiles?.full_name,
+                      phone: member.profiles?.phone,
                       org_id: orgId,
                       role: getMemberRoles(member)[0] || null,
+                      page_permissions: member.page_permissions,
+                      module_permissions: member.module_permissions,
+                      capabilities: member.capabilities,
                     });
                     toast.success("Invite resent");
                   } catch (error) {
@@ -1557,10 +1564,13 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
       const primaryRole = selectedRoles.find(r => r !== "custom") || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
       for (const m of selectedMembers) {
+        const nextStatus = m.status === "invited"
+          ? "invited"
+          : (selectedRoles.length > 0 ? "active" : "no_access");
         await supabase.from("memberships").update({
           role: primaryRole,
           page_permissions: pagePerms,
-          status: selectedRoles.length > 0 ? "active" : m.status,
+          status: nextStatus,
           capabilities: {
             ...(m.capabilities || {}),
             roles: selectedRoles,
@@ -1834,8 +1844,12 @@ export default function UserManagement() {
       await invokeInviteUser({
         email: m.profiles?.email,
         full_name: m.profiles?.full_name,
+        phone: m.profiles?.phone,
         org_id: activeOrgId,
         role: getMemberRoles(m)[0] || null,
+        page_permissions: m.page_permissions,
+        module_permissions: m.module_permissions,
+        capabilities: m.capabilities,
       });
     }
     toast.success(`Resent ${targets.length} invites`);

@@ -101,6 +101,69 @@ let _cachedProfile = null;
 // ─── Role priority for resolving effective role ──────────────
 const ROLE_PRIORITY = ['super_admin', 'org_admin', 'manager', 'editor', 'viewer'];
 
+function sortMembershipsByPrivilege(memberships = []) {
+  return [...memberships].sort((a, b) => {
+    const aIndex = ROLE_PRIORITY.indexOf(a.role);
+    const bIndex = ROLE_PRIORITY.indexOf(b.role);
+    return (aIndex === -1 ? ROLE_PRIORITY.length : aIndex)
+      - (bIndex === -1 ? ROLE_PRIORITY.length : bIndex);
+  });
+}
+
+function resolvePrimaryMembership(memberships = []) {
+  return sortMembershipsByPrivilege(memberships)[0] || null;
+}
+
+async function reconcileSignedInInvite(authUser, memberships = []) {
+  const invitedMemberships = memberships.filter((membership) => membership?.status === 'invited');
+  if (!authUser?.id || invitedMemberships.length === 0) return memberships;
+
+  const now = new Date().toISOString();
+  const orgIds = [...new Set(invitedMemberships.map((membership) => membership.org_id).filter(Boolean))];
+
+  try {
+    await supabase
+      .from('memberships')
+      .update({ status: 'active', updated_at: now })
+      .eq('user_id', authUser.id)
+      .eq('status', 'invited');
+  } catch (error) {
+    console.warn('[auth] invite membership activation failed:', error?.message || error);
+  }
+
+  try {
+    await supabase.from('profiles').upsert({
+      id: authUser.id,
+      email: authUser.email || null,
+      full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || null,
+      status: 'active',
+      last_sign_in_at: authUser.last_sign_in_at || now,
+      updated_at: now,
+    }, { onConflict: 'id' });
+  } catch (error) {
+    console.warn('[auth] invited profile reconciliation failed:', error?.message || error);
+  }
+
+  if (authUser.email && orgIds.length > 0) {
+    try {
+      await supabase
+        .from('invitations')
+        .update({ status: 'accepted', updated_at: now })
+        .eq('email', authUser.email)
+        .in('org_id', orgIds)
+        .in('status', ['pending', 'pending_approval']);
+    } catch (error) {
+      console.warn('[auth] invitation log reconciliation failed:', error?.message || error);
+    }
+  }
+
+  return memberships.map((membership) => (
+    membership?.status === 'invited'
+      ? { ...membership, status: 'active', updated_at: now }
+      : membership
+  ));
+}
+
 /**
  * Resolve the highest-privilege membership for the given user.
  * Returns { role, org_id, memberships }.
@@ -116,11 +179,7 @@ async function resolveMembership(userId) {
     return { role: 'viewer', org_id: null, memberships: [] };
   }
 
-  // Sort by highest privilege first
-  const sorted = [...memberships].sort(
-    (a, b) => ROLE_PRIORITY.indexOf(a.role) - ROLE_PRIORITY.indexOf(b.role)
-  );
-  const primary = sorted[0];
+  const primary = resolvePrimaryMembership(memberships);
 
   return {
     role: primary.role,
@@ -135,14 +194,26 @@ async function resolveMembership(userId) {
  */
 async function buildUserObject(authUser) {
   // Fetch identity profile
-  const { data: profile } = await supabase
+  let { data: profile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', authUser.id)
     .single();
 
   // Resolve role — always from memberships, never hardcoded
-  const { role, org_id, memberships } = await resolveMembership(authUser.id);
+  let { role, org_id, memberships } = await resolveMembership(authUser.id);
+  memberships = await reconcileSignedInInvite(authUser, memberships);
+  const { data: refreshedProfile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', authUser.id)
+    .maybeSingle();
+  if (refreshedProfile) profile = refreshedProfile;
+  const primaryMembership = resolvePrimaryMembership(memberships);
+  if (primaryMembership) {
+    role = primaryMembership.role;
+    org_id = primaryMembership.role === 'super_admin' ? null : primaryMembership.org_id;
+  }
 
   // Fetch active org if associated
   let activeOrg = null;
@@ -333,8 +404,12 @@ export async function updateProfile(updates) {
 
   const { error } = await supabase
     .from('profiles')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', user.id);
+    .upsert({
+      id: user.id,
+      email: user.email || null,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
 
   if (error) throw error;
   _cachedProfile = null; // bust cache to re-fetch fresh
