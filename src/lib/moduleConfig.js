@@ -9,7 +9,7 @@
 export const MODULE_DEFINITIONS = {
   dashboard:      { label: "Dashboard",         pages: ["Dashboard"] },
   portfolio:      { label: "Portfolio",          pages: ["Portfolios"] },
-  properties:     { label: "Properties",         pages: ["Properties", "BuildingsUnits", "PropertyDetail"] },
+  properties:     { label: "Properties",         pages: ["Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail"] },
   tenants:        { label: "Tenants",            pages: ["Tenants", "TenantDetail"] },
   vendors:        { label: "Vendors",            pages: ["Vendors"] },  // nested under expenses in nav
   leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "RentProjection"] },

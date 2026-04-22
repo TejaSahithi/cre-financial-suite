@@ -14,7 +14,7 @@
 const ROLE_PAGES = {
   org_admin: [
     "Dashboard", "Portfolios", "PortfolioInsights",
-    "Properties", "BuildingsUnits", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail", "Vendors", "VendorProfile",
     "Leases", "LeaseUpload", "LeaseReview", "RentProjection",
     "Expenses", "AddExpense", "BulkImport", "ExpenseProjection",
@@ -31,7 +31,7 @@ const ROLE_PAGES = {
   ],
   manager: [
     "Dashboard",
-    "Properties", "BuildingsUnits", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail", "Vendors", "VendorProfile",
     "Leases", "LeaseUpload", "LeaseReview", "RentProjection",
     "Expenses", "AddExpense", "BulkImport",
@@ -43,7 +43,7 @@ const ROLE_PAGES = {
   // Legacy alias
   property_manager: [
     "Dashboard",
-    "Properties", "BuildingsUnits", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail", "Vendors",
     "Leases", "LeaseUpload", "LeaseReview", "RentProjection",
     "Expenses", "AddExpense", "BulkImport",
@@ -53,7 +53,7 @@ const ROLE_PAGES = {
   ],
   editor: [
     "Dashboard", "PortfolioInsights",
-    "Properties", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail",
     "Leases", "LeaseUpload", "LeaseReview",
     "Expenses", "AddExpense", "BulkImport", "ExpenseProjection",
@@ -78,7 +78,7 @@ const ROLE_PAGES = {
   ],
   viewer: [
     "Dashboard", "PortfolioInsights",
-    "Properties", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail",
     "Leases", "LeaseReview",
     "Expenses", "Billing",
@@ -91,7 +91,7 @@ const ROLE_PAGES = {
   // Legacy alias
   read_only: [
     "Dashboard", "PortfolioInsights",
-    "Properties", "PropertyDetail",
+    "Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail",
     "Tenants", "TenantDetail",
     "Leases", "LeaseReview",
     "Expenses", "Billing",
