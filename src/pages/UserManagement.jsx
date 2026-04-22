@@ -201,9 +201,12 @@ const PAGE_PERMISSION_GROUPS = [
 
 // ─── Access Levels ─────────────────────────────────────────────────────────────
 const ACCESS_LEVELS = {
-  full: { label: "Full",  chipClass: "bg-emerald-100 text-emerald-700 border-emerald-200", btnActive: "bg-emerald-600 text-white border-transparent" },
-  read: { label: "Read",  chipClass: "bg-blue-100 text-blue-700 border-blue-200",         btnActive: "bg-blue-600 text-white border-transparent" },
-  none: { label: "None",  chipClass: "bg-slate-100 text-slate-400 border-slate-200",      btnActive: "bg-slate-200 text-slate-600 border-transparent" },
+  admin:   { label: "Admin",   chipClass: "bg-violet-100 text-violet-700 border-violet-200",   btnActive: "bg-violet-600 text-white border-transparent" },
+  approve: { label: "Approve", chipClass: "bg-amber-100 text-amber-700 border-amber-200",       btnActive: "bg-amber-600 text-white border-transparent" },
+  write:   { label: "Write",   chipClass: "bg-emerald-100 text-emerald-700 border-emerald-200", btnActive: "bg-emerald-600 text-white border-transparent" },
+  read:    { label: "Read",    chipClass: "bg-blue-100 text-blue-700 border-blue-200",          btnActive: "bg-blue-600 text-white border-transparent" },
+  none:    { label: "None",    chipClass: "bg-slate-100 text-slate-400 border-slate-200",       btnActive: "bg-slate-200 text-slate-600 border-transparent" },
+  full:    { label: "Admin",   chipClass: "bg-violet-100 text-violet-700 border-violet-200",    btnActive: "bg-violet-600 text-white border-transparent" },
 };
 
 // ─── Signing Privilege Levels ──────────────────────────────────────────────────
@@ -230,11 +233,13 @@ const DEFAULT_PAGE_PERMS = Object.fromEntries(
 );
 const DEFAULT_SIGNING = Object.fromEntries(DOCUMENT_TYPES.map(d => [d.key, 0]));
 const DEFAULT_ROLES = [];
-const DEFAULT_DATA_SCOPE = { portfolios: [], properties: [] };
+const DEFAULT_DATA_SCOPE = { allPortfolios: false, allProperties: false, portfolios: [], properties: [] };
 
 const STATUS_CONFIG = {
   active:    { label: "Active",    badgeClass: "bg-emerald-100 text-emerald-700", Icon: CheckCircle2 },
   invited:   { label: "Invited",   badgeClass: "bg-amber-100 text-amber-700",    Icon: Mail },
+  suspended: { label: "Suspended", badgeClass: "bg-orange-100 text-orange-700",   Icon: UserX },
+  revoked:   { label: "Revoked",   badgeClass: "bg-slate-200 text-slate-600",     Icon: UserX },
   no_access: { label: "No Access", badgeClass: "bg-red-100 text-red-600",         Icon: UserX },
 };
 
@@ -264,6 +269,7 @@ function formatLastActive(ts) {
 }
 
 function deriveStatus(member) {
+  if (["suspended", "revoked"].includes(member.status)) return member.status;
   if (member.status === "invited") return "invited";
   const roles = getMemberRoles(member);
   if (roles.length === 0 && !member.role) return "no_access";
@@ -321,7 +327,12 @@ function getMemberSigningPrivileges(member) {
 }
 
 function getMemberPagePerms(member) {
-  return { ...DEFAULT_PAGE_PERMS, ...normalizeObject(member?.page_permissions, {}) };
+  const raw = { ...DEFAULT_PAGE_PERMS, ...normalizeObject(member?.page_permissions, {}) };
+  return Object.fromEntries(Object.entries(raw).map(([key, value]) => {
+    if (value === "full") return [key, "admin"];
+    if (value === "read_only" || value === "readonly") return [key, "read"];
+    return [key, value];
+  }));
 }
 
 function getHighestSigningLevel(signingPrivs) {
@@ -364,7 +375,10 @@ function parseCSV(text) {
 
 function getMemberDataScope(member) {
   const grants = Array.isArray(member?.access_grants) ? member.access_grants : [];
+  const scopeAccess = normalizeObject(member?.capabilities?.scope_access, {});
   return {
+    allPortfolios: Boolean(scopeAccess.all_portfolios),
+    allProperties: Boolean(scopeAccess.all_properties),
     portfolios: grants.filter((grant) => grant.scope === "portfolio").map((grant) => grant.scope_id),
     properties: grants.filter((grant) => grant.scope === "property").map((grant) => grant.scope_id),
   };
@@ -372,10 +386,10 @@ function getMemberDataScope(member) {
 
 function deriveAccessGrantRole(selectedRoles, pagePerms) {
   const selected = new Set(selectedRoles || []);
-  const hasFullPageAccess = Object.values(pagePerms || {}).some((value) => value === "full");
+  const hasManagerPageAccess = Object.values(pagePerms || {}).some((value) => ["write", "approve", "admin", "full"].includes(value));
 
   if (
-    hasFullPageAccess ||
+    hasManagerPageAccess ||
     selected.has("asset_manager") ||
     selected.has("portfolio_manager") ||
     selected.has("property_manager") ||
@@ -473,6 +487,8 @@ function DataScopeEditor({ orgId, value, onChange }) {
 
   const selectedPortfolios = new Set(value?.portfolios || []);
   const selectedProperties = new Set(value?.properties || []);
+  const allPortfolios = Boolean(value?.allPortfolios);
+  const allProperties = Boolean(value?.allProperties);
   const portfolioNameById = Object.fromEntries(portfolios.map((portfolio) => [portfolio.id, portfolio.name]));
 
   const toggle = (key, scopeId) => {
@@ -482,26 +498,37 @@ function DataScopeEditor({ orgId, value, onChange }) {
     onChange({ ...(value || DEFAULT_DATA_SCOPE), [key]: [...current] });
   };
 
+  const setAll = (key, checked) => {
+    const next = { ...(value || DEFAULT_DATA_SCOPE), [key]: Boolean(checked) };
+    if (key === "allPortfolios" && checked) next.portfolios = [];
+    if (key === "allProperties" && checked) next.properties = [];
+    onChange(next);
+  };
+
   return (
     <div className="space-y-4">
       <div className="p-3 rounded-xl border border-blue-100 bg-blue-50 text-xs text-blue-700">
-        Assign the exact portfolios or properties this user can work on. For non-admin org users, leaving both lists empty means they will not see portfolio or property data.
+        Assign all access or exact portfolios/properties this user can work on. Selected portfolio and direct property access are combined as a union.
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 overflow-hidden">
           <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
             <p className="text-sm font-semibold text-slate-800">Portfolio Access</p>
-            <p className="text-[11px] text-slate-500">{selectedPortfolios.size} selected</p>
+            <p className="text-[11px] text-slate-500">{allPortfolios ? "All portfolios" : `${selectedPortfolios.size} selected`}</p>
+            <label className="mt-3 flex items-center gap-2 text-xs text-slate-700">
+              <Checkbox checked={allPortfolios} onCheckedChange={(checked) => setAll("allPortfolios", checked)} />
+              All portfolios
+            </label>
           </div>
-          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allPortfolios ? "opacity-50 pointer-events-none" : ""}`}>
             {portfolios.length === 0 ? (
               <div className="px-4 py-4 text-xs text-slate-400">No portfolios in this organization</div>
             ) : (
               portfolios.map((portfolio) => (
                 <label key={portfolio.id} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
                   <Checkbox
-                    checked={selectedPortfolios.has(portfolio.id)}
+                    checked={allPortfolios || selectedPortfolios.has(portfolio.id)}
                     onCheckedChange={() => toggle("portfolios", portfolio.id)}
                   />
                   <span className="text-sm text-slate-700">{portfolio.name}</span>
@@ -514,16 +541,20 @@ function DataScopeEditor({ orgId, value, onChange }) {
         <div className="rounded-2xl border border-slate-200 overflow-hidden">
           <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
             <p className="text-sm font-semibold text-slate-800">Property Access</p>
-            <p className="text-[11px] text-slate-500">{selectedProperties.size} selected</p>
+            <p className="text-[11px] text-slate-500">{allProperties ? "All properties" : `${selectedProperties.size} selected`}</p>
+            <label className="mt-3 flex items-center gap-2 text-xs text-slate-700">
+              <Checkbox checked={allProperties} onCheckedChange={(checked) => setAll("allProperties", checked)} />
+              All properties
+            </label>
           </div>
-          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allProperties ? "opacity-50 pointer-events-none" : ""}`}>
             {properties.length === 0 ? (
               <div className="px-4 py-4 text-xs text-slate-400">No properties in this organization</div>
             ) : (
               properties.map((property) => (
                 <label key={property.id} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
                   <Checkbox
-                    checked={selectedProperties.has(property.id)}
+                    checked={allProperties || selectedProperties.has(property.id)}
                     onCheckedChange={() => toggle("properties", property.id)}
                   />
                   <div className="min-w-0">
@@ -662,7 +693,10 @@ function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
 
   const groupAccess = (group) => {
     const levels = group.pages.map(p => permissions[p.key] || "none");
-    if (levels.every(l => l === "full")) return "full";
+    if (levels.every(l => l === "admin" || l === "full")) return "admin";
+    if (levels.every(l => l === "approve")) return "approve";
+    if (levels.every(l => l === "write")) return "write";
+    if (levels.every(l => l === "read")) return "read";
     if (levels.every(l => l === "none")) return "none";
     return "mixed";
   };
@@ -689,11 +723,11 @@ function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
                 {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
                 <span className="text-xs font-semibold text-slate-700">{group.icon} {group.label}</span>
                 {groupLevel === "mixed" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-600 font-semibold">Mixed</span>}
-                {groupLevel === "full" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-600 font-semibold">Full</span>}
+                {groupLevel !== "mixed" && groupLevel !== "none" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-600 font-semibold">{ACCESS_LEVELS[groupLevel]?.label}</span>}
               </div>
               {!readonly && (
                 <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                  {Object.entries(ACCESS_LEVELS).map(([l, cfg]) => (
+                  {Object.entries(ACCESS_LEVELS).filter(([l]) => l !== "full").map(([l, cfg]) => (
                     <button
                       key={l}
                       onClick={() => setGroupAccess(group, l)}
@@ -722,7 +756,7 @@ function PagePermissionMatrix({ permissions, onChange, readonly = false }) {
                         </span>
                       ) : (
                         <div className="flex gap-1">
-                          {Object.entries(ACCESS_LEVELS).map(([l, cfg]) => (
+                          {Object.entries(ACCESS_LEVELS).filter(([l]) => l !== "full").map(([l, cfg]) => (
                             <button
                               key={l}
                               onClick={() => onChange(page.key, l)}
@@ -826,6 +860,33 @@ function PageAccessChips({ pagePerms, maxVisible = 4 }) {
 }
 
 // ─── RoleBadges Component ──────────────────────────────────────────────────────
+function ScopeSummary({ member }) {
+  const scope = getMemberDataScope(member);
+  if (scope.allProperties) return <span className="text-xs font-semibold text-emerald-700">All properties</span>;
+  if (scope.allPortfolios) return <span className="text-xs font-semibold text-emerald-700">All portfolios</span>;
+
+  const portfolioCount = scope.portfolios.length;
+  const propertyCount = scope.properties.length;
+  if (portfolioCount === 0 && propertyCount === 0) {
+    return <span className="text-xs text-slate-400 italic">No scope</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {portfolioCount > 0 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-200">
+          {portfolioCount} portfolio{portfolioCount === 1 ? "" : "s"}
+        </span>
+      )}
+      {propertyCount > 0 && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-cyan-50 text-cyan-700 border-cyan-200">
+          {propertyCount} propert{propertyCount === 1 ? "y" : "ies"}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function RoleBadges({ member, maxVisible = 2 }) {
   const roles = getMemberRoles(member);
   const customName = member.capabilities?.custom_role;
@@ -907,16 +968,16 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   }, [member]);
 
   useEffect(() => {
-    setDataScope(getMemberDataScope({ access_grants: accessGrants }));
-  }, [accessGrants]);
+    setDataScope(getMemberDataScope({ ...member, access_grants: accessGrants }));
+  }, [accessGrants, member]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
       const accessRole = deriveAccessGrantRole(selectedRoles, pagePerms);
-      const nextStatus = member.status === "invited"
-        ? "invited"
+      const nextStatus = ["invited", "suspended", "revoked"].includes(member.status)
+        ? member.status
         : (selectedRoles.length > 0 ? "active" : "no_access");
       const { error } = await supabase.from("memberships").update({
         role: primaryRole,
@@ -927,6 +988,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
           roles: selectedRoles,
           custom_role: customRoleName || null,
           signing_privileges: signingPrivs,
+          scope_access: {
+            all_portfolios: Boolean(dataScope.allPortfolios),
+            all_properties: Boolean(dataScope.allProperties),
+          },
         },
       }).eq("user_id", member.user_id).eq("org_id", orgId);
       if (error) throw error;
@@ -938,6 +1003,30 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
       onClose();
     } catch (e) {
       toast.error(e.message || "Failed to save");
+    }
+    setSaving(false);
+  };
+
+  const handleStatusChange = async (nextStatus) => {
+    setSaving(true);
+    try {
+      const payload = {
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+        deactivated_at: ["suspended", "revoked"].includes(nextStatus) ? new Date().toISOString() : null,
+      };
+      const { error } = await supabase
+        .from("memberships")
+        .update(payload)
+        .eq("user_id", member.user_id)
+        .eq("org_id", orgId);
+      if (error) throw error;
+      await logAudit({ action: `membership_${nextStatus}`, target_user_id: member.user_id });
+      toast.success(`Member ${nextStatus}`);
+      queryClient.invalidateQueries({ queryKey: ["org-members"] });
+      onClose();
+    } catch (e) {
+      toast.error(e.message || "Failed to update status");
     }
     setSaving(false);
   };
@@ -1111,6 +1200,18 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
                 <Mail className="w-3.5 h-3.5" /> Resend Invite
               </Button>
             )}
+            {status === "active" && (
+              <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-orange-200 text-orange-700 hover:bg-orange-50"
+                onClick={() => handleStatusChange("suspended")} disabled={saving}>
+                <UserX className="w-3.5 h-3.5" /> Suspend
+              </Button>
+            )}
+            {["suspended", "revoked"].includes(status) && (
+              <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => handleStatusChange("active")} disabled={saving}>
+                <UserCheck className="w-3.5 h-3.5" /> Reactivate
+              </Button>
+            )}
             <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-red-200 text-red-600 hover:bg-red-50"
               onClick={handleRemove} disabled={removing}>
               {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -1177,6 +1278,10 @@ function InviteDialog({ open, onClose, orgId }) {
           roles: selectedRoles,
           custom_role: customRoleName || null,
           signing_privileges: signingPrivs,
+          scope_access: {
+            all_portfolios: Boolean(dataScope.allPortfolios),
+            all_properties: Boolean(dataScope.allProperties),
+          },
         },
         access_role: accessRole,
       });
@@ -1576,6 +1681,10 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
             roles: selectedRoles,
             custom_role: customRoleName || null,
             signing_privileges: signingPrivs,
+            scope_access: {
+              all_portfolios: Boolean(dataScope.allPortfolios),
+              all_properties: Boolean(dataScope.allProperties),
+            },
           },
         }).eq("user_id", m.user_id).eq("org_id", orgId);
         await syncUserAccessGrants({ userId: m.user_id, orgId, dataScope, role: accessRole });
@@ -1690,7 +1799,7 @@ export default function UserManagement() {
         const baseMembers = Array.isArray(membershipRows) ? membershipRows : [];
         const userIds = [...new Set(baseMembers.map(member => member?.user_id).filter(Boolean))];
 
-        const [profilesResult, invitationsResult] = await Promise.all([
+        const [profilesResult, invitationsResult, accessResult] = await Promise.all([
           userIds.length > 0
             ? supabase
                 .from("profiles")
@@ -1702,6 +1811,13 @@ export default function UserManagement() {
             .select("*")
             .eq("org_id", activeOrgId)
             .in("status", ["pending", "pending_approval"]),
+          userIds.length > 0
+            ? supabase
+                .from("user_access")
+                .select("user_id, scope, scope_id, role, is_active, expires_at")
+                .eq("org_id", activeOrgId)
+                .in("user_id", userIds)
+            : Promise.resolve({ data: [], error: null }),
         ]);
 
         if (profilesResult.error) {
@@ -1710,8 +1826,16 @@ export default function UserManagement() {
         if (invitationsResult.error) {
           console.warn("[UserManagement] invitation enrichment failed:", invitationsResult.error.message);
         }
+        if (accessResult.error) {
+          console.warn("[UserManagement] access enrichment failed:", accessResult.error.message);
+        }
 
         const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+        const accessByUserId = new Map();
+        (accessResult.data || []).forEach((grant) => {
+          if (!accessByUserId.has(grant.user_id)) accessByUserId.set(grant.user_id, []);
+          accessByUserId.get(grant.user_id).push(grant);
+        });
 
         const enrichedMembers = baseMembers.map(member => {
           if (!member) return null;
@@ -1723,6 +1847,7 @@ export default function UserManagement() {
           return {
             ...member,
             capabilities,
+            access_grants: accessByUserId.get(member.user_id) || [],
             page_permissions: normalizeObject(member.page_permissions, {}),
             module_permissions: normalizeObject(member.module_permissions, {}),
             profiles: {
@@ -1961,6 +2086,8 @@ export default function UserManagement() {
             <SelectItem value="all">All Statuses</SelectItem>
             <SelectItem value="active">Active</SelectItem>
             <SelectItem value="invited">Invited</SelectItem>
+            <SelectItem value="suspended">Suspended</SelectItem>
+            <SelectItem value="revoked">Revoked</SelectItem>
             <SelectItem value="no_access">No Access</SelectItem>
           </SelectContent>
         </Select>
@@ -2014,6 +2141,7 @@ export default function UserManagement() {
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Member</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">CRE Roles</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Page Access</TableHead>
+              <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Scope</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Signing Authority</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Status</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Last Active</TableHead>
@@ -2023,13 +2151,13 @@ export default function UserManagement() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-16 text-center">
+                <TableCell colSpan={9} className="py-16 text-center">
                   <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-300" />
                 </TableCell>
               </TableRow>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-16 text-center">
+                <TableCell colSpan={9} className="py-16 text-center">
                   <AlertTriangle className="w-8 h-8 text-red-300 mx-auto mb-2" />
                   <p className="text-sm text-red-500 font-medium">
                     Failed to load members: {fetchError?.message || "Unknown error"}
@@ -2041,7 +2169,7 @@ export default function UserManagement() {
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-16 text-center">
+                <TableCell colSpan={9} className="py-16 text-center">
                   <Users className="w-8 h-8 text-slate-200 mx-auto mb-2" />
                   <p className="text-sm text-slate-400 font-medium">
                     {hasFilters ? "No members match your filters" : "No members yet — invite your first team member"}
@@ -2117,6 +2245,9 @@ export default function UserManagement() {
 
                     {/* Page Access */}
                     <TableCell><PageAccessChips pagePerms={pagePerms} maxVisible={3} /></TableCell>
+
+                    {/* Scope */}
+                    <TableCell><ScopeSummary member={member} /></TableCell>
 
                     {/* Signing Authority */}
                     <TableCell>

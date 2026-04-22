@@ -15,11 +15,13 @@ const ModuleAccessContext = createContext({
 });
 
 function normalizeAccessLevel(value) {
-  if (value === true) return "full";
+  if (value === true) return "admin";
   if (value === false || value == null) return "none";
 
   const normalized = String(value).trim().toLowerCase();
-  if (["full", "write", "edit", "manage"].includes(normalized)) return "full";
+  if (["full", "admin", "manage"].includes(normalized)) return "admin";
+  if (["approve", "approver"].includes(normalized)) return "approve";
+  if (["write", "edit"].includes(normalized)) return "write";
   if (["read", "read_only", "readonly", "view", "viewer"].includes(normalized)) return "read";
   return "none";
 }
