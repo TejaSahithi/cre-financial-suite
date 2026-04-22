@@ -161,7 +161,10 @@ export default function BuildingsUnits() {
   const displayTotalSF = activeBuilding
     ? (activeBuilding.total_sf || activeBuilding.total_sqft || 0)
     : totalSF;
-  const activeImportType = activeBuilding ? "unit" : "building";
+  const openImport = (type) => {
+    setImportType(type);
+    setShowImport(true);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async ({ type, id }) => {
@@ -312,10 +315,23 @@ export default function BuildingsUnits() {
             <Download className="w-4 h-4 mr-1 text-slate-500" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={() => { setImportType(activeImportType); setShowImport(true); }}>
-            <Upload className="w-4 h-4 mr-1" />
-            {activeBuilding ? "Import Units" : "Import"}
-          </Button>
+          {activeBuilding ? (
+            <Button variant="outline" size="sm" onClick={() => openImport("unit")}>
+              <Upload className="w-4 h-4 mr-1" />
+              Import Units
+            </Button>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={() => openImport("building")}>
+                <Upload className="w-4 h-4 mr-1" />
+                Import Buildings
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => openImport("unit")}>
+                <Upload className="w-4 h-4 mr-1" />
+                Import Units
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -754,4 +770,3 @@ export default function BuildingsUnits() {
     </div>
   );
 }
-
