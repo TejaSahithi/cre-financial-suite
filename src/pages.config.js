@@ -53,6 +53,7 @@ import AddExpense from './pages/AddExpense';
 import AuditLog from './pages/AuditLog';
 import BudgetDashboard from './pages/BudgetDashboard';
 import BudgetReview from './pages/BudgetReview';
+import Buildings from './pages/Buildings';
 import BuildingsUnits from './pages/BuildingsUnits';
 import BulkImport from './pages/BulkImport';
 import CAMCalculation from './pages/CAMCalculation';
@@ -82,6 +83,7 @@ import SuperAdmin from './pages/SuperAdmin';
 import ExpenseProjection from './pages/ExpenseProjection';
 import Tenants from './pages/Tenants';
 import TenantDetail from './pages/TenantDetail';
+import Units from './pages/Units';
 import Revenue from './pages/Revenue';
 import Actuals from './pages/Actuals';
 import Variance from './pages/Variance';
@@ -117,6 +119,7 @@ export const PAGES = {
     "AuditLog": AuditLog,
     "BudgetDashboard": BudgetDashboard,
     "BudgetReview": BudgetReview,
+    "Buildings": Buildings,
     "BuildingsUnits": BuildingsUnits,
     "BulkImport": BulkImport,
     "CAMCalculation": CAMCalculation,
@@ -144,6 +147,7 @@ export const PAGES = {
     "ExpenseProjection": ExpenseProjection,
     "Tenants": Tenants,
     "TenantDetail": TenantDetail,
+    "Units": Units,
     "Revenue": Revenue,
     "Actuals": Actuals,
     "Variance": Variance,

@@ -129,6 +129,8 @@ const PAGE_PERMISSION_GROUPS = [
     key: "properties", label: "Properties", icon: "🏢",
     pages: [
       { key: "Properties",     label: "Properties List" },
+      { key: "Buildings", label: "Buildings" },
+      { key: "Units", label: "Units" },
       { key: "BuildingsUnits", label: "Buildings & Units" },
       { key: "PropertyDetail", label: "Property Detail" },
     ],

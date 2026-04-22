@@ -23,7 +23,8 @@ const navSections = [
   {
     label: "Properties", icon: Home, children: [
       { label: "All Properties", page: "Properties" },
-      { label: "Buildings & Units", page: "BuildingsUnits" },
+      { label: "Buildings", page: "Buildings" },
+      { label: "Units", page: "Units" },
     ]
   },
   {
