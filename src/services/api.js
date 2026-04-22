@@ -13,6 +13,7 @@ import { resolveTableName, ORG_EXEMPT_TABLES } from '@/types';
 import { logAudit } from '@/services/audit';
 import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
+import { assertCanWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
 
 // ─── In-memory store (used when Supabase is unavailable) ───────────────
 const memoryStore = new Map();
@@ -73,6 +74,19 @@ const ACCESS_CACHE_PREFIX = '__access_scope__';
 // Super-admin and org-admin keep full visibility within their org by default.
 // Scoped portfolio/property restrictions are applied to non-admin org users.
 const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
+const WRITE_PERMISSION_EXEMPT_ENTITIES = new Set(['AccessRequest', 'DemoRequest', 'AuditLog', 'Notification']);
+
+async function assertCurrentUserCanWrite(entityName) {
+  if (WRITE_PERMISSION_EXEMPT_ENTITIES.has(entityName)) return;
+  if (typeof window === 'undefined') return;
+
+  const { me } = await import('@/services/auth');
+  const user = await me();
+  if (!user) return;
+
+  const pageName = getCurrentPageName();
+  assertCanWritePage(user, pageName, `modify ${entityName} records`);
+}
 
 async function getCurrentCacheScopeKey() {
   try {
@@ -768,6 +782,7 @@ export function createEntityService(entityName) {
      */
     async create(data) {
       try {
+        await assertCurrentUserCanWrite(entityName);
         const translated = translateToDbSchema(data);
         const now = new Date().toISOString();
         const enriched = {
@@ -859,6 +874,7 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return newRecord;
       } catch (err) {
+        if (isPagePermissionError(err)) throw err;
         if (isTableNotFound(err)) {
           console.warn(`[api] ${entityName} table not found in Supabase — creating in-memory`);
           seedMemoryStore();
@@ -883,6 +899,7 @@ export function createEntityService(entityName) {
      */
     async upsert(data, conflictColumn = 'email') {
       try {
+        await assertCurrentUserCanWrite(entityName);
         const translated = translateToDbSchema(data);
         const now = new Date().toISOString();
         const enriched = {
@@ -925,6 +942,7 @@ export function createEntityService(entityName) {
         // In-memory fallback — just create
         return this.create(data);
       } catch (err) {
+        if (isPagePermissionError(err)) throw err;
         console.error(`[api] ${entityName}.upsert() error:`, err);
         return { id: `error-${Date.now()}`, ...data };
       }
@@ -939,6 +957,7 @@ export function createEntityService(entityName) {
      */
     async update(id, data) {
       try {
+        await assertCurrentUserCanWrite(entityName);
         const translated = translateToDbSchema(data);
         const enriched = {
           ...translated,
@@ -1008,6 +1027,7 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return updated;
       } catch (err) {
+        if (isPagePermissionError(err)) throw err;
         if (isTableNotFound(err)) {
           console.warn(`[api] ${entityName} table not found in Supabase — updating in-memory`);
           seedMemoryStore();
@@ -1031,6 +1051,7 @@ export function createEntityService(entityName) {
      */
     async delete(id) {
       try {
+        await assertCurrentUserCanWrite(entityName);
         if (supabase) {
           const orgId = isOrgExempt ? null : await getCurrentOrgId();
           let query = supabase.from(tableName).delete().eq('id', id);
@@ -1067,6 +1088,7 @@ export function createEntityService(entityName) {
         invalidateEntity(entityName);
         return true;
       } catch (err) {
+        if (isPagePermissionError(err)) throw err;
         if (isTableNotFound(err)) {
           console.warn(`[api] ${entityName} table not found in Supabase — deleting in-memory`);
           seedMemoryStore();

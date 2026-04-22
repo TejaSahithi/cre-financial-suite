@@ -1,7 +1,7 @@
 // User Management v2 — Permission System Constants & Helpers
 // Role = default template, Access = override layer
 
-import { getAllowedPagesForRole, resolveRoleForAccess } from "@/lib/rbac";
+import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess } from "@/lib/rbac";
 import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 
 // ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
@@ -170,4 +170,88 @@ export function resolveEffectivePermissions(roleStr, modulePerms, pagePerms, cap
 
   const effectiveCaps = { ...baseCaps, ...capabilities };
   return { effectiveModule, effectivePage, effectiveCaps };
+}
+
+export class PagePermissionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PagePermissionError";
+    this.code = "PAGE_READ_ONLY";
+  }
+}
+
+function parseObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      } catch {
+        /* ignore malformed permission payloads */
+      }
+    }
+  }
+  return {};
+}
+
+export function normalizeAccessLevel(value) {
+  if (value === true) return "full";
+  if (value === false || value == null) return "none";
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["full", "write", "edit", "manage", "admin"].includes(normalized)) return "full";
+  if (["read", "read_only", "readonly", "view", "viewer"].includes(normalized)) return "read";
+  return "none";
+}
+
+export function getCurrentPageName(pathname = typeof window !== "undefined" ? window.location.pathname : "") {
+  const [segment] = String(pathname || "")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter(Boolean);
+  return segment || "Dashboard";
+}
+
+export function getActiveMembershipForUser(user) {
+  const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
+  if (memberships.length === 0) return null;
+  return memberships.find((membership) => membership?.org_id === user?.org_id) || memberships[0];
+}
+
+export function getPageAccessLevel(user, pageName) {
+  if (!user || !pageName) return "none";
+
+  const rawRole = user._raw_role || user.role;
+  const resolvedRole = resolveRoleForAccess(rawRole);
+  if (["admin", "super_admin", "org_admin"].includes(resolvedRole)) return "full";
+
+  const membership = getActiveMembershipForUser(user);
+  const pagePermissions = parseObject(membership?.page_permissions);
+  const hasExplicitPagePermissions = Object.keys(pagePermissions).length > 0;
+
+  if (hasExplicitPagePermissions) {
+    return normalizeAccessLevel(pagePermissions[pageName]);
+  }
+
+  if (!canAccess(rawRole, pageName)) return "none";
+  return getPermissions(rawRole).canWrite ? "full" : "read";
+}
+
+export function canReadPage(user, pageName) {
+  return getPageAccessLevel(user, pageName) !== "none";
+}
+
+export function canWritePage(user, pageName) {
+  return getPageAccessLevel(user, pageName) === "full";
+}
+
+export function assertCanWritePage(user, pageName, action = "modify this page") {
+  if (canWritePage(user, pageName)) return;
+  throw new PagePermissionError(`You have read-only access to ${pageName}. Ask an admin for full access to ${action}.`);
+}
+
+export function isPagePermissionError(error) {
+  return error?.code === "PAGE_READ_ONLY" || error instanceof PagePermissionError;
 }

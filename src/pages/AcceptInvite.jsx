@@ -193,6 +193,7 @@ export default function AcceptInvite() {
     try {
       await updateProfile({
         full_name: fullName || undefined,
+        phone: phone || undefined,
         status: "active",
         first_login: false,
         onboarding_complete: true,
@@ -210,6 +211,19 @@ export default function AcceptInvite() {
 
       const { error: membershipError } = await membershipUpdate;
       if (membershipError) throw membershipError;
+
+      const invitationUpdate = supabase
+        .from("invitations")
+        .update({ status: "accepted", updated_at: new Date().toISOString() })
+        .eq("email", session.user.email)
+        .in("status", ["pending", "pending_approval"]);
+
+      if (session.user.user_metadata?.org_id) {
+        invitationUpdate.eq("org_id", session.user.user_metadata.org_id);
+      }
+
+      const { error: invitationError } = await invitationUpdate;
+      if (invitationError) console.warn("[AcceptInvite] invitation status update failed:", invitationError.message);
 
       setStep(3);
     } catch (err) {
