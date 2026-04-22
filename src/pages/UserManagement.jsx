@@ -237,10 +237,14 @@ const STATUS_CONFIG = {
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-function avatarColor(email = "") {
-  const colors = ["#6366f1","#8b5cf6","#ec4899","#f59e0b","#10b981","#3b82f6","#ef4444","#14b8a6"];
+function avatarColor(email) {
+  const colors = ["#6366f1", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444", "#14b8a6"];
+  const safeEmail = String(email || "");
+  if (!safeEmail) return colors[0];
   let h = 0;
-  for (const c of email) h = (h * 31 + c.charCodeAt(0)) % colors.length;
+  for (const c of safeEmail) {
+    h = (h * 31 + c.charCodeAt(0)) % colors.length;
+  }
   return colors[h];
 }
 
@@ -1654,107 +1658,117 @@ export default function UserManagement() {
   });
 
   // Fetch members
-  const { data: members = [], isLoading } = useQuery({
+  const { data: members = [], isLoading, isError, error: fetchError } = useQuery({
     queryKey: ["org-members", activeOrgId],
     queryFn: async () => {
       if (!activeOrgId) return [];
 
-      const { data: membershipRows, error: membershipError } = await supabase
-        .from("memberships")
-        .select("*")
-        .eq("org_id", activeOrgId)
-        .neq("role", "super_admin");
-      if (membershipError) throw membershipError;
-
-      const baseMembers = Array.isArray(membershipRows) ? membershipRows : [];
-      const userIds = [...new Set(baseMembers.map(member => member?.user_id).filter(Boolean))];
-
-      const [profilesResult, invitationsResult] = await Promise.all([
-        userIds.length > 0
-          ? supabase
-              .from("profiles")
-              .select("*")
-              .in("id", userIds)
-          : Promise.resolve({ data: [], error: null }),
-        supabase
-          .from("invitations")
+      try {
+        const { data: membershipRows, error: membershipError } = await supabase
+          .from("memberships")
           .select("*")
           .eq("org_id", activeOrgId)
-          .in("status", ["pending", "pending_approval"]),
-      ]);
+          .neq("role", "super_admin");
 
-      if (profilesResult.error) {
-        console.warn("[UserManagement] profile enrichment failed:", profilesResult.error.message);
-      }
-      if (invitationsResult.error) {
-        console.warn("[UserManagement] invitation enrichment failed:", invitationsResult.error.message);
-      }
+        if (membershipError) {
+          console.error("[UserManagement] memberships fetch failed:", membershipError);
+          throw membershipError;
+        }
 
-      const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
+        const baseMembers = Array.isArray(membershipRows) ? membershipRows : [];
+        const userIds = [...new Set(baseMembers.map(member => member?.user_id).filter(Boolean))];
 
-      const enrichedMembers = baseMembers.map(member => {
-        const capabilities = normalizeCapabilities(member.capabilities);
-        const profile = profilesById.get(member.user_id);
-        const invitedEmail = capabilities.invited_email || null;
-        const invitedFullName = capabilities.invited_full_name || null;
+        const [profilesResult, invitationsResult] = await Promise.all([
+          userIds.length > 0
+            ? supabase
+                .from("profiles")
+                .select("*")
+                .in("id", userIds)
+            : Promise.resolve({ data: [], error: null }),
+          supabase
+            .from("invitations")
+            .select("*")
+            .eq("org_id", activeOrgId)
+            .in("status", ["pending", "pending_approval"]),
+        ]);
 
-        return {
-          ...member,
-          capabilities,
-          page_permissions: normalizeObject(member.page_permissions, {}),
-          module_permissions: normalizeObject(member.module_permissions, {}),
-          profiles: {
-            id: profile?.id || member.user_id || null,
-            full_name: profile?.full_name || invitedFullName || null,
-            email: profile?.email || invitedEmail || null,
-            phone: profile?.phone || member.phone || null,
-            status: profile?.status || null,
-            last_sign_in_at: profile?.last_sign_in_at || null,
-            avatar_url: profile?.avatar_url || null,
-          },
-        };
-      });
+        if (profilesResult.error) {
+          console.warn("[UserManagement] profile enrichment failed:", profilesResult.error.message);
+        }
+        if (invitationsResult.error) {
+          console.warn("[UserManagement] invitation enrichment failed:", invitationsResult.error.message);
+        }
 
-      const knownEmails = new Set(
-        enrichedMembers
-          .map(member => member.profiles?.email?.toLowerCase())
-          .filter(Boolean),
-      );
+        const profilesById = new Map((profilesResult.data || []).map(profile => [profile.id, profile]));
 
-      const invitationOnlyMembers = (invitationsResult.data || [])
-        .filter(invitation => invitation.email && !knownEmails.has(invitation.email.toLowerCase()))
-        .map(invitation => ({
-          id: `invitation:${invitation.id}`,
-          user_id: `invitation:${invitation.id}`,
-          role: invitation.role || null,
-          status: "invited",
-          phone: null,
-          custom_role: null,
-          module_permissions: {},
-          page_permissions: {},
-          capabilities: {
-            roles: invitation.role ? [invitation.role] : [],
-            invited_email: invitation.email,
-            invited_full_name: null,
-          },
-          created_at: invitation.created_at,
-          updated_at: invitation.updated_at || invitation.created_at,
-          invitation,
-          isInvitationOnly: true,
-          profiles: {
-            id: null,
-            full_name: null,
-            email: invitation.email,
-            phone: null,
+        const enrichedMembers = baseMembers.map(member => {
+          if (!member) return null;
+          const capabilities = normalizeCapabilities(member.capabilities);
+          const profile = member.user_id ? profilesById.get(member.user_id) : null;
+          const invitedEmail = capabilities.invited_email || null;
+          const invitedFullName = capabilities.invited_full_name || null;
+
+          return {
+            ...member,
+            capabilities,
+            page_permissions: normalizeObject(member.page_permissions, {}),
+            module_permissions: normalizeObject(member.module_permissions, {}),
+            profiles: {
+              id: profile?.id || member.user_id || null,
+              full_name: profile?.full_name || invitedFullName || null,
+              email: profile?.email || invitedEmail || null,
+              phone: profile?.phone || member.phone || null,
+              status: profile?.status || null,
+              last_sign_in_at: profile?.last_sign_in_at || null,
+              avatar_url: profile?.avatar_url || null,
+            },
+          };
+        }).filter(Boolean);
+
+        const knownEmails = new Set(
+          enrichedMembers
+            .map(member => member?.profiles?.email?.toLowerCase())
+            .filter(Boolean),
+        );
+
+        const invitationOnlyMembers = (invitationsResult.data || [])
+          .filter(invitation => invitation.email && !knownEmails.has(invitation.email.toLowerCase()))
+          .map(invitation => ({
+            id: `invitation:${invitation.id}`,
+            user_id: `invitation:${invitation.id}`,
+            role: invitation.role || null,
             status: "invited",
-            last_sign_in_at: null,
-            avatar_url: null,
-          },
-        }));
+            phone: null,
+            custom_role: null,
+            module_permissions: {},
+            page_permissions: {},
+            capabilities: {
+              roles: invitation.role ? [invitation.role] : [],
+              invited_email: invitation.email,
+              invited_full_name: null,
+            },
+            created_at: invitation.created_at,
+            updated_at: invitation.updated_at || invitation.created_at,
+            invitation,
+            isInvitationOnly: true,
+            profiles: {
+              id: null,
+              full_name: null,
+              email: invitation.email,
+              phone: null,
+              status: "invited",
+              last_sign_in_at: null,
+              avatar_url: null,
+            },
+          }));
 
-      return [...enrichedMembers, ...invitationOnlyMembers].sort(
-        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime(),
-      );
+        return [...enrichedMembers, ...invitationOnlyMembers].sort(
+          (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime(),
+        );
+      } catch (err) {
+        console.error("[UserManagement] queryFn error:", err);
+        throw err;
+      }
     },
     enabled: !!activeOrgId,
   });
@@ -1995,6 +2009,18 @@ export default function UserManagement() {
               <TableRow>
                 <TableCell colSpan={8} className="py-16 text-center">
                   <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-300" />
+                </TableCell>
+              </TableRow>
+            ) : isError ? (
+              <TableRow>
+                <TableCell colSpan={8} className="py-16 text-center">
+                  <AlertTriangle className="w-8 h-8 text-red-300 mx-auto mb-2" />
+                  <p className="text-sm text-red-500 font-medium">
+                    Failed to load members: {fetchError?.message || "Unknown error"}
+                  </p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={() => queryClient.invalidateQueries({ queryKey: ["org-members"] })}>
+                    Try Again
+                  </Button>
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
