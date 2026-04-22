@@ -116,6 +116,13 @@ async function getCurrentAccessScope(orgId) {
       return { unrestricted: true, userId: user.id, orgId };
     }
 
+    const memberships = Array.isArray(user.memberships) ? user.memberships : [];
+    const activeMembership = memberships.find((membership) => membership?.org_id === orgId) || memberships[0];
+    const scopeAccess = activeMembership?.capabilities?.scope_access || {};
+    if (scopeAccess.all_portfolios || scopeAccess.all_properties) {
+      return { unrestricted: true, userId: user.id, orgId };
+    }
+
     const cacheKey = `${ACCESS_CACHE_PREFIX}:${user.id}:${orgId}`;
     const cached = getCached(cacheKey);
     if (cached) return cached;

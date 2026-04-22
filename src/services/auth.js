@@ -179,12 +179,21 @@ async function resolveMembership(userId) {
     return { role: 'viewer', org_id: null, memberships: [] };
   }
 
-  const primary = resolvePrimaryMembership(memberships);
+  const usableMemberships = memberships.filter((membership) => {
+    const status = membership?.status || 'active';
+    return ['active', 'owner', 'invited'].includes(status);
+  });
+
+  if (usableMemberships.length === 0) {
+    return { role: 'viewer', org_id: null, memberships };
+  }
+
+  const primary = resolvePrimaryMembership(usableMemberships);
 
   return {
     role: primary.role,
     org_id: primary.role === 'super_admin' ? null : primary.org_id,
-    memberships,
+    memberships: usableMemberships,
   };
 }
 

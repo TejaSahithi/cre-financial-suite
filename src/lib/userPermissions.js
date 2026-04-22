@@ -90,6 +90,18 @@ export const ACCESS_LEVELS = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+export const ACCESS_LEVEL_RANK = {
+  none: 0,
+  read: 1,
+  read_only: 1,
+  readonly: 1,
+  write: 2,
+  edit: 2,
+  approve: 3,
+  admin: 4,
+  full: 4,
+};
+
 export function parseRoles(roleStr) {
   if (!roleStr || roleStr === "__none__") return [];
   return String(roleStr).split(",").map(r => r.trim()).filter(Boolean);
@@ -197,13 +209,19 @@ function parseObject(value) {
 }
 
 export function normalizeAccessLevel(value) {
-  if (value === true) return "full";
+  if (value === true) return "admin";
   if (value === false || value == null) return "none";
 
   const normalized = String(value).trim().toLowerCase();
-  if (["full", "write", "edit", "manage", "admin"].includes(normalized)) return "full";
+  if (["full", "admin", "manage"].includes(normalized)) return "admin";
+  if (["approve", "approver"].includes(normalized)) return "approve";
+  if (["write", "edit"].includes(normalized)) return "write";
   if (["read", "read_only", "readonly", "view", "viewer"].includes(normalized)) return "read";
   return "none";
+}
+
+export function hasAccessAtLeast(level, minimumLevel) {
+  return (ACCESS_LEVEL_RANK[normalizeAccessLevel(level)] || 0) >= (ACCESS_LEVEL_RANK[normalizeAccessLevel(minimumLevel)] || 0);
 }
 
 export function getCurrentPageName(pathname = typeof window !== "undefined" ? window.location.pathname : "") {
@@ -225,7 +243,7 @@ export function getPageAccessLevel(user, pageName) {
 
   const rawRole = user._raw_role || user.role;
   const resolvedRole = resolveRoleForAccess(rawRole);
-  if (["admin", "super_admin", "org_admin"].includes(resolvedRole)) return "full";
+  if (["admin", "super_admin", "org_admin"].includes(resolvedRole)) return "admin";
 
   const membership = getActiveMembershipForUser(user);
   const pagePermissions = parseObject(membership?.page_permissions);
@@ -236,7 +254,7 @@ export function getPageAccessLevel(user, pageName) {
   }
 
   if (!canAccess(rawRole, pageName)) return "none";
-  return getPermissions(rawRole).canWrite ? "full" : "read";
+  return getPermissions(rawRole).canWrite ? "write" : "read";
 }
 
 export function canReadPage(user, pageName) {
@@ -244,7 +262,7 @@ export function canReadPage(user, pageName) {
 }
 
 export function canWritePage(user, pageName) {
-  return getPageAccessLevel(user, pageName) === "full";
+  return hasAccessAtLeast(getPageAccessLevel(user, pageName), "write");
 }
 
 export function assertCanWritePage(user, pageName, action = "modify this page") {
