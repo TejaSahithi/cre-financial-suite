@@ -1243,6 +1243,24 @@ function InviteDialog({ open, onClose, orgId }) {
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
 
+  const resetInviteForm = () => {
+    setActiveTab("info");
+    setForm({ full_name: "", email: "", phone: "" });
+    setSelectedRoles([]);
+    setCustomRoleName("");
+    setPagePerms({ ...DEFAULT_PAGE_PERMS });
+    setSigningPrivs({ ...DEFAULT_SIGNING });
+    setDataScope({ ...DEFAULT_DATA_SCOPE });
+    setSubmitting(false);
+    setErrors({});
+  };
+
+  useEffect(() => {
+    if (open) {
+      resetInviteForm();
+    }
+  }, [open]);
+
   const TABS = [
     { key: "info",    label: "1. Contact" },
     { key: "roles",   label: "2. Roles" },
@@ -1287,14 +1305,7 @@ function InviteDialog({ open, onClose, orgId }) {
       });
       toast.success(`Invite sent to ${form.email}`);
       queryClient.invalidateQueries({ queryKey: ["org-members"] });
-      // Reset
-      setForm({ full_name: "", email: "", phone: "" });
-      setSelectedRoles([]);
-      setCustomRoleName("");
-      setPagePerms({ ...DEFAULT_PAGE_PERMS });
-      setDataScope({ ...DEFAULT_DATA_SCOPE });
-      setSigningPrivs({ ...DEFAULT_SIGNING });
-      setActiveTab("info");
+      resetInviteForm();
       onClose();
     } catch (e) {
       toast.error(e.message || "Failed to send invite");
