@@ -296,14 +296,20 @@ Deno.serve(async (req: Request) => {
         user,
       );
 
-      await setStatus(supabaseAdmin, file_id, "storing");
-      await setStatus(supabaseAdmin, file_id, "stored", {
+      const { error: storingStatusError } = await setStatus(supabaseAdmin, file_id, "storing");
+      if (storingStatusError) {
+        throw new Error(`Lease draft staging failed: ${storingStatusError.message}`);
+      }
+      const { error: storedStatusError } = await setStatus(supabaseAdmin, file_id, "stored", {
         reviewed_output: {
           ...reviewedOutput,
           status: "approved",
           lease_review_ids: leaseStoreResult.inserted_ids,
         },
       });
+      if (storedStatusError) {
+        throw new Error(`Lease draft finalization failed: ${storedStatusError.message}`);
+      }
 
       return jsonResponse({
         error: false,
@@ -330,6 +336,7 @@ Deno.serve(async (req: Request) => {
       req.headers.get("x-supabase-auth") ??
       req.headers.get("x-user-jwt") ??
       "";
+    const actingOrgId = req.headers.get("x-acting-org-id")?.trim() || "";
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     let validateResult: unknown = null;
@@ -344,6 +351,7 @@ Deno.serve(async (req: Request) => {
           "Content-Type": "application/json",
           "Authorization": authHeader,
           "apikey": Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+          ...(actingOrgId ? { "x-acting-org-id": actingOrgId } : {}),
         },
         body: JSON.stringify({ file_id }),
       });
@@ -359,6 +367,7 @@ Deno.serve(async (req: Request) => {
             "Content-Type": "application/json",
             "Authorization": authHeader,
             "apikey": Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+            ...(actingOrgId ? { "x-acting-org-id": actingOrgId } : {}),
           },
           body: JSON.stringify({ file_id }),
         });

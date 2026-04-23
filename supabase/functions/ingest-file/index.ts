@@ -9,6 +9,7 @@ import {
   type ModuleType,
   type DocumentSubtype,
 } from "../_shared/file-detector.ts";
+import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
 
 /**
  * ingest-file — Unified File Ingestion Router
@@ -46,6 +47,7 @@ async function callEdgeFunction(
   functionName: string,
   body: Record<string, unknown>,
   authToken: string,
+  actingOrgId?: string | null,
   retries = 3,
   timeoutMs = 120000,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string }> {
@@ -62,6 +64,7 @@ async function callEdgeFunction(
           "Content-Type": "application/json",
           "Authorization": authorization,
           "apikey": Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+          ...(actingOrgId ? { "x-acting-org-id": actingOrgId } : {}),
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
@@ -286,31 +289,26 @@ async function parkForManualReview(args: {
     reason: args.reason,
   });
 
-  const { error } = await args.supabaseAdmin
-    .from("uploaded_files")
-    .update({
-      status: "review_required",
-      progress_percentage: 60,
-      review_required: true,
-      review_status: "pending",
-      extraction_method: args.extractionMethod,
-      ui_review_payload: payload,
-      normalized_output: {
-        method: "manual_review_fallback",
-        rows: payload.rows.map((row: any) => row.values),
-        warnings: payload.global_warnings,
-        validationErrors: [],
-        metadata: payload.metadata,
-      },
-      parsed_data: payload.rows.map((row: any) => row.values),
-      row_count: 1,
-      valid_count: 0,
-      error_count: 0,
-      error_message: null,
-      failed_step: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", args.fileId);
+  const { error } = await setStatus(args.supabaseAdmin, args.fileId, "review_required", {
+    review_required: true,
+    review_status: "pending",
+    extraction_method: args.extractionMethod,
+    ui_review_payload: payload,
+    normalized_output: {
+      method: "manual_review_fallback",
+      rows: payload.rows.map((row: any) => row.values),
+      warnings: payload.global_warnings,
+      validationErrors: [],
+      metadata: payload.metadata,
+    },
+    parsed_data: payload.rows.map((row: any) => row.values),
+    row_count: 1,
+    valid_count: 0,
+    error_count: 0,
+    error_message: null,
+    failed_step: null,
+    processing_completed_at: new Date().toISOString(),
+  });
 
   if (error) {
     throw new Error(`Manual review fallback failed: ${error.message}`);
@@ -386,10 +384,12 @@ Deno.serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  let requestedFileId: string | null = null;
   try {
     // 1. Auth
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
+    const actingOrgId = req.headers.get("x-acting-org-id")?.trim() || "";
 
     // 2. Parse request
     const body = await req.json();
@@ -399,6 +399,7 @@ Deno.serve(async (req: Request) => {
       document_subtype: explicitSubtype,   // optional override from caller (UI)
       defer_store = false,
     } = body;
+    requestedFileId = file_id ?? null;
 
     if (!file_id) {
       return new Response(
@@ -502,14 +503,13 @@ Deno.serve(async (req: Request) => {
 
     if (routing.route === "unsupported") {
       // Mark as failed with detailed error information
-      await supabaseAdmin
-        .from("uploaded_files")
-        .update({
-          status: "failed",
-          error_message: `Unsupported file format: ${detection.fileFormat}. Supported formats: PDF, DOC, DOCX, XLS, XLSX, CSV, TXT, Images (JPG, PNG, TIFF, etc.)`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file_id);
+      await setFailed(
+        supabaseAdmin,
+        file_id,
+        `Unsupported file format: ${detection.fileFormat}. Supported formats: PDF, DOC, DOCX, XLS, XLSX, CSV, TXT, Images (JPG, PNG, TIFF, etc.)`,
+        "ingest",
+        5,
+      );
 
       return new Response(
         JSON.stringify({
@@ -554,10 +554,16 @@ Deno.serve(async (req: Request) => {
     // PDF and document processing: enhanced two-step with better error handling
     if (routing.route === "parse-pdf-docling") {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
-      
+
       // Step 1: Docling extraction with enhanced error handling
-      const doclingResult = await callEdgeFunction(supabaseUrl, "parse-pdf-docling", { file_id }, downstreamAuthToken);
-      
+      const doclingResult = await callEdgeFunction(
+        supabaseUrl,
+        "parse-pdf-docling",
+        { file_id },
+        downstreamAuthToken,
+        actingOrgId,
+      );
+
       if (!doclingResult.ok) {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
 
@@ -591,7 +597,13 @@ Deno.serve(async (req: Request) => {
       console.log(`[ingest-file] Docling extraction succeeded, starting normalization`);
       
       // Step 2: Normalization with enhanced error handling
-      const normalizeResult = await callEdgeFunction(supabaseUrl, "normalize-pdf-output", { file_id }, downstreamAuthToken);
+      const normalizeResult = await callEdgeFunction(
+        supabaseUrl,
+        "normalize-pdf-output",
+        { file_id },
+        downstreamAuthToken,
+        actingOrgId,
+      );
       
       if (!normalizeResult.ok) {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
@@ -654,9 +666,21 @@ Deno.serve(async (req: Request) => {
 
       if (normalizeResult.ok && !(normalizeResult.data as any)?.review_required) {
         console.log("[ingest-file] Normalization succeeded; running validate-data then store-data");
-        const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);
+        const validateResult = await callEdgeFunction(
+          supabaseUrl,
+          "validate-data",
+          { file_id },
+          downstreamAuthToken,
+          actingOrgId,
+        );
         const storeResult = validateResult.ok
-          ? await callEdgeFunction(supabaseUrl, "store-data", { file_id }, downstreamAuthToken)
+          ? await callEdgeFunction(
+            supabaseUrl,
+            "store-data",
+            { file_id },
+            downstreamAuthToken,
+            actingOrgId,
+          )
           : { ok: false, status: validateResult.status, data: {}, error: "store-data skipped because validate-data failed" };
 
         return new Response(
@@ -702,35 +726,31 @@ Deno.serve(async (req: Request) => {
     // CSV / Excel / text: enhanced single step processing
     console.log(`[ingest-file] Starting structured data processing for ${detection.fileFormat} file`);
     
-    const downstreamResult = await callEdgeFunction(supabaseUrl, routing.route, { file_id }, downstreamAuthToken);
+    const downstreamResult = await callEdgeFunction(
+      supabaseUrl,
+      routing.route,
+      { file_id },
+      downstreamAuthToken,
+      actingOrgId,
+    );
     
     if (!downstreamResult.ok) {
       console.error(`[ingest-file] Structured data processing failed:`, downstreamResult.error);
 
-      const reason = `Structured data processing failed: ${downstreamResult.error || "Unknown error"}`;
-      const payload = await parkForManualReview({
-        supabaseAdmin,
-        fileId: file_id,
-        fileName: fileRecord.file_name ?? "document",
-        moduleType: effectiveModuleType,
-        documentSubtype: subtypeResult.subtype,
-        extractionMethod: "manual_review_fallback",
-        reason,
-      });
-
       return new Response(
         JSON.stringify({
-          error: false,
+          error: true,
           file_id,
           detection: detectionSummary,
           routing: { routed_to: routing.route, reason: routing.reason },
           result: downstreamResult.data,
           error_details: downstreamResult.error,
           stage: "parsing",
-          manual_review: true,
-          ui_review_payload: payload,
         }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        {
+          status: downstreamResult.status || 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     } else if (defer_store) {
       console.log("[ingest-file] Structured parsing succeeded; defer_store=true so validate-data/store-data are skipped");
@@ -751,9 +771,21 @@ Deno.serve(async (req: Request) => {
       );
     } else {
       console.log("[ingest-file] Structured parsing succeeded; running validate-data then store-data");
-      const validateResult = await callEdgeFunction(supabaseUrl, "validate-data", { file_id }, downstreamAuthToken);
+      const validateResult = await callEdgeFunction(
+        supabaseUrl,
+        "validate-data",
+        { file_id },
+        downstreamAuthToken,
+        actingOrgId,
+      );
       const storeResult = validateResult.ok
-        ? await callEdgeFunction(supabaseUrl, "store-data", { file_id }, downstreamAuthToken)
+        ? await callEdgeFunction(
+          supabaseUrl,
+          "store-data",
+          { file_id },
+          downstreamAuthToken,
+          actingOrgId,
+        )
         : { ok: false, status: validateResult.status, data: {}, error: "store-data skipped because validate-data failed" };
 
       return new Response(
@@ -798,25 +830,21 @@ Deno.serve(async (req: Request) => {
 
   } catch (err) {
     console.error("[ingest-file] Unexpected error:", err.message, err.stack);
-    
-    // Try to update file status if we have the file_id
-    try {
-      const body = await req.clone().json();
-      if (body.file_id) {
+
+    if (requestedFileId) {
+      try {
         const { user, supabaseAdmin } = await verifyUser(req);
-        await supabaseAdmin
-          .from("uploaded_files")
-          .update({
-            status: "failed",
-            error_message: `Ingestion failed: ${err.message}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", body.file_id);
+        await setFailed(
+          supabaseAdmin,
+          requestedFileId,
+          `Ingestion failed: ${err.message}`,
+          "ingest",
+          5,
+        );
+      } catch (updateErr) {
+        console.error("[ingest-file] Failed to update file status:", updateErr.message);
       }
-    } catch (updateErr) {
-      console.error("[ingest-file] Failed to update file status:", updateErr.message);
     }
-    
     return new Response(
       JSON.stringify({
         error: true,

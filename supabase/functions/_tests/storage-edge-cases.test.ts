@@ -214,7 +214,7 @@ Deno.test({
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name: "Storage Edge Cases: storing same file twice returns error on second attempt",
+  name: "Storage Edge Cases: storing same file twice is idempotent on second attempt",
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -243,7 +243,7 @@ Deno.test({
       assertEquals(result1.error, false, `First store must succeed. Error: ${result1.message}`);
       assertEquals(result1.processing_status, "stored");
 
-      // Second store — file is now in 'stored' status, should be rejected
+      // Second store — file is now in 'stored' status, should return the same stored result
       const response2 = await fetch(STORE_DATA_URL, {
         method: "POST",
         headers: {
@@ -254,8 +254,15 @@ Deno.test({
       });
 
       const result2 = await response2.json();
-      assertEquals(result2.error, true, "Second store attempt must be rejected (already stored)");
-      assertExists(result2.message, "Error response must include a message");
+      assertEquals(result2.error, false, "Second store attempt must be idempotent");
+      assertEquals(result2.processing_status, "stored");
+      assertEquals(result2.already_stored, true, "Second response should indicate an idempotent replay");
+
+      const { count } = await adminClient
+        .from("leases")
+        .select("id", { count: "exact", head: true })
+        .eq("org_id", org.id);
+      assertEquals(count, 1, "Repeated store attempts must not duplicate stored rows");
     } finally {
       await cleanup(adminClient, org.id, "", fileIds);
     }

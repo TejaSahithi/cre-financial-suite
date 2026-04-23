@@ -4,6 +4,7 @@
 
 ALTER TABLE public.uploaded_files
   ADD COLUMN IF NOT EXISTS reviewed_output JSONB,
+  ADD COLUMN IF NOT EXISTS review_status TEXT,
   ADD COLUMN IF NOT EXISTS review_audit JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 DO $$

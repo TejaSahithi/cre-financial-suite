@@ -75,7 +75,10 @@ Deno.serve(async (req: Request) => {
     );
 
     // 4. Transition status → 'parsing'
-    await setStatus(supabaseAdmin, file_id, "parsing");
+    const { error: parsingStatusError } = await setStatus(supabaseAdmin, file_id, "parsing");
+    if (parsingStatusError) {
+      throw new Error(`Failed to transition file to parsing: ${parsingStatusError.message}`);
+    }
 
     try {
       // 5. Download bytes from Supabase Storage

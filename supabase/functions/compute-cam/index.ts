@@ -209,6 +209,63 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
     } else {
       leaseConfigMap = Object.fromEntries((leaseConfigs ?? []).map((row: any) => [row.lease_id, row]));
     }
+
+    // Fetch approved expense rules for these leases
+    const { data: approvedRuleSets, error: rulesError } = await supabaseAdmin
+      .from("lease_expense_rule_sets")
+      .select(`
+        *,
+        lease_expense_rules (
+          *,
+          expense_categories ( category_name )
+        )
+      `)
+      .eq("org_id", orgId)
+      .eq("status", "approved")
+      .in("lease_id", leaseIds)
+      .order("version", { ascending: false });
+
+    if (rulesError) {
+      console.warn("[compute-cam] lease_expense_rules fetch warning:", rulesError.message);
+    } else if (approvedRuleSets && approvedRuleSets.length > 0) {
+      // Group by lease_id (taking the first one because of order by version desc)
+      const latestRulesByLease = new Map();
+      for (const rs of approvedRuleSets) {
+        if (!latestRulesByLease.has(rs.lease_id)) {
+          latestRulesByLease.set(rs.lease_id, rs);
+        }
+      }
+
+      // Merge into leaseConfigMap
+      for (const [leaseId, rs] of latestRulesByLease.entries()) {
+        const config = leaseConfigMap[leaseId] || { lease_id: leaseId, config_values: {} };
+        const configValues = (config.config_values as Record<string, any>) || {};
+        
+        const excludedCategories = asStringArray(configValues.excluded_expenses);
+        
+        // Apply rules
+        for (const rule of rs.lease_expense_rules || []) {
+          const catName = rule.expense_categories?.category_name;
+          if (!catName) continue;
+          
+          if (rule.is_excluded || rule.is_recoverable === false || rule.row_status === 'unmapped') {
+            if (!excludedCategories.includes(catName)) {
+              excludedCategories.push(catName);
+            }
+          }
+          
+          // If a base year is found on any rule, and no global base year exists, use it as a fallback hint
+          if (rule.has_base_year && !configValues.base_year) {
+             // We ideally need the values table here, but for now we note it.
+             console.log(`[compute-cam] Lease ${leaseId} has base year for ${catName} but global base_year not set.`);
+          }
+        }
+
+        configValues.excluded_expenses = excludedCategories;
+        config.config_values = configValues;
+        leaseConfigMap[leaseId] = config;
+      }
+    }
   }
 
   return { propertyConfig: propertyConfig ?? null, leaseConfigMap };
