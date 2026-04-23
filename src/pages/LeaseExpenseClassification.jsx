@@ -19,7 +19,7 @@ export default function LeaseExpenseClassification() {
 
   const [activeRuleSetId, setActiveRuleSetId] = useState(null);
   const [localRules, setLocalRules] = useState([]);
-  
+
   // UI State
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [selectedRule, setSelectedRule] = useState(null);
@@ -62,19 +62,19 @@ export default function LeaseExpenseClassification() {
         .not('status', 'eq', 'archived')
         .order('version', { ascending: false })
         .limit(1);
-        
+
       if (rsError) throw rsError;
-      
+
       const activeSet = ruleSets?.[0];
       if (!activeSet) return { ruleSet: null, rules: [] };
-      
+
       const { data: rules, error: rError } = await supabase
         .from('lease_expense_rules')
         .select('*')
         .eq('rule_set_id', activeSet.id);
-        
+
       if (rError) throw rError;
-      
+
       return { ruleSet: activeSet, rules: rules || [] };
     },
     enabled: !!id,
@@ -98,10 +98,10 @@ export default function LeaseExpenseClassification() {
         .eq('entity_id', id)
         .eq('entity_type', 'lease')
         .limit(1);
-        
+
       const file = docs?.[0]?.uploaded_files;
       if (!file || !file.normalized_output?.raw_text) {
-         throw new Error("No extracted lease text found to analyze.");
+        throw new Error("No extracted lease text found to analyze.");
       }
 
       const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
@@ -111,7 +111,7 @@ export default function LeaseExpenseClassification() {
           categories: categories.map(c => ({ id: c.id, category_name: c.category_name, subcategory_name: c.subcategory_name }))
         }
       });
-      
+
       if (error) throw error;
       return data;
     },
@@ -127,7 +127,7 @@ export default function LeaseExpenseClassification() {
             rule_set_id: activeRuleSetId // Might be null if creating a new set
           };
         }).filter(Boolean);
-        
+
         setLocalRules(aiRules);
         toast.success("AI extraction complete. Please review the draft rules.");
       }
@@ -141,7 +141,7 @@ export default function LeaseExpenseClassification() {
   const saveRuleSetMutation = useMutation({
     mutationFn: async (status) => {
       let currentRuleSetId = activeRuleSetId;
-      
+
       // If approving, we might want to archive the old one and create a new version.
       // For MVP, we just upsert the current rule set with the new status.
       if (!currentRuleSetId) {
@@ -176,7 +176,7 @@ export default function LeaseExpenseClassification() {
           .upsert(rulesToUpsert, { onConflict: 'id' });
         if (rulesErr) throw rulesErr;
       }
-      
+
       return currentRuleSetId;
     },
     onSuccess: () => {
@@ -222,22 +222,22 @@ export default function LeaseExpenseClassification() {
         <ArrowLeft className="w-4 h-4 mr-2" /> Back
       </Button>
 
-      <PageHeader 
-        icon={FileText} 
-        title="Expense Classification" 
-        subtitle={lease ? `Reviewing CAM & Expense Rules for: ${lease.tenant_name || 'Lease'}` : 'Loading...'} 
+      <PageHeader
+        icon={FileText}
+        title="Expense Classification"
+        subtitle={lease ? `Reviewing CAM & Expense Rules for: ${lease.tenant_name || 'Lease'}` : 'Loading...'}
         iconColor="from-blue-600 to-indigo-600"
       >
         <div className="flex gap-2">
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             onClick={() => extractRulesMutation.mutate()}
             disabled={isWorking}
           >
             <Wand2 className="w-4 h-4 mr-2 text-purple-600" />
             {extractRulesMutation.isPending ? 'Extracting...' : 'Extract with AI'}
           </Button>
-          <Button 
+          <Button
             variant="outline"
             onClick={() => saveRuleSetMutation.mutate('draft')}
             disabled={isWorking}
@@ -245,7 +245,7 @@ export default function LeaseExpenseClassification() {
             <Save className="w-4 h-4 mr-2" />
             Save Draft
           </Button>
-          <Button 
+          <Button
             className="bg-blue-600 hover:bg-blue-700"
             onClick={() => saveRuleSetMutation.mutate('approved')}
             disabled={isWorking}
@@ -276,7 +276,7 @@ export default function LeaseExpenseClassification() {
               {isLoadingCategories ? (
                 <div className="py-8 text-center text-slate-500">Loading taxonomy...</div>
               ) : (
-                <ExpenseClassificationTable 
+                <ExpenseClassificationTable
                   categories={categories}
                   rules={localRules}
                   onEditRule={handleEditRule}
@@ -298,14 +298,14 @@ export default function LeaseExpenseClassification() {
                 <p className="text-sm text-slate-500 text-center mb-2">
                   Preview based on the current drafted rules.
                 </p>
-                
+
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-sm font-medium text-slate-700">Categories Mapped</span>
                   <span className="font-bold text-slate-900">
                     {localRules.filter(r => r.row_status === 'mapped').length} / {categories.length}
                   </span>
                 </div>
-                
+
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-sm font-medium text-slate-700">Explicitly Excluded</span>
                   <span className="font-bold text-rose-600">
@@ -319,7 +319,7 @@ export default function LeaseExpenseClassification() {
                     {localRules.filter(r => r.is_subject_to_cap).length}
                   </span>
                 </div>
-                
+
                 <div className="flex justify-between items-center pb-2">
                   <span className="text-sm font-medium text-slate-700">Needs Review</span>
                   <span className="font-bold text-amber-600">
@@ -327,7 +327,7 @@ export default function LeaseExpenseClassification() {
                   </span>
                 </div>
               </div>
-              
+
               <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
                 Approving this rule set will update the ledger configurations and impact future CAM calculations for this lease.
               </div>
@@ -336,14 +336,14 @@ export default function LeaseExpenseClassification() {
         </div>
       </div>
 
-      <ClauseEvidenceDrawer 
+      <ClauseEvidenceDrawer
         isOpen={isEvidenceDrawerOpen}
         onClose={() => setIsEvidenceDrawerOpen(false)}
         category={selectedCategory}
         rule={selectedRule}
       />
 
-      <ExpenseValuePanel 
+      <ExpenseValuePanel
         isOpen={isValuePanelOpen}
         onClose={() => setIsValuePanelOpen(false)}
         category={selectedCategory}
