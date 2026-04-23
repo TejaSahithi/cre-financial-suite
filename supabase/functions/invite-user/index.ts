@@ -185,6 +185,20 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Upsert membership record (status: invited) ────────────────────────────
+    const { data: existingMembership } = userId
+      ? await adminClient
+        .from("memberships")
+        .select("status")
+        .eq("user_id", userId)
+        .eq("org_id", org_id)
+        .maybeSingle()
+      : { data: null };
+
+    const nextMembershipStatus = ["active", "owner"].includes(existingMembership?.status)
+      ? existingMembership.status
+      : "invited";
+    const invitationStatus = nextMembershipStatus === "invited" ? "pending_approval" : "accepted";
+
     const warnings: string[] = [];
     if (userId) {
       const membershipCapabilities = {
@@ -206,7 +220,7 @@ Deno.serve(async (req: Request) => {
         user_id: userId,
         org_id,
         role: membershipRole,
-        status: "invited",
+        status: nextMembershipStatus,
       };
       if (custom_role) membershipRow.custom_role = custom_role;
       if (phone) membershipRow.phone = phone;
@@ -241,13 +255,24 @@ Deno.serve(async (req: Request) => {
       }
 
       // ── Ensure profile row exists for invited user ────────────────────────
+      const { data: existingProfile } = await adminClient
+        .from("profiles")
+        .select("status, onboarding_complete, first_login")
+        .eq("id", userId)
+        .maybeSingle();
+
+      const nextProfileStatus = ["active", "approved", "onboarding", "under_review"].includes(existingProfile?.status)
+        ? existingProfile.status
+        : "pending_approval";
+
       const { error: profileErr } = await adminClient.from("profiles").upsert({
         id: userId,
         email,
         full_name: full_name || null,
-        status: "active",
+        status: nextProfileStatus,
         onboarding_type: "invited",
-        first_login: true,
+        onboarding_complete: existingProfile?.onboarding_complete ?? false,
+        first_login: existingProfile?.first_login ?? true,
       }, { onConflict: "id" });
       
       if (profileErr) console.error("[invite-user] profile upsert:", profileErr);
@@ -305,12 +330,24 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Log invitation ────────────────────────────────────────────────────────
+    const { error: revokeExistingInvitesError } = await adminClient
+      .from("invitations")
+      .update({ status: "revoked", updated_at: new Date().toISOString() })
+      .eq("email", email)
+      .eq("org_id", org_id)
+      .in("status", ["pending", "pending_approval"]);
+
+    if (revokeExistingInvitesError) {
+      console.error("[invite-user] revoke existing invites error:", revokeExistingInvitesError);
+      warnings.push(`invitations revoke: ${revokeExistingInvitesError.message}`);
+    }
+
     const { error: inviteLogErr } = await adminClient.from("invitations").insert({
       email,
       org_id,
       role: displayRole,
       token: "magic-link",
-      status: "pending_approval",
+      status: invitationStatus,
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
     });
 

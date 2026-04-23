@@ -163,13 +163,22 @@ Deno.serve(async (req) => {
     // 2. Prevent duplicate orgs: Check if membership already exists
     const { data: existingMemberships } = await supabaseAdmin
       .from('memberships')
-      .select('id')
+      .select('id, org_id, status')
       .eq('user_id', user.id);
 
     if (existingMemberships && existingMemberships.length > 0) {
       // If membership exists, normalize the profile state and reuse the existing org.
-      await supabaseAdmin.from('profiles').update({ status: 'onboarding' }).eq('id', user.id);
-      return new Response(JSON.stringify({ success: true, message: 'Corrected dirty state. Resuming.' }), {
+      const existingOrgId = existingMemberships.find((membership: any) => membership?.org_id)?.org_id || null;
+      await supabaseAdmin
+        .from('profiles')
+        .update({
+          status: 'onboarding',
+          onboarding_type: 'owner',
+          onboarding_complete: false,
+          first_login: true,
+        })
+        .eq('id', user.id);
+      return new Response(JSON.stringify({ success: true, org_id: existingOrgId, message: 'Corrected dirty state. Resuming.' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -195,7 +204,8 @@ Deno.serve(async (req) => {
       .insert({
         user_id: user.id,
         org_id: org.id,
-        role: 'org_admin'
+        role: 'org_admin',
+        status: 'active',
       });
 
     if (memError) throw memError;

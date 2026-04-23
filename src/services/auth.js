@@ -11,6 +11,11 @@
  */
 
 import { supabase } from '@/services/supabaseClient';
+import {
+  clearStoredActingOrgId,
+  getStoredActingOrgId,
+  setStoredActingOrgId,
+} from '@/lib/actingOrg';
 
 // ──────────────────────────────────────────────────────────────
 // GOOGLE OAUTH APPROVAL CHECK
@@ -100,18 +105,48 @@ let _cachedProfile = null;
 
 // ─── Role priority for resolving effective role ──────────────
 const ROLE_PRIORITY = ['super_admin', 'org_admin', 'manager', 'editor', 'viewer'];
+const MEMBERSHIP_STATUS_PRIORITY = ['active', 'owner', 'invited'];
+
+function getMembershipStatusRank(status) {
+  const index = MEMBERSHIP_STATUS_PRIORITY.indexOf(status || 'active');
+  return index === -1 ? MEMBERSHIP_STATUS_PRIORITY.length : index;
+}
 
 function sortMembershipsByPrivilege(memberships = []) {
   return [...memberships].sort((a, b) => {
+    const statusDiff = getMembershipStatusRank(a?.status) - getMembershipStatusRank(b?.status);
+    if (statusDiff !== 0) return statusDiff;
+
     const aIndex = ROLE_PRIORITY.indexOf(a.role);
     const bIndex = ROLE_PRIORITY.indexOf(b.role);
-    return (aIndex === -1 ? ROLE_PRIORITY.length : aIndex)
+    const roleDiff = (aIndex === -1 ? ROLE_PRIORITY.length : aIndex)
       - (bIndex === -1 ? ROLE_PRIORITY.length : bIndex);
+    if (roleDiff !== 0) return roleDiff;
+
+    return String(a?.org_id || '').localeCompare(String(b?.org_id || ''));
   });
 }
 
-function resolvePrimaryMembership(memberships = []) {
-  return sortMembershipsByPrivilege(memberships)[0] || null;
+function resolvePrimaryMembership(memberships = [], preferredOrgId = null) {
+  const sorted = sortMembershipsByPrivilege(memberships);
+  if (preferredOrgId) {
+    const preferredMembership = sorted.find((membership) => membership?.org_id === preferredOrgId);
+    if (preferredMembership) return preferredMembership;
+  }
+  return sorted[0] || null;
+}
+
+async function loadMembershipRows(userId) {
+  const { data: memberships, error } = await supabase
+    .from('memberships')
+    .select('*')
+    .eq('user_id', userId);
+
+  if (error || !memberships) return [];
+  return memberships.filter((membership) => {
+    const status = membership?.status || 'active';
+    return ['active', 'owner', 'invited'].includes(status);
+  });
 }
 
 async function invokeAuthenticatedFunction(functionName, body = {}) {
@@ -173,25 +208,18 @@ async function acceptInviteOnServer(payload = {}) {
   return invokeAuthenticatedFunction('accept-invite', payload);
 }
 
-async function reconcileSignedInInvite(authUser, memberships = []) {
+async function reconcileSignedInInvite(authUser, profile, memberships = []) {
   const invitedMemberships = memberships.filter((membership) => membership?.status === 'invited');
-  if (!authUser?.id || invitedMemberships.length === 0) return memberships;
-
-  const now = new Date().toISOString();
+  const shouldAutoActivate = profile?.first_login === false || profile?.status === 'active';
+  if (!authUser?.id || invitedMemberships.length === 0 || !shouldAutoActivate) return memberships;
 
   try {
-    await acceptInviteOnServer({
-      org_id: invitedMemberships.length === 1 ? invitedMemberships[0]?.org_id : undefined,
-    });
+    await acceptInviteOnServer();
+    return await loadMembershipRows(authUser.id);
   } catch (error) {
     console.warn('[auth] invite membership activation failed:', error?.message || error);
+    return memberships;
   }
-
-  return memberships.map((membership) => (
-    membership?.status === 'invited'
-      ? { ...membership, status: 'active', updated_at: now }
-      : membership
-  ));
 }
 
 /**
@@ -200,25 +228,20 @@ async function reconcileSignedInInvite(authUser, memberships = []) {
  * @param {string} userId
  */
 async function resolveMembership(userId) {
-  const { data: memberships, error } = await supabase
-    .from('memberships')
-    .select('*')
-    .eq('user_id', userId);
+  const memberships = await loadMembershipRows(userId);
 
-  if (error || !memberships || memberships.length === 0) {
+  if (!memberships.length) {
     return { role: 'viewer', org_id: null, memberships: [] };
   }
 
-  const usableMemberships = memberships.filter((membership) => {
-    const status = membership?.status || 'active';
-    return ['active', 'owner', 'invited'].includes(status);
-  });
+  const preferredOrgId = getStoredActingOrgId();
+  const usableMemberships = memberships;
 
   if (usableMemberships.length === 0) {
     return { role: 'viewer', org_id: null, memberships };
   }
 
-  const primary = resolvePrimaryMembership(usableMemberships);
+  const primary = resolvePrimaryMembership(usableMemberships, preferredOrgId);
 
   return {
     role: primary.role,
@@ -241,14 +264,15 @@ async function buildUserObject(authUser) {
 
   // Resolve role — always from memberships, never hardcoded
   let { role, org_id, memberships } = await resolveMembership(authUser.id);
-  memberships = await reconcileSignedInInvite(authUser, memberships);
+  memberships = await reconcileSignedInInvite(authUser, profile, memberships);
+  const storedActingOrgId = getStoredActingOrgId();
   const { data: refreshedProfile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', authUser.id)
     .maybeSingle();
   if (refreshedProfile) profile = refreshedProfile;
-  const primaryMembership = resolvePrimaryMembership(memberships);
+  const primaryMembership = resolvePrimaryMembership(memberships, storedActingOrgId);
   if (primaryMembership) {
     role = primaryMembership.role;
     org_id = primaryMembership.role === 'super_admin' ? null : primaryMembership.org_id;
@@ -256,13 +280,22 @@ async function buildUserObject(authUser) {
 
   // Fetch active org if associated
   let activeOrg = null;
-  if (org_id) {
+  const isSuperAdmin = memberships.some((membership) => membership?.role === 'super_admin');
+  const resolvedActiveOrgId = isSuperAdmin ? storedActingOrgId : org_id;
+  if (!isSuperAdmin && storedActingOrgId && !memberships.some((membership) => membership?.org_id === storedActingOrgId)) {
+    clearStoredActingOrgId();
+  }
+
+  if (resolvedActiveOrgId) {
     const { data: orgData } = await supabase
       .from('organizations')
       .select('*')
-      .eq('id', org_id)
+      .eq('id', resolvedActiveOrgId)
       .single();
     if (orgData) activeOrg = orgData;
+    if (isSuperAdmin && orgData?.id) {
+      setStoredActingOrgId(orgData.id);
+    }
   }
 
   console.log('[auth] buildUserObject resolved:', {
@@ -479,6 +512,7 @@ export async function acceptInvite(payload = {}) {
  */
 export async function logout(redirectUrl) {
   _cachedProfile = null;
+  clearStoredActingOrgId();
 
   if (DEV_MODE) {
     if (redirectUrl) window.location.href = redirectUrl;
