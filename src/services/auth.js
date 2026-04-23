@@ -114,47 +114,77 @@ function resolvePrimaryMembership(memberships = []) {
   return sortMembershipsByPrivilege(memberships)[0] || null;
 }
 
+async function invokeAuthenticatedFunction(functionName, body = {}) {
+  if (DEV_MODE) {
+    return { success: true };
+  }
+
+  const attemptInvoke = async (session) => {
+    if (!session?.access_token) {
+      throw new Error('Not authenticated');
+    }
+
+    return supabase.functions.invoke(functionName, {
+      body,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+  };
+
+  let { data: sessionData } = await supabase.auth.getSession();
+  let session = sessionData?.session;
+
+  if (!session?.access_token) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshData?.session?.access_token) {
+      throw refreshError || new Error('Not authenticated');
+    }
+    session = refreshData.session;
+  }
+
+  let result = await attemptInvoke(session);
+
+  if (result.error) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (!refreshError && refreshData?.session?.access_token) {
+      result = await attemptInvoke(refreshData.session);
+    }
+  }
+
+  if (result.error) {
+    let detail = result.error.message;
+    try {
+      const ctx = result.error.context;
+      if (ctx && typeof ctx.json === 'function') {
+        const payload = await ctx.json();
+        if (payload?.error) detail = payload.error;
+      }
+    } catch {
+      /* ignore body parse failures */
+    }
+    throw new Error(detail);
+  }
+
+  return result.data;
+}
+
+async function acceptInviteOnServer(payload = {}) {
+  return invokeAuthenticatedFunction('accept-invite', payload);
+}
+
 async function reconcileSignedInInvite(authUser, memberships = []) {
   const invitedMemberships = memberships.filter((membership) => membership?.status === 'invited');
   if (!authUser?.id || invitedMemberships.length === 0) return memberships;
 
   const now = new Date().toISOString();
-  const orgIds = [...new Set(invitedMemberships.map((membership) => membership.org_id).filter(Boolean))];
 
   try {
-    await supabase
-      .from('memberships')
-      .update({ status: 'active', updated_at: now })
-      .eq('user_id', authUser.id)
-      .eq('status', 'invited');
+    await acceptInviteOnServer({
+      org_id: invitedMemberships.length === 1 ? invitedMemberships[0]?.org_id : undefined,
+    });
   } catch (error) {
     console.warn('[auth] invite membership activation failed:', error?.message || error);
-  }
-
-  try {
-    await supabase.from('profiles').upsert({
-      id: authUser.id,
-      email: authUser.email || null,
-      full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || null,
-      status: 'active',
-      last_sign_in_at: authUser.last_sign_in_at || now,
-      updated_at: now,
-    }, { onConflict: 'id' });
-  } catch (error) {
-    console.warn('[auth] invited profile reconciliation failed:', error?.message || error);
-  }
-
-  if (authUser.email && orgIds.length > 0) {
-    try {
-      await supabase
-        .from('invitations')
-        .update({ status: 'accepted', updated_at: now })
-        .eq('email', authUser.email)
-        .in('org_id', orgIds)
-        .in('status', ['pending', 'pending_approval']);
-    } catch (error) {
-      console.warn('[auth] invitation log reconciliation failed:', error?.message || error);
-    }
   }
 
   return memberships.map((membership) => (
@@ -411,18 +441,36 @@ export async function updateProfile(updates) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
-  const { error } = await supabase
-    .from('profiles')
-    .upsert({
-      id: user.id,
-      email: user.email || null,
-      ...updates,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+  const payload = {
+    email: user.email || null,
+    ...updates,
+    updated_at: new Date().toISOString(),
+  };
 
-  if (error) throw error;
+  const { data: updatedRows, error: updateError } = await supabase
+    .from('profiles')
+    .update(payload)
+    .eq('id', user.id)
+    .select('id');
+
+  if (updateError) throw updateError;
+
+  if (!updatedRows?.length) {
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert({
+        id: user.id,
+        ...payload,
+      });
+
+    if (insertError) throw insertError;
+  }
   _cachedProfile = null; // bust cache to re-fetch fresh
   return await me();
+}
+
+export async function acceptInvite(payload = {}) {
+  return acceptInviteOnServer(payload);
 }
 
 /**

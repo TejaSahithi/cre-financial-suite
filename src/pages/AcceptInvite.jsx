@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/services/supabaseClient";
-import { updateProfile } from "@/services/auth";
+import { acceptInvite } from "@/services/auth";
 import { toast } from "sonner";
 
 const STEPS = ["Verify Invite", "Set Password", "Your Profile", "All Set!"];
@@ -191,40 +191,11 @@ export default function AcceptInvite() {
 
     setSaving(true);
     try {
-      await updateProfile({
+      await acceptInvite({
         full_name: fullName || undefined,
         phone: phone || undefined,
-        status: "active",
-        first_login: false,
-        onboarding_complete: true,
-        dashboard_viewed: false,
+        org_id: session.user.user_metadata?.org_id || undefined,
       });
-
-      const membershipUpdate = supabase
-        .from("memberships")
-        .update(phone ? { phone, status: "active" } : { status: "active" })
-        .eq("user_id", session.user.id);
-
-      if (session.user.user_metadata?.org_id) {
-        membershipUpdate.eq("org_id", session.user.user_metadata.org_id);
-      }
-
-      const { error: membershipError } = await membershipUpdate;
-      if (membershipError) throw membershipError;
-
-      const invitationUpdate = supabase
-        .from("invitations")
-        .update({ status: "accepted", updated_at: new Date().toISOString() })
-        .eq("email", session.user.email)
-        .in("status", ["pending", "pending_approval"]);
-
-      if (session.user.user_metadata?.org_id) {
-        invitationUpdate.eq("org_id", session.user.user_metadata.org_id);
-      }
-
-      const { error: invitationError } = await invitationUpdate;
-      if (invitationError) console.warn("[AcceptInvite] invitation status update failed:", invitationError.message);
-
       setStep(3);
     } catch (err) {
       toast.error(`Failed to save profile: ${err.message || "Unknown error"}`);

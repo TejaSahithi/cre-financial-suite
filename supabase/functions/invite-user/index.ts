@@ -7,6 +7,78 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const SYSTEM_ROLE_ALIASES: Record<string, string> = {
+  admin: "org_admin",
+  user: "viewer",
+};
+
+const SYSTEM_ROLES = new Set([
+  "super_admin",
+  "org_admin",
+  "manager",
+  "editor",
+  "viewer",
+  "finance",
+  "property_manager",
+]);
+
+function normalizeRoleValue(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveMembershipRole(role: unknown, accessRole: unknown) {
+  const normalizedAccessRole = normalizeRoleValue(accessRole);
+  if (SYSTEM_ROLES.has(normalizedAccessRole)) return normalizedAccessRole;
+
+  const normalizedRole = normalizeRoleValue(role);
+  const aliasedRole = SYSTEM_ROLE_ALIASES[normalizedRole] || normalizedRole;
+  if (SYSTEM_ROLES.has(aliasedRole)) return aliasedRole;
+
+  return "viewer";
+}
+
+function resolveDisplayRole({
+  role,
+  customRole,
+  capabilities,
+  accessRole,
+}: {
+  role: unknown;
+  customRole: unknown;
+  capabilities: Record<string, unknown>;
+  accessRole: unknown;
+}) {
+  const customLabel = typeof customRole === "string" ? customRole.trim() : "";
+  if (customLabel) return customLabel;
+
+  const capabilityCustomRole = typeof capabilities?.custom_role === "string"
+    ? capabilities.custom_role.trim()
+    : "";
+  if (capabilityCustomRole) return capabilityCustomRole;
+
+  const capabilityRoles = Array.isArray(capabilities?.roles)
+    ? capabilities.roles.map((value) => normalizeRoleValue(value)).filter(Boolean)
+    : [];
+
+  const firstBusinessRole = capabilityRoles.find((value) => {
+    return value !== "custom" && !SYSTEM_ROLES.has(value) && !SYSTEM_ROLE_ALIASES[value];
+  });
+  if (firstBusinessRole) return firstBusinessRole;
+
+  const normalizedRole = normalizeRoleValue(role);
+  if (normalizedRole && !SYSTEM_ROLES.has(normalizedRole) && !SYSTEM_ROLE_ALIASES[normalizedRole]) {
+    return normalizedRole;
+  }
+
+  const normalizedAccessRole = normalizeRoleValue(accessRole);
+  const fallbackRole = SYSTEM_ROLE_ALIASES[normalizedRole] || normalizedRole || normalizedAccessRole;
+  return fallbackRole || "team member";
+}
+
+function formatRoleLabel(role: unknown) {
+  return String(role || "team member").replaceAll("_", " ");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const authorization = req.headers.get("Authorization");
@@ -55,6 +127,15 @@ Deno.serve(async (req: Request) => {
       access_scopes, access_role
     } = await req.json();
 
+    const incomingCapabilities = capabilities && typeof capabilities === "object" ? capabilities : {};
+    const membershipRole = resolveMembershipRole(role, access_role);
+    const displayRole = resolveDisplayRole({
+      role,
+      customRole: custom_role,
+      capabilities: incomingCapabilities,
+      accessRole: access_role,
+    });
+
     // role is optional: null/omitted means user is imported with no role (no_access)
     if (!email || !org_id) {
       return new Response(JSON.stringify({ error: "Missing required fields: email, org_id" }), {
@@ -90,7 +171,8 @@ Deno.serve(async (req: Request) => {
           redirectTo: `${frontendUrl}/AcceptInvite`,
           data: {
             full_name: full_name || "",
-            role,
+            role: displayRole,
+            app_role: membershipRole,
             org_id,
             org_name: orgName,
             invited_by: caller.id,
@@ -106,15 +188,24 @@ Deno.serve(async (req: Request) => {
     const warnings: string[] = [];
     if (userId) {
       const membershipCapabilities = {
-        ...(capabilities && typeof capabilities === "object" ? capabilities : {}),
+        ...incomingCapabilities,
         invited_email: email,
         invited_full_name: full_name || null,
       };
+      const normalizedIncomingRole = normalizeRoleValue(role);
+      if (
+        !Array.isArray(membershipCapabilities.roles)
+        && normalizedIncomingRole
+        && !SYSTEM_ROLES.has(normalizedIncomingRole)
+        && !SYSTEM_ROLE_ALIASES[normalizedIncomingRole]
+      ) {
+        membershipCapabilities.roles = [normalizedIncomingRole];
+      }
 
       const membershipRow: any = {
         user_id: userId,
         org_id,
-        role,
+        role: membershipRole,
         status: "invited",
       };
       if (custom_role) membershipRow.custom_role = custom_role;
@@ -136,7 +227,7 @@ Deno.serve(async (req: Request) => {
             {
               user_id: userId,
               org_id,
-              role,
+              role: membershipRole,
             },
             { onConflict: "user_id,org_id" },
           );
@@ -165,7 +256,9 @@ Deno.serve(async (req: Request) => {
         portfolios: Array.isArray(access_scopes?.portfolios) ? [...new Set(access_scopes.portfolios.filter(Boolean))] : [],
         properties: Array.isArray(access_scopes?.properties) ? [...new Set(access_scopes.properties.filter(Boolean))] : [],
       };
-      const normalizedAccessRole = ["viewer", "editor", "manager"].includes(access_role) ? access_role : "viewer";
+      const normalizedAccessRole = ["viewer", "editor", "manager"].includes(access_role)
+        ? access_role
+        : (["viewer", "editor", "manager"].includes(membershipRole) ? membershipRole : "viewer");
 
       const { error: deleteAccessError } = await adminClient
         .from("user_access")
@@ -213,7 +306,9 @@ Deno.serve(async (req: Request) => {
 
     // ── Log invitation ────────────────────────────────────────────────────────
     const { error: inviteLogErr } = await adminClient.from("invitations").insert({
-      email, org_id, role,
+      email,
+      org_id,
+      role: displayRole,
       token: "magic-link",
       status: "pending_approval",
       expires_at: new Date(Date.now() + 86400000).toISOString(), // 24h
@@ -225,7 +320,7 @@ Deno.serve(async (req: Request) => {
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
     if (RESEND_API_KEY) {
       try {
-        const roleLabel = role ? role.replaceAll("_", " ") : "team member";
+        const roleLabel = formatRoleLabel(displayRole);
         const title = isNewUser ? "Complete your account setup" : "You've been added to a new organization";
         const bodyText = isNewUser 
           ? `You've been invited to join <strong>${orgName}</strong> as <strong>${roleLabel}</strong>. Please create your account to get started.`
