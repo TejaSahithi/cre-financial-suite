@@ -43,6 +43,7 @@ import ViewModeToggle from "@/components/ViewModeToggle";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
+import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
 
@@ -81,7 +82,7 @@ export default function Portfolios() {
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
-  const [selectedOrgId, setSelectedOrgId] = useState("all");
+  const [selectedOrgId, setSelectedOrgId] = useState(() => getStoredActingOrgId() || "all");
   const [selectedCreateOrgId, setSelectedCreateOrgId] = useState("");
   const [selectedPortfolioIds, setSelectedPortfolioIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -128,6 +129,11 @@ export default function Portfolios() {
     [organizations]
   );
 
+  const handleSelectedOrgChange = (value) => {
+    setSelectedOrgId(value);
+    setStoredActingOrgId(value === "all" ? null : value);
+  };
+
   const openCreateModal = () => {
     if (!canEditPortfolios) {
       toast.error("You have read-only access to Portfolios.");
@@ -171,7 +177,7 @@ export default function Portfolios() {
       setShowCreate(false);
       setForm(defaultForm);
       if (data?.org_id) {
-        setSelectedOrgId(data.org_id);
+        handleSelectedOrgChange(data.org_id);
       }
       toast.success("Portfolio created successfully");
       if (data?.id) {
@@ -356,7 +362,7 @@ export default function Portfolios() {
           <CardContent className="p-4">
             <div className="flex items-center gap-4 flex-wrap">
               <div className="text-sm font-bold text-violet-700">SuperAdmin Org Context</div>
-              <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
+              <Select value={selectedOrgId} onValueChange={handleSelectedOrgChange}>
                 <SelectTrigger className="w-72 bg-white border-violet-200">
                   <SelectValue placeholder="All organizations" />
                 </SelectTrigger>

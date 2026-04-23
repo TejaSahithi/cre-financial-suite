@@ -1,4 +1,5 @@
 import { supabase } from "@/services/supabaseClient";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 export async function getFreshAccessToken() {
@@ -34,7 +35,7 @@ export async function invokeEdgeFunction(fnName, body) {
   // tenant. If we have an active org context (membership or app_metadata),
   // forward it; otherwise the function will fail loudly and ask the caller to
   // pick an organization first.
-  const actingOrgId = await resolveWritableOrgId(null);
+  const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null);
   if (actingOrgId) {
     headers["x-acting-org-id"] = actingOrgId;
   }

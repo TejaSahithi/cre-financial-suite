@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
+import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { logAudit } from "@/services/audit";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -1767,8 +1768,9 @@ export default function UserManagement() {
   const isSuperAdmin = userMemberships.some(m => m?.role === "super_admin");
   const canManageUsers = canWritePage("UserManagement");
   const defaultOrgId = user?.activeOrg?.id || user?.org_id;
+  const initialSelectedOrgId = isSuperAdmin ? (getStoredActingOrgId() || defaultOrgId) : defaultOrgId;
 
-  const [selectedOrgId, setSelectedOrgId] = useState(defaultOrgId);
+  const [selectedOrgId, setSelectedOrgId] = useState(initialSelectedOrgId);
   const [selectedOrgName, setSelectedOrgName] = useState(user?.activeOrg?.name || "My Organization");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -1781,6 +1783,15 @@ export default function UserManagement() {
 
   const activeOrgId = selectedOrgId || defaultOrgId;
 
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+
+    const storedOrgId = getStoredActingOrgId();
+    if (storedOrgId && storedOrgId !== selectedOrgId) {
+      setSelectedOrgId(storedOrgId);
+    }
+  }, [isSuperAdmin]);
+
   // Fetch all orgs for SuperAdmin
   const { data: allOrgs = [] } = useQuery({
     queryKey: ["all-orgs-sa"],
@@ -1791,6 +1802,15 @@ export default function UserManagement() {
     },
     enabled: isSuperAdmin,
   });
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+
+    const activeOrg = allOrgs.find(org => org.id === activeOrgId);
+    if (activeOrg?.name) {
+      setSelectedOrgName(activeOrg.name);
+    }
+  }, [allOrgs, activeOrgId, isSuperAdmin]);
 
   // Fetch members
   const { data: members = [], isLoading, isError, error: fetchError } = useQuery({
@@ -2042,6 +2062,7 @@ export default function UserManagement() {
                 value={selectedOrgId || ""}
                 onValueChange={val => {
                   setSelectedOrgId(val);
+                  setStoredActingOrgId(val || null);
                   const org = allOrgs.find(o => o.id === val);
                   setSelectedOrgName(org?.name || "Unknown");
                   setSelectedIds(new Set());
