@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { OrganizationService } from "@/services/api";
-import { MODULE_DEFINITIONS, getModuleForPage, isPageInEnabledModules } from "./moduleConfig";
+import { MODULE_DEFINITIONS, getModuleForPage } from "./moduleConfig";
 import { MANDATORY_SETUP_PAGES } from "./rbac";
+import { getActiveMembershipForUser, getPageAccessLevel as resolveUserPageAccessLevel, normalizeAccessLevel } from "./userPermissions";
 
 const ModuleAccessContext = createContext({
   enabledModules: [],
@@ -18,18 +19,6 @@ const ModuleAccessContext = createContext({
   loading: true,
 });
 
-function normalizeAccessLevel(value) {
-  if (value === true) return "admin";
-  if (value === false || value == null) return "none";
-
-  const normalized = String(value).trim().toLowerCase();
-  if (["full", "admin", "manage"].includes(normalized)) return "admin";
-  if (["approve", "approver"].includes(normalized)) return "approve";
-  if (["write", "edit"].includes(normalized)) return "write";
-  if (["read", "read_only", "readonly", "view", "viewer"].includes(normalized)) return "read";
-  return "none";
-}
-
 function coerceToObject(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value;
   if (typeof value === "string") {
@@ -44,12 +33,6 @@ function coerceToObject(value) {
     }
   }
   return {};
-}
-
-function getActiveMembership(user) {
-  const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
-  if (memberships.length === 0) return null;
-  return memberships.find((membership) => membership?.org_id === user?.org_id) || memberships[0];
 }
 
 function buildAssignedPagesByModule({ pagePermissions, enabledModules, hasExplicitPagePermissions }) {
@@ -81,7 +64,6 @@ export function ModuleAccessProvider({ children }) {
   const [activeMembership, setActiveMembership] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasModuleRestrictions, setHasModuleRestrictions] = useState(false);
-  const [hasPageRestrictions, setHasPageRestrictions] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -93,7 +75,6 @@ export function ModuleAccessProvider({ children }) {
           setPageAccess({});
           setActiveMembership(null);
           setHasModuleRestrictions(false);
-          setHasPageRestrictions(false);
           setLoading(false);
           return;
         }
@@ -105,14 +86,13 @@ export function ModuleAccessProvider({ children }) {
           setPageAccess({});
           setActiveMembership(null);
           setHasModuleRestrictions(false);
-          setHasPageRestrictions(false);
           setLoading(false);
           return;
         }
 
         setIsAdmin(false);
 
-        const membership = getActiveMembership(user);
+        const membership = getActiveMembershipForUser(user);
         setActiveMembership(membership);
 
         let orgEnabledModules = [];
@@ -158,14 +138,12 @@ export function ModuleAccessProvider({ children }) {
           })
         );
         setHasModuleRestrictions(hasExplicitModulePermissions || hasOrgRestrictions);
-        setHasPageRestrictions(hasExplicitPagePermissions);
       } catch {
         setEnabledModules([]);
         setAssignedPagesByModule({});
         setPageAccess({});
         setActiveMembership(null);
         setHasModuleRestrictions(false);
-        setHasPageRestrictions(false);
       }
 
       setLoading(false);
@@ -181,13 +159,7 @@ export function ModuleAccessProvider({ children }) {
   const getPageAccessLevel = (pageName) => {
     if (isAdmin) return "admin";
     if (MANDATORY_SETUP_PAGES.includes(pageName)) return "admin";
-
-    if (hasPageRestrictions) {
-      return pageAccess[pageName] || "none";
-    }
-
-    if (!hasModuleRestrictions) return "admin";
-    return isPageInEnabledModules(pageName, enabledModules) ? "admin" : "none";
+    return resolveUserPageAccessLevel(user, pageName);
   };
 
   const canReadPage = (pageName) => normalizeAccessLevel(getPageAccessLevel(pageName)) !== "none";

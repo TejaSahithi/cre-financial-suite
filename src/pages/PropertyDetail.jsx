@@ -61,12 +61,15 @@ export default function PropertyDetail() {
     total_sqft: "",
     year_built: "",
   });
-  const canEditProperty = canWritePage("PropertyDetail");
+  const canEditProperty = canWritePage("Properties");
+  const canManageBuildings = canWritePage("Buildings");
+  const canManageUnits = canWritePage("Units");
   const canUploadLease = canWritePage("LeaseUpload");
   const canReviewLease = canWritePage("LeaseReview");
   const canManageExpense = canWritePage("AddExpense");
   const canRunCAMCalculation = canWritePage("CAMCalculation");
   const canCreateBudget = canWritePage("CreateBudget");
+  const hasStructureReadOnlyRestrictions = !canEditProperty || !canManageBuildings || !canManageUnits;
 
   const { data: property, isLoading } = useQuery({
     queryKey: ['property', propertyId],
@@ -106,7 +109,7 @@ export default function PropertyDetail() {
 
   const createBuildingMutation = useMutation({
     mutationFn: (data) => {
-      assertCanWritePage(user, "PropertyDetail", "add buildings");
+      assertCanWritePage(user, "Buildings", "add buildings");
       return BuildingService.create(data);
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1 }); },
@@ -115,7 +118,7 @@ export default function PropertyDetail() {
 
   const createUnitMutation = useMutation({
     mutationFn: (data) => {
-      assertCanWritePage(user, "PropertyDetail", "add units");
+      assertCanWritePage(user, "Units", "add units");
       return UnitService.create(data);
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); },
@@ -124,7 +127,7 @@ export default function PropertyDetail() {
 
   const updatePropertyMutation = useMutation({
     mutationFn: (data) => {
-      assertCanWritePage(user, "PropertyDetail", "edit property details");
+      assertCanWritePage(user, "Properties", "edit property details");
       return PropertyService.update(propertyId, data);
     },
     onSuccess: () => {
@@ -214,16 +217,16 @@ export default function PropertyDetail() {
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" disabled={!canEditProperty} onClick={openEditProperty}><Pencil className="w-4 h-4 mr-1" />Edit Property</Button>
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700" disabled={!canEditProperty} onClick={() => { setSelectedBuildingId(buildings[0]?.id || null); setShowAddUnit(true); }}><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700" disabled={!canManageUnits} onClick={() => { setSelectedBuildingId(buildings[0]?.id || null); setShowAddUnit(true); }}><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {!canEditProperty && (
+      {hasStructureReadOnlyRestrictions && (
         <Card className="border-blue-200 bg-blue-50">
           <CardContent className="p-4 text-sm text-blue-800">
-            This property page is in read-only mode for your account. You can review details, but property edits, building changes, and unit changes are disabled.
+            Some actions on this property are read-only for your account. You can review details, but property, building, and unit changes are limited to the sections your role allows.
           </CardContent>
         </Card>
       )}
@@ -450,7 +453,7 @@ export default function PropertyDetail() {
         {/* Buildings & Units Tab */}
         <TabsContent value="buildings" className="mt-4 space-y-6">
           <div className="flex justify-end gap-2">
-            <Button variant="outline" disabled={!canEditProperty} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
+            <Button variant="outline" disabled={!canManageBuildings} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
           </div>
           {buildings.length > 0 ? buildings.map(b => (
             <Card key={b.id}>
@@ -482,7 +485,7 @@ export default function PropertyDetail() {
                     ) : (
                       <Button size="sm" variant="outline" disabled className="text-xs h-8 text-emerald-700 border-emerald-200"><BarChart2 className="w-3 h-3 mr-1" />Generate Budget</Button>
                     )}
-                    <Button size="sm" disabled={!canEditProperty} className="bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => { setSelectedBuildingId(b.id); setShowAddUnit(true); }}><Plus className="w-3 h-3 mr-1" />Add Unit</Button>
+                    <Button size="sm" disabled={!canManageUnits} className="bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => { setSelectedBuildingId(b.id); setShowAddUnit(true); }}><Plus className="w-3 h-3 mr-1" />Add Unit</Button>
                   </div>
                 </div>
                 <Table>
@@ -539,7 +542,7 @@ export default function PropertyDetail() {
             <Card>
               <CardContent className="p-8 text-center text-slate-400">
                 <p className="mb-3">No buildings configured. Add a building to start managing units.</p>
-                <Button disabled={!canEditProperty} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
+                <Button disabled={!canManageBuildings} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
               </CardContent>
             </Card>
           )}
@@ -682,7 +685,7 @@ export default function PropertyDetail() {
       </Dialog>
 
       {/* Add Building Dialog */}
-      <Dialog open={showAddBuilding && canEditProperty} onOpenChange={(open) => setShowAddBuilding(open && canEditProperty)}>
+      <Dialog open={showAddBuilding && canManageBuildings} onOpenChange={(open) => setShowAddBuilding(open && canManageBuildings)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add Building</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -694,7 +697,7 @@ export default function PropertyDetail() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddBuilding(false)}>Cancel</Button>
-            <Button onClick={() => createBuildingMutation.mutate({ name: buildingForm.name, total_sqft: parseInt(buildingForm.total_sqft) || 0, floors: buildingForm.floors || 1, property_id: propertyId, org_id: property.org_id })} disabled={!canEditProperty || !buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            <Button onClick={() => createBuildingMutation.mutate({ name: buildingForm.name, total_sqft: parseInt(buildingForm.total_sqft) || 0, floors: buildingForm.floors || 1, property_id: propertyId, org_id: property.org_id })} disabled={!canManageBuildings || !buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createBuildingMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Building
             </Button>
           </DialogFooter>
@@ -702,7 +705,7 @@ export default function PropertyDetail() {
       </Dialog>
 
       {/* Add Unit Dialog */}
-      <Dialog open={showAddUnit && canEditProperty} onOpenChange={(open) => setShowAddUnit(open && canEditProperty)}>
+      <Dialog open={showAddUnit && canManageUnits} onOpenChange={(open) => setShowAddUnit(open && canManageUnits)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add Unit</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -750,7 +753,7 @@ export default function PropertyDetail() {
               building_id: selectedBuildingId || null,
               property_id: propertyId,
               org_id: property.org_id,
-            })} disabled={!canEditProperty || !unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            })} disabled={!canManageUnits || !unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createUnitMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Unit
             </Button>
           </DialogFooter>

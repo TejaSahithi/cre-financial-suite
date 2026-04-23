@@ -2,7 +2,7 @@
 // Role = default template, Access = override layer
 
 import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess } from "@/lib/rbac";
-import { MODULE_DEFINITIONS } from "@/lib/moduleConfig";
+import { MODULE_DEFINITIONS, getModuleForPage } from "@/lib/moduleConfig";
 
 // ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
 export const ROLE_DEFINITIONS = [
@@ -235,7 +235,58 @@ export function getCurrentPageName(pathname = typeof window !== "undefined" ? wi
 export function getActiveMembershipForUser(user) {
   const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
   if (memberships.length === 0) return null;
-  return memberships.find((membership) => membership?.org_id === user?.org_id) || memberships[0];
+
+  const preferredOrgId = user?.activeOrg?.id || user?.org_id || null;
+  const activeMemberships = memberships.filter((membership) =>
+    ["active", "owner", "invited"].includes(membership?.status || "active")
+  );
+  const candidates = activeMemberships.length > 0 ? activeMemberships : memberships;
+
+  if (preferredOrgId) {
+    const preferredMembership = candidates.find((membership) => membership?.org_id === preferredOrgId);
+    if (preferredMembership) return preferredMembership;
+  }
+
+  return candidates[0];
+}
+
+function getRoleDefaultPageAccessLevel(role, pageName) {
+  const resolvedRole = resolveRoleForAccess(role);
+  if (!pageName || !role) return "none";
+  if (["admin", "super_admin"].includes(resolvedRole)) return "admin";
+  if (resolvedRole === "org_admin") {
+    return canAccess(role, pageName) ? "admin" : "none";
+  }
+  if (!canAccess(role, pageName)) return "none";
+  return getPermissions(role).canWrite ? "write" : "read";
+}
+
+function getEnabledModulesForUser(user) {
+  return Array.isArray(user?.activeOrg?.enabled_modules)
+    ? user.activeOrg.enabled_modules
+    : [];
+}
+
+function getModuleAccessLevel(user, membership, pageName) {
+  const moduleKey = getModuleForPage(pageName);
+  if (!moduleKey) return "admin";
+
+  const enabledModules = getEnabledModulesForUser(user);
+  if (enabledModules.length > 0 && !enabledModules.includes(moduleKey)) {
+    return "none";
+  }
+
+  const modulePermissions = parseObject(membership?.module_permissions);
+  const hasExplicitModulePermissions = Object.keys(modulePermissions).length > 0;
+  if (!hasExplicitModulePermissions) return "admin";
+
+  return normalizeAccessLevel(modulePermissions[moduleKey]);
+}
+
+function getLowerAccessLevel(left, right) {
+  return (ACCESS_LEVEL_RANK[normalizeAccessLevel(left)] || 0) <= (ACCESS_LEVEL_RANK[normalizeAccessLevel(right)] || 0)
+    ? normalizeAccessLevel(left)
+    : normalizeAccessLevel(right);
 }
 
 export function getPageAccessLevel(user, pageName) {
@@ -243,18 +294,27 @@ export function getPageAccessLevel(user, pageName) {
 
   const rawRole = user._raw_role || user.role;
   const resolvedRole = resolveRoleForAccess(rawRole);
-  if (["admin", "super_admin", "org_admin"].includes(resolvedRole)) return "admin";
+  if (["admin", "super_admin"].includes(resolvedRole)) return "admin";
 
   const membership = getActiveMembershipForUser(user);
+  if (!membership) return "none";
+
+  const moduleLevel = getModuleAccessLevel(user, membership, pageName);
+  if (moduleLevel === "none") return "none";
+
   const pagePermissions = parseObject(membership?.page_permissions);
   const hasExplicitPagePermissions = Object.keys(pagePermissions).length > 0;
+  const explicitPageLevel = normalizeAccessLevel(pagePermissions[pageName]);
+  const roleLevel = getRoleDefaultPageAccessLevel(rawRole, pageName);
 
   if (hasExplicitPagePermissions) {
-    return normalizeAccessLevel(pagePermissions[pageName]);
+    return explicitPageLevel === "none"
+      ? "none"
+      : getLowerAccessLevel(explicitPageLevel, moduleLevel);
   }
 
-  if (!canAccess(rawRole, pageName)) return "none";
-  return getPermissions(rawRole).canWrite ? "write" : "read";
+  if (roleLevel === "none") return "none";
+  return getLowerAccessLevel(roleLevel, moduleLevel);
 }
 
 export function canReadPage(user, pageName) {

@@ -13,7 +13,7 @@ import { resolveTableName, ORG_EXEMPT_TABLES } from '@/types';
 import { logAudit } from '@/services/audit';
 import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
-import { assertCanWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
+import { assertCanWritePage, canWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
 
 // ─── In-memory store (used when Supabase is unavailable) ───────────────
 const memoryStore = new Map();
@@ -75,6 +75,25 @@ const ACCESS_CACHE_PREFIX = '__access_scope__';
 // Scoped portfolio/property restrictions are applied to non-admin org users.
 const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
 const WRITE_PERMISSION_EXEMPT_ENTITIES = new Set(['AccessRequest', 'DemoRequest', 'AuditLog', 'Notification']);
+const ENTITY_WRITE_PAGES = {
+  Portfolio: ['Portfolios'],
+  Property: ['Properties'],
+  Building: ['Buildings'],
+  Unit: ['Units'],
+  Lease: ['Leases', 'LeaseUpload', 'LeaseReview'],
+  Tenant: ['Tenants'],
+  Expense: ['Expenses', 'AddExpense', 'BulkImport'],
+  Budget: ['CreateBudget', 'BudgetDashboard'],
+  Vendor: ['Vendors'],
+  Invoice: ['Billing'],
+  Revenue: ['Revenue'],
+  Actual: ['ActualsVariance'],
+  Variance: ['ActualsVariance'],
+  CAMCalculation: ['CAMCalculation', 'CAMDashboard'],
+  GLAccount: ['ChartOfAccounts'],
+  Document: ['Documents'],
+  Organization: ['OrgSettings'],
+};
 
 async function assertCurrentUserCanWrite(entityName) {
   if (WRITE_PERMISSION_EXEMPT_ENTITIES.has(entityName)) return;
@@ -84,8 +103,11 @@ async function assertCurrentUserCanWrite(entityName) {
   const user = await me();
   if (!user) return;
 
-  const pageName = getCurrentPageName();
-  assertCanWritePage(user, pageName, `modify ${entityName} records`);
+  const pageNames = ENTITY_WRITE_PAGES[entityName] || [getCurrentPageName()];
+  const canWriteAnyMappedPage = pageNames.some((pageName) => canWritePage(user, pageName));
+  if (canWriteAnyMappedPage) return;
+
+  assertCanWritePage(user, pageNames[0], `modify ${entityName} records`);
 }
 
 async function getCurrentCacheScopeKey() {
