@@ -563,7 +563,11 @@ export default function BudgetDashboard() {
       </PageHeader>
 
       {selectedPropertyId ? (
-        <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={BUDGET_ACTIONS} />
+        <PipelineActions
+          propertyId={selectedPropertyId}
+          fiscalYear={selectedBudget ? getBudgetYear(selectedBudget) : new Date().getFullYear()}
+          actions={BUDGET_ACTIONS}
+        />
       ) : (
         <div className="text-xs text-slate-500">Select a property scope to run budget compute and export actions.</div>
       )}

@@ -162,6 +162,7 @@ const PAGE_PERMISSION_GROUPS = [
       { key: "Expenses",    label: "Expenses" },
       { key: "AddExpense",  label: "Add Expense" },
       { key: "BulkImport",  label: "Bulk Import" },
+      { key: "LeaseExpenseClassification", label: "Expense Classification" },
     ],
   },
   {
