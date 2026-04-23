@@ -48,6 +48,7 @@ const navSections = [
       { label: "Bulk Import", page: "BulkImport" },
       { label: "Expense Projection", page: "ExpenseProjection" },
       { label: "Vendors", page: "Vendors" },
+      { label: "Expense Classification", page: "LeaseExpenseClassification" },
     ]
   },
   {

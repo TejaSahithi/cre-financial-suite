@@ -61,12 +61,22 @@ export default function Reports() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Reports & KPIs</h1>
-          <p className="text-sm text-slate-500">Financial performance metrics and downloadable reports</p>
+          <p className="text-sm text-slate-500">Raw operational preview metrics and links to authoritative report pages</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline"><Download className="w-4 h-4 mr-2" />Export</Button>
         </div>
       </div>
+
+      <Card className="border-amber-200 bg-amber-50">
+        <CardContent className="p-4">
+          <p className="text-sm font-semibold text-amber-900">Preview analytics only</p>
+          <p className="mt-1 text-xs text-amber-700">
+            This page summarizes raw stored records for quick operational review. For authoritative
+            computed outputs, use the Rent Projection, CAM Dashboard, Budget Dashboard, and Reconciliation pages.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* KPIs from real data */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
