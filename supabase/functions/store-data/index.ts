@@ -242,7 +242,7 @@ Deno.serve(async (req: Request) => {
   try {
     // 1. Verify user auth and resolve org_id
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
     const userEmail = user.email ?? "unknown";
 
     // 2. Read file_id from request body

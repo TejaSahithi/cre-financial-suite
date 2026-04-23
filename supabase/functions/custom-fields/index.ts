@@ -529,7 +529,7 @@ Deno.serve(async (req: Request) => {
   try {
     // Auth
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const url = new URL(req.url);
     const pathParts = url.pathname.split('/').filter(Boolean);

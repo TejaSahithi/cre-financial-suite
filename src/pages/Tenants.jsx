@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { tenantService } from "@/services/tenantService";
-import { supabase } from "@/services/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Link } from "react-router-dom";
@@ -18,34 +17,7 @@ import ModuleLink from "@/components/ModuleLink";
 import { downloadCSV } from "@/utils/index";
 import PageHeader from "@/components/PageHeader";
 import BulkImportModal from "@/components/property/BulkImportModal";
-
-async function resolveWritableOrgId(currentOrgId) {
-  if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
-
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.app_metadata?.org_id) return user.app_metadata.org_id;
-
-    const { data: membership } = await supabase
-      .from("memberships")
-      .select("org_id")
-      .eq("user_id", user?.id)
-      .limit(1)
-      .maybeSingle();
-
-    if (membership?.org_id) return membership.org_id;
-
-    const { data: org } = await supabase
-      .from("organizations")
-      .select("id")
-      .limit(1)
-      .maybeSingle();
-
-    return org?.id || null;
-  } catch {
-    return null;
-  }
-}
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 export default function Tenants() {
   const [search, setSearch] = useState("");

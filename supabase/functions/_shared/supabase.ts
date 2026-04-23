@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
 
 /**
@@ -47,40 +48,74 @@ export async function verifyUser(req: Request) {
   return { user, supabaseAdmin };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractActingOrgId(req?: Request): string | null {
+  if (!req) return null;
+  const raw = req.headers.get('x-acting-org-id');
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
 /**
- * Gets the org_id for the authenticated user
+ * Resolve the org_id to use for the current request.
+ *
+ * Resolution order (strictest first):
+ *   1. The first membership row with a real org_id.
+ *   2. (Super-admin only) an explicit `x-acting-org-id` header naming a real org.
+ *   3. Otherwise THROW.
+ *
+ * Security note (audit finding S2):
+ *   The previous implementation silently fell back to "the first organization
+ *   in the system" when a super-admin had no membership with an org_id. That
+ *   caused compute / store / export operations to run against an arbitrary
+ *   tenant. Do not reintroduce an implicit fallback — super-admins that need
+ *   cross-tenant access must name the tenant via the `x-acting-org-id` header
+ *   (which is audited at the edge).
  */
-export async function getUserOrgId(userId: string, supabaseAdmin: any): Promise<string> {
+export async function getUserOrgId(
+  userId: string,
+  supabaseAdmin: any,
+  req?: Request,
+): Promise<string> {
   const { data: memberships, error } = await supabaseAdmin
     .from('memberships')
     .select('org_id, role')
     .eq('user_id', userId);
 
-  if (!error && memberships && memberships.length > 0) {
-    // Super admins may have a membership with org_id = NULL.
-    // Try to find a membership with a real org_id first.
-    const withOrg = memberships.find((m: any) => m.org_id != null);
-    if (withOrg) return withOrg.org_id;
+  if (error) {
+    throw new Error(`Failed to resolve memberships: ${error.message}`);
+  }
 
-    // Super admin with no org_id — fall through to pick the first org in the system.
-    const isSuperAdmin = memberships.some((m: any) => m.role === 'super_admin');
-    if (!isSuperAdmin) {
-      throw new Error('User membership has no organization');
+  const rows = Array.isArray(memberships) ? memberships : [];
+  const withOrg = rows.find((m: any) => m.org_id != null);
+  if (withOrg) return withOrg.org_id as string;
+
+  const isSuperAdmin = rows.some((m: any) => m.role === 'super_admin');
+
+  if (isSuperAdmin) {
+    const actingOrgId = extractActingOrgId(req);
+    if (!actingOrgId) {
+      throw new Error(
+        'Super-admin request is missing the `x-acting-org-id` header. ' +
+        'Cross-tenant operations must name the target organization explicitly.'
+      );
     }
+
+    const { data: org, error: orgError } = await supabaseAdmin
+      .from('organizations')
+      .select('id')
+      .eq('id', actingOrgId)
+      .maybeSingle();
+
+    if (orgError || !org?.id) {
+      throw new Error(`Organization ${actingOrgId} (from x-acting-org-id) not found`);
+    }
+
+    console.log('[getUserOrgId] Super-admin acting on org:', org.id, 'user:', userId);
+    return org.id as string;
   }
 
-  // Fallback: pick the first organization (for super admins or users with no membership)
-  const { data: org, error: orgError } = await supabaseAdmin
-    .from('organizations')
-    .select('id')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (orgError || !org?.id) {
-    throw new Error('User has no organization membership');
-  }
-
-  console.log("[getUserOrgId] Resolved org_id via fallback:", org.id, "for user:", userId);
-  return org.id;
+  throw new Error('User has no organization membership');
 }

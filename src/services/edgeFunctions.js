@@ -1,4 +1,5 @@
 import { supabase } from "@/services/supabaseClient";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 export async function getFreshAccessToken() {
   // Refresh the session so the edge function never receives an expired JWT.
@@ -27,6 +28,16 @@ export async function getFreshAccessToken() {
 export async function invokeEdgeFunction(fnName, body) {
   const accessToken = await getFreshAccessToken();
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+
+  // Super-admin edge functions that operate across org data now require an
+  // explicit acting org header instead of silently resolving to an arbitrary
+  // tenant. If we have an active org context (membership or app_metadata),
+  // forward it; otherwise the function will fail loudly and ask the caller to
+  // pick an organization first.
+  const actingOrgId = await resolveWritableOrgId(null);
+  if (actingOrgId) {
+    headers["x-acting-org-id"] = actingOrgId;
+  }
 
   const { data, error } = await supabase.functions.invoke(fnName, { body, headers });
 
