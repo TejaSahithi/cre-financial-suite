@@ -172,7 +172,7 @@ Any step can transition to `failed` with an `error_message`.
 ### `_shared/supabase.ts`
 - `createAdminClient()` - Creates Supabase admin client
 - `verifyUser(req)` - Verifies user from Authorization header
-- `getUserOrgId(userId, supabaseAdmin)` - Gets org_id for user
+- `getUserOrgId(userId, supabaseAdmin, req?)` - Gets org_id for user. For super-admins with no org-scoped membership, requires the caller to pass the request so the `x-acting-org-id` header can be read (there is no implicit "first org" fallback — see audit finding S2).
 
 ## Multi-Tenant Isolation
 

@@ -577,7 +577,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
     const { export_type, property_id, fiscal_year, format } = body;

@@ -303,8 +303,25 @@ export function clearCache() {
  * Returns true if the error indicates the table doesn't exist in Supabase.
  * PGRST205 = relation not found in schema cache
  * 42P01    = undefined_table (Postgres error)
+ *
+ * Security/integrity note (audit finding B5):
+ *   In production, a missing table is a real error that must surface to the
+ *   caller — otherwise we silently fall back to in-memory seed data and mask
+ *   schema drift. This helper only reports "table not found" in a dev build
+ *   (Vite DEV). In prod builds it returns false so the error propagates
+ *   normally.
  */
+const IS_DEV_BUILD = Boolean(
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV === true
+);
+
+function assertDevFallbackAllowed(operation) {
+  if (IS_DEV_BUILD) return;
+  throw new Error(`[api] ${operation} requires Supabase in non-development environments.`);
+}
+
 function isTableNotFound(err) {
+  if (!IS_DEV_BUILD) return false;
   return (
     err?.code === 'PGRST205' ||
     err?.code === '42P01' ||
@@ -603,6 +620,7 @@ export function createEntityService(entityName) {
           return finalRecord;
         }
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.get()`);
         seedMemoryStore();
         const record = getStore(entityName).find(r => r.id === id);
         return record || null;
@@ -677,6 +695,7 @@ export function createEntityService(entityName) {
           return result;
         }
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.list()`);
         seedMemoryStore();
         let items = [...getStore(entityName)];
         if (sortField) {
@@ -759,6 +778,7 @@ export function createEntityService(entityName) {
           return result;
         }
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.filter()`);
         seedMemoryStore();
         const items = getStore(entityName).filter(record =>
           Object.entries(filters).every(([key, value]) => record[key] === value)
@@ -798,25 +818,30 @@ export function createEntityService(entityName) {
           updated_at: translated.updated_at || now,
         };
 
-        // Inject org_id if not present and table requires it
+        // Inject org_id if not present and table requires it.
+        // Security note (S3): super-admins used to silently fall back to "the
+        // first organization in the system" when no context was provided,
+        // which caused cross-tenant data contamination. That fallback was
+        // removed — super-admins must now pass `org_id` explicitly in the
+        // create payload, or act with an active org in their app_metadata /
+        // membership. Anything else is rejected.
         if (!isOrgExempt && !enriched.org_id) {
           const orgId = await getCurrentOrgId();
           if (orgId && orgId !== '__none__') {
-            // Regular user — use their org directly
             enriched.org_id = orgId;
           } else if (orgId === null) {
-            // Super-admin context — org_id is null meaning "no filter / see all".
-            // We still need a real org_id to satisfy the NOT NULL constraint.
-            // Fall back to resolveWritableOrgId which picks the first org in the system.
-            try {
-              const { resolveWritableOrgId } = await import('@/lib/orgUtils');
-              const fallbackOrgId = await resolveWritableOrgId(null);
-              if (fallbackOrgId) {
-                enriched.org_id = fallbackOrgId;
-                console.warn(`[api] ${entityName}.create() — SuperAdmin: auto-assigned org_id=${fallbackOrgId}`);
-              }
-            } catch (e) {
-              console.error('[api] Failed to resolve SuperAdmin org fallback:', e);
+            // Super-admin with no active org context. Try to resolve from
+            // their own app_metadata / membership, but never auto-pick a
+            // random tenant.
+            const { resolveWritableOrgId } = await import('@/lib/orgUtils');
+            const resolvedOrgId = await resolveWritableOrgId(null);
+            if (resolvedOrgId) {
+              enriched.org_id = resolvedOrgId;
+            } else {
+              throw new Error(
+                `${entityName}.create() requires an explicit org_id. ` +
+                `Super-admins must select an organization before writing data.`
+              );
             }
           }
         }
@@ -867,6 +892,7 @@ export function createEntityService(entityName) {
         }
 
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.create()`);
         seedMemoryStore();
         const newRecord = { id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...enriched };
         getStore(entityName).push(newRecord);
@@ -947,6 +973,7 @@ export function createEntityService(entityName) {
         }
 
         // In-memory fallback — just create
+        assertDevFallbackAllowed(`${entityName}.upsert()`);
         return this.create(data);
       } catch (err) {
         if (isPagePermissionError(err)) throw err;
@@ -1017,6 +1044,7 @@ export function createEntityService(entityName) {
         }
 
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.update()`);
         seedMemoryStore();
         const store = getStore(entityName);
         const idx = store.findIndex(r => r.id === id);
@@ -1081,6 +1109,7 @@ export function createEntityService(entityName) {
         }
 
         // In-memory fallback
+        assertDevFallbackAllowed(`${entityName}.delete()`);
         seedMemoryStore();
         const delStore = getStore(entityName);
         const delIdx = delStore.findIndex(r => r.id === id);
@@ -1168,6 +1197,7 @@ export async function submitPublicAccessRequest(payload) {
   };
 
   if (!supabase) {
+    assertDevFallbackAllowed('submitPublicAccessRequest()');
     return { id: `mem-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
@@ -1211,6 +1241,7 @@ export async function submitPublicDemoRequest(payload) {
   };
 
   if (!supabase) {
+    assertDevFallbackAllowed('submitPublicDemoRequest()');
     return { id: `mem-demo-${Date.now()}`, ...requestPayload, created_at: new Date().toISOString() };
   }
 
@@ -1233,6 +1264,7 @@ export async function submitPublicDemoRequest(payload) {
 
 export async function verifyAccessRequest(email) {
   if (!supabase) {
+    assertDevFallbackAllowed('verifyAccessRequest()');
     // In-memory fallback
     return { valid: true, company_name: 'Test Company' };
   }
@@ -1246,6 +1278,7 @@ export async function verifyAccessRequest(email) {
 
 export async function saveSecurityQuestions(questions) {
   if (!supabase) {
+    assertDevFallbackAllowed('saveSecurityQuestions()');
     return { success: true };
   }
   const { data, error } = await supabase.functions.invoke('save-security-questions', {
@@ -1260,7 +1293,11 @@ export async function saveSecurityQuestions(questions) {
 }
 
 export async function markDemoViewed(requestId) {
-  if (!supabase || !requestId) return { success: true };
+  if (!requestId) return { success: true };
+  if (!supabase) {
+    assertDevFallbackAllowed('markDemoViewed()');
+    return { success: true };
+  }
   try {
     return { success: true };
   } catch (err) {
@@ -1274,7 +1311,11 @@ export async function markDemoViewed(requestId) {
  * @param {'access' | 'demo'} type
  */
 export async function getExistingRequest(email, type = 'access') {
-  if (!supabase || !email) return null;
+  if (!email) return null;
+  if (!supabase) {
+    assertDevFallbackAllowed('getExistingRequest()');
+    return null;
+  }
   const table = type === 'demo' ? 'demo_requests' : 'access_requests';
   try {
     const { data, error } = await supabase

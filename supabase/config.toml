@@ -126,10 +126,6 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
-[functions.extract-lease]
-enabled = true
-verify_jwt = false
-
 [functions.generate-budget]
 enabled = true
 verify_jwt = false

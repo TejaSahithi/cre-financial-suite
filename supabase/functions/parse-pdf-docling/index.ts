@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
   try {
     // 1. Auth + org isolation
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     // 2. Parse request body
     const body = await req.json().catch(() => ({}));

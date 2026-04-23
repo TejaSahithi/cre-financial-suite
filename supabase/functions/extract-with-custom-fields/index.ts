@@ -435,7 +435,7 @@ Deno.serve(async (req: Request) => {
   try {
     // Auth
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     // Parse request
     const body = await req.json().catch(() => ({}));

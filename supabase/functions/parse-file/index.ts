@@ -121,7 +121,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     // Get file_id from request body
     const body = await req.json();

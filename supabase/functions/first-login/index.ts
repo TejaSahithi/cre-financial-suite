@@ -182,6 +182,7 @@ Deno.serve(async (req) => {
         status: 'onboarding',
         onboarding_step: 1,
         primary_contact_email: profile.email || user.email,
+        created_by: user.id,
       })
       .select('id')
       .single();

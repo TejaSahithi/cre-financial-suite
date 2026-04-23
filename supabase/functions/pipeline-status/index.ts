@@ -96,7 +96,7 @@ Deno.serve(async (req: Request) => {
   try {
     // Authenticate
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     // -----------------------------------------------------------------------
     // Extract parameters from GET query string or POST JSON body
