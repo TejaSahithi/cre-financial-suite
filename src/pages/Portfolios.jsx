@@ -42,6 +42,8 @@ import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
+import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
 
 async function resolveWritableOrgId(currentOrgId) {
   if (currentOrgId && currentOrgId !== "__none__") return currentOrgId;
@@ -125,6 +127,8 @@ export default function Portfolios() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { canWritePage } = useModuleAccess();
+  const canEditPortfolios = canWritePage("Portfolios");
 
   const { data: portfolios = [], isLoading, orgId, isAdmin } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -152,6 +156,11 @@ export default function Portfolios() {
   );
 
   const openCreateModal = () => {
+    if (!canEditPortfolios) {
+      toast.error("You have read-only access to Portfolios.");
+      return;
+    }
+
     if (isAdmin) {
       setSelectedCreateOrgId(
         selectedOrgId !== "all" ? selectedOrgId : (organizations[0]?.id || "")
@@ -164,6 +173,7 @@ export default function Portfolios() {
 
   const createMutation = useMutation({
     mutationFn: async (data) => {
+      assertCanWritePage(user, "Portfolios", "create portfolios");
       const writableOrgId = data.org_id || await resolveWritableOrgId(orgId);
       const created = await PortfolioService.create({
         ...data,
@@ -196,12 +206,13 @@ export default function Portfolios() {
       }
     },
     onError: (err) => {
-      toast.error(`Failed to create portfolio: ${err?.message || "Unknown error"}`);
+      toast.error(isPagePermissionError(err) ? err.message : `Failed to create portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
+      assertCanWritePage(user, "Portfolios", "delete portfolios");
       const ok = await PortfolioService.delete(id);
       if (!ok) throw new Error("Delete failed");
       return id;
@@ -213,12 +224,13 @@ export default function Portfolios() {
       setSelectedPortfolioIds((prev) => prev.filter((selectedId) => selectedId !== id));
     },
     onError: (err) => {
-      toast.error(`Failed to delete portfolio: ${err?.message || "Unknown error"}`);
+      toast.error(isPagePermissionError(err) ? err.message : `Failed to delete portfolio: ${err?.message || "Unknown error"}`);
     },
   });
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids) => {
+      assertCanWritePage(user, "Portfolios", "delete portfolios");
       await Promise.all(
         ids.map(async (id) => {
           const ok = await PortfolioService.delete(id);
@@ -234,7 +246,7 @@ export default function Portfolios() {
       toast.success(`${count} portfolio${count === 1 ? "" : "s"} deleted`);
     },
     onError: (err) => {
-      toast.error(`Failed to delete selected portfolios: ${err?.message || "Unknown error"}`);
+      toast.error(isPagePermissionError(err) ? err.message : `Failed to delete selected portfolios: ${err?.message || "Unknown error"}`);
     },
   });
 
@@ -303,6 +315,7 @@ export default function Portfolios() {
   const allFilteredSelected = filtered.length > 0 && filtered.every((portfolio) => selectedPortfolioIds.includes(portfolio.id));
 
   const togglePortfolioSelection = (portfolioId) => {
+    if (!canEditPortfolios) return;
     setSelectedPortfolioIds((prev) =>
       prev.includes(portfolioId)
         ? prev.filter((id) => id !== portfolioId)
@@ -311,6 +324,7 @@ export default function Portfolios() {
   };
 
   const toggleSelectAllFiltered = (checked) => {
+    if (!canEditPortfolios) return;
     if (checked) {
       setSelectedPortfolioIds((prev) => [...new Set([...prev, ...filtered.map((portfolio) => portfolio.id)])]);
       return;
@@ -347,6 +361,7 @@ export default function Portfolios() {
           </Button>
           <Button
             onClick={openCreateModal}
+            disabled={!canEditPortfolios}
             className="bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 shadow-sm"
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -354,6 +369,14 @@ export default function Portfolios() {
           </Button>
         </div>
       </PageHeader>
+
+      {!canEditPortfolios && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="p-4 text-sm text-blue-800">
+            You have read-only access on this page. Viewing portfolios is allowed, but creating, selecting, and deleting portfolios is disabled.
+          </CardContent>
+        </Card>
+      )}
 
       {isAdmin && organizations.length > 0 && (
         <Card className="border-violet-200 bg-violet-50/40">
@@ -413,6 +436,7 @@ export default function Portfolios() {
                 variant="outline"
                 size="sm"
                 className="border-red-200 text-red-600 hover:bg-red-50"
+                disabled={!canEditPortfolios}
                 onClick={() => setShowBulkDelete(true)}
               >
                 <Trash2 className="w-4 h-4 mr-1" />
@@ -432,7 +456,7 @@ export default function Portfolios() {
         <Card>
           <CardContent className="p-16 text-center">
             <p className="text-slate-400 text-sm mb-3">No portfolios found</p>
-            <Button onClick={openCreateModal}>Create Your First Portfolio</Button>
+            <Button onClick={openCreateModal} disabled={!canEditPortfolios}>Create Your First Portfolio</Button>
           </CardContent>
         </Card>
       ) : viewMode === "grid" ? (
@@ -444,6 +468,7 @@ export default function Portfolios() {
                   <div className="flex items-center gap-3">
                     <Checkbox
                       checked={selectedPortfolioIds.includes(portfolio.id)}
+                      disabled={!canEditPortfolios}
                       onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
                       className="mt-1"
                     />
@@ -462,6 +487,7 @@ export default function Portfolios() {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    disabled={!canEditPortfolios}
                     onClick={() => setDeleteTarget(portfolio)}
                     title="Delete portfolio"
                   >
@@ -529,6 +555,7 @@ export default function Portfolios() {
               <CardContent className="p-4 flex items-center gap-4">
                 <Checkbox
                   checked={selectedPortfolioIds.includes(portfolio.id)}
+                  disabled={!canEditPortfolios}
                   onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
                 />
                 <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -558,6 +585,7 @@ export default function Portfolios() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
+                  disabled={!canEditPortfolios}
                   onClick={() => setDeleteTarget(portfolio)}
                   title="Delete portfolio"
                 >
@@ -575,6 +603,7 @@ export default function Portfolios() {
                 <TableHead className="w-10">
                   <Checkbox
                     checked={allFilteredSelected}
+                    disabled={!canEditPortfolios}
                     onCheckedChange={toggleSelectAllFiltered}
                     aria-label="Select all filtered portfolios"
                   />
@@ -597,6 +626,7 @@ export default function Portfolios() {
                   <TableCell>
                     <Checkbox
                       checked={selectedPortfolioIds.includes(portfolio.id)}
+                      disabled={!canEditPortfolios}
                       onCheckedChange={() => togglePortfolioSelection(portfolio.id)}
                       aria-label={`Select ${portfolio.name}`}
                     />
@@ -636,6 +666,7 @@ export default function Portfolios() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        disabled={!canEditPortfolios}
                         onClick={() => setDeleteTarget(portfolio)}
                         title="Delete portfolio"
                       >
@@ -650,7 +681,7 @@ export default function Portfolios() {
         </Card>
       )}
 
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+      <Dialog open={showCreate && canEditPortfolios} onOpenChange={(open) => setShowCreate(open && canEditPortfolios)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create Portfolio</DialogTitle>
@@ -830,7 +861,7 @@ export default function Portfolios() {
                   ...(isAdmin && selectedCreateOrgId ? { org_id: selectedCreateOrgId } : {}),
                 });
               }}
-              disabled={createDisabled}
+              disabled={!canEditPortfolios || createDisabled}
               className="bg-gradient-to-r from-blue-600 to-indigo-700"
             >
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}

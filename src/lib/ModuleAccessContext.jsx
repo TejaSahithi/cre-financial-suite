@@ -9,6 +9,10 @@ const ModuleAccessContext = createContext({
   assignedPagesByModule: {},
   pageAccess: {},
   activeMembership: null,
+  getPageAccessLevel: () => "none",
+  canReadPage: () => true,
+  canWritePage: () => true,
+  isReadOnlyPage: () => false,
   isModuleEnabled: () => true,
   isPageEnabled: () => true,
   loading: true,
@@ -174,16 +178,29 @@ export function ModuleAccessProvider({ children }) {
     return enabledModules.includes(moduleKey);
   };
 
-  const isPageEnabled = (pageName) => {
-    if (isAdmin) return true;
-    if (MANDATORY_SETUP_PAGES.includes(pageName)) return true;
+  const getPageAccessLevel = (pageName) => {
+    if (isAdmin) return "admin";
+    if (MANDATORY_SETUP_PAGES.includes(pageName)) return "admin";
 
     if (hasPageRestrictions) {
-      return Boolean(pageAccess[pageName]);
+      return pageAccess[pageName] || "none";
     }
 
-    if (!hasModuleRestrictions) return true;
-    return isPageInEnabledModules(pageName, enabledModules);
+    if (!hasModuleRestrictions) return "admin";
+    return isPageInEnabledModules(pageName, enabledModules) ? "admin" : "none";
+  };
+
+  const canReadPage = (pageName) => normalizeAccessLevel(getPageAccessLevel(pageName)) !== "none";
+
+  const canWritePage = (pageName) => {
+    const level = normalizeAccessLevel(getPageAccessLevel(pageName));
+    return ["write", "approve", "admin"].includes(level);
+  };
+
+  const isReadOnlyPage = (pageName) => normalizeAccessLevel(getPageAccessLevel(pageName)) === "read";
+
+  const isPageEnabled = (pageName) => {
+    return canReadPage(pageName);
   };
 
   return (
@@ -193,6 +210,10 @@ export function ModuleAccessProvider({ children }) {
         assignedPagesByModule,
         pageAccess,
         activeMembership,
+        getPageAccessLevel,
+        canReadPage,
+        canWritePage,
+        isReadOnlyPage,
         isModuleEnabled,
         isPageEnabled,
         loading,

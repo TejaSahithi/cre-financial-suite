@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Calculator, TrendingUp, TrendingDown } from "lucide-react";
 
-export default function PropertyCAMTab({ propertyId }) {
+export default function PropertyCAMTab({ propertyId, canRunCalculation = true }) {
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
 
@@ -99,9 +99,13 @@ export default function PropertyCAMTab({ propertyId }) {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Tenant CAM Allocation — Current vs Prior Year vs Lease Terms</CardTitle>
-          <Link to={createPageUrl("CAMCalculation") + `?property=${propertyId}`}>
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Calculator className="w-3 h-3 mr-1" />Run Calculation</Button>
-          </Link>
+          {canRunCalculation ? (
+            <Link to={createPageUrl("CAMCalculation") + `?property=${propertyId}`}>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Calculator className="w-3 h-3 mr-1" />Run Calculation</Button>
+            </Link>
+          ) : (
+            <Button size="sm" disabled className="bg-blue-600 hover:bg-blue-700"><Calculator className="w-3 h-3 mr-1" />Run Calculation</Button>
+          )}
         </CardHeader>
         <CardContent>
           <Table>

@@ -10,7 +10,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Plus, TrendingUp, TrendingDown } from "lucide-react";
 
-export default function PropertyBudgetsTab({ propertyId }) {
+export default function PropertyBudgetsTab({ propertyId, canCreateBudget = true }) {
   const currentYear = new Date().getFullYear();
 
   const { data: budgets = [] } = useQuery({
@@ -81,9 +81,13 @@ export default function PropertyBudgetsTab({ propertyId }) {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Budget History — Year over Year Comparison</CardTitle>
-          <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}`}>
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Create Budget</Button>
-          </Link>
+          {canCreateBudget ? (
+            <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}`}>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Create Budget</Button>
+            </Link>
+          ) : (
+            <Button size="sm" disabled className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Create Budget</Button>
+          )}
         </CardHeader>
         <CardContent>
           <Table>
