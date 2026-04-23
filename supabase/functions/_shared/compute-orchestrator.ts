@@ -69,13 +69,7 @@ function engineTypeForFunction(fn: string): ComputeEngineType {
 }
 
 /**
- * Stable fingerprint for the compute inputs. Any change to a stored row
- * that belongs to the same (org, property, fiscal_year, engine) tuple
- * produces a new fingerprint, which is how the UI detects stale results.
- *
- * Note: this file-triggered fingerprint is intentionally compact today.
- * It can be expanded later to include the exact sorted source row IDs
- * and updated_at pairs returned by each compute engine.
+ * Stable fingerprint for the compute trigger inputs.
  */
 async function fingerprint(parts: Array<string | number | null | undefined>): Promise<string> {
   const source = parts
@@ -228,14 +222,19 @@ async function callOnce(
   functionName: string,
   body: Record<string, unknown>,
   serviceKey: string,
+  orgId: string,
+  fileId: string,
 ): Promise<{ ok: boolean; error: string }> {
   try {
     const res = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${serviceKey}`,
         "apikey": serviceKey,
+        "x-internal-service-key": serviceKey,
+        "x-internal-org-id": orgId,
+        "x-source-file-id": fileId,
+        "x-compute-trigger": "upload",
       },
       body: JSON.stringify(body),
     });
@@ -261,11 +260,13 @@ async function callWithRetry(
   functionName: string,
   body: Record<string, unknown>,
   serviceKey: string,
+  orgId: string,
+  fileId: string,
 ): Promise<{ ok: boolean; attempts: number; lastError: string }> {
   let lastError = "";
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const result = await callOnce(supabaseUrl, functionName, body, serviceKey);
+    const result = await callOnce(supabaseUrl, functionName, body, serviceKey, orgId, fileId);
 
     if (result.ok) {
       console.log(`[compute-orchestrator] ${functionName} OK (attempt ${attempt})`);
@@ -287,11 +288,7 @@ async function callWithRetry(
 }
 
 /**
- * Resolve property_ids using a 4-level priority chain:
- * 1. fileRecord.property_id  (set at upload time)
- * 2. validData rows
- * 3. DB lookup on the just-stored table
- * 4. Org-level fallback
+ * Resolve property_ids from trusted stored scope only.
  */
 export async function resolvePropertyIds(
   fileRecord: Record<string, any>,
@@ -312,38 +309,33 @@ export async function resolvePropertyIds(
     ),
   ];
   if (fromRows.length > 0) return fromRows;
+  return [];
+}
 
-  const tableMap: Partial<Record<ModuleType, string>> = {
-    leases: "leases",
-    expenses: "expenses",
-    revenue: "revenues",
-    buildings: "buildings",
-    units: "units",
-    invoices: "invoices",
-  };
-  const table = tableMap[moduleType];
-  if (table) {
-    const { data } = await supabaseAdmin
-      .from(table)
-      .select("property_id")
-      .eq("org_id", orgId)
-      .not("property_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(50);
+function deriveFiscalYear(
+  fileRecord: Record<string, any>,
+  validData: Record<string, any>[],
+): number | null {
+  const explicitYear = Number(fileRecord?.fiscal_year ?? validData?.[0]?.fiscal_year ?? 0);
+  if (Number.isFinite(explicitYear) && explicitYear >= 2000 && explicitYear <= 3000) {
+    return explicitYear;
+  }
 
-    if (data && data.length > 0) {
-      const ids = [...new Set(data.map((r: any) => r.property_id).filter(Boolean))];
-      if (ids.length > 0) return ids as string[];
+  const dateSources = [
+    fileRecord?.effective_date,
+    fileRecord?.date,
+    ...validData.flatMap((row) => [row?.effective_date, row?.date, row?.start_date]),
+  ].filter(Boolean);
+
+  for (const source of dateSources) {
+    const parsed = new Date(String(source));
+    const year = parsed.getUTCFullYear();
+    if (Number.isFinite(year) && year >= 2000 && year <= 3000) {
+      return year;
     }
   }
 
-  const { data: props } = await supabaseAdmin
-    .from("properties")
-    .select("id")
-    .eq("org_id", orgId)
-    .limit(20);
-
-  return props?.map((p: any) => p.id) ?? [];
+  return null;
 }
 
 /**
@@ -375,14 +367,26 @@ export async function triggerComputePipeline(opts: {
   }
 
   try {
-    await setStatus(supabaseAdmin, fileId, "computing");
+    const statusResult = await setStatus(supabaseAdmin, fileId, "computing");
+    if (!statusResult?.ok) {
+      throw new Error(statusResult?.error || "Failed to set computing status");
+    }
 
     const propertyIds = await resolvePropertyIds(fileRecord, validData, moduleType, orgId, supabaseAdmin);
-    const fiscalYear = new Date().getFullYear();
+    const fiscalYear = deriveFiscalYear(fileRecord, validData);
 
-    await log.info("compute", `Starting compute: module=${moduleType} properties=[${propertyIds.join(",")}] fy=${fiscalYear}`, { module: moduleType, property_ids: propertyIds, fiscal_year: fiscalYear });
+    if (["leases", "expenses", "revenue", "cam", "budgets"].includes(moduleType)) {
+      if (propertyIds.length === 0) {
+        throw new Error(`Unable to resolve property scope for compute module ${moduleType}`);
+      }
+      if (!fiscalYear) {
+        throw new Error(`Unable to resolve fiscal year for compute module ${moduleType}`);
+      }
+    }
 
-    const jobs = getComputeJobs(moduleType, propertyIds, fiscalYear);
+    await log.info("compute", `Starting compute: module=${moduleType} properties=[${propertyIds.join(",")}] fy=${fiscalYear ?? "n/a"}`, { module: moduleType, property_ids: propertyIds, fiscal_year: fiscalYear });
+
+    const jobs = getComputeJobs(moduleType, propertyIds, fiscalYear ?? 0);
 
     if (jobs.length === 0) {
       await log.info("compute", `No compute jobs needed for module=${moduleType}`);
@@ -405,7 +409,7 @@ export async function triggerComputePipeline(opts: {
         fileId,
         job,
       });
-      const result = await callWithRetry(supabaseUrl, job.functionName, job.body, serviceKey);
+      const result = await callWithRetry(supabaseUrl, job.functionName, job.body, serviceKey, orgId, fileId);
       await recordRunFinish({
         supabaseAdmin,
         runId,

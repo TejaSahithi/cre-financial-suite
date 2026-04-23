@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { saveSnapshot } from "../_shared/snapshot.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 import { calculateCam } from "../_shared/cam-calculator.ts";
 
 type ScopeLevel = "property" | "building" | "unit";
@@ -336,6 +336,9 @@ Deno.serve(async (req: Request) => {
       throw new Error(`scope_id is required when scope_level is ${scopeLevel}`);
     }
 
+    await assertPageAccess(req, orgId, ["CAMCalculation", "CAMDashboard"], "write");
+    await assertPropertyAccess(req, propertyId);
+
     const { property, buildings, units } = await fetchPropertyContext(supabaseAdmin, orgId, propertyId);
     const [expenses, leases] = await Promise.all([
       fetchExpenses(supabaseAdmin, orgId, propertyId, fiscalYear),
@@ -418,7 +421,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
-      .select("outputs")
+      .select("id, outputs")
       .eq("org_id", orgId)
       .eq("property_id", propertyId)
       .eq("engine_type", "budget")
@@ -428,7 +431,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: priorCamSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
-      .select("outputs")
+      .select("id, outputs")
       .eq("org_id", orgId)
       .eq("property_id", propertyId)
       .eq("engine_type", "cam")
@@ -495,7 +498,55 @@ Deno.serve(async (req: Request) => {
       unit_count: units.length,
       property_config: mergedPropertyConfig,
       override_values: body?.override_values ?? null,
+      _compute: {
+        page_scope: ["CAMCalculation", "CAMDashboard"],
+        source_tables: ["properties", "buildings", "units", "expenses", "leases", "property_config", "lease_config", "lease_expense_rule_sets", "computation_snapshots"],
+        source_row_ids: {
+          buildings: buildings.map((building: any) => building.id).sort(),
+          units: units.map((unit: any) => unit.id).sort(),
+          expenses: expenses.map((expense: any) => expense.id).sort(),
+          leases: leases.map((lease: any) => lease.id).sort(),
+        },
+        source_counts: {
+          buildings: buildings.length,
+          units: units.length,
+          expenses: expenses.length,
+          leases: leases.length,
+        },
+        source_snapshot_ids: {
+          budget: budgetSnapshot?.[0]?.id ?? null,
+          prior_cam: priorCamSnapshot?.[0]?.id ?? null,
+        },
+        trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
+        source_file_id: req.headers.get("x-source-file-id") ?? null,
+      },
     };
+
+    const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id: propertyId,
+      engine_type: "cam",
+      fiscal_year: fiscalYear,
+      inputs,
+      outputs,
+      computed_by: user.email ?? user.id,
+    });
+
+    if (existingSnapshot?.outputs) {
+      return new Response(
+        JSON.stringify({
+          error: false,
+          property_id: propertyId,
+          fiscal_year: fiscalYear,
+          scope_level: scopeLevel,
+          scope_id: scopeId,
+          ...existingSnapshot.outputs,
+          snapshot_id: existingSnapshot.id,
+          reused_snapshot: true,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     await saveSnapshot(supabaseAdmin, {
       org_id: orgId,

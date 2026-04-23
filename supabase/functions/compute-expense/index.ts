@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { saveSnapshot } from "../_shared/snapshot.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Expense Edge Function
@@ -23,6 +23,9 @@ Deno.serve(async (req: Request) => {
     if (!property_id || !fiscal_year) {
       throw new Error("Missing required fields: property_id and fiscal_year");
     }
+
+    await assertPageAccess(req, orgId, ["Expenses", "AddExpense", "BulkImport"], "write");
+    await assertPropertyAccess(req, property_id);
 
     // ---------------------------------------------------------------
     // 1. Fetch all expenses for property_id & fiscal_year (org-scoped)
@@ -230,11 +233,32 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     // 9. Store computation snapshot
     // ---------------------------------------------------------------
+    const sortedExpenses = [...(expenses ?? [])].sort((left: any, right: any) =>
+      String(left?.id ?? "").localeCompare(String(right?.id ?? "")),
+    );
+    const sortedLeases = [...(leases ?? [])].sort((left: any, right: any) =>
+      String(left?.id ?? "").localeCompare(String(right?.id ?? "")),
+    );
+
     const inputs = {
       property_id,
       fiscal_year,
-      expense_count: expenses.length,
-      lease_count: leases.length,
+      expense_count: sortedExpenses.length,
+      lease_count: sortedLeases.length,
+      _compute: {
+        page_scope: ["Expenses", "AddExpense", "BulkImport"],
+        source_tables: ["expenses", "leases", "lease_config", "properties"],
+        source_row_ids: {
+          expenses: sortedExpenses.map((expense: any) => expense.id),
+          leases: sortedLeases.map((lease: any) => lease.id),
+        },
+        source_counts: {
+          expenses: sortedExpenses.length,
+          leases: sortedLeases.length,
+        },
+        trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
+        source_file_id: req.headers.get("x-source-file-id") ?? null,
+      },
     };
 
     const outputs = {
@@ -247,6 +271,30 @@ Deno.serve(async (req: Request) => {
       tenant_allocations: tenantAllocations,
       monthly_breakdown: monthlyBreakdown,
     };
+
+    const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id,
+      engine_type: "expense",
+      fiscal_year,
+      inputs,
+      outputs,
+      computed_by: user.email ?? user.id,
+    });
+
+    if (existingSnapshot?.outputs) {
+      return new Response(
+        JSON.stringify({
+          error: false,
+          property_id,
+          fiscal_year,
+          ...existingSnapshot.outputs,
+          snapshot_id: existingSnapshot.id,
+          reused_snapshot: true,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     await saveSnapshot(supabaseAdmin, {
       org_id: orgId,

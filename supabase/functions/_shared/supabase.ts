@@ -1,14 +1,39 @@
 // @ts-nocheck
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
 
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
 /**
  * Creates a Supabase admin client with service role key
  */
 export function createAdminClient() {
   return createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
     { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
+
+function extractBearerToken(req: Request): string | null {
+  const headerSources = ["x-user-jwt", "x-supabase-auth", "Authorization"] as const;
+  for (const name of headerSources) {
+    const value = req.headers.get(name);
+    if (value) {
+      return value.replace(/^Bearer\s+/i, "").trim();
+    }
+  }
+  return null;
+}
+
+function isInternalServiceRequest(req?: Request): boolean {
+  if (!req) return false;
+  const internalKey = req.headers.get("x-internal-service-key");
+  return Boolean(
+    internalKey &&
+      SUPABASE_SERVICE_ROLE_KEY &&
+      internalKey.trim() === SUPABASE_SERVICE_ROLE_KEY,
   );
 }
 
@@ -17,9 +42,21 @@ export function createAdminClient() {
  * Returns the authenticated user or throws an error
  */
 export async function verifyUser(req: Request) {
-  const headerSources = ['x-user-jwt', 'x-supabase-auth', 'Authorization'] as const;
+  if (isInternalServiceRequest(req)) {
+    const supabaseAdmin = createAdminClient();
+    return {
+      user: {
+        id: "internal-compute",
+        email: "internal-compute@system.local",
+      },
+      supabaseAdmin,
+      isInternal: true,
+    };
+  }
+
+  const headerSources = ["x-user-jwt", "x-supabase-auth", "Authorization"] as const;
   let authHeader: string | null = null;
-  let usedHeader = '';
+  let usedHeader = "";
 
   for (const name of headerSources) {
     const value = req.headers.get(name);
@@ -31,8 +68,8 @@ export async function verifyUser(req: Request) {
   }
 
   if (!authHeader) {
-    console.error("[verifyUser] No auth header found. Checked:", headerSources.join(', '));
-    throw new Error('Missing Authorization header');
+    console.error("[verifyUser] No auth header found. Checked:", headerSources.join(", "));
+    throw new Error("Missing Authorization header");
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, '');
@@ -41,7 +78,7 @@ export async function verifyUser(req: Request) {
   const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
   if (authError || !user) {
     console.error("[verifyUser] Auth failed via", usedHeader, ":", authError?.message);
-    throw new Error(`Unauthorized: ${authError?.message || 'Invalid token'}`);
+    throw new Error(`Unauthorized: ${authError?.message || "Invalid token"}`);
   }
 
   console.log("[verifyUser] Authenticated", user.email ?? user.id, "via", usedHeader);
@@ -56,6 +93,32 @@ function extractActingOrgId(req?: Request): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
   return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
+function extractInternalOrgId(req?: Request): string | null {
+  if (!req || !isInternalServiceRequest(req)) return null;
+  const raw = req.headers.get("x-internal-org-id");
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
+function createUserScopedClient(req: Request) {
+  const token = extractBearerToken(req);
+  if (!token) {
+    throw new Error("Missing Authorization header");
+  }
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error("Missing Supabase anon configuration");
+  }
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  });
 }
 
 /**
@@ -79,6 +142,11 @@ export async function getUserOrgId(
   supabaseAdmin: any,
   req?: Request,
 ): Promise<string> {
+  const internalOrgId = extractInternalOrgId(req);
+  if (internalOrgId) {
+    return internalOrgId;
+  }
+
   const { data: memberships, error } = await supabaseAdmin
     .from('memberships')
     .select('org_id, role, status')
@@ -138,4 +206,69 @@ export async function getUserOrgId(
   }
 
   throw new Error('User has no active organization membership');
+}
+
+export async function assertPageAccess(
+  req: Request,
+  orgId: string,
+  pageNames: string[],
+  access: "read" | "write" = "write",
+): Promise<void> {
+  if (isInternalServiceRequest(req) || !Array.isArray(pageNames) || pageNames.length === 0) {
+    return;
+  }
+
+  const scopedClient = createUserScopedClient(req);
+  let allowed = false;
+
+  if (access === "write") {
+    if (pageNames.length > 1) {
+      const { data, error } = await scopedClient.rpc("can_write_any_page", {
+        check_org_id: orgId,
+        page_names: pageNames,
+      });
+      if (error) throw new Error(`Permission check failed: ${error.message}`);
+      allowed = Boolean(data);
+    } else {
+      const { data, error } = await scopedClient.rpc("can_write_page", {
+        check_org_id: orgId,
+        page_name: pageNames[0],
+      });
+      if (error) throw new Error(`Permission check failed: ${error.message}`);
+      allowed = Boolean(data);
+    }
+  } else {
+    const checks = await Promise.all(
+      pageNames.map(async (pageName) => {
+        const { data, error } = await scopedClient.rpc("can_read_page", {
+          check_org_id: orgId,
+          page_name: pageName,
+        });
+        if (error) throw error;
+        return Boolean(data);
+      }),
+    );
+    allowed = checks.some(Boolean);
+  }
+
+  if (!allowed) {
+    throw new Error(`Access denied for ${access} on ${pageNames.join(", ")}`);
+  }
+}
+
+export async function assertPropertyAccess(req: Request, propertyId?: string | null): Promise<void> {
+  if (isInternalServiceRequest(req) || !propertyId) {
+    return;
+  }
+
+  const scopedClient = createUserScopedClient(req);
+  const { data, error } = await scopedClient.rpc("can_access_property", {
+    p_property_id: propertyId,
+  });
+  if (error) {
+    throw new Error(`Property access check failed: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error("Access denied for the requested property");
+  }
 }

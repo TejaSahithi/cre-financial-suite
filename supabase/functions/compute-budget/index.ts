@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { saveSnapshot } from "../_shared/snapshot.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Budget Edge Function
@@ -26,6 +26,9 @@ Deno.serve(async (req: Request) => {
     if (!property_id || !fiscal_year) {
       throw new Error("property_id and fiscal_year are required");
     }
+
+    await assertPageAccess(req, orgId, ["BudgetDashboard", "CreateBudget"], "write");
+    await assertPropertyAccess(req, property_id);
 
     const resolvedAction = action || "generate";
 
@@ -77,8 +80,37 @@ async function handleGenerate(
     throw new Error(`Property not found: ${propErr?.message ?? propertyId}`);
   }
 
+  const { data: revenueSnapshot } = await supabaseAdmin
+    .from("computation_snapshots")
+    .select("id, outputs, computed_at")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("engine_type", "revenue")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: expenseSnapshot } = await supabaseAdmin
+    .from("computation_snapshots")
+    .select("id, outputs, computed_at")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("engine_type", "expense")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!revenueSnapshot?.outputs) {
+    throw new Error("Revenue snapshot is required before generating a budget");
+  }
+  if (!expenseSnapshot?.outputs) {
+    throw new Error("Expense snapshot is required before generating a budget");
+  }
+
   // ---------------------------------------------------------------
-  // 2. Calculate total projected revenue
+  // 2. Calculate total projected revenue from trusted snapshots + stored detail
   // ---------------------------------------------------------------
 
   // 2a. Base rent from active leases
@@ -93,25 +125,25 @@ async function handleGenerate(
     throw new Error(`Failed to fetch leases: ${leaseErr.message}`);
   }
 
-  let baseRent = 0;
+  let baseRent = Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.base_rent ?? 0);
   const fyStart = new Date(fiscalYear, 0, 1); // Jan 1 of fiscal year
   const fyEnd = new Date(fiscalYear, 11, 31); // Dec 31 of fiscal year
 
-  for (const lease of leases ?? []) {
-    const monthlyRent = Number(lease.monthly_rent) || 0;
-    const leaseStart = new Date(lease.start_date);
-    const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
+  if (baseRent === 0) {
+    for (const lease of leases ?? []) {
+      const monthlyRent = Number(lease.monthly_rent) || 0;
+      const leaseStart = new Date(lease.start_date);
+      const leaseEnd = lease.end_date ? new Date(lease.end_date) : fyEnd;
 
-    // Determine overlap with fiscal year
-    const overlapStart = leaseStart > fyStart ? leaseStart : fyStart;
-    const overlapEnd = leaseEnd < fyEnd ? leaseEnd : fyEnd;
+      const overlapStart = leaseStart > fyStart ? leaseStart : fyStart;
+      const overlapEnd = leaseEnd < fyEnd ? leaseEnd : fyEnd;
 
-    if (overlapStart <= overlapEnd) {
-      // Calculate months of overlap
-      const startMonth = overlapStart.getFullYear() * 12 + overlapStart.getMonth();
-      const endMonth = overlapEnd.getFullYear() * 12 + overlapEnd.getMonth();
-      const activeMonths = endMonth - startMonth + 1;
-      baseRent += monthlyRent * activeMonths;
+      if (overlapStart <= overlapEnd) {
+        const startMonth = overlapStart.getFullYear() * 12 + overlapStart.getMonth();
+        const endMonth = overlapEnd.getFullYear() * 12 + overlapEnd.getMonth();
+        const activeMonths = endMonth - startMonth + 1;
+        baseRent += monthlyRent * activeMonths;
+      }
     }
   }
 
@@ -119,11 +151,11 @@ async function handleGenerate(
   let camRecovery = 0;
   const { data: camSnapshot, error: camSnapErr } = await supabaseAdmin
     .from("computation_snapshots")
-    .select("outputs")
+    .select("id, outputs")
     .eq("property_id", propertyId)
     .eq("engine_type", "cam")
     .eq("fiscal_year", fiscalYear)
-    .order("created_at", { ascending: false })
+    .order("computed_at", { ascending: false })
     .limit(1);
 
   if (!camSnapErr && camSnapshot && camSnapshot.length > 0) {
@@ -132,14 +164,15 @@ async function handleGenerate(
   }
 
   // 2c. Other revenue from revenues table
-  let otherIncome = 0;
+  let otherIncome = Number(revenueSnapshot?.outputs?.summary?.revenue_by_type?.other_income ?? 0);
   const { data: revenues, error: revErr } = await supabaseAdmin
     .from("revenues")
     .select("type, amount, month")
     .eq("property_id", propertyId)
+    .eq("org_id", orgId)
     .eq("fiscal_year", fiscalYear);
 
-  if (!revErr && revenues) {
+  if (!revErr && revenues && otherIncome === 0) {
     for (const rev of revenues) {
       otherIncome += Number(rev.amount) || 0;
     }
@@ -163,13 +196,15 @@ async function handleGenerate(
 
   // Group expenses by category
   const expenseByCategory: Record<string, number> = {};
-  let totalExpenses = 0;
+  let totalExpenses = Number(expenseSnapshot?.outputs?.total_expenses ?? 0);
 
   for (const exp of expenses ?? []) {
     const amount = Number(exp.amount) || 0;
     const category = (exp.category || "other").toLowerCase();
     expenseByCategory[category] = (expenseByCategory[category] || 0) + amount;
-    totalExpenses += amount;
+    if (!expenseSnapshot?.outputs?.total_expenses) {
+      totalExpenses += amount;
+    }
   }
 
   // ---------------------------------------------------------------
@@ -282,6 +317,26 @@ async function handleGenerate(
       lease_count: (leases ?? []).length,
       expense_count: (expenses ?? []).length,
       revenue_count: (revenues ?? []).length,
+      _compute: {
+        page_scope: ["BudgetDashboard", "CreateBudget"],
+        source_tables: ["budgets", "leases", "expenses", "revenues", "computation_snapshots"],
+        source_row_ids: {
+          leases: (leases ?? []).map((lease: any) => lease.id).sort(),
+          expenses: (expenses ?? []).map((expense: any) => expense.id).sort(),
+          revenues: (revenues ?? []).map((revenue: any) => revenue.id).sort(),
+        },
+        source_counts: {
+          leases: (leases ?? []).length,
+          expenses: (expenses ?? []).length,
+          revenues: (revenues ?? []).length,
+        },
+        source_snapshot_ids: {
+          revenue: revenueSnapshot.id,
+          expense: expenseSnapshot.id,
+          cam: camSnapshot?.[0]?.id ?? null,
+        },
+        trigger_type: "manual",
+      },
     },
     outputs: {
       budget_id: budgetId,
@@ -289,6 +344,32 @@ async function handleGenerate(
       line_items: lineItems,
     },
   };
+
+  const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+    org_id: orgId,
+    property_id: propertyId,
+    engine_type: "budget",
+    fiscal_year: fiscalYear,
+    inputs: snapshotPayload.inputs,
+    outputs: snapshotPayload.outputs,
+    computed_by: userId,
+  });
+
+  if (existingSnapshot?.outputs?.budget_id) {
+    return new Response(
+      JSON.stringify({
+        error: false,
+        property_id: propertyId,
+        fiscal_year: fiscalYear,
+        budget_id: existingSnapshot.outputs.budget_id,
+        status: existingSnapshot.outputs.status ?? "draft",
+        line_items: existingSnapshot.outputs.line_items ?? lineItems,
+        snapshot_id: existingSnapshot.id,
+        reused_snapshot: true,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
 
   await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
@@ -370,6 +451,44 @@ async function handleStatusTransition(
   // Create audit log entry
   await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, newStatus, successMessage);
 
+  const { data: latestSnapshot } = await supabaseAdmin
+    .from("computation_snapshots")
+    .select("id, outputs")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("engine_type", "budget")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  await saveSnapshot(supabaseAdmin, {
+    org_id: orgId,
+    property_id: propertyId,
+    engine_type: "budget",
+    fiscal_year: fiscalYear,
+    computed_by: userId,
+    inputs: {
+      property_id: propertyId,
+      fiscal_year: fiscalYear,
+      action: newStatus,
+      _compute: {
+        page_scope: ["BudgetDashboard", "CreateBudget"],
+        source_tables: ["budgets", "computation_snapshots"],
+        source_snapshot_ids: {
+          prior_budget_snapshot: latestSnapshot?.id ?? null,
+        },
+        trigger_type: "manual",
+      },
+    },
+    outputs: {
+      ...(latestSnapshot?.outputs ?? {}),
+      budget_id: budget.id,
+      status: newStatus,
+      message: successMessage,
+    },
+  });
+
   return new Response(
     JSON.stringify({
       error: false,
@@ -432,11 +551,12 @@ async function handleLock(
   // Create baseline snapshot for variance analysis
   const { data: latestSnapshot } = await supabaseAdmin
     .from("computation_snapshots")
-    .select("outputs")
+    .select("id, outputs")
+    .eq("org_id", orgId)
     .eq("property_id", propertyId)
     .eq("engine_type", "budget")
     .eq("fiscal_year", fiscalYear)
-    .order("created_at", { ascending: false })
+    .order("computed_at", { ascending: false })
     .limit(1);
 
   const baselineOutputs = latestSnapshot && latestSnapshot.length > 0
@@ -467,13 +587,25 @@ async function handleLock(
     },
   };
 
-  const { error: snapErr } = await supabaseAdmin
-    .from("computation_snapshots")
-    .insert(baselinePayload);
-
-  if (snapErr) {
-    console.error("[compute-budget] baseline snapshot insert error:", snapErr.message);
-  }
+  await saveSnapshot(supabaseAdmin, {
+    org_id: orgId,
+    property_id: propertyId,
+    engine_type: "budget",
+    fiscal_year: fiscalYear,
+    computed_by: userId,
+    inputs: {
+      ...baselinePayload.inputs,
+      _compute: {
+        page_scope: ["BudgetDashboard", "CreateBudget"],
+        source_tables: ["budgets", "computation_snapshots"],
+        source_snapshot_ids: {
+          prior_budget_snapshot: latestSnapshot?.[0]?.id ?? null,
+        },
+        trigger_type: "manual",
+      },
+    },
+    outputs: baselinePayload.outputs,
+  });
 
   // Create audit log entry
   await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "locked", "Budget locked successfully");

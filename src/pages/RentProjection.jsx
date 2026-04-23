@@ -234,10 +234,37 @@ export default function RentProjection() {
     }));
   }, [filteredLeases, fiscalYear]);
 
-  const projectedAnnual = monthlyChart.reduce((sum, b) => sum + b.projected, 0);
+  const authoritativeChart = useMemo(() => {
+    if (!hasSnapshot || !Array.isArray(outputs?.monthly_projections)) {
+      return monthlyChart;
+    }
+    return MONTHS.map((month, index) => {
+      const row = outputs.monthly_projections[index] ?? {};
+      return {
+        month,
+        current: Number(row.base_rent ?? 0),
+        projected: Number(row.projected_rent ?? 0),
+      };
+    });
+  }, [hasSnapshot, outputs, monthlyChart]);
+
+  const displayedStats = useMemo(() => {
+    if (!hasSnapshot) return stats;
+    const summary = outputs?.summary ?? {};
+    return {
+      ...stats,
+      totalAnnual: Number(summary.total_rent ?? stats.totalAnnual),
+      totalMonthly: Number(summary.avg_monthly_rent ?? stats.totalMonthly),
+      totalLeases: Number(summary.lease_count ?? stats.totalLeases),
+    };
+  }, [hasSnapshot, outputs, stats]);
+
+  const projectedAnnual = authoritativeChart.reduce((sum, bucket) => sum + Number(bucket.projected || 0), 0);
   const projectedMonthlyAvg = projectedAnnual / 12;
   const yoyChange =
-    stats.totalAnnual > 0 ? ((projectedAnnual - stats.totalAnnual) / stats.totalAnnual) * 100 : null;
+    displayedStats.totalAnnual > 0
+      ? ((projectedAnnual - displayedStats.totalAnnual) / displayedStats.totalAnnual) * 100
+      : null;
 
   const handleTriggerCompute = async () => {
     if (!selectedPropertyId) {
@@ -341,8 +368,8 @@ export default function RentProjection() {
         <Card className="border-l-4 border-l-blue-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Total Annual Rent</p>
-            <p className="text-2xl font-bold text-slate-900">{fmtMoney(stats.totalAnnual)}</p>
-            <p className="text-[10px] text-slate-400">{fmtMoney(stats.totalMonthly)}/mo</p>
+            <p className="text-2xl font-bold text-slate-900">{fmtMoney(displayedStats.totalAnnual)}</p>
+            <p className="text-[10px] text-slate-400">{fmtMoney(displayedStats.totalMonthly)}/mo</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-emerald-500">
@@ -371,14 +398,14 @@ export default function RentProjection() {
         <Card className="border-l-4 border-l-slate-400">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Avg Rent / SF</p>
-            <p className="text-2xl font-bold text-slate-700">${stats.avgRentPerSf.toFixed(2)}</p>
-            <p className="text-[10px] text-slate-400">{Number(stats.totalSf).toLocaleString()} SF leased</p>
+            <p className="text-2xl font-bold text-slate-700">${displayedStats.avgRentPerSf.toFixed(2)}</p>
+            <p className="text-[10px] text-slate-400">{Number(displayedStats.totalSf).toLocaleString()} SF leased</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-red-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Expiring &lt; 12 mo</p>
-            <p className="text-2xl font-bold text-red-600">{stats.expiring12mo}</p>
+            <p className="text-2xl font-bold text-red-600">{displayedStats.expiring12mo}</p>
             <p className="text-[10px] text-slate-400">Renewal risk</p>
           </CardContent>
         </Card>
@@ -392,7 +419,7 @@ export default function RentProjection() {
             <div className="flex-1">
               <p className="text-sm font-semibold text-amber-800">No engine snapshot for this property yet</p>
               <p className="text-xs text-amber-600 mt-0.5">
-                Showing a live rent roll computed from lease records. Click <strong>Run Engine</strong> to
+                Showing a preview computed from lease records. Click <strong>Run Engine</strong> to
                 generate a full computation snapshot with CAM allocation and recovery schedules.
               </p>
             </div>
@@ -423,7 +450,7 @@ export default function RentProjection() {
             </p>
           ) : (
             <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={monthlyChart}>
+              <ComposedChart data={authoritativeChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                 <YAxis

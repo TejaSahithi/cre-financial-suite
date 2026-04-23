@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { saveSnapshot } from "../_shared/snapshot.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Revenue Edge Function
@@ -191,6 +191,9 @@ Deno.serve(async (req: Request) => {
       throw new Error("property_id and fiscal_year are required");
     }
 
+    await assertPageAccess(req, orgId, ["Revenue"], "write");
+    await assertPropertyAccess(req, property_id);
+
     // ---------------------------------------------------------------
     // 1. Fetch property details
     // ---------------------------------------------------------------
@@ -338,6 +341,21 @@ Deno.serve(async (req: Request) => {
         lease_count: allLeases.length,
         revenue_record_count: allRevenues.length,
         cam_available: camCalc != null,
+        _compute: {
+          page_scope: ["Revenue"],
+          source_tables: ["properties", "leases", "revenues", "cam_calculations"],
+          source_row_ids: {
+            leases: allLeases.map((lease: any) => lease.id).sort(),
+            revenues: allRevenues.map((row: any) => row.id).sort(),
+          },
+          source_counts: {
+            leases: allLeases.length,
+            revenues: allRevenues.length,
+          },
+          source_snapshot_ids: {},
+          trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
+          source_file_id: req.headers.get("x-source-file-id") ?? null,
+        },
       },
       outputs: {
         monthly_projections: monthlyProjections,
@@ -345,6 +363,32 @@ Deno.serve(async (req: Request) => {
         rolling_forecast: rollingForecast,
       },
     };
+
+    const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id,
+      engine_type: "revenue",
+      fiscal_year,
+      inputs: snapshotPayload.inputs,
+      outputs: snapshotPayload.outputs,
+      computed_by: user.email ?? user.id,
+    });
+
+    if (existingSnapshot?.outputs) {
+      return new Response(
+        JSON.stringify({
+          error: false,
+          property_id,
+          fiscal_year,
+          ...existingSnapshot.outputs,
+          snapshot_id: existingSnapshot.id,
+          reused_snapshot: true,
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
 
     await saveSnapshot(supabaseAdmin, {
       org_id: orgId,

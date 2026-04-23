@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Reconciliation Edge Function
@@ -23,6 +24,9 @@ Deno.serve(async (req: Request) => {
     if (!property_id || !fiscal_year) {
       throw new Error("Missing required fields: property_id and fiscal_year");
     }
+
+    await assertPageAccess(req, orgId, ["Reconciliation", "ActualsVariance", "Actuals", "Variance"], "write");
+    await assertPropertyAccess(req, property_id);
 
     // ---------------------------------------------------------------
     // 1. Fetch budget for property_id and fiscal_year
@@ -83,13 +87,18 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
-      .select("inputs, outputs")
+      .select("id, inputs, outputs")
+      .eq("org_id", orgId)
       .eq("property_id", property_id)
       .eq("fiscal_year", fiscal_year)
       .eq("engine_type", "budget")
-      .order("created_at", { ascending: false })
+      .order("computed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    if (!budgetSnapshot?.outputs) {
+      throw new Error(`Budget snapshot is required before reconciliation for property ${property_id} and fiscal year ${fiscal_year}`);
+    }
 
     // Build budget-by-category lookup from snapshot or fall back to even split
     const budgetByCategory: Record<string, number> = {};
@@ -373,6 +382,25 @@ Deno.serve(async (req: Request) => {
         actuals_count: (actuals ?? []).length,
         expenses_count: (expenses ?? []).length,
         revenues_count: (revenues ?? []).length,
+        _compute: {
+          page_scope: ["Reconciliation", "ActualsVariance", "Actuals", "Variance"],
+          source_tables: ["budgets", "actuals", "expenses", "revenues", "computation_snapshots", "variances", "reconciliations"],
+          source_row_ids: {
+            actuals: (actuals ?? []).map((row: any) => row.id).sort(),
+            expenses: (expenses ?? []).map((row: any) => row.id).sort(),
+            revenues: (revenues ?? []).map((row: any) => row.id).sort(),
+          },
+          source_counts: {
+            actuals: (actuals ?? []).length,
+            expenses: (expenses ?? []).length,
+            revenues: (revenues ?? []).length,
+          },
+          source_snapshot_ids: {
+            budget: budgetSnapshot.id,
+          },
+          trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
+          source_file_id: req.headers.get("x-source-file-id") ?? null,
+        },
       },
       outputs: {
         summary,
@@ -383,12 +411,26 @@ Deno.serve(async (req: Request) => {
       },
     };
 
-    const { error: snapErr } = await supabaseAdmin
-      .from("computation_snapshots")
-      .insert(snapshotPayload);
+    const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+      org_id: orgId,
+      property_id,
+      engine_type: "reconciliation",
+      fiscal_year,
+      inputs: snapshotPayload.inputs,
+      outputs: snapshotPayload.outputs,
+      computed_by: user.email ?? user.id,
+    });
 
-    if (snapErr) {
-      console.error("[compute-reconciliation] Snapshot insert error:", snapErr.message);
+    if (!existingSnapshot) {
+      await saveSnapshot(supabaseAdmin, {
+        org_id: orgId,
+        property_id,
+        engine_type: "reconciliation",
+        fiscal_year,
+        computed_by: user.email ?? user.id,
+        inputs: snapshotPayload.inputs,
+        outputs: snapshotPayload.outputs,
+      });
     }
 
     // ---------------------------------------------------------------

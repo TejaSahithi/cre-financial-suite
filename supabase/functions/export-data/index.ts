@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 
 /**
  * Export Data Edge Function
@@ -26,6 +26,22 @@ const ENGINE_TYPE_MAP: Record<ExportType, string> = {
   expenses: "expense",
   revenue: "revenue",
 };
+
+const EXPORT_PAGE_MAP: Record<ExportType, string[]> = {
+  rent_schedule: ["Leases", "LeaseReview", "RentProjection"],
+  cam_calculation: ["CAMCalculation", "CAMDashboard"],
+  budget: ["BudgetDashboard", "CreateBudget", "BudgetReview"],
+  reconciliation: ["Reconciliation", "ActualsVariance", "Variance"],
+  expenses: ["Expenses", "AddExpense", "BulkImport"],
+  revenue: ["Revenue"],
+};
+
+const SNAPSHOT_BACKED_EXPORTS = new Set<ExportType>([
+  "rent_schedule",
+  "cam_calculation",
+  "budget",
+  "reconciliation",
+]);
 
 const FALLBACK_TABLE_MAP: Record<ExportType, string> = {
   rent_schedule: "rent_schedules",
@@ -595,6 +611,9 @@ Deno.serve(async (req: Request) => {
       throw new Error('Only "csv" format is currently supported');
     }
 
+    await assertPageAccess(req, orgId, EXPORT_PAGE_MAP[export_type as ExportType] ?? [], "read");
+    await assertPropertyAccess(req, property_id);
+
     const { data: property } = await supabaseAdmin
       .from("properties")
       .select("id, name")
@@ -611,7 +630,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: snapshot } = await supabaseAdmin
       .from("computation_snapshots")
-      .select("id, outputs, computed_at")
+      .select("id, outputs, computed_at, inputs")
       .eq("org_id", orgId)
       .eq("property_id", property_id)
       .eq("engine_type", engineType)
@@ -634,6 +653,12 @@ Deno.serve(async (req: Request) => {
     } else if (snapshot?.outputs) {
       rows = flattenOutputs(export_type as ExportType, snapshot.outputs);
     } else {
+      if (SNAPSHOT_BACKED_EXPORTS.has(export_type as ExportType)) {
+        throw new Error(
+          `No completed ${engineType} snapshot found for property="${property_id}" and fiscal_year=${fiscal_year}. Run the compute engine first.`,
+        );
+      }
+
       const fallbackTable = FALLBACK_TABLE_MAP[export_type as ExportType];
 
       const yearColumn = export_type === "budget" ? "budget_year" : "fiscal_year";
@@ -690,6 +715,9 @@ Deno.serve(async (req: Request) => {
       `# Fiscal Year: ${fiscal_year}`,
       `# Export Type: ${formatHeader(export_type)}`,
       `# Rows: ${rows.length}`,
+      `# Snapshot ID: ${escapeCSVValue(snapshot?.id ?? "")}`,
+      `# Snapshot Computed At: ${escapeCSVValue(snapshot?.computed_at ?? "")}`,
+      `# Engine Type: ${escapeCSVValue(engineType ?? "")}`,
       "",
     ];
 
