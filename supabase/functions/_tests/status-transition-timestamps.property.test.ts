@@ -20,12 +20,15 @@ type ProcessingStatus =
   | "uploaded"
   | "parsing"
   | "parsed"
+  | "pdf_parsed"
   | "validating"
   | "validated"
+  | "review_required"
+  | "approved"
   | "storing"
   | "stored"
   | "computing"
-  | "computed"
+  | "completed"
   | "failed";
 
 interface StatusRecord {
@@ -55,12 +58,15 @@ const statusArb = fc.constantFrom<ProcessingStatus>(
   "uploaded",
   "parsing",
   "parsed",
+  "pdf_parsed",
   "validating",
   "validated",
+  "review_required",
+  "approved",
   "storing",
   "stored",
   "computing",
-  "computed",
+  "completed",
   "failed",
 );
 

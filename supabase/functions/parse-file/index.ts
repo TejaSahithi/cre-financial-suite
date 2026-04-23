@@ -144,9 +144,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // Update status to 'parsing'
-    await setStatus(supabaseAdmin, file_id, "parsing", {
+    const { error: parsingStatusError } = await setStatus(supabaseAdmin, file_id, "parsing", {
       processing_started_at: new Date().toISOString(),
     });
+    if (parsingStatusError) {
+      throw new Error(`Failed to transition file to parsing: ${parsingStatusError.message}`);
+    }
 
     const log = createLogger(supabaseAdmin, file_id, orgId);
     await log.info("parse", `Started parsing file: ${fileRecord.file_name}`);

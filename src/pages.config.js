@@ -108,6 +108,7 @@ import RequestDemo from './pages/RequestDemo';
 import PaymentSuccess from './pages/PaymentSuccess';
 import FileHistoryPage from './pages/FileHistoryPage';
 import PipelineUpload from './pages/PipelineUpload';
+import LeaseExpenseClassification from './pages/LeaseExpenseClassification';
 
 import __Layout from './Layout.jsx';
 
@@ -174,6 +175,7 @@ export const PAGES = {
     "PaymentSuccess": PaymentSuccess,
     "FileHistoryPage": FileHistoryPage,
     "PipelineUpload": PipelineUpload,
+    "LeaseExpenseClassification": LeaseExpenseClassification,
 }
 
 export const pagesConfig = {

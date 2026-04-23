@@ -161,6 +161,8 @@ interface RowValidationResult {
   normalizedRow: Record<string, unknown>;
 }
 
+const VALIDATABLE_STATUSES = new Set(["parsed", "approved", "validated"]);
+
 function validateRow(
   row: Record<string, unknown>,
   rowIndex: number,
@@ -257,6 +259,19 @@ function coerceInvalidApprovedRow(
     }
   }
   return approvedRow;
+}
+
+function getRowsForValidation(fileRecord: Record<string, any>): Record<string, unknown>[] {
+  if (Array.isArray(fileRecord.reviewed_output?.final_records) && fileRecord.reviewed_output.final_records.length > 0) {
+    return fileRecord.reviewed_output.final_records;
+  }
+  if (Array.isArray(fileRecord.valid_data) && fileRecord.status === "approved" && fileRecord.valid_data.length > 0) {
+    return fileRecord.valid_data;
+  }
+  if (Array.isArray(fileRecord.parsed_data)) {
+    return fileRecord.parsed_data;
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -361,24 +376,40 @@ Deno.serve(async (req: Request) => {
     if (!REQUIRED_FIELDS[moduleType]) {
       throw new Error(`Unsupported module_type: ${moduleType}`);
     }
+
+    if (!VALIDATABLE_STATUSES.has(fileRecord.status)) {
+      if (fileRecord.status === "review_required") {
+        throw new Error(
+          `File ${file_id} is awaiting human review and cannot be validated until approved.`,
+        );
+      }
+      throw new Error(
+        `File status must be one of ${Array.from(VALIDATABLE_STATUSES).join(", ")} before validation. ` +
+        `Current status: ${fileRecord.status}`,
+      );
+    }
+
     const reviewerApproved =
       fileRecord.review_required === true &&
       fileRecord.review_status === "approved";
 
     // Update status to 'validating'
-    await setStatus(supabaseAdmin, file_id, "validating", {
+    const { error: validatingStatusError } = await setStatus(supabaseAdmin, file_id, "validating", {
       processing_started_at: new Date().toISOString(),
     });
+    if (validatingStatusError) {
+      throw new Error(`Failed to transition file to validating: ${validatingStatusError.message}`);
+    }
 
     const log = createLogger(supabaseAdmin, file_id, orgId);
     await log.info("validate", `Validating ${fileRecord.row_count ?? 0} rows for module: ${fileRecord.module_type}`);
 
     try {
       // Read parsed data
-      const parsedData: Record<string, unknown>[] = fileRecord.parsed_data || [];
+      const parsedData: Record<string, unknown>[] = getRowsForValidation(fileRecord);
 
       if (parsedData.length === 0) {
-        throw new Error("No parsed data found for this file");
+        throw new Error("No parsed or reviewed rows found for this file");
       }
 
       // -----------------------------------------------------------------------

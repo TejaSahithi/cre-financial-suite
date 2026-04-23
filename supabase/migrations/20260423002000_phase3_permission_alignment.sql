@@ -2,6 +2,8 @@
 -- page-permission evaluator, then use that aligned truth in the RLS policies
 -- that back write-capable pages.
 
+ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS enabled_modules TEXT[] DEFAULT '{}'::TEXT[];
+
 CREATE OR REPLACE FUNCTION public.normalize_page_access_level(raw_level TEXT)
 RETURNS TEXT AS $$
   SELECT CASE lower(COALESCE(raw_level, 'none'))

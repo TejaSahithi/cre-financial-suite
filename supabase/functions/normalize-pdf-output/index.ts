@@ -567,7 +567,10 @@ Deno.serve(async (req: Request) => {
 
     // Transition to 'validating' while the pipeline runs.
     // (pdf_parsed → validating is allowed in the FSM.)
-    await setStatus(supabaseAdmin, file_id, "validating");
+    const { error: validatingStatusError } = await setStatus(supabaseAdmin, file_id, "validating");
+    if (validatingStatusError) {
+      throw new Error(`Failed to transition file to validating: ${validatingStatusError.message}`);
+    }
 
     try {
       // Run the canonical extraction pipeline.

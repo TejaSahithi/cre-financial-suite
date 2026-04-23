@@ -5,11 +5,13 @@ import { supabase } from "@/services/supabaseClient";
  * Statuses that indicate work is still in progress — keep polling.
  */
 const ACTIVE_STATUSES = new Set([
-  "uploading",
+  "uploaded",
   "parsing",
   "pdf_parsed",   // PDF extracted, normalization pending
   "validating",
   "storing",
+  "approved",
+  "computing",
 ]);
 
 /**
@@ -17,9 +19,10 @@ const ACTIVE_STATUSES = new Set([
  */
 const TERMINAL_STATUSES = new Set([
   "parsed",
+  "review_required",
   "validated",
   "stored",
-  "processed",
+  "completed",
   "failed",
 ]);
 
@@ -76,7 +79,13 @@ export default function useFileStatus(fileId) {
       // Apply response fields
       if (data) {
         setStatus(data.status ?? null);
-        setProgress(typeof data.progress === "number" ? data.progress : 0);
+        setProgress(
+          typeof data.progress_percentage === "number"
+            ? data.progress_percentage
+            : typeof data.progress === "number"
+              ? data.progress
+              : 0,
+        );
         setErrors(Array.isArray(data.validation_errors) ? data.validation_errors : []);
         setValidCount(typeof data.valid_count === "number" ? data.valid_count : 0);
         setErrorCount(typeof data.error_count === "number" ? data.error_count : 0);

@@ -234,6 +234,44 @@ function mapRow(
   }
 }
 
+function applyFileScope(
+  row: Record<string, any>,
+  fileRecord: Record<string, any>,
+): Record<string, any> {
+  return {
+    ...row,
+    property_id: row.property_id ?? fileRecord.property_id ?? null,
+    building_id: row.building_id ?? fileRecord.building_id ?? null,
+    unit_id: row.unit_id ?? fileRecord.unit_id ?? null,
+  };
+}
+
+function buildStoreResult(
+  fileId: string,
+  tableName: string,
+  insertedIds: string[],
+  computeTriggered: boolean,
+  alreadyStored = false,
+) {
+  return {
+    file_id: fileId,
+    processing_status: "stored",
+    inserted_count: insertedIds.length,
+    inserted_ids: insertedIds,
+    table: tableName,
+    compute_triggered: computeTriggered,
+    already_stored: alreadyStored,
+  };
+}
+
+function getExistingStoreResult(fileRecord: Record<string, any>) {
+  const reviewedStoreResult = fileRecord.reviewed_output?.store_result;
+  if (reviewedStoreResult && typeof reviewedStoreResult === "object") {
+    return reviewedStoreResult;
+  }
+  return null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -272,6 +310,23 @@ Deno.serve(async (req: Request) => {
     // 'approved' after a human clears it via review-approve. Both are valid.
     // Anything else (especially 'review_required') blocks here.
     const storableStatuses = new Set(["validated", "approved"]);
+    const alreadyStoredStatuses = new Set(["stored", "computing", "completed"]);
+    if (alreadyStoredStatuses.has(fileRecord.status)) {
+      const existingResult = getExistingStoreResult(fileRecord);
+      if (existingResult) {
+        return new Response(
+          JSON.stringify({
+            error: false,
+            ...existingResult,
+            already_stored: true,
+          }),
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+    }
+
     if (!storableStatuses.has(fileRecord.status)) {
       if (fileRecord.status === "review_required") {
         throw new Error(
@@ -299,7 +354,10 @@ Deno.serve(async (req: Request) => {
     }
 
     // 5. Update status to 'storing'
-    await setStatus(supabaseAdmin, file_id, "storing");
+    const { error: storingStatusError } = await setStatus(supabaseAdmin, file_id, "storing");
+    if (storingStatusError) {
+      throw new Error(`Failed to transition file to storing: ${storingStatusError.message}`);
+    }
 
     const log = createLogger(supabaseAdmin, file_id, orgId);
     await log.info("store", `Storing ${fileRecord.valid_count ?? 0} validated rows into ${fileRecord.module_type}`);
@@ -325,9 +383,12 @@ Deno.serve(async (req: Request) => {
       // 7. Map each row to the correct table columns.
       // If a row is missing property_id but the file has one, inject it.
       const mappedRows = validData.map((row) => {
-        const enriched = filePropertyId && !row.property_id
-          ? { ...row, property_id: filePropertyId }
-          : row;
+        const enriched = applyFileScope(
+          filePropertyId && !row.property_id
+            ? { ...row, property_id: filePropertyId }
+            : row,
+          fileRecord,
+        );
         return mapRow(enriched, moduleType, orgId, userEmail);
       });
 
@@ -343,7 +404,9 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const insertedCount = insertedData?.length ?? mappedRows.length;
+      const insertedIds = (insertedData ?? []).map((row: any) => row.id).filter(Boolean);
+      const insertedCount = insertedIds.length || mappedRows.length;
+      const storeResult = buildStoreResult(file_id, tableName, insertedIds, true);
 
       // 9. Create audit_logs entry for the batch
       await supabaseAdmin.from("audit_logs").insert({
@@ -355,13 +418,17 @@ Deno.serve(async (req: Request) => {
         old_value: null,
         new_value: JSON.stringify({ inserted_count: insertedCount, table: tableName }),
         user_email: userEmail,
-        property_id: null,
+        property_id: fileRecord.property_id ?? null,
         timestamp: new Date().toISOString(),
       });
 
       // 10. On success: update status to 'stored'
       await setStatus(supabaseAdmin, file_id, "stored", {
         processing_completed_at: new Date().toISOString(),
+        reviewed_output: {
+          ...(fileRecord.reviewed_output ?? {}),
+          store_result: storeResult,
+        },
       });
 
       await log.info("store", `Stored ${insertedCount} rows into ${tableName}`, { inserted_count: insertedCount, table: tableName });
@@ -383,12 +450,7 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           error: false,
-          file_id,
-          processing_status: "stored",
-          inserted_count: insertedCount,
-          inserted_ids: (insertedData ?? []).map((row: any) => row.id).filter(Boolean),
-          table: tableName,
-          compute_triggered: true,
+          ...storeResult,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

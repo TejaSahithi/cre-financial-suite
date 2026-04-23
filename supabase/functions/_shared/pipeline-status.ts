@@ -45,23 +45,23 @@ export const STATUS_PROGRESS: Record<PipelineStatus, number> = {
 };
 
 /** Valid forward transitions — prevents accidental status regression */
-const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[]>> = {
-  uploaded:         ["parsing", "failed"],
-  parsing:          ["parsed", "pdf_parsed", "failed"],
+export const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[]>> = {
+  uploaded:         ["parsing", "review_required", "failed"],
+  parsing:          ["parsed", "pdf_parsed", "review_required", "failed"],
   parsed:           ["validating", "failed"],
-  pdf_parsed:       ["validating", "failed"],
+  pdf_parsed:       ["validating", "review_required", "failed"],
   validating:       ["validated", "failed"],
   // After validation we either park for review or go straight to storing.
   validated:        ["validating", "review_required", "storing", "failed"],
   // Reviewer either approves (→ approved → storing) or rejects (→ failed).
-  review_required:  ["approved", "failed"],
+  review_required:  ["parsing", "approved", "failed"],
   approved:         ["validating", "storing", "failed"],
   storing:          ["stored", "failed"],
   stored:           ["computing", "failed"],
   computing:        ["completed", "failed"],
   // terminal states — no further transitions
   completed:        [],
-  failed:           [],
+  failed:           ["parsing", "review_required"],
 };
 
 const REVIEW_PIPELINE_COLUMNS = new Set([
@@ -107,6 +107,26 @@ function buildNoRowUpdatedError(fileId: string, status: string) {
   return error;
 }
 
+function buildInvalidTransitionError(fileId: string, fromStatus: PipelineStatus, toStatus: PipelineStatus) {
+  const allowed = ALLOWED_TRANSITIONS[fromStatus] ?? [];
+  const error: any = new Error(
+    `Invalid uploaded_files status transition for file ${fileId}: ${fromStatus} -> ${toStatus}. ` +
+    `Allowed: ${allowed.length > 0 ? allowed.join(", ") : "(none)"}`,
+  );
+  error.code = "INVALID_STATUS_TRANSITION";
+  error.details = { fromStatus, toStatus, allowed };
+  return error;
+}
+
+export function isAllowedTransition(
+  fromStatus: PipelineStatus | null | undefined,
+  toStatus: PipelineStatus,
+): boolean {
+  if (!fromStatus) return true;
+  if (fromStatus === toStatus) return true;
+  return (ALLOWED_TRANSITIONS[fromStatus] ?? []).includes(toStatus);
+}
+
 /**
  * Update uploaded_files.status and related metadata.
  * Returns the Supabase update error (if any) — callers decide whether to throw.
@@ -119,6 +139,29 @@ export async function setStatus(
 ): Promise<{ error: any }> {
   const now = new Date().toISOString();
   const progress = STATUS_PROGRESS[status];
+
+  const currentLookup = await supabaseAdmin
+    .from("uploaded_files")
+    .select("id, status, progress_percentage")
+    .eq("id", fileId)
+    .maybeSingle();
+
+  if (currentLookup.error) {
+    console.error(`[pipeline-status] Could not read current status for file ${fileId}:`, currentLookup.error);
+    return { error: currentLookup.error };
+  }
+
+  const currentRecord = currentLookup.data;
+  if (!currentRecord) {
+    return { error: buildNoRowUpdatedError(fileId, status) };
+  }
+
+  const currentStatus = currentRecord.status as PipelineStatus | null;
+  if (!isAllowedTransition(currentStatus, status)) {
+    const error = buildInvalidTransitionError(fileId, currentStatus as PipelineStatus, status);
+    console.error(`[pipeline-status] Rejected invalid transition for file ${fileId}:`, error.details);
+    return { error };
+  }
 
   const patch: Record<string, unknown> = {
     status,
