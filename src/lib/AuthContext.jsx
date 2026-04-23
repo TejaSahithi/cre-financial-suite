@@ -12,6 +12,7 @@ import {
   resetProfileCache,
 } from '@/services/auth';
 import { clearCache, resetOrgIdCache } from '@/services/api';
+import { clearStoredActingOrgId } from '@/lib/actingOrg';
 
 const AuthContext = createContext();
 
@@ -89,6 +90,7 @@ export const AuthProvider = ({ children }) => {
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsAuthenticated(false);
+        clearStoredActingOrgId();
         resetProfileCache();
         resetOrgIdCache();
         clearCache();
@@ -126,6 +128,7 @@ export const AuthProvider = ({ children }) => {
   const logout = (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
+    clearStoredActingOrgId();
     resetProfileCache();
     resetOrgIdCache();
     clearCache();

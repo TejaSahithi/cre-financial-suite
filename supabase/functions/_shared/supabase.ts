@@ -81,7 +81,7 @@ export async function getUserOrgId(
 ): Promise<string> {
   const { data: memberships, error } = await supabaseAdmin
     .from('memberships')
-    .select('org_id, role')
+    .select('org_id, role, status')
     .eq('user_id', userId);
 
   if (error) {
@@ -89,13 +89,15 @@ export async function getUserOrgId(
   }
 
   const rows = Array.isArray(memberships) ? memberships : [];
-  const withOrg = rows.find((m: any) => m.org_id != null);
-  if (withOrg) return withOrg.org_id as string;
-
   const isSuperAdmin = rows.some((m: any) => m.role === 'super_admin');
+  const actingOrgId = extractActingOrgId(req);
+  const activeMemberships = rows.filter((m: any) => {
+    const status = m?.status ?? 'active';
+    return m?.org_id != null && ['active', 'owner'].includes(status);
+  });
+  const activeOrgIds = [...new Set(activeMemberships.map((m: any) => m.org_id as string))];
 
   if (isSuperAdmin) {
-    const actingOrgId = extractActingOrgId(req);
     if (!actingOrgId) {
       throw new Error(
         'Super-admin request is missing the `x-acting-org-id` header. ' +
@@ -117,5 +119,23 @@ export async function getUserOrgId(
     return org.id as string;
   }
 
-  throw new Error('User has no organization membership');
+  if (actingOrgId) {
+    const matchingMembership = activeMemberships.find((m: any) => m.org_id === actingOrgId);
+    if (!matchingMembership) {
+      throw new Error('Requested acting organization is not available to this user');
+    }
+    return actingOrgId;
+  }
+
+  if (activeOrgIds.length === 1) {
+    return activeOrgIds[0];
+  }
+
+  if (activeOrgIds.length > 1) {
+    throw new Error(
+      'User belongs to multiple organizations. Provide `x-acting-org-id` to select the target organization explicitly.'
+    );
+  }
+
+  throw new Error('User has no active organization membership');
 }

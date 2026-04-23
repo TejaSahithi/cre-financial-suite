@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/services/supabaseClient";
 import { acceptInvite } from "@/services/auth";
+import { setStoredActingOrgId } from "@/lib/actingOrg";
 import { toast } from "sonner";
 
 const STEPS = ["Verify Invite", "Set Password", "Your Profile", "All Set!"];
@@ -191,11 +192,14 @@ export default function AcceptInvite() {
 
     setSaving(true);
     try {
-      await acceptInvite({
+      const result = await acceptInvite({
         full_name: fullName || undefined,
         phone: phone || undefined,
         org_id: session.user.user_metadata?.org_id || undefined,
       });
+      if (result?.primary_org_id) {
+        setStoredActingOrgId(result.primary_org_id);
+      }
       setStep(3);
     } catch (err) {
       toast.error(`Failed to save profile: ${err.message || "Unknown error"}`);

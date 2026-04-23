@@ -60,12 +60,48 @@ Deno.serve(async (req: Request) => {
     }
 
     const invitedMemberships = (memberships || []).filter((membership: any) => membership?.status === "invited");
-    const activeMemberships = (memberships || []).filter((membership: any) => membership?.status === "active");
     const invitedOrgIds = [...new Set(invitedMemberships.map((membership: any) => membership?.org_id).filter(Boolean))];
-    const fallbackOrgIds = [...new Set(activeMemberships.map((membership: any) => membership?.org_id).filter(Boolean))];
-    const targetOrgIds = requestedOrgId
-      ? [requestedOrgId]
-      : (invitedOrgIds.length > 0 ? invitedOrgIds : fallbackOrgIds);
+    if (invitedOrgIds.length === 0) {
+      return new Response(JSON.stringify({ error: "No pending invitation found for this account" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (requestedOrgId && !invitedOrgIds.includes(requestedOrgId)) {
+      return new Response(JSON.stringify({ error: "The requested organization does not have a pending invite for this account" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const targetOrgIds = requestedOrgId ? [requestedOrgId] : invitedOrgIds;
+
+    const membershipPayload: Record<string, unknown> = {
+      status: "active",
+      updated_at: now,
+    };
+    if (phone) membershipPayload.phone = phone;
+
+    const { data: activatedMemberships, error: membershipError } = await adminClient
+      .from("memberships")
+      .update(membershipPayload)
+      .eq("user_id", user.id)
+      .in("org_id", targetOrgIds)
+      .eq("status", "invited")
+      .select("org_id");
+
+    if (membershipError) {
+      throw membershipError;
+    }
+
+    const activatedOrgIds = [...new Set((activatedMemberships || []).map((membership: any) => membership?.org_id).filter(Boolean))];
+    if (activatedOrgIds.length === 0) {
+      return new Response(JSON.stringify({ error: "No invited memberships were activated" }), {
+        status: 409,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const profilePayload: Record<string, unknown> = {
       id: user.id,
@@ -88,42 +124,24 @@ Deno.serve(async (req: Request) => {
       throw profileError;
     }
 
-    if (targetOrgIds.length > 0) {
-      const membershipPayload: Record<string, unknown> = {
-        status: "active",
-        updated_at: now,
-      };
-      if (phone) membershipPayload.phone = phone;
+    if (user.email) {
+      const { error: invitationError } = await adminClient
+        .from("invitations")
+        .update({ status: "accepted", updated_at: now })
+        .eq("email", user.email)
+        .in("org_id", activatedOrgIds)
+        .in("status", ["pending", "pending_approval"]);
 
-      const { error: membershipError } = await adminClient
-        .from("memberships")
-        .update(membershipPayload)
-        .eq("user_id", user.id)
-        .in("org_id", targetOrgIds)
-        .in("status", ["invited", "active"]);
-
-      if (membershipError) {
-        throw membershipError;
-      }
-
-      if (user.email) {
-        const { error: invitationError } = await adminClient
-          .from("invitations")
-          .update({ status: "accepted", updated_at: now })
-          .eq("email", user.email)
-          .in("org_id", targetOrgIds)
-          .in("status", ["pending", "pending_approval"]);
-
-        if (invitationError) {
-          console.warn("[accept-invite] invitation update warning:", invitationError.message);
-        }
+      if (invitationError) {
+        console.warn("[accept-invite] invitation update warning:", invitationError.message);
       }
     }
 
     return new Response(JSON.stringify({
       success: true,
-      org_ids: targetOrgIds,
-      activated_memberships: invitedMemberships.length,
+      org_ids: activatedOrgIds,
+      primary_org_id: activatedOrgIds[0] || null,
+      activated_memberships: activatedOrgIds.length,
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
