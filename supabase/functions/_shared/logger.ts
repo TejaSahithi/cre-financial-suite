@@ -25,6 +25,30 @@ export function createLogger(
   fileId: string,
   orgId: string,
 ): PipelineLogger {
+  function normalizeMetadata(input: Record<string, unknown> = {}): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(input || {})) {
+      if (value instanceof Error) {
+        out[key] = {
+          name: value.name,
+          message: value.message,
+          stack: value.stack ?? null,
+        };
+        continue;
+      }
+
+      if (typeof value === "bigint") {
+        out[key] = String(value);
+        continue;
+      }
+
+      out[key] = value;
+    }
+
+    return out;
+  }
+
   async function write(
     level: LogLevel,
     step: string,
@@ -32,18 +56,28 @@ export function createLogger(
     metadata: Record<string, unknown> = {},
   ): Promise<void> {
     try {
-      await supabaseAdmin.from("pipeline_logs").insert({
+      const payload = {
         file_id: fileId,
         org_id: orgId,
         step,
         level,
         message,
-        metadata,
+        metadata: normalizeMetadata(metadata),
         timestamp: new Date().toISOString(),
-      });
+      };
+
+      const { error } = await supabaseAdmin.from("pipeline_logs").insert(payload);
+      if (error) throw error;
     } catch (err) {
       // Never let logging break the pipeline
-      console.warn(`[logger] Failed to write log (${step}/${level}):`, err?.message);
+      console.warn(
+        `[logger] Failed to write log (${step}/${level}) for file ${fileId} in org ${orgId}:`,
+        {
+          error: err?.message || String(err),
+          message,
+          metadata: normalizeMetadata(metadata),
+        },
+      );
     }
   }
 
