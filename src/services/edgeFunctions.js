@@ -26,6 +26,11 @@ export async function getFreshAccessToken() {
   return accessToken;
 }
 
+async function getActingOrgHeaders() {
+  const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null);
+  return actingOrgId ? { "x-acting-org-id": actingOrgId } : {};
+}
+
 export async function invokeEdgeFunction(fnName, body) {
   const accessToken = await getFreshAccessToken();
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
@@ -35,10 +40,7 @@ export async function invokeEdgeFunction(fnName, body) {
   // tenant. If we have an active org context (membership or app_metadata),
   // forward it; otherwise the function will fail loudly and ask the caller to
   // pick an organization first.
-  const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null);
-  if (actingOrgId) {
-    headers["x-acting-org-id"] = actingOrgId;
-  }
+  Object.assign(headers, await getActingOrgHeaders());
 
   const { data, error } = await supabase.functions.invoke(fnName, { body, headers });
 
@@ -78,11 +80,14 @@ export async function invokeEdgeFunctionFormData(fnName, formData) {
     throw new Error("Missing Supabase configuration. Please check environment variables.");
   }
 
+  const actingOrgHeaders = await getActingOrgHeaders();
+
   const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       apikey: supabaseAnonKey,
+      ...actingOrgHeaders,
     },
     body: formData,
   });

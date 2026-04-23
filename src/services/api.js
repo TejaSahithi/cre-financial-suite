@@ -13,6 +13,8 @@ import { resolveTableName, ORG_EXEMPT_TABLES } from '@/types';
 import { logAudit } from '@/services/audit';
 import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
+import { getStoredActingOrgId } from '@/lib/actingOrg';
+import { resolveReadableOrgIdForUser, resolveWritableOrgIdForUser } from '@/lib/orgUtils';
 import { assertCanWritePage, canWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
 
 // ─── In-memory store (used when Supabase is unavailable) ───────────────
@@ -34,8 +36,7 @@ function seedMemoryStore() {
   }
   console.log('[api] In-memory store seeded with demo data');
 }
-// Cached so we don't call auth.me() on every query.
-let _cachedOrgId = undefined; // undefined = not resolved yet
+let _cachedOrgResolution = null;
 
 /**
  * Get the current user's org_id for multi-tenant filtering.
@@ -44,36 +45,40 @@ let _cachedOrgId = undefined; // undefined = not resolved yet
  * not from email-based lookups. Super-admins get null (see all). Regular users
  * get their org_id from their primary membership. '__none__' means no org found.
  */
-export async function getCurrentOrgId() {
-  if (_cachedOrgId !== undefined) return _cachedOrgId;
+export async function getCurrentOrgId(options = {}) {
   try {
     const { me } = await import('@/services/auth');
     const user = await me();
 
     if (!user) {
-      _cachedOrgId = '__none__';
-      return _cachedOrgId;
+      _cachedOrgResolution = { key: 'anon', orgId: '__none__' };
+      return '__none__';
     }
 
-    // Super-admin: role mapped to 'admin', _raw_role is 'super_admin'
-    if (user.role === 'admin' || user._raw_role === 'super_admin') {
-      _cachedOrgId = null; // null = no filter, sees all data
-      return _cachedOrgId;
+    const cacheKey = [
+      user.id,
+      user._raw_role || user.role || 'unknown',
+      user.org_id || '__none__',
+      getStoredActingOrgId() || '__none__',
+      options.allowSuperAdminGlobal === true ? 'global' : 'scoped',
+    ].join(':');
+
+    if (_cachedOrgResolution?.key === cacheKey) {
+      return _cachedOrgResolution.orgId;
     }
 
-    // org_id is already resolved from memberships in auth.js — use it directly
-    _cachedOrgId = user.org_id || '__none__';
-    return _cachedOrgId;
+    const orgId = resolveReadableOrgIdForUser(user, {
+      allowSuperAdminGlobal: options.allowSuperAdminGlobal === true,
+    });
+    _cachedOrgResolution = { key: cacheKey, orgId };
+    return orgId;
   } catch {
-    _cachedOrgId = '__none__';
-    return _cachedOrgId;
+    _cachedOrgResolution = { key: 'error', orgId: '__none__' };
+    return '__none__';
   }
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
-// Super-admin and org-admin keep full visibility within their org by default.
-// Scoped portfolio/property restrictions are applied to non-admin org users.
-const ACCESS_BYPASS_ROLES = new Set(['super_admin', 'org_admin']);
 const WRITE_PERMISSION_EXEMPT_ENTITIES = new Set(['AccessRequest', 'DemoRequest', 'AuditLog', 'Notification']);
 const ENTITY_WRITE_PAGES = {
   Portfolio: ['Portfolios'],
@@ -114,16 +119,25 @@ async function getCurrentCacheScopeKey() {
   try {
     const { me } = await import('@/services/auth');
     const user = await me();
+    const orgId = await getCurrentOrgId();
 
     if (!user) return 'anon';
-    if (user.role === 'admin' || user._raw_role === 'super_admin') {
-      return `super_admin:${user.id}`;
-    }
-
-    return `user:${user.id}:org:${user.org_id || '__none__'}`;
+    return `user:${user.id}:role:${user._raw_role || user.role || 'unknown'}:org:${orgId === null ? '__all__' : (orgId || '__none__')}:acting:${getStoredActingOrgId() || '__none__'}`;
   } catch {
     return 'anon';
   }
+}
+
+function buildEmptyAccessScope(userId, orgId) {
+  return {
+    unrestricted: false,
+    userId,
+    orgId,
+    accessiblePortfolioIds: new Set(),
+    accessiblePropertyIds: new Set(),
+    accessibleTenantIds: new Set(),
+    accessibleTenantNames: new Set(),
+  };
 }
 
 async function getCurrentAccessScope(orgId) {
@@ -134,31 +148,35 @@ async function getCurrentAccessScope(orgId) {
     const user = await me();
 
     if (!user) return null;
-    if (user.role === 'admin' || ACCESS_BYPASS_ROLES.has(user._raw_role)) {
+    if (user.role === 'admin' || user._raw_role === 'super_admin') {
       return { unrestricted: true, userId: user.id, orgId };
     }
 
     const memberships = Array.isArray(user.memberships) ? user.memberships : [];
-    const activeMembership = memberships.find((membership) => membership?.org_id === orgId) || memberships[0];
+    const activeMembership = memberships.find((membership) =>
+      membership?.org_id === orgId && ['active', 'owner'].includes(membership?.status || 'active')
+    );
+    const cacheKey = `${ACCESS_CACHE_PREFIX}:${user.id}:${orgId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
+    if (!activeMembership) {
+      const emptyScope = buildEmptyAccessScope(user.id, orgId);
+      setCached(cacheKey, emptyScope);
+      return emptyScope;
+    }
+
+    if (activeMembership.role === 'org_admin') {
+      return { unrestricted: true, userId: user.id, orgId };
+    }
+
     const scopeAccess = activeMembership?.capabilities?.scope_access || {};
     if (scopeAccess.all_portfolios || scopeAccess.all_properties) {
       return { unrestricted: true, userId: user.id, orgId };
     }
 
-    const cacheKey = `${ACCESS_CACHE_PREFIX}:${user.id}:${orgId}`;
-    const cached = getCached(cacheKey);
-    if (cached) return cached;
-
     if (!supabase) {
-      const emptyScope = {
-        unrestricted: false,
-        userId: user.id,
-        orgId,
-        accessiblePortfolioIds: new Set(),
-        accessiblePropertyIds: new Set(),
-        accessibleTenantIds: new Set(),
-        accessibleTenantNames: new Set(),
-      };
+      const emptyScope = buildEmptyAccessScope(user.id, orgId);
       setCached(cacheKey, emptyScope);
       return emptyScope;
     }
@@ -287,7 +305,7 @@ function filterRecordsByAccessScope(entityName, records, accessScope) {
 
 /** Reset the cached org ID (e.g. after login/logout). */
 export function resetOrgIdCache() {
-  _cachedOrgId = undefined;
+  _cachedOrgResolution = null;
 }
 
 // ─── Simple TTL cache ──────────────────────────────────────────────────
@@ -311,7 +329,7 @@ function setCached(key, data) {
 /** Invalidate cache entries for a given entity. */
 function invalidateEntity(entityName) {
   for (const key of queryCache.keys()) {
-    if (key.startsWith(`${entityName}:`)) queryCache.delete(key);
+    if (key.includes(`:${entityName}:`)) queryCache.delete(key);
   }
 }
 
@@ -370,6 +388,11 @@ function isMissingColumnError(err) {
     err?.code === '42703' ||
     !!extractMissingColumn(err)
   );
+}
+
+function shouldStripMissingColumn(operation) {
+  if (IS_DEV_BUILD) return true;
+  throw new Error(`[api] ${operation} encountered a schema mismatch. Update the database schema instead of silently stripping fields.`);
 }
 
 // ─── Per-entity column allow-lists ─────────────────────────────────────
@@ -475,6 +498,25 @@ const ALLOWED_COLUMNS = {
     'normal_balance', 'is_recoverable', 'notes',
   ]),
 };
+
+async function getCurrentUserForCrud() {
+  const { me } = await import('@/services/auth');
+  return me();
+}
+
+async function resolveMutationOrgId(entityName, explicitOrgId = null) {
+  const user = await getCurrentUserForCrud();
+  const resolvedOrgId = resolveWritableOrgIdForUser(user, { currentOrgId: explicitOrgId });
+  if (resolvedOrgId) return resolvedOrgId;
+
+  if (user?.role === 'admin' || user?._raw_role === 'super_admin') {
+    throw new Error(
+      `${entityName} requires an explicit org_id. Super-admins must select an organization before writing data.`
+    );
+  }
+
+  throw new Error(`${entityName} requires a valid active organization context before writing data.`);
+}
 
 // ─── Generic Entity Service Factory ────────────────────────────────────
 /**
@@ -625,11 +667,12 @@ export function createEntityService(entityName) {
             return null;
           }
 
-          const { data, error } = await supabase
-            .from(tableName)
-            .select('*')
-            .eq('id', id)
-            .single();
+          let query = supabase.from(tableName).select('*').eq('id', id);
+          if (orgId && orgId !== '__none__') {
+            query = query.eq('org_id', orgId);
+          }
+
+          const { data, error } = await query.single();
           if (error) {
             if (error.code === 'PGRST116') return null; // Not found
             throw error;
@@ -654,7 +697,7 @@ export function createEntityService(entityName) {
           return record || null;
         }
         console.error(`[api] ${entityName}.get() error:`, err);
-        return null;
+        throw err;
       }
     },
 
@@ -750,7 +793,7 @@ export function createEntityService(entityName) {
           return items;
         }
         console.error(`[api] ${entityName}.list() error:`, err);
-        return [];
+        throw err;
       }
     },
 
@@ -818,7 +861,7 @@ export function createEntityService(entityName) {
           );
         }
         console.error(`[api] ${entityName}.filter() error:`, err);
-        return [];
+        throw err;
       }
     },
 
@@ -847,25 +890,8 @@ export function createEntityService(entityName) {
         // removed — super-admins must now pass `org_id` explicitly in the
         // create payload, or act with an active org in their app_metadata /
         // membership. Anything else is rejected.
-        if (!isOrgExempt && !enriched.org_id) {
-          const orgId = await getCurrentOrgId();
-          if (orgId && orgId !== '__none__') {
-            enriched.org_id = orgId;
-          } else if (orgId === null) {
-            // Super-admin with no active org context. Try to resolve from
-            // their own app_metadata / membership, but never auto-pick a
-            // random tenant.
-            const { resolveWritableOrgId } = await import('@/lib/orgUtils');
-            const resolvedOrgId = await resolveWritableOrgId(null);
-            if (resolvedOrgId) {
-              enriched.org_id = resolvedOrgId;
-            } else {
-              throw new Error(
-                `${entityName}.create() requires an explicit org_id. ` +
-                `Super-admins must select an organization before writing data.`
-              );
-            }
-          }
+        if (!isOrgExempt) {
+          enriched.org_id = await resolveMutationOrgId(`${entityName}.create()`, enriched.org_id);
         }
 
         if (supabase) {
@@ -891,6 +917,7 @@ export function createEntityService(entityName) {
               throw error;
             }
 
+            shouldStripMissingColumn(`${entityName}.create()`);
             strippedColumns.push(missingColumn);
             delete payload[missingColumn];
           }
@@ -963,6 +990,10 @@ export function createEntityService(entityName) {
           updated_at: now,
         };
 
+        if (!isOrgExempt) {
+          enriched.org_id = await resolveMutationOrgId(`${entityName}.upsert()`, enriched.org_id);
+        }
+
         if (supabase) {
           // For public forms (e.g. access_requests), RLS prevents public UPDATE.
           // Using .upsert() natively causes Postgres to demand UPDATE privileges.
@@ -988,6 +1019,7 @@ export function createEntityService(entityName) {
             entityType: entityName,
             entityId: finalRecord?.id || 'upserted',
             action: 'upsert',
+            orgId: finalRecord?.org_id || enriched.org_id || null,
           }).catch(() => {});
 
           invalidateEntity(entityName);
@@ -1000,7 +1032,7 @@ export function createEntityService(entityName) {
       } catch (err) {
         if (isPagePermissionError(err)) throw err;
         console.error(`[api] ${entityName}.upsert() error:`, err);
-        return { id: `error-${Date.now()}`, ...data };
+        throw err;
       }
     },
 
@@ -1021,8 +1053,11 @@ export function createEntityService(entityName) {
         };
 
         if (supabase) {
-          const orgId = isOrgExempt ? null : await getCurrentOrgId();
+          const orgId = isOrgExempt ? null : await resolveMutationOrgId(`${entityName}.update()`, enriched.org_id);
           let payload = { ...enriched };
+          if (!isOrgExempt) {
+            payload.org_id = orgId;
+          }
           const strippedColumns = [];
           let updated = null;
 
@@ -1044,6 +1079,7 @@ export function createEntityService(entityName) {
               throw error;
             }
 
+            shouldStripMissingColumn(`${entityName}.update()`);
             strippedColumns.push(missingColumn);
             delete payload[missingColumn];
           }
@@ -1096,7 +1132,7 @@ export function createEntityService(entityName) {
           return idx !== -1 ? store[idx] : { id, ...enriched };
         }
         console.error(`[api] ${entityName}.update() error:`, err);
-        return { id, ...data };
+        throw err;
       }
     },
 
@@ -1110,7 +1146,7 @@ export function createEntityService(entityName) {
       try {
         await assertCurrentUserCanWrite(entityName);
         if (supabase) {
-          const orgId = isOrgExempt ? null : await getCurrentOrgId();
+          const orgId = isOrgExempt ? null : await resolveMutationOrgId(`${entityName}.delete()`);
           let query = supabase.from(tableName).delete().eq('id', id);
           
           if (orgId && orgId !== '__none__') {
@@ -1157,7 +1193,7 @@ export function createEntityService(entityName) {
           return true;
         }
         console.error(`[api] ${entityName}.delete() error:`, err);
-        return false;
+        throw err;
       }
     },
   };
