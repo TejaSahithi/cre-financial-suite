@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
-import { saveSnapshot } from "../_shared/snapshot.ts";
+import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
+import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
 /**
  * Compute Lease Edge Function
@@ -227,6 +227,9 @@ Deno.serve(async (req: Request) => {
       throw new Error("Request must include lease_id or property_id");
     }
 
+    await assertPageAccess(req, orgId, ["Leases", "LeaseUpload", "LeaseReview", "RentProjection"], "write");
+    await assertPropertyAccess(req, property_id ?? null);
+
     // ----------------------------------------------------------------
     // 1. Fetch lease(s) scoped to the user's organization
     // ----------------------------------------------------------------
@@ -302,61 +305,6 @@ Deno.serve(async (req: Request) => {
       const result = computeLeaseSchedule(lease, leaseConf, propConf);
       results.push(result);
 
-      // ----------------------------------------------------------------
-      // 5. Store snapshot for successfully computed leases
-      // ----------------------------------------------------------------
-      if (!result.error) {
-        const inputPayload = {
-          lease_id: lease.id,
-          lease: {
-            tenant_name: lease.tenant_name,
-            start_date: lease.start_date,
-            end_date: lease.end_date,
-            monthly_rent: lease.monthly_rent,
-            square_footage: lease.square_footage,
-            lease_type: lease.lease_type,
-            status: lease.status,
-          },
-          lease_config: leaseConf,
-          property_config: propConf
-            ? {
-                cam_calculation_method: propConf.cam_calculation_method,
-                expense_recovery_method: propConf.expense_recovery_method,
-                config_values: propConf.config_values,
-              }
-            : null,
-        };
-
-        // Deterministic hash of inputs for idempotency
-        const encoder = new TextEncoder();
-        const hashBuffer = await crypto.subtle.digest(
-          "SHA-256",
-          encoder.encode(JSON.stringify(inputPayload))
-        );
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const inputHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-        const startDate = new Date(lease.start_date + "T00:00:00Z");
-        const fiscalYear = startDate.getUTCFullYear();
-        const month = startDate.getUTCMonth() + 1;
-
-        await supabaseAdmin.from("computation_snapshots").insert({
-          org_id: orgId,
-          property_id: lease.property_id || null,
-          engine_type: "lease",
-          fiscal_year: fiscalYear,
-          month: month,
-          input_hash: inputHash,
-          inputs: inputPayload,
-          outputs: {
-            rent_schedule: result.rent_schedule,
-            summary: result.summary,
-          },
-          status: "completed",
-          computed_at: new Date().toISOString(),
-          computed_by: user.email ?? user.id,
-        });
-      }
     }
 
     // ----------------------------------------------------------------
@@ -491,14 +439,60 @@ Deno.serve(async (req: Request) => {
           },
         };
 
-        // Save property-level snapshot (preserves history)
+        const snapshotInputs = {
+          property_id,
+          fiscal_year: fiscalYear,
+          lease_count: leases.length,
+          _compute: {
+            page_scope: ["Leases", "LeaseUpload", "LeaseReview", "RentProjection"],
+            source_tables: ["leases", "lease_config", "property_config"],
+            source_row_ids: {
+              leases: leases.map((lease) => lease.id).sort(),
+              lease_configs: Object.keys(leaseConfigMap).sort(),
+              property_configs: Object.keys(propertyConfigMap).sort(),
+            },
+            source_counts: {
+              leases: leases.length,
+              lease_configs: Object.keys(leaseConfigMap).length,
+              property_configs: Object.keys(propertyConfigMap).length,
+            },
+            trigger_type: req.headers.get("x-compute-trigger") ?? "manual",
+            source_file_id: req.headers.get("x-source-file-id") ?? null,
+          },
+        };
+
+        const existingSnapshot = await findMatchingCompletedSnapshot(supabaseAdmin, {
+          org_id: orgId,
+          property_id,
+          engine_type: "lease",
+          fiscal_year: fiscalYear,
+          computed_by: user.email ?? user.id,
+          inputs: snapshotInputs,
+          outputs: aggregateOutputs,
+        });
+
+        if (existingSnapshot?.outputs) {
+          return new Response(
+            JSON.stringify({
+              error: false,
+              property_id,
+              results,
+              snapshot_id: existingSnapshot.id,
+              reused_snapshot: true,
+            }),
+            {
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+
         await saveSnapshot(supabaseAdmin, {
           org_id: orgId,
           property_id,
           engine_type: "lease",
           fiscal_year: fiscalYear,
           computed_by: user.email ?? user.id,
-          inputs: { property_id, lease_count: leases.length },
+          inputs: snapshotInputs,
           outputs: aggregateOutputs,
         });
       }

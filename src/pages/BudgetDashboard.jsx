@@ -17,10 +17,10 @@ import {
   CartesianGrid,
 } from "recharts";
 
-import { BudgetService } from "@/services/api";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import ScopeSelector from "@/components/ScopeSelector";
 import PageHeader from "@/components/PageHeader";
@@ -391,7 +391,12 @@ export default function BudgetDashboard() {
   const queryClient = useQueryClient();
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...data }) => BudgetService.update(id, data),
+    mutationFn: ({ action, propertyId, fiscalYear }) =>
+      invokeEdgeFunction("compute-budget", {
+        property_id: propertyId,
+        fiscal_year: fiscalYear,
+        action,
+      }),
     onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
       toast.success("Budget status updated");
@@ -401,8 +406,13 @@ export default function BudgetDashboard() {
     },
   });
 
-  const handleStatusChange = (id, newStatus) => {
-    updateMutation.mutate({ id, status: newStatus });
+  const handleStatusChange = (budget, action) => {
+    if (!budget?.property_id) return;
+    updateMutation.mutate({
+      action,
+      propertyId: budget.property_id,
+      fiscalYear: getBudgetYear(budget),
+    });
   };
 
   const handleDetailedExport = async (budget) => {
@@ -486,6 +496,11 @@ export default function BudgetDashboard() {
   const selectedBudget = visibleBudgets.find((budget) => budget.id === selectedBudgetId) || visibleBudgets[0] || null;
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || selectedBudget?.property_id || null;
   const selectedBudgetScopeLabel = selectedBudget ? getBudgetScopeLabel(selectedBudget, scope) : "Selected scope";
+  const { computedAt: budgetSnapshotComputedAt, hasSnapshot: hasBudgetSnapshot } = useSnapshotQuery({
+    engineType: "budget",
+    propertyId: selectedBudget?.property_id ?? null,
+    fiscalYear: selectedBudget ? getBudgetYear(selectedBudget) : null,
+  });
 
   const handleEmailStakeholders = async ({ budget, recipients, message }) => {
     const toastId = toast.loading("Sending budget review...");
@@ -633,6 +648,11 @@ export default function BudgetDashboard() {
                   </Badge>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                  <div className="text-xs text-slate-500">
+                    {hasBudgetSnapshot && budgetSnapshotComputedAt
+                      ? `Authoritative compute snapshot updated ${new Date(budgetSnapshotComputedAt).toLocaleString()}.`
+                      : "No completed budget snapshot yet for this property/year. Actions below call the server compute flow."}
+                  </div>
                   <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs text-slate-500">Total Revenue</p>
@@ -658,7 +678,7 @@ export default function BudgetDashboard() {
                     {["draft", "ai_generated", "under_review", "reviewed"].includes(selectedBudget.status) && (
                       <Button
                         className="flex-1 bg-emerald-600 hover:bg-emerald-700"
-                        onClick={() => handleStatusChange(selectedBudget.id, "approved")}
+                        onClick={() => handleStatusChange(selectedBudget, "approve")}
                         disabled={updateMutation.isPending}
                       >
                         {updateMutation.isPending ? (
@@ -673,7 +693,7 @@ export default function BudgetDashboard() {
                       <Button
                         variant="outline"
                         className="border-red-200 text-red-500 hover:bg-red-50"
-                        onClick={() => handleStatusChange(selectedBudget.id, "draft")}
+                        onClick={() => handleStatusChange(selectedBudget, "reject")}
                         disabled={updateMutation.isPending}
                       >
                         <X className="mr-2 h-4 w-4" />

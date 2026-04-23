@@ -1,18 +1,15 @@
 // @ts-nocheck
 /**
- * Snapshot helper — preserves history while always making the latest row queryable.
+ * Snapshot helper - preserves history while always making the latest row queryable.
  *
  * Strategy:
- *   1. Mark any existing row for (org_id, property_id, engine_type, fiscal_year)
- *      as status='superseded' so it stays in the table for audit/history.
- *   2. INSERT a brand-new row with the fresh outputs.
+ *   1. Mark any existing row for the same logical compute scope as status='superseded'.
+ *   2. INSERT a brand-new row with normalized inputs/outputs and deterministic metadata.
  *
- * The `latest_snapshots` view (ORDER BY computed_at DESC) always returns the
- * newest row, so the frontend sees current data. Old rows are never deleted.
- *
- * Why not upsert?
- *   Upsert replaces the row in-place — history is lost. This approach keeps
- *   every computation run as a separate immutable record.
+ * Scope note:
+ *   Some engines, such as CAM, persist property-, building-, and unit-level snapshots
+ *   under the same (org, property, engine, fiscal_year) tuple. We therefore supersede
+ *   by logical scope, not by property/year alone.
  */
 
 export interface SnapshotData {
@@ -25,6 +22,115 @@ export interface SnapshotData {
   computed_by?: string;
 }
 
+function normalizeForSnapshot(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeForSnapshot);
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = normalizeForSnapshot((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {} as Record<string, unknown>);
+  }
+  return value;
+}
+
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(normalizeForSnapshot(value));
+}
+
+export async function computeInputFingerprint(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(stableStringify(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function getScopeLevel(inputs: Record<string, unknown>, outputs: Record<string, unknown>): string {
+  return String(inputs?.scope_level ?? outputs?.scope_level ?? "property");
+}
+
+function getScopeId(
+  inputs: Record<string, unknown>,
+  outputs: Record<string, unknown>,
+  propertyId: string | null,
+): string {
+  return String(inputs?.scope_id ?? outputs?.scope_id ?? propertyId ?? "global");
+}
+
+function getScopeKey(
+  inputs: Record<string, unknown>,
+  outputs: Record<string, unknown>,
+  propertyId: string | null,
+): string {
+  return `${getScopeLevel(inputs, outputs)}:${getScopeId(inputs, outputs, propertyId)}`;
+}
+
+async function enrichInputs(inputs: Record<string, unknown>) {
+  const normalizedInputs = (normalizeForSnapshot(inputs ?? {}) ?? {}) as Record<string, unknown>;
+  const existingMeta =
+    normalizedInputs._compute && typeof normalizedInputs._compute === "object"
+      ? { ...(normalizedInputs._compute as Record<string, unknown>) }
+      : {};
+
+  if (!existingMeta.input_fingerprint) {
+    existingMeta.input_fingerprint = await computeInputFingerprint(normalizedInputs);
+  }
+
+  return {
+    ...normalizedInputs,
+    _compute: existingMeta,
+  };
+}
+
+export async function findMatchingCompletedSnapshot(
+  supabaseAdmin: any,
+  data: SnapshotData,
+) {
+  const inputs = await enrichInputs(data.inputs);
+  const outputs = (normalizeForSnapshot(data.outputs ?? {}) ?? {}) as Record<string, unknown>;
+  const targetScopeKey = getScopeKey(inputs, outputs, data.property_id ?? null);
+  const targetFingerprint = String(
+    (inputs._compute as Record<string, unknown>)?.input_fingerprint ?? "",
+  );
+
+  const query = supabaseAdmin
+    .from("computation_snapshots")
+    .select("id, property_id, inputs, outputs, computed_at, status")
+    .eq("org_id", data.org_id)
+    .eq("engine_type", data.engine_type)
+    .eq("fiscal_year", data.fiscal_year)
+    .eq("status", "completed");
+
+  if (data.property_id) {
+    query.eq("property_id", data.property_id);
+  } else {
+    query.is("property_id", null);
+  }
+
+  const { data: candidates, error } = await query.order("computed_at", { ascending: false });
+  if (error || !candidates?.length) {
+    return null;
+  }
+
+  return candidates.find((candidate: any) => {
+    const candidateInputs = (candidate?.inputs ?? {}) as Record<string, unknown>;
+    const candidateOutputs = (candidate?.outputs ?? {}) as Record<string, unknown>;
+    const candidateScopeKey = getScopeKey(
+      candidateInputs,
+      candidateOutputs,
+      candidate?.property_id ?? null,
+    );
+    const candidateFingerprint = String(
+      candidateInputs?._compute?.input_fingerprint ?? "",
+    );
+    return candidateScopeKey === targetScopeKey && candidateFingerprint === targetFingerprint;
+  }) ?? null;
+}
+
 /**
  * Save a computation snapshot, preserving previous runs as 'superseded'.
  *
@@ -35,33 +141,55 @@ export async function saveSnapshot(
   data: SnapshotData,
 ): Promise<string | null> {
   const now = new Date().toISOString();
+  const inputs = await enrichInputs(data.inputs);
+  const outputs = (normalizeForSnapshot(data.outputs ?? {}) ?? {}) as Record<string, unknown>;
+  const targetScopeKey = getScopeKey(inputs, outputs, data.property_id ?? null);
 
-  // 1. Supersede any existing 'completed' snapshot for this key
-  //    (leave 'superseded' rows untouched — they're already history)
-  const supersede = supabaseAdmin
+  const query = supabaseAdmin
     .from("computation_snapshots")
-    .update({ status: "superseded", updated_at: now })
+    .select("id, property_id, inputs, outputs")
     .eq("org_id", data.org_id)
     .eq("engine_type", data.engine_type)
     .eq("fiscal_year", data.fiscal_year)
     .eq("status", "completed");
 
   if (data.property_id) {
-    supersede.eq("property_id", data.property_id);
+    query.eq("property_id", data.property_id);
   } else {
-    supersede.is("property_id", null);
+    query.is("property_id", null);
   }
 
-  const { error: supersedeErr } = await supersede;
-  if (supersedeErr) {
-    // Non-fatal — log and continue. The insert below will still create the new row.
+  const { data: existingRows, error: existingErr } = await query;
+  if (existingErr) {
     console.warn(
-      `[snapshot] supersede failed for ${data.engine_type}/${data.fiscal_year}:`,
-      supersedeErr.message,
+      `[snapshot] existing snapshot lookup failed for ${data.engine_type}/${data.fiscal_year}:`,
+      existingErr.message,
     );
   }
 
-  // 2. Insert the new snapshot as a fresh row
+  const idsToSupersede = (existingRows ?? [])
+    .filter((row: any) => {
+      const rowInputs = (row?.inputs ?? {}) as Record<string, unknown>;
+      const rowOutputs = (row?.outputs ?? {}) as Record<string, unknown>;
+      return getScopeKey(rowInputs, rowOutputs, row?.property_id ?? null) === targetScopeKey;
+    })
+    .map((row: any) => row.id)
+    .filter(Boolean);
+
+  if (idsToSupersede.length > 0) {
+    const { error: supersedeErr } = await supabaseAdmin
+      .from("computation_snapshots")
+      .update({ status: "superseded", updated_at: now })
+      .in("id", idsToSupersede);
+
+    if (supersedeErr) {
+      console.warn(
+        `[snapshot] supersede failed for ${data.engine_type}/${data.fiscal_year}:`,
+        supersedeErr.message,
+      );
+    }
+  }
+
   const { data: inserted, error: insertErr } = await supabaseAdmin
     .from("computation_snapshots")
     .insert({
@@ -69,8 +197,8 @@ export async function saveSnapshot(
       property_id: data.property_id ?? null,
       engine_type: data.engine_type,
       fiscal_year: data.fiscal_year,
-      inputs: data.inputs,
-      outputs: data.outputs,
+      inputs,
+      outputs,
       status: "completed",
       computed_at: now,
       computed_by: data.computed_by ?? null,
