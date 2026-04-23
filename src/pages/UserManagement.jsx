@@ -4,6 +4,7 @@ import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
+import { getActiveMembershipForUser } from "@/lib/userPermissions";
 import { logAudit } from "@/services/audit";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -454,7 +455,7 @@ async function syncUserAccessGrants({ userId, orgId, dataScope, role }) {
   if (insertError) throw insertError;
 }
 
-function DataScopeEditor({ orgId, value, onChange }) {
+function DataScopeEditor({ orgId, value, onChange, readonly = false }) {
   const { data: portfolios = [] } = useQuery({
     queryKey: ["member-scope-portfolios", orgId],
     queryFn: async () => {
@@ -519,11 +520,11 @@ function DataScopeEditor({ orgId, value, onChange }) {
             <p className="text-sm font-semibold text-slate-800">Portfolio Access</p>
             <p className="text-[11px] text-slate-500">{allPortfolios ? "All portfolios" : `${selectedPortfolios.size} selected`}</p>
             <label className="mt-3 flex items-center gap-2 text-xs text-slate-700">
-              <Checkbox checked={allPortfolios} onCheckedChange={(checked) => setAll("allPortfolios", checked)} />
+              <Checkbox checked={allPortfolios} disabled={readonly} onCheckedChange={(checked) => setAll("allPortfolios", checked)} />
               All portfolios
             </label>
           </div>
-          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allPortfolios ? "opacity-50 pointer-events-none" : ""}`}>
+          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allPortfolios || readonly ? "opacity-50 pointer-events-none" : ""}`}>
             {portfolios.length === 0 ? (
               <div className="px-4 py-4 text-xs text-slate-400">No portfolios in this organization</div>
             ) : (
@@ -531,6 +532,7 @@ function DataScopeEditor({ orgId, value, onChange }) {
                 <label key={portfolio.id} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
                   <Checkbox
                     checked={allPortfolios || selectedPortfolios.has(portfolio.id)}
+                    disabled={readonly}
                     onCheckedChange={() => toggle("portfolios", portfolio.id)}
                   />
                   <span className="text-sm text-slate-700">{portfolio.name}</span>
@@ -545,11 +547,11 @@ function DataScopeEditor({ orgId, value, onChange }) {
             <p className="text-sm font-semibold text-slate-800">Property Access</p>
             <p className="text-[11px] text-slate-500">{allProperties ? "All properties" : `${selectedProperties.size} selected`}</p>
             <label className="mt-3 flex items-center gap-2 text-xs text-slate-700">
-              <Checkbox checked={allProperties} onCheckedChange={(checked) => setAll("allProperties", checked)} />
+              <Checkbox checked={allProperties} disabled={readonly} onCheckedChange={(checked) => setAll("allProperties", checked)} />
               All properties
             </label>
           </div>
-          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allProperties ? "opacity-50 pointer-events-none" : ""}`}>
+          <div className={`max-h-56 overflow-y-auto divide-y divide-slate-100 ${allProperties || readonly ? "opacity-50 pointer-events-none" : ""}`}>
             {properties.length === 0 ? (
               <div className="px-4 py-4 text-xs text-slate-400">No properties in this organization</div>
             ) : (
@@ -557,6 +559,7 @@ function DataScopeEditor({ orgId, value, onChange }) {
                 <label key={property.id} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
                   <Checkbox
                     checked={allProperties || selectedProperties.has(property.id)}
+                    disabled={readonly}
                     onCheckedChange={() => toggle("properties", property.id)}
                   />
                   <div className="min-w-0">
@@ -576,7 +579,7 @@ function DataScopeEditor({ orgId, value, onChange }) {
 }
 
 // ─── RoleSelector Component ───────────────────────────────────────────────────
-function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameChange }) {
+function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameChange, readonly = false }) {
   const [open, setOpen] = useState(false);
   const grouped = ROLE_CATEGORY_ORDER.map(cat => ({
     category: cat,
@@ -598,8 +601,13 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
       <div className="relative">
         <button
           type="button"
-          onClick={() => setOpen(o => !o)}
-          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-left hover:border-slate-300 transition-colors"
+          onClick={() => {
+            if (!readonly) setOpen(o => !o);
+          }}
+          disabled={readonly}
+          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-left transition-colors ${
+            readonly ? "cursor-default opacity-80" : "hover:border-slate-300"
+          }`}
         >
           <div className="flex flex-wrap gap-1 flex-1 min-w-0">
             {selectedRoles.length === 0 ? (
@@ -624,7 +632,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
           <ChevronDown className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
 
-        {open && (
+        {open && !readonly && (
           <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-80 overflow-y-auto">
             <div className="p-2 space-y-1">
               {grouped.map(({ category, roles: catRoles }) => (
@@ -679,6 +687,7 @@ function RoleSelector({ selectedRoles, onChange, customRoleName, onCustomNameCha
         <Input
           placeholder="Enter custom role title (e.g. Senior Deal Analyst)"
           value={customRoleName}
+          disabled={readonly}
           onChange={e => onCustomNameChange(e.target.value)}
           className="text-sm"
         />
@@ -924,7 +933,7 @@ function RoleBadges({ member, maxVisible = 2 }) {
 }
 
 // ─── UserDetailDrawer Component ───────────────────────────────────────────────
-function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
+function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin, readOnly = false }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("roles");
   const [selectedRoles, setSelectedRoles] = useState(getMemberRoles(member));
@@ -974,6 +983,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   }, [accessGrants, member]);
 
   const handleSave = async () => {
+    if (readOnly) {
+      toast.error("You have read-only access to User Management.");
+      return;
+    }
     setSaving(true);
     try {
       const primaryRole = selectedRoles.find(r => r !== "custom") || selectedRoles[0] || null;
@@ -1010,6 +1023,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   };
 
   const handleStatusChange = async (nextStatus) => {
+    if (readOnly) {
+      toast.error("You have read-only access to User Management.");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -1034,6 +1051,10 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
   };
 
   const handleRemove = async () => {
+    if (readOnly) {
+      toast.error("You have read-only access to User Management.");
+      return;
+    }
     if (!confirm(`Remove ${member.profiles?.full_name || member.profiles?.email} from this organization?`)) return;
     setRemoving(true);
     try {
@@ -1106,6 +1127,11 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
 
         {/* Tab Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {readOnly && (
+            <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              This member is view-only for your account. Changes to roles, access, status, and signing authority are disabled.
+            </div>
+          )}
           {activeTab === "roles" && (
             <div className="space-y-4">
               <div>
@@ -1115,6 +1141,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
                   onChange={setSelectedRoles}
                   customRoleName={customRoleName}
                   onCustomNameChange={setCustomRoleName}
+                  readonly={readOnly}
                 />
               </div>
               {selectedRoles.length > 0 && (
@@ -1156,12 +1183,13 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
               <PagePermissionMatrix
                 permissions={pagePerms}
                 onChange={(k, v) => setPagePerms(p => ({ ...p, [k]: v }))}
+                readonly={readOnly}
               />
             </div>
           )}
 
           {activeTab === "data" && (
-            <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} />
+            <DataScopeEditor orgId={orgId} value={dataScope} onChange={setDataScope} readonly={readOnly} />
           )}
 
           {activeTab === "signing" && (
@@ -1172,6 +1200,7 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
               <SigningPrivilegesMatrix
                 privileges={signingPrivs}
                 onChange={(k, v) => setSigningPrivs(p => ({ ...p, [k]: v }))}
+                readonly={readOnly}
               />
             </div>
           )}
@@ -1179,8 +1208,9 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex-shrink-0">
-          <div className="flex gap-2 mb-3">
-            {status === "invited" && (
+          {!readOnly && (
+            <div className="flex gap-2 mb-3">
+              {status === "invited" && (
               <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs"
                 onClick={async () => {
                   try {
@@ -1201,30 +1231,33 @@ function UserDetailDrawer({ member, orgId, onClose, isSuperAdmin }) {
                 }}>
                 <Mail className="w-3.5 h-3.5" /> Resend Invite
               </Button>
-            )}
-            {status === "active" && (
+              )}
+              {status === "active" && (
               <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-orange-200 text-orange-700 hover:bg-orange-50"
                 onClick={() => handleStatusChange("suspended")} disabled={saving}>
                 <UserX className="w-3.5 h-3.5" /> Suspend
               </Button>
-            )}
-            {["suspended", "revoked"].includes(status) && (
+              )}
+              {["suspended", "revoked"].includes(status) && (
               <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                 onClick={() => handleStatusChange("active")} disabled={saving}>
                 <UserCheck className="w-3.5 h-3.5" /> Reactivate
               </Button>
-            )}
-            <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-red-200 text-red-600 hover:bg-red-50"
-              onClick={handleRemove} disabled={removing}>
-              {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-              Remove
-            </Button>
-          </div>
+              )}
+              <Button variant="outline" size="sm" className="flex-1 gap-2 text-xs border-red-200 text-red-600 hover:bg-red-50"
+                onClick={handleRemove} disabled={removing}>
+                {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Remove
+              </Button>
+            </div>
+          )}
           <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-            <Button className="flex-1 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={handleSave} disabled={saving}>
-              {saving && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Save
-            </Button>
+            <Button variant="outline" className="flex-1" onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
+            {!readOnly && (
+              <Button className="flex-1 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Save
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -1765,8 +1798,7 @@ export default function UserManagement() {
   const { canWritePage } = useModuleAccess();
   const queryClient = useQueryClient();
   const userMemberships = Array.isArray(user?.memberships) ? user.memberships : [];
-  const isSuperAdmin = userMemberships.some(m => m?.role === "super_admin");
-  const canManageUsers = canWritePage("UserManagement");
+  const isSuperAdmin = user?._raw_role === "super_admin" || userMemberships.some(m => m?.role === "super_admin");
   const defaultOrgId = user?.activeOrg?.id || user?.org_id;
   const initialSelectedOrgId = isSuperAdmin ? (getStoredActingOrgId() || defaultOrgId) : defaultOrgId;
 
@@ -1782,6 +1814,10 @@ export default function UserManagement() {
   const [showBulkUpdate, setShowBulkUpdate] = useState(false);
 
   const activeOrgId = selectedOrgId || defaultOrgId;
+  const activeOrgMembership = isSuperAdmin
+    ? null
+    : (userMemberships.find((membership) => membership?.org_id === activeOrgId) || getActiveMembershipForUser(user));
+  const canManageUsers = canWritePage("UserManagement") && (isSuperAdmin || activeOrgMembership?.role === "org_admin");
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -2118,7 +2154,7 @@ export default function UserManagement() {
         <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
           <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
           <span className="text-amber-800">
-            <strong>{stats.noAccess} user{stats.noAccess > 1 ? "s" : ""}</strong> have no roles assigned and cannot access the platform. Click their row to assign roles.
+            <strong>{stats.noAccess} user{stats.noAccess > 1 ? "s" : ""}</strong> have no roles assigned and cannot access the platform. {canManageUsers ? "Click their row to assign roles." : "Open their row to review current access."}
           </span>
         </div>
       )}
@@ -2241,7 +2277,7 @@ export default function UserManagement() {
                 const highestSigning = getHighestSigningLevel(signingPrivs);
                 const highestSlvl = SIGNING_LEVELS[highestSigning] || SIGNING_LEVELS[0];
                 const isSelected = selectedIds.has(member.user_id);
-                const canOpenDetails = !member.isInvitationOnly && canManageUsers;
+                const canOpenDetails = !member.isInvitationOnly;
                 const initials = (member.profiles?.full_name || member.profiles?.email || "?")
                   .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
@@ -2354,6 +2390,7 @@ export default function UserManagement() {
           member={drawerMember}
           orgId={activeOrgId}
           isSuperAdmin={isSuperAdmin}
+          readOnly={!canManageUsers}
           onClose={() => setDrawerMember(null)}
         />
       )}
