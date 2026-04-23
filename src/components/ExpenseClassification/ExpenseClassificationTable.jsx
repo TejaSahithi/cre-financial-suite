@@ -11,6 +11,7 @@ export default function ExpenseClassificationTable({ categories, rules, onEditRu
       case 'mapped': return <Badge className="bg-emerald-100 text-emerald-800">Mapped</Badge>;
       case 'unmapped': return <Badge variant="outline" className="text-slate-500">Unmapped</Badge>;
       case 'uncertain': return <Badge className="bg-amber-100 text-amber-800">Review Needed</Badge>;
+      case 'missing_value': return <Badge className="bg-rose-100 text-rose-800 border-rose-200">Missing Value</Badge>;
       case 'not_mentioned': return <Badge variant="secondary" className="text-slate-500">Not Mentioned</Badge>;
       default: return <Badge variant="outline">Unknown</Badge>;
     }
@@ -29,6 +30,7 @@ export default function ExpenseClassificationTable({ categories, rules, onEditRu
           <TableRow>
             <TableHead>Category</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead className="text-right">Amount</TableHead>
             <TableHead className="text-center">Recoverable</TableHead>
             <TableHead className="text-center">Excluded</TableHead>
             <TableHead>Cap / Base Year</TableHead>
@@ -47,16 +49,24 @@ export default function ExpenseClassificationTable({ categories, rules, onEditRu
               cap_type,
               has_base_year,
               base_year_type,
+              extracted_value,
+              manual_value,
               confidence
             } = rule;
 
+            const displayValue = manual_value ?? extracted_value;
+            const isMissingValue = row_status === 'missing_value';
+
             return (
-              <TableRow key={category.id} className={row_status === 'uncertain' ? 'bg-amber-50/30' : ''}>
+              <TableRow key={category.id} className={isMissingValue ? 'bg-rose-50/50 border-l-4 border-l-rose-500' : row_status === 'uncertain' ? 'bg-amber-50/30' : ''}>
                 <TableCell className="font-medium">
                   {category.category_name}
                   {category.subcategory_name && <span className="text-slate-500 text-sm ml-2">({category.subcategory_name})</span>}
                 </TableCell>
                 <TableCell>{getStatusBadge(row_status)}</TableCell>
+                <TableCell className="text-right font-mono">
+                  {displayValue ? `$${Number(displayValue).toLocaleString()}` : <span className="text-slate-300">-</span>}
+                </TableCell>
                 <TableCell className="text-center">{renderBooleanIcon(is_recoverable)}</TableCell>
                 <TableCell className="text-center">{renderBooleanIcon(is_excluded)}</TableCell>
                 <TableCell>

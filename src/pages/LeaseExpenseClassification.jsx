@@ -20,6 +20,10 @@ export default function LeaseExpenseClassification() {
   const [activeRuleSetId, setActiveRuleSetId] = useState(null);
   const [localRules, setLocalRules] = useState([]);
 
+  // Filters State
+  const [scopeType, setScopeType] = useState('property');
+  const [frequency, setFrequency] = useState('yearly');
+
   // UI State
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [selectedRule, setSelectedRule] = useState(null);
@@ -39,15 +43,34 @@ export default function LeaseExpenseClassification() {
 
   // Fetch Taxonomies
   const { data: categories = [], isLoading: isLoadingCategories } = useQuery({
-    queryKey: ['expense_categories'],
+    queryKey: ['scope_expense_categories', scopeType, lease?.property_id, lease?.unit_id],
     queryFn: async () => {
+      let scopeId = null;
+      if (scopeType === 'property') scopeId = lease?.property_id;
+      else if (scopeType === 'unit') scopeId = lease?.unit_id;
+
+      if (scopeId) {
+        const { data: scopeData, error: scopeErr } = await supabase
+          .from('scope_expense_categories')
+          .select('expense_category_id, is_applicable, expense_categories(*)')
+          .eq('scope_type', scopeType)
+          .eq('scope_id', scopeId)
+          .eq('is_applicable', true);
+        
+        if (!scopeErr && scopeData && scopeData.length > 0) {
+           return scopeData.map(s => s.expense_categories).filter(Boolean).sort((a,b) => a.display_order - b.display_order);
+        }
+      }
+
+      // Fallback
       const { data, error } = await supabase.from('expense_categories')
         .select('*')
         .eq('is_active', true)
         .order('display_order', { ascending: true });
       if (error) throw error;
       return data || [];
-    }
+    },
+    enabled: !!lease
   });
 
   // Fetch Active Rule Set & Rules
@@ -229,6 +252,32 @@ export default function LeaseExpenseClassification() {
         iconColor="from-blue-600 to-indigo-600"
       >
         <div className="flex gap-2">
+          <select 
+            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm"
+            value={scopeType}
+            onChange={e => setScopeType(e.target.value)}
+          >
+            <option value="property">Property Scope</option>
+            <option value="building">Building Scope</option>
+            <option value="unit">Unit Scope</option>
+          </select>
+          <select 
+            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm"
+            value={frequency}
+            onChange={e => setFrequency(e.target.value)}
+          >
+            <option value="yearly">Yearly</option>
+            <option value="monthly">Monthly</option>
+            <option value="quarterly">Quarterly</option>
+          </select>
+          
+          <Button variant="outline" onClick={() => toast.info("Add Expense Modal (Placeholder)")} disabled={isWorking}>
+            Add Expense
+          </Button>
+          <Button variant="outline" onClick={() => toast.info("Bulk Import Modal (Placeholder)")} disabled={isWorking}>
+            Bulk Import
+          </Button>
+          
           <Button
             variant="outline"
             onClick={() => extractRulesMutation.mutate()}
@@ -251,6 +300,13 @@ export default function LeaseExpenseClassification() {
             disabled={isWorking}
           >
             Approve Rule Set
+          </Button>
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={() => navigate('/cam-calculation')}
+            disabled={isWorking}
+          >
+            Move to CAM
           </Button>
         </div>
       </PageHeader>
@@ -279,6 +335,7 @@ export default function LeaseExpenseClassification() {
                 <ExpenseClassificationTable
                   categories={categories}
                   rules={localRules}
+                  frequency={frequency}
                   onEditRule={handleEditRule}
                   onViewEvidence={handleViewEvidence}
                 />
