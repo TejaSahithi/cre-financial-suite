@@ -11,9 +11,16 @@ import useOrgId from "./useOrgId";
  * @param {object} options - { queryKey, sort, limit, enabled }
  */
 export default function useOrgQuery(entityName, extraFilter = {}, options = {}) {
-  const { orgId, orgName, isAdmin, loading: orgLoading } = useOrgId();
+  const { orgId, orgName, isAdmin, loading: orgLoading } = useOrgId({
+    allowSuperAdminGlobal: options.allowSuperAdminGlobal === true,
+  });
 
-  const queryKey = options.queryKey || [entityName, orgId, JSON.stringify(extraFilter)];
+  const queryKey = options.queryKey || [
+    entityName,
+    orgId,
+    options.allowSuperAdminGlobal === true ? "global" : "scoped",
+    JSON.stringify(extraFilter),
+  ];
 
   const result = useQuery({
     queryKey,
@@ -22,7 +29,7 @@ export default function useOrgQuery(entityName, extraFilter = {}, options = {}) 
       const entity = createEntityService(entityName);
       if (!entity) return [];
 
-      // SuperAdmin: no org filter
+      // Only callers that explicitly opt in should perform cross-org reads.
       if (orgId === null) {
         if (Object.keys(extraFilter).length > 0) {
           return entity.filter(extraFilter);
