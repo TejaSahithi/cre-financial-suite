@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Plus, Upload, TrendingUp, TrendingDown, Minus } from "lucide-react";
 
-export default function PropertyExpensesTab({ propertyId }) {
+export default function PropertyExpensesTab({ propertyId, canAddExpense = true, canImportExpenses = true }) {
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
 
@@ -110,8 +110,16 @@ export default function PropertyExpensesTab({ propertyId }) {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Expense by Category — Actual vs Budget vs Prior Year</CardTitle>
           <div className="flex gap-2">
-            <Link to={createPageUrl("BulkImport") + `?property=${propertyId}`}><Button variant="outline" size="sm"><Upload className="w-3 h-3 mr-1" />Import</Button></Link>
-            <Link to={createPageUrl("AddExpense") + `?property=${propertyId}`}><Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Add</Button></Link>
+            {canImportExpenses ? (
+              <Link to={createPageUrl("BulkImport") + `?property=${propertyId}`}><Button variant="outline" size="sm"><Upload className="w-3 h-3 mr-1" />Import</Button></Link>
+            ) : (
+              <Button variant="outline" size="sm" disabled><Upload className="w-3 h-3 mr-1" />Import</Button>
+            )}
+            {canAddExpense ? (
+              <Link to={createPageUrl("AddExpense") + `?property=${propertyId}`}><Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Add</Button></Link>
+            ) : (
+              <Button size="sm" disabled className="bg-blue-600 hover:bg-blue-700"><Plus className="w-3 h-3 mr-1" />Add</Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>

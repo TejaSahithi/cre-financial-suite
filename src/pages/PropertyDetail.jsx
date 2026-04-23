@@ -17,6 +17,9 @@ import { toast } from "sonner";
 
 import { PropertyService, LeaseService, ExpenseService, UnitService, BuildingService, StakeholderService } from "@/services/api";
 import { createPageUrl } from "@/utils";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
+import { useAuth } from "@/lib/AuthContext";
+import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
 
 import PropertyExpensesTab from "@/components/property/PropertyExpensesTab";
 import PropertyCAMTab from "@/components/property/PropertyCAMTab";
@@ -39,6 +42,8 @@ export default function PropertyDetail() {
   const urlParams = new URLSearchParams(location.search);
   const propertyId = urlParams.get("id");
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const { canWritePage } = useModuleAccess();
 
   const [showAddBuilding, setShowAddBuilding] = useState(false);
   const [showAddUnit, setShowAddUnit] = useState(false);
@@ -56,6 +61,12 @@ export default function PropertyDetail() {
     total_sqft: "",
     year_built: "",
   });
+  const canEditProperty = canWritePage("PropertyDetail");
+  const canUploadLease = canWritePage("LeaseUpload");
+  const canReviewLease = canWritePage("LeaseReview");
+  const canManageExpense = canWritePage("AddExpense");
+  const canRunCAMCalculation = canWritePage("CAMCalculation");
+  const canCreateBudget = canWritePage("CreateBudget");
 
   const { data: property, isLoading } = useQuery({
     queryKey: ['property', propertyId],
@@ -94,24 +105,35 @@ export default function PropertyDetail() {
   });
 
   const createBuildingMutation = useMutation({
-    mutationFn: (data) => BuildingService.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1 }); }
+    mutationFn: (data) => {
+      assertCanWritePage(user, "PropertyDetail", "add buildings");
+      return BuildingService.create(data);
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['buildings', propertyId] }); setShowAddBuilding(false); setBuildingForm({ name: "", total_sf: "", floors: 1 }); },
+    onError: (err) => toast.error(isPagePermissionError(err) ? err.message : `Failed to create building: ${err?.message || "Unknown error"}`),
   });
 
   const createUnitMutation = useMutation({
-    mutationFn: (data) => UnitService.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); }
+    mutationFn: (data) => {
+      assertCanWritePage(user, "PropertyDetail", "add units");
+      return UnitService.create(data);
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['units', propertyId] }); setShowAddUnit(false); setUnitForm({ unit_number: "", square_footage: "", status: "vacant" }); },
+    onError: (err) => toast.error(isPagePermissionError(err) ? err.message : `Failed to create unit: ${err?.message || "Unknown error"}`),
   });
 
   const updatePropertyMutation = useMutation({
-    mutationFn: (data) => PropertyService.update(propertyId, data),
+    mutationFn: (data) => {
+      assertCanWritePage(user, "PropertyDetail", "edit property details");
+      return PropertyService.update(propertyId, data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['property', propertyId] });
       queryClient.invalidateQueries({ queryKey: ['Property'] });
       setShowEditProperty(false);
       toast.success("Property updated successfully");
     },
-    onError: (err) => toast.error(`Failed to update property: ${err?.message || "Unknown error"}`),
+    onError: (err) => toast.error(isPagePermissionError(err) ? err.message : `Failed to update property: ${err?.message || "Unknown error"}`),
   });
 
   if (isLoading) return <div className="flex items-center justify-center h-96"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
@@ -144,6 +166,11 @@ export default function PropertyDetail() {
   };
 
   const openEditProperty = () => {
+    if (!canEditProperty) {
+      toast.error("You have read-only access to Property Detail.");
+      return;
+    }
+
     setPropertyForm({
       name: property.name || "",
       address: property.address || "",
@@ -186,12 +213,20 @@ export default function PropertyDetail() {
               </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={openEditProperty}><Pencil className="w-4 h-4 mr-1" />Edit Property</Button>
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => { setSelectedBuildingId(buildings[0]?.id || null); setShowAddUnit(true); }}><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
+              <Button variant="outline" size="sm" disabled={!canEditProperty} onClick={openEditProperty}><Pencil className="w-4 h-4 mr-1" />Edit Property</Button>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700" disabled={!canEditProperty} onClick={() => { setSelectedBuildingId(buildings[0]?.id || null); setShowAddUnit(true); }}><Plus className="w-4 h-4 mr-1" />Add Unit</Button>
             </div>
           </div>
         </CardContent>
       </Card>
+
+      {!canEditProperty && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="p-4 text-sm text-blue-800">
+            This property page is in read-only mode for your account. You can review details, but property edits, building changes, and unit changes are disabled.
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="overview">
         <TabsList className="bg-white border">
@@ -258,13 +293,17 @@ export default function PropertyDetail() {
                 <div className="space-y-1.5">
                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Core Actions</p>
                   {[
-                    { icon: Upload, label: "Upload Lease Agreement", page: "LeaseUpload", desc: "Extract & validate AI" },
-                    { icon: DollarSign, label: "Add Operating Expense", page: "AddExpense", desc: "Log a new property bill" },
-                    { icon: Calculator, label: "Run CAM Calculation", page: "CAMDashboard", desc: "Reconcile common area" },
-                    { icon: ClipboardCheck, label: "Generate Property Budget", page: "CreateBudget", desc: "Create annual forecast" },
-                  ].map((a, i) => (
-                    <Link key={i} to={createPageUrl(a.page) + `?property=${propertyId}`} className="block">
-                      <Button variant="ghost" className="w-full justify-start h-auto py-2 px-3 gap-3 text-left hover:bg-slate-50 group border border-transparent hover:border-slate-100">
+                    { icon: Upload, label: "Upload Lease Agreement", page: "LeaseUpload", desc: "Extract & validate AI", canAccess: canUploadLease },
+                    { icon: DollarSign, label: "Add Operating Expense", page: "AddExpense", desc: "Log a new property bill", canAccess: canManageExpense },
+                    { icon: Calculator, label: "Run CAM Calculation", page: "CAMDashboard", desc: "Reconcile common area", canAccess: canRunCAMCalculation },
+                    { icon: ClipboardCheck, label: "Generate Property Budget", page: "CreateBudget", desc: "Create annual forecast", canAccess: canCreateBudget },
+                  ].map((a, i) => {
+                    const button = (
+                      <Button
+                        variant="ghost"
+                        disabled={!a.canAccess}
+                        className="w-full justify-start h-auto py-2 px-3 gap-3 text-left hover:bg-slate-50 group border border-transparent hover:border-slate-100 disabled:opacity-60 disabled:pointer-events-auto"
+                      >
                         <div className="w-8 h-8 rounded-lg bg-slate-100 group-hover:bg-white flex flex-shrink-0 items-center justify-center border border-slate-200/50 transition-colors">
                           <a.icon className="w-4 h-4 text-slate-500 group-hover:text-blue-600 transition-colors" />
                         </div>
@@ -273,8 +312,18 @@ export default function PropertyDetail() {
                           <p className="text-[10px] text-slate-400 truncate">{a.desc}</p>
                         </div>
                       </Button>
-                    </Link>
-                  ))}
+                    );
+
+                    return a.canAccess ? (
+                      <Link key={i} to={createPageUrl(a.page) + `?property=${propertyId}`} className="block">
+                        {button}
+                      </Link>
+                    ) : (
+                      <div key={i} className="block">
+                        {button}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div className="pt-3 border-t border-slate-100">
@@ -313,9 +362,13 @@ export default function PropertyDetail() {
                            <div>
                              <p className="text-sm font-bold text-blue-800 leading-tight">Missing Expense Data</p>
                              <p className="text-xs text-blue-600 mt-0.5 leading-snug">No operating expenses recorded for this month.</p>
-                             <Link to={createPageUrl("AddExpense") + `?property=${propertyId}`}>
-                               <Button variant="link" className="text-[11px] h-auto p-0 mt-1 text-blue-700 font-bold">Add Expense &rarr;</Button>
-                             </Link>
+                             {canManageExpense ? (
+                               <Link to={createPageUrl("AddExpense") + `?property=${propertyId}`}>
+                                 <Button variant="link" className="text-[11px] h-auto p-0 mt-1 text-blue-700 font-bold">Add Expense &rarr;</Button>
+                               </Link>
+                             ) : (
+                               <Button variant="link" disabled className="text-[11px] h-auto p-0 mt-1 text-blue-700 font-bold">Add Expense &rarr;</Button>
+                             )}
                            </div>
                          </div>
                        </CardContent>
@@ -397,7 +450,7 @@ export default function PropertyDetail() {
         {/* Buildings & Units Tab */}
         <TabsContent value="buildings" className="mt-4 space-y-6">
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
+            <Button variant="outline" disabled={!canEditProperty} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
           </div>
           {buildings.length > 0 ? buildings.map(b => (
             <Card key={b.id}>
@@ -408,16 +461,28 @@ export default function PropertyDetail() {
                     <p className="text-xs text-slate-500 mt-1">{b.total_sqft?.toLocaleString() || 0} RSV SF · {b.floors || 1} Floors</p>
                   </div>
                   <div className="flex gap-2 flex-wrap">
-                    <Link to={createPageUrl("AddExpense") + `?property=${propertyId}&building=${b.id}`}>
-                      <Button size="sm" variant="outline" className="text-xs h-8"><DollarSign className="w-3 h-3 mr-1" />Log Expense</Button>
-                    </Link>
-                    <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&building=${b.id}`}>
-                      <Button size="sm" variant="outline" className="text-xs h-8"><Upload className="w-3 h-3 mr-1" />Upload Lease</Button>
-                    </Link>
-                    <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&building=${b.id}`}>
-                      <Button size="sm" variant="outline" className="text-xs h-8 text-emerald-700 border-emerald-200 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Generate Budget</Button>
-                    </Link>
-                    <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => { setSelectedBuildingId(b.id); setShowAddUnit(true); }}><Plus className="w-3 h-3 mr-1" />Add Unit</Button>
+                    {canManageExpense ? (
+                      <Link to={createPageUrl("AddExpense") + `?property=${propertyId}&building=${b.id}`}>
+                        <Button size="sm" variant="outline" className="text-xs h-8"><DollarSign className="w-3 h-3 mr-1" />Log Expense</Button>
+                      </Link>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled className="text-xs h-8"><DollarSign className="w-3 h-3 mr-1" />Log Expense</Button>
+                    )}
+                    {canUploadLease ? (
+                      <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&building=${b.id}`}>
+                        <Button size="sm" variant="outline" className="text-xs h-8"><Upload className="w-3 h-3 mr-1" />Upload Lease</Button>
+                      </Link>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled className="text-xs h-8"><Upload className="w-3 h-3 mr-1" />Upload Lease</Button>
+                    )}
+                    {canCreateBudget ? (
+                      <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&building=${b.id}`}>
+                        <Button size="sm" variant="outline" className="text-xs h-8 text-emerald-700 border-emerald-200 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Generate Budget</Button>
+                      </Link>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled className="text-xs h-8 text-emerald-700 border-emerald-200"><BarChart2 className="w-3 h-3 mr-1" />Generate Budget</Button>
+                    )}
+                    <Button size="sm" disabled={!canEditProperty} className="bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => { setSelectedBuildingId(b.id); setShowAddUnit(true); }}><Plus className="w-3 h-3 mr-1" />Add Unit</Button>
                   </div>
                 </div>
                 <Table>
@@ -447,14 +512,18 @@ export default function PropertyDetail() {
                               <Link to={createPageUrl("LeaseReview", { id: u.lease_id })}>
                                 <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50">View Lease</Button>
                               </Link>
-                            ) : u.status === 'vacant' ? (
+                            ) : u.status === 'vacant' && canUploadLease ? (
                               <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}&unit=${u.id}`}>
                                 <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50">Add Lease</Button>
                               </Link>
                             ) : null}
-                            <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&unit=${u.id}`}>
-                              <Button size="sm" variant="outline" className="h-7 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Budget</Button>
-                            </Link>
+                            {canCreateBudget ? (
+                              <Link to={createPageUrl("CreateBudget") + `?property=${propertyId}&unit=${u.id}`}>
+                                <Button size="sm" variant="outline" className="h-7 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"><BarChart2 className="w-3 h-3 mr-1" />Budget</Button>
+                              </Link>
+                            ) : (
+                              <Button size="sm" variant="outline" disabled className="h-7 text-xs border-emerald-200 text-emerald-700"><BarChart2 className="w-3 h-3 mr-1" />Budget</Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -470,7 +539,7 @@ export default function PropertyDetail() {
             <Card>
               <CardContent className="p-8 text-center text-slate-400">
                 <p className="mb-3">No buildings configured. Add a building to start managing units.</p>
-                <Button onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
+                <Button disabled={!canEditProperty} onClick={() => setShowAddBuilding(true)}><Plus className="w-4 h-4 mr-1" />Add Building</Button>
               </CardContent>
             </Card>
           )}
@@ -486,9 +555,13 @@ export default function PropertyDetail() {
                   <Link to={createPageUrl("Leases", { property: propertyId })}>
                     <Button size="sm" variant="outline">Open Lease List</Button>
                   </Link>
-                  <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}`}>
-                    <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Upload className="w-4 h-4 mr-1" />Upload Lease</Button>
-                  </Link>
+                  {canUploadLease ? (
+                    <Link to={createPageUrl("LeaseUpload") + `?property=${propertyId}`}>
+                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700"><Upload className="w-4 h-4 mr-1" />Upload Lease</Button>
+                    </Link>
+                  ) : (
+                    <Button size="sm" disabled className="bg-blue-600 hover:bg-blue-700"><Upload className="w-4 h-4 mr-1" />Upload Lease</Button>
+                  )}
                 </div>
               </div>
               <Table>
@@ -519,7 +592,7 @@ export default function PropertyDetail() {
                       <TableCell><Badge className={`${leaseStatusColors[derivedStatus]} text-[10px] uppercase`}>{derivedStatus.replace("_", "-")}</Badge></TableCell>
                       <TableCell className="text-right">
                         <Link to={createPageUrl("LeaseReview", { id: l.id })}>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs">Review/Edit</Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs">{canReviewLease ? "Review/Edit" : "View"}</Button>
                         </Link>
                       </TableCell>
                     </TableRow>
@@ -534,17 +607,17 @@ export default function PropertyDetail() {
 
         {/* Expenses Tab - Inline with historical comparison */}
         <TabsContent value="expenses" className="mt-4">
-          <PropertyExpensesTab propertyId={propertyId} />
+          <PropertyExpensesTab propertyId={propertyId} canAddExpense={canManageExpense} canImportExpenses={canWritePage("BulkImport")} />
         </TabsContent>
 
         {/* CAM Tab - Inline with historical comparison */}
         <TabsContent value="cam" className="mt-4">
-          <PropertyCAMTab propertyId={propertyId} />
+          <PropertyCAMTab propertyId={propertyId} canRunCalculation={canRunCAMCalculation} />
         </TabsContent>
 
         {/* Budgets Tab - Inline with historical comparison */}
         <TabsContent value="budgets" className="mt-4">
-          <PropertyBudgetsTab propertyId={propertyId} />
+          <PropertyBudgetsTab propertyId={propertyId} canCreateBudget={canCreateBudget} />
         </TabsContent>
 
         {/* Stakeholders - Navigate to module */}
@@ -561,7 +634,7 @@ export default function PropertyDetail() {
       </Tabs>
 
       {/* Edit Property Dialog */}
-      <Dialog open={showEditProperty} onOpenChange={setShowEditProperty}>
+      <Dialog open={showEditProperty && canEditProperty} onOpenChange={(open) => setShowEditProperty(open && canEditProperty)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Property</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -594,7 +667,7 @@ export default function PropertyDetail() {
             <Button variant="outline" onClick={() => setShowEditProperty(false)}>Cancel</Button>
             <Button
               className="bg-blue-600 hover:bg-blue-700"
-              disabled={!propertyForm.name || updatePropertyMutation.isPending}
+              disabled={!canEditProperty || !propertyForm.name || updatePropertyMutation.isPending}
               onClick={() => updatePropertyMutation.mutate({
                 ...propertyForm,
                 total_sqft: propertyForm.total_sqft ? Number(propertyForm.total_sqft) : null,
@@ -609,7 +682,7 @@ export default function PropertyDetail() {
       </Dialog>
 
       {/* Add Building Dialog */}
-      <Dialog open={showAddBuilding} onOpenChange={setShowAddBuilding}>
+      <Dialog open={showAddBuilding && canEditProperty} onOpenChange={(open) => setShowAddBuilding(open && canEditProperty)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add Building</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -621,7 +694,7 @@ export default function PropertyDetail() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddBuilding(false)}>Cancel</Button>
-            <Button onClick={() => createBuildingMutation.mutate({ name: buildingForm.name, total_sqft: parseInt(buildingForm.total_sqft) || 0, floors: buildingForm.floors || 1, property_id: propertyId, org_id: property.org_id })} disabled={!buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            <Button onClick={() => createBuildingMutation.mutate({ name: buildingForm.name, total_sqft: parseInt(buildingForm.total_sqft) || 0, floors: buildingForm.floors || 1, property_id: propertyId, org_id: property.org_id })} disabled={!canEditProperty || !buildingForm.name || createBuildingMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createBuildingMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Building
             </Button>
           </DialogFooter>
@@ -629,7 +702,7 @@ export default function PropertyDetail() {
       </Dialog>
 
       {/* Add Unit Dialog */}
-      <Dialog open={showAddUnit} onOpenChange={setShowAddUnit}>
+      <Dialog open={showAddUnit && canEditProperty} onOpenChange={(open) => setShowAddUnit(open && canEditProperty)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add Unit</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -677,7 +750,7 @@ export default function PropertyDetail() {
               building_id: selectedBuildingId || null,
               property_id: propertyId,
               org_id: property.org_id,
-            })} disabled={!unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
+            })} disabled={!canEditProperty || !unitForm.unit_number || createUnitMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
               {createUnitMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Unit
             </Button>
           </DialogFooter>

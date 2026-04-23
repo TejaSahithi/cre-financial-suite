@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { logAudit } from "@/services/audit";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -1760,9 +1761,11 @@ function BulkUpdateDialog({ open, onClose, selectedMembers, orgId }) {
 // ─── Main UserManagement ──────────────────────────────────────────────────────
 export default function UserManagement() {
   const { user } = useAuth();
+  const { canWritePage } = useModuleAccess();
   const queryClient = useQueryClient();
   const userMemberships = Array.isArray(user?.memberships) ? user.memberships : [];
   const isSuperAdmin = userMemberships.some(m => m?.role === "super_admin");
+  const canManageUsers = canWritePage("UserManagement");
   const defaultOrgId = user?.activeOrg?.id || user?.org_id;
 
   const [selectedOrgId, setSelectedOrgId] = useState(defaultOrgId);
@@ -1963,6 +1966,10 @@ export default function UserManagement() {
   };
 
   const handleBulkRemove = async () => {
+    if (!canManageUsers) {
+      toast.error("You have read-only access to User Management.");
+      return;
+    }
     if (!confirm(`Remove ${selectedMembers.length} members?`)) return;
     for (const m of selectedMembers) {
       await supabase.from("memberships").delete().eq("user_id", m.user_id).eq("org_id", activeOrgId);
@@ -1974,6 +1981,10 @@ export default function UserManagement() {
   };
 
   const handleBulkResend = async () => {
+    if (!canManageUsers) {
+      toast.error("You have read-only access to User Management.");
+      return;
+    }
     const targets = selectedMembers.filter(m => deriveStatus(m) === "invited");
     if (!targets.length) { toast.info("No invited users selected"); return; }
     for (const m of targets) {
@@ -2003,14 +2014,21 @@ export default function UserManagement() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="gap-2 h-9" onClick={() => setShowCSV(true)}>
+          <Button variant="outline" size="sm" className="gap-2 h-9" onClick={() => setShowCSV(true)} disabled={!canManageUsers}>
             <Upload className="w-4 h-4" /> Import CSV
           </Button>
-          <Button size="sm" className="gap-2 h-9 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={() => setShowInvite(true)}>
+          <Button size="sm" className="gap-2 h-9 bg-[#1a2744] hover:bg-[#1a2744]/90 text-white" onClick={() => setShowInvite(true)} disabled={!canManageUsers}>
             <Plus className="w-4 h-4" /> Invite Member
           </Button>
         </div>
       </div>
+
+      {!canManageUsers && (
+        <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+          <Eye className="w-4 h-4 flex-shrink-0" />
+          <span>This page is in read-only mode for your account. You can review members, but invites, edits, and removals are disabled.</span>
+        </div>
+      )}
 
       {/* SuperAdmin Org Switcher */}
       {isSuperAdmin && allOrgs.length > 0 && (
@@ -2123,16 +2141,16 @@ export default function UserManagement() {
         <div className="flex items-center gap-3 px-5 py-3 bg-[#1a2744] rounded-xl shadow-lg flex-wrap">
           <span className="text-sm text-white font-bold">{selectedIds.size} selected</span>
           <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5"
-            onClick={() => setShowBulkUpdate(true)}>
+            onClick={() => setShowBulkUpdate(true)} disabled={!canManageUsers}>
             <Settings className="w-3.5 h-3.5" /> Assign Roles & Access
           </Button>
           <Button size="sm" variant="ghost" className="h-8 text-xs text-white hover:bg-white/10 gap-1.5"
-            onClick={handleBulkResend}>
+            onClick={handleBulkResend} disabled={!canManageUsers}>
             <Mail className="w-3.5 h-3.5" /> Resend Invites
           </Button>
           <Button size="sm" variant="ghost"
             className="h-8 text-xs text-red-300 hover:bg-white/10 gap-1.5 ml-auto"
-            onClick={handleBulkRemove}>
+            onClick={handleBulkRemove} disabled={!canManageUsers}>
             <Trash2 className="w-3.5 h-3.5" /> Remove ({selectedIds.size})
           </Button>
           <button className="text-white/50 hover:text-white" onClick={() => setSelectedIds(new Set())}>
@@ -2147,7 +2165,7 @@ export default function UserManagement() {
           <TableHeader>
             <TableRow className="bg-slate-50 hover:bg-slate-50">
               <TableHead className="w-10 px-4">
-                <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Select all" />
+                <Checkbox checked={allSelected} disabled={!canManageUsers} onCheckedChange={toggleAll} aria-label="Select all" />
               </TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">Member</TableHead>
               <TableHead className="text-xs font-bold text-slate-500 uppercase tracking-wide">CRE Roles</TableHead>
@@ -2186,7 +2204,7 @@ export default function UserManagement() {
                     {hasFilters ? "No members match your filters" : "No members yet — invite your first team member"}
                   </p>
                   {!hasFilters && (
-                    <Button size="sm" className="mt-3 gap-1.5 bg-[#1a2744] text-white" onClick={() => setShowInvite(true)}>
+                    <Button size="sm" className="mt-3 gap-1.5 bg-[#1a2744] text-white" onClick={() => setShowInvite(true)} disabled={!canManageUsers}>
                       <Plus className="w-3.5 h-3.5" /> Invite Member
                     </Button>
                   )}
@@ -2202,7 +2220,7 @@ export default function UserManagement() {
                 const highestSigning = getHighestSigningLevel(signingPrivs);
                 const highestSlvl = SIGNING_LEVELS[highestSigning] || SIGNING_LEVELS[0];
                 const isSelected = selectedIds.has(member.user_id);
-                const canOpenDetails = !member.isInvitationOnly;
+                const canOpenDetails = !member.isInvitationOnly && canManageUsers;
                 const initials = (member.profiles?.full_name || member.profiles?.email || "?")
                   .split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 
@@ -2217,7 +2235,7 @@ export default function UserManagement() {
                     <TableCell className="px-4" onClick={e => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
-                        disabled={member.isInvitationOnly}
+                        disabled={member.isInvitationOnly || !canManageUsers}
                         onCheckedChange={() => toggleSelect(member.user_id)}
                       />
                     </TableCell>

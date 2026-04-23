@@ -22,8 +22,13 @@ import MetricCard from "@/components/MetricCard";
 import ViewModeToggle from "@/components/ViewModeToggle";
 import BulkImportModal from "@/components/property/BulkImportModal";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { useModuleAccess } from "@/lib/ModuleAccessContext";
+import { assertCanWritePage, isPagePermissionError } from "@/lib/userPermissions";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function Properties() {
+  const { user } = useAuth();
+  const { canWritePage } = useModuleAccess();
   const navigate = useNavigate();
   const location = useLocation();
   const portfolioId = new URLSearchParams(location.search).get("portfolio");
@@ -39,6 +44,7 @@ export default function Properties() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
+  const canEditProperties = canWritePage("Properties");
 
   const buildDefaultForm = () => ({
     name: "", address: "", city: "", state: "", zip: "",
@@ -85,7 +91,10 @@ export default function Properties() {
   }, [properties]);
 
   const createMutation = useMutation({
-    mutationFn: (data) => propertyService.create(data),
+    mutationFn: (data) => {
+      assertCanWritePage(user, "Properties", "create properties");
+      return propertyService.create(data);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['Property'] });
       setShowCreate(false);
@@ -97,12 +106,13 @@ export default function Properties() {
       }
     },
     onError: (err) => {
-      toast.error("Failed to create property: " + (err?.message || "Unknown error"));
+      toast.error(isPagePermissionError(err) ? err.message : "Failed to create property: " + (err?.message || "Unknown error"));
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
+      assertCanWritePage(user, "Properties", "delete properties");
       const ok = await propertyService.delete(id);
       if (!ok) throw new Error("Delete failed");
       return id;
@@ -122,6 +132,7 @@ export default function Properties() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids) => {
+      assertCanWritePage(user, "Properties", "delete properties");
       await Promise.all(
         ids.map(async (id) => {
           const ok = await propertyService.delete(id);
@@ -159,6 +170,7 @@ export default function Properties() {
   const allFilteredSelected = filtered.length > 0 && filtered.every((property) => selectedPropertyIds.includes(property.id));
 
   const togglePropertySelection = (propertyId) => {
+    if (!canEditProperties) return;
     setSelectedPropertyIds((prev) =>
       prev.includes(propertyId)
         ? prev.filter((id) => id !== propertyId)
@@ -167,6 +179,7 @@ export default function Properties() {
   };
 
   const toggleSelectAllFiltered = (checked) => {
+    if (!canEditProperties) return;
     if (checked) {
       setSelectedPropertyIds((prev) => [...new Set([...prev, ...filtered.map((property) => property.id)])]);
       return;
@@ -246,10 +259,18 @@ export default function Properties() {
       <PageHeader icon={Home} title="Properties" subtitle={`${scopedProperties.length} properties${scopeSubtitle} · ${singleTenantProps.length} single · ${multiTenantProps.length} multi-building`} iconColor="from-blue-500 to-blue-700">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" disabled={scopedProperties.length === 0} onClick={() => downloadCSV(scopedProperties, 'properties.csv')}><Download className="w-4 h-4 mr-1 text-slate-500" />Export</Button>
-          <Button variant="outline" size="sm" disabled={noPortfolioAccess} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
-          <Button size="sm" disabled={noPortfolioAccess} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
+          <Button variant="outline" size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowImport(true)}><Upload className="w-4 h-4 mr-1" />Bulk Upload</Button>
+          <Button size="sm" disabled={noPortfolioAccess || !canEditProperties} onClick={() => setShowCreate(true)} className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-sm"><Plus className="w-4 h-4 mr-1" />Add Property</Button>
         </div>
       </PageHeader>
+
+      {!canEditProperties && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="p-4 text-sm text-blue-800">
+            You have read-only access on this page. Viewing is allowed, but creating, deleting, and editing properties is disabled.
+          </CardContent>
+        </Card>
+      )}
 
       {noPortfolioAccess && (
         <Card className="border-amber-200 bg-amber-50">
@@ -302,6 +323,7 @@ export default function Properties() {
                 variant="outline"
                 size="sm"
                 className="border-red-200 text-red-600 hover:bg-red-50"
+                disabled={!canEditProperties}
                 onClick={() => setShowBulkDelete(true)}
               >
                 <Trash2 className="w-4 h-4 mr-1" />
@@ -328,6 +350,7 @@ export default function Properties() {
                   <div className="flex items-start gap-3 mb-3">
                     <Checkbox
                       checked={selectedPropertyIds.includes(p.id)}
+                      disabled={!canEditProperties}
                       onCheckedChange={() => togglePropertySelection(p.id)}
                       className="mt-1"
                     />
@@ -348,6 +371,7 @@ export default function Properties() {
                       variant="ghost"
                       size="sm"
                       className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                      disabled={!canEditProperties}
                       onClick={() => setDeleteTarget(p)}
                       title="Delete property"
                     >
@@ -396,6 +420,7 @@ export default function Properties() {
                 <CardContent className="p-3 flex items-center gap-4">
                   <Checkbox
                     checked={selectedPropertyIds.includes(p.id)}
+                    disabled={!canEditProperties}
                     onCheckedChange={() => togglePropertySelection(p.id)}
                   />
                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${p.structure_type === 'multi' ? 'bg-purple-100' : 'bg-blue-100'}`}>
@@ -419,6 +444,7 @@ export default function Properties() {
                     variant="ghost"
                     size="sm"
                     className="h-8 w-8 p-0 text-red-500 hover:text-red-600 flex-shrink-0"
+                    disabled={!canEditProperties}
                     onClick={() => setDeleteTarget(p)}
                     title="Delete property"
                   >
@@ -440,6 +466,7 @@ export default function Properties() {
                 <TableHead className="w-10">
                   <Checkbox
                     checked={allFilteredSelected}
+                    disabled={!canEditProperties}
                     onCheckedChange={toggleSelectAllFiltered}
                     aria-label="Select all filtered properties"
                   />
@@ -470,6 +497,7 @@ export default function Properties() {
                       <TableCell>
                         <Checkbox
                           checked={selectedPropertyIds.includes(p.id)}
+                          disabled={!canEditProperties}
                           onCheckedChange={() => togglePropertySelection(p.id)}
                           aria-label={`Select ${p.name}`}
                         />
@@ -519,6 +547,7 @@ export default function Properties() {
                             variant="ghost"
                             size="sm"
                             className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+                            disabled={!canEditProperties}
                             onClick={() => setDeleteTarget(p)}
                             title="Delete property"
                           >
@@ -536,7 +565,7 @@ export default function Properties() {
       )}
 
       {/* Add Property Multi-Step Wizard Dialog */}
-      <Dialog open={showCreate} onOpenChange={v => { setShowCreate(v); if(!v) setCurrentStep(1); }}>
+      <Dialog open={showCreate && canEditProperties} onOpenChange={v => { setShowCreate(v && canEditProperties); if(!v) setCurrentStep(1); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Add New Property</DialogTitle>
@@ -714,7 +743,7 @@ export default function Properties() {
                 ...(form.portfolio_id ? { portfolio_id: form.portfolio_id } : {}),
                 ...(orgId && orgId !== '__none__' ? { org_id: orgId } : {}),
                 status: "active",
-              })} disabled={!form.name || createMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
+              })} disabled={!canEditProperties || !form.name || createMutation.isPending || (!isAdmin && portfolios.length > 0 && !form.portfolio_id)} className="bg-blue-600 hover:bg-blue-700 min-w-[140px] shadow-sm">
                 {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Property
               </Button>
             )}
