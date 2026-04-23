@@ -65,10 +65,23 @@ const navSections = [
       { label: "Budget Review", page: "BudgetReview" },
     ]
   },
-  { label: "Actuals & Variance", icon: Layers, page: "ActualsVariance" },
+  {
+    label: "Actuals & Variance", icon: Layers, children: [
+      { label: "Overview", page: "ActualsVariance" },
+      { label: "Actuals", page: "Actuals" },
+      { label: "Variance", page: "Variance" },
+    ]
+  },
   { label: "YoY Comparison", icon: ArrowLeftRight, page: "Comparison" },
   { label: "Reconciliation", icon: DollarSign, page: "Reconciliation" },
-  { label: "Analytics & Reports", icon: BarChart3, page: "AnalyticsReports" },
+  {
+    label: "Analytics & Reports", icon: BarChart3, children: [
+      { label: "Analytics Hub", page: "AnalyticsReports" },
+      { label: "Portfolio Insights", page: "PortfolioInsights" },
+      { label: "Analytics", page: "Analytics" },
+      { label: "Reports & KPIs", page: "Reports" },
+    ]
+  },
   { label: "Workflows", icon: GitBranch, page: "Workflows" },
   { label: "Notifications", icon: Bell, page: "Notifications" },
   { label: "Documents", icon: FolderOpen, page: "Documents" },
@@ -89,7 +102,21 @@ const navSections = [
   },
 ];
 
-function NavItem({ item, currentPageName, collapsed }) {
+function buildPageLabelMap(items, map = {}) {
+  items.forEach((item) => {
+    if (item.page) {
+      map[item.page] = item.label;
+    }
+    if (item.children) {
+      buildPageLabelMap(item.children, map);
+    }
+  });
+  return map;
+}
+
+const PAGE_LABELS = buildPageLabelMap(navSections);
+
+function NavItem({ item, currentPageName, collapsed, onNavigate }) {
   const [open, setOpen] = useState(false);
   const isActive = item.page === currentPageName || item.children?.some(c => c.page === currentPageName);
 
@@ -118,6 +145,7 @@ function NavItem({ item, currentPageName, collapsed }) {
               <Link
                 key={child.page}
                 to={createPageUrl(child.page)}
+                onClick={onNavigate}
                 className={`block px-3 py-1.5 rounded-md text-[13px] transition-colors ${child.page === currentPageName ? 'text-white bg-white/10' : 'text-white/50 hover:text-white hover:bg-white/5'}`}
               >
                 {child.label}
@@ -132,6 +160,7 @@ function NavItem({ item, currentPageName, collapsed }) {
   return (
     <Link
       to={createPageUrl(item.page)}
+      onClick={onNavigate}
       className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isActive ? 'text-white bg-white/10' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
     >
       <item.icon className="w-[18px] h-[18px] flex-shrink-0" />
@@ -150,6 +179,7 @@ export default function Layout({ children, currentPageName }) {
     ? filterNavForAllowedPages(navSections, allowedPageNames)
     : filterNavForRole(navSections, user?.role);
   const visibleNav = filterNavForModules(baseNav, enabledModules);
+  const currentPageLabel = PAGE_LABELS[currentPageName] || currentPageName;
 
   // Handle unauthenticated state if on a protected page
   useEffect(() => {
@@ -184,9 +214,17 @@ export default function Layout({ children, currentPageName }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-          {visibleNav.map((item, i) => (
-            <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={!sidebarOpen} />
-          ))}
+          {visibleNav.length > 0 ? (
+            visibleNav.map((item, i) => (
+              <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={!sidebarOpen} />
+            ))
+          ) : (
+            sidebarOpen && (
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/60">
+                No modules are enabled for this view yet. Ask an org admin to grant access or enable a module.
+              </div>
+            )
+          )}
         </nav>
 
         {sidebarOpen && (
@@ -219,7 +257,7 @@ export default function Layout({ children, currentPageName }) {
             </div>
             <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
               {visibleNav.map((item, i) => (
-                <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={false} />
+                <NavItem key={i} item={item} currentPageName={currentPageName} collapsed={false} onNavigate={() => setMobileOpen(false)} />
               ))}
             </nav>
           </aside>
@@ -232,7 +270,7 @@ export default function Layout({ children, currentPageName }) {
           <div className="flex items-center gap-4">
             <button onClick={() => setMobileOpen(true)} className="lg:hidden text-slate-600"><Menu className="w-5 h-5" /></button>
             <div className="text-sm text-slate-500">
-              <span className="font-semibold text-slate-700">{currentPageName}</span>
+              <span className="font-semibold text-slate-700">{currentPageLabel}</span>
             </div>
           </div>
           <div className="flex items-center gap-3">

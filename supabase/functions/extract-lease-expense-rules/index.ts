@@ -8,7 +8,7 @@ Your task is to analyze lease text and extract explicit expense and CAM (Common 
 You will map the findings against standard expense categories.
 
 For each of the categories provided in the JSON input, determine the following:
-- row_status: "not_mentioned", "uncertain", "unmapped", or "mapped"
+- row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" to prompt the user to manually enter it.
 - mentioned_in_lease: boolean (is this category specifically mentioned?)
 - is_recoverable: boolean (can the landlord recover this expense?)
 - is_excluded: boolean (is this explicitly excluded from recovery?)
@@ -21,6 +21,8 @@ For each of the categories provided in the JSON input, determine the following:
 - gross_up_applicable: boolean
 - admin_fee_applicable: boolean
 - admin_fee_percent: number or null
+- extracted_value: number or null (the explicit dollar amount mentioned for this expense, if any)
+- frequency: string ("yearly", "monthly", "quarterly") or null
 - notes: string (a brief explanation of your reasoning)
 - confidence: number (0.0 to 1.0)
 - source: string (the exact lease clause text snippet justifying this rule)

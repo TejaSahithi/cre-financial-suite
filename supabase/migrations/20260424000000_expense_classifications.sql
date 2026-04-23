@@ -20,6 +20,23 @@ CREATE POLICY "expense_categories_select" ON public.expense_categories FOR SELEC
 CREATE POLICY "expense_categories_insert" ON public.expense_categories FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
 CREATE POLICY "expense_categories_update" ON public.expense_categories FOR UPDATE USING (public.can_write_org_data(org_id));
 
+CREATE TABLE IF NOT EXISTS public.scope_expense_categories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('property', 'building', 'unit')),
+  scope_id UUID NOT NULL,
+  expense_category_id UUID NOT NULL REFERENCES public.expense_categories(id) ON DELETE CASCADE,
+  is_applicable BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.scope_expense_categories ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "scope_expense_categories_select" ON public.scope_expense_categories FOR SELECT USING (org_id IN (SELECT public.get_my_org_ids()));
+CREATE POLICY "scope_expense_categories_insert" ON public.scope_expense_categories FOR INSERT WITH CHECK (public.can_write_org_data(org_id));
+CREATE POLICY "scope_expense_categories_update" ON public.scope_expense_categories FOR UPDATE USING (public.can_write_org_data(org_id));
+CREATE POLICY "scope_expense_categories_delete" ON public.scope_expense_categories FOR DELETE USING (public.can_write_org_data(org_id));
+
 CREATE TABLE IF NOT EXISTS public.lease_expense_rule_sets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
@@ -43,7 +60,7 @@ CREATE TABLE IF NOT EXISTS public.lease_expense_rules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   rule_set_id UUID NOT NULL REFERENCES public.lease_expense_rule_sets(id) ON DELETE CASCADE,
   expense_category_id UUID NOT NULL REFERENCES public.expense_categories(id) ON DELETE CASCADE,
-  row_status TEXT DEFAULT 'uncertain', -- not_mentioned, uncertain, unmapped, mapped
+  row_status TEXT DEFAULT 'needs_review', -- not_mentioned, uncertain, unmapped, mapped, needs_review, missing_value, manually_added
   mentioned_in_lease BOOLEAN DEFAULT false,
   is_recoverable BOOLEAN DEFAULT false,
   is_excluded BOOLEAN DEFAULT false,
@@ -82,6 +99,7 @@ CREATE TABLE IF NOT EXISTS public.lease_expense_values (
   extracted_value NUMERIC,
   manual_value NUMERIC,
   final_value NUMERIC,
+  frequency TEXT DEFAULT 'yearly', -- yearly, monthly, quarterly
   value_source TEXT,
   mapped_expense_id UUID REFERENCES public.expenses(id) ON DELETE SET NULL,
   mapped_gl_account_id UUID,
