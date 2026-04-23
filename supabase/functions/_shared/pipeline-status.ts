@@ -99,6 +99,14 @@ function stripReviewPipelineColumns(patch: Record<string, unknown>): Record<stri
   return next;
 }
 
+function buildNoRowUpdatedError(fileId: string, status: string) {
+  const error: any = new Error(
+    `No uploaded_files row was updated for file ${fileId} while setting status=${status}`,
+  );
+  error.code = "NO_ROW_UPDATED";
+  return error;
+}
+
 /**
  * Update uploaded_files.status and related metadata.
  * Returns the Supabase update error (if any) — callers decide whether to throw.
@@ -139,10 +147,12 @@ export async function setStatus(
     patch.processing_completed_at = patch.processing_completed_at ?? now;
   }
 
-  let { error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from("uploaded_files")
     .update(patch)
-    .eq("id", fileId);
+    .eq("id", fileId)
+    .select("id, status")
+    .maybeSingle();
 
   if (error && looksLikeMissingOptionalColumn(error)) {
     console.warn(
@@ -152,12 +162,22 @@ export async function setStatus(
     const retry = await supabaseAdmin
       .from("uploaded_files")
       .update(stripReviewPipelineColumns(patch))
-      .eq("id", fileId);
+      .eq("id", fileId)
+      .select("id, status")
+      .maybeSingle();
+    data = retry.data;
     error = retry.error;
   }
 
+  if (!error && !data) {
+    error = buildNoRowUpdatedError(fileId, status);
+  }
+
   if (error) {
-    console.error(`[pipeline-status] setStatus(${status}) failed for file ${fileId}:`, error.message);
+    console.error(`[pipeline-status] setStatus(${status}) failed for file ${fileId}:`, {
+      error: error.message,
+      patch,
+    });
   }
 
   return { error };
@@ -175,19 +195,30 @@ export async function setFailed(
   lastProgress = 0,
 ): Promise<void> {
   const now = new Date().toISOString();
-  const { error } = await supabaseAdmin
+  const patch = {
+    status: "failed",
+    error_message: errorMessage,
+    failed_step: failedStep ?? null,
+    progress_percentage: lastProgress,
+    processing_completed_at: now,
+    updated_at: now,
+  };
+
+  const { data, error: updateError } = await supabaseAdmin
     .from("uploaded_files")
-    .update({
-      status: "failed",
-      error_message: errorMessage,
-      failed_step: failedStep ?? null,
-      progress_percentage: lastProgress,
-      processing_completed_at: now,
-      updated_at: now,
-    })
-    .eq("id", fileId);
+    .update(patch)
+    .eq("id", fileId)
+    .select("id, status")
+    .maybeSingle();
+
+  const error = !updateError && !data
+    ? buildNoRowUpdatedError(fileId, "failed")
+    : updateError;
 
   if (error) {
-    console.error(`[pipeline-status] setFailed update error for ${fileId}:`, error.message);
+    console.error(`[pipeline-status] setFailed update error for ${fileId}:`, {
+      error: error.message,
+      patch,
+    });
   }
 }

@@ -3,6 +3,23 @@
 -- Profiles, Organizations, Memberships, Access Requests
 -- + Row-Level Security (RLS) policies
 -- ============================================================
+--
+-- IMPORTANT:
+-- This file is the foundational auth + tenancy schema, not the complete
+-- production contract. The app also depends on later additive migrations for
+-- business tables, uploaded_files observability, pipeline_logs, scoped access,
+-- and membership permission JSON.
+--
+-- Review these migrations before changing schema-dependent code:
+--   - 20260322_add_core_tables.sql
+--   - 202604010146112_pipeline_uploaded_files.sql
+--   - 202604080146114_enterprise_schema.sql
+--   - 20260422000200_enterprise_access_control.sql
+--   - later uploaded_files review/scope migrations
+--
+-- Phase 1 note:
+-- Do not treat schema.sql as the sole source of truth for uploaded_files,
+-- pipeline_logs, audit visibility, or scoped-access behavior.
 
 -- 1. PROFILES — user identity only (no role, no org_id)
 CREATE TABLE IF NOT EXISTS public.profiles (
