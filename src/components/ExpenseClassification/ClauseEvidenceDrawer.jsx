@@ -7,7 +7,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { FileText, ExternalLink } from "lucide-react";
+import { FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }) {

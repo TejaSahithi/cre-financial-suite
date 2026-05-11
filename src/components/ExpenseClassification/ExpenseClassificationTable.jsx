@@ -2,8 +2,7 @@ import React from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, X, FileSearch, HelpCircle, Edit2 } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Check, X, FileSearch, Edit2 } from "lucide-react";
 
 export default function ExpenseClassificationTable({ categories, rules, onEditRule, onViewEvidence }) {
   const getStatusBadge = (status) => {

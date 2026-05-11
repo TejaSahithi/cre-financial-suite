@@ -7,9 +7,7 @@ import { FileText, Settings, Upload, Sparkles } from 'lucide-react';
 import CustomFieldManager from './CustomFieldManager';
 import CustomFieldForm from './CustomFieldForm';
 import CustomFieldDisplay from './CustomFieldDisplay';
-import DocumentExtractionWithCustomFields from './DocumentExtractionWithCustomFields';
 import CustomFieldSuggestionNotification from './CustomFieldSuggestionNotification';
-import useCustomFields from '@/hooks/useCustomFields';
 
 /**
  * CustomFieldIntegrationExample - Demonstrates how to integrate custom field components
