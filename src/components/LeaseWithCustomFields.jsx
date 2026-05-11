@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Edit, Save, X, FileText } from 'lucide-react';
+import { Edit, X, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import CustomFieldForm from './CustomFieldForm';
 import CustomFieldDisplay from './CustomFieldDisplay';

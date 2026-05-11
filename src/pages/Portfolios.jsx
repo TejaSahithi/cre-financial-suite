@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   Plus,
   Search,
@@ -99,7 +99,6 @@ export default function Portfolios() {
   };
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const { user } = useAuth();
   const { canWritePage } = useModuleAccess();
   const canEditPortfolios = canWritePage("Portfolios");
@@ -180,9 +179,7 @@ export default function Portfolios() {
         handleSelectedOrgChange(data.org_id);
       }
       toast.success("Portfolio created successfully");
-      if (data?.id) {
-        navigate(createPageUrl("Properties") + `?portfolio=${data.id}`);
-      }
+      // Stay on the Portfolios page so the user can see the newly created portfolio in the list
     },
     onError: (err) => {
       toast.error(isPagePermissionError(err) ? err.message : `Failed to create portfolio: ${err?.message || "Unknown error"}`);

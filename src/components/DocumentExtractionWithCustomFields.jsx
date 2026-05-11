@@ -13,14 +13,11 @@ import {
   AlertTriangle, 
   Plus,
   Eye,
-  Download,
   RefreshCw
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { customFieldService } from '@/services/customFieldService';
 import CustomFieldManager from './CustomFieldManager';
-import CustomFieldForm from './CustomFieldForm';
-import CustomFieldDisplay from './CustomFieldDisplay';
 import useOrgId from '@/hooks/useOrgId';
 
 /**
