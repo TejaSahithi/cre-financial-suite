@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { expenseService } from "@/services/expenseService";
 import { leaseService } from "@/services/leaseService";
 import { propertyService } from "@/services/propertyService";
+import { parseCSV } from "@/services/parsingEngine";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,29 +40,36 @@ export default function Integrations() {
     if (!file) return;
     setImporting(true);
     try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) { setImporting(false); return; }
-      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
-      const items = lines.slice(1).map(line => {
-        const values = line.split(",").map(v => v.trim());
-        const row = {};
-        headers.forEach((h, i) => { row[h] = values[i] || ""; });
-        return row;
-      });
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      let text = "";
+
+      if (ext === "xlsx" || ext === "xls") {
+        const { read, utils } = await import("xlsx");
+        const buf = await file.arrayBuffer();
+        const workbook = read(buf, { type: "array" });
+        const firstSheet = workbook.SheetNames?.[0];
+        if (!firstSheet) {
+          setImporting(false);
+          return;
+        }
+        text = utils.sheet_to_csv(workbook.Sheets[firstSheet], { blankrows: false });
+      } else {
+        text = await file.text();
+      }
+
+      const { rows: items } = parseCSV(text);
 
       if (items.length > 0) {
         await expenseService.bulkCreate(items.map(item => ({
           date: item.date || null,
           category: item.category || item.expense_category || "",
-          amount: parseFloat(item.amount) || 0,
+          amount: parseFloat(String(item.amount || item.total || item.cost || 0).replace(/[$,]/g, "")) || 0,
           vendor: item.vendor || "",
           description: item.description || "",
           classification: item.classification || "recoverable",
-          org_id: "default",
-          property_id: properties[0]?.id || "default",
+          property_id: properties[0]?.id || null,
           source: "import",
-          fiscal_year: new Date().getFullYear(),
+          fiscal_year: item.date ? new Date(item.date).getFullYear() || new Date().getFullYear() : new Date().getFullYear(),
         })));
         queryClient.invalidateQueries({ queryKey: ["expenses"] });
       }

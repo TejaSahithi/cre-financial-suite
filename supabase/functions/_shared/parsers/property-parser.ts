@@ -119,7 +119,7 @@ const NUMERIC_FIELDS = new Set([
  * Tries both the raw lowercased header and a version with spaces→underscores.
  */
 function findStandardFieldName(columnHeader: string): string | null {
-  const rawNorm = columnHeader.toLowerCase().trim();
+  const rawNorm = columnHeader.replace(/^\uFEFF/, '').toLowerCase().trim();
   const underNorm = rawNorm.replace(/\s+/g, '_');
 
   for (const [standardName, variations] of Object.entries(COLUMN_MAPPINGS)) {

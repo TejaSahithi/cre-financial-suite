@@ -91,7 +91,12 @@ export default function VendorProfile() {
   if (peakMonth.amount > 0) insights.push({ type: "info", text: `Peak spending month: ${peakMonth.month} ($${peakMonth.amount.toLocaleString()})` });
 
   // Vendor documents
-  const vendorDocs = documents.filter(d => d.vendor_name?.toLowerCase() === vendor.name?.toLowerCase());
+  const vendorDocs = documents.filter((d) => {
+    const normalizedVendor = String(vendor.name || '').trim().toLowerCase();
+    const normalizedDocVendor = String(d.vendor_name || '').trim().toLowerCase();
+    const normalizedComments = String(d.comments || d.description || '').trim().toLowerCase();
+    return normalizedDocVendor === normalizedVendor || normalizedComments.includes(normalizedVendor);
+  });
 
   const filteredExpenses = vendorExpenses.filter(e => {
     if (!expSearch) return true;
@@ -123,6 +128,7 @@ export default function VendorProfile() {
       name: file.name,
       type: "vendor_invoice",
       file_url,
+      comments: `Vendor: ${vendor.name}`,
     });
     setUploading(false);
   };

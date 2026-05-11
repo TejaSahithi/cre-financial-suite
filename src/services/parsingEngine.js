@@ -20,7 +20,9 @@ export function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return { headers: [], rows: [] };
 
-  const headers = splitCSVLine(lines[0]);
+  const headers = splitCSVLine(lines[0]).map((header, idx) => (
+    idx === 0 ? String(header).replace(/^\uFEFF/, '') : header
+  ));
   const rows = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -66,6 +68,7 @@ function splitCSVLine(line) {
  */
 function normaliseHeader(h) {
   return h
+    .replace(/^\uFEFF/, '')
     .toLowerCase()
     .replace(/[()$%#*]/g, '')
     .trim()
@@ -143,6 +146,7 @@ const PROPERTY_COLUMNS = {
   name: 'name',
   property_name: 'name',
   property: 'name',
+  property_id_code: 'property_id_code',
   building_name: 'name',
   asset_name: 'name',
   project_name: 'name',
@@ -952,6 +956,15 @@ export function parseProperties(text) {
     if (row.property_type) {
       row.property_type = String(row.property_type).toLowerCase().trim();
     }
+    if (row.structure_type) {
+      const structure = normaliseHeader(row.structure_type);
+      row.structure_type =
+        structure === 'multi' || structure.includes('multi_building') || structure.includes('multi_tenant') || structure.startsWith('multi')
+          ? 'multi'
+          : structure === 'single' || structure.includes('single_building') || structure.startsWith('single')
+            ? 'single'
+            : structure;
+    }
     // Normalise status
     if (row.status) {
       row.status = String(row.status).toLowerCase().trim();
@@ -1572,6 +1585,7 @@ export const CSV_TEMPLATES = {
   property: 'Property Name,Address,City,State,Zip,Property Type,Total SF,Year Built,Status,Portfolio\n',
   lease: 'Tenant Name,Unit Number,Property Name,Start Date,End Date,Monthly Rent,Annual Rent,Square Footage,Lease Type,Security Deposit,CAM Amount,Escalation Rate,Status,Notes\n',
   tenant: 'Tenant Name,Company,Email,Phone,Industry,Status\n',
+  vendor: 'Vendor Name,Contact Name,Email,Phone,Category,Status\n',
   building: 'Building Name,Property Name,Address,Total SF,Floors,Year Built,Status\n',
   unit: 'Unit Number,Building Name,Property Name,Floor,Square Footage,Unit Type,Status,Monthly Rent\n',
   expense: 'Date,Category,Amount,Vendor,Description,Classification,GL Code,Property Name,Fiscal Year,Month\n',

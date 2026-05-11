@@ -11,13 +11,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CSV_TEMPLATES } from "@/services/parsingEngine";
+import { CSV_TEMPLATES, parseCSV } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
-  PropertyService, LeaseService, TenantService, GLAccountService, InvoiceService,
+  PropertyService, LeaseService, TenantService, GLAccountService, InvoiceService, VendorService,
 } from "@/services/api";
 
 // ── Service map ──────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ const SERVICE_MAP = {
   property: PropertyService, lease: LeaseService,
   tenant: TenantService,     invoice: InvoiceService,
   gl_account: GLAccountService, gl: GLAccountService,
+  vendor: VendorService,
 };
 
 const MODULE_TITLES = {
@@ -34,6 +35,7 @@ const MODULE_TITLES = {
   lease: 'Leases', tenant: 'Tenants', revenue: 'Revenue Entries',
   expense: 'Expenses', invoice: 'Invoices',
   gl_account: 'GL Accounts', gl: 'GL Accounts',
+  vendor: 'Vendors',
 };
 
 // ── All fields per module — shown in the edit grid ──────────────────────────
@@ -135,6 +137,14 @@ const MODULE_FIELDS = {
     { key: 'status',       label: 'Status',       required: false, placeholder: 'active' },
     { key: 'notes',        label: 'Notes',        required: false, placeholder: '' },
   ],
+  vendor: [
+    { key: 'name',          label: 'Vendor Name',  required: true,  placeholder: 'ABC Services' },
+    { key: 'contact_name',  label: 'Contact Name', required: false, placeholder: 'Jane Smith' },
+    { key: 'contact_email', label: 'Email',        required: false, placeholder: 'jane@abcservices.com' },
+    { key: 'contact_phone', label: 'Phone',        required: false, placeholder: '555-0100' },
+    { key: 'category',      label: 'Category',     required: false, placeholder: 'maintenance' },
+    { key: 'status',        label: 'Status',       required: false, placeholder: 'active' },
+  ],
   invoice: [
     { key: 'tenant_name',    label: 'Tenant',       required: false, placeholder: 'Acme Corp' },
     { key: 'property_name',  label: 'Property',     required: false, placeholder: 'Sunset Plaza' },
@@ -182,6 +192,7 @@ const MODULE_FIELDS = {
 MODULE_FIELDS.gl = MODULE_FIELDS.gl_account;
 
 const ACCEPT_ATTR = '.csv,.tsv,.xlsx,.xls,.pdf,.docx,.doc,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp,.bmp,.gif';
+const LOCAL_ONLY_MODULES = new Set(['vendor']);
 
 const PIPELINE_MODULE_MAP = {
   property: 'properties',
@@ -231,6 +242,50 @@ function normalizeFieldKey(key) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+function normalizePropertyStructureType(value) {
+  const normalized = normalizeFieldKey(value);
+  if (!normalized) return null;
+  if (
+    normalized === 'multi' ||
+    normalized.includes('multi_building') ||
+    normalized.includes('multi_tenant') ||
+    normalized.startsWith('multi')
+  ) {
+    return 'multi';
+  }
+  if (
+    normalized === 'single' ||
+    normalized.includes('single_building') ||
+    normalized.startsWith('single')
+  ) {
+    return 'single';
+  }
+  return normalized;
+}
+
+async function parseStructuredFileLocally(file) {
+  const ext = String(file?.name || '').split('.').pop()?.toLowerCase() || '';
+
+  if (ext === 'xlsx' || ext === 'xls') {
+    const { read, utils } = await import('xlsx');
+    const buffer = await file.arrayBuffer();
+    const workbook = read(buffer, { type: 'array' });
+    const firstSheet = workbook.SheetNames?.[0];
+    if (!firstSheet) {
+      throw new Error('Excel file contains no worksheets.');
+    }
+    return parseCSV(utils.sheet_to_csv(workbook.Sheets[firstSheet], { blankrows: false })).rows;
+  }
+
+  if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
+    const text = await file.text();
+    const normalizedText = ext === 'tsv' ? text.replace(/\t/g, ',') : text;
+    return parseCSV(normalizedText).rows;
+  }
+
+  throw new Error('This import expects a CSV, TSV, or Excel file.');
 }
 
 // Detects whether a record is a plain CSV-row object (no pipeline-wrapper keys).
@@ -611,6 +666,14 @@ export default function BulkImportModal({
         credit_score: 'credit_rating', credit: 'credit_rating',
         tenant_status: 'status',
       },
+      vendor: {
+        vendor_name: 'name', supplier_name: 'name', contractor_name: 'name', company_name: 'name',
+        contact: 'contact_name', contact_person: 'contact_name', primary_contact: 'contact_name',
+        email: 'contact_email', email_address: 'contact_email', contact_email: 'contact_email',
+        phone: 'contact_phone', phone_number: 'contact_phone', telephone: 'contact_phone', contact_phone: 'contact_phone',
+        vendor_category: 'category', service_category: 'category',
+        vendor_status: 'status',
+      },
       invoice: {
         total_amount: 'amount', total: 'amount', amount_due: 'amount', balance_due: 'amount', invoice_total: 'amount',
         invoice_date: 'issued_date', date_issued: 'issued_date', date: 'issued_date',
@@ -658,6 +721,18 @@ export default function BulkImportModal({
         Object.entries(aliased).filter(([k]) => allowedKeys.has(k))
       );
 
+      if (moduleType === 'property') {
+        if (filteredExtracted.structure_type != null) {
+          filteredExtracted.structure_type = normalizePropertyStructureType(filteredExtracted.structure_type);
+        }
+        if (filteredExtracted.property_type != null) {
+          filteredExtracted.property_type = normalizeFieldKey(filteredExtracted.property_type);
+        }
+        if (filteredExtracted.status != null) {
+          filteredExtracted.status = normalizeFieldKey(filteredExtracted.status);
+        }
+      }
+
       return {
         ...defaultRow,
         ...filteredExtracted,
@@ -682,6 +757,23 @@ export default function BulkImportModal({
     try {
       if (REQUIRES_PROPERTY.has(moduleType) && !propertyId && !targetPropertyId && !CAN_RESOLVE_PROPERTY_PER_ROW.has(moduleType)) {
         toast.error('Pick a target property before uploading this file.');
+        return;
+      }
+
+      if (LOCAL_ONLY_MODULES.has(moduleType)) {
+        const extractedRows = await parseStructuredFileLocally(f);
+        if (!extractedRows.length) {
+          toast.warning('No records found. Try a different file or format.');
+          return;
+        }
+
+        const fileName = String(f.name || '').toLowerCase();
+        const localMethod =
+          fileName.endsWith('.xlsx') || fileName.endsWith('.xls') ? 'excel' : 'csv';
+
+        setRows(buildRows(extractedRows));
+        setMethod(localMethod);
+        toast.success(`${extractedRows.length} ${title.toLowerCase()} record${extractedRows.length !== 1 ? 's' : ''} extracted locally. Review and click Import to add them.`);
         return;
       }
 
@@ -890,6 +982,7 @@ export default function BulkImportModal({
           unit:     ['Unit', 'bu-units', 'units'],
           lease:    ['Lease', 'leases-prop'],
           tenant:   ['Tenant'],
+          vendor:   ['Vendor'],
           invoice:  ['Invoice', 'invoices'],
           revenue:  ['Revenue'],
           expense:  ['Expense', 'expenses-prop'],
@@ -1187,6 +1280,7 @@ export default function BulkImportModal({
       unit:     ['Unit', 'bu-units', 'units'],
       lease:    ['Lease', 'leases-prop'],
       tenant:   ['Tenant'],
+      vendor:   ['Vendor'],
       invoice:  ['Invoice', 'invoices'],
       revenue:  ['Revenue'],
       expense:  ['Expense', 'expenses-prop'],

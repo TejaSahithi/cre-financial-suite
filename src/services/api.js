@@ -450,6 +450,7 @@ const ALLOWED_COLUMNS = {
     ...COMMON_BASE_COLUMNS,
     'property_id', 'lease_id', 'type', 'name', 'status',
     'signed_by', 'signed_at', 'comments', 'document_url',
+    'file_url', 'description', 'tenant_name', 'vendor_name',
   ]),
   Tenant: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -560,8 +561,24 @@ export function createEntityService(entityName) {
       }
     }
 
-    // 2. Entity-specific cleanup (none currently — `floors` is now a real
-    //    column on properties, see 20260408_bulk_import_columns.sql)
+    // 2. Entity-specific aliasing for schema drift across environments.
+    if (entityName === 'Vendor') {
+      if (clean.contact_email !== undefined && clean.email === undefined) {
+        clean.email = clean.contact_email;
+      }
+      if (clean.contact_phone !== undefined && clean.phone === undefined) {
+        clean.phone = clean.contact_phone;
+      }
+    }
+
+    if (entityName === 'Document') {
+      if (clean.file_url !== undefined && clean.document_url === undefined) {
+        clean.document_url = clean.file_url;
+      }
+      if (clean.document_url !== undefined && clean.file_url === undefined) {
+        clean.file_url = clean.document_url;
+      }
+    }
 
     // 3. Global Strip List (Relational aliases and UI-only artifacts)
     const toStrip = [
@@ -639,6 +656,24 @@ export function createEntityService(entityName) {
       }
       if (normalized.contact_phone === undefined && normalized.phone !== undefined) {
         normalized.contact_phone = normalized.phone;
+      }
+    }
+
+    if (entityName === 'Vendor') {
+      if (normalized.contact_email === undefined && normalized.email !== undefined) {
+        normalized.contact_email = normalized.email;
+      }
+      if (normalized.contact_phone === undefined && normalized.phone !== undefined) {
+        normalized.contact_phone = normalized.phone;
+      }
+    }
+
+    if (entityName === 'Document') {
+      if (normalized.file_url === undefined && normalized.document_url !== undefined) {
+        normalized.file_url = normalized.document_url;
+      }
+      if (normalized.document_url === undefined && normalized.file_url !== undefined) {
+        normalized.document_url = normalized.file_url;
       }
     }
     
