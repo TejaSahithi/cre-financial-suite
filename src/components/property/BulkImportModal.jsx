@@ -484,6 +484,7 @@ export default function BulkImportModal({
       property: {
         // Name
         property_id: 'property_id_code', property_code: 'property_id_code', asset_id: 'property_id_code',
+        property_uuid: 'property_id_code', prop_id: 'property_id_code', id_code: 'property_id_code',
         property: 'name', property_name: 'name', building_name: 'name', asset_name: 'name',
         asset: 'name', project_name: 'name', site_name: 'name',
         // SF
@@ -491,33 +492,43 @@ export default function BulkImportModal({
         square_feet: 'total_sf', sqft: 'total_sf', sf: 'total_sf',
         rentable_sf: 'total_sf', rentable_square_feet: 'total_sf',
         gla: 'total_sf', gross_leasable_area: 'total_sf', nra: 'total_sf',
+        leased_sqft: 'leased_sf', occupied_sf: 'leased_sf', occupied_sqft: 'leased_sf',
         // Address
         property_address: 'address', premises_address: 'address', mailing_address: 'address',
         address_line_1: 'address', address1: 'address', street: 'address',
         street_address: 'address', location: 'address', full_address: 'address',
-        zipcode: 'zip', zip_code: 'zip', postal_code: 'zip',
+        municipality: 'city', town: 'city',
+        province: 'state', region: 'state',
+        zipcode: 'zip', zip_code: 'zip', postal_code: 'zip', postal: 'zip',
         // Type
         type: 'property_type', asset_type: 'property_type', building_type: 'property_type',
-        use_type: 'property_type', property_use: 'property_type',
+        use_type: 'property_type', property_use: 'property_type', class: 'property_type',
+        structure: 'structure_type', structure_category: 'structure_type', building_structure: 'structure_type',
         // Counts
         units: 'total_units', unit_count: 'total_units', number_of_units: 'total_units',
         buildings: 'total_buildings', building_count: 'total_buildings', number_of_buildings: 'total_buildings',
+        occupancy: 'occupancy_pct', occupancy_rate: 'occupancy_pct', occupancy_percent: 'occupancy_pct',
+        occ_pct: 'occupancy_pct',
+        floor_count: 'floors', number_of_floors: 'floors', stories: 'floors', num_floors: 'floors',
         // Year
         built: 'year_built', construction_year: 'year_built', year_constructed: 'year_built',
         year: 'year_built',
         // Value / performance
         acquisition_price: 'purchase_price', cost_basis: 'purchase_price',
         appraised_value: 'market_value', current_value: 'market_value', assessed_value: 'market_value',
+        valuation: 'market_value',
         net_operating_income: 'noi', annual_noi: 'noi',
         capitalization_rate: 'cap_rate',
         // Owner / manager
         property_manager: 'manager', manager_name: 'manager', managed_by: 'manager',
         owner_name: 'owner', ownership: 'owner', owner_entity: 'owner',
-        property_contact: 'contact', telephone: 'phone', phone_number: 'phone', email_address: 'email',
-        acquisition_date: 'acquired_date', purchase_date: 'acquired_date',
+        property_contact: 'contact', contact_name: 'contact', contact_info: 'contact',
+        telephone: 'phone', phone_number: 'phone', contact_phone: 'phone',
+        email_address: 'email', contact_email: 'email',
+        acquisition_date: 'acquired_date', purchase_date: 'acquired_date', date_acquired: 'acquired_date',
         parcel_id: 'parcel_tax_id', tax_id: 'parcel_tax_id', parcel_tax: 'parcel_tax_id',
         parking: 'parking_spaces', parking_count: 'parking_spaces',
-        features: 'amenities',
+        features: 'amenities', amenity_list: 'amenities',
         policy_number: 'insurance_policy', insurance: 'insurance_policy',
         // Status
         asset_status: 'status', property_status: 'status',

@@ -145,6 +145,13 @@ const PROPERTY_COLUMNS = {
   property: 'name',
   building_name: 'name',
   asset_name: 'name',
+  project_name: 'name',
+  site_name: 'name',
+  property_id: 'property_id_code',
+  property_code: 'property_id_code',
+  asset_id: 'property_id_code',
+  prop_id: 'property_id_code',
+  id_code: 'property_id_code',
 
   // Address
   address: 'address',
@@ -152,13 +159,21 @@ const PROPERTY_COLUMNS = {
   street_address: 'address',
   location: 'address',
   full_address: 'address',
+  property_address: 'address',
+  premises_address: 'address',
+  mailing_address: 'address',
+  address_line_1: 'address',
+  address1: 'address',
 
   // City / State / Zip
   city: 'city',
+  municipality: 'city',
+  town: 'city',
   state: 'state',
   province: 'state',
   region: 'state',
   zip: 'zip',
+  zipcode: 'zip',
   zip_code: 'zip',
   postal_code: 'zip',
   postal: 'zip',
@@ -169,6 +184,10 @@ const PROPERTY_COLUMNS = {
   building_type: 'property_type',
   use_type: 'property_type',
   class: 'property_type',
+  property_use: 'property_type',
+  structure_type: 'structure_type',
+  structure: 'structure_type',
+  building_structure: 'structure_type',
 
   // Square footage
   total_sf: 'total_sf',
@@ -182,6 +201,10 @@ const PROPERTY_COLUMNS = {
   gross_leasable_area: 'total_sf',
   net_rentable_area: 'total_sf',
   nra: 'total_sf',
+  leased_sf: 'leased_sf',
+  leased_sqft: 'leased_sf',
+  occupied_sf: 'leased_sf',
+  occupied_sqft: 'leased_sf',
 
   // Year built
   year_built: 'year_built',
@@ -207,27 +230,69 @@ const PROPERTY_COLUMNS = {
   market_value: 'market_value',
   appraised_value: 'market_value',
   current_value: 'market_value',
+  assessed_value: 'market_value',
+  valuation: 'market_value',
   noi: 'noi',
   net_operating_income: 'noi',
+  annual_noi: 'noi',
   cap_rate: 'cap_rate',
   capitalization_rate: 'cap_rate',
 
   // Units / floors
+  total_buildings: 'total_buildings',
+  buildings: 'total_buildings',
+  building_count: 'total_buildings',
+  number_of_buildings: 'total_buildings',
   total_units: 'total_units',
   units: 'total_units',
   unit_count: 'total_units',
   number_of_units: 'total_units',
+  occupancy_pct: 'occupancy_pct',
+  occupancy: 'occupancy_pct',
+  occupancy_rate: 'occupancy_pct',
+  occupancy_percent: 'occupancy_pct',
+  occ_pct: 'occupancy_pct',
   floors: 'floors',
+  floor_count: 'floors',
   number_of_floors: 'floors',
   stories: 'floors',
 
   // Contact / manager
   manager: 'manager',
   property_manager: 'manager',
+  manager_name: 'manager',
+  managed_by: 'manager',
   contact: 'contact',
+  property_contact: 'contact',
   contact_name: 'contact',
+  contact_info: 'contact',
   owner: 'owner',
   ownership: 'owner',
+  owner_name: 'owner',
+  owner_entity: 'owner',
+  phone: 'phone',
+  telephone: 'phone',
+  phone_number: 'phone',
+  contact_phone: 'phone',
+  email: 'email',
+  email_address: 'email',
+  contact_email: 'email',
+  acquired_date: 'acquired_date',
+  acquisition_date: 'acquired_date',
+  purchase_date: 'acquired_date',
+  date_acquired: 'acquired_date',
+  parcel_tax_id: 'parcel_tax_id',
+  parcel_id: 'parcel_tax_id',
+  tax_id: 'parcel_tax_id',
+  parking_spaces: 'parking_spaces',
+  parking: 'parking_spaces',
+  parking_count: 'parking_spaces',
+  amenities: 'amenities',
+  features: 'amenities',
+  amenity_list: 'amenities',
+  insurance_policy: 'insurance_policy',
+  policy_number: 'insurance_policy',
+  insurance: 'insurance_policy',
 
   // Notes / description
   notes: 'notes',
@@ -872,13 +937,17 @@ export function parseProperties(text) {
       }
     });
     row.total_sf      = toNumber(row.total_sf);
+    row.leased_sf     = toNumber(row.leased_sf);
+    row.total_buildings = toNumber(row.total_buildings);
     row.year_built    = toNumber(row.year_built);
     row.total_units   = toNumber(row.total_units);
+    row.occupancy_pct = toNumber(row.occupancy_pct) ?? undefined;
     row.floors        = toNumber(row.floors);
     row.purchase_price = toNumber(row.purchase_price) ?? undefined;
     row.market_value  = toNumber(row.market_value) ?? undefined;
     row.noi           = toNumber(row.noi) ?? undefined;
     row.cap_rate      = toNumber(row.cap_rate) ?? undefined;
+    row.parking_spaces = toNumber(row.parking_spaces) ?? undefined;
     // Normalise property_type to lowercase
     if (row.property_type) {
       row.property_type = String(row.property_type).toLowerCase().trim();
