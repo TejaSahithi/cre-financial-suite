@@ -39,7 +39,12 @@ function parseCSV(text: string): ParseResult {
 
   // Extract headers from first line
   const headerLine = lines[0];
-  const headers = headerLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+  const headers = headerLine
+    .split(',')
+    .map((h, idx) => {
+      const cleaned = h.trim().replace(/^"|"$/g, '');
+      return idx === 0 ? cleaned.replace(/^\uFEFF/, '') : cleaned;
+    });
   
   if (headers.length === 0) {
     throw new Error('CSV file has no columns');
