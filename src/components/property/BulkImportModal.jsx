@@ -233,8 +233,37 @@ function normalizeFieldKey(key) {
     .replace(/^_+|_+$/g, '');
 }
 
+// Detects whether a record is a plain CSV-row object (no pipeline-wrapper keys).
+// CSV parsed_data rows are stored as flat objects like { name: 'X', city: 'Y' }.
+function isPlainDataRow(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const pipelineKeys = new Set(['values', 'row', 'fields', 'standard_fields', 'custom_fields',
+    'extracted_fields', 'record_index', 'row_index', 'confidence', 'warnings', 'notes',
+    'missing_required', 'rejected_fields']);
+  const keys = Object.keys(record);
+  if (keys.length === 0) return false;
+  // A plain row has NO pipeline-wrapper keys (it's all data columns + optional _row_number)
+  return !keys.some(k => pipelineKeys.has(k));
+}
+
 function rowFromReviewRecord(record) {
   if (!record || typeof record !== 'object') return null;
+
+  // ── Plain CSV row (e.g. from parse-file pipeline) ──────────────────────────
+  // parsed_data/valid_data for CSV files are stored as arrays of flat objects.
+  // They have NO pipeline wrapper keys, so we return them directly after
+  // stripping internal metadata keys (_row_number, _row, etc.).
+  if (isPlainDataRow(record)) {
+    const cleaned = {};
+    Object.entries(record).forEach(([k, v]) => {
+      if (k.startsWith('_')) return; // skip internal metadata (_row_number, etc.)
+      if (v == null) return;
+      cleaned[normalizeFieldKey(k)] = v;
+    });
+    return Object.keys(cleaned).length ? cleaned : null;
+  }
+
+  // ── Review-pipeline wrapper formats ───────────────────────────────────────
   if (record.values && typeof record.values === 'object') return record.values;
   if (record.row && typeof record.row === 'object') return record.row;
 
@@ -264,6 +293,8 @@ function rowFromReviewRecord(record) {
 }
 
 function extractRowsFromUploadedFile(record) {
+  // Priority: parsed_data first for defer_store=true flows (CSV/Excel)
+  // where valid_data is empty because validate-data was skipped.
   const candidates = [
     record?.valid_data,
     record?.parsed_data,
