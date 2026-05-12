@@ -371,6 +371,45 @@ function extractRowsFromUploadedFile(record) {
   return singleRecord ? [singleRecord] : [];
 }
 
+const wait = (ms) => new Promise((resolve) => {
+  globalThis.setTimeout(resolve, ms);
+});
+
+async function waitForUploadedFileRows(fileId, {
+  timeoutMs = 15000,
+  intervalMs = 750,
+} = {}) {
+  const startedAt = Date.now();
+  let lastRecord = null;
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const { data: fileRecord, error } = await supabase
+      .from('uploaded_files')
+      .select('*')
+      .eq('id', fileId)
+      .single();
+
+    if (error) throw error;
+    lastRecord = fileRecord;
+
+    if (fileRecord?.status === 'failed') {
+      throw new Error(fileRecord.error_message || 'Pipeline failed.');
+    }
+
+    const extractedRows = extractRowsFromUploadedFile(fileRecord);
+    if (extractedRows.length > 0) {
+      return { fileRecord, extractedRows };
+    }
+
+    await wait(intervalMs);
+  }
+
+  return {
+    fileRecord: lastRecord,
+    extractedRows: lastRecord ? extractRowsFromUploadedFile(lastRecord) : [],
+  };
+}
+
 // ── Template download ─────────────────────────────────────────────────────────
 function downloadTemplate(moduleType) {
   const content = CSV_TEMPLATES?.[moduleType];
@@ -808,15 +847,7 @@ export default function BulkImportModal({
         );
       }
 
-      const { data: fileRecord, error: recordError } = await supabase
-        .from('uploaded_files')
-        .select('*')
-        .eq('id', uploadData.file_id)
-        .single();
-      if (recordError) throw recordError;
-      if (fileRecord?.status === 'failed') throw new Error(fileRecord.error_message || 'Pipeline failed.');
-
-      const extractedRows = extractRowsFromUploadedFile(fileRecord);
+      const { fileRecord, extractedRows } = await waitForUploadedFileRows(uploadData.file_id);
       if (!extractedRows.length) {
         toast.warning('No records found. Try a different file or format.');
         return;
