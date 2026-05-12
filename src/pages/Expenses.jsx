@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -29,6 +29,7 @@ import VendorSpendAnalysis from "@/components/expenses/VendorSpendAnalysis";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { ExpenseService } from "@/services/api";
+import { expenseService } from "@/services/expenseService";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,10 +50,12 @@ export default function Expenses() {
   const [selectedExpenseIds, setSelectedExpenseIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const lastLeaseExpenseSyncKey = useRef("");
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
   const { data: budgets = [] } = useOrgQuery("Budget");
+  const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
   const { data: allUnits = [] } = useOrgQuery("Unit");
@@ -96,6 +99,81 @@ export default function Expenses() {
   });
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
+  const selectorScopedLeases = leases.filter((lease) => {
+    if (
+      !matchesHierarchyScope(lease, scope, {
+        portfolioKey: "portfolio_id",
+        propertyKey: "property_id",
+        buildingKey: "building_id",
+        unitKey: "unit_id",
+      })
+    ) {
+      return false;
+    }
+
+    if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
+
+    if (scopeBuilding !== "all") {
+      const leaseUnit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
+      const leaseBuildingId = lease.building_id || leaseUnit?.building_id || null;
+      if (leaseBuildingId !== scopeBuilding) return false;
+    }
+
+    if (scopeUnit !== "all" && lease.unit_id !== scopeUnit) return false;
+    return true;
+  });
+
+  const leaseExpenseSyncKey = useMemo(() => {
+    if (!selectedPropertyId) return "";
+
+    return selectorScopedLeases
+      .map((lease) => [
+        lease.id,
+        lease.updated_at || "",
+        lease.status || "",
+        lease.cam_amount ?? "",
+        lease.nnn_amount ?? "",
+        lease.property_id || "",
+        lease.building_id || "",
+        lease.unit_id || "",
+      ].join(":"))
+      .sort()
+      .join("|");
+  }, [selectedPropertyId, selectorScopedLeases]);
+
+  useEffect(() => {
+    if (!selectedPropertyId || !leaseExpenseSyncKey) return;
+    if (lastLeaseExpenseSyncKey.current === leaseExpenseSyncKey) return;
+
+    let cancelled = false;
+
+    const syncLeaseExpenses = async () => {
+      try {
+        const result = await expenseService.syncLeaseDerivedExpenses({
+          leases: selectorScopedLeases,
+          existingExpenses: selectorScopedExpenses,
+          properties,
+        });
+
+        if (cancelled) return;
+        lastLeaseExpenseSyncKey.current = leaseExpenseSyncKey;
+
+        if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+          queryClient.invalidateQueries({ queryKey: ["Expense"] });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("[Expenses] Failed to sync lease-derived expenses:", error);
+        }
+      }
+    };
+
+    syncLeaseExpenses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leaseExpenseSyncKey, properties, queryClient, selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
