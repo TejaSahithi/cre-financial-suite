@@ -10,6 +10,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { fetchPropertyCamConfig } from "@/services/camConfig";
+import { expenseService } from "@/services/expenseService";
 import { getCamScopeContext } from "@/lib/camScope";
 import { createPageUrl } from "@/utils";
 
@@ -80,7 +81,7 @@ export default function CAMCalculation() {
     const yr = searchParams.get("year");
     if (pid) setScopeProperty(pid);
     if (yr) setFiscalYear(Number(yr));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -108,6 +109,17 @@ export default function CAMCalculation() {
   const { data: configData } = useQuery({
     queryKey: ["property-cam-config", scope.targetPropertyId ?? "none"],
     queryFn: () => fetchPropertyCamConfig(scope.targetPropertyId),
+    enabled: !!scope.targetPropertyId,
+  });
+
+  const { data: workflowSummary } = useQuery({
+    queryKey: ["cam-workflow-summary", scope.targetPropertyId, scope.targetScopeId, fiscalYear],
+    queryFn: () => expenseService.getWorkflowSummary({
+      propertyId: scope.targetPropertyId,
+      buildingId: scope.targetScopeLevel === "building" ? scope.targetScopeId : null,
+      unitId: scope.targetScopeLevel === "unit" ? scope.targetScopeId : null,
+      fiscalYear,
+    }),
     enabled: !!scope.targetPropertyId,
   });
 
@@ -156,7 +168,14 @@ export default function CAMCalculation() {
   const validationIssues = [
     !scope.targetPropertyId ? "property_id is required" : null,
     scope.totalSqft <= 0 ? "Total scope square footage must be greater than 0" : null,
-    scope.recoverableExpenses.length === 0 ? `No recoverable expenses found for FY ${fiscalYear}` : null,
+    workflowSummary?.approvedLeaseCount === 0 && scope.activeLeases.length > 0 ? "No approved or budget-ready leases found for this scope" : null,
+    workflowSummary?.approvedRuleLeaseCount === 0 && scope.activeLeases.length > 0 ? "Lease expense/CAM rules must be approved before CAM calculation" : null,
+    workflowSummary?.actualExpenseCount === 0 ? "No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation." : null,
+    workflowSummary?.needsReviewCount > 0 ? `${workflowSummary.needsReviewCount} expense(s) still need review before CAM can run` : null,
+    workflowSummary?.missingSquareFootageCount > 0 ? `${workflowSummary.missingSquareFootageCount} lease(s) are missing square footage` : null,
+    workflowSummary?.missingLeaseDatesCount > 0 ? `${workflowSummary.missingLeaseDatesCount} lease(s) are missing start/end dates` : null,
+    workflowSummary?.missingCategoryCount > 0 ? `${workflowSummary.missingCategoryCount} expense(s) are missing categories` : null,
+    workflowSummary?.conditionalExpenseCount > 0 ? `${workflowSummary.conditionalExpenseCount} conditional expense(s) require manual review` : null,
   ].filter(Boolean);
 
   const leaseNotice =
@@ -399,7 +418,7 @@ export default function CAMCalculation() {
 
             <Button
               onClick={handleCalculate}
-              disabled={!scope.targetPropertyId || isTriggering}
+              disabled={!scope.targetPropertyId || isTriggering || workflowSummary?.canRunCam === false}
               className="w-full bg-teal-600 hover:bg-teal-700 h-11 text-sm font-semibold"
             >
               {isTriggering ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Calculator className="w-4 h-4 mr-2" />}

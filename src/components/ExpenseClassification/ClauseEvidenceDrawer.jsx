@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }) {
   if (!category || !rule) return null;
 
+  const clauses = Array.isArray(rule.clauses) ? rule.clauses : [];
+
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
       <SheetContent className="sm:max-w-md overflow-y-auto">
@@ -50,7 +52,22 @@ export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }
 
           <div className="space-y-2">
             <h4 className="text-sm font-medium text-slate-900">Source Clause</h4>
-            {rule.source ? (
+            {clauses.length > 0 ? (
+              <div className="space-y-3">
+                {clauses.map((clause, index) => (
+                  <div key={`${clause.id || index}`} className="relative">
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-200 rounded-l-md"></div>
+                    <div className="pl-4 py-3 pr-3 bg-blue-50/50 border border-blue-100 rounded-md text-sm text-slate-800 whitespace-pre-wrap">
+                      <div className="mb-2 flex gap-2 text-[11px] uppercase tracking-wide text-blue-700">
+                        <span>{clause.clause_type || "Evidence"}</span>
+                        {clause.page_number != null ? <span>Page {clause.page_number}</span> : null}
+                      </div>
+                      <div className="italic font-serif">{clause.clause_text}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : rule.source ? (
               <div className="relative">
                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-200 rounded-l-md"></div>
                 <div className="pl-4 py-3 pr-3 bg-blue-50/50 border border-blue-100 rounded-md text-sm text-slate-800 italic whitespace-pre-wrap font-serif">

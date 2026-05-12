@@ -53,7 +53,7 @@ export default function ExpenseClassificationTable({ categories, rules, onEditRu
               confidence
             } = rule;
 
-            const displayValue = manual_value ?? extracted_value;
+            const displayValue = rule.final_value ?? manual_value ?? extracted_value;
             const isMissingValue = row_status === 'missing_value';
 
             return (

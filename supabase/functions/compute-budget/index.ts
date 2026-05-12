@@ -21,7 +21,7 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { property_id, fiscal_year, action } = body;
+    const { property_id, fiscal_year, action, allow_generate_without_cam } = body;
 
     if (!property_id || !fiscal_year) {
       throw new Error("property_id and fiscal_year are required");
@@ -37,7 +37,7 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     switch (resolvedAction) {
       case "generate":
-        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year);
+        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true);
       case "approve":
         return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, "under_review", "approved", "Budget approved successfully");
       case "reject":
@@ -64,7 +64,8 @@ async function handleGenerate(
   orgId: string,
   userId: string,
   propertyId: string,
-  fiscalYear: number
+  fiscalYear: number,
+  allowGenerateWithoutCam = false
 ) {
   // ---------------------------------------------------------------
   // 1. Fetch property details
@@ -161,6 +162,8 @@ async function handleGenerate(
   if (!camSnapErr && camSnapshot && camSnapshot.length > 0) {
     const camOutputs = camSnapshot[0].outputs;
     camRecovery = Number(camOutputs?.total_cam) || 0;
+  } else if (!allowGenerateWithoutCam) {
+    throw new Error("CAM snapshot is required before generating a budget. Re-run with allow_generate_without_cam=true only when you intentionally want to bypass CAM.");
   }
 
   // 2c. Other revenue from revenues table

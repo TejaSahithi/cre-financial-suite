@@ -40,6 +40,8 @@ export const ENTITIES = {
   DemoRequest:       'demo_requests',
   UploadedFile:      'uploaded_files',
   ComputationSnapshot: 'computation_snapshots',
+  ExpenseClassification: 'expense_classifications',
+  BudgetLineItem: 'budget_line_items',
 };
 
 /**
@@ -195,21 +197,65 @@ export function errorResponse(error, fallback = []) {
  * @property {string} [building_id]
  * @property {string} [unit_id]
  * @property {string} [lease_id]
+ * @property {string} [tenant_id]
+ * @property {string} [tenant_name]
  * @property {string} [category]
+ * @property {string} [expense_subcategory]
  * @property {number} [amount]
  * @property {string} [classification] - 'recoverable' | 'non_recoverable' | 'conditional'
  * @property {string} [vendor]
+ * @property {string} [vendor_name]
  * @property {string} [vendor_id]
  * @property {string} [gl_code]
  * @property {number} [fiscal_year]
  * @property {number} [month]
  * @property {string} [date]
+ * @property {string} [expense_date]
+ * @property {string} [billing_period_start]
+ * @property {string} [billing_period_end]
  * @property {string} [source]
+ * @property {string} [source_type]
+ * @property {string} [recovery_status]
+ * @property {string} [recovery_rule_id]
+ * @property {string} [rule_source]
+ * @property {number} [confidence_score]
+ * @property {string} [evidence_text]
+ * @property {number} [evidence_page_number]
+ * @property {string} [approved_status]
  * @property {boolean} [is_controllable]
  * @property {string} [allocation_type]
+ * @property {string} [allocation_method]
  * @property {Object} [allocation_meta]
+ * @property {Object} [recovery_meta]
  * @property {string[]} [direct_tenant_ids]
  * @property {string} [created_by]
+ * @property {string} created_at
+ * @property {string} updated_at
+ */
+
+/**
+ * @typedef {Object} ExpenseClassification
+ * @property {string} id
+ * @property {string} org_id
+ * @property {string} expense_id
+ * @property {string} [property_id]
+ * @property {string} [building_id]
+ * @property {string} [unit_id]
+ * @property {string} [lease_id]
+ * @property {string} [rule_set_id]
+ * @property {string} [recovery_rule_id]
+ * @property {string} recovery_status
+ * @property {string} [allocation_method]
+ * @property {boolean} [cap_applied]
+ * @property {boolean} [exclusion_applied]
+ * @property {boolean} [condition_applied]
+ * @property {string} [condition_reason]
+ * @property {string} [rule_source]
+ * @property {number} [confidence_score]
+ * @property {string} [evidence_text]
+ * @property {number} [evidence_page_number]
+ * @property {string} [approved_status]
+ * @property {string} [notes]
  * @property {string} created_at
  * @property {string} updated_at
  */

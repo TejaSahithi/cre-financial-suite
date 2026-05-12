@@ -82,6 +82,7 @@ export default function CreateBudget() {
   const [rejectComment, setRejectComment] = useState("");
   const [rejectTargetId, setRejectTargetId] = useState(null);
   const [historicalFileIds, setHistoricalFileIds] = useState([]);
+  const [generateWithoutCam, setGenerateWithoutCam] = useState(false);
 
   const { orgId } = useOrgQuery("Budget");
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
@@ -153,8 +154,31 @@ export default function CreateBudget() {
   const selectedProperty = properties.find((property) => property.id === form.property_id);
   const selectedBuilding = buildings.find((building) => building.id === form.building_id);
   const selectedUnit = units.find((unit) => unit.id === form.unit_id);
+  const { data: latestCamSnapshot } = useQuery({
+    queryKey: ["latest-cam-snapshot", form.property_id, form.budget_year],
+    queryFn: async () => {
+      if (!form.property_id) return null;
+      const { data, error } = await supabase
+        .from("computation_snapshots")
+        .select("id, computed_at, outputs")
+        .eq("property_id", form.property_id)
+        .eq("engine_type", "cam")
+        .eq("fiscal_year", form.budget_year)
+        .order("computed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    },
+    enabled: !!form.property_id,
+  });
 
   const handleGenerate = async () => {
+    if (!latestCamSnapshot && !generateWithoutCam) {
+      toast.error("CAM snapshot is missing. Run CAM first or choose Generate without CAM.");
+      return;
+    }
+
     setGenerating(true);
     const scopeLabel =
       selectedUnit
@@ -210,11 +234,13 @@ export default function CreateBudget() {
       unit_id: form.unit_id || undefined,
       generation_method: method,
       status: method === "manual" ? "draft" : "ai_generated",
+      cam_snapshot_id: latestCamSnapshot?.id || null,
       total_revenue: data.total_revenue || 669000,
       total_expenses: data.total_expenses || 232050,
       cam_total: data.cam_total || 72900,
       noi: data.noi || 436950,
       ai_insights: data.ai_insights || "",
+      manual_notes: generateWithoutCam && !latestCamSnapshot ? "Generated without CAM snapshot by explicit user override." : null,
     });
     setGenerating(false);
   };
@@ -549,6 +575,23 @@ export default function CreateBudget() {
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                   <p className="text-sm font-medium text-amber-700">No leases found for selected scope — AI will use market benchmarks instead</p>
                 </div>
+              )}
+
+              <div className={`rounded-lg border p-3 text-sm ${latestCamSnapshot ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                {latestCamSnapshot
+                  ? `CAM snapshot ready from ${new Date(latestCamSnapshot.computed_at).toLocaleString()}. Budget generation will use CAM recovery inputs.`
+                  : "No CAM snapshot found for this property and year. Budget generation is blocked unless you explicitly generate without CAM."}
+              </div>
+
+              {!latestCamSnapshot && (
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={generateWithoutCam}
+                    onChange={(event) => setGenerateWithoutCam(event.target.checked)}
+                  />
+                  Generate without CAM
+                </label>
               )}
 
               {method === "historical_ai" && (
