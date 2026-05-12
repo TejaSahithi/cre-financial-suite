@@ -11,9 +11,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CSV_TEMPLATES, parseCSV } from "@/services/parsingEngine";
+import { CSV_TEMPLATES } from "@/services/parsingEngine";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
+import { normalizeImportedDateFields } from "@/lib/importDates";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import {
   BuildingService, UnitService, RevenueService, ExpenseService,
@@ -771,9 +772,11 @@ export default function BulkImportModal({
         }
       }
 
+      const normalizedDates = normalizeImportedDateFields(filteredExtracted);
+
       return {
         ...defaultRow,
-        ...filteredExtracted,
+        ...normalizedDates,
         _row: idx + 1,
       };
     });
@@ -1154,7 +1157,7 @@ export default function BulkImportModal({
       }
 
       // ── Apply Cleanup ──────────────────────────────────────────────────
-      const cleanData = { ...data };
+      const cleanData = normalizeImportedDateFields({ ...data });
       delete cleanData.id;    // Always fresh UUID from service
       delete cleanData._row;  // UI-only index
       

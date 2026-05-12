@@ -13,6 +13,7 @@ import { resolveTableName, ORG_EXEMPT_TABLES } from '@/types';
 import { logAudit } from '@/services/audit';
 import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
+import { normalizeImportedDateFields } from '@/lib/importDates';
 import { getStoredActingOrgId } from '@/lib/actingOrg';
 import { resolveReadableOrgIdForUser, resolveWritableOrgIdForUser } from '@/lib/orgUtils';
 import { assertCanWritePage, canWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
@@ -550,7 +551,7 @@ export function createEntityService(entityName) {
    */
   function translateToDbSchema(data) {
     if (!data || typeof data !== 'object') return data;
-    const clean = { ...data };
+    const clean = normalizeImportedDateFields({ ...data });
     
     // 1. Generic field translation (Total SF)
     if (clean.total_sf !== undefined) {
