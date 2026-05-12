@@ -266,39 +266,38 @@ function normalizePropertyStructureType(value) {
 }
 
 async function parseStructuredFileLocally(file) {
-  const ext = String(file?.name || '').split('.').pop()?.toLowerCase() || '';
-
-  if (ext === 'xlsx' || ext === 'xls') {
-    const { read, utils } = await import('xlsx');
-    const buffer = await file.arrayBuffer();
-    const workbook = read(buffer, { type: 'array' });
-    const firstSheet = workbook.SheetNames?.[0];
-    if (!firstSheet) {
-      throw new Error('Excel file contains no worksheets.');
-    }
-    return parseCSV(utils.sheet_to_csv(workbook.Sheets[firstSheet], { blankrows: false })).rows;
+  const { read, utils } = await import('xlsx');
+  const buffer = await file.arrayBuffer();
+  
+  // XLSX automatically detects and parses csv, tsv, txt, and excel formats
+  const workbook = read(buffer, { type: 'array' });
+  const firstSheet = workbook.SheetNames?.[0];
+  if (!firstSheet) {
+    throw new Error('File contains no worksheets or data.');
   }
-
-  if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
-    const text = await file.text();
-    const normalizedText = ext === 'tsv' ? text.replace(/\t/g, ',') : text;
-    return parseCSV(normalizedText).rows;
-  }
-
-  throw new Error('This import expects a CSV, TSV, or Excel file.');
+  
+  const rawRows = utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: null });
+  return rawRows;
 }
 
 // Detects whether a record is a plain CSV-row object (no pipeline-wrapper keys).
 // CSV parsed_data rows are stored as flat objects like { name: 'X', city: 'Y' }.
 function isPlainDataRow(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
-  const pipelineKeys = new Set(['values', 'row', 'fields', 'standard_fields', 'custom_fields',
-    'extracted_fields', 'record_index', 'row_index', 'confidence', 'warnings', 'notes',
-    'missing_required', 'rejected_fields']);
   const keys = Object.keys(record);
   if (keys.length === 0) return false;
-  // A plain row has NO pipeline-wrapper keys (it's all data columns + optional _row_number)
-  return !keys.some(k => pipelineKeys.has(k));
+  
+  // A review-pipeline wrapper record usually contains nested objects or arrays for these keys
+  const hasWrapperStructures = (
+    (record.fields && typeof record.fields === 'object' && !Array.isArray(record.fields)) ||
+    (record.standard_fields && Array.isArray(record.standard_fields)) ||
+    (record.custom_fields && Array.isArray(record.custom_fields)) ||
+    (record.extracted_fields && Array.isArray(record.extracted_fields)) ||
+    (record.values && typeof record.values === 'object') ||
+    (record.row && typeof record.row === 'object')
+  );
+  
+  return !hasWrapperStructures;
 }
 
 function rowFromReviewRecord(record) {

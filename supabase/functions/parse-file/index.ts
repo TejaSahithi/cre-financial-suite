@@ -7,6 +7,7 @@ import { parseLeases } from "../_shared/parsers/lease-parser.ts";
 import { parseExpenses } from "../_shared/parsers/expense-parser.ts";
 import { parseProperties } from "../_shared/parsers/property-parser.ts";
 import { parseRevenues } from "../_shared/parsers/revenue-parser.ts";
+import * as XLSX from "npm:xlsx";
 
 /**
  * Parse File Edge Function
@@ -24,99 +25,6 @@ interface ParseResult {
   rows: ParsedRow[];
   headers: string[];
   rowCount: number;
-}
-
-/**
- * Parse CSV text into structured JSON
- * Handles missing values as null, preserves column headers
- */
-function parseCSV(text: string): ParseResult {
-  const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-  
-  if (lines.length === 0) {
-    throw new Error('CSV file is empty');
-  }
-
-  // Extract headers from first line
-  const headerLine = lines[0];
-  const headers = headerLine
-    .split(',')
-    .map((h, idx) => {
-      const cleaned = h.trim().replace(/^"|"$/g, '');
-      return idx === 0 ? cleaned.replace(/^\uFEFF/, '') : cleaned;
-    });
-  
-  if (headers.length === 0) {
-    throw new Error('CSV file has no columns');
-  }
-
-  // Parse data rows
-  const rows: ParsedRow[] = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    const values = parseCSVLine(line);
-    
-    // Skip empty rows
-    if (values.every(v => v === '')) {
-      continue;
-    }
-    
-    const row: ParsedRow = {};
-    
-    for (let j = 0; j < headers.length; j++) {
-      const header = headers[j];
-      const value = j < values.length ? values[j] : '';
-      
-      // Handle missing values as null
-      if (value === '' || value === null || value === undefined) {
-        row[header] = null;
-      } else {
-        row[header] = value;
-      }
-    }
-    
-    rows.push(row);
-  }
-
-  return {
-    rows,
-    headers,
-    rowCount: rows.length
-  };
-}
-
-/**
- * Parse a single CSV line, handling quoted values with commas
- */
-function parseCSVLine(line: string): string[] {
-  const values: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (char === '"') {
-      // Handle escaped quotes ("")
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++; // Skip next quote
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      values.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  
-  // Add last value
-  values.push(current.trim());
-  
-  return values;
 }
 
 Deno.serve(async (req: Request) => {
@@ -172,11 +80,31 @@ Deno.serve(async (req: Request) => {
         throw new Error(`Failed to download file: ${downloadError?.message || 'File not found in storage'}`);
       }
 
-      // Convert blob to text
-      const text = await fileData.text();
-
-      // Parse CSV into structured JSON
-      const parseResult = parseCSV(text);
+      // Read binary data
+      const buffer = await fileData.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+      
+      if (!firstSheetName) {
+        throw new Error('File contains no worksheets or data');
+      }
+      
+      const worksheet = workbook.Sheets[firstSheetName];
+      const rawRows: ParsedRow[] = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+      
+      let headers: string[] = [];
+      if (rawRows.length > 0) {
+        headers = Object.keys(rawRows[0]);
+      } else {
+        const headerRow = XLSX.utils.sheet_to_json(worksheet, { header: 1 })[0] as string[];
+        headers = headerRow || [];
+      }
+      
+      const parseResult: ParseResult = {
+        rows: rawRows,
+        headers,
+        rowCount: rawRows.length
+      };
 
       // Apply module-specific parser based on file type
       let finalParsedData = parseResult.rows;
