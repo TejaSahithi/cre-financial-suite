@@ -107,6 +107,12 @@ export default function LeaseUpload() {
   const selectedUnit = scopeUnit !== "all"
     ? units.find((unit) => unit.id === scopeUnit) ?? null
     : null;
+  const effectiveBuildingId =
+    selectedUnit?.building_id ||
+    (scopeBuilding !== "all" ? scopeBuilding : null);
+  const effectiveBuilding = effectiveBuildingId
+    ? buildings.find((building) => building.id === effectiveBuildingId) ?? selectedBuilding
+    : selectedBuilding;
   const effectivePropertyId =
     selectedUnit?.property_id ||
     selectedBuilding?.property_id ||
@@ -114,6 +120,28 @@ export default function LeaseUpload() {
   const effectiveProperty = effectivePropertyId
     ? properties.find((property) => property.id === effectivePropertyId) ?? selectedProperty
     : selectedProperty;
+  const unitLabel = selectedUnit?.unit_number || selectedUnit?.unit_id_code || null;
+  const propertyDetail = effectiveProperty
+    ? [
+        effectiveProperty.name,
+        effectiveProperty.property_id_code ? `ID ${effectiveProperty.property_id_code}` : null,
+        effectiveProperty.address || null,
+      ].filter(Boolean)
+    : [];
+  const buildingDetail = effectiveBuilding
+    ? [
+        effectiveBuilding.name,
+        effectiveBuilding.building_id_code ? `ID ${effectiveBuilding.building_id_code}` : null,
+        effectiveBuilding.address || null,
+      ].filter(Boolean)
+    : [];
+  const unitDetail = selectedUnit
+    ? [
+        unitLabel,
+        selectedUnit.unit_type || null,
+        selectedUnit.floor ? `Floor ${selectedUnit.floor}` : null,
+      ].filter(Boolean)
+    : [];
 
   const updateScopeParams = ({ property = scopeProperty, building = scopeBuilding, unit = scopeUnit }) => {
     const params = new URLSearchParams(location.search);
@@ -445,10 +473,29 @@ export default function LeaseUpload() {
             }}
           />
           <div className="text-xs text-slate-500">
-            Scope:{" "}
-            {[selectedProperty?.name, selectedBuilding?.name, selectedUnit?.unit_number || selectedUnit?.unit_id_code]
-              .filter(Boolean)
-              .join(" - ") || "No specific scope selected"}
+            <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Property</div>
+                <div className="font-medium text-slate-700">{effectiveProperty?.name || "All properties"}</div>
+                <div className="text-[11px] text-slate-500">{propertyDetail.slice(1).join(" • ") || "No property selected"}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Building</div>
+                <div className="font-medium text-slate-700">{effectiveBuilding?.name || "All buildings"}</div>
+                <div className="text-[11px] text-slate-500">{buildingDetail.slice(1).join(" • ") || "No building selected"}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Unit</div>
+                <div className="font-medium text-slate-700">{unitLabel || "All units"}</div>
+                <div className="text-[11px] text-slate-500">{unitDetail.slice(1).join(" • ") || "No unit selected"}</div>
+              </div>
+            </div>
+            <div className="mt-2">
+              Scope:{" "}
+              {[effectiveProperty?.name, effectiveBuilding?.name, unitLabel]
+                .filter(Boolean)
+                .join(" - ") || "No specific scope selected"}
+            </div>
           </div>
         </CardContent>
       </Card>
