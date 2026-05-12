@@ -389,11 +389,11 @@ export default function LeaseReview() {
         resolvedDocumentUrl = uploadedFile?.file_url || null;
       }
 
-      // 1. Update lease to budget_ready with signature metadata
+      // 1. Update lease to approved with signature metadata
       const approvedLease = await updateLeaseMutation.mutateAsync({
         id: lease.id,
         data: {
-          status: "budget_ready",
+          status: "approved",
           signed_by: approvalSignedBy,
           signed_at: approvalSignedAt,
           approval_comments: approvalComments,
@@ -432,7 +432,7 @@ export default function LeaseReview() {
           org_id: lease.org_id,
           type: "lease_approved",
           title: "Lease Approved",
-          message: `Lease for ${lease.tenant_name} has been approved and is now budget-ready. Signed by ${approvalSignedBy}.`,
+          message: `Lease for ${lease.tenant_name} has been approved. Signed by ${approvalSignedBy}.`,
           link: createPageUrl("LeaseReview", { id: lease.id }),
           priority: "normal"
         });
