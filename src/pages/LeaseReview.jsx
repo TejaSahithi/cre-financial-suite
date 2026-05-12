@@ -20,6 +20,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { supabase } from "@/services/supabaseClient";
 
 const documentService = createEntityService("Document");
 
@@ -358,6 +359,19 @@ export default function LeaseReview() {
     }
 
     try {
+      let resolvedDocumentUrl = approvalDocumentUrl || null;
+      const sourceFileId = lease.extraction_data?.source_file_id || null;
+
+      if (!resolvedDocumentUrl && sourceFileId && supabase) {
+        const { data: uploadedFile } = await supabase
+          .from("uploaded_files")
+          .select("file_url")
+          .eq("id", sourceFileId)
+          .maybeSingle();
+
+        resolvedDocumentUrl = uploadedFile?.file_url || null;
+      }
+
       // 1. Update lease to budget_ready with signature metadata
       await updateLeaseMutation.mutateAsync({
         id: lease.id,
@@ -366,7 +380,7 @@ export default function LeaseReview() {
           signed_by: approvalSignedBy,
           signed_at: approvalSignedAt,
           approval_comments: approvalComments,
-          approval_document_url: approvalDocumentUrl || null,
+          approval_document_url: resolvedDocumentUrl,
         }
       });
 
@@ -382,7 +396,7 @@ export default function LeaseReview() {
           signed_by: approvalSignedBy,
           signed_at: approvalSignedAt,
           comments: approvalComments,
-          document_url: approvalDocumentUrl || null,
+          document_url: resolvedDocumentUrl,
         });
       } catch (docErr) {
         console.warn("[LeaseReview] Failed to save to documents:", docErr);
