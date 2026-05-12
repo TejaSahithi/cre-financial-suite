@@ -28,7 +28,8 @@ import PropertyBudgetsTab from "@/components/property/PropertyBudgetsTab";
 function deriveLeaseStatus(lease) {
   const raw = String(lease?.status || "").toLowerCase();
   if (raw === "budget_ready") return "budget_ready";
-  if (raw === "validated" || raw === "active" || raw === "approved") return "validated";
+  if (raw === "approved") return "approved";
+  if (raw === "validated" || raw === "active") return "validated";
   if (raw === "expired") return "expired";
   if (lease?.end_date) {
     const end = new Date(lease.end_date);
@@ -164,7 +165,7 @@ export default function PropertyDetail() {
 
   const leaseStatusColors = {
     draft: "bg-slate-100 text-slate-600", extracted: "bg-blue-100 text-blue-700",
-    validated: "bg-amber-100 text-amber-700", budget_ready: "bg-emerald-100 text-emerald-700",
+    approved: "bg-blue-100 text-blue-700", validated: "bg-amber-100 text-amber-700", budget_ready: "bg-emerald-100 text-emerald-700",
     expired: "bg-red-100 text-red-700", none: "bg-slate-100 text-slate-400"
   };
 

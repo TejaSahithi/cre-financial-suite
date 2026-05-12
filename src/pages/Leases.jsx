@@ -24,7 +24,8 @@ import { leaseService } from "@/services/leaseService";
 function deriveLeaseStatus(lease) {
   const raw = String(lease?.status || "").toLowerCase();
   if (raw === "budget_ready") return "budget_ready";
-  if (raw === "validated" || raw === "active" || raw === "approved") return "validated";
+  if (raw === "approved") return "approved";
+  if (raw === "validated" || raw === "active") return "validated";
   if (raw === "expired") return "expired";
 
   if (lease?.end_date) {
@@ -77,6 +78,7 @@ export default function Leases() {
   }, [leases]);
 
   const statusColors = {
+    approved: "bg-blue-100 text-blue-700",
     budget_ready: "bg-emerald-100 text-emerald-700",
     validated: "bg-amber-100 text-amber-700",
     draft: "bg-slate-100 text-slate-600",
@@ -186,6 +188,7 @@ export default function Leases() {
   });
 
   const statusCounts = {
+    approved: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "approved").length,
     budget_ready: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "budget_ready").length,
     validated: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "validated").length,
     draft: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "draft").length,
@@ -252,8 +255,8 @@ export default function Leases() {
 
       <div className="grid grid-cols-4 gap-4">
         {[
+          { label: "Approved", value: "approved", count: statusCounts.approved, color: "border-l-blue-500 bg-blue-50" },
           { label: "Budget Ready", value: "budget_ready", count: statusCounts.budget_ready, color: "border-l-emerald-500 bg-emerald-50" },
-          { label: "Validated", value: "validated", count: statusCounts.validated, color: "border-l-amber-500 bg-amber-50" },
           { label: "Draft", value: "draft", count: statusCounts.draft, color: "border-l-slate-400 bg-slate-50" },
           { label: "Expired", value: "expired", count: statusCounts.expired, color: "border-l-red-500 bg-red-50" },
         ].map((statusCard) => (
@@ -276,7 +279,7 @@ export default function Leases() {
           <Input placeholder="Search tenant..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <div className="flex gap-1">
-          {["all", "budget_ready", "validated", "draft", "expired"].map((value) => (
+          {["all", "approved", "budget_ready", "validated", "draft", "expired"].map((value) => (
             <Button
               key={value}
               variant={filter === value ? "default" : "outline"}
