@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect } from "react";
 import { leaseService } from "@/services/leaseService";
 import { NotificationService, createEntityService } from "@/services/api";
+import { expenseService } from "@/services/expenseService";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -373,7 +374,7 @@ export default function LeaseReview() {
       }
 
       // 1. Update lease to budget_ready with signature metadata
-      await updateLeaseMutation.mutateAsync({
+      const approvedLease = await updateLeaseMutation.mutateAsync({
         id: lease.id,
         data: {
           status: "budget_ready",
@@ -383,6 +384,9 @@ export default function LeaseReview() {
           approval_document_url: resolvedDocumentUrl,
         }
       });
+
+      await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
 
       // 2. Save to documents table (non-fatal if table missing)
       try {
@@ -437,22 +441,27 @@ export default function LeaseReview() {
 
   const handleFieldSave = async () => {
     if (!editingField) return;
+    const editedFieldKey = editingField.key;
     let val = typeof editValue === "string" ? editValue.trim() : editValue;
 
-    if (NUMERIC_FIELDS.has(editingField.key)) {
+    if (NUMERIC_FIELDS.has(editedFieldKey)) {
       const n = parseFloat(String(val).replace(/[$,]/g, ""));
       val = isNaN(n) ? null : n;
     }
 
     // Map UI alias `total_sf` to the actual DB column.
-    const updateData = editingField.key === "total_sf"
+    const updateData = editedFieldKey === "total_sf"
       ? { square_footage: val }
-      : { [editingField.key]: val };
+      : { [editedFieldKey]: val };
 
     try {
-      await updateLeaseMutation.mutateAsync({ id: lease.id, data: updateData });
+      const updatedLease = await updateLeaseMutation.mutateAsync({ id: lease.id, data: updateData });
+      if (["cam_amount", "nnn_amount", "building_id", "unit_id", "start_date", "end_date", "tenant_name"].includes(editedFieldKey)) {
+        await expenseService.syncLeaseDerivedExpenses({ leases: [updatedLease] });
+        queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      }
       // Boost confidence display for this field — it's been human-verified
-      setEditedFields(prev => new Set([...prev, editingField.key]));
+      setEditedFields(prev => new Set([...prev, editedFieldKey]));
       setEditingField(null); // only close on success
     } catch {
       // error already toasted by onError — keep dialog open so user can retry
