@@ -345,7 +345,8 @@ type RoutingDecision =
 
 /** Enhanced routing decision with better format support */
 function decideRoute(detection: DetectionResult): RoutingDecision {
-  const { fileFormat } = detection;
+  const { fileFormat, moduleType } = detection;
+  const isTabularModule = ["properties", "buildings", "units", "revenue", "budgets", "expenses", "gl_accounts", "tenants"].includes(moduleType);
 
   switch (fileFormat) {
     case "csv":
@@ -355,6 +356,9 @@ function decideRoute(detection: DetectionResult): RoutingDecision {
 
     case "xls":
     case "xlsx":
+      if (isTabularModule) {
+        return { route: "parse-file", reason: `${fileFormat} file → CSV/Excel parser for tabular data` };
+      }
       // Excel — route through Docling which handles binary Excel natively
       return { route: "parse-pdf-docling", reason: `${fileFormat} file → Docling (handles Excel binary format)` };
 
