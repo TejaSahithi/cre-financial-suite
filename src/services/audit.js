@@ -51,6 +51,19 @@ function inferEntityId(entry) {
   return entry.entityId || entry.entity_id || entry.target_user_id || null;
 }
 
+function extractMissingColumn(err) {
+  const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(' ');
+  if (!message) return null;
+
+  let match = message.match(/Could not find the '([^']+)' column/i);
+  if (match?.[1]) return match[1];
+
+  match = message.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
+  if (match?.[1]) return match[1];
+
+  return null;
+}
+
 async function resolveAuditContext(entry) {
   const resolved = {
     orgId: entry.orgId || entry.org_id || getStoredActingOrgId() || null,
@@ -116,6 +129,7 @@ export async function logAudit(entry) {
     new_value:     serializeAuditValue(
       entry.newValue ?? entry.new_value ?? entry.details ?? null,
     ),
+    user_id:       context.userId,
     user_email:    context.userEmail,
     user_name:     entry.userName || entry.user_name || null,
     property_id:   entry.propertyId || entry.property_id || null,
@@ -125,9 +139,19 @@ export async function logAudit(entry) {
 
   try {
     if (supabase) {
-      const { error } = await supabase.from('audit_logs').insert(row);
+      const payload = { ...row };
 
-      if (error) throw error;
+      while (true) {
+        const { error } = await supabase.from('audit_logs').insert(payload);
+        if (!error) break;
+
+        const missingColumn = extractMissingColumn(error);
+        if (!missingColumn || !(missingColumn in payload)) {
+          throw error;
+        }
+
+        delete payload[missingColumn];
+      }
     } else {
       console.log('[audit]', row);
     }

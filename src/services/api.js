@@ -396,6 +396,75 @@ function shouldStripMissingColumn(operation) {
   throw new Error(`[api] ${operation} encountered a schema mismatch. Update the database schema instead of silently stripping fields.`);
 }
 
+const COMPATIBILITY_MISSING_COLUMNS = {
+  Lease: new Set([
+    'building_id',
+    'signed_by',
+    'signed_at',
+    'approval_comments',
+    'approval_document_url',
+    'annual_rent',
+    'rent_per_sf',
+    'lease_term_months',
+    'security_deposit',
+    'cam_amount',
+    'nnn_amount',
+    'escalation_rate',
+    'renewal_options',
+    'ti_allowance',
+    'free_rent_months',
+    'notes',
+    'escalation_type',
+    'escalation_timing',
+    'renewal_type',
+    'renewal_notice_months',
+    'cam_applicable',
+    'cam_cap',
+    'cam_cap_type',
+    'cam_cap_rate',
+    'admin_fee_pct',
+    'management_fee_pct',
+    'management_fee_basis',
+    'gross_up_clause',
+    'allocation_method',
+    'weight_factor',
+    'base_year_amount',
+    'expense_stop_amount',
+    'hvac_responsibility',
+    'sales_reporting_frequency',
+    'extraction_data',
+    'confidence_score',
+    'low_confidence_fields',
+    'extracted_fields',
+  ]),
+  Document: new Set([
+    'lease_id',
+    'type',
+    'name',
+    'status',
+    'signed_by',
+    'signed_at',
+    'comments',
+    'document_url',
+    'description',
+    'tenant_name',
+    'vendor_name',
+    'title',
+    'document_type',
+    'file_name',
+    'file_size_bytes',
+    'mime_type',
+    'storage_path',
+    'file_url',
+    'uploaded_by',
+  ]),
+};
+
+function canStripMissingColumn(operation, entityName, missingColumn) {
+  if (IS_DEV_BUILD) return true;
+  return Boolean(COMPATIBILITY_MISSING_COLUMNS[entityName]?.has(missingColumn));
+}
+
 // ─── Per-entity column allow-lists ─────────────────────────────────────
 // These reflect the actual columns present in the Supabase tables AFTER all
 // migrations (including the bulk-import enrichment migration). Anything not
@@ -452,6 +521,9 @@ const ALLOWED_COLUMNS = {
     'property_id', 'lease_id', 'type', 'name', 'status',
     'signed_by', 'signed_at', 'comments', 'document_url',
     'file_url', 'description', 'tenant_name', 'vendor_name',
+    // Legacy documents schema compatibility
+    'title', 'document_type', 'file_name', 'file_size_bytes', 'mime_type',
+    'storage_path', 'uploaded_by',
   ]),
   Tenant: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -573,11 +645,43 @@ export function createEntityService(entityName) {
     }
 
     if (entityName === 'Document') {
+      if (clean.name !== undefined && clean.title === undefined) {
+        clean.title = clean.name;
+      }
+      if (clean.title !== undefined && clean.name === undefined) {
+        clean.name = clean.title;
+      }
+      if (clean.type !== undefined && clean.document_type === undefined) {
+        clean.document_type = clean.type;
+      }
+      if (clean.document_type !== undefined && clean.type === undefined) {
+        clean.type = clean.document_type;
+      }
+      if (clean.file_name === undefined && (clean.name !== undefined || clean.title !== undefined)) {
+        clean.file_name = clean.name || clean.title;
+      }
       if (clean.file_url !== undefined && clean.document_url === undefined) {
         clean.document_url = clean.file_url;
       }
       if (clean.document_url !== undefined && clean.file_url === undefined) {
         clean.file_url = clean.document_url;
+      }
+
+      if (clean.storage_path === undefined) {
+        const fallbackName = clean.file_name || clean.name || clean.title || 'document';
+        clean.storage_path = clean.document_url || clean.file_url || `documents/${fallbackName}`;
+      }
+
+      if (clean.description === undefined) {
+        const signatureSummary = [
+          clean.signed_by ? `Signed by: ${clean.signed_by}` : null,
+          clean.signed_at ? `Signed at: ${clean.signed_at}` : null,
+          clean.comments || null,
+        ].filter(Boolean);
+
+        if (signatureSummary.length > 0) {
+          clean.description = signatureSummary.join(' | ');
+        }
       }
     }
 
@@ -953,7 +1057,9 @@ export function createEntityService(entityName) {
               throw error;
             }
 
-            shouldStripMissingColumn(`${entityName}.create()`);
+            if (!canStripMissingColumn(`${entityName}.create()`, entityName, missingColumn)) {
+              shouldStripMissingColumn(`${entityName}.create()`);
+            }
             strippedColumns.push(missingColumn);
             delete payload[missingColumn];
           }
@@ -1115,7 +1221,9 @@ export function createEntityService(entityName) {
               throw error;
             }
 
-            shouldStripMissingColumn(`${entityName}.update()`);
+            if (!canStripMissingColumn(`${entityName}.update()`, entityName, missingColumn)) {
+              shouldStripMissingColumn(`${entityName}.update()`);
+            }
             strippedColumns.push(missingColumn);
             delete payload[missingColumn];
           }
