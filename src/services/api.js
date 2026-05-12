@@ -458,6 +458,35 @@ const COMPATIBILITY_MISSING_COLUMNS = {
     'file_url',
     'uploaded_by',
   ]),
+  Expense: new Set([
+    'tenant_id',
+    'tenant_name',
+    'vendor_name',
+    'expense_subcategory',
+    'expense_date',
+    'billing_period_start',
+    'billing_period_end',
+    'source_type',
+    'recovery_status',
+    'recovery_rule_id',
+    'rule_source',
+    'confidence_score',
+    'evidence_text',
+    'evidence_page_number',
+    'approved_status',
+    'allocation_method',
+    'recovery_meta',
+    'classification_updated_at',
+    'classification_updated_by',
+  ]),
+  Budget: new Set([
+    'cam_snapshot_id',
+    'expense_snapshot_id',
+    'revenue_snapshot_id',
+    'variance_vs_prior_budget',
+    'variance_vs_actuals',
+    'manual_notes',
+  ]),
 };
 
 function canStripMissingColumn(operation, entityName, missingColumn) {
@@ -534,15 +563,21 @@ const ALLOWED_COLUMNS = {
   Expense: new Set([
     ...COMMON_BASE_COLUMNS,
     'portfolio_id', 'property_id', 'building_id', 'unit_id', 'lease_id',
-    'category', 'amount', 'classification', 'vendor',
+    'tenant_id', 'tenant_name',
+    'category', 'expense_subcategory', 'amount', 'classification', 'vendor', 'vendor_name',
     'vendor_id', 'gl_code', 'fiscal_year', 'month', 'date', 'source',
+    'expense_date', 'billing_period_start', 'billing_period_end',
+    'source_type', 'recovery_status', 'recovery_rule_id', 'rule_source',
+    'confidence_score', 'evidence_text', 'evidence_page_number',
+    'approved_status', 'notes',
     'is_controllable', 'created_by',
     // Bulk-import enrichment columns
     'description', 'invoice_number',
     // Attachment / receipt
     'attachment_url',
     // CAM allocation fields
-    'allocation_type', 'allocation_meta', 'direct_tenant_ids',
+    'allocation_type', 'allocation_method', 'allocation_meta', 'direct_tenant_ids',
+    'recovery_meta', 'classification_updated_at', 'classification_updated_by',
   ]),
   Revenue: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -558,7 +593,22 @@ const ALLOWED_COLUMNS = {
     'generation_method', 'total_revenue', 'total_expenses',
     'cam_total', 'noi', 'status', 'ai_insights', 'created_by',
     'reviewed_at', 'reviewed_by', 'rejected_at', 'rejected_by',
-    'rejection_comment',
+    'rejection_comment', 'cam_snapshot_id', 'expense_snapshot_id', 'revenue_snapshot_id',
+    'variance_vs_prior_budget', 'variance_vs_actuals', 'manual_notes',
+  ]),
+  ExpenseClassification: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'expense_id', 'property_id', 'building_id', 'unit_id', 'lease_id', 'tenant_id',
+    'rule_set_id', 'recovery_rule_id', 'recovery_status', 'allocation_method',
+    'cap_applied', 'exclusion_applied', 'condition_applied', 'condition_reason',
+    'rule_source', 'confidence_score', 'evidence_text', 'evidence_page_number',
+    'approved_status', 'notes', 'classified_by', 'classified_at', 'approved_by', 'approved_at',
+  ]),
+  BudgetLineItem: new Set([
+    ...COMMON_BASE_COLUMNS,
+    'budget_id', 'property_id', 'building_id', 'unit_id', 'lease_id',
+    'category', 'subcategory', 'line_type', 'amount', 'source_type',
+    'source_snapshot_id', 'notes', 'metadata', 'sort_order',
   ]),
   Invoice: new Set([
     ...COMMON_BASE_COLUMNS,
@@ -685,6 +735,42 @@ export function createEntityService(entityName) {
       }
     }
 
+    if (entityName === 'Expense') {
+      if (clean.expense_date !== undefined && clean.date === undefined) {
+        clean.date = clean.expense_date;
+      }
+      if (clean.date !== undefined && clean.expense_date === undefined) {
+        clean.expense_date = clean.date;
+      }
+      if (clean.vendor_name !== undefined && clean.vendor === undefined) {
+        clean.vendor = clean.vendor_name;
+      }
+      if (clean.vendor !== undefined && clean.vendor_name === undefined) {
+        clean.vendor_name = clean.vendor;
+      }
+      if (clean.source_type !== undefined && clean.source === undefined) {
+        clean.source = clean.source_type;
+      }
+      if (clean.source !== undefined && clean.source_type === undefined) {
+        clean.source_type = clean.source;
+      }
+      if (clean.recovery_status !== undefined && clean.classification === undefined) {
+        clean.classification = clean.recovery_status;
+      }
+      if (clean.classification !== undefined && clean.recovery_status === undefined) {
+        clean.recovery_status = clean.classification;
+      }
+      if (clean.allocation_method !== undefined && clean.allocation_type === undefined) {
+        clean.allocation_type = clean.allocation_method;
+      }
+      if (clean.allocation_type !== undefined && clean.allocation_method === undefined) {
+        clean.allocation_method = clean.allocation_type;
+      }
+      if (clean.tenant_name !== undefined && clean.vendor === undefined && clean.source_type === 'lease_import') {
+        clean.vendor = clean.tenant_name;
+      }
+    }
+
     // 3. Global Strip List (Relational aliases and UI-only artifacts)
     const toStrip = [
       'total_sf', 'square_feet', 'sqft', 'sf', 'leased_sf', 'area',
@@ -779,6 +865,36 @@ export function createEntityService(entityName) {
       }
       if (normalized.document_url === undefined && normalized.file_url !== undefined) {
         normalized.document_url = normalized.file_url;
+      }
+    }
+
+    if (entityName === 'Expense') {
+      if (normalized.expense_date === undefined && normalized.date !== undefined) {
+        normalized.expense_date = normalized.date;
+      }
+      if (normalized.date === undefined && normalized.expense_date !== undefined) {
+        normalized.date = normalized.expense_date;
+      }
+      if (normalized.vendor_name === undefined && normalized.vendor !== undefined) {
+        normalized.vendor_name = normalized.vendor;
+      }
+      if (normalized.vendor === undefined && normalized.vendor_name !== undefined) {
+        normalized.vendor = normalized.vendor_name;
+      }
+      if (normalized.source_type === undefined && normalized.source !== undefined) {
+        normalized.source_type = normalized.source;
+      }
+      if (normalized.source === undefined && normalized.source_type !== undefined) {
+        normalized.source = normalized.source_type;
+      }
+      if (normalized.recovery_status === undefined && normalized.classification !== undefined) {
+        normalized.recovery_status = normalized.classification;
+      }
+      if (normalized.classification === undefined && normalized.recovery_status !== undefined) {
+        normalized.classification = normalized.recovery_status;
+      }
+      if (normalized.allocation_method === undefined && normalized.allocation_type !== undefined) {
+        normalized.allocation_method = normalized.allocation_type;
       }
     }
     

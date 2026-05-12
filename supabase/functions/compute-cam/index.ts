@@ -129,6 +129,10 @@ function emptyCalculation(propertyId: string, fiscalYear: number, scopeLevel: Sc
   };
 }
 
+function isApprovedLeaseStatus(status: unknown) {
+  return ["approved", "budget_ready", "active", "executed"].includes(String(status || "").toLowerCase());
+}
+
 async function fetchPropertyContext(supabaseAdmin: any, orgId: string, propertyId: string) {
   const { data: property, error: propertyError } = await supabaseAdmin
     .from("properties")
@@ -353,6 +357,55 @@ Deno.serve(async (req: Request) => {
       leaseIds,
     );
     const mergedPropertyConfig = mergePropertyConfig(propertyConfig, body);
+
+    const approvedScopedLeases = leases.filter((lease: any) =>
+      scopedLeaseMatches(lease, units, scopeLevel, scopeId, propertyId) &&
+      leaseOverlapsFiscalYear(lease, fiscalYear) &&
+      isApprovedLeaseStatus(lease.status)
+    );
+
+    if (approvedScopedLeases.length === 0) {
+      throw new Error("No approved or budget-ready leases found for this scope");
+    }
+
+    const { data: approvedRuleSets, error: approvedRuleSetsError } = await supabaseAdmin
+      .from("lease_expense_rule_sets")
+      .select("lease_id")
+      .eq("org_id", orgId)
+      .eq("status", "approved")
+      .in("lease_id", approvedScopedLeases.map((lease: any) => lease.id));
+
+    if (approvedRuleSetsError) {
+      throw new Error(`Failed to validate approved lease expense rules: ${approvedRuleSetsError.message}`);
+    }
+
+    if (!approvedRuleSets || approvedRuleSets.length === 0) {
+      throw new Error("Lease expense/CAM rules must be approved before CAM calculation");
+    }
+
+    const actualExpenses = expenses.filter((expense: any) => {
+      const sourceType = String(expense.source_type || expense.source || "").toLowerCase();
+      return sourceType !== "lease_import";
+    });
+
+    if (actualExpenses.length === 0) {
+      throw new Error("No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation.");
+    }
+
+    const reviewBlockingExpenses = expenses.filter((expense: any) => {
+      const recoveryStatus = String(expense.recovery_status || expense.classification || "").toLowerCase();
+      const approvedStatus = String(expense.approved_status || "").toLowerCase();
+      return (
+        recoveryStatus === "needs_review" ||
+        recoveryStatus === "conditional" ||
+        approvedStatus === "needs_review" ||
+        !expense.category
+      );
+    });
+
+    if (reviewBlockingExpenses.length > 0) {
+      throw new Error(`Expense review must be approved before CAM calculation. ${reviewBlockingExpenses.length} expense(s) still need review.`);
+    }
 
     // Filter recoverable expenses — accept 'recoverable', 'cam', 'nnn', or null classification
     const recoverableExpenses = expenses.filter((expense: any) => {

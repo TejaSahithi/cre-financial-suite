@@ -32,6 +32,11 @@ export default function ExpenseValuePanel({ isOpen, onClose, category, rule, onS
         gross_up_applicable: rule.gross_up_applicable || false,
         admin_fee_applicable: rule.admin_fee_applicable || false,
         admin_fee_percent: rule.admin_fee_percent || '',
+        extracted_value: rule.extracted_value || '',
+        manual_value: rule.manual_value || '',
+        final_value: rule.final_value || '',
+        frequency: rule.frequency || 'yearly',
+        base_year_amount: rule.base_year_amount || '',
         notes: rule.notes || '',
       });
     }
@@ -113,6 +118,61 @@ export default function ExpenseValuePanel({ isOpen, onClose, category, rule, onS
           </div>
 
           <div className="col-span-2 space-y-4 border p-4 rounded-md bg-slate-50/50">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">Extracted Value</Label>
+                <Input
+                  type="number"
+                  placeholder="0.00"
+                  value={formData.extracted_value}
+                  onChange={(e) => handleChange('extracted_value', e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">Manual Override Value</Label>
+                <Input
+                  type="number"
+                  placeholder="0.00"
+                  value={formData.manual_value}
+                  onChange={(e) => {
+                    handleChange('manual_value', e.target.value);
+                    handleChange('final_value', e.target.value);
+                  }}
+                  className="bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">Final Value Used</Label>
+                <Input
+                  type="number"
+                  placeholder="0.00"
+                  value={formData.final_value}
+                  onChange={(e) => handleChange('final_value', e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">Frequency</Label>
+                <Select
+                  value={formData.frequency || 'yearly'}
+                  onValueChange={(val) => handleChange('frequency', val)}
+                >
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="Select frequency..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             <div className="flex items-center space-x-2 mb-2">
               <Switch 
                 id="is_subject_to_cap" 
@@ -181,6 +241,16 @@ export default function ExpenseValuePanel({ isOpen, onClose, category, rule, onS
                       <SelectItem value="expense">Expense Specific Year</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-1 col-span-2">
+                  <Label className="text-xs text-slate-500">Base Year Amount</Label>
+                  <Input
+                    type="number"
+                    placeholder="0.00"
+                    value={formData.base_year_amount}
+                    onChange={(e) => handleChange('base_year_amount', e.target.value)}
+                    className="bg-white"
+                  />
                 </div>
               </div>
             )}

@@ -85,6 +85,22 @@ export default function LeaseReview() {
   }, [leaseId]);
 
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
+  const { data: approvedRuleSet } = useQuery({
+    queryKey: ["lease-expense-rule-status", leaseId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("id, status, approved_at")
+        .eq("lease_id", leaseId)
+        .eq("status", "approved")
+        .order("approved_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    },
+    enabled: !!leaseId,
+  });
 
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => {
@@ -386,6 +402,10 @@ export default function LeaseReview() {
       });
 
       await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
+      if (approvedRuleSet?.id) {
+        const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
+        await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
+      }
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
 
       // 2. Save to documents table (non-fatal if table missing)
@@ -481,9 +501,18 @@ export default function LeaseReview() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleReuploadPdf}>Re-Upload PDF</Button>
+          <Button variant="outline" onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}>
+            Review Expense Rules
+          </Button>
           <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setShowSignature(true)}><Send className="w-4 h-4 mr-1" />Request Signature</Button>
           <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowApproval(true)}><CheckCircle2 className="w-4 h-4 mr-1" />Approve Lease</Button>
         </div>
+      </div>
+
+      <div className={`rounded-xl border px-4 py-3 text-sm ${approvedRuleSet ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+        {approvedRuleSet
+          ? "Lease expense rules are approved. Approving the lease will also refresh lease-derived charges and expense classification readiness."
+          : "Expense/CAM rules have not been approved yet. Review the extracted rules before moving into CAM."}
       </div>
 
       {/* Low Confidence Block Alert */}

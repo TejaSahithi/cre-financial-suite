@@ -2,6 +2,9 @@ import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
+import { ExpenseService } from "@/services/api";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { expenseService } from "@/services/expenseService";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -76,61 +79,34 @@ export default function LeaseExpenseClassification() {
   // Fetch Active Rule Set & Rules
   const { data: ruleSetData, isLoading: isLoadingRules } = useQuery({
     queryKey: ['lease_expense_rule_sets', id],
-    queryFn: async () => {
-      // Find the most recent active rule set (draft or approved)
-      const { data: ruleSets, error: rsError } = await supabase
-        .from('lease_expense_rule_sets')
-        .select('*')
-        .eq('lease_id', id)
-        .not('status', 'eq', 'archived')
-        .order('version', { ascending: false })
-        .limit(1);
-
-      if (rsError) throw rsError;
-
-      const activeSet = ruleSets?.[0];
-      if (!activeSet) return { ruleSet: null, rules: [] };
-
-      const { data: rules, error: rError } = await supabase
-        .from('lease_expense_rules')
-        .select('*')
-        .eq('rule_set_id', activeSet.id);
-
-      if (rError) throw rError;
-
-      return { ruleSet: activeSet, rules: rules || [] };
-    },
+    queryFn: () => leaseExpenseRuleService.loadRuleSet(id),
     enabled: !!id,
-    onSuccess: (data) => {
-      if (data?.ruleSet) {
-        setActiveRuleSetId(data.ruleSet.id);
-        setLocalRules(data.rules || []);
-      }
-    }
   });
 
   const ruleSet = ruleSetData?.ruleSet;
 
+  React.useEffect(() => {
+    if (!ruleSetData) return;
+    setActiveRuleSetId(ruleSetData.ruleSet?.id || null);
+    setLocalRules(ruleSetData.rules || []);
+  }, [ruleSetData]);
+
   // Mutation: Extract with AI
   const extractRulesMutation = useMutation({
     mutationFn: async () => {
-      // Find lease's uploaded file (simplification: find first document_link for this lease)
-      const { data: docs } = await supabase
-        .from('document_links')
-        .select('file_id, uploaded_files(normalized_output)')
-        .eq('entity_id', id)
-        .eq('entity_type', 'lease')
-        .limit(1);
+      const sourceText = await leaseExpenseRuleService.getLeaseSourceText(
+        id,
+        lease?.extraction_data?.source_file_id || null
+      );
 
-      const file = docs?.[0]?.uploaded_files;
-      if (!file || !file.normalized_output?.raw_text) {
+      if (!sourceText) {
         throw new Error("No extracted lease text found to analyze.");
       }
 
       const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
         body: {
           lease_id: id,
-          source_text: file.normalized_output.raw_text,
+          source_text: sourceText,
           categories: categories.map(c => ({ id: c.id, category_name: c.category_name, subcategory_name: c.subcategory_name }))
         }
       });
@@ -163,47 +139,28 @@ export default function LeaseExpenseClassification() {
   // Mutation: Save / Approve
   const saveRuleSetMutation = useMutation({
     mutationFn: async (status) => {
-      let currentRuleSetId = activeRuleSetId;
-
-      // If approving, we might want to archive the old one and create a new version.
-      // For MVP, we just upsert the current rule set with the new status.
-      if (!currentRuleSetId) {
-        const { data: newRs, error: newRsError } = await supabase
-          .from('lease_expense_rule_sets')
-          .insert({ lease_id: id, org_id: lease.org_id, status: status, version: 1 })
-          .select()
-          .single();
-        if (newRsError) throw newRsError;
-        currentRuleSetId = newRs.id;
-      } else {
-        const { error: updError } = await supabase
-          .from('lease_expense_rule_sets')
-          .update({ status })
-          .eq('id', currentRuleSetId);
-        if (updError) throw updError;
-      }
-
-      // Upsert rules
-      const rulesToUpsert = localRules.map(r => {
-        const { id: ruleId, ...rest } = r;
-        return {
-          ...rest,
-          id: ruleId && !String(ruleId).startsWith('temp-') ? ruleId : undefined,
-          rule_set_id: currentRuleSetId,
-        };
+      const persisted = await leaseExpenseRuleService.saveRuleSet({
+        lease,
+        rules: localRules,
+        status,
+        existingRuleSetId: activeRuleSetId,
+        categories,
       });
 
-      if (rulesToUpsert.length > 0) {
-        const { error: rulesErr } = await supabase
-          .from('lease_expense_rules')
-          .upsert(rulesToUpsert, { onConflict: 'id' });
-        if (rulesErr) throw rulesErr;
+      if (status === "approved") {
+        await expenseService.syncLeaseDerivedExpenses({ leases: [lease] });
+        const propertyExpenses = await ExpenseService.filter({ property_id: lease.property_id });
+        await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [lease] });
       }
 
-      return currentRuleSetId;
+      return persisted;
     },
-    onSuccess: () => {
+    onSuccess: (persisted) => {
+      setActiveRuleSetId(persisted?.ruleSet?.id || null);
+      setLocalRules(persisted?.rules || []);
       queryClient.invalidateQueries(['lease_expense_rule_sets', id]);
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["Lease"] });
       toast.success("Expense rules saved successfully.");
     },
     onError: (err) => {
@@ -303,10 +260,10 @@ export default function LeaseExpenseClassification() {
           </Button>
           <Button
             className="bg-emerald-600 hover:bg-emerald-700 text-white"
-            onClick={() => navigate('/cam-calculation')}
+            onClick={() => navigate(`/LeaseReview?id=${id}`)}
             disabled={isWorking}
           >
-            Move to CAM
+            Back to Lease Review
           </Button>
         </div>
       </PageHeader>
@@ -386,7 +343,7 @@ export default function LeaseExpenseClassification() {
               </div>
 
               <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
-                Approving this rule set will update the ledger configurations and impact future CAM calculations for this lease.
+                Approving this rule set updates lease CAM config, persists clause evidence and values, creates explicit lease-derived charge rows when amounts exist, and refreshes expense classification readiness.
               </div>
             </CardContent>
           </Card>

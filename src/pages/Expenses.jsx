@@ -51,6 +51,7 @@ export default function Expenses() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const lastLeaseExpenseSyncKey = useRef("");
+  const lastClassificationKey = useRef("");
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -175,6 +176,70 @@ export default function Expenses() {
     };
   }, [leaseExpenseSyncKey, properties, queryClient, selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
 
+  const classificationSyncKey = useMemo(() => {
+    if (!selectedPropertyId) return "";
+
+    const expenseDriverKey = selectorScopedExpenses
+      .map((expense) => [
+        expense.id,
+        expense.amount ?? "",
+        expense.category || "",
+        expense.expense_subcategory || "",
+        expense.description || "",
+        expense.lease_id || "",
+        expense.property_id || "",
+        expense.building_id || "",
+        expense.unit_id || "",
+        expense.source_type || expense.source || "",
+      ].join(":"))
+      .sort()
+      .join("|");
+
+    const leaseDriverKey = selectorScopedLeases
+      .map((lease) => [
+        lease.id,
+        lease.updated_at || "",
+        lease.status || "",
+      ].join(":"))
+      .sort()
+      .join("|");
+
+    return `${expenseDriverKey}__${leaseDriverKey}`;
+  }, [selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
+
+  useEffect(() => {
+    if (!selectedPropertyId || !classificationSyncKey) return;
+    if (lastClassificationKey.current === classificationSyncKey) return;
+
+    let cancelled = false;
+
+    const classifyExpenses = async () => {
+      try {
+        const result = await expenseService.classifyExpenses({
+          expenses: selectorScopedExpenses,
+          leases: selectorScopedLeases,
+        });
+
+        if (cancelled) return;
+        lastClassificationKey.current = classificationSyncKey;
+
+        if (result.updated > 0) {
+          queryClient.invalidateQueries({ queryKey: ["Expense"] });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("[Expenses] Failed to classify expenses:", error);
+        }
+      }
+    };
+
+    classifyExpenses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [classificationSyncKey, queryClient, selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
+
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
   const currentYearExpenses = selectorScopedExpenses.filter((expense) => expense.fiscal_year === currentYear);
@@ -195,6 +260,8 @@ export default function Expenses() {
     recoverable: "bg-emerald-100 text-emerald-700",
     non_recoverable: "bg-red-100 text-red-700",
     conditional: "bg-amber-100 text-amber-700",
+    excluded: "bg-slate-200 text-slate-700",
+    needs_review: "bg-amber-100 text-amber-700",
   };
 
   const totals = {
@@ -226,7 +293,10 @@ export default function Expenses() {
       [expense.category, expense.vendor, property?.name, building?.name, unit?.unit_number, expense.description]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
-    const matchFilter = filter === "all" || expense.classification === filter;
+    const matchFilter =
+      filter === "all" ||
+      expense.classification === filter ||
+      expense.recovery_status === filter;
     return matchSearch && matchFilter;
   });
 
@@ -444,7 +514,7 @@ export default function Expenses() {
               <Input placeholder="Search category, vendor, property..." className="pl-9 h-9 text-sm" value={search} onChange={(event) => setSearch(event.target.value)} />
             </div>
             <div className="flex gap-1">
-              {["all", "recoverable", "non_recoverable", "conditional"].map((value) => (
+              {["all", "recoverable", "non_recoverable", "conditional", "excluded", "needs_review"].map((value) => (
                 <Button
                   key={value}
                   variant={filter === value ? "default" : "outline"}
@@ -452,7 +522,7 @@ export default function Expenses() {
                   onClick={() => setFilter(value)}
                   className={`text-xs capitalize ${filter === value ? "bg-blue-600" : ""}`}
                 >
-                  {value === "all" ? "All" : value.replace("_", "-")}
+                  {value === "all" ? "All" : value.replaceAll("_", "-")}
                 </Button>
               ))}
             </div>
@@ -492,11 +562,16 @@ export default function Expenses() {
                   <TableHead className="text-[10px] font-bold tracking-wider">PROPERTY</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">BUILDING</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">UNIT</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">TENANT</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">CATEGORY</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">SUBCATEGORY</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">GL CODE</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">VENDOR</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider text-right">AMOUNT</TableHead>
-                  <TableHead className="text-[10px] font-bold tracking-wider">CLASS</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">RECOVERY</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">RULE</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">CONF.</TableHead>
+                  <TableHead className="text-[10px] font-bold tracking-wider">APPROVAL</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">CTRL</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider">SOURCE</TableHead>
                   <TableHead className="text-[10px] font-bold tracking-wider w-20"></TableHead>
@@ -505,16 +580,16 @@ export default function Expenses() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={13} className="text-center py-12">
-                      <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
-                    </TableCell>
-                  </TableRow>
-                ) : filtered.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
-                      No expenses found
-                    </TableCell>
-                  </TableRow>
+                      <TableCell colSpan={18} className="text-center py-12">
+                        <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
+                      </TableCell>
+                    </TableRow>
+                  ) : filtered.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={18} className="text-center py-12 text-sm text-slate-400">
+                        No expenses found
+                      </TableCell>
+                    </TableRow>
                 ) : (
                   filtered.map((expense) => {
                     const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
@@ -539,16 +614,18 @@ export default function Expenses() {
                         <TableCell className="text-xs font-medium text-slate-800">{property?.name || getPropertyName(expense.property_id)}</TableCell>
                         <TableCell className="text-xs text-slate-600">{building?.name || "—"}</TableCell>
                         <TableCell className="text-xs text-slate-600">{unit?.unit_number || unit?.unit_id_code || "—"}</TableCell>
+                        <TableCell className="text-xs text-slate-600">{expense.tenant_name || "—"}</TableCell>
                         <TableCell className="text-xs font-medium capitalize">{expense.category?.replace(/_/g, " ")}</TableCell>
+                        <TableCell className="text-xs text-slate-600">{expense.expense_subcategory || "—"}</TableCell>
                         <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || "—"}</TableCell>
                         <TableCell className="text-xs">
-                          {expense.vendor ? (
+                          {(expense.vendor_name || expense.vendor) ? (
                             matchedVendor ? (
                               <Link to={`/VendorProfile?id=${matchedVendor.id}`} className="text-blue-600 hover:underline font-medium" onClick={(event) => event.stopPropagation()}>
-                                {expense.vendor}
+                                {expense.vendor_name || expense.vendor}
                               </Link>
                             ) : (
-                              <span>{expense.vendor}</span>
+                              <span>{expense.vendor_name || expense.vendor}</span>
                             )
                           ) : (
                             "—"
@@ -556,16 +633,19 @@ export default function Expenses() {
                         </TableCell>
                         <TableCell className="text-right text-xs font-mono font-semibold tabular-nums">${(expense.amount || 0).toLocaleString()}</TableCell>
                         <TableCell>
-                          <Badge className={`${classColors[expense.classification]} text-[8px] uppercase`}>
-                            {expense.classification?.replace("_", "-")}
+                          <Badge className={`${classColors[expense.recovery_status || expense.classification] || "bg-slate-100 text-slate-700"} text-[8px] uppercase`}>
+                            {(expense.recovery_status || expense.classification || "needs_review").replace("_", "-")}
                           </Badge>
                         </TableCell>
+                        <TableCell className="text-[10px] text-slate-500">{expense.rule_source || "—"}</TableCell>
+                        <TableCell className="text-[10px] text-slate-500">{expense.confidence_score != null ? `${Math.round(Number(expense.confidence_score) * 100)}%` : "—"}</TableCell>
+                        <TableCell className="text-[10px] text-slate-500">{expense.approved_status || "draft"}</TableCell>
                         <TableCell>
                           <span className={`text-[9px] font-semibold ${expense.is_controllable !== false ? "text-emerald-600" : "text-slate-400"}`}>
                             {expense.is_controllable !== false ? "CTRL" : "NON"}
                           </span>
                         </TableCell>
-                        <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source}</TableCell>
+                        <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source_type || expense.source}</TableCell>
                         <TableCell>
                           <div className="flex gap-1">
                             <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
