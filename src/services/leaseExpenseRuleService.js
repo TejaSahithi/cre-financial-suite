@@ -24,6 +24,14 @@ function normalizeRuleSource(value) {
   return raw || null;
 }
 
+function normalizeCategoryToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function normalizeRuleStatus(rule) {
   const raw = String(rule?.row_status || "").trim().toLowerCase();
   return raw || "needs_review";
@@ -80,6 +88,78 @@ function extractRuleClauses(rule, leaseId, ruleId) {
     clause_text: source,
     confidence: asNumber(rule?.confidence),
   }];
+}
+
+function buildCategoryMatchIndex(categories = []) {
+  const index = new Map();
+
+  for (const category of categories) {
+    const tokens = [
+      category?.category_name,
+      category?.subcategory_name,
+      category?.normalized_key,
+      [category?.category_name, category?.subcategory_name].filter(Boolean).join(" "),
+    ]
+      .map(normalizeCategoryToken)
+      .filter(Boolean);
+
+    for (const token of tokens) {
+      if (!index.has(token)) {
+        index.set(token, category);
+      }
+    }
+  }
+
+  return index;
+}
+
+function resolveCategoryForRule(rule, categories = [], categoryIndex = buildCategoryMatchIndex(categories)) {
+  const directMatches = [
+    rule?.expense_category_id ? categories.find((category) => category.id === rule.expense_category_id) : null,
+    categoryIndex.get(normalizeCategoryToken(rule?.category_name)),
+    categoryIndex.get(normalizeCategoryToken(rule?.subcategory_name)),
+    categoryIndex.get(normalizeCategoryToken(rule?.normalized_key)),
+    categoryIndex.get(normalizeCategoryToken([rule?.category_name, rule?.subcategory_name].filter(Boolean).join(" "))),
+  ].filter(Boolean);
+
+  if (directMatches.length > 0) return directMatches[0];
+
+  const requestedCategory = normalizeCategoryToken(rule?.category_name);
+  const requestedSubcategory = normalizeCategoryToken(rule?.subcategory_name);
+
+  return categories.find((category) => {
+    const categoryName = normalizeCategoryToken(category?.category_name);
+    const subcategoryName = normalizeCategoryToken(category?.subcategory_name);
+    return (
+      (requestedCategory && (categoryName.includes(requestedCategory) || requestedCategory.includes(categoryName))) ||
+      (requestedSubcategory && (subcategoryName.includes(requestedSubcategory) || requestedSubcategory.includes(subcategoryName)))
+    );
+  }) || null;
+}
+
+function mapExtractedRulesToCategories(aiRules = [], categories = [], existingRules = []) {
+  const categoryIndex = buildCategoryMatchIndex(categories);
+  const existingByCategoryId = new Map(
+    (existingRules || [])
+      .filter((rule) => rule?.expense_category_id)
+      .map((rule) => [rule.expense_category_id, rule])
+  );
+
+  return (aiRules || [])
+    .map((rule) => {
+      const matchedCategory = resolveCategoryForRule(rule, categories, categoryIndex);
+      if (!matchedCategory?.id) return null;
+
+      const existingRule = existingByCategoryId.get(matchedCategory.id) || {};
+      return {
+        ...existingRule,
+        ...rule,
+        expense_category_id: matchedCategory.id,
+        category_name: matchedCategory.category_name,
+        subcategory_name: matchedCategory.subcategory_name || null,
+      };
+    })
+    .filter(Boolean);
 }
 
 function buildLeaseConfigFromRules(lease, rules = [], categoriesById = new Map()) {
@@ -158,6 +238,17 @@ async function loadRuleDependencies(ruleSetId) {
   };
 }
 
+function mergeRulesWithRelations(rules = [], valuesByRuleId = new Map(), clausesByRuleId = new Map()) {
+  return (rules || []).map((rule) => {
+    const valueRow = valuesByRuleId.get(rule.id) || null;
+    return {
+      ...rule,
+      ...valueRow,
+      clauses: clausesByRuleId.get(rule.id) || [],
+    };
+  });
+}
+
 export const leaseExpenseRuleService = {
   async getLeaseSourceText(leaseId, sourceFileId = null) {
     if (!supabase || !leaseId) return "";
@@ -212,16 +303,108 @@ export const leaseExpenseRuleService = {
     if (!ruleSet) return { ruleSet: null, rules: [] };
 
     const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
-    const mergedRules = rules.map((rule) => {
-      const valueRow = valuesByRuleId.get(rule.id) || null;
-      return {
-        ...rule,
-        ...valueRow,
-        clauses: clausesByRuleId.get(rule.id) || [],
-      };
-    });
+    const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
 
     return { ruleSet, rules: mergedRules };
+  },
+
+  async loadRuleSets(leaseIds = []) {
+    if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) return [];
+
+    const { data: ruleSets, error } = await supabase
+      .from("lease_expense_rule_sets")
+      .select("*")
+      .in("lease_id", leaseIds)
+      .not("status", "eq", "archived")
+      .order("version", { ascending: false });
+
+    if (error) throw error;
+
+    const latestRuleSetByLeaseId = new Map();
+    for (const ruleSet of ruleSets || []) {
+      if (!latestRuleSetByLeaseId.has(ruleSet.lease_id)) {
+        latestRuleSetByLeaseId.set(ruleSet.lease_id, ruleSet);
+      }
+    }
+
+    const latestRuleSets = [...latestRuleSetByLeaseId.values()];
+    const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
+    if (ruleSetIds.length === 0) return [];
+
+    const { data: rules, error: rulesError } = await supabase
+      .from("lease_expense_rules")
+      .select("*")
+      .in("rule_set_id", ruleSetIds);
+
+    if (rulesError) throw rulesError;
+
+    const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
+    const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
+      ruleIds.length > 0
+        ? supabase.from("lease_expense_values").select("*").in("rule_id", ruleIds)
+        : Promise.resolve({ data: [], error: null }),
+      ruleIds.length > 0
+        ? supabase.from("lease_expense_rule_clauses").select("*").in("lease_expense_rule_id", ruleIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (valuesError) throw valuesError;
+    if (clausesError) throw clausesError;
+
+    const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
+    const clausesByRuleId = new Map();
+    (clauses || []).forEach((clause) => {
+      const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
+      existing.push(clause);
+      clausesByRuleId.set(clause.lease_expense_rule_id, existing);
+    });
+
+    return latestRuleSets.map((ruleSet) => ({
+      leaseId: ruleSet.lease_id,
+      ruleSet,
+      rules: mergeRulesWithRelations(
+        (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id),
+        valuesByRuleId,
+        clausesByRuleId
+      ),
+    }));
+  },
+
+  async extractDraftRuleSet({ lease, categories = [], existingRuleSetId = null, existingRules = [] }) {
+    if (!supabase || !lease?.id) throw new Error("Lease is required to extract expense rules");
+
+    const sourceText = await this.getLeaseSourceText(
+      lease.id,
+      lease?.extraction_data?.source_file_id || null
+    );
+
+    if (!sourceText) {
+      throw new Error("No extracted lease text found to analyze.");
+    }
+
+    const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
+      body: {
+        lease_id: lease.id,
+        source_text: sourceText,
+        categories: (categories || []).map((category) => ({
+          id: category.id,
+          category_name: category.category_name,
+          subcategory_name: category.subcategory_name,
+          normalized_key: category.normalized_key,
+        })),
+      },
+    });
+
+    if (error) throw error;
+
+    const mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
+    return this.saveRuleSet({
+      lease,
+      rules: mappedRules,
+      status: "draft",
+      existingRuleSetId,
+      categories,
+    });
   },
 
   async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [] }) {
@@ -374,6 +557,34 @@ export const leaseExpenseRuleService = {
       ...persisted,
       ruleSet: persisted.ruleSet || { id: ruleSetId, status, version: currentVersion },
     };
+  },
+
+  groupRulesByRecoveryStatus(rules = []) {
+    const groups = {
+      recoverable: [],
+      nonRecoverable: [],
+      conditional: [],
+      needsReview: [],
+    };
+
+    for (const rule of rules || []) {
+      const normalizedRecoveryStatus = normalizeRecoveryStatus(rule);
+      if (normalizedRecoveryStatus === "recoverable") {
+        groups.recoverable.push(rule);
+        continue;
+      }
+      if (["non_recoverable", "excluded"].includes(normalizedRecoveryStatus)) {
+        groups.nonRecoverable.push(rule);
+        continue;
+      }
+      if (normalizedRecoveryStatus === "conditional") {
+        groups.conditional.push(rule);
+        continue;
+      }
+      groups.needsReview.push(rule);
+    }
+
+    return groups;
   },
 
   normalizeRecoveryStatus,

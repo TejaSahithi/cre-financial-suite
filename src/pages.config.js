@@ -62,6 +62,7 @@ import ContactUs from './pages/ContactUs';
 import CreateBudget from './pages/CreateBudget';
 import Dashboard from './pages/Dashboard';
 import Expenses from './pages/Expenses';
+import ExpenseReview from './pages/ExpenseReview';
 import Landing from './pages/Landing';
 import LeaseReview from './pages/LeaseReview';
 import LeaseUpload from './pages/LeaseUpload';
@@ -129,6 +130,7 @@ export const PAGES = {
     "CreateBudget": CreateBudget,
     "Dashboard": Dashboard,
     "Expenses": Expenses,
+    "ExpenseReview": ExpenseReview,
     "Landing": Landing,
     "LeaseReview": LeaseReview,
     "LeaseUpload": LeaseUpload,

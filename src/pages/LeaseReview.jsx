@@ -695,7 +695,7 @@ export default function LeaseReview() {
       <Dialog open={showApproval} onOpenChange={setShowApproval}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Approve Lease</DialogTitle></DialogHeader>
-          <p className="text-sm text-slate-500 mb-2">Approval requires signature confirmation. The lease will be marked as Budget-Ready and saved to Documents.</p>
+          <p className="text-sm text-slate-500 mb-2">Approval requires signature confirmation. The lease will be marked as Approved and saved to Documents.</p>
           <div className="bg-slate-50 p-3 rounded-lg mb-3">
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
             <p className="text-xs text-slate-500">{lease.tenant_name} · {getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} · {lease.start_date} to {lease.end_date}</p>

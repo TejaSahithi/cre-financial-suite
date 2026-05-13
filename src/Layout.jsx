@@ -46,9 +46,10 @@ const navSections = [
       { label: "Expense Dashboard", page: "Expenses" },
       { label: "Add Expense", page: "AddExpense" },
       { label: "Bulk Import", page: "BulkImport" },
+      { label: "Expense Classification", page: "LeaseExpenseClassification" },
+      { label: "Expense Review", page: "ExpenseReview" },
       { label: "Expense Projection", page: "ExpenseProjection" },
       { label: "Vendors", page: "Vendors" },
-      { label: "Expense Classification", page: "LeaseExpenseClassification" },
     ]
   },
   {
