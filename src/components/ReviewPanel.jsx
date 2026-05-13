@@ -386,9 +386,17 @@ function normalizeLeaseReviewFields(record, index, standardFields, customFields)
     });
   }
 
+  const baseKeys = LEASE_STANDARD_FIELDS.map((field) => field.key);
+  const extraKeys = [...standardByKey.keys()]
+    .filter((key) => !baseKeys.includes(key))
+    .filter((key) => {
+      const field = standardByKey.get(key);
+      return field && (field.status !== "missing" || !isBlank(field.value));
+    });
+
   return {
     ...record,
-    standard_fields: LEASE_STANDARD_FIELDS.map((field) => standardByKey.get(field.key)),
+    standard_fields: [...baseKeys, ...extraKeys].map((fieldKey) => standardByKey.get(fieldKey)),
     custom_fields: remainingCustomFields,
   };
 }
@@ -461,6 +469,61 @@ function flattenRecordValues(record) {
   );
 }
 
+function choosePreferredField(existing, candidate) {
+  if (!existing) return candidate;
+  if (isBlank(existing.value) && !isBlank(candidate.value)) return candidate;
+  if (!isBlank(existing.value) && isBlank(candidate.value)) return existing;
+  if ((candidate.confidence ?? 0) > (existing.confidence ?? 0)) return candidate;
+  if ((candidate.accepted || candidate.status === "edited") && !(existing.accepted || existing.status === "edited")) {
+    return candidate;
+  }
+  return existing;
+}
+
+function collapseLeaseRecords(records = []) {
+  if (!Array.isArray(records) || records.length <= 1) return records;
+
+  const standardFieldMap = new Map();
+  const customFieldMap = new Map();
+  const warnings = new Set();
+
+  for (const record of records) {
+    for (const field of record.standard_fields || []) {
+      const key = canonicalFieldKey(field.field_key);
+      const existing = standardFieldMap.get(key);
+      standardFieldMap.set(key, choosePreferredField(existing, { ...field, field_key: key, is_standard: true }));
+    }
+
+    for (const field of record.custom_fields || []) {
+      const key = compactKey(field.field_key);
+      if (!key) continue;
+      const existing = customFieldMap.get(key);
+      customFieldMap.set(key, choosePreferredField(existing, { ...field, field_key: key, is_standard: false }));
+    }
+
+    for (const warning of record.warnings || []) {
+      if (warning) warnings.add(String(warning));
+    }
+  }
+
+  const mergedRecord = normalizeLeaseReviewFields(
+    {
+      ...(records[0] || {}),
+      record_index: 0,
+      row_index: 0,
+      standard_fields: [...standardFieldMap.values()],
+      custom_fields: [...customFieldMap.values()],
+      rejected_fields: [],
+      warnings: [...warnings],
+    },
+    0,
+    [...standardFieldMap.values()],
+    [...customFieldMap.values()],
+  );
+
+  return [mergedRecord];
+}
+
 export default function ReviewPanel({
   payload,
   onApprove,
@@ -473,9 +536,15 @@ export default function ReviewPanel({
   saving = false,
 }) {
   const initialRecords = useMemo(
-    () => (payload?.records || payload?.rows || []).map((record, index) =>
-      normalizeRecord(record, index, payload?.module_type),
-    ),
+    () => {
+      const normalized = (payload?.records || payload?.rows || []).map((record, index) =>
+        normalizeRecord(record, index, payload?.module_type),
+      );
+      if (payload?.module_type === "leases" || payload?.module_type === "lease") {
+        return collapseLeaseRecords(normalized);
+      }
+      return normalized;
+    },
     [payload],
   );
   const [records, setRecords] = useState(initialRecords);
