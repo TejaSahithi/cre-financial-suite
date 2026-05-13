@@ -583,6 +583,11 @@ export default function CreateBudget() {
                   : "No CAM snapshot found for this property and year. Budget generation is blocked unless you explicitly generate without CAM."}
               </div>
 
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                Lease is not the only source of truth for budget generation.
+                The budget uses lease data for rent and obligation terms, approved expense data for operating cost history, and CAM snapshots for recovery projections.
+              </div>
+
               {!latestCamSnapshot && (
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input

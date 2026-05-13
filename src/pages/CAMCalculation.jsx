@@ -282,6 +282,11 @@ export default function CAMCalculation() {
         </div>
       ) : null}
 
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-3 text-sm text-blue-800">
+        Lease is the source of truth for tenant obligations, reimbursement terms, caps, base years, and CAM rule logic.
+        Approved expense rows are the source of truth for the actual expense pool used in CAM. Budget generation then uses lease revenue inputs plus approved expense and CAM snapshot outputs.
+      </div>
+
       {leaseNotice ? (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 text-sm text-amber-700">
           {leaseNotice}

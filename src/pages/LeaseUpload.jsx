@@ -26,6 +26,22 @@ const ACTIVE_STATUSES = new Set([
   "computing",
 ]);
 
+const EXPLICIT_LEASE_CHARGE_FIELDS = [
+  { key: "cam_amount", label: "CAM" },
+  { key: "nnn_amount", label: "NNN" },
+  { key: "insurance_reimbursement_amount", label: "Insurance Reimbursement" },
+  { key: "tax_reimbursement_amount", label: "Tax Reimbursement" },
+  { key: "utility_reimbursement_amount", label: "Utility Reimbursement" },
+];
+
+const EXPENSE_RULE_HINT_PATTERN = /(responsibility|reimbursement|recoverable|non_recoverable|conditional|cap|expense_stop|base_year|gross_up|admin_fee|management_fee|exclusion|utility|tax|insurance|cam|nnn|maintenance)/i;
+
+function asLeaseAmount(value) {
+  if (value == null || value === "") return null;
+  const normalized = Number(String(value).replace(/[$,% ,]/g, ""));
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
 export default function LeaseUpload() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -368,6 +384,10 @@ export default function LeaseUpload() {
   const reviewPayload = fileRecord?.ui_review_payload || null;
   const reviewedRows = reviewPayload?.records || reviewPayload?.rows || [];
   const leaseFiscalYear = inferLeaseFiscalYear(reviewedRows);
+  const leaseExpensePreview = useMemo(
+    () => summarizeLeaseExpenseSignals(reviewedRows),
+    [reviewedRows]
+  );
   const expenseScope = useMemo(() => {
     const propertyId = effectivePropertyId;
     if (!propertyId) {
@@ -605,6 +625,7 @@ export default function LeaseUpload() {
           <ExpenseCamReadinessCard
             expenseScope={expenseScope}
             workflowSummary={workflowSummary}
+            extractionPreview={leaseExpensePreview}
             propertyName={effectiveProperty?.name}
             scopeParams={{
               property: effectivePropertyId,
@@ -655,10 +676,71 @@ function inferLeaseFiscalYear(records) {
   return new Date().getFullYear();
 }
 
-function ExpenseCamReadinessCard({ expenseScope, workflowSummary, propertyName, scopeParams }) {
+function summarizeLeaseExpenseSignals(records) {
+  const first = records?.[0] || null;
+  if (!first) {
+    return {
+      explicitCharges: [],
+      ruleHints: [],
+    };
+  }
+
+  const fields = [];
+  const pushField = (fieldKey, label, value) => {
+    if (value == null || value === "") return;
+    fields.push({ fieldKey, label, value });
+  };
+
+  (first.standard_fields || []).forEach((field) => {
+    pushField(field.field_key, field.label || field.field_key, field.value);
+  });
+  (first.custom_fields || []).forEach((field) => {
+    pushField(field.field_key, field.label || field.field_key, field.value);
+  });
+  Object.entries(first.values || {}).forEach(([fieldKey, value]) => {
+    pushField(fieldKey, fieldKey, value);
+  });
+  Object.entries(first.fields || {}).forEach(([fieldKey, field]) => {
+    const value = field && typeof field === "object" && "value" in field ? field.value : field;
+    pushField(fieldKey, fieldKey, value);
+  });
+
+  const fieldByKey = new Map();
+  for (const field of fields) {
+    if (!fieldByKey.has(field.fieldKey)) {
+      fieldByKey.set(field.fieldKey, field);
+    }
+  }
+
+  const explicitCharges = EXPLICIT_LEASE_CHARGE_FIELDS.flatMap((definition) => {
+    const value = getRecordValue(first, definition.key);
+    const amount = asLeaseAmount(value);
+    if (!amount || amount <= 0) return [];
+    return [{ ...definition, amount }];
+  });
+
+  const explicitKeys = new Set(EXPLICIT_LEASE_CHARGE_FIELDS.map((definition) => definition.key));
+  const ruleHints = [...fieldByKey.values()]
+    .filter((field) => !explicitKeys.has(field.fieldKey))
+    .filter((field) => EXPENSE_RULE_HINT_PATTERN.test(field.fieldKey))
+    .map((field) => ({
+      key: field.fieldKey,
+      label: String(field.label || field.fieldKey).replace(/_/g, " "),
+      value: String(field.value),
+    }));
+
+  return {
+    explicitCharges,
+    ruleHints,
+  };
+}
+
+function ExpenseCamReadinessCard({ expenseScope, workflowSummary, extractionPreview, propertyName, scopeParams }) {
   const hasProperty = !!expenseScope.propertyId;
   const hasRecoverableExpenses = expenseScope.recoverable.length > 0;
   const hasApprovedRules = (workflowSummary?.approvedRuleLeaseCount || 0) > 0;
+  const extractedChargeCount = extractionPreview?.explicitCharges?.length || 0;
+  const extractedRuleHintCount = extractionPreview?.ruleHints?.length || 0;
   const scopedParams = Object.fromEntries(
     Object.entries(scopeParams || {}).filter(([, value]) => value !== undefined && value !== null && value !== "all"),
   );
@@ -695,6 +777,12 @@ function ExpenseCamReadinessCard({ expenseScope, workflowSummary, propertyName, 
               FY {expenseScope.fiscalYear}
             </Badge>
             <Badge className="bg-white text-slate-700">
+              {extractedChargeCount} lease charge fields
+            </Badge>
+            <Badge className="bg-white text-slate-700">
+              {extractedRuleHintCount} CAM/rule hints
+            </Badge>
+            <Badge className="bg-white text-slate-700">
               {workflowSummary?.approvedRuleLeaseCount || 0} approved rule sets
             </Badge>
             <Badge className={hasRecoverableExpenses ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
@@ -713,6 +801,11 @@ function ExpenseCamReadinessCard({ expenseScope, workflowSummary, propertyName, 
             {propertyName ? ` for ${propertyName}` : ""}, totaling ${expenseScope.recoverableTotal.toLocaleString()}.
             You can now calculate CAM from actual expenses.
           </div>
+        ) : extractedChargeCount > 0 ? (
+          <div className="rounded-lg border border-blue-200 bg-white p-3 text-xs text-blue-800">
+            The lease already contains {extractedChargeCount} explicit charge field(s) such as CAM/NNN/reimbursements.
+            Those values will prefill lease-derived expense rows after lease approval, but full CAM still needs approved actual expense inputs.
+          </div>
         ) : hasApprovedRules ? (
           <div className="rounded-lg border border-blue-200 bg-white p-3 text-xs text-blue-800">
             Lease expense rules are approved for this scope, but actual expense rows are still missing.
@@ -721,6 +814,46 @@ function ExpenseCamReadinessCard({ expenseScope, workflowSummary, propertyName, 
         ) : (
           <div className="rounded-lg border border-amber-200 bg-white p-3 text-xs text-amber-800">
             No recoverable expenses were found for this lease scope and fiscal year. Add individual expenses or bulk import expense lines, then run CAM.
+          </div>
+        )}
+
+        {(extractedChargeCount > 0 || extractedRuleHintCount > 0) && (
+          <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Lease expense extraction preview</div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div>
+                <div className="text-xs font-medium text-slate-700">Explicit lease charges</div>
+                {extractionPreview.explicitCharges.length > 0 ? (
+                  <div className="mt-2 space-y-2">
+                    {extractionPreview.explicitCharges.map((charge) => (
+                      <div key={charge.key} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs">
+                        <span className="font-medium text-slate-700">{charge.label}</span>
+                        <span className="font-semibold text-slate-900">${charge.amount.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">No explicit recurring charge amount was extracted from the lease review payload yet.</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-medium text-slate-700">Rule / responsibility hints</div>
+                {extractionPreview.ruleHints.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {extractionPreview.ruleHints.slice(0, 8).map((hint) => (
+                      <Badge key={hint.key} className="bg-slate-100 text-slate-700">
+                        {hint.label}
+                      </Badge>
+                    ))}
+                    {extractionPreview.ruleHints.length > 8 ? (
+                      <Badge className="bg-slate-100 text-slate-700">+{extractionPreview.ruleHints.length - 8} more</Badge>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">No CAM rule hints were detected in the current extracted field set yet.</div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
