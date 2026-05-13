@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { supabase } from "@/services/supabaseClient";
-import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -62,35 +62,6 @@ function getProcessingError(ingestData, ingestError) {
   );
 }
 
-async function invokeUploadHandler(formData) {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const { data: sessionData } = await supabase.auth.getSession();
-  const accessToken = sessionData?.session?.access_token;
-
-  if (!supabaseUrl || !supabaseAnonKey || !accessToken) {
-    throw new Error("Missing Supabase session. Please refresh and sign in again.");
-  }
-
-  const response = await fetch(`${supabaseUrl}/functions/v1/upload-handler`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      apikey: supabaseAnonKey,
-    },
-    body: formData,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.error) {
-    const error = new Error(payload?.message || `Upload failed with HTTP ${response.status}`);
-    error.context = payload;
-    throw error;
-  }
-
-  return payload;
-}
-
 /**
  * Reusable file upload component that sends files to the upload-handler
  * Edge Function and auto-triggers ingestion on success.
@@ -117,7 +88,7 @@ export default function FileUploader({
   multiple = false,
   accept = DEFAULT_ACCEPT,
 }) {
-  const { orgId } = useOrgId();
+  const { orgId, isAdmin } = useOrgId();
   const resolvedOrgId = orgIdOverride ?? orgId;
   const fileInputRef = useRef(null);
 
@@ -236,6 +207,10 @@ export default function FileUploader({
         throw new Error("Supabase client is not available.");
       }
 
+      if (isAdmin && (!resolvedOrgId || resolvedOrgId === "__none__")) {
+        throw new Error("Super-admin must select an organization before uploading files.");
+      }
+
       const formData = new FormData();
       formData.append("file", file);
       formData.append("file_type", normalizeFileType(fileType));
@@ -257,7 +232,7 @@ export default function FileUploader({
         formData.append("unit_id", safeUnitId);
       }
 
-      const data = await invokeUploadHandler(formData);
+      const data = await invokeEdgeFunctionFormData("upload-handler", formData);
 
       if (data?.file_id) {
         invokeEdgeFunction("ingest-file", {
@@ -289,7 +264,7 @@ export default function FileUploader({
         processing_started: Boolean(data?.file_id),
       };
     },
-    [buildingId, fileType, propertyId, resolvedOrgId, unitId]
+    [buildingId, fileType, isAdmin, propertyId, resolvedOrgId, unitId]
   );
 
   const handleUpload = useCallback(async () => {
