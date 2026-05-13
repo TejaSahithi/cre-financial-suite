@@ -560,7 +560,10 @@ export default function Expenses() {
                 If nothing appears yet, open Expense Classification to review the extraction directly.
               </p>
             ) : (
-              <p>No scoped leases were found yet for this property/building/unit selection.</p>
+              <p>
+                No scoped lease records were found yet for this property/building/unit selection.
+                If you just uploaded a lease, it will not appear here until you send it to Lease Review and save an approved lease/rule set into this scope.
+              </p>
             )}
             <div className="flex flex-wrap gap-2">
               <Link to={classificationUrl}>
@@ -598,6 +601,11 @@ export default function Expenses() {
               <p>
                 Lease rules are ready, but no actual expense rows have been uploaded yet.
                 Only explicit CAM/NNN/tax/insurance/utility charges should auto-create lease-derived rows from the lease itself.
+              </p>
+            ) : selectorScopedLeases.length === 0 ? (
+              <p>
+                No scoped lease records are available yet, so there is nothing to classify or sync into CAM.
+                Finish Lease Review approval first, then upload actual expenses or rely on explicit lease charge imports where the lease provides real amounts.
               </p>
             ) : (
               <p>

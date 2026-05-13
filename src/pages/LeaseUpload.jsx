@@ -391,6 +391,10 @@ export default function LeaseUpload() {
     () => summarizeLeaseExpenseSignals(reviewedRows),
     [reviewedRows]
   );
+  const extractionQuality = useMemo(
+    () => assessLeaseExtractionQuality(reviewedRows),
+    [reviewedRows]
+  );
   const expenseScope = useMemo(() => {
     const propertyId = effectivePropertyId;
     if (!propertyId) {
@@ -612,6 +616,27 @@ export default function LeaseUpload() {
         </Card>
       )}
 
+      {fileRecord?.status === "review_required" && !isEmptyExtractionFallback && extractionQuality.suspicious && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
+            <span>
+              This extraction looks stale or misparsed: {extractionQuality.reasons.join("; ")}.
+              Retry extraction to rebuild the review payload with the latest DOCX parser fix.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={retryExtraction}
+              disabled={retryingExtraction}
+              className="border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+            >
+              {retryingExtraction && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Retry automatic extraction
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {fileRecord?.status === "review_required" && reviewPayload && (
         <>
           <ReviewPanel
@@ -735,6 +760,45 @@ function summarizeLeaseExpenseSignals(records) {
   return {
     explicitCharges,
     ruleHints,
+  };
+}
+
+function assessLeaseExtractionQuality(records) {
+  const first = records?.[0] || null;
+  if (!first) {
+    return { suspicious: false, reasons: [] };
+  }
+
+  const reasons = [];
+  const tenantName = String(getRecordValue(first, "tenant_name") || "").trim();
+  const propertyName = String(getRecordValue(first, "property_name") || "").trim();
+  const propertyAddress = String(getRecordValue(first, "property_address") || "").trim();
+  const customFields = Array.isArray(first.custom_fields) ? first.custom_fields : [];
+
+  if (/^(signature|date)\s*:/i.test(tenantName)) {
+    reasons.push("tenant name was filled with signature/date text");
+  }
+
+  if (propertyAddress && /^\d{1,3}$/.test(propertyName)) {
+    reasons.push("property name was reduced to a table row number");
+  }
+
+  const noisyCustomFieldCount = customFields.filter((field) =>
+    /^(https|before_move|total_due_before_move|garage_space_g|the_lease_begins_at_12|rent_received_after_5|fixed_term_lease)$/i
+      .test(String(field?.field_key || "")),
+  ).length;
+
+  if (noisyCustomFieldCount >= 2) {
+    reasons.push("legacy table fragments were saved as custom fields");
+  }
+
+  if ((records?.length || 0) > 1) {
+    reasons.push("multiple lease records were created from one document");
+  }
+
+  return {
+    suspicious: reasons.length > 0,
+    reasons,
   };
 }
 
