@@ -126,9 +126,13 @@ const LEASE_STANDARD_FIELDS = [
 const CANONICAL_FIELD_ALIASES = {
   landlord: "landlord_name",
   landlord_name: "landlord_name",
+  landlord_management_company: "landlord_name",
+  landlord_management: "landlord_name",
   lessor: "landlord_name",
   tenant: "tenant_name",
   tenant_name: "tenant_name",
+  tenant_1: "tenant_name",
+  tenant_2: "tenant_name",
   lessee: "tenant_name",
   assignor: "assignor_name",
   assignor_name: "assignor_name",
@@ -151,6 +155,9 @@ const CANONICAL_FIELD_ALIASES = {
   assumption_scope: "assumption_scope",
   assumption: "assumption_scope",
   premises: "property_address",
+  apartment_community: "property_name",
+  property: "property_name",
+  property_name: "property_name",
   property_address: "property_address",
   premises_address: "property_address",
   premises_location: "property_address",
@@ -211,6 +218,44 @@ function isAddressLike(value) {
 function isCamClauseCustom(field) {
   const text = `${field.field_key || ""} ${field.value || ""}`;
   return /(^|\b)(pro[\s_-]?rata|common area maintenance|\bcam\b)(\b|$)/i.test(text);
+}
+
+function isSuspiciousLeaseStandardValue(fieldKey, value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldKey)) {
+    return /^(signature|date)\s*:|^_+$|\bhereby\b|\bterms? and conditions\b/i.test(text);
+  }
+
+  if (fieldKey === "property_name") {
+    return /^\d{1,4}$/.test(text) || isAddressLike(text) || /^(signature|date)\s*:/i.test(text);
+  }
+
+  if (fieldKey === "unit_number") {
+    return /^(suite|unit)\s+\d{3,4}$/i.test(text);
+  }
+
+  return false;
+}
+
+function isPlausibleLeaseReplacement(fieldKey, value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldKey)) {
+    return !/^(signature|date)\s*:|^_+$|\bhereby\b|\bterms? and conditions\b/i.test(text) && text.length >= 3;
+  }
+
+  if (fieldKey === "property_name") {
+    return !/^\d{1,4}$/.test(text) && !isAddressLike(text) && text.length >= 3;
+  }
+
+  if (fieldKey === "unit_number") {
+    return /^[A-Za-z0-9-]{1,12}$/.test(text);
+  }
+
+  return true;
 }
 
 function isBrokenContinuationCustom(field, standardByKey) {
@@ -330,7 +375,11 @@ function normalizeLeaseReviewFields(record, index, standardFields, customFields)
     if (isDuplicateCustomField(field, standardByKey)) continue;
     if (standardByKey.has(canonicalKey)) {
       const existing = standardByKey.get(canonicalKey);
-      if (isBlank(existing.value) && !isBlank(field.value)) {
+      const shouldReplaceSuspicious =
+        isSuspiciousLeaseStandardValue(canonicalKey, existing.value) &&
+        isPlausibleLeaseReplacement(canonicalKey, field.value) &&
+        !isBlank(field.value);
+      if ((isBlank(existing.value) && !isBlank(field.value)) || shouldReplaceSuspicious) {
         standardByKey.set(canonicalKey, {
           ...existing,
           value: field.value,
