@@ -249,6 +249,170 @@ function mergeRulesWithRelations(rules = [], valuesByRuleId = new Map(), clauses
   });
 }
 
+function getLeaseExtractedValue(lease, fieldName) {
+  if (!lease || !fieldName) return null;
+  if (lease[fieldName] != null && lease[fieldName] !== "") return lease[fieldName];
+
+  const extractedFields = lease?.extracted_fields && typeof lease.extracted_fields === "object"
+    ? lease.extracted_fields
+    : lease?.extraction_data?.extracted_fields && typeof lease.extraction_data.extracted_fields === "object"
+      ? lease.extraction_data.extracted_fields
+      : null;
+
+  if (extractedFields && extractedFields[fieldName] != null && extractedFields[fieldName] !== "") {
+    return extractedFields[fieldName];
+  }
+
+  const customField = asArray(lease?.extraction_data?.custom_fields)
+    .find((field) => field?.field_key === fieldName && field?.value != null && field?.value !== "");
+
+  return customField?.value ?? null;
+}
+
+function findCategoryByKeywords(categories = [], keywords = []) {
+  const normalizedKeywords = keywords.map(normalizeCategoryToken).filter(Boolean);
+  return categories.find((category) => {
+    const haystack = [
+      category?.category_name,
+      category?.subcategory_name,
+      category?.normalized_key,
+    ]
+      .map(normalizeCategoryToken)
+      .filter(Boolean)
+      .join(" ");
+
+    return normalizedKeywords.some((keyword) => haystack.includes(keyword) || keyword.includes(haystack));
+  }) || null;
+}
+
+function extractSnippet(text, pattern) {
+  const match = String(text || "").match(pattern);
+  return match?.[0] ? match[0].trim() : null;
+}
+
+function buildDeterministicDraftRules({ lease, categories = [], sourceText = "", existingRules = [] }) {
+  const draftRules = [];
+  const existingByCategoryId = new Map(
+    (existingRules || [])
+      .filter((rule) => rule?.expense_category_id)
+      .map((rule) => [rule.expense_category_id, rule]),
+  );
+
+  const candidates = [
+    {
+      field: "cam_amount",
+      keywords: ["cam", "common area maintenance"],
+      notes: "Derived from extracted CAM amount",
+    },
+    {
+      field: "nnn_amount",
+      keywords: ["nnn", "triple net", "operating expenses"],
+      notes: "Derived from extracted NNN amount",
+    },
+    {
+      field: "insurance_reimbursement_amount",
+      keywords: ["insurance"],
+      notes: "Derived from extracted insurance reimbursement amount",
+    },
+    {
+      field: "tax_reimbursement_amount",
+      keywords: ["tax", "real estate tax"],
+      notes: "Derived from extracted tax reimbursement amount",
+    },
+    {
+      field: "utility_reimbursement_amount",
+      keywords: ["utility", "utilities"],
+      notes: "Derived from extracted utility reimbursement amount",
+    },
+    {
+      field: "water_sewer_reimbursement_amount",
+      keywords: ["water", "sewer", "utilities"],
+      notes: "Derived from extracted water/sewer reimbursement amount",
+    },
+  ];
+
+  for (const candidate of candidates) {
+    const category = findCategoryByKeywords(categories, candidate.keywords);
+    if (!category?.id) continue;
+
+    const extractedValue = asNumber(getLeaseExtractedValue(lease, candidate.field));
+    if (extractedValue == null || extractedValue <= 0) continue;
+
+    const snippet = extractSnippet(
+      sourceText,
+      new RegExp(`${candidate.keywords.join("|")}[\\s\\S]{0,120}?\\$[\\d,]+(?:\\.\\d{2})?`, "i"),
+    );
+    const existing = existingByCategoryId.get(category.id) || {};
+
+    draftRules.push({
+      ...existing,
+      expense_category_id: category.id,
+      category_name: category.category_name,
+      subcategory_name: category.subcategory_name || null,
+      row_status: "mapped",
+      mentioned_in_lease: true,
+      is_recoverable: true,
+      is_excluded: false,
+      is_controllable: true,
+      is_subject_to_cap: false,
+      has_base_year: false,
+      gross_up_applicable: false,
+      admin_fee_applicable: false,
+      extracted_value: extractedValue,
+      final_value: extractedValue,
+      frequency: /monthly|per month/i.test(snippet || sourceText) ? "monthly" : "yearly",
+      confidence: 0.78,
+      notes: candidate.notes,
+      source: snippet || candidate.notes,
+    });
+  }
+
+  const utilitiesCategory = findCategoryByKeywords(categories, ["utility", "utilities", "electric", "water", "sewer"]);
+  const electricResponsibility = String(getLeaseExtractedValue(lease, "electric_responsibility") || "");
+  if (utilitiesCategory?.id && electricResponsibility && /tenant/i.test(electricResponsibility)) {
+    const existing = existingByCategoryId.get(utilitiesCategory.id) || {};
+    draftRules.push({
+      ...existing,
+      expense_category_id: utilitiesCategory.id,
+      category_name: utilitiesCategory.category_name,
+      subcategory_name: utilitiesCategory.subcategory_name || null,
+      row_status: "mapped",
+      mentioned_in_lease: true,
+      is_recoverable: false,
+      is_excluded: true,
+      is_controllable: true,
+      is_subject_to_cap: false,
+      has_base_year: false,
+      gross_up_applicable: false,
+      admin_fee_applicable: false,
+      extracted_value: null,
+      final_value: null,
+      frequency: "yearly",
+      confidence: 0.72,
+      notes: "Tenant pays electric directly per lease clause.",
+      source: electricResponsibility,
+    });
+  }
+
+  const deduped = new Map();
+  for (const rule of draftRules) {
+    if (!rule?.expense_category_id) continue;
+    const existing = deduped.get(rule.expense_category_id);
+    if (!existing) {
+      deduped.set(rule.expense_category_id, rule);
+      continue;
+    }
+
+    const existingScore = (asNumber(existing.final_value) != null ? 2 : 0) + (existing.is_recoverable ? 1 : 0);
+    const nextScore = (asNumber(rule.final_value) != null ? 2 : 0) + (rule.is_recoverable ? 1 : 0);
+    if (nextScore >= existingScore) {
+      deduped.set(rule.expense_category_id, rule);
+    }
+  }
+
+  return [...deduped.values()];
+}
+
 export const leaseExpenseRuleService = {
   async getLeaseSourceText(leaseId, sourceFileId = null) {
     if (!supabase || !leaseId) return "";
@@ -382,22 +546,38 @@ export const leaseExpenseRuleService = {
       throw new Error("No extracted lease text found to analyze.");
     }
 
-    const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
-      body: {
-        lease_id: lease.id,
-        source_text: sourceText,
-        categories: (categories || []).map((category) => ({
-          id: category.id,
-          category_name: category.category_name,
-          subcategory_name: category.subcategory_name,
-          normalized_key: category.normalized_key,
-        })),
-      },
-    });
+    let mappedRules = [];
 
-    if (error) throw error;
+    try {
+      const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
+        body: {
+          lease_id: lease.id,
+          source_text: sourceText,
+          categories: (categories || []).map((category) => ({
+            id: category.id,
+            category_name: category.category_name,
+            subcategory_name: category.subcategory_name,
+            normalized_key: category.normalized_key,
+          })),
+        },
+      });
 
-    const mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
+      if (error) throw error;
+      mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
+    } catch (error) {
+      console.warn("[leaseExpenseRuleService] AI rule extraction fallback:", error);
+      mappedRules = [];
+    }
+
+    if (mappedRules.length === 0) {
+      mappedRules = buildDeterministicDraftRules({
+        lease,
+        categories,
+        sourceText,
+        existingRules,
+      });
+    }
+
     return this.saveRuleSet({
       lease,
       rules: mappedRules,

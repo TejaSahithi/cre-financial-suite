@@ -431,13 +431,26 @@ function normalizeComparableValue(value: unknown): string {
 function looksLikeNoise(key: string, value: unknown): boolean {
   const normalized = normalizeKey(key);
   if (!normalized || normalized.length < 4) return true;
+  if (/^https?$/.test(normalized)) return true;
+  if (/^(before|after|the|and|or|with|without)_/.test(normalized)) return true;
+  if (/^(signature|name|date)_[a-z0-9_]+$/.test(normalized)) return true;
+  if (/^(move_in|inspection|checklist|instructions|terms|fixed_term_lease|tenant_initials|landlord_initials)/.test(normalized)) {
+    return true;
+  }
   if (["page", "date", "signature", "initials"].includes(normalized)) return false;
   if (/^(the|and|or|of|to|from|for|in|on|with)$/.test(normalized)) return true;
   const stringValue = String(value ?? "").trim();
   if (stringValue.length < 2) return true;
   if (stringValue.length > 240) return true;
+  if (stringValue.includes("________________")) return true;
   if (/^(pro|cam|nnn|sf|psf)$/.test(normalized)) return true;
   if (/(common area maintenance|\bcam\b|pro[\s-]?rata)/i.test(`${key} ${stringValue}`)) return true;
+  if (
+    normalized.split("_").length >= 4 &&
+    !/(tenant|landlord|property|address|rent|lease|deposit|cam|nnn|utility|water|sewer|electric|parking|pet|fee|reimbursement|insurance|tax)/i.test(normalized)
+  ) {
+    return true;
+  }
   if (/^[a-z]/.test(stringValue) && normalized.length <= 10) return true;
   return false;
 }

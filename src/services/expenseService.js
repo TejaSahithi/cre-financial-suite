@@ -11,6 +11,9 @@ const LEASE_DERIVED_EXPENSES = [
   { field: "insurance_reimbursement_amount", category: "insurance", label: "Insurance Reimbursement" },
   { field: "tax_reimbursement_amount", category: "taxes", label: "Tax Reimbursement" },
   { field: "utility_reimbursement_amount", category: "utilities", label: "Utility Reimbursement" },
+  { field: "water_sewer_reimbursement_amount", category: "utilities", label: "Water / Sewer Reimbursement" },
+  { field: "pet_rent_amount", category: "pet_rent", label: "Pet Rent" },
+  { field: "parking_fee_amount", category: "parking", label: "Parking Fee" },
 ];
 
 const SYNCABLE_LEASE_STATUSES = new Set(["active", "approved", "budget_ready", "executed"]);
@@ -95,6 +98,28 @@ function normalizeSourceType(expense) {
   return expense?.source_type || expense?.source || "manual";
 }
 
+function getLeaseExtractedValue(lease, fieldName) {
+  if (!lease || !fieldName) return null;
+  if (lease[fieldName] != null && lease[fieldName] !== "") return lease[fieldName];
+
+  const extractedFields = lease?.extracted_fields && typeof lease.extracted_fields === "object"
+    ? lease.extracted_fields
+    : lease?.extraction_data?.extracted_fields && typeof lease.extraction_data.extracted_fields === "object"
+      ? lease.extraction_data.extracted_fields
+      : null;
+
+  if (extractedFields && extractedFields[fieldName] != null && extractedFields[fieldName] !== "") {
+    return extractedFields[fieldName];
+  }
+
+  const customFields = Array.isArray(lease?.extraction_data?.custom_fields)
+    ? lease.extraction_data.custom_fields
+    : [];
+
+  const matchingCustomField = customFields.find((field) => field?.field_key === fieldName && field?.value != null && field?.value !== "");
+  return matchingCustomField?.value ?? null;
+}
+
 function buildCoreLeaseDerivedPayloads(lease, propertyById) {
   const status = normalizeLeaseStatus(lease?.status);
   if (!SYNCABLE_LEASE_STATUSES.has(status)) return [];
@@ -107,7 +132,7 @@ function buildCoreLeaseDerivedPayloads(lease, propertyById) {
   const property = propertyById.get(lease.property_id) || null;
 
   return LEASE_DERIVED_EXPENSES.flatMap((definition) => {
-    const amount = toNumber(lease?.[definition.field]);
+    const amount = toNumber(getLeaseExtractedValue(lease, definition.field));
     if (amount <= 0) return [];
 
     return [{

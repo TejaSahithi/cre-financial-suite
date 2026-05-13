@@ -32,9 +32,12 @@ const EXPLICIT_LEASE_CHARGE_FIELDS = [
   { key: "insurance_reimbursement_amount", label: "Insurance Reimbursement" },
   { key: "tax_reimbursement_amount", label: "Tax Reimbursement" },
   { key: "utility_reimbursement_amount", label: "Utility Reimbursement" },
+  { key: "water_sewer_reimbursement_amount", label: "Water / Sewer Reimbursement" },
+  { key: "pet_rent_amount", label: "Pet Rent" },
+  { key: "parking_fee_amount", label: "Parking Fee" },
 ];
 
-const EXPENSE_RULE_HINT_PATTERN = /(responsibility|reimbursement|recoverable|non_recoverable|conditional|cap|expense_stop|base_year|gross_up|admin_fee|management_fee|exclusion|utility|tax|insurance|cam|nnn|maintenance)/i;
+const EXPENSE_RULE_HINT_PATTERN = /(responsibility|reimbursement|recoverable|non_recoverable|conditional|cap|expense_stop|base_year|gross_up|admin_fee|management_fee|exclusion|utility|water|sewer|electric|tax|insurance|cam|nnn|maintenance|parking|pet)/i;
 
 function asLeaseAmount(value) {
   if (value == null || value === "") return null;
