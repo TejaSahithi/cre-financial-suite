@@ -834,7 +834,7 @@ async function inflateZipEntry(compressed: Uint8Array, method: number): Promise<
 
 function buildDocxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
   const decoder = new TextDecoder("utf-8");
-  const xmlParts: string[] = [];
+  const paragraphParts: string[] = [];
   const tables: DoclingTable[] = [];
   const wanted = [
     "word/document.xml",
@@ -847,16 +847,215 @@ function buildDocxOutput(entries: Map<string, Uint8Array>): DoclingOutput {
     const data = entries.get(name);
     if (data) {
       const xml = decoder.decode(data);
-      xmlParts.push(xml);
+      paragraphParts.push(...extractWordParagraphs(xml));
       tables.push(...extractWordTables(xml, tables.length));
     }
   }
 
-  const text = cleanExtractedXmlText(xmlParts.map(xmlToText).join("\n\n"));
+  const filteredTables = tables.filter((table) => !isLikelyLeaseAuxiliaryWordTable(table));
+  const semanticFields = dedupeDocxFields([
+    ...extractLeaseDocxFieldsFromParagraphs(paragraphParts),
+    ...extractLeaseDocxFieldsFromTables(filteredTables),
+  ]);
+  const relevantTableText = filteredTables.flatMap((table) => tableToRelevantText(table));
+  const text = cleanExtractedXmlText([...paragraphParts, ...relevantTableText].join("\n\n"));
   return {
     ...textToDocling(text),
-    tables,
+    tables: filteredTables,
+    fields: semanticFields,
   };
+}
+
+const DOCX_LEASE_FIELD_ALIASES: Record<string, string> = {
+  tenant: "tenant_name",
+  tenant_name: "tenant_name",
+  tenant_1: "tenant_name",
+  lessee: "tenant_name",
+  landlord: "landlord_name",
+  landlord_name: "landlord_name",
+  lessor: "landlord_name",
+  landlord_management_company: "landlord_name",
+  apartment_community: "property_name",
+  property_name: "property_name",
+  premises_location: "property_address",
+  property_address: "property_address",
+  premises: "property_address",
+  lease_start_date: "start_date",
+  commencement_date: "start_date",
+  start_date: "start_date",
+  lease_end_date: "end_date",
+  expiration_date: "end_date",
+  end_date: "end_date",
+  unit: "unit_number",
+  unit_number: "unit_number",
+  suite: "unit_number",
+  monthly_rent: "monthly_rent",
+  base_rent: "monthly_rent",
+  annual_rent: "annual_rent",
+  rent_per_sf: "rent_per_sf",
+  square_footage: "square_footage",
+  lease_term: "lease_term_months",
+  lease_term_months: "lease_term_months",
+  security_deposit: "security_deposit",
+  lease_type: "lease_type",
+  cam: "cam_amount",
+  cam_amount: "cam_amount",
+  water_sewer_reimbursement_charge: "water_sewer_reimbursement_amount",
+  utility_reimbursement_charge: "utility_reimbursement_amount",
+  parking_fee: "parking_fee_amount",
+  pet_rent: "pet_rent_amount",
+  pet_fee: "pet_fee_amount",
+  late_fee: "late_fee_amount",
+  returned_payment_fee: "returned_payment_fee_amount",
+  application_fee: "application_fee_amount",
+  administrative_fee: "administrative_fee_amount",
+  electric_responsibility: "electric_responsibility",
+  water_sewer_responsibility: "water_sewer_responsibility",
+};
+
+function normalizeDocxToken(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[#%]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function extractWordParagraphs(xml: string): string[] {
+  const paragraphs: string[] = [];
+  for (const paragraphMatch of xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)) {
+    const text = cleanExtractedXmlText(xmlToText(paragraphMatch[0]));
+    if (!text) continue;
+    if (isIgnorableLeaseParagraph(text)) continue;
+    paragraphs.push(text);
+  }
+  return paragraphs;
+}
+
+function isIgnorableLeaseParagraph(text: string): boolean {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return true;
+  if (/^https?:\/\//.test(normalized) || /^www\./.test(normalized)) return true;
+  if (/^signature\s*:/.test(normalized) || /^date\s*:/.test(normalized)) return true;
+  if (/^_+$/.test(normalized)) return true;
+  if (/completed sample for demonstration purposes/.test(normalized)) return true;
+  if (/move[\s-]*in inspection|inspection checklist|tenant initials|landlord initials|authorized agent/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyLeaseAuxiliaryWordTable(table: DoclingTable): boolean {
+  const headerText = table.headers.map(normalizeDocxToken).join(" ");
+  if (/^landlord_authorized_agent tenant$/.test(headerText)) return true;
+  if (/^area condition notes tenant_initials$/.test(headerText)) return true;
+
+  const flattened = [table.headers.join(" "), ...table.rows.map((row) => row.join(" "))]
+    .join(" ")
+    .toLowerCase();
+
+  if (/move[\s-]*in inspection|inspection checklist|tenant initials|landlord initials/.test(flattened)) {
+    return true;
+  }
+  if (/signature|authorized agent/.test(flattened) && table.rows.length <= 4) {
+    return true;
+  }
+
+  return false;
+}
+
+function resolveDocxLeaseField(rawKey: string): string | null {
+  const normalized = normalizeDocxToken(rawKey);
+  if (!normalized) return null;
+  if (DOCX_LEASE_FIELD_ALIASES[normalized]) return DOCX_LEASE_FIELD_ALIASES[normalized];
+  const withoutOrdinal = normalized.replace(/_\d+$/, "");
+  return DOCX_LEASE_FIELD_ALIASES[withoutOrdinal] || null;
+}
+
+function extractLeaseDocxFieldsFromParagraphs(paragraphs: string[]): DoclingField[] {
+  const fields: DoclingField[] = [];
+  for (const paragraph of paragraphs) {
+    const match = paragraph.match(/^\s*([A-Za-z][A-Za-z0-9 /&().#-]{2,64})\s*:\s*(.{1,200})$/);
+    if (!match) continue;
+    const fieldName = resolveDocxLeaseField(match[1]);
+    if (!fieldName) continue;
+    const value = match[2].trim();
+    if (!value) continue;
+    fields.push({
+      key: fieldName,
+      value,
+      confidence: 0.96,
+    });
+    const derivedUnit = extractUnitFromPremises(value);
+    if (fieldName === "property_address" && derivedUnit) {
+      fields.push({
+        key: "unit_number",
+        value: derivedUnit,
+        confidence: 0.94,
+      });
+    }
+  }
+  return fields;
+}
+
+function extractLeaseDocxFieldsFromTables(tables: DoclingTable[]): DoclingField[] {
+  const fields: DoclingField[] = [];
+  for (const table of tables) {
+    for (const row of table.rows) {
+      if (!Array.isArray(row) || row.length < 2) continue;
+      const rawKey = String(row[0] ?? "").trim();
+      const rawValue = row.slice(1).join(" ").trim();
+      if (!rawKey || !rawValue) continue;
+      const fieldName = resolveDocxLeaseField(rawKey);
+      if (!fieldName) continue;
+      fields.push({
+        key: fieldName,
+        value: rawValue,
+        confidence: 0.97,
+      });
+      const derivedUnit = extractUnitFromPremises(rawValue);
+      if (fieldName === "property_address" && derivedUnit) {
+        fields.push({
+          key: "unit_number",
+          value: derivedUnit,
+          confidence: 0.95,
+        });
+      }
+    }
+  }
+  return fields;
+}
+
+function dedupeDocxFields(fields: DoclingField[]): DoclingField[] {
+  const byKey = new Map<string, DoclingField>();
+  for (const field of fields) {
+    const key = normalizeDocxToken(field.key);
+    if (!key || !field.value) continue;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...field, key });
+      continue;
+    }
+
+    const existingScore = (existing.confidence ?? 0) + String(existing.value || "").length / 500;
+    const nextScore = (field.confidence ?? 0) + String(field.value || "").length / 500;
+    if (nextScore > existingScore) {
+      byKey.set(key, { ...field, key });
+    }
+  }
+  return [...byKey.values()];
+}
+
+function tableToRelevantText(table: DoclingTable): string[] {
+  return table.rows
+    .map((row) => row.filter(Boolean).join(": ").trim())
+    .filter((line) => line.length > 0 && !isIgnorableLeaseParagraph(line));
+}
+
+function extractUnitFromPremises(value: string): string | null {
+  const match = String(value || "").match(/\b(?:unit|suite|space|apt\.?|apartment)\s+([A-Za-z0-9-]+)/i);
+  return match?.[1]?.trim() || null;
 }
 
 function extractWordTables(xml: string, startIndex = 0): DoclingTable[] {

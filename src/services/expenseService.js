@@ -130,9 +130,22 @@ function buildCoreLeaseDerivedPayloads(lease, propertyById) {
   const month = Number(expenseDate.slice(5, 7)) || 1;
   const tenantName = String(lease.tenant_name || "Lease");
   const property = propertyById.get(lease.property_id) || null;
+  const extractedAmounts = Object.fromEntries(
+    LEASE_DERIVED_EXPENSES.map((definition) => [
+      definition.field,
+      toNumber(getLeaseExtractedValue(lease, definition.field)),
+    ]),
+  );
+  const suppressGenericUtilityCharge =
+    extractedAmounts.utility_reimbursement_amount > 0 &&
+    extractedAmounts.utility_reimbursement_amount === extractedAmounts.water_sewer_reimbursement_amount;
 
   return LEASE_DERIVED_EXPENSES.flatMap((definition) => {
-    const amount = toNumber(getLeaseExtractedValue(lease, definition.field));
+    if (definition.field === "utility_reimbursement_amount" && suppressGenericUtilityCharge) {
+      return [];
+    }
+
+    const amount = extractedAmounts[definition.field] ?? 0;
     if (amount <= 0) return [];
 
     return [{
