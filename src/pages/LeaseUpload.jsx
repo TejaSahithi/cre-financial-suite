@@ -713,6 +713,10 @@ function summarizeLeaseExpenseSignals(records) {
     };
   }
 
+  const workflowRules = Array.isArray(first?.workflow_output?.expense_rules)
+    ? first.workflow_output.expense_rules
+    : [];
+
   const fields = [];
   const pushField = (fieldKey, label, value) => {
     if (value == null || value === "") return;
@@ -746,6 +750,16 @@ function summarizeLeaseExpenseSignals(records) {
     if (!amount || amount <= 0) return [];
     return [{ ...definition, amount }];
   });
+  const workflowCharges = workflowRules.flatMap((rule) => {
+    const amount = asLeaseAmount(rule?.explicit_charge_amount);
+    if (!amount || amount <= 0) return [];
+    const key = String(rule?.expense_category || "lease_charge");
+    return [{
+      key,
+      label: String(rule?.expense_category || key).replace(/_/g, " "),
+      amount,
+    }];
+  });
 
   const explicitKeys = new Set(EXPLICIT_LEASE_CHARGE_FIELDS.map((definition) => definition.key));
   const ruleHints = [...fieldByKey.values()]
@@ -756,10 +770,27 @@ function summarizeLeaseExpenseSignals(records) {
       label: String(field.label || field.fieldKey).replace(/_/g, " "),
       value: String(field.value),
     }));
+  const workflowRuleHints = workflowRules
+    .filter((rule) => !rule?.explicit_charge_amount)
+    .map((rule) => ({
+      key: String(rule?.expense_category || "lease_rule"),
+      label: String(rule?.expense_category || "lease_rule").replace(/_/g, " "),
+      value: String(rule?.lease_treatment || rule?.rule_classification || "lease rule"),
+    }));
+
+  const dedupeByKey = (items) => {
+    const seen = new Set();
+    return items.filter((item) => {
+      const key = String(item?.key || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
 
   return {
-    explicitCharges,
-    ruleHints,
+    explicitCharges: dedupeByKey([...explicitCharges, ...workflowCharges]),
+    ruleHints: dedupeByKey([...ruleHints, ...workflowRuleHints]),
   };
 }
 

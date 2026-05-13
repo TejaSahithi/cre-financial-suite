@@ -24,6 +24,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { getSchema } from "../_shared/extraction/schemas.ts";
+import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 
@@ -129,6 +130,15 @@ function buildReviewPayload(opts: {
     .map(([key]) => key);
   const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
   const source = sourceFromMethod(extractionMethod ?? result.method);
+  const workflowOutputs = extractionModuleType === "lease"
+    ? result.rows.map((row) =>
+        buildLeaseWorkflowAbstraction({
+          row,
+          doclingRaw: doclingRaw ?? null,
+          documentSubtype,
+        })
+      )
+    : [];
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
     if ((moduleType === "leases" || moduleType === "lease") && isBlank(values.notes)) {
@@ -140,8 +150,10 @@ function buildReviewPayload(opts: {
     const rowConfidence = normalizeConfidence(
       r.confidence_score ?? result.metadata?.avgConfidence,
     ) ?? avgConfidence;
+    const workflowOutput = workflowOutputs[index] ?? null;
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
       const value = values[fieldKey] ?? null;
+      const workflowField = workflowOutput?.lease_fields?.[fieldKey] ?? null;
       return buildReviewField({
         recordIndex: index,
         fieldKey,
@@ -152,6 +164,14 @@ function buildReviewPayload(opts: {
         required: !!def.required,
         fieldType: def.type ?? "string",
         description: def.description,
+        evidence: workflowField
+          ? {
+              page_number: workflowField.source_page ?? null,
+              source_clause: workflowField.source_clause ?? null,
+            }
+          : null,
+        status: workflowField?.extraction_status ?? undefined,
+        editable: workflowField?.editable ?? true,
       });
     });
     const customFieldsFromRows = Object.entries(values)
@@ -205,8 +225,23 @@ function buildReviewPayload(opts: {
         : [],
       confidence: rowConfidence,
       notes: (r.extraction_notes as string | undefined) ?? null,
+      workflow_output: workflowOutput,
     };
   });
+
+  const workflowSummary = extractionModuleType === "lease"
+    ? {
+        records: workflowOutputs,
+        summary: {
+          extracted_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_field_count ?? 0), 0),
+          calculated_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.calculated_field_count ?? 0), 0),
+          manual_required_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.manual_required_count ?? 0), 0),
+          conflict_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.conflict_count ?? 0), 0),
+          clause_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.clause_count ?? 0), 0),
+          expense_rule_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.expense_rule_count ?? 0), 0),
+        },
+      }
+    : null;
 
   const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
 
@@ -226,7 +261,10 @@ function buildReviewPayload(opts: {
     global_warnings: userWarnings,
     warnings: userWarnings,
     validation_errors: result.validationErrors,
-    metadata: result.metadata,
+    metadata: {
+      ...(result.metadata ?? {}),
+      workflow_output: workflowSummary,
+    },
     built_at: new Date().toISOString(),
   };
 }
@@ -259,6 +297,9 @@ function buildReviewField(opts: {
   required: boolean;
   fieldType: string;
   description?: string;
+  evidence?: Record<string, unknown> | null;
+  status?: string;
+  editable?: boolean;
 }) {
   const blank = isBlank(opts.value);
   return {
@@ -273,8 +314,10 @@ function buildReviewField(opts: {
     is_standard: opts.isStandard,
     confidence: opts.confidence,
     source: blank ? "system" : opts.source,
-    evidence: null,
-    status: blank ? "missing" : "pending",
+    evidence: opts.evidence ?? null,
+    editable: opts.editable ?? true,
+    extraction_status: opts.status ?? (blank ? "not_found" : "extracted"),
+    status: opts.status ?? (blank ? "missing" : "pending"),
     accepted: false,
     rejected: false,
     user_edit: null,
@@ -631,6 +674,13 @@ Deno.serve(async (req: Request) => {
         doclingRaw: fileRecord.docling_raw ?? null,
         result,
       });
+      if (uiReviewPayload?.metadata?.workflow_output) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          workflow_output: uiReviewPayload.metadata.workflow_output,
+        };
+        (result as Record<string, unknown>).workflow_output = uiReviewPayload.metadata.workflow_output;
+      }
 
       // Decide the next status based on the review gate decided at ingest.
       const reviewRequired = !!fileRecord.review_required;
