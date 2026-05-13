@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
@@ -14,6 +14,22 @@ import { toast } from "sonner";
 import ExpenseClassificationTable from "@/components/ExpenseClassification/ExpenseClassificationTable";
 import ExpenseValuePanel from "@/components/ExpenseClassification/ExpenseValuePanel";
 import ClauseEvidenceDrawer from "@/components/ExpenseClassification/ClauseEvidenceDrawer";
+import { createPageUrl } from "@/utils";
+
+function getRuleForCategory(rules, categoryId) {
+  return rules.find((rule) => rule.expense_category_id === categoryId) || null;
+}
+
+function categorizeCategory(category, rules) {
+  const rule = getRuleForCategory(rules, category.id);
+  if (!rule) return "needsReview";
+
+  const recoveryStatus = leaseExpenseRuleService.normalizeRecoveryStatus(rule);
+  if (recoveryStatus === "recoverable") return "recoverable";
+  if (["non_recoverable", "excluded"].includes(recoveryStatus)) return "nonRecoverable";
+  if (recoveryStatus === "conditional") return "conditional";
+  return "needsReview";
+}
 
 export default function LeaseExpenseClassification() {
   const { id } = useParams();
@@ -22,6 +38,7 @@ export default function LeaseExpenseClassification() {
 
   const [activeRuleSetId, setActiveRuleSetId] = useState(null);
   const [localRules, setLocalRules] = useState([]);
+  const autoExtractedLeaseIds = useRef(new Set());
 
   // Filters State
   const [scopeType, setScopeType] = useState('property');
@@ -93,41 +110,21 @@ export default function LeaseExpenseClassification() {
 
   // Mutation: Extract with AI
   const extractRulesMutation = useMutation({
-    mutationFn: async () => {
-      const sourceText = await leaseExpenseRuleService.getLeaseSourceText(
-        id,
-        lease?.extraction_data?.source_file_id || null
-      );
-
-      if (!sourceText) {
-        throw new Error("No extracted lease text found to analyze.");
-      }
-
-      const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
-        body: {
-          lease_id: id,
-          source_text: sourceText,
-          categories: categories.map(c => ({ id: c.id, category_name: c.category_name, subcategory_name: c.subcategory_name }))
-        }
+    mutationFn: async ({ silent = false } = {}) => {
+      const persisted = await leaseExpenseRuleService.extractDraftRuleSet({
+        lease,
+        categories,
+        existingRuleSetId: activeRuleSetId,
+        existingRules: localRules,
       });
 
-      if (error) throw error;
-      return data;
+      return { persisted, silent };
     },
-    onSuccess: (data) => {
-      if (data?.rules) {
-        // Merge AI rules into local state
-        const aiRules = data.rules.map(ai => {
-          const cat = categories.find(c => c.category_name === ai.category_name);
-          if (!cat) return null;
-          return {
-            ...ai,
-            expense_category_id: cat.id,
-            rule_set_id: activeRuleSetId // Might be null if creating a new set
-          };
-        }).filter(Boolean);
-
-        setLocalRules(aiRules);
+    onSuccess: ({ persisted, silent }) => {
+      setActiveRuleSetId(persisted?.ruleSet?.id || null);
+      setLocalRules(persisted?.rules || []);
+      queryClient.invalidateQueries(['lease_expense_rule_sets', id]);
+      if (!silent) {
         toast.success("AI extraction complete. Please review the draft rules.");
       }
     },
@@ -167,6 +164,34 @@ export default function LeaseExpenseClassification() {
       toast.error(`Save failed: ${err.message}`);
     }
   });
+
+  React.useEffect(() => {
+    if (!lease?.id || categories.length === 0 || isLoadingRules) return;
+    if (extractRulesMutation.isPending) return;
+    if (autoExtractedLeaseIds.current.has(lease.id)) return;
+    if ((localRules || []).length > 0) return;
+
+    autoExtractedLeaseIds.current.add(lease.id);
+    extractRulesMutation.mutate({ silent: true });
+  }, [categories, extractRulesMutation, isLoadingRules, lease?.id, localRules]);
+
+  const groupedCategories = useMemo(() => {
+    return categories.reduce((groups, category) => {
+      const key = categorizeCategory(category, localRules);
+      groups[key].push(category);
+      return groups;
+    }, {
+      recoverable: [],
+      nonRecoverable: [],
+      conditional: [],
+      needsReview: [],
+    });
+  }, [categories, localRules]);
+
+  const ruleGroups = useMemo(
+    () => leaseExpenseRuleService.groupRulesByRecoveryStatus(localRules),
+    [localRules]
+  );
 
   const handleEditRule = (category, rule) => {
     setSelectedCategory(category);
@@ -237,7 +262,7 @@ export default function LeaseExpenseClassification() {
           
           <Button
             variant="outline"
-            onClick={() => extractRulesMutation.mutate()}
+            onClick={() => extractRulesMutation.mutate({ silent: false })}
             disabled={isWorking}
           >
             <Wand2 className="w-4 h-4 mr-2 text-purple-600" />
@@ -269,6 +294,37 @@ export default function LeaseExpenseClassification() {
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="border-emerald-200 bg-emerald-50/70">
+          <CardContent className="p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-600">Recoverable</div>
+            <div className="mt-2 text-2xl font-bold text-emerald-800">{ruleGroups.recoverable.length}</div>
+            <div className="mt-1 text-xs text-emerald-700">Lease rules that can flow into CAM recovery.</div>
+          </CardContent>
+        </Card>
+        <Card className="border-rose-200 bg-rose-50/70">
+          <CardContent className="p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-600">Non-Recoverable</div>
+            <div className="mt-2 text-2xl font-bold text-rose-800">{ruleGroups.nonRecoverable.length}</div>
+            <div className="mt-1 text-xs text-rose-700">Explicit exclusions and landlord-borne costs.</div>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-200 bg-amber-50/80">
+          <CardContent className="p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">Conditional</div>
+            <div className="mt-2 text-2xl font-bold text-amber-900">{ruleGroups.conditional.length}</div>
+            <div className="mt-1 text-xs text-amber-700">Rules with caps, base years, or conditional recovery logic.</div>
+          </CardContent>
+        </Card>
+        <Card className="border-slate-200 bg-slate-50/80">
+          <CardContent className="p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Needs Review</div>
+            <div className="mt-2 text-2xl font-bold text-slate-900">{ruleGroups.needsReview.length}</div>
+            <div className="mt-1 text-xs text-slate-600">Still missing values, evidence, or final yes/no decisions.</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Main Grid Area */}
         <div className="md:col-span-3 space-y-4">
           <Card>
@@ -289,13 +345,48 @@ export default function LeaseExpenseClassification() {
               {isLoadingCategories ? (
                 <div className="py-8 text-center text-slate-500">Loading taxonomy...</div>
               ) : (
-                <ExpenseClassificationTable
-                  categories={categories}
-                  rules={localRules}
-                  frequency={frequency}
-                  onEditRule={handleEditRule}
-                  onViewEvidence={handleViewEvidence}
-                />
+                <div className="space-y-6">
+                  <RuleGroupSection
+                    title="Recoverable Rules"
+                    description="These lease clauses allow the expense to be recovered from the tenant."
+                    categories={groupedCategories.recoverable}
+                    rules={localRules}
+                    tone="emerald"
+                    frequency={frequency}
+                    onEditRule={handleEditRule}
+                    onViewEvidence={handleViewEvidence}
+                  />
+                  <RuleGroupSection
+                    title="Non-Recoverable Rules"
+                    description="These costs stay with ownership or are explicitly excluded."
+                    categories={groupedCategories.nonRecoverable}
+                    rules={localRules}
+                    tone="rose"
+                    frequency={frequency}
+                    onEditRule={handleEditRule}
+                    onViewEvidence={handleViewEvidence}
+                  />
+                  <RuleGroupSection
+                    title="Conditional Rules"
+                    description="These clauses depend on caps, base years, gross-up logic, or other conditions."
+                    categories={groupedCategories.conditional}
+                    rules={localRules}
+                    tone="amber"
+                    frequency={frequency}
+                    onEditRule={handleEditRule}
+                    onViewEvidence={handleViewEvidence}
+                  />
+                  <RuleGroupSection
+                    title="Needs Review / Unmapped"
+                    description="Finish the yes/no mapping or add the value manually when the lease mentions the item but no numeric amount was found."
+                    categories={groupedCategories.needsReview}
+                    rules={localRules}
+                    tone="slate"
+                    frequency={frequency}
+                    onEditRule={handleEditRule}
+                    onViewEvidence={handleViewEvidence}
+                  />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -345,6 +436,20 @@ export default function LeaseExpenseClassification() {
               <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
                 Approving this rule set updates lease CAM config, persists clause evidence and values, creates explicit lease-derived charge rows when amounts exist, and refreshes expense classification readiness.
               </div>
+              <Button
+                className="mt-4 w-full bg-slate-900 hover:bg-slate-800"
+                onClick={() =>
+                  navigate(
+                    createPageUrl("ExpenseReview", {
+                      property: lease?.property_id,
+                      building: lease?.building_id,
+                      unit: lease?.unit_id,
+                    })
+                  )
+                }
+              >
+                Continue to Expense Review
+              </Button>
             </CardContent>
           </Card>
         </div>
@@ -365,6 +470,44 @@ export default function LeaseExpenseClassification() {
         onSave={handleSaveRule}
       />
 
+    </div>
+  );
+}
+
+function RuleGroupSection({
+  title,
+  description,
+  categories,
+  rules,
+  tone,
+  onEditRule,
+  onViewEvidence,
+}) {
+  const toneClasses = {
+    emerald: "border-emerald-200 bg-emerald-50/40",
+    rose: "border-rose-200 bg-rose-50/40",
+    amber: "border-amber-200 bg-amber-50/40",
+    slate: "border-slate-200 bg-slate-50/70",
+  };
+
+  return (
+    <div className={`rounded-xl border p-4 ${toneClasses[tone] || toneClasses.slate}`}>
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <p className="mt-1 text-xs text-slate-600">{description}</p>
+      </div>
+      {categories.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-center text-xs text-slate-500">
+          No categories are in this bucket yet.
+        </div>
+      ) : (
+        <ExpenseClassificationTable
+          categories={categories}
+          rules={rules}
+          onEditRule={onEditRule}
+          onViewEvidence={onViewEvidence}
+        />
+      )}
     </div>
   );
 }

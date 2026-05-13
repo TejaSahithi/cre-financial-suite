@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Calculator, CheckCircle2, DollarSign, FileText, Loader2, Plus, Upload } from "lucide-react";
 import { toast } from "sonner";
 import FileUploader from "@/components/FileUploader";
@@ -9,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { expenseService } from "@/services/expenseService";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
@@ -437,6 +439,18 @@ export default function LeaseUpload() {
     return () => window.clearTimeout(retryTimer);
   }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
 
+  const { data: workflowSummary } = useQuery({
+    queryKey: ["lease-upload-expense-workflow", effectivePropertyId, scopeBuilding, scopeUnit, leaseFiscalYear],
+    queryFn: () =>
+      expenseService.getWorkflowSummary({
+        propertyId: effectivePropertyId,
+        buildingId: scopeBuilding !== "all" ? scopeBuilding : null,
+        unitId: scopeUnit !== "all" ? scopeUnit : null,
+        fiscalYear: leaseFiscalYear,
+      }),
+    enabled: Boolean(effectivePropertyId),
+  });
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <Link to={createPageUrl("Leases") + location.search} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
@@ -590,6 +604,7 @@ export default function LeaseUpload() {
           />
           <ExpenseCamReadinessCard
             expenseScope={expenseScope}
+            workflowSummary={workflowSummary}
             propertyName={effectiveProperty?.name}
             scopeParams={{
               property: effectivePropertyId,
@@ -640,14 +655,16 @@ function inferLeaseFiscalYear(records) {
   return new Date().getFullYear();
 }
 
-function ExpenseCamReadinessCard({ expenseScope, propertyName, scopeParams }) {
+function ExpenseCamReadinessCard({ expenseScope, workflowSummary, propertyName, scopeParams }) {
   const hasProperty = !!expenseScope.propertyId;
   const hasRecoverableExpenses = expenseScope.recoverable.length > 0;
+  const hasApprovedRules = (workflowSummary?.approvedRuleLeaseCount || 0) > 0;
   const scopedParams = Object.fromEntries(
     Object.entries(scopeParams || {}).filter(([, value]) => value !== undefined && value !== null && value !== "all"),
   );
   const addExpenseUrl = createPageUrl("AddExpense", scopedParams);
   const bulkImportUrl = createPageUrl("BulkImport", scopedParams);
+  const reviewUrl = createPageUrl("ExpenseReview", scopedParams);
   const camUrl = createPageUrl("CAMCalculation", {
     property_id: expenseScope.propertyId,
     year: expenseScope.fiscalYear,
@@ -677,6 +694,9 @@ function ExpenseCamReadinessCard({ expenseScope, propertyName, scopeParams }) {
             <Badge className="bg-white text-slate-700">
               FY {expenseScope.fiscalYear}
             </Badge>
+            <Badge className="bg-white text-slate-700">
+              {workflowSummary?.approvedRuleLeaseCount || 0} approved rule sets
+            </Badge>
             <Badge className={hasRecoverableExpenses ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
               {expenseScope.recoverable.length} recoverable expenses
             </Badge>
@@ -692,6 +712,11 @@ function ExpenseCamReadinessCard({ expenseScope, propertyName, scopeParams }) {
             Found {expenseScope.recoverable.length} recoverable expense line item(s)
             {propertyName ? ` for ${propertyName}` : ""}, totaling ${expenseScope.recoverableTotal.toLocaleString()}.
             You can now calculate CAM from actual expenses.
+          </div>
+        ) : hasApprovedRules ? (
+          <div className="rounded-lg border border-blue-200 bg-white p-3 text-xs text-blue-800">
+            Lease expense rules are approved for this scope, but actual expense rows are still missing.
+            Add expenses or bulk import them before CAM calculation.
           </div>
         ) : (
           <div className="rounded-lg border border-amber-200 bg-white p-3 text-xs text-amber-800">
@@ -719,12 +744,21 @@ function ExpenseCamReadinessCard({ expenseScope, propertyName, scopeParams }) {
             Bulk import expenses
           </ActionLinkButton>
           <ActionLinkButton
+            to={reviewUrl}
+            disabled={!hasProperty}
+            variant="outline"
+            className="bg-white"
+            icon={FileText}
+          >
+            Expense review
+          </ActionLinkButton>
+          <ActionLinkButton
             to={camUrl}
-            disabled={!hasProperty || !hasRecoverableExpenses}
+            disabled={!hasProperty || (!hasRecoverableExpenses && !hasApprovedRules)}
             className="bg-teal-600 hover:bg-teal-700"
             icon={Calculator}
           >
-            Calculate CAM from expenses
+            Review CAM readiness
           </ActionLinkButton>
         </div>
       </CardContent>

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
   Upload,
@@ -14,6 +14,8 @@ import {
   TrendingDown,
   Layers,
   Download,
+  ClipboardCheck,
+  FileSearch,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 import { toast } from "sonner";
@@ -30,6 +32,8 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +56,7 @@ export default function Expenses() {
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const lastLeaseExpenseSyncKey = useRef("");
   const lastClassificationKey = useRef("");
+  const lastRuleBootstrapKey = useRef("");
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -141,6 +146,82 @@ export default function Expenses() {
       .sort()
       .join("|");
   }, [selectedPropertyId, selectorScopedLeases]);
+
+  const { data: expenseCategories = [] } = useQuery({
+    queryKey: ["expense-dashboard-categories"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("expense_categories")
+        .select("*")
+        .eq("is_active", true)
+        .order("display_order", { ascending: true });
+
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const selectorScopedLeaseIds = useMemo(
+    () => selectorScopedLeases.map((lease) => lease.id).filter(Boolean),
+    [selectorScopedLeases]
+  );
+
+  const { data: selectorScopedRuleSets = [] } = useQuery({
+    queryKey: ["expense-dashboard-rule-sets", selectorScopedLeaseIds.join("|")],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(selectorScopedLeaseIds),
+    enabled: selectorScopedLeaseIds.length > 0,
+  });
+
+  useEffect(() => {
+    if (!selectedPropertyId || expenseCategories.length === 0 || selectorScopedLeases.length === 0) return;
+
+    const ruleSetByLeaseId = new Map((selectorScopedRuleSets || []).map((entry) => [entry.leaseId, entry]));
+    const bootstrapCandidates = selectorScopedLeases.filter((lease) => {
+      const normalizedStatus = String(lease.status || "").toLowerCase();
+      if (!["approved", "budget_ready", "active", "executed"].includes(normalizedStatus)) return false;
+      const existingRuleSet = ruleSetByLeaseId.get(lease.id);
+      return !existingRuleSet || (existingRuleSet.rules || []).length === 0;
+    });
+
+    if (bootstrapCandidates.length === 0) return;
+
+    const bootstrapKey = bootstrapCandidates
+      .map((lease) => `${lease.id}:${lease.updated_at || ""}:${lease.status || ""}`)
+      .sort()
+      .join("|");
+
+    if (!bootstrapKey || lastRuleBootstrapKey.current === bootstrapKey) return;
+
+    let cancelled = false;
+
+    const bootstrapDraftRules = async () => {
+      try {
+        await Promise.all(
+          bootstrapCandidates.map((lease) =>
+            leaseExpenseRuleService.extractDraftRuleSet({
+              lease,
+              categories: expenseCategories,
+            })
+          )
+        );
+
+        if (cancelled) return;
+        lastRuleBootstrapKey.current = bootstrapKey;
+        queryClient.invalidateQueries({ queryKey: ["expense-dashboard-rule-sets"] });
+        queryClient.invalidateQueries({ queryKey: ["lease_expense_rule_sets"] });
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("[Expenses] Failed to bootstrap draft expense rules:", error);
+        }
+      }
+    };
+
+    bootstrapDraftRules();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expenseCategories, queryClient, selectedPropertyId, selectorScopedLeases, selectorScopedRuleSets]);
 
   useEffect(() => {
     if (!selectedPropertyId || !leaseExpenseSyncKey) return;
@@ -263,6 +344,33 @@ export default function Expenses() {
     excluded: "bg-slate-200 text-slate-700",
     needs_review: "bg-amber-100 text-amber-700",
   };
+
+  const scopedRuleSummary = useMemo(() => {
+    const allRules = selectorScopedRuleSets.flatMap((entry) => entry.rules || []);
+    const groupedRules = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
+    return {
+      total: allRules.length,
+      approvedRuleSets: selectorScopedRuleSets.filter((entry) => entry.ruleSet?.status === "approved").length,
+      draftRuleSets: selectorScopedRuleSets.filter((entry) => entry.ruleSet?.status !== "approved").length,
+      recoverable: groupedRules.recoverable.length,
+      nonRecoverable: groupedRules.nonRecoverable.length,
+      conditional: groupedRules.conditional.length,
+      needsReview: groupedRules.needsReview.length,
+    };
+  }, [selectorScopedRuleSets]);
+
+  const classificationTargetLeaseId = selectorScopedLeases[0]?.id || null;
+  const classificationUrl = classificationTargetLeaseId
+    ? createPageUrl("LeaseExpenseClassification", { id: classificationTargetLeaseId })
+    : createPageUrl("LeaseExpenseClassification");
+  const reviewUrl = createPageUrl("ExpenseReview", {
+    property: scopeProperty !== "all" ? scopeProperty : undefined,
+    building: scopeBuilding !== "all" ? scopeBuilding : undefined,
+    unit: scopeUnit !== "all" ? scopeUnit : undefined,
+  });
+  const projectionUrl = createPageUrl("ExpenseProjection", {
+    property: scopeProperty !== "all" ? scopeProperty : undefined,
+  });
 
   const totals = {
     all: selectorScopedExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0),
@@ -430,6 +538,83 @@ export default function Expenses() {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
+        <Card className="border-blue-200 bg-blue-50/60">
+          <CardHeader>
+            <CardTitle className="text-base">Lease Rule Extraction</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-slate-700">
+            <div className="flex flex-wrap gap-2">
+              <Badge className="bg-emerald-100 text-emerald-700">{scopedRuleSummary.recoverable} recoverable</Badge>
+              <Badge className="bg-rose-100 text-rose-700">{scopedRuleSummary.nonRecoverable} non-recoverable</Badge>
+              <Badge className="bg-amber-100 text-amber-800">{scopedRuleSummary.conditional} conditional</Badge>
+              <Badge className="bg-slate-100 text-slate-700">{scopedRuleSummary.needsReview} needs review</Badge>
+            </div>
+            {scopedRuleSummary.total > 0 ? (
+              <p>
+                {scopedRuleSummary.total} extracted lease expense rule(s) are available in this scope.
+                Review the yes/no decisions and manual values before CAM.
+              </p>
+            ) : selectorScopedLeases.length > 0 ? (
+              <p>
+                The expense module is preparing draft lease rules from the approved lease text for this scope.
+                If nothing appears yet, open Expense Classification to review the extraction directly.
+              </p>
+            ) : (
+              <p>No scoped leases were found yet for this property/building/unit selection.</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Link to={classificationUrl}>
+                <Button size="sm" variant="outline" className="bg-white">
+                  <FileSearch className="mr-2 h-4 w-4" />
+                  Expense Classification
+                </Button>
+              </Link>
+              <Link to={reviewUrl}>
+                <Button size="sm" className="bg-slate-900 hover:bg-slate-800">
+                  <ClipboardCheck className="mr-2 h-4 w-4" />
+                  Expense Review
+                </Button>
+              </Link>
+              <Link to={projectionUrl}>
+                <Button size="sm" variant="outline" className="bg-white">
+                  Projection
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className={selectorScopedExpenses.length > 0 ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
+          <CardHeader>
+            <CardTitle className="text-base">Expense Pipeline Status</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-slate-700">
+            {selectorScopedExpenses.length > 0 ? (
+              <p>
+                {selectorScopedExpenses.length} expense row(s) are loaded in this scope, including
+                {" "}{selectorScopedExpenses.filter((expense) => expense.source_type === "lease_import").length} lease-derived charge row(s).
+              </p>
+            ) : scopedRuleSummary.total > 0 ? (
+              <p>
+                Lease rules are ready, but no actual expense rows have been uploaded yet.
+                Only explicit CAM/NNN/tax/insurance/utility charges should auto-create lease-derived rows from the lease itself.
+              </p>
+            ) : (
+              <p>
+                No expense rows or reviewed lease rules are visible yet in this scope.
+                Upload expenses, import them in bulk, or complete lease expense classification.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Badge className="bg-white text-slate-700">{selectorScopedExpenses.length} expense rows</Badge>
+              <Badge className="bg-white text-slate-700">{selectorScopedLeases.length} scoped leases</Badge>
+              <Badge className="bg-white text-slate-700">{scopedRuleSummary.approvedRuleSets} approved rule set(s)</Badge>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Expense Classification</CardTitle>
@@ -587,7 +772,9 @@ export default function Expenses() {
                   ) : filtered.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={18} className="text-center py-12 text-sm text-slate-400">
-                        No expenses found
+                        {scopedRuleSummary.total > 0
+                          ? "No expense rows found yet. Lease rules are ready above; upload actual expenses or review the extracted rule set."
+                          : "No expenses found"}
                       </TableCell>
                     </TableRow>
                 ) : (
