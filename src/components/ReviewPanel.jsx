@@ -39,9 +39,14 @@ function confidenceClass(score) {
 
 function statusClass(status) {
   if (status === "accepted") return "bg-emerald-50 text-emerald-700";
+  if (status === "extracted") return "bg-emerald-50 text-emerald-700";
+  if (status === "calculated") return "bg-cyan-50 text-cyan-700";
   if (status === "edited") return "bg-blue-50 text-blue-700";
   if (status === "rejected") return "bg-red-50 text-red-700";
   if (status === "missing") return "bg-amber-50 text-amber-700";
+  if (status === "not_found") return "bg-amber-50 text-amber-700";
+  if (status === "manual_required") return "bg-amber-50 text-amber-700";
+  if (status === "conflict_detected") return "bg-red-50 text-red-700";
   return "bg-slate-100 text-slate-600";
 }
 
@@ -86,11 +91,212 @@ function normalizeField(field, recordIndex, kind) {
     confidence: field.confidence ?? null,
     source: field.source || (kind === "custom" ? "user" : "system"),
     evidence: field.evidence || null,
+    editable: field.editable !== false,
+    extraction_status: field.extraction_status || field.status || (isBlank(field.value) ? "not_found" : "extracted"),
     status,
     accepted: status === "accepted" || status === "edited",
     rejected: status === "rejected",
     user_edit: field.user_edit || null,
   };
+}
+
+function formatCellValue(value) {
+  if (value == null || value === "") return "—";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function WorkflowTable({ columns, rows, emptyMessage = "No rows available." }) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">{emptyMessage}</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200">
+      <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            {columns.map((column) => (
+              <th key={column.key} className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((row, rowIndex) => (
+            <tr key={row.id || row.key || row.expense_category || row.month || rowIndex}>
+              {columns.map((column) => (
+                <td key={column.key} className="px-3 py-2 align-top text-slate-700">
+                  {column.render ? column.render(row[column.key], row) : formatCellValue(row[column.key])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorkflowSummaryTabs({ workflowOutput }) {
+  const [activeTab, setActiveTab] = useState("lease_details");
+  if (!workflowOutput) return null;
+
+  const leaseFieldRows = Object.values(workflowOutput.lease_fields || {}).map((field) => ({
+    field: humanizeFieldName(field.key),
+    extracted_value: field.value,
+    source_page: field.source_page,
+    source_clause: field.source_clause,
+    confidence: field.confidence_score,
+    status: field.extraction_status,
+    editable: field.editable,
+  }));
+
+  const expenseRuleRows = (workflowOutput.expense_rules || []).map((rule) => ({
+    expense_category: rule.expense_category,
+    responsibility: rule.responsibility,
+    included_in_rent: rule.included_in_rent ? "Yes" : "No",
+    recoverable: rule.recoverable_flag ? "Yes" : "No",
+    recovery_method: rule.recovery_method,
+    allocation_basis: rule.allocation_basis,
+    cap: rule.cap_type && rule.cap_type !== "none"
+      ? `${humanizeFieldName(rule.cap_type)}${rule.cap_percent != null ? ` (${rule.cap_percent}%)` : rule.cap_amount != null ? ` (${rule.cap_amount})` : ""}`
+      : "—",
+    admin_fee: rule.admin_fee_percent != null ? `${rule.admin_fee_percent}%` : "—",
+    gross_up: rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "—",
+    source_clause: rule.source_clause,
+    confidence: rule.confidence_score,
+    status: rule.status,
+    editable: rule.editable,
+  }));
+
+  const camRows = workflowOutput.cam_profile
+    ? [
+        ["CAM Structure", workflowOutput.cam_profile.cam_structure],
+        ["Recovery Status", workflowOutput.cam_profile.recovery_status],
+        ["Recoverable Expense Categories", workflowOutput.cam_profile.recoverable_expenses],
+        ["Tenant RSF", workflowOutput.cam_profile.tenant_rsf],
+        ["Building RSF", workflowOutput.cam_profile.building_rsf],
+        ["Tenant Pro-Rata Share", workflowOutput.cam_profile.tenant_pro_rata_share],
+        ["CAM Cap", workflowOutput.cam_profile.cam_cap_type],
+        ["Admin Fee", workflowOutput.cam_profile.admin_fee_percent],
+        ["Gross-Up", workflowOutput.cam_profile.gross_up_percent],
+        ["Estimate Frequency", workflowOutput.cam_profile.estimate_frequency],
+        ["Reconciliation Frequency", workflowOutput.cam_profile.reconciliation_frequency],
+        ["Included Expenses", workflowOutput.cam_profile.included_expenses],
+        ["Excluded Expenses", workflowOutput.cam_profile.excluded_expenses],
+        ["Monthly CAM Charge", workflowOutput.cam_profile.monthly_cam_charge],
+        ["Annual CAM Estimate", workflowOutput.cam_profile.annual_cam_estimate],
+        ["Reconciliation Required", workflowOutput.cam_profile.reconciliation_required ? "Yes" : "No"],
+        ["Status", workflowOutput.cam_profile.status],
+      ].map(([label, value]) => ({ label, value }))
+    : [];
+
+  const budgetRows = workflowOutput.budget_preview?.tenant_billing_schedule || [];
+  const validationRows = workflowOutput.validations || [];
+
+  const tabButton = (key, label) => (
+    <button
+      type="button"
+      onClick={() => setActiveTab(key)}
+      className={`rounded-full px-3 py-1.5 text-xs font-medium ${activeTab === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {tabButton("lease_details", "Lease Details")}
+        {tabButton("expenses", "Expenses")}
+        {tabButton("cam", "CAM")}
+        {tabButton("budget", "Budget")}
+        <div className="ml-auto flex flex-wrap gap-2">
+          {validationRows.filter((row) => row.pass === false).length > 0 ? (
+            <Badge className="bg-amber-50 text-amber-700">
+              {validationRows.filter((row) => row.pass === false).length} validation flags
+            </Badge>
+          ) : (
+            <Badge className="bg-emerald-50 text-emerald-700">Validation passed</Badge>
+          )}
+        </div>
+      </div>
+
+      {activeTab === "lease_details" && (
+        <WorkflowTable
+          columns={[
+            { key: "field", label: "Field" },
+            { key: "extracted_value", label: "Extracted Value" },
+            { key: "source_page", label: "Source Page" },
+            { key: "source_clause", label: "Source Clause" },
+            { key: "confidence", label: "Confidence", render: (value) => value == null ? "—" : `${Math.round(Number(value) * 100)}%` },
+            { key: "status", label: "Status", render: (value) => <Badge className={`text-[10px] ${statusClass(value)}`}>{value}</Badge> },
+            { key: "editable", label: "Edit", render: (value) => value === false ? "Locked" : "Editable" },
+          ]}
+          rows={leaseFieldRows}
+          emptyMessage="No structured lease fields are available yet."
+        />
+      )}
+
+      {activeTab === "expenses" && (
+        <WorkflowTable
+          columns={[
+            { key: "expense_category", label: "Expense Category", render: (value) => humanizeFieldName(value) },
+            { key: "responsibility", label: "Responsibility", render: (value) => humanizeFieldName(value) },
+            { key: "included_in_rent", label: "Included in Rent" },
+            { key: "recoverable", label: "Recoverable" },
+            { key: "recovery_method", label: "Recovery Method" },
+            { key: "allocation_basis", label: "Allocation Basis" },
+            { key: "cap", label: "Cap" },
+            { key: "admin_fee", label: "Admin Fee" },
+            { key: "gross_up", label: "Gross-Up" },
+            { key: "source_clause", label: "Source Clause" },
+            { key: "confidence", label: "Confidence", render: (value) => value == null ? "—" : `${Math.round(Number(value) * 100)}%` },
+            { key: "editable", label: "Edit", render: (value) => value === false ? "Locked" : "Editable" },
+          ]}
+          rows={expenseRuleRows}
+          emptyMessage="No lease expense rules were generated from this document yet."
+        />
+      )}
+
+      {activeTab === "cam" && (
+        <div className="grid gap-3 md:grid-cols-2">
+          {camRows.length > 0 ? camRows.map((row) => (
+            <div key={row.label} className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{row.label}</div>
+              <div className="mt-1 text-sm text-slate-800">{formatCellValue(row.value)}</div>
+            </div>
+          )) : (
+            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+              No CAM profile was generated yet.
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "budget" && (
+        <WorkflowTable
+          columns={[
+            { key: "month", label: "Month" },
+            { key: "base_rent", label: "Base Rent" },
+            { key: "cam", label: "CAM" },
+            { key: "taxes", label: "Taxes" },
+            { key: "insurance", label: "Insurance" },
+            { key: "utilities", label: "Utilities" },
+            { key: "fixed_charges", label: "Fixed Charges" },
+            { key: "percentage_rent", label: "Percentage Rent" },
+            { key: "other_recoveries", label: "Other Recoveries" },
+            { key: "total_monthly_invoice", label: "Total Invoice" },
+          ]}
+          rows={budgetRows}
+          emptyMessage="No tenant billing schedule was generated yet."
+        />
+      )}
+    </div>
+  );
 }
 
 const LEASE_STANDARD_FIELDS = [
@@ -618,6 +824,11 @@ export default function ReviewPanel({
     .map(sanitizeReviewWarning)
     .filter(Boolean))];
   const validationErrors = payload.validation_errors || payload.validationErrors || [];
+  const workflowOutput =
+    records?.[0]?.workflow_output ||
+    payload?.metadata?.workflow_output?.records?.[0] ||
+    payload?.metadata?.workflow_output ||
+    null;
   const allFields = records.flatMap((record) => [
     ...(record.standard_fields || []),
     ...(record.custom_fields || []),
@@ -883,6 +1094,10 @@ export default function ReviewPanel({
                 </div>
               </div>
             </div>
+          )}
+
+          {workflowOutput && (
+            <WorkflowSummaryTabs workflowOutput={workflowOutput} />
           )}
 
           {rejectedCount > 0 && (

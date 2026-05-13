@@ -638,6 +638,7 @@ function buildReviewedOutput(payload: any, userId: string, now: string) {
     schema_version: 1,
     reviewed_by: userId,
     reviewed_at: now,
+    workflow_output: payload?.metadata?.workflow_output ?? null,
     approved_standard_fields: acceptedFields.filter((field) => field.is_standard),
     custom_fields: customFields,
     user_edited_fields: userEditedFields,
@@ -732,15 +733,28 @@ async function ensureLeaseReviewDrafts(
   const insertedIds: string[] = [];
   let createdCount = 0;
 
-  for (const row of finalRows) {
+  for (let rowIndex = 0; rowIndex < finalRows.length; rowIndex += 1) {
+    const row = finalRows[rowIndex];
     const existingLeaseId = await findExistingLeaseDraft(supabaseAdmin, fileRecord, row);
     if (existingLeaseId) {
+      await syncLeaseWorkflowArtifacts(
+        supabaseAdmin,
+        fileRecord.org_id,
+        existingLeaseId,
+        getWorkflowOutputForRow(reviewedOutput, rowIndex),
+      );
       insertedIds.push(existingLeaseId);
       continue;
     }
 
-    const leasePayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now);
+    const leasePayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now, rowIndex);
     const inserted = await insertLeaseDraft(supabaseAdmin, leasePayload);
+    await syncLeaseWorkflowArtifacts(
+      supabaseAdmin,
+      fileRecord.org_id,
+      inserted.id,
+      getWorkflowOutputForRow(reviewedOutput, rowIndex),
+    );
     insertedIds.push(inserted.id);
     createdCount += 1;
   }
@@ -813,6 +827,7 @@ function buildLeaseReviewDraftPayload(
   reviewedOutput: any,
   user: any,
   now: string,
+  rowIndex = 0,
 ) {
   const confidenceScores = collectConfidenceScores(reviewedOutput);
   const lowConfidenceFields = Object.entries(confidenceScores)
@@ -830,6 +845,12 @@ function buildLeaseReviewDraftPayload(
   const squareFootage = toNumber(row.square_footage ?? row.total_sf);
   const rentPerSf = toNumber(row.rent_per_sf) ??
     (annualRent != null && squareFootage ? roundMoney(annualRent / squareFootage) : null);
+  const workflowOutput = getWorkflowOutputForRow(reviewedOutput, rowIndex);
+  const workflowFields = workflowOutput?.lease_fields ?? {};
+  const workflowFieldValue = (key: string) =>
+    workflowFields?.[key] && workflowFields[key].value != null && workflowFields[key].value !== ""
+      ? workflowFields[key].value
+      : null;
 
   return stripUndefined({
     org_id: fileRecord.org_id,
@@ -842,6 +863,35 @@ function buildLeaseReviewDraftPayload(
     monthly_rent: monthlyRent ?? 0,
     square_footage: squareFootage ?? 0,
     lease_type: row.lease_type ?? null,
+    lease_date: normalizeDate(workflowFieldValue("lease_date")),
+    property_name: workflowFieldValue("property_name") ?? null,
+    property_address: workflowFieldValue("property_address") ?? row.property_address ?? null,
+    landlord_address: workflowFieldValue("landlord_address") ?? null,
+    tenant_contact_name: workflowFieldValue("tenant_contact_name") ?? null,
+    tenant_address: workflowFieldValue("tenant_address") ?? null,
+    suite_number: workflowFieldValue("suite_number") ?? row.unit_number ?? null,
+    rentable_area_sqft: toNumber(workflowFieldValue("rentable_area_sqft")),
+    permitted_use: workflowFieldValue("permitted_use") ?? null,
+    broker_name: workflowFieldValue("broker_name") ?? null,
+    lease_term: workflowFieldValue("lease_term") ?? null,
+    commencement_date: normalizeDate(workflowFieldValue("commencement_date")),
+    expiration_date: normalizeDate(workflowFieldValue("expiration_date")),
+    renewal_notice_days: toInteger(workflowFieldValue("renewal_notice_days")),
+    renewal_escalation_percent: toNumber(workflowFieldValue("renewal_escalation_percent")),
+    holdover_rent_multiplier: toNumber(workflowFieldValue("holdover_rent_multiplier")),
+    base_rent_monthly: toNumber(workflowFieldValue("base_rent_monthly")),
+    rent_due_day: toInteger(workflowFieldValue("rent_due_day")),
+    rent_frequency: workflowFieldValue("rent_frequency") ?? null,
+    rent_payment_timing: workflowFieldValue("rent_payment_timing") ?? null,
+    late_fee_grace_days: toInteger(workflowFieldValue("late_fee_grace_days")),
+    late_fee_percent: toNumber(workflowFieldValue("late_fee_percent")),
+    default_interest_rate_formula: workflowFieldValue("default_interest_rate_formula") ?? null,
+    building_rsf: toNumber(workflowFieldValue("building_rsf")),
+    tenant_rsf: toNumber(workflowFieldValue("tenant_rsf")),
+    tenant_pro_rata_share: toNumber(workflowFieldValue("tenant_pro_rata_share")),
+    floor_plan_reference: workflowFieldValue("floor_plan_reference") ?? null,
+    parking_rights: workflowFieldValue("parking_rights") ?? null,
+    common_area_description: workflowFieldValue("common_area_description") ?? null,
     status: "draft",
     created_by: user.email ?? user.id,
     created_at: now,
@@ -881,6 +931,7 @@ function buildLeaseReviewDraftPayload(
       confidence_scores: confidenceScores,
       custom_fields: customFields,
       rejected_fields: rejectedFields,
+      workflow_output: workflowOutput,
       reviewed_at: reviewedOutput?.reviewed_at ?? now,
       reviewed_by: reviewedOutput?.reviewed_by ?? user.id,
     },
@@ -888,6 +939,82 @@ function buildLeaseReviewDraftPayload(
     low_confidence_fields: lowConfidenceFields,
     extracted_fields: row,
   });
+}
+
+function getWorkflowOutputForRow(reviewedOutput: any, rowIndex = 0) {
+  const workflowOutput = reviewedOutput?.workflow_output;
+  if (!workflowOutput) return null;
+  if (Array.isArray(workflowOutput?.records)) {
+    return workflowOutput.records[rowIndex] ?? workflowOutput.records[0] ?? null;
+  }
+  return workflowOutput;
+}
+
+async function syncLeaseWorkflowArtifacts(supabaseAdmin: any, orgId: string, leaseId: string, workflowOutput: any) {
+  if (!workflowOutput || !leaseId) return;
+
+  const leaseClauses = Array.isArray(workflowOutput?.lease_clauses)
+    ? workflowOutput.lease_clauses
+        .filter((clause: any) => clause?.clause_text)
+        .map((clause: any) => ({
+          org_id: orgId,
+          lease_id: leaseId,
+          clause_type: clause.clause_type,
+          clause_title: clause.clause_title,
+          clause_text: clause.clause_text,
+          source_page: clause.source_page ?? null,
+          confidence_score: clause.confidence_score ?? null,
+          structured_fields_json: clause.structured_fields_json ?? {},
+          source: "document_review",
+        }))
+    : [];
+
+  if (leaseClauses.length > 0) {
+    try {
+      await supabaseAdmin
+        .from("lease_clauses")
+        .delete()
+        .eq("lease_id", leaseId)
+        .eq("source", "document_review");
+      await supabaseAdmin.from("lease_clauses").insert(leaseClauses);
+    } catch (error) {
+      console.warn(`[review-approve] lease_clauses sync skipped: ${error?.message ?? error}`);
+    }
+  }
+
+  if (workflowOutput?.cam_profile) {
+    const profilePayload = {
+      org_id: orgId,
+      lease_id: leaseId,
+      cam_structure: workflowOutput.cam_profile.cam_structure ?? null,
+      recovery_status: workflowOutput.cam_profile.recovery_status ?? null,
+      cam_start_date: workflowOutput.cam_profile.cam_start_date ?? null,
+      cam_end_date: workflowOutput.cam_profile.cam_end_date ?? null,
+      estimate_frequency: workflowOutput.cam_profile.estimate_frequency ?? null,
+      reconciliation_frequency: workflowOutput.cam_profile.reconciliation_frequency ?? null,
+      tenant_rsf: workflowOutput.cam_profile.tenant_rsf ?? null,
+      building_rsf: workflowOutput.cam_profile.building_rsf ?? null,
+      tenant_pro_rata_share: workflowOutput.cam_profile.tenant_pro_rata_share ?? null,
+      cam_cap_type: workflowOutput.cam_profile.cam_cap_type ?? null,
+      cam_cap_percent: workflowOutput.cam_profile.cam_cap_percent ?? null,
+      admin_fee_percent: workflowOutput.cam_profile.admin_fee_percent ?? null,
+      gross_up_percent: workflowOutput.cam_profile.gross_up_percent ?? null,
+      included_expenses: workflowOutput.cam_profile.included_expenses ?? [],
+      excluded_expenses: workflowOutput.cam_profile.excluded_expenses ?? [],
+      actual_cam_expense: workflowOutput.cam_profile.actual_cam_expense ?? null,
+      estimated_cam_billed: workflowOutput.cam_profile.estimated_cam_billed ?? null,
+      reconciliation_amount: workflowOutput.cam_profile.reconciliation_amount ?? null,
+      tenant_balance_due_or_credit: workflowOutput.cam_profile.tenant_balance_due_or_credit ?? null,
+      status: workflowOutput.cam_profile.status ?? "draft",
+      source: "document_review",
+    };
+
+    try {
+      await supabaseAdmin.from("cam_profiles").upsert(profilePayload, { onConflict: "lease_id" });
+    } catch (error) {
+      console.warn(`[review-approve] cam_profiles sync skipped: ${error?.message ?? error}`);
+    }
+  }
 }
 
 async function insertLeaseDraft(supabaseAdmin: any, payload: Record<string, unknown>) {
@@ -899,10 +1026,9 @@ async function insertLeaseDraft(supabaseAdmin: any, payload: Record<string, unkn
 
   if (error && looksLikeMissingLeaseMetadataColumn(error)) {
     const fallbackPayload = { ...payload };
-    delete fallbackPayload.extraction_data;
-    delete fallbackPayload.confidence_score;
-    delete fallbackPayload.low_confidence_fields;
-    delete fallbackPayload.extracted_fields;
+    for (const key of LEASE_WORKFLOW_OPTIONAL_COLUMNS) {
+      delete fallbackPayload[key];
+    }
     const retry = await supabaseAdmin
       .from("leases")
       .insert(fallbackPayload)
@@ -924,8 +1050,44 @@ function looksLikeMissingLeaseMetadataColumn(error: any): boolean {
   const code = String(error?.code || "");
   return code === "42703" ||
     code === "PGRST204" ||
-    /extraction_data|confidence_score|low_confidence_fields|extracted_fields/i.test(message);
+    /extraction_data|confidence_score|low_confidence_fields|extracted_fields|lease_date|property_name|property_address|landlord_address|tenant_contact_name|tenant_address|suite_number|rentable_area_sqft|permitted_use|broker_name|lease_term|commencement_date|expiration_date|renewal_notice_days|renewal_escalation_percent|holdover_rent_multiplier|base_rent_monthly|rent_due_day|rent_frequency|rent_payment_timing|late_fee_grace_days|late_fee_percent|default_interest_rate_formula|building_rsf|tenant_rsf|tenant_pro_rata_share|floor_plan_reference|parking_rights|common_area_description/i.test(message);
 }
+
+const LEASE_WORKFLOW_OPTIONAL_COLUMNS = [
+  "extraction_data",
+  "confidence_score",
+  "low_confidence_fields",
+  "extracted_fields",
+  "lease_date",
+  "property_name",
+  "property_address",
+  "landlord_address",
+  "tenant_contact_name",
+  "tenant_address",
+  "suite_number",
+  "rentable_area_sqft",
+  "permitted_use",
+  "broker_name",
+  "lease_term",
+  "commencement_date",
+  "expiration_date",
+  "renewal_notice_days",
+  "renewal_escalation_percent",
+  "holdover_rent_multiplier",
+  "base_rent_monthly",
+  "rent_due_day",
+  "rent_frequency",
+  "rent_payment_timing",
+  "late_fee_grace_days",
+  "late_fee_percent",
+  "default_interest_rate_formula",
+  "building_rsf",
+  "tenant_rsf",
+  "tenant_pro_rata_share",
+  "floor_plan_reference",
+  "parking_rights",
+  "common_area_description",
+];
 
 function collectConfidenceScores(reviewedOutput: any): Record<string, number> {
   const scores: Record<string, number> = {};

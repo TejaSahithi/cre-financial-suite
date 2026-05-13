@@ -269,6 +269,13 @@ function getLeaseExtractedValue(lease, fieldName) {
   return customField?.value ?? null;
 }
 
+function getLeaseWorkflowOutput(lease) {
+  const workflow = lease?.extraction_data?.workflow_output;
+  if (!workflow || typeof workflow !== "object") return null;
+  if (Array.isArray(workflow?.records) && workflow.records[0]) return workflow.records[0];
+  return workflow;
+}
+
 function findCategoryByKeywords(categories = [], keywords = []) {
   const normalizedKeywords = keywords.map(normalizeCategoryToken).filter(Boolean);
   return categories.find((category) => {
@@ -297,6 +304,57 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       .filter((rule) => rule?.expense_category_id)
       .map((rule) => [rule.expense_category_id, rule]),
   );
+  const workflowOutput = getLeaseWorkflowOutput(lease);
+  const workflowRules = asArray(workflowOutput?.expense_rules);
+
+  for (const workflowRule of workflowRules) {
+    const category = findCategoryByKeywords(categories, [
+      workflowRule?.expense_category,
+      workflowRule?.expense_subcategory,
+      String(workflowRule?.expense_category || "").replace(/_/g, " "),
+    ].filter(Boolean));
+    if (!category?.id) continue;
+
+    const existing = existingByCategoryId.get(category.id) || {};
+    const explicitValue = asNumber(workflowRule?.explicit_charge_amount);
+    const recoveryClass = String(workflowRule?.rule_classification || "").trim().toLowerCase();
+    const rowStatus =
+      workflowRule?.status === "manual_required"
+        ? "needs_review"
+        : explicitValue != null || ["recoverable", "non_recoverable", "conditional", "excluded"].includes(recoveryClass)
+          ? "mapped"
+          : "needs_review";
+
+    draftRules.push({
+      ...existing,
+      expense_category_id: category.id,
+      category_name: category.category_name,
+      subcategory_name: category.subcategory_name || null,
+      row_status: rowStatus,
+      mentioned_in_lease: true,
+      is_recoverable: workflowRule?.recoverable_flag === true,
+      is_excluded: recoveryClass === "excluded",
+      is_controllable: true,
+      is_subject_to_cap: false,
+      has_base_year: false,
+      gross_up_applicable: false,
+      admin_fee_applicable: false,
+      extracted_value: explicitValue,
+      final_value: explicitValue,
+      frequency: normalizeFrequency(workflowRule?.billing_frequency),
+      confidence: asNumber(workflowRule?.confidence_score) ?? 0.74,
+      notes: workflowRule?.notes || null,
+      source: workflowRule?.source_clause || workflowRule?.lease_treatment || null,
+      clauses: workflowRule?.source_clause
+        ? [{
+            clause_type: "supporting_text",
+            clause_text: workflowRule.source_clause,
+            page_number: workflowRule?.source_page ?? null,
+            confidence: asNumber(workflowRule?.confidence_score) ?? 0.74,
+          }]
+        : [],
+    });
+  }
 
   const candidates = [
     {
