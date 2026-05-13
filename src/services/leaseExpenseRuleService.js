@@ -330,8 +330,19 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       notes: "Derived from extracted water/sewer reimbursement amount",
     },
   ];
+  const extractedUtilityAmount = asNumber(getLeaseExtractedValue(lease, "utility_reimbursement_amount"));
+  const extractedWaterSewerAmount = asNumber(getLeaseExtractedValue(lease, "water_sewer_reimbursement_amount"));
 
   for (const candidate of candidates) {
+    if (
+      candidate.field === "utility_reimbursement_amount" &&
+      extractedUtilityAmount != null &&
+      extractedUtilityAmount > 0 &&
+      extractedUtilityAmount === extractedWaterSewerAmount
+    ) {
+      continue;
+    }
+
     const category = findCategoryByKeywords(categories, candidate.keywords);
     if (!category?.id) continue;
 

@@ -265,7 +265,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     min: 0,
     labels: ["utility reimbursement", "utility reimbursement amount", "utility charge"],
     tableHeaders: ["utility_reimbursement_amount", "utility reimbursement", "utility charge"],
-    patterns: [/(?:utility\s+reimbursement|utility\s+charge)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    patterns: [
+      /(?:utility\s+reimbursement|utility\s+charge)[^\n$]{0,40}\$\s*([\d,]+(?:\.\d{2})?)/i,
+      /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s+month|monthly)?[^\n]{0,60}(?:utility\s+reimbursement|utility\s+charge)/i,
+    ],
     description: "Explicit utility reimbursement or utility charge amount in USD, if stated",
   },
   water_sewer_reimbursement_amount: {
@@ -273,7 +276,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     min: 0,
     labels: ["water/sewer reimbursement", "water sewer reimbursement", "water/sewer charge", "water sewer charge"],
     tableHeaders: ["water_sewer_reimbursement_amount", "water/sewer reimbursement", "water sewer reimbursement", "water/sewer charge"],
-    patterns: [/(?:water\s*\/?\s*sewer\s+(?:reimbursement|charge))[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    patterns: [
+      /(?:water\s*\/?\s*sewer\s+(?:reimbursement|charge))[^\n$]{0,40}\$\s*([\d,]+(?:\.\d{2})?)/i,
+      /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s+month|monthly)?[^\n]{0,80}(?:water\s*\/?\s*sewer\s+(?:reimbursement|charge))/i,
+    ],
     description: "Explicit recurring water/sewer reimbursement amount in USD, if stated",
   },
   electric_responsibility: {

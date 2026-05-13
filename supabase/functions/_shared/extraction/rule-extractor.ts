@@ -358,12 +358,49 @@ const CANONICAL_LEASE_FIELD_ALIASES: Record<string, string> = {
   address_for_notices: "assignee_notice_address",
 };
 
+function isLikelyLeaseAuxiliaryTable(table: DoclingOutput["tables"][number]): boolean {
+  const headers = (table?.headers || []).map((header) => normalizeMatchKey(header)).filter(Boolean);
+  const headerText = headers.join(" ");
+  if (/^landlord_authorized_agent tenant$/.test(headerText)) return true;
+  if (/^area condition notes tenant_initials$/.test(headerText)) return true;
+
+  const flattened = [
+    ...(table?.headers || []),
+    ...((table?.rows || []).flat()),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/move[\s-]*in inspection|inspection checklist|tenant initials|landlord initials/.test(flattened)) {
+    return true;
+  }
+
+  if (/signature|authorized agent/.test(flattened) && (table?.rows?.length ?? 0) <= 4) {
+    return true;
+  }
+
+  return false;
+}
+
+function resolveCanonicalLeaseField(rawKey: string): string | null {
+  const normalized = normalizeMatchKey(rawKey);
+  if (!normalized) return null;
+  if (CANONICAL_LEASE_FIELD_ALIASES[normalized]) return CANONICAL_LEASE_FIELD_ALIASES[normalized];
+  const withoutOrdinal = normalized.replace(/_\d+$/, "");
+  return CANONICAL_LEASE_FIELD_ALIASES[withoutOrdinal] || null;
+}
+
 function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): unknown {
   if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName)) {
     raw = cleanPartyName(raw);
   }
   if (fieldName === "property_address") {
     raw = cleanPropertyAddress(raw);
+  }
+  if (fieldName === "property_name" && /^\s*\d{1,4}\s*$/.test(String(raw))) {
+    return null;
   }
   if (fieldName === "property_name" && looksLikeAddressOrPremisesClause(raw)) {
     return null;
@@ -392,6 +429,12 @@ function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): u
 function cleanPartyName(raw: unknown): string {
   let text = String(raw ?? "").trim();
   if (!text) return "";
+
+  text = text
+    .replace(/^(?:signature|signed\s+by|name|tenant|landlord|resident)\s*:\s*/i, "")
+    .replace(/^_+$/, "")
+    .trim();
+  if (!text || /^_+$/.test(text)) return "";
 
   // Gemini/OCR can combine adjacent contact/address text into the tenant name.
   // Keep the legal entity portion and leave contact person/phone/address as
@@ -431,6 +474,8 @@ function looksLikeAddressOrPremisesClause(raw: unknown): boolean {
 function looksLikeClauseNotName(raw: unknown): boolean {
   const text = String(raw ?? "").trim();
   if (!text) return false;
+  if (/^(signature|date)\s*:/i.test(text)) return true;
+  if (/^_+$/.test(text)) return true;
   if (text.length > 90) return true;
   return /\b(hereby|effective as of|terms? and conditions|under the lease|transfers? and assigns?|assumes?|obligations?|contained in said lease)\b/i.test(text);
 }
@@ -517,12 +562,21 @@ function extractFromDoclingFields(
 function extractFromKeyValueTables(
   tables: DoclingOutput["tables"],
   schema: ModuleSchema,
+  moduleType: ModuleType,
 ): Record<string, ExtractedField> {
   const fields: DoclingField[] = [];
 
   for (const table of tables ?? []) {
+    if ((moduleType === "lease" || moduleType === "leases") && isLikelyLeaseAuxiliaryTable(table)) {
+      continue;
+    }
+
     const pairs: string[][] = [];
-    if (Array.isArray(table.headers) && table.headers.length >= 2) {
+    if (
+      Array.isArray(table.headers) &&
+      table.headers.length >= 2 &&
+      !/^(item|details|amount|value|description)$/i.test(String(table.headers[0] ?? "").trim())
+    ) {
       pairs.push([String(table.headers[0] ?? ""), String(table.headers[1] ?? "")]);
     }
     if (Array.isArray(table.rows)) {
@@ -535,6 +589,9 @@ function extractFromKeyValueTables(
 
     for (const [key, value] of pairs) {
       if (!key.trim() || !value.trim()) continue;
+      if ((moduleType === "lease" || moduleType === "leases") && !resolveCanonicalLeaseField(key)) {
+        continue;
+      }
       fields.push({
         key,
         value,
@@ -722,7 +779,7 @@ export function extractRuleBased(
 
   // Run all three sub-steps
   const fromFields = extractFromDoclingFields(docling.fields ?? [], schema);
-  const fromKeyValueTables = extractFromKeyValueTables(docling.tables ?? [], schema);
+  const fromKeyValueTables = extractFromKeyValueTables(docling.tables ?? [], schema, moduleType);
   const fromPatterns = extractViaPatterns(fullText, schema);
   const fromLabels = extractViaLabels(fullText, schema);
 
