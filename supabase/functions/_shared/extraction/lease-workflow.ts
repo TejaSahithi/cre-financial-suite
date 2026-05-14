@@ -1010,11 +1010,11 @@ function deriveExpenseRules(
       rule_classification: recoveryStatus,
       clauses: clauseText
         ? [{
-            clause_type: supportingClause?.clause_type || "supporting_text",
-            clause_text: clauseText,
-            page_number: sourcePage,
-            confidence,
-          }]
+          clause_type: supportingClause?.clause_type || "supporting_text",
+          clause_text: clauseText,
+          page_number: sourcePage,
+          confidence,
+        }]
         : [],
     };
   });
@@ -1209,17 +1209,17 @@ function deriveBudgetPreview(fieldMap: Record<string, LeaseWorkflowField>, expen
   const renewalEscalationPercent = asNumber(fieldMap.renewal_escalation_percent?.value);
   const renewalProjection = renewalEscalationPercent != null && monthlyRent > 0
     ? [
-        {
-          year: 1,
-          monthly_rent: round2(monthlyRent * (1 + renewalEscalationPercent / 100)),
-          status: "calculated",
-        },
-        {
-          year: 2,
-          monthly_rent: round2(monthlyRent * (1 + renewalEscalationPercent / 100) * (1 + renewalEscalationPercent / 100)),
-          status: "calculated",
-        },
-      ]
+      {
+        year: 1,
+        monthly_rent: round2(monthlyRent * (1 + renewalEscalationPercent / 100)),
+        status: "calculated",
+      },
+      {
+        year: 2,
+        monthly_rent: round2(monthlyRent * (1 + renewalEscalationPercent / 100) * (1 + renewalEscalationPercent / 100)),
+        status: "calculated",
+      },
+    ]
     : [];
 
   return {
