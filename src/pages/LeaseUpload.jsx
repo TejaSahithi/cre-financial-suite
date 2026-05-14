@@ -1,20 +1,28 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Calculator, CheckCircle2, DollarSign, FileText, Loader2, Plus, Upload } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ExternalLink,
+  Eye,
+  FileText,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import FileUploader from "@/components/FileUploader";
-import ReviewPanel from "@/components/ReviewPanel";
 import ScopeSelector from "@/components/ScopeSelector";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
-import { expenseService } from "@/services/expenseService";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
 
+// Statuses that still need polling because a backend stage is in flight.
 const ACTIVE_STATUSES = new Set([
   "uploaded",
   "parsing",
@@ -26,23 +34,53 @@ const ACTIVE_STATUSES = new Set([
   "computing",
 ]);
 
-const EXPLICIT_LEASE_CHARGE_FIELDS = [
-  { key: "cam_amount", label: "CAM" },
-  { key: "nnn_amount", label: "NNN" },
-  { key: "insurance_reimbursement_amount", label: "Insurance Reimbursement" },
-  { key: "tax_reimbursement_amount", label: "Tax Reimbursement" },
-  { key: "utility_reimbursement_amount", label: "Utility Reimbursement" },
-  { key: "water_sewer_reimbursement_amount", label: "Water / Sewer Reimbursement" },
-  { key: "pet_rent_amount", label: "Pet Rent" },
-  { key: "parking_fee_amount", label: "Parking Fee" },
+// Visual processing pipeline shown to the user.
+const PIPELINE_STAGES = [
+  { key: "uploaded", label: "Uploaded" },
+  { key: "ocr", label: "OCR Processing" },
+  { key: "text_extracted", label: "Text Extracted" },
+  { key: "ai_extracting", label: "AI Extracting" },
+  { key: "ai_extracted", label: "AI Extracted" },
+  { key: "needs_review", label: "Needs Review" },
 ];
 
-const EXPENSE_RULE_HINT_PATTERN = /(responsibility|reimbursement|recoverable|non_recoverable|conditional|cap|expense_stop|base_year|gross_up|admin_fee|management_fee|exclusion|utility|water|sewer|electric|tax|insurance|cam|nnn|maintenance|parking|pet)/i;
+// Map raw uploaded_files.status to a stepper position.
+function pipelineProgress(status) {
+  switch (status) {
+    case "uploaded":
+      return { activeIndex: 0, failed: false };
+    case "parsing":
+      return { activeIndex: 1, failed: false };
+    case "pdf_parsed":
+      return { activeIndex: 2, failed: false };
+    case "validating":
+      return { activeIndex: 3, failed: false };
+    case "validated":
+    case "storing":
+    case "stored":
+    case "computing":
+      return { activeIndex: 4, failed: false };
+    case "review_required":
+    case "completed":
+      return { activeIndex: 5, failed: false };
+    case "failed":
+      return { activeIndex: -1, failed: true };
+    default:
+      return { activeIndex: 0, failed: false };
+  }
+}
 
-function asLeaseAmount(value) {
-  if (value == null || value === "") return null;
-  const normalized = Number(String(value).replace(/[$,% ,]/g, ""));
-  return Number.isFinite(normalized) ? normalized : null;
+function statusBadgeStyle(status) {
+  if (status === "failed") return "bg-red-100 text-red-700";
+  if (status === "completed") return "bg-emerald-100 text-emerald-700";
+  if (status === "review_required") return "bg-amber-100 text-amber-800";
+  return "bg-slate-100 text-slate-700";
+}
+
+function statusLabelFor(status) {
+  if (!status) return "Waiting";
+  if (status === "review_required") return "Needs Review";
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export default function LeaseUpload() {
@@ -59,17 +97,16 @@ export default function LeaseUpload() {
   const [fileId, setFileId] = useState(null);
   const [fileRecord, setFileRecord] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
-  const [approving, setApproving] = useState(false);
-  const [savingReview, setSavingReview] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
+  const [openingReview, setOpeningReview] = useState(false);
   const [retryingExtraction, setRetryingExtraction] = useState(false);
+  const [deletingUpload, setDeletingUpload] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const retriedUploadedFiles = useRef(new Set());
   const retriedManualFallbackFiles = useRef(new Set());
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
-  const { data: expenses = [] } = useOrgQuery("Expense");
 
   useEffect(() => {
     let nextProperty = queryPropertyId || "all";
@@ -185,7 +222,7 @@ export default function LeaseUpload() {
     let { data, error } = await supabase
       .from("uploaded_files")
       .select(
-        "id, file_name, status, error_message, review_required, review_status, " +
+        "id, file_name, file_url, status, error_message, review_required, review_status, " +
         "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
         "property_id, building_id, unit_id, updated_at",
       )
@@ -195,7 +232,7 @@ export default function LeaseUpload() {
     if (error) {
       const fallback = await supabase
         .from("uploaded_files")
-        .select("id, file_name, status, error_message, row_count, updated_at")
+        .select("id, file_name, file_url, status, error_message, row_count, updated_at")
         .eq("id", id)
         .maybeSingle();
       data = fallback.data;
@@ -270,92 +307,7 @@ export default function LeaseUpload() {
       fetchFileRecord(result.file_id);
       return;
     }
-    toast.success("Lease uploaded. The canonical extraction pipeline is running.");
-  };
-
-  const saveReview = async (reviewPayload) => {
-    if (!fileId) return;
-    setSavingReview(true);
-    try {
-      const data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "save",
-        review_payload: reviewPayload,
-      });
-
-      if (data?.error) {
-        toast.error(data?.message || "Review save failed");
-        return;
-      }
-
-      toast.success("Review draft saved.");
-      await fetchFileRecord(fileId);
-    } catch (error) {
-      toast.error(error?.message || "Review save failed");
-    } finally {
-      setSavingReview(false);
-    }
-  };
-
-  const approveReview = async (reviewPayload) => {
-    if (!fileId) return;
-    setApproving(true);
-    try {
-      const data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "approve",
-        review_payload: reviewPayload,
-      });
-
-      if (data?.error) {
-        toast.error(data?.message || "Review approval failed");
-        return;
-      }
-
-      const insertedLeaseId =
-        data?.store_result?.inserted_ids?.[0] ||
-        data?.store_result?.insertedIds?.[0] ||
-        null;
-
-      if (data?.already_approved) {
-        toast.info("This extraction was already sent to Lease Review.");
-      } else {
-        toast.success("Lease draft sent to Lease Review.");
-      }
-      await fetchFileRecord(fileId);
-
-      if (insertedLeaseId) {
-        navigate(createPageUrl("LeaseReview", { id: insertedLeaseId }));
-      }
-    } catch (error) {
-      toast.error(error?.message || "Review approval failed");
-    } finally {
-      setApproving(false);
-    }
-  };
-
-  const rejectReview = async (reason) => {
-    if (!fileId) return;
-    setRejecting(true);
-    try {
-      const data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "reject",
-        reject_reason: reason,
-      });
-
-      if (data?.error) {
-        toast.error(data?.message || "Review rejection failed");
-        return;
-      }
-
-      toast.success("Lease extraction rejected.");
-      await fetchFileRecord(fileId);
-    } catch (error) {
-      toast.error(error?.message || "Review rejection failed");
-    } finally {
-      setRejecting(false);
-    }
+    toast.success("Lease uploaded. The extraction pipeline is running.");
   };
 
   const retryExtraction = async () => {
@@ -383,55 +335,95 @@ export default function LeaseUpload() {
     }
   };
 
-  const statusLabel = fileRecord?.status ? fileRecord.status.replace(/_/g, " ") : "waiting";
+  // Open Lease Review for the lease draft tied to this file. If a draft does
+  // not yet exist, send the existing extraction to the review pipeline (which
+  // creates the lease draft on the backend) and then navigate. The actual
+  // approval still happens in Lease Review — this just promotes the raw AI
+  // output into a reviewable draft, per the upgraded workflow.
+  const openLeaseReview = async () => {
+    if (!fileId) return;
+    setOpeningReview(true);
+    try {
+      const existing = await findLeaseByFileId(fileId);
+      if (existing?.id) {
+        navigate(createPageUrl("LeaseReview", { id: existing.id }));
+        return;
+      }
+
+      const data = await invokeEdgeFunction("review-approve", {
+        file_id: fileId,
+        action: "approve",
+        review_payload: fileRecord?.ui_review_payload || null,
+      });
+
+      if (data?.error) {
+        toast.error(data?.message || "Could not open Lease Review");
+        return;
+      }
+
+      const insertedLeaseId =
+        data?.store_result?.inserted_ids?.[0] ||
+        data?.store_result?.insertedIds?.[0] ||
+        null;
+
+      await fetchFileRecord(fileId);
+
+      if (insertedLeaseId) {
+        navigate(createPageUrl("LeaseReview", { id: insertedLeaseId }));
+        return;
+      }
+
+      // already_approved path: look up the linked lease.
+      const linked = await findLeaseByFileId(fileId);
+      if (linked?.id) {
+        navigate(createPageUrl("LeaseReview", { id: linked.id }));
+      } else {
+        toast.info("Lease review draft is being prepared. Try again in a moment.");
+      }
+    } catch (error) {
+      toast.error(error?.message || "Could not open Lease Review");
+    } finally {
+      setOpeningReview(false);
+    }
+  };
+
+  const handleViewDocument = () => {
+    const url = fileRecord?.file_url;
+    if (!url) {
+      toast.error("Document URL is not available.");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const handleDeleteUpload = async () => {
+    if (!fileId) return;
+    setDeletingUpload(true);
+    try {
+      const { error } = await supabase.from("uploaded_files").delete().eq("id", fileId);
+      if (error) throw error;
+      toast.success("Upload deleted.");
+      setFileId(null);
+      setFileRecord(null);
+      setConfirmDelete(false);
+    } catch (error) {
+      toast.error(error?.message || "Could not delete upload");
+    } finally {
+      setDeletingUpload(false);
+    }
+  };
+
   const reviewPayload = fileRecord?.ui_review_payload || null;
   const reviewedRows = reviewPayload?.records || reviewPayload?.rows || [];
-  const leaseFiscalYear = inferLeaseFiscalYear(reviewedRows);
-  const leaseExpensePreview = useMemo(
-    () => summarizeLeaseExpenseSignals(reviewedRows),
-    [reviewedRows]
-  );
   const extractionQuality = useMemo(
     () => assessLeaseExtractionQuality(reviewedRows),
     [reviewedRows]
   );
-  const expenseScope = useMemo(() => {
-    const propertyId = effectivePropertyId;
-    if (!propertyId) {
-      return {
-        propertyId: null,
-        fiscalYear: leaseFiscalYear,
-        scoped: [],
-        recoverable: [],
-        recoverableTotal: 0,
-      };
-    }
-
-    const scoped = expenses.filter((expense) => {
-      if (expense.property_id !== propertyId) return false;
-      if (scopeBuilding !== "all" && expense.building_id && expense.building_id !== scopeBuilding) return false;
-      if (scopeUnit !== "all" && expense.unit_id && expense.unit_id !== scopeUnit) return false;
-      if (leaseFiscalYear && Number(expense.fiscal_year) !== Number(leaseFiscalYear)) return false;
-      return true;
-    });
-    const recoverable = scoped.filter((expense) => {
-      const classification = String(expense.classification || "").toLowerCase();
-      return classification === "recoverable" || classification === "cam" || classification === "nnn" || classification === "";
-    });
-
-    return {
-      propertyId,
-      fiscalYear: leaseFiscalYear,
-      scoped,
-      recoverable,
-      recoverableTotal: recoverable.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0),
-    };
-  }, [expenses, effectivePropertyId, scopeBuilding, scopeUnit, leaseFiscalYear]);
+  const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
   const isManualReviewFallback =
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
     reviewPayload?.extraction_method === "manual_review_fallback" ||
     reviewPayload?.metadata?.manualReviewFallback === true;
-  const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
   const isEmptyExtractionFallback =
     isManualReviewFallback ||
     reviewPayload?.extraction_method === "none" ||
@@ -466,23 +458,22 @@ export default function LeaseUpload() {
     return () => window.clearTimeout(retryTimer);
   }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
 
-  const { data: workflowSummary } = useQuery({
-    queryKey: ["lease-upload-expense-workflow", effectivePropertyId, scopeBuilding, scopeUnit, leaseFiscalYear],
-    queryFn: () =>
-      expenseService.getWorkflowSummary({
-        propertyId: effectivePropertyId,
-        buildingId: scopeBuilding !== "all" ? scopeBuilding : null,
-        unitId: scopeUnit !== "all" ? scopeUnit : null,
-        fiscalYear: leaseFiscalYear,
-      }),
-    enabled: Boolean(effectivePropertyId),
-  });
+  const { activeIndex, failed } = pipelineProgress(fileRecord?.status);
+  const canOpenReview =
+    fileRecord?.status === "review_required" || fileRecord?.status === "completed";
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <Link to={createPageUrl("Leases") + location.search} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
         <ArrowLeft className="h-4 w-4" /> Back to Leases
       </Link>
+
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Upload Lease</h1>
+        <p className="text-sm text-slate-500">
+          Intake a lease document. AI extraction runs automatically; review and approval happen in Lease Review.
+        </p>
+      </div>
 
       <Card>
         <CardContent className="space-y-3 p-4">
@@ -557,23 +548,126 @@ export default function LeaseUpload() {
 
       {fileId && (
         <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100">
-                <FileText className="h-5 w-5 text-slate-500" />
+          <CardContent className="space-y-4 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100">
+                  <FileText className="h-5 w-5 text-slate-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">{fileRecord?.file_name || "Lease document"}</p>
+                  <p className="text-xs text-slate-500">File ID: {fileId}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900">{fileRecord?.file_name || "Lease document"}</p>
-                <p className="text-xs text-slate-500">File ID: {fileId}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {loadingRecord && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                <Badge className={statusBadgeStyle(fileRecord?.status)}>{statusLabelFor(fileRecord?.status)}</Badge>
+                {fileRecord?.document_subtype && (
+                  <Badge className="bg-blue-50 text-blue-700">{fileRecord.document_subtype.replace(/_/g, " ")}</Badge>
+                )}
+                {fileRecord?.status === "review_required" && (
+                  <Badge className="bg-amber-100 text-amber-800">Review Required</Badge>
+                )}
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              {loadingRecord && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
-              <Badge className="bg-slate-100 text-slate-700">{statusLabel}</Badge>
-              {fileRecord?.document_subtype && (
-                <Badge className="bg-blue-50 text-blue-700">{fileRecord.document_subtype.replace(/_/g, " ")}</Badge>
-              )}
+
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+              <Button
+                onClick={openLeaseReview}
+                disabled={openingReview || !canOpenReview}
+                size="sm"
+                className="bg-teal-600 hover:bg-teal-700"
+              >
+                {openingReview && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Open Lease Review
+              </Button>
+              <Button
+                onClick={retryExtraction}
+                disabled={retryingExtraction}
+                size="sm"
+                variant="outline"
+              >
+                {retryingExtraction ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Re-run Extraction
+              </Button>
+              <Button
+                onClick={handleViewDocument}
+                disabled={!fileRecord?.file_url}
+                size="sm"
+                variant="outline"
+              >
+                <Eye className="mr-2 h-4 w-4" />
+                View Document
+              </Button>
+              <Button
+                onClick={() => setConfirmDelete(true)}
+                disabled={deletingUpload}
+                size="sm"
+                variant="outline"
+                className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Upload
+              </Button>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {fileId && (
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold text-slate-900">Processing Status</h3>
+            <p className="text-xs text-slate-500">
+              The intake pipeline runs automatically. Once extraction is ready, open Lease Review to inspect fields.
+            </p>
+            <ol className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              {PIPELINE_STAGES.map((stage, idx) => {
+                const isComplete = !failed && idx < activeIndex;
+                const isCurrent = !failed && idx === activeIndex;
+                return (
+                  <li
+                    key={stage.key}
+                    className={`flex items-start gap-2 rounded-lg border p-2 ${
+                      isCurrent
+                        ? "border-blue-200 bg-blue-50"
+                        : isComplete
+                        ? "border-emerald-200 bg-emerald-50/60"
+                        : "border-slate-200 bg-slate-50"
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                        isComplete
+                          ? "bg-emerald-500 text-white"
+                          : isCurrent
+                          ? "bg-blue-500 text-white"
+                          : "bg-slate-300 text-white"
+                      }`}
+                    >
+                      {isComplete ? "✓" : idx + 1}
+                    </span>
+                    <span
+                      className={`text-xs font-medium ${
+                        isCurrent ? "text-blue-700" : isComplete ? "text-emerald-700" : "text-slate-600"
+                      }`}
+                    >
+                      {stage.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            {failed && (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                Pipeline failed. Use Re-run Extraction to retry.
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -600,7 +694,7 @@ export default function LeaseUpload() {
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
             <span>
-              Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or continue manually below.
+              Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or open Lease Review to continue manually.
             </span>
             <Button
               variant="outline"
@@ -621,7 +715,7 @@ export default function LeaseUpload() {
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
             <span>
               This extraction looks stale or misparsed: {extractionQuality.reasons.join("; ")}.
-              Retry extraction to rebuild the review payload with the latest DOCX parser fix.
+              Retry extraction to rebuild the review payload with the latest parser fix.
             </span>
             <Button
               variant="outline"
@@ -637,52 +731,37 @@ export default function LeaseUpload() {
         </Card>
       )}
 
-      {fileRecord?.status === "review_required" && reviewPayload && (
-        <>
-          <ReviewPanel
-            payload={reviewPayload}
-            approving={approving}
-            saving={savingReview}
-            rejecting={rejecting}
-            approveLabel="Send to Lease Review"
-            approveDescription="Creates a reviewed lease draft, then opens Lease Review for confidence checks, team review, and signature approval."
-            onApprove={approveReview}
-            onSave={saveReview}
-            onReject={rejectReview}
-          />
-          <ExpenseCamReadinessCard
-            expenseScope={expenseScope}
-            workflowSummary={workflowSummary}
-            extractionPreview={leaseExpensePreview}
-            propertyName={effectiveProperty?.name}
-            scopeParams={{
-              property: effectivePropertyId,
-              building: scopeBuilding !== "all" ? scopeBuilding : undefined,
-              unit: scopeUnit !== "all" ? scopeUnit : undefined,
-            }}
-          />
-        </>
-      )}
-
-      {fileRecord?.status === "review_required" && !reviewPayload && (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-blue-600" />
-            <p className="text-sm text-slate-500">Preparing the review payload...</p>
-          </CardContent>
-        </Card>
-      )}
-
       {fileRecord?.status === "completed" && (
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="flex items-center gap-2 p-4 text-sm text-emerald-700">
             <CheckCircle2 className="h-4 w-4" />
-            Lease data was stored and compute jobs were started successfully.
+            Lease data was stored. Continue in Lease Review to verify and approve the lease abstract.
           </CardContent>
         </Card>
       )}
+
+      <DeleteConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this lease upload?"
+        description="This removes the uploaded file record. Any downstream lease draft created from it will remain — delete it separately from the Leases list if needed."
+        confirmLabel="Delete upload"
+        loading={deletingUpload}
+        onConfirm={handleDeleteUpload}
+      />
     </div>
   );
+}
+
+async function findLeaseByFileId(fileId) {
+  const { data, error } = await supabase
+    .from("leases")
+    .select("id")
+    .eq("extraction_data->>source_file_id", fileId)
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+  return data;
 }
 
 function getRecordValue(record, key) {
@@ -694,104 +773,6 @@ function getRecordValue(record, key) {
   const field = record?.fields?.[key];
   if (field && typeof field === "object" && "value" in field) return field.value;
   return field;
-}
-
-function inferLeaseFiscalYear(records) {
-  const first = records?.[0] || null;
-  const dateValue = getRecordValue(first, "start_date") || getRecordValue(first, "assignment_effective_date") || getRecordValue(first, "end_date");
-  const parsedDate = dateValue ? new Date(String(dateValue)) : null;
-  if (parsedDate && !Number.isNaN(parsedDate.getTime())) return parsedDate.getFullYear();
-  return new Date().getFullYear();
-}
-
-function summarizeLeaseExpenseSignals(records) {
-  const first = records?.[0] || null;
-  if (!first) {
-    return {
-      explicitCharges: [],
-      ruleHints: [],
-    };
-  }
-
-  const workflowRules = Array.isArray(first?.workflow_output?.expense_rules)
-    ? first.workflow_output.expense_rules
-    : [];
-
-  const fields = [];
-  const pushField = (fieldKey, label, value) => {
-    if (value == null || value === "") return;
-    fields.push({ fieldKey, label, value });
-  };
-
-  (first.standard_fields || []).forEach((field) => {
-    pushField(field.field_key, field.label || field.field_key, field.value);
-  });
-  (first.custom_fields || []).forEach((field) => {
-    pushField(field.field_key, field.label || field.field_key, field.value);
-  });
-  Object.entries(first.values || {}).forEach(([fieldKey, value]) => {
-    pushField(fieldKey, fieldKey, value);
-  });
-  Object.entries(first.fields || {}).forEach(([fieldKey, field]) => {
-    const value = field && typeof field === "object" && "value" in field ? field.value : field;
-    pushField(fieldKey, fieldKey, value);
-  });
-
-  const fieldByKey = new Map();
-  for (const field of fields) {
-    if (!fieldByKey.has(field.fieldKey)) {
-      fieldByKey.set(field.fieldKey, field);
-    }
-  }
-
-  const explicitCharges = EXPLICIT_LEASE_CHARGE_FIELDS.flatMap((definition) => {
-    const value = getRecordValue(first, definition.key);
-    const amount = asLeaseAmount(value);
-    if (!amount || amount <= 0) return [];
-    return [{ ...definition, amount }];
-  });
-  const workflowCharges = workflowRules.flatMap((rule) => {
-    const amount = asLeaseAmount(rule?.explicit_charge_amount);
-    if (!amount || amount <= 0) return [];
-    const key = String(rule?.expense_category || "lease_charge");
-    return [{
-      key,
-      label: String(rule?.expense_category || key).replace(/_/g, " "),
-      amount,
-    }];
-  });
-
-  const explicitKeys = new Set(EXPLICIT_LEASE_CHARGE_FIELDS.map((definition) => definition.key));
-  const ruleHints = [...fieldByKey.values()]
-    .filter((field) => !explicitKeys.has(field.fieldKey))
-    .filter((field) => EXPENSE_RULE_HINT_PATTERN.test(field.fieldKey))
-    .map((field) => ({
-      key: field.fieldKey,
-      label: String(field.label || field.fieldKey).replace(/_/g, " "),
-      value: String(field.value),
-    }));
-  const workflowRuleHints = workflowRules
-    .filter((rule) => !rule?.explicit_charge_amount)
-    .map((rule) => ({
-      key: String(rule?.expense_category || "lease_rule"),
-      label: String(rule?.expense_category || "lease_rule").replace(/_/g, " "),
-      value: String(rule?.lease_treatment || rule?.rule_classification || "lease rule"),
-    }));
-
-  const dedupeByKey = (items) => {
-    const seen = new Set();
-    return items.filter((item) => {
-      const key = String(item?.key || "");
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  };
-
-  return {
-    explicitCharges: dedupeByKey([...explicitCharges, ...workflowCharges]),
-    ruleHints: dedupeByKey([...ruleHints, ...workflowRuleHints]),
-  };
 }
 
 function assessLeaseExtractionQuality(records) {
@@ -831,179 +812,4 @@ function assessLeaseExtractionQuality(records) {
     suspicious: reasons.length > 0,
     reasons,
   };
-}
-
-function ExpenseCamReadinessCard({ expenseScope, workflowSummary, extractionPreview, propertyName, scopeParams }) {
-  const hasProperty = !!expenseScope.propertyId;
-  const hasRecoverableExpenses = expenseScope.recoverable.length > 0;
-  const hasApprovedRules = (workflowSummary?.approvedRuleLeaseCount || 0) > 0;
-  const extractedChargeCount = extractionPreview?.explicitCharges?.length || 0;
-  const extractedRuleHintCount = extractionPreview?.ruleHints?.length || 0;
-  const scopedParams = Object.fromEntries(
-    Object.entries(scopeParams || {}).filter(([, value]) => value !== undefined && value !== null && value !== "all"),
-  );
-  const addExpenseUrl = createPageUrl("AddExpense", scopedParams);
-  const bulkImportUrl = createPageUrl("BulkImport", scopedParams);
-  const reviewUrl = createPageUrl("ExpenseReview", scopedParams);
-  const camUrl = createPageUrl("CAMCalculation", {
-    property_id: expenseScope.propertyId,
-    year: expenseScope.fiscalYear,
-  });
-
-  return (
-    <Card className={hasRecoverableExpenses ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
-      <CardContent className="space-y-4 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex gap-3">
-            <div className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl ${hasRecoverableExpenses ? "bg-emerald-100" : "bg-amber-100"}`}>
-              {hasRecoverableExpenses ? (
-                <DollarSign className="h-5 w-5 text-emerald-700" />
-              ) : (
-                <AlertTriangle className="h-5 w-5 text-amber-700" />
-              )}
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">Expenses and CAM readiness</h3>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-600">
-                Lease documents can provide CAM terms and recovery hints, but actual CAM must be calculated from expense records.
-                Expenses inherit this lease upload scope when you add or import them.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge className="bg-white text-slate-700">
-              FY {expenseScope.fiscalYear}
-            </Badge>
-            <Badge className="bg-white text-slate-700">
-              {extractedChargeCount} lease charge fields
-            </Badge>
-            <Badge className="bg-white text-slate-700">
-              {extractedRuleHintCount} CAM/rule hints
-            </Badge>
-            <Badge className="bg-white text-slate-700">
-              {workflowSummary?.approvedRuleLeaseCount || 0} approved rule sets
-            </Badge>
-            <Badge className={hasRecoverableExpenses ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
-              {expenseScope.recoverable.length} recoverable expenses
-            </Badge>
-          </div>
-        </div>
-
-        {!hasProperty ? (
-          <div className="rounded-lg border border-amber-200 bg-white p-3 text-xs text-amber-800">
-            Select a property scope before adding expenses or running CAM. CAM requires a property, fiscal year, leases, and recoverable expenses.
-          </div>
-        ) : hasRecoverableExpenses ? (
-          <div className="rounded-lg border border-emerald-200 bg-white p-3 text-xs text-emerald-800">
-            Found {expenseScope.recoverable.length} recoverable expense line item(s)
-            {propertyName ? ` for ${propertyName}` : ""}, totaling ${expenseScope.recoverableTotal.toLocaleString()}.
-            You can now calculate CAM from actual expenses.
-          </div>
-        ) : extractedChargeCount > 0 ? (
-          <div className="rounded-lg border border-blue-200 bg-white p-3 text-xs text-blue-800">
-            The lease already contains {extractedChargeCount} explicit charge field(s) such as CAM/NNN/reimbursements.
-            Those values will prefill lease-derived expense rows after lease approval, but full CAM still needs approved actual expense inputs.
-          </div>
-        ) : hasApprovedRules ? (
-          <div className="rounded-lg border border-blue-200 bg-white p-3 text-xs text-blue-800">
-            Lease expense rules are approved for this scope, but actual expense rows are still missing.
-            Add expenses or bulk import them before CAM calculation.
-          </div>
-        ) : (
-          <div className="rounded-lg border border-amber-200 bg-white p-3 text-xs text-amber-800">
-            No recoverable expenses were found for this lease scope and fiscal year. Add individual expenses or bulk import expense lines, then run CAM.
-          </div>
-        )}
-
-        {(extractedChargeCount > 0 || extractedRuleHintCount > 0) && (
-          <div className="rounded-lg border border-slate-200 bg-white p-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Lease expense extraction preview</div>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div>
-                <div className="text-xs font-medium text-slate-700">Explicit lease charges</div>
-                {extractionPreview.explicitCharges.length > 0 ? (
-                  <div className="mt-2 space-y-2">
-                    {extractionPreview.explicitCharges.map((charge) => (
-                      <div key={charge.key} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                        <span className="font-medium text-slate-700">{charge.label}</span>
-                        <span className="font-semibold text-slate-900">${charge.amount.toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-slate-500">No explicit recurring charge amount was extracted from the lease review payload yet.</div>
-                )}
-              </div>
-              <div>
-                <div className="text-xs font-medium text-slate-700">Rule / responsibility hints</div>
-                {extractionPreview.ruleHints.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {extractionPreview.ruleHints.slice(0, 8).map((hint) => (
-                      <Badge key={hint.key} className="bg-slate-100 text-slate-700">
-                        {hint.label}
-                      </Badge>
-                    ))}
-                    {extractionPreview.ruleHints.length > 8 ? (
-                      <Badge className="bg-slate-100 text-slate-700">+{extractionPreview.ruleHints.length - 8} more</Badge>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-slate-500">No CAM rule hints were detected in the current extracted field set yet.</div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          <ActionLinkButton
-            to={addExpenseUrl}
-            disabled={!hasProperty}
-            variant="outline"
-            className="bg-white"
-            icon={Plus}
-          >
-            Add expense manually
-          </ActionLinkButton>
-          <ActionLinkButton
-            to={bulkImportUrl}
-            disabled={!hasProperty}
-            variant="outline"
-            className="bg-white"
-            icon={Upload}
-          >
-            Bulk import expenses
-          </ActionLinkButton>
-          <ActionLinkButton
-            to={reviewUrl}
-            disabled={!hasProperty}
-            variant="outline"
-            className="bg-white"
-            icon={FileText}
-          >
-            Expense review
-          </ActionLinkButton>
-          <ActionLinkButton
-            to={camUrl}
-            disabled={!hasProperty || (!hasRecoverableExpenses && !hasApprovedRules)}
-            className="bg-teal-600 hover:bg-teal-700"
-            icon={Calculator}
-          >
-            Review CAM readiness
-          </ActionLinkButton>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActionLinkButton({ to, disabled, children, icon: Icon, variant, className }) {
-  const button = (
-    <Button size="sm" variant={variant} disabled={disabled} className={className}>
-      {Icon && <Icon className="mr-2 h-4 w-4" />}
-      {children}
-    </Button>
-  );
-
-  return disabled ? button : <Link to={to}>{button}</Link>;
 }

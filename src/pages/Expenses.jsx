@@ -476,7 +476,7 @@ export default function Expenses() {
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
-      <PageHeader icon={Receipt} title="Expense Engine" subtitle={subtitleScope} iconColor="from-red-500 to-rose-600">
+      <PageHeader icon={Receipt} title="Actual Expenses" subtitle={subtitleScope} iconColor="from-red-500 to-rose-600">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filtered, "expenses.csv")}>
             <Download className="w-4 h-4 mr-1 text-slate-500" />
@@ -504,6 +504,16 @@ export default function Expenses() {
           </RoleGuard>
         </div>
       </PageHeader>
+
+      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <span className="font-medium">Actual Expenses</span> come from invoices, bulk imports, and
+        vendor bills.{" "}
+        <Link to={createPageUrl("LeaseExpenseRules")} className="underline">
+          Lease Expense Rules
+        </Link>{" "}
+        (responsibility / recovery method / caps) are extracted from approved lease documents and
+        live on a separate page. Approved expense rows feed CAM and Budget.
+      </div>
 
       {selectedPropertyId ? (
         <PipelineActions propertyId={selectedPropertyId} fiscalYear={new Date().getFullYear()} actions={EXPENSE_ACTIONS} />

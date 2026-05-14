@@ -10,6 +10,10 @@ import {
 } from "@/services/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  ChargeScheduleTab,
+  InvoicePreviewTab,
+} from "@/components/revenue/ChargeScheduleAndPreview";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -469,6 +473,16 @@ export default function Billing() {
           </Table>
         </CardContent>
       </Card>
+
+      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        The sections below project tenant charges from <strong>approved lease abstracts</strong>,
+        approved CAM Setup profiles, and approved recoverable expenses — read-only previews used to
+        sanity-check what the existing <em>Generate Invoices</em> action will produce.
+      </div>
+
+      <ChargeScheduleTab propertyId={null} />
+
+      <InvoicePreviewTab propertyId={null} onGenerate={() => setShowGenerate(true)} />
 
       <Dialog open={showGenerate} onOpenChange={setShowGenerate}>
         <DialogContent>

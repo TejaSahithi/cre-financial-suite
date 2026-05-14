@@ -38,15 +38,18 @@ const navSections = [
       { label: "Upload Lease", page: "LeaseUpload" },
       { label: "Lease Review", page: "LeaseReview" },
       { label: "Rent Projection", page: "RentProjection" },
+      { label: "Critical Dates", page: "CriticalDates" },
       { label: "Lease List", page: "Leases" },
     ]
   },
   {
     label: "Expenses", icon: Receipt, children: [
       { label: "Expense Dashboard", page: "Expenses" },
+      { label: "Lease Expense Rules", page: "LeaseExpenseRules" },
+      { label: "Actual Expenses", page: "Expenses" },
       { label: "Add Expense", page: "AddExpense" },
       { label: "Bulk Import", page: "BulkImport" },
-      { label: "Expense Classification", page: "LeaseExpenseClassification" },
+      { label: "Expense Classification (per-lease)", page: "LeaseExpenseClassification" },
       { label: "Expense Review", page: "ExpenseReview" },
       { label: "Expense Projection", page: "ExpenseProjection" },
       { label: "Vendors", page: "Vendors" },
@@ -55,6 +58,7 @@ const navSections = [
   {
     label: "CAM Engine", icon: Calculator, children: [
       { label: "CAM Dashboard", page: "CAMDashboard" },
+      { label: "CAM Setup", page: "CAMSetup" },
       { label: "CAM Calculation", page: "CAMCalculation" },
     ]
   },
