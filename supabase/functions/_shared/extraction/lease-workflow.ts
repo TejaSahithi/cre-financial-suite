@@ -1227,7 +1227,7 @@ function deriveBudgetPreview(fieldMap: Record<string, LeaseWorkflowField>, expen
     operating_expense_budget: operatingExpenseBudget,
     cam_recovery_budget: recoveries,
     tenant_billing_schedule: tenantBillingSchedule,
-    annual_base_rent,
+    annual_base_rent: annualBaseRent,
     renewal_projection: renewalProjection,
   };
 }
