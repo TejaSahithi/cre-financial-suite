@@ -13,6 +13,7 @@ import ScenarioPlanner from "@/components/ScenarioPlanner";
 import FileUploader from "@/components/FileUploader";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { toast } from "sonner";
+import BudgetPreviewTabs from "@/components/budget/BudgetPreviewTabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -416,9 +417,17 @@ export default function CreateBudget() {
       <Tabs defaultValue="generate">
         <TabsList className="bg-white border">
           <TabsTrigger value="generate">Generate Budget</TabsTrigger>
+          <TabsTrigger value="preview">Preview from Approved Data</TabsTrigger>
           <TabsTrigger value="manage">Manage Budgets ({budgets.length})</TabsTrigger>
           <TabsTrigger value="scenarios">Scenario Planning</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="preview" className="mt-4">
+          <BudgetPreviewTabs
+            propertyId={form.property_id || scope.propertyId || null}
+            budgetYear={form.budget_year}
+          />
+        </TabsContent>
 
         <TabsContent value="generate" className="mt-4 space-y-6">
           <div className="grid md:grid-cols-3 gap-4">

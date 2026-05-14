@@ -3,7 +3,21 @@ import { Link, useLocation } from "react-router-dom";
 import { differenceInDays } from "date-fns";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Upload, Search, Loader2, Download, Plus, FileText, Trash2, Pencil } from "lucide-react";
+import {
+  Calculator,
+  Download,
+  FileText,
+  Loader2,
+  MoreVertical,
+  Pencil,
+  PiggyBank,
+  Plus,
+  Receipt,
+  Search,
+  Trash2,
+  TrendingUp,
+  Upload,
+} from "lucide-react";
 
 import PipelineActions, { LEASE_ACTIONS } from "@/components/PipelineActions";
 import PageHeader from "@/components/PageHeader";
@@ -18,6 +32,15 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { createPageUrl, downloadCSV } from "@/utils";
 import { leaseService } from "@/services/leaseService";
 
@@ -36,11 +59,26 @@ function deriveLeaseStatus(lease) {
   return "draft";
 }
 
+// Group buckets driven by the new abstract_status column (Phase 3).
+// Falls back to lease.status='approved' for rows that pre-date the migration.
+function deriveAbstractBucket(lease) {
+  const abstractStatus = String(lease?.abstract_status || "").toLowerCase();
+  if (abstractStatus === "approved") return "approved";
+  if (abstractStatus === "rejected") return "rejected";
+  if (abstractStatus === "pending_review" || abstractStatus === "draft") return "drafts";
+  // Legacy fallback: leases approved before the Phase 3 migration backfill
+  // ran will already have abstract_status='approved'. Anything else that
+  // doesn't carry the column is in draft territory.
+  if (String(lease?.status || "").toLowerCase() === "approved") return "approved";
+  return "drafts";
+}
+
 export default function Leases() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [view, setView] = useState("approved"); // approved | drafts | all
   const [showImport, setShowImport] = useState(false);
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -105,7 +143,22 @@ export default function Leases() {
     return true;
   });
 
-  const filtered = selectorFilteredLeases.filter((lease) => {
+  const viewFilteredLeases = useMemo(() => {
+    if (view === "all") return selectorFilteredLeases;
+    return selectorFilteredLeases.filter((lease) => deriveAbstractBucket(lease) === view);
+  }, [selectorFilteredLeases, view]);
+
+  const viewCounts = useMemo(() => {
+    const counts = { approved: 0, drafts: 0, all: selectorFilteredLeases.length };
+    for (const lease of selectorFilteredLeases) {
+      const bucket = deriveAbstractBucket(lease);
+      if (bucket === "approved") counts.approved += 1;
+      else counts.drafts += 1;
+    }
+    return counts;
+  }, [selectorFilteredLeases]);
+
+  const filtered = viewFilteredLeases.filter((lease) => {
     const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
     const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
     const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
@@ -188,11 +241,11 @@ export default function Leases() {
   });
 
   const statusCounts = {
-    approved: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "approved").length,
-    budget_ready: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "budget_ready").length,
-    validated: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "validated").length,
-    draft: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "draft").length,
-    expired: selectorFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "expired").length,
+    approved: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "approved").length,
+    budget_ready: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "budget_ready").length,
+    validated: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "validated").length,
+    draft: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "draft").length,
+    expired: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "expired").length,
   };
 
   const subtitleScope = getScopeSubtitle(scope, {
@@ -252,6 +305,36 @@ export default function Leases() {
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
       />
+
+      <Tabs value={view} onValueChange={setView}>
+        <TabsList className="bg-white border">
+          <TabsTrigger value="approved" className="text-xs">
+            Approved Abstracts
+            <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">
+              {viewCounts.approved}
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="drafts" className="text-xs">
+            Drafts & In Review
+            <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">
+              {viewCounts.drafts}
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="all" className="text-xs">
+            All
+            <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-slate-200 px-1 text-[10px] font-semibold text-slate-700">
+              {viewCounts.all}
+            </span>
+          </TabsTrigger>
+        </TabsList>
+        <p className="mt-2 text-xs text-slate-500">
+          {view === "approved"
+            ? "Approved lease abstracts feed Expenses, CAM, Budget, and Billing. Edits here re-version the abstract."
+            : view === "drafts"
+            ? "Lease drafts that are still in review or have been rejected. Open Lease Review to continue."
+            : "Every lease record regardless of abstract status."}
+        </p>
+      </Tabs>
 
       <div className="grid grid-cols-4 gap-4">
         {[
@@ -320,17 +403,17 @@ export default function Leases() {
                 />
               </TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
+              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Landlord</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Building</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Unit</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease Type</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Start Date</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">End Date</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rent/SF</TableHead>
+              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Commencement</TableHead>
+              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Expiration</TableHead>
+              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Monthly Rent</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Annual Rent</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM/Mo</TableHead>
+              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Abstract</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status</TableHead>
-              <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
               <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -355,8 +438,6 @@ export default function Leases() {
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
                 const derivedStatus = deriveLeaseStatus(lease);
                 const annualRent = Number(lease.annual_rent || Number(lease.monthly_rent || 0) * 12 || 0);
-                const leasedSf = Number(lease.total_sf || lease.square_footage || 0);
-                const rentPerSf = Number(lease.rent_per_sf || (annualRent > 0 && leasedSf > 0 ? annualRent / leasedSf : 0));
                 const unitLabel =
                   lease.unit_number ||
                   unit?.unit_number ||
@@ -364,6 +445,18 @@ export default function Leases() {
                   unit?.unit_id_code ||
                   (lease.unit_id && lease.unit_id.length > 8 ? lease.unit_id.substring(0, 8) : lease.unit_id) ||
                   "—";
+
+                const monthlyRent = Number(lease.monthly_rent || (annualRent ? annualRent / 12 : 0));
+                const abstractStatus = String(lease.abstract_status || "").toLowerCase();
+                const abstractBadgeClass =
+                  abstractStatus === "approved"
+                    ? "bg-emerald-100 text-emerald-700"
+                    : abstractStatus === "rejected"
+                    ? "bg-red-100 text-red-700"
+                    : abstractStatus === "pending_review"
+                    ? "bg-blue-100 text-blue-700"
+                    : "bg-slate-100 text-slate-600";
+                const propertyScopeQuery = lease.property_id ? `?property=${lease.property_id}` : "";
 
                 return (
                   <TableRow key={lease.id} className="hover:bg-slate-50">
@@ -375,6 +468,7 @@ export default function Leases() {
                       />
                     </TableCell>
                     <TableCell className="text-sm font-medium text-slate-900">{lease.tenant_name || "—"}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{lease.landlord_name || property?.landlord_name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{building?.name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{unitLabel}</TableCell>
@@ -383,19 +477,25 @@ export default function Leases() {
                         {lease.lease_type || "—"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{lease.start_date || "—"}</TableCell>
+                    <TableCell className="text-sm">{lease.start_date || lease.commencement_date || "—"}</TableCell>
                     <TableCell className="text-sm">
                       <span className={daysLeft && daysLeft < 180 ? "text-red-600 font-medium" : ""}>
-                        {lease.end_date || "—"}
+                        {lease.end_date || lease.expiration_date || "—"}
                       </span>
                       {daysLeft && daysLeft < 365 && daysLeft > 0 && (
                         <span className="block text-[10px] text-red-500">{daysLeft}d remaining</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm font-mono">{rentPerSf > 0 ? `$${rentPerSf.toFixed(2)}` : "—"}</TableCell>
-                    <TableCell className="text-sm font-mono">{annualRent > 0 ? `$${annualRent.toLocaleString()}` : "—"}</TableCell>
                     <TableCell className="text-sm font-mono">
-                      ${Number(lease.cam_amount || lease.cam_per_month || 0).toLocaleString()}
+                      {monthlyRent > 0 ? `$${Math.round(monthlyRent).toLocaleString()}` : "—"}
+                    </TableCell>
+                    <TableCell className="text-sm font-mono">{annualRent > 0 ? `$${annualRent.toLocaleString()}` : "—"}</TableCell>
+                    <TableCell>
+                      <Badge className={`${abstractBadgeClass} text-[10px] uppercase whitespace-nowrap`}>
+                        {abstractStatus
+                          ? `${abstractStatus.replace("_", " ")}${lease.abstract_version ? ` v${lease.abstract_version}` : ""}`
+                          : "—"}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Badge className={`${getStatusColor(derivedStatus)} text-[10px] uppercase whitespace-nowrap`}>
@@ -403,44 +503,65 @@ export default function Leases() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {lease.confidence_score ? (
-                        <div className="flex items-center gap-1.5">
-                          <div
-                            className={`w-2 h-2 rounded-full ${
-                              lease.confidence_score >= 90
-                                ? "bg-emerald-500"
-                                : lease.confidence_score >= 75
-                                  ? "bg-amber-500"
-                                  : "bg-red-500"
-                            }`}
-                          />
-                          <span className="text-xs">{lease.confidence_score}%</span>
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Link to={createPageUrl("LeaseReview") + `?id=${lease.id}`}>
-                          <Button variant="ghost" size="sm" className="text-xs h-7 px-2">
+                      <div className="flex items-center gap-1">
+                        <Link
+                          to={
+                            createPageUrl(abstractStatus === "approved" ? "LeaseDetail" : "LeaseReview") +
+                            `?id=${lease.id}`
+                          }
+                        >
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
                             View
                           </Button>
                         </Link>
                         <Link to={createPageUrl("LeaseReview") + `?id=${lease.id}`}>
-                          <Button variant="ghost" size="sm" className="text-xs h-7 px-2">
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
                             <Pencil className="mr-1 h-3.5 w-3.5" />
                             Edit
                           </Button>
                         </Link>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-xs h-7 px-2 text-red-600 hover:text-red-700"
-                          onClick={() => setDeleteTarget(lease)}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
+                              <MoreVertical className="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-56">
+                            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Downstream
+                            </DropdownMenuLabel>
+                            <DropdownMenuItem asChild>
+                              <Link to={createPageUrl("RentProjection") + propertyScopeQuery}>
+                                <TrendingUp className="mr-2 h-3.5 w-3.5" /> View Rent Schedule
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link to={createPageUrl("LeaseExpenseClassification") + `?id=${lease.id}`}>
+                                <Receipt className="mr-2 h-3.5 w-3.5" /> Generate Expense Rules
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link to={createPageUrl("CAMCalculation") + (lease.property_id ? `?property_id=${lease.property_id}` : "")}>
+                                <Calculator className="mr-2 h-3.5 w-3.5" /> Generate CAM Profile
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link to={createPageUrl("CreateBudget") + propertyScopeQuery}>
+                                <PiggyBank className="mr-2 h-3.5 w-3.5" /> Generate Budget Draft
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onSelect={(event) => {
+                                event.preventDefault();
+                                setDeleteTarget(lease);
+                              }}
+                              className="text-red-600 focus:text-red-700"
+                            >
+                              <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete lease
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>

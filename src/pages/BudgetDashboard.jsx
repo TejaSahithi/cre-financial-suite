@@ -562,6 +562,12 @@ export default function BudgetDashboard() {
         </div>
       </PageHeader>
 
+      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        Budgets read from <strong>approved lease abstracts</strong>, <strong>approved expense rules</strong>, and{" "}
+        <strong>approved CAM Setup profiles</strong>. Raw extraction never feeds budgets. Open Create Budget →
+        <em> Preview from Approved Data</em> to see the inputs before generating.
+      </div>
+
       {selectedPropertyId ? (
         <PipelineActions
           propertyId={selectedPropertyId}

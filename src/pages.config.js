@@ -58,6 +58,7 @@ import BuildingsUnits from './pages/BuildingsUnits';
 import BulkImport from './pages/BulkImport';
 import CAMCalculation from './pages/CAMCalculation';
 import CAMDashboard from './pages/CAMDashboard';
+import CAMSetup from './pages/CAMSetup';
 import ContactUs from './pages/ContactUs';
 import CreateBudget from './pages/CreateBudget';
 import Dashboard from './pages/Dashboard';
@@ -67,6 +68,8 @@ import Landing from './pages/Landing';
 import LeaseReview from './pages/LeaseReview';
 import LeaseUpload from './pages/LeaseUpload';
 import Leases from './pages/Leases';
+import LeaseDetail from './pages/LeaseDetail';
+import CriticalDates from './pages/CriticalDates';
 import Notifications from './pages/Notifications';
 import Onboarding from './pages/Onboarding';
 import OrgSettings from './pages/OrgSettings';
@@ -110,6 +113,7 @@ import PaymentSuccess from './pages/PaymentSuccess';
 import FileHistoryPage from './pages/FileHistoryPage';
 import PipelineUpload from './pages/PipelineUpload';
 import LeaseExpenseClassification from './pages/LeaseExpenseClassification';
+import LeaseExpenseRules from './pages/LeaseExpenseRules';
 
 import __Layout from './Layout.jsx';
 
@@ -126,6 +130,7 @@ export const PAGES = {
     "BulkImport": BulkImport,
     "CAMCalculation": CAMCalculation,
     "CAMDashboard": CAMDashboard,
+    "CAMSetup": CAMSetup,
     "ContactUs": ContactUs,
     "CreateBudget": CreateBudget,
     "Dashboard": Dashboard,
@@ -135,6 +140,8 @@ export const PAGES = {
     "LeaseReview": LeaseReview,
     "LeaseUpload": LeaseUpload,
     "Leases": Leases,
+    "LeaseDetail": LeaseDetail,
+    "CriticalDates": CriticalDates,
     "Notifications": Notifications,
     "Onboarding": Onboarding,
     "OrgSettings": OrgSettings,
@@ -178,6 +185,7 @@ export const PAGES = {
     "FileHistoryPage": FileHistoryPage,
     "PipelineUpload": PipelineUpload,
     "LeaseExpenseClassification": LeaseExpenseClassification,
+    "LeaseExpenseRules": LeaseExpenseRules,
 }
 
 export const pagesConfig = {
