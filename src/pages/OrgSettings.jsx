@@ -17,12 +17,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Settings, Users, GitBranch, Bell, Save, Plus, Loader2, Package } from "lucide-react";
 import { ALL_MODULE_KEYS, MODULE_DEFINITIONS } from "@/lib/moduleConfig";
 import { toast } from "sonner";
+import AdminControlSurfaces from "@/components/admin/AdminControlSurfaces";
 
 const settingsTabs = [
   { id: "org", label: "Organization", icon: Settings },
   { id: "modules", label: "Modules", icon: Package },
   { id: "users", label: "Users & Roles", icon: Users },
   { id: "defaults", label: "CAM Defaults", icon: GitBranch },
+  { id: "mapping_rules", label: "Field Mapping Rules", icon: GitBranch },
+  { id: "approval_workflows", label: "Approval Workflows", icon: GitBranch },
+  { id: "audit_surface", label: "Audit Surface", icon: Bell },
   { id: "notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -358,6 +362,10 @@ export default function OrgSettings() {
                 <p className="text-sm text-slate-500">Notification templates and email preferences will be configured here. Configure stakeholder notification preferences on the Stakeholders page.</p>
               </CardContent>
             </Card>
+          )}
+
+          {["mapping_rules", "approval_workflows", "audit_surface"].includes(activeTab) && (
+            <AdminControlSurfaces tab={activeTab} />
           )}
         </div>
       </div>
