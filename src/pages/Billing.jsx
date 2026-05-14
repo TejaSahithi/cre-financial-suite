@@ -22,6 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Search,
   Plus,
@@ -323,6 +324,20 @@ export default function Billing() {
         ))}
       </div>
 
+      <Tabs defaultValue="invoice_records" className="space-y-4">
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          Billing now reads from <strong>approved lease abstracts</strong>, approved CAM Setup profiles,
+          and approved recoverable expenses. Move from invoice records to charge schedule and invoice
+          preview before generating live invoices.
+        </div>
+
+        <TabsList className="h-auto flex-wrap bg-white border p-1">
+          <TabsTrigger value="invoice_records" className="text-xs">Invoice Records</TabsTrigger>
+          <TabsTrigger value="charge_schedule" className="text-xs">Charge Schedule</TabsTrigger>
+          <TabsTrigger value="invoice_preview" className="text-xs">Invoice Preview</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="invoice_records" className="space-y-4">
       <div className="flex gap-3 items-center flex-wrap">
         <div className="relative flex-1 max-w-sm min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -480,9 +495,16 @@ export default function Billing() {
         sanity-check what the existing <em>Generate Invoices</em> action will produce.
       </div>
 
-      <ChargeScheduleTab propertyId={null} />
+        </TabsContent>
 
-      <InvoicePreviewTab propertyId={null} onGenerate={() => setShowGenerate(true)} />
+        <TabsContent value="charge_schedule" className="mt-0">
+          <ChargeScheduleTab propertyId={null} />
+        </TabsContent>
+
+        <TabsContent value="invoice_preview" className="mt-0">
+          <InvoicePreviewTab propertyId={null} onGenerate={() => setShowGenerate(true)} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={showGenerate} onOpenChange={setShowGenerate}>
         <DialogContent>
