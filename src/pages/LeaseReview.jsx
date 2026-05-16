@@ -8,9 +8,11 @@ import {
   ChevronDown,
   Check,
   CheckCircle2,
+  ExternalLink,
   FileText,
   FileX,
   Gavel,
+  HelpCircle,
   Loader2,
   MinusCircle,
   Pencil,
@@ -71,6 +73,8 @@ import {
   readFieldEvidence,
   readFieldConfidence,
   isResolvedReview,
+  classifyConfidence,
+  resolveFieldColumns,
 } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -80,15 +84,54 @@ import {
   saveAbstractDraft,
   rejectLeaseAbstract,
 } from "@/services/leaseAbstractService";
+import { logAudit } from "@/services/audit";
 
 const documentService = createEntityService("Document");
 
 const confidenceColor = (score) => {
-  if (score == null) return "bg-slate-100 text-slate-500";
-  if (score >= 90) return "bg-emerald-100 text-emerald-700";
-  if (score >= 75) return "bg-amber-100 text-amber-700";
-  return "bg-red-100 text-red-700";
+  const bucket = classifyConfidence(score);
+  if (bucket === "high") return "bg-emerald-100 text-emerald-700";
+  if (bucket === "medium") return "bg-amber-100 text-amber-700";
+  if (bucket === "low") return "bg-red-100 text-red-700";
+  return "bg-slate-100 text-slate-500";
 };
+
+// Detect numeric conflicts between extracted source and stored value
+// (e.g. monthly_rent vs annual_rent / 12). Returns an array of human
+// strings describing each conflict — empty array means no conflict.
+function detectFieldConflicts(lease) {
+  const conflicts = [];
+  const monthly = Number(lease?.monthly_rent || 0);
+  const annual = Number(lease?.annual_rent || 0);
+  if (monthly > 0 && annual > 0) {
+    const expectedAnnual = monthly * 12;
+    if (Math.abs(expectedAnnual - annual) / Math.max(expectedAnnual, annual) > 0.05) {
+      conflicts.push({
+        field_key: "monthly_rent",
+        label: "Monthly Rent × 12 ≠ Annual Rent",
+        detail: `${monthly.toLocaleString()} × 12 = ${expectedAnnual.toLocaleString()} vs annual ${annual.toLocaleString()}`,
+      });
+    }
+  }
+  const start = lease?.commencement_date || lease?.start_date;
+  const end = lease?.expiration_date || lease?.end_date;
+  if (start && end && new Date(start) >= new Date(end)) {
+    conflicts.push({
+      field_key: "commencement_date",
+      label: "Commencement date is on or after expiration",
+      detail: `${start} → ${end}`,
+    });
+  }
+  const leaseDate = lease?.lease_date;
+  if (leaseDate && start && new Date(leaseDate) > new Date(start)) {
+    conflicts.push({
+      field_key: "lease_date",
+      label: "Lease signed after commencement",
+      detail: `signed ${leaseDate}, commences ${start}`,
+    });
+  }
+  return conflicts;
+}
 
 export default function LeaseReview() {
   const location = useLocation();
@@ -101,13 +144,14 @@ export default function LeaseReview() {
 
   // UI state
   const [activeTab, setActiveTab] = useState("summary");
-  const [editingField, setEditingField] = useState(null); // schema field object
+  const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
   const [showSignature, setShowSignature] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [showSendBack, setShowSendBack] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // Approval form
   const [approvalSignedBy, setApprovalSignedBy] = useState("");
@@ -124,7 +168,7 @@ export default function LeaseReview() {
   const [signatureMessage, setSignatureMessage] = useState("");
   const [sendingSignature, setSendingSignature] = useState(false);
 
-  // Field review state — keyed by field key, initialized from extraction_data.
+  // Field review state — keyed by field key.
   const [fieldReviews, setFieldReviews] = useState({});
 
   // Lease query
@@ -135,11 +179,42 @@ export default function LeaseReview() {
     select: (data) => data?.[0],
   });
 
-  // Hydrate field reviews from the lease record when it loads.
+  // Hydrate field reviews from the lease record when it loads. Prefer the
+  // dedicated lease_field_reviews table (queryable audit trail); fall back
+  // to extraction_data.field_reviews for older records.
   useEffect(() => {
     if (!lease) return;
-    const stored = lease.extraction_data?.field_reviews || {};
-    setFieldReviews(stored);
+    let cancelled = false;
+    (async () => {
+      let nextReviews = lease.extraction_data?.field_reviews || {};
+      if (supabase && lease.id) {
+        try {
+          const { data, error } = await supabase
+            .from("lease_field_reviews")
+            .select("field_key, status, normalized_value, note, reviewer, reviewed_at")
+            .eq("lease_id", lease.id);
+          if (!error && Array.isArray(data) && data.length > 0) {
+            const merged = { ...nextReviews };
+            for (const row of data) {
+              merged[row.field_key] = {
+                status: row.status,
+                value: row.normalized_value,
+                note: row.note,
+                reviewer: row.reviewer,
+                reviewed_at: row.reviewed_at,
+              };
+            }
+            nextReviews = merged;
+          }
+        } catch (err) {
+          console.warn("[LeaseReview] load reviews skipped:", err?.message || err);
+        }
+      }
+      if (!cancelled) setFieldReviews(nextReviews);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [lease]);
 
   // Mark related notifications as read.
@@ -156,28 +231,54 @@ export default function LeaseReview() {
   }, [leaseId]);
 
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
-  const { data: approvedRuleSet } = useQuery({
-    queryKey: ["lease-expense-rule-status", leaseId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("id, status, approved_at")
-        .eq("lease_id", leaseId)
-        .eq("status", "approved")
-        .order("approved_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data || null;
-    },
+
+  // Lease expense rule set status + counts (drives the warning banner and
+  // the Expense/CAM card on the summary tab).
+  const { data: ruleSetSummary } = useQuery({
+    queryKey: ["lease-expense-rule-summary", leaseId],
     enabled: !!leaseId,
+    queryFn: async () => {
+      if (!supabase || !leaseId) return null;
+      const { data: ruleSets, error } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("id, status, approved_at, version")
+        .eq("lease_id", leaseId)
+        .neq("status", "archived")
+        .order("version", { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      const ruleSet = ruleSets?.[0] || null;
+      if (!ruleSet) {
+        return { ruleSet: null, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 } };
+      }
+      const { data: rules } = await supabase
+        .from("lease_expense_rules")
+        .select("id, row_status, mentioned_in_lease, is_recoverable, expense_category_id, gross_up_applicable, is_subject_to_cap, cap_type, admin_fee_applicable")
+        .eq("rule_set_id", ruleSet.id);
+      const approvedSet = ruleSet.status === "approved";
+      const totals = (rules || []).reduce(
+        (acc, r) => {
+          const status = String(r.row_status || "").toLowerCase();
+          const isCam = Boolean(r.gross_up_applicable || r.is_subject_to_cap || r.cap_type || r.admin_fee_applicable);
+          const isApproved = approvedSet && ["confirmed", "approved", "accepted"].includes(status);
+          if (isCam) {
+            acc.cam.total += 1;
+            if (isApproved) acc.cam.approved += 1;
+          } else {
+            acc.expense.total += 1;
+            if (isApproved) acc.expense.approved += 1;
+          }
+          return acc;
+        },
+        { expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 } },
+      );
+      return { ruleSet, ...totals };
+    },
   });
+  const approvedRuleSet = ruleSetSummary?.ruleSet?.status === "approved" ? ruleSetSummary.ruleSet : null;
 
   const updateLeaseMutation = useMutation({
-    mutationFn: async ({ id, data }) => {
-      const updated = await leaseService.update(id, data);
-      return updated;
-    },
+    mutationFn: async ({ id, data }) => leaseService.update(id, data),
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
@@ -234,27 +335,45 @@ export default function LeaseReview() {
   }
 
   // --- Derived data --------------------------------------------------------
-  const requiredResolved = REQUIRED_FIELD_KEYS.every((key) => isResolvedReview(fieldReviews[key]));
+  const requiredReviewedKeys = REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k]));
+  const requiredPendingKeys = REQUIRED_FIELD_KEYS.filter((k) => !isResolvedReview(fieldReviews[k]));
+  const requiredResolved = requiredPendingKeys.length === 0;
   const totalFields = LEASE_REVIEW_FIELDS.length;
   const resolvedCount = LEASE_REVIEW_FIELDS.reduce(
     (acc, f) => acc + (isResolvedReview(fieldReviews[f.key]) ? 1 : 0),
     0,
   );
 
-  const allConfidences = LEASE_REVIEW_FIELDS.map((f) => readFieldConfidence(lease, f.key)).filter(
-    (c) => typeof c === "number",
+  // Confidence buckets from real extracted_fields confidence_score.
+  const confidenceBuckets = LEASE_REVIEW_FIELDS.reduce(
+    (acc, f) => {
+      const value = readFieldValue(lease, f.key);
+      if (value === null || value === undefined || value === "") return acc;
+      const score = readFieldConfidence(lease, f.key);
+      acc[classifyConfidence(score)] += 1;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0, unknown: 0 },
   );
-  const highConf = allConfidences.filter((c) => c >= 90).length;
-  const medConf = allConfidences.filter((c) => c >= 75 && c < 90).length;
-  const lowConf = allConfidences.filter((c) => c < 75).length;
 
+  // Manual_required + conflicts surface as their own counters.
+  const manualRequiredCount = Object.values(fieldReviews).filter(
+    (r) => r?.status === REVIEW_STATUSES.MANUAL_REQUIRED || r?.status === REVIEW_STATUSES.NEEDS_LEGAL,
+  ).length;
+  const conflicts = detectFieldConflicts(lease);
+
+  // Validation checks (kept for summary panel).
   const validationChecks = [];
-  if (lease.start_date && lease.end_date) {
-    const startOk = new Date(lease.start_date) < new Date(lease.end_date);
+  const commencementValue = lease.commencement_date || lease.start_date;
+  const expirationValue = lease.expiration_date || lease.end_date;
+  if (commencementValue && expirationValue) {
+    const startOk = new Date(commencementValue) < new Date(expirationValue);
     validationChecks.push({
       pass: startOk,
-      label: "Start date < End date",
-      detail: startOk ? `${lease.start_date} < ${lease.end_date}` : "End date is before start date",
+      label: "Commencement < Expiration",
+      detail: startOk
+        ? `${commencementValue} → ${expirationValue}`
+        : "Expiration date is on/before commencement",
     });
   }
   if (lease.tenant_name) {
@@ -276,49 +395,175 @@ export default function LeaseReview() {
     });
   }
   validationChecks.push({
-    pass: lowConf === 0,
+    pass: confidenceBuckets.low === 0,
     label: "All confidence scores ≥ 75%",
-    detail: lowConf === 0 ? "No low-confidence fields detected" : `${lowConf} low-confidence field(s)`,
+    detail: confidenceBuckets.low === 0 ? "No low-confidence fields detected" : `${confidenceBuckets.low} low-confidence field(s)`,
   });
   validationChecks.push({
     pass: requiredResolved,
     label: "Required fields reviewed",
     detail: requiredResolved
       ? `All ${REQUIRED_FIELD_KEYS.length} required fields are resolved`
-      : `${REQUIRED_FIELD_KEYS.length - REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k])).length} required field(s) pending review`,
+      : `${requiredPendingKeys.length} required field(s) pending review`,
+  });
+  validationChecks.push({
+    pass: conflicts.length === 0,
+    label: "No unresolved conflicts",
+    detail: conflicts.length === 0 ? "No data conflicts detected" : `${conflicts.length} conflict(s) detected`,
   });
   const passCount = validationChecks.filter((v) => v.pass).length;
 
   const totalSf = lease.total_sf || lease.square_footage;
 
-  // Stakeholder routing for the Request Signature dialog.
   const scopedStakeholders = stakeholders.filter(
     (s) => !s.property_id || !lease.property_id || s.property_id === lease.property_id,
   );
   const signatureRecipients = scopedStakeholders.filter((s) => s.email);
 
+  // --- Approval blockers ---------------------------------------------------
+  const expenseCamUnreviewed =
+    ruleSetSummary &&
+    ruleSetSummary.ruleSet &&
+    (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
+    !approvedRuleSet;
+  const missingSourceEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
+    const { sourcePage, sourceText } = readFieldEvidence(lease, key);
+    return !sourcePage && !sourceText;
+  });
+
+  const approvalBlockers = [];
+  if (requiredPendingKeys.length > 0) {
+    approvalBlockers.push({
+      kind: "required_pending",
+      title: `${requiredPendingKeys.length} required field(s) pending review`,
+      detail: requiredPendingKeys
+        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
+        .join(", "),
+    });
+  }
+  if (conflicts.length > 0) {
+    approvalBlockers.push({
+      kind: "conflicts",
+      title: `${conflicts.length} unresolved conflict(s)`,
+      detail: conflicts.map((c) => c.label).join(" • "),
+    });
+  }
+  if (expenseCamUnreviewed) {
+    approvalBlockers.push({
+      kind: "expense_cam",
+      title: "Expense / CAM rules not approved",
+      detail: `${ruleSetSummary.expense.total} expense rules, ${ruleSetSummary.cam.total} CAM rules awaiting approval`,
+    });
+  }
+  if (missingSourceEvidence.length > 0) {
+    approvalBlockers.push({
+      kind: "missing_evidence",
+      title: `${missingSourceEvidence.length} required field(s) without source evidence`,
+      detail: missingSourceEvidence
+        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
+        .join(", "),
+    });
+  }
+  const canApprove = approvalBlockers.length === 0;
+  const blockerMessage = canApprove
+    ? "All checks passed. You can approve the lease abstract."
+    : approvalBlockers.map((b) => b.title).join(" • ");
+
   // --- Field-action helpers -----------------------------------------------
-  const setFieldStatus = (key, status, extraPayload = {}) => {
+
+  // Persist a field review change to the backend (saveAbstractDraft writes
+  // both the JSONB shape AND lease_field_reviews) and write an audit log
+  // entry. UI updates optimistically; on error the local state is reverted.
+  const persistFieldAction = async ({ field, status, value, previousReview, note }) => {
     const next = {
       ...fieldReviews,
-      [key]: {
-        ...(fieldReviews[key] || {}),
+      [field.key]: {
+        ...(fieldReviews[field.key] || {}),
         status,
+        ...(value !== undefined ? { value } : {}),
+        ...(note !== undefined ? { note } : {}),
         reviewed_at: new Date().toISOString(),
-        ...extraPayload,
       },
     };
     setFieldReviews(next);
+    try {
+      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+      await logAudit({
+        entityType: "LeaseFieldReview",
+        entityId: lease.id,
+        action: status === REVIEW_STATUSES.EDITED ? "field_edit" : `field_${status}`,
+        orgId: lease.org_id,
+        fieldChanged: field.key,
+        oldValue: previousReview ? previousReview.value ?? previousReview.status : null,
+        newValue: value !== undefined ? value : status,
+        propertyId: lease.property_id || null,
+      });
+    } catch (err) {
+      console.error("[LeaseReview] persistFieldAction failed:", err);
+      toast.error(err?.message || "Could not save review action");
+      // revert
+      setFieldReviews(fieldReviews);
+    }
   };
 
-  const handleAccept = (field) => setFieldStatus(field.key, REVIEW_STATUSES.ACCEPTED);
-  const handleReject = (field) => setFieldStatus(field.key, REVIEW_STATUSES.REJECTED);
-  const handleMarkNA = (field) => setFieldStatus(field.key, REVIEW_STATUSES.N_A);
-  const handleNeedsLegal = (field) => setFieldStatus(field.key, REVIEW_STATUSES.NEEDS_LEGAL);
-  const handleResetField = (field) => {
+  const handleAccept = (field) =>
+    persistFieldAction({
+      field,
+      status: REVIEW_STATUSES.ACCEPTED,
+      previousReview: fieldReviews[field.key],
+    });
+  const handleReject = (field) =>
+    persistFieldAction({
+      field,
+      status: REVIEW_STATUSES.REJECTED,
+      previousReview: fieldReviews[field.key],
+    });
+  const handleMarkNA = (field) =>
+    persistFieldAction({
+      field,
+      status: REVIEW_STATUSES.N_A,
+      previousReview: fieldReviews[field.key],
+    });
+  const handleNeedsLegal = (field) =>
+    persistFieldAction({
+      field,
+      status: REVIEW_STATUSES.NEEDS_LEGAL,
+      previousReview: fieldReviews[field.key],
+    });
+  const handleMarkManualRequired = (field) =>
+    persistFieldAction({
+      field,
+      status: REVIEW_STATUSES.MANUAL_REQUIRED,
+      previousReview: fieldReviews[field.key],
+    });
+  const handleResetField = async (field) => {
+    const previousReview = fieldReviews[field.key];
     const next = { ...fieldReviews };
     delete next[field.key];
     setFieldReviews(next);
+    try {
+      await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+      if (supabase) {
+        await supabase
+          .from("lease_field_reviews")
+          .delete()
+          .eq("lease_id", lease.id)
+          .eq("field_key", field.key);
+      }
+      await logAudit({
+        entityType: "LeaseFieldReview",
+        entityId: lease.id,
+        action: "field_reset",
+        orgId: lease.org_id,
+        fieldChanged: field.key,
+        oldValue: previousReview?.status || null,
+        newValue: null,
+      });
+    } catch (err) {
+      console.error("[LeaseReview] reset failed:", err);
+      toast.error(err?.message || "Could not reset review");
+      setFieldReviews(fieldReviews);
+    }
   };
 
   const openEdit = (field) => {
@@ -339,45 +584,45 @@ export default function LeaseReview() {
       val = val === true || val === "true" || val === "yes";
     }
 
-    // total_sf alias → square_footage column.
-    const columnKey = key === "total_sf" ? "square_footage" : key;
+    // Write to every aliased column so legacy + new columns stay in sync.
+    const columnUpdates = {};
+    for (const column of resolveFieldColumns(key)) {
+      columnUpdates[column] = val;
+    }
+    // total_sf alias → square_footage column (legacy).
+    if (key === "total_sf") columnUpdates.square_footage = val;
+
+    const previousValue = readFieldValue(lease, key);
 
     try {
-      // Persist value: write to known lease column AND store in extraction_data.fields.
       const updatedLease = await updateLeaseMutation.mutateAsync({
         id: lease.id,
         data: {
-          [columnKey]: val,
+          ...columnUpdates,
           extraction_data: {
             ...(lease.extraction_data || {}),
             fields: {
               ...(lease.extraction_data?.fields || {}),
-              [key]: { value: val, manually_edited: true },
+              [key]: { value: val, manually_edited: true, edited_at: new Date().toISOString() },
             },
           },
         },
       });
-      // Mark field as EDITED in review state.
-      const next = {
-        ...fieldReviews,
-        [key]: {
-          ...(fieldReviews[key] || {}),
-          status: REVIEW_STATUSES.EDITED,
-          value: val,
-          reviewed_at: new Date().toISOString(),
-        },
-      };
-      setFieldReviews(next);
+      await persistFieldAction({
+        field: editingField,
+        status: REVIEW_STATUSES.EDITED,
+        value: val,
+        previousReview: { value: previousValue, status: fieldReviews[key]?.status },
+      });
 
-      // Side effects for rent/dates: recompute downstream lease-derived expenses.
-      if (["cam_amount", "nnn_amount", "start_date", "end_date", "tenant_name"].includes(key)) {
+      if (["cam_amount", "nnn_amount", "start_date", "end_date", "commencement_date", "expiration_date", "tenant_name"].includes(key)) {
         await expenseService.syncLeaseDerivedExpenses({ leases: [updatedLease] });
         queryClient.invalidateQueries({ queryKey: ["Expense"] });
       }
       toast.success(`Updated ${editingField.label}`);
       setEditingField(null);
     } catch {
-      // toast handled by mutation onError
+      /* toasted */
     }
   };
 
@@ -409,8 +654,8 @@ export default function LeaseReview() {
   };
 
   const handleApproveAbstract = async () => {
-    if (!requiredResolved) {
-      toast.error("Resolve all required fields before approving the lease abstract.");
+    if (!canApprove) {
+      toast.error(blockerMessage);
       return;
     }
     if (!approvalSignedBy.trim()) {
@@ -422,6 +667,7 @@ export default function LeaseReview() {
       return;
     }
 
+    setApproving(true);
     try {
       let resolvedDocumentUrl = approvalDocumentUrl || null;
       const sourceFileId = lease.extraction_data?.source_file_id || null;
@@ -482,7 +728,7 @@ export default function LeaseReview() {
           org_id: lease.org_id,
           type: "lease_approved",
           title: "Lease Abstract Approved",
-          message: `Lease abstract v${approvedLease.abstract_version} for ${lease.tenant_name || "tenant"} approved. Signed by ${approvalSignedBy}.`,
+          message: `Lease abstract v${approvedLease.abstract_version || 1} for ${lease.tenant_name || "tenant"} approved. Signed by ${approvalSignedBy}.`,
           link: createPageUrl("LeaseReview", { id: lease.id }),
           priority: "normal",
         });
@@ -490,11 +736,30 @@ export default function LeaseReview() {
         /* non-fatal */
       }
 
-      toast.success(`Lease abstract approved (v${approvedLease.abstract_version})`);
+      try {
+        await logAudit({
+          entityType: "Lease",
+          entityId: lease.id,
+          action: "lease_abstract_approved",
+          orgId: lease.org_id,
+          newValue: {
+            abstract_version: approvedLease.abstract_version || 1,
+            signed_by: approvalSignedBy,
+            signed_at: approvalSignedAt,
+          },
+          propertyId: lease.property_id || null,
+        });
+      } catch (auditErr) {
+        console.warn("[LeaseReview] approval audit log failed:", auditErr);
+      }
+
+      toast.success(`Lease abstract approved (v${approvedLease.abstract_version || 1})`);
       setShowApproval(false);
     } catch (err) {
       console.error("[LeaseReview] approve failed:", err);
       toast.error(err?.message || "Could not approve lease abstract");
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -584,8 +849,43 @@ export default function LeaseReview() {
     }
   };
 
+  // Open the original lease document. Resolves the source_file_id lazily so
+  // every field's "View in Document" action goes to the same target.
+  const viewInDocument = async (field) => {
+    const fileId = lease.extraction_data?.source_file_id || null;
+    if (lease.approval_document_url) {
+      window.open(lease.approval_document_url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (!fileId || !supabase) {
+      toast.info("No source document is linked to this lease.");
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("uploaded_files")
+        .select("file_url")
+        .eq("id", fileId)
+        .maybeSingle();
+      if (error || !data?.file_url) {
+        toast.info("Source document URL is unavailable.");
+        return;
+      }
+      const { sourcePage } = readFieldEvidence(lease, field.key);
+      const url = sourcePage ? `${data.file_url}#page=${sourcePage}` : data.file_url;
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("[LeaseReview] viewInDocument failed:", err);
+      toast.error("Could not open source document");
+    }
+  };
+
   // --- Render --------------------------------------------------------------
   const leaseStatus = lease.status || "draft";
+  const requiredCounterTitle = `Required Reviewed ${requiredReviewedKeys.length} / ${REQUIRED_FIELD_KEYS.length}`;
+  const requiredCounterPendingLabel = requiredResolved
+    ? "All required fields reviewed"
+    : `Required Pending ${requiredPendingKeys.length}`;
 
   return (
     <div className="space-y-6 p-6 pb-32">
@@ -605,6 +905,10 @@ export default function LeaseReview() {
             {totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} ·{" "}
             {getLeaseFieldLabel("lease_type", lease.lease_type) || "Unknown type"}
           </p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            Term: {commencementValue || "—"} → {expirationValue || "—"}
+            {lease.lease_date ? ` · Signed: ${lease.lease_date}` : ""}
+          </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge className={leaseStatus === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}>
               Status: {leaseStatus}
@@ -618,9 +922,22 @@ export default function LeaseReview() {
             <Badge className="bg-slate-100 text-slate-700">
               Reviewed {resolvedCount} / {totalFields}
             </Badge>
-            <Badge className={requiredResolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
-              Required {REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k])).length} / {REQUIRED_FIELD_KEYS.length}
+            <Badge
+              title={requiredResolved
+                ? "All required fields have been accepted, edited, marked N/A, or marked manual_required."
+                : `${requiredPendingKeys.length} required field(s) still need a review decision.`}
+              className={requiredResolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}
+            >
+              {requiredCounterTitle}
             </Badge>
+            {!requiredResolved && (
+              <Badge className="bg-amber-50 text-amber-700">{requiredCounterPendingLabel}</Badge>
+            )}
+            {conflicts.length > 0 && (
+              <Badge className="bg-red-100 text-red-700">
+                {conflicts.length} conflict{conflicts.length === 1 ? "" : "s"}
+              </Badge>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -653,37 +970,51 @@ export default function LeaseReview() {
           : "Expense/CAM rules have not been approved yet. Review the extracted rules before final abstract approval."}
       </div>
 
-      {/* Confidence summary */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Confidence summary — 6 cards */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Card className="border-emerald-200 bg-emerald-50">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold uppercase text-emerald-600">High Confidence (≥90%)</p>
-            <p className="text-2xl font-bold text-emerald-700">{highConf} fields</p>
+          <CardContent className="p-3">
+            <p className="text-[10px] font-semibold uppercase text-emerald-600">High (≥90%)</p>
+            <p className="text-2xl font-bold text-emerald-700">{confidenceBuckets.high}</p>
             <p className="text-[10px] text-emerald-500">Auto-populated</p>
           </CardContent>
         </Card>
         <Card className="border-amber-200 bg-amber-50">
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold uppercase text-amber-600">Medium (75-89%)</p>
-            <p className="text-2xl font-bold text-amber-700">{medConf} fields</p>
+          <CardContent className="p-3">
+            <p className="text-[10px] font-semibold uppercase text-amber-600">Medium (75–89%)</p>
+            <p className="text-2xl font-bold text-amber-700">{confidenceBuckets.medium}</p>
             <p className="text-[10px] text-amber-500">Flagged for review</p>
           </CardContent>
         </Card>
         <Card className="border-red-200 bg-red-50">
-          <CardContent className="p-4">
+          <CardContent className="p-3">
             <p className="text-[10px] font-semibold uppercase text-red-600">Low (&lt;75%)</p>
-            <p className="text-2xl font-bold text-red-600">{lowConf} fields</p>
+            <p className="text-2xl font-bold text-red-600">{confidenceBuckets.low}</p>
             <p className="text-[10px] text-red-400">Verify before approval</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-[10px] font-semibold uppercase text-slate-500">Validation Checks</p>
-            <p className="text-2xl font-bold text-slate-900">
-              {passCount}/{validationChecks.length} Pass
+        <Card className="border-slate-200 bg-slate-50">
+          <CardContent className="p-3">
+            <p className="text-[10px] font-semibold uppercase text-slate-500">Unknown Confidence</p>
+            <p className="text-2xl font-bold text-slate-700">{confidenceBuckets.unknown}</p>
+            <p className="text-[10px] text-slate-500">No score recorded</p>
+          </CardContent>
+        </Card>
+        <Card className="border-purple-200 bg-purple-50">
+          <CardContent className="p-3">
+            <p className="text-[10px] font-semibold uppercase text-purple-600">Manual Required</p>
+            <p className="text-2xl font-bold text-purple-700">{manualRequiredCount}</p>
+            <p className="text-[10px] text-purple-500">Needs human input or legal review</p>
+          </CardContent>
+        </Card>
+        <Card className={conflicts.length > 0 ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"}>
+          <CardContent className="p-3">
+            <p className={`text-[10px] font-semibold uppercase ${conflicts.length > 0 ? "text-red-600" : "text-slate-500"}`}>Conflicts</p>
+            <p className={`text-2xl font-bold ${conflicts.length > 0 ? "text-red-700" : "text-slate-900"}`}>
+              {conflicts.length}
             </p>
-            <p className="text-[10px] text-amber-500">
-              {validationChecks.length - passCount} warning(s)
+            <p className={`text-[10px] ${conflicts.length > 0 ? "text-red-500" : "text-slate-500"}`}>
+              {conflicts.length > 0 ? "Resolve before approval" : "No data conflicts"}
             </p>
           </CardContent>
         </Card>
@@ -720,10 +1051,77 @@ export default function LeaseReview() {
             <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <SummaryStat label="Tenant" value={lease.tenant_name || "—"} />
               <SummaryStat label="Lease Type" value={getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} />
-              <SummaryStat label="Term" value={`${lease.start_date || "—"} → ${lease.end_date || "—"}`} />
+              <SummaryStat
+                label="Term (Commencement → Expiration)"
+                value={`${commencementValue || "—"} → ${expirationValue || "—"}`}
+              />
+              <SummaryStat label="Lease Date (signed)" value={lease.lease_date || "—"} />
               <SummaryStat label="Monthly Rent" value={lease.monthly_rent ? `$${Number(lease.monthly_rent).toLocaleString()}` : "—"} />
               <SummaryStat label="Annual Rent" value={lease.annual_rent ? `$${Number(lease.annual_rent).toLocaleString()}` : "—"} />
               <SummaryStat label="Square Footage" value={totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} />
+            </CardContent>
+          </Card>
+
+          {/* Expense / CAM card */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Expense / CAM Readiness</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <SummaryStat
+                  label="Expense rules extracted"
+                  value={String(ruleSetSummary?.expense?.total ?? 0)}
+                />
+                <SummaryStat
+                  label="Expense rules approved"
+                  value={String(ruleSetSummary?.expense?.approved ?? 0)}
+                />
+                <SummaryStat
+                  label="CAM rules extracted"
+                  value={String(ruleSetSummary?.cam?.total ?? 0)}
+                />
+                <SummaryStat
+                  label="CAM rules approved"
+                  value={String(ruleSetSummary?.cam?.approved ?? 0)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-500">
+                  Expenses/CAM live under a separate rule set. Approve them there before approving the lease abstract.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
+                >
+                  Review Expense Rules
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Approval Blockers</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {approvalBlockers.length === 0 ? (
+                <div className="flex items-center gap-2 rounded-lg bg-emerald-50 p-3 text-emerald-700">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>No blockers. Ready to approve.</span>
+                </div>
+              ) : (
+                approvalBlockers.map((b) => (
+                  <div key={b.kind} className="rounded-lg border border-red-200 bg-red-50 p-3">
+                    <div className="flex items-center gap-2 text-red-700">
+                      <AlertTriangle className="h-4 w-4" />
+                      <p className="text-sm font-semibold">{b.title}</p>
+                    </div>
+                    <p className="ml-6 mt-1 text-xs text-red-600">{b.detail}</p>
+                  </div>
+                ))
+              )}
             </CardContent>
           </Card>
 
@@ -750,31 +1148,27 @@ export default function LeaseReview() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">Approval Gate</CardTitle>
+                <CardTitle className="text-base">Required Fields</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <p className="text-slate-700">
-                  The Approve Lease Abstract action is disabled until every required field has been
-                  reviewed (accepted, edited, marked N/A, or manual_required).
+                  Approval is blocked until every required field is accepted, edited, marked N/A, or marked manual_required.
                 </p>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold text-slate-700">Required fields</p>
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {REQUIRED_FIELD_KEYS.map((key) => {
-                      const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
-                      const review = fieldReviews[key];
-                      const resolved = isResolvedReview(review);
-                      return (
-                        <li key={key} className="flex items-center justify-between gap-2">
-                          <span className="text-slate-600">{field?.label || key}</span>
-                          <Badge className={resolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
-                            {resolved ? REVIEW_STATUS_LABELS[review.status] : "Pending"}
-                          </Badge>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {REQUIRED_FIELD_KEYS.map((key) => {
+                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
+                    const review = fieldReviews[key];
+                    const resolved = isResolvedReview(review);
+                    return (
+                      <li key={key} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                        <span className="text-slate-600">{field?.label || key}</span>
+                        <Badge className={resolved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
+                          {resolved ? REVIEW_STATUS_LABELS[review.status] : "Pending"}
+                        </Badge>
+                      </li>
+                    );
+                  })}
+                </ul>
               </CardContent>
             </Card>
           </div>
@@ -794,7 +1188,9 @@ export default function LeaseReview() {
                 onReject={() => handleReject(field)}
                 onMarkNA={() => handleMarkNA(field)}
                 onNeedsLegal={() => handleNeedsLegal(field)}
+                onMarkManualRequired={() => handleMarkManualRequired(field)}
                 onReset={() => handleResetField(field)}
+                onViewInDocument={() => viewInDocument(field)}
               />
             ))}
           </TabsContent>
@@ -833,9 +1229,13 @@ export default function LeaseReview() {
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
           <div className="text-xs text-slate-500">
-            {requiredResolved
-              ? "All required fields are reviewed. You can approve the lease abstract."
-              : `${REQUIRED_FIELD_KEYS.length - REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k])).length} required field(s) still need review.`}
+            {canApprove ? (
+              <span className="text-emerald-700">All checks passed. You can approve the lease abstract.</span>
+            ) : (
+              <span title={blockerMessage} className="text-amber-700">
+                Approval blocked: {blockerMessage}
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -861,7 +1261,8 @@ export default function LeaseReview() {
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={() => setShowApproval(true)}
-              disabled={!requiredResolved}
+              disabled={!canApprove}
+              title={canApprove ? "Approve the lease abstract" : `Approval blocked: ${blockerMessage}`}
             >
               <CheckCircle2 className="mr-1 h-4 w-4" />
               Approve Lease Abstract
@@ -952,7 +1353,7 @@ export default function LeaseReview() {
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
             <p className="text-xs text-slate-500">
               {lease.tenant_name} · {getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} ·{" "}
-              {lease.start_date} to {lease.end_date}
+              {commencementValue || "—"} to {expirationValue || "—"}
             </p>
           </div>
           <div className="space-y-3">
@@ -1005,9 +1406,9 @@ export default function LeaseReview() {
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={handleApproveAbstract}
-              disabled={updateLeaseMutation.isPending}
+              disabled={approving || updateLeaseMutation.isPending}
             >
-              {updateLeaseMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              {approving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Confirm Approval
             </Button>
           </DialogFooter>
@@ -1163,7 +1564,9 @@ function FieldReviewRow({
   onReject,
   onMarkNA,
   onNeedsLegal,
+  onMarkManualRequired,
   onReset,
+  onViewInDocument,
 }) {
   const value = readFieldValue(lease, field.key);
   const display =
@@ -1179,29 +1582,41 @@ function FieldReviewRow({
         : "No"
       : String(value);
 
-  const { rawValue, sourcePage, sourceText } = readFieldEvidence(lease, field.key);
+  const { rawValue, sourcePage, sourceText, extractionStatus } = readFieldEvidence(lease, field.key);
   const confidence = readFieldConfidence(lease, field.key);
   const status = review?.status || REVIEW_STATUSES.PENDING;
   const required = field.required;
   const allowNA = field.allowNA !== false;
   const actionLabel = REVIEW_STATUS_LABELS[status] || "Review Action";
+  const confidenceBucket = classifyConfidence(confidence);
+  const confidenceLabel =
+    confidenceBucket === "unknown"
+      ? "Unknown Confidence"
+      : `${Math.round(confidence)}%`;
+
+  const inferredExtractionStatus =
+    extractionStatus
+    || (value === null || value === undefined || value === ""
+      ? "missing"
+      : confidenceBucket === "unknown"
+        ? "extracted_no_confidence"
+        : "extracted");
 
   return (
     <Card className={status === REVIEW_STATUSES.PENDING && required ? "border-amber-200" : ""}>
       <CardContent className="space-y-3 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-1">
+          <div className="min-w-0 flex-1 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                 {field.label}
                 {required && <span className="ml-1 text-red-500">*</span>}
               </p>
-              {confidence != null && (
-                <Badge className={`text-[10px] ${confidenceColor(confidence)}`}>{confidence}%</Badge>
-              )}
+              <Badge className={`text-[10px] ${confidenceColor(confidence)}`}>{confidenceLabel}</Badge>
               <Badge className={`text-[10px] ${REVIEW_STATUS_STYLES[status]}`}>
                 {REVIEW_STATUS_LABELS[status]}
               </Badge>
+              <Badge className="bg-slate-50 text-[10px] text-slate-600">{inferredExtractionStatus}</Badge>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
@@ -1210,17 +1625,52 @@ function FieldReviewRow({
               </div>
               <div>
                 <p className="text-[10px] font-semibold uppercase text-slate-400">Raw Extracted</p>
-                <p className="truncate text-sm text-slate-600">{rawValue ?? "—"}</p>
+                <p className="truncate text-sm text-slate-600" title={rawValue ?? ""}>{rawValue ?? "—"}</p>
               </div>
             </div>
-            {(sourcePage || sourceText) && (
-              <details className="text-xs text-slate-500">
-                <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
-                  Source {sourcePage ? `(p. ${sourcePage})` : ""}
-                </summary>
-                <p className="mt-1 rounded bg-slate-50 p-2 italic">{sourceText || "No source text captured."}</p>
-              </details>
-            )}
+            <details className="text-xs text-slate-500">
+              <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
+                Source &amp; review metadata
+              </summary>
+              <div className="mt-2 space-y-1 rounded bg-slate-50 p-2">
+                <p>
+                  <span className="font-semibold text-slate-600">Source Page:</span>{" "}
+                  <span className="text-slate-700">{sourcePage ?? "—"}</span>
+                </p>
+                <p>
+                  <span className="font-semibold text-slate-600">Exact Source Text:</span>{" "}
+                  <span className="italic text-slate-700">{sourceText || "No source text captured."}</span>
+                </p>
+                <p>
+                  <span className="font-semibold text-slate-600">Confidence Score:</span>{" "}
+                  <span className="text-slate-700">{typeof confidence === "number" ? `${Math.round(confidence)}%` : "Unknown"}</span>
+                </p>
+                <p>
+                  <span className="font-semibold text-slate-600">Extraction Status:</span>{" "}
+                  <span className="text-slate-700">{inferredExtractionStatus}</span>
+                </p>
+                <p>
+                  <span className="font-semibold text-slate-600">Review Status:</span>{" "}
+                  <span className="text-slate-700">{REVIEW_STATUS_LABELS[status]}</span>
+                </p>
+                {review?.reviewer && (
+                  <p>
+                    <span className="font-semibold text-slate-600">Reviewer:</span>{" "}
+                    <span className="text-slate-700">{review.reviewer}</span>
+                  </p>
+                )}
+                {review?.reviewed_at && (
+                  <p>
+                    <span className="font-semibold text-slate-600">Reviewed At:</span>{" "}
+                    <span className="text-slate-700">{new Date(review.reviewed_at).toLocaleString()}</span>
+                  </p>
+                )}
+              </div>
+            </details>
+            <Button variant="outline" size="sm" onClick={onViewInDocument}>
+              <ExternalLink className="mr-1 h-3.5 w-3.5" />
+              View in Document
+            </Button>
           </div>
 
           <DropdownMenu>
@@ -1249,6 +1699,10 @@ function FieldReviewRow({
                   Mark N/A
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem onClick={onMarkManualRequired}>
+                <HelpCircle className="h-4 w-4 text-amber-600" />
+                Mark Manual Required
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onNeedsLegal}>
                 <Gavel className="h-4 w-4 text-purple-600" />
                 Needs Legal Review
@@ -1305,10 +1759,12 @@ function BudgetPreviewCard({ lease }) {
     return Number.isFinite(v) ? v : 0;
   }, [lease.monthly_rent, lease.annual_rent]);
 
+  const startBasis = lease.commencement_date || lease.start_date;
+
   const months = useMemo(() => {
     const out = [];
-    if (!lease.start_date) return out;
-    const start = new Date(lease.start_date);
+    if (!startBasis) return out;
+    const start = new Date(startBasis);
     const escalation = Number(lease.escalation_rate || 0) / 100;
     for (let i = 0; i < 12; i++) {
       const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
@@ -1317,9 +1773,9 @@ function BudgetPreviewCard({ lease }) {
       out.push({ label: d.toLocaleDateString(undefined, { year: "numeric", month: "short" }), amount: stepRent });
     }
     return out;
-  }, [lease.start_date, lease.escalation_rate, monthly]);
+  }, [startBasis, lease.escalation_rate, monthly]);
 
-  if (!lease.start_date || !monthly) {
+  if (!startBasis || !monthly) {
     return (
       <Card>
         <CardContent className="p-4 text-sm text-slate-500">

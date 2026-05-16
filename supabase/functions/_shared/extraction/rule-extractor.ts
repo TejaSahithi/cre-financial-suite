@@ -125,10 +125,14 @@ export function parseEnum(s: string, allowed: string[]): string | null {
 
   // Special mappings
   const ENUM_ALIASES: Record<string, string> = {
-    "triple net": "nnn", "triple-net": "nnn",
-    "full service": "gross", "full-service": "gross",
+    "triple net": "triple_net", "triple-net": "triple_net", "nnn": "triple_net",
+    "full service": "full_service", "full-service": "full_service",
+    "full service lease": "full_service", "full-service lease": "full_service",
     "modified gross": "modified_gross", "modified-gross": "modified_gross",
-    "double net": "nn", "double-net": "nn",
+    "double net": "double_net", "double-net": "double_net",
+    "single net": "single_net", "single-net": "single_net",
+    "absolute net": "absolute_net", "absolute-net": "absolute_net",
+    "ground lease": "ground", "percentage lease": "percentage",
     "non recoverable": "non_recoverable", "non-recoverable": "non_recoverable",
     "not recoverable": "non_recoverable",
     "commercial office": "office",
