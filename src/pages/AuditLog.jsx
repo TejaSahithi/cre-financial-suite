@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,8 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Download, Search, Shield, Loader2, Home, Building2, DoorOpen } from "lucide-react";
 import moment from "moment";
+import { supabase } from "@/services/supabaseClient";
+import { REVIEW_STATUS_LABELS, REVIEW_STATUS_STYLES, LEASE_REVIEW_FIELDS } from "@/lib/leaseReviewSchema";
 
 const actionColors = {
   create: "bg-emerald-100 text-emerald-700",
@@ -68,6 +72,14 @@ export default function AuditLog() {
         </div>
         <Button variant="outline"><Download className="w-4 h-4 mr-2" />Export Log</Button>
       </div>
+
+      <Tabs defaultValue="activity">
+        <TabsList className="bg-white border">
+          <TabsTrigger value="activity" className="text-xs">Activity Log ({logs.length})</TabsTrigger>
+          <TabsTrigger value="field_reviews" className="text-xs">Lease Field Reviews</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="activity" className="mt-4 space-y-4">
 
       {/* Action counts */}
       <div className="flex flex-wrap gap-3">
@@ -183,6 +195,86 @@ export default function AuditLog() {
           </TableBody>
         </Table>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="field_reviews" className="mt-4">
+          <FieldReviewsTab />
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+function FieldReviewsTab() {
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ["lease-field-reviews-all"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_field_reviews")
+        .select("id, lease_id, field_key, status, normalized_value, raw_value, source_page, source_text, confidence, note, reviewer, reviewed_at")
+        .order("reviewed_at", { ascending: false })
+        .limit(500);
+      if (error) {
+        console.warn("[AuditLog] lease_field_reviews query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+  });
+
+  return (
+    <Card>
+      <div className="p-3 border-b border-slate-200 text-xs text-slate-500">
+        Per-field review decisions captured during Lease Review (Accept / Edit / Reject / Mark N/A
+        / Needs Legal). Most recent 500 entries across all leases.
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-slate-50">
+            <TableHead className="text-[11px]">REVIEWED AT</TableHead>
+            <TableHead className="text-[11px]">REVIEWER</TableHead>
+            <TableHead className="text-[11px]">LEASE</TableHead>
+            <TableHead className="text-[11px]">FIELD</TableHead>
+            <TableHead className="text-[11px]">STATUS</TableHead>
+            <TableHead className="text-[11px]">RAW</TableHead>
+            <TableHead className="text-[11px]">NORMALIZED</TableHead>
+            <TableHead className="text-[11px]">SOURCE</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {isLoading ? (
+            <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" /></TableCell></TableRow>
+          ) : rows.length === 0 ? (
+            <TableRow><TableCell colSpan={8} className="text-center py-12 text-sm text-slate-400">No field-level review activity recorded yet.</TableCell></TableRow>
+          ) : (
+            rows.map((row) => {
+              const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === row.field_key);
+              const style = REVIEW_STATUS_STYLES[row.status] || "bg-slate-100 text-slate-700";
+              return (
+                <TableRow key={row.id} className="hover:bg-slate-50">
+                  <TableCell className="text-xs font-mono text-slate-500">
+                    {row.reviewed_at ? moment(row.reviewed_at).format("YYYY-MM-DD HH:mm") : "—"}
+                  </TableCell>
+                  <TableCell className="text-sm">{row.reviewer || "System"}</TableCell>
+                  <TableCell className="text-xs font-mono text-slate-500">{row.lease_id?.slice(0, 8)}</TableCell>
+                  <TableCell className="text-sm">
+                    <div className="font-medium text-slate-900">{fieldDef?.label || row.field_key}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">{row.field_key}</div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={`text-[10px] ${style}`}>{REVIEW_STATUS_LABELS[row.status] || row.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs font-mono text-slate-400 max-w-[140px] truncate">{row.raw_value || "—"}</TableCell>
+                  <TableCell className="text-xs font-mono text-slate-700 max-w-[140px] truncate">{row.normalized_value || "—"}</TableCell>
+                  <TableCell className="text-xs text-slate-500">
+                    {row.source_page ? `p. ${row.source_page}` : "—"}
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
+    </Card>
   );
 }
