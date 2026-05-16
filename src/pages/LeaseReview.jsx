@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Ban,
+  ChevronDown,
   Check,
   CheckCircle2,
   FileText,
@@ -45,6 +46,13 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   LEASE_FIELD_OPTIONS,
   getLeaseFieldLabel,
@@ -1176,6 +1184,7 @@ function FieldReviewRow({
   const status = review?.status || REVIEW_STATUSES.PENDING;
   const required = field.required;
   const allowNA = field.allowNA !== false;
+  const actionLabel = REVIEW_STATUS_LABELS[status] || "Review Action";
 
   return (
     <Card className={status === REVIEW_STATUSES.PENDING && required ? "border-amber-200" : ""}>
@@ -1213,56 +1222,48 @@ function FieldReviewRow({
               </details>
             )}
           </div>
-        </div>
 
-        <div className="flex flex-wrap gap-1.5">
-          <Button
-            size="sm"
-            variant={status === REVIEW_STATUSES.ACCEPTED ? "default" : "outline"}
-            className={status === REVIEW_STATUSES.ACCEPTED ? "bg-emerald-600 hover:bg-emerald-700" : ""}
-            onClick={onAccept}
-          >
-            <Check className="mr-1 h-3.5 w-3.5" />
-            Accept
-          </Button>
-          <Button size="sm" variant="outline" onClick={onEdit}>
-            <Pencil className="mr-1 h-3.5 w-3.5" />
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant={status === REVIEW_STATUSES.REJECTED ? "default" : "outline"}
-            className={status === REVIEW_STATUSES.REJECTED ? "bg-red-600 hover:bg-red-700" : "text-red-700"}
-            onClick={onReject}
-          >
-            <X className="mr-1 h-3.5 w-3.5" />
-            Reject
-          </Button>
-          {allowNA && (
-            <Button
-              size="sm"
-              variant={status === REVIEW_STATUSES.N_A ? "default" : "outline"}
-              className={status === REVIEW_STATUSES.N_A ? "bg-slate-500 hover:bg-slate-600" : ""}
-              onClick={onMarkNA}
-            >
-              <MinusCircle className="mr-1 h-3.5 w-3.5" />
-              Mark N/A
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant={status === REVIEW_STATUSES.NEEDS_LEGAL ? "default" : "outline"}
-            className={status === REVIEW_STATUSES.NEEDS_LEGAL ? "bg-purple-600 hover:bg-purple-700" : "text-purple-700"}
-            onClick={onNeedsLegal}
-          >
-            <Gavel className="mr-1 h-3.5 w-3.5" />
-            Needs Legal Review
-          </Button>
-          {status !== REVIEW_STATUSES.PENDING && (
-            <Button size="sm" variant="ghost" onClick={onReset} className="text-slate-500">
-              Reset
-            </Button>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="min-w-[170px] justify-between text-xs">
+                {actionLabel}
+                <ChevronDown className="ml-2 h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={onAccept}>
+                <Check className="h-4 w-4 text-emerald-600" />
+                Accept
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onEdit}>
+                <Pencil className="h-4 w-4 text-blue-600" />
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onReject}>
+                <X className="h-4 w-4 text-red-600" />
+                Reject
+              </DropdownMenuItem>
+              {allowNA && (
+                <DropdownMenuItem onClick={onMarkNA}>
+                  <MinusCircle className="h-4 w-4 text-slate-600" />
+                  Mark N/A
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={onNeedsLegal}>
+                <Gavel className="h-4 w-4 text-purple-600" />
+                Needs Legal Review
+              </DropdownMenuItem>
+              {status !== REVIEW_STATUSES.PENDING && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={onReset}>
+                    <Undo2 className="h-4 w-4 text-slate-500" />
+                    Reset
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardContent>
     </Card>
