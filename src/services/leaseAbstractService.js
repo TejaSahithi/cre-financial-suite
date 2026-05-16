@@ -28,6 +28,27 @@ export const ABSTRACT_STATUS = {
   SUPERSEDED: "superseded",
 };
 
+function isMissingAbstractColumnError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    error?.code === "PGRST204" &&
+    (
+      message.includes("abstract_status") ||
+      message.includes("abstract_version") ||
+      message.includes("abstract_snapshot") ||
+      message.includes("abstract_approved_at") ||
+      message.includes("abstract_approved_by")
+    )
+  );
+}
+
+function withLegacyAbstractFallback(update, extractionData) {
+  return {
+    ...update,
+    extraction_data: extractionData,
+  };
+}
+
 function toText(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "object") return JSON.stringify(value);
@@ -152,7 +173,32 @@ export async function approveLeaseAbstract({
     .eq("id", lease.id)
     .select()
     .single();
-  if (error) throw error;
+  if (error) {
+    if (!isMissingAbstractColumnError(error)) throw error;
+    const legacyUpdate = withLegacyAbstractFallback(
+      {
+        status: "approved",
+        signed_by: approvedBy,
+        signed_at: signedAt || snapshot.approved_at,
+        approval_comments: comments || null,
+        approval_document_url: documentUrl || null,
+      },
+      nextExtraction,
+    );
+    const { data: legacyData, error: legacyError } = await supabase
+      .from("leases")
+      .update(legacyUpdate)
+      .eq("id", lease.id)
+      .select()
+      .single();
+    if (legacyError) throw legacyError;
+    await persistFieldReviews({
+      lease: { ...lease, ...legacyData },
+      fieldReviews,
+      reviewer: approvedBy,
+    }).catch(() => {});
+    return legacyData;
+  }
 
   // Persist per-field reviews so the audit trail is queryable.
   await persistFieldReviews({
@@ -187,8 +233,19 @@ export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
     .eq("id", lease.id)
     .select()
     .single();
-  if (error) throw error;
-  await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer });
+  if (error) {
+    if (!isMissingAbstractColumnError(error)) throw error;
+    const { data: legacyData, error: legacyError } = await supabase
+      .from("leases")
+      .update({ extraction_data: nextExtraction })
+      .eq("id", lease.id)
+      .select()
+      .single();
+    if (legacyError) throw legacyError;
+    await persistFieldReviews({ lease: { ...lease, ...legacyData }, fieldReviews, reviewer }).catch(() => {});
+    return legacyData;
+  }
+  await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer }).catch(() => {});
   return data;
 }
 
@@ -215,7 +272,20 @@ export async function rejectLeaseAbstract({ lease, reason, reviewer }) {
     .eq("id", lease.id)
     .select()
     .single();
-  if (error) throw error;
+  if (error) {
+    if (!isMissingAbstractColumnError(error)) throw error;
+    const { data: legacyData, error: legacyError } = await supabase
+      .from("leases")
+      .update({
+        status: "rejected",
+        extraction_data: nextExtraction,
+      })
+      .eq("id", lease.id)
+      .select()
+      .single();
+    if (legacyError) throw legacyError;
+    return legacyData;
+  }
   return data;
 }
 
