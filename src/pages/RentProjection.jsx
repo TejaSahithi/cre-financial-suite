@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { differenceInDays, differenceInMonths, parseISO } from "date-fns";
+import { differenceInDays, parseISO } from "date-fns";
 import {
-  Loader2,
-  RefreshCw,
   AlertCircle,
   Building2,
-  TrendingUp,
   CalendarDays,
   Download,
+  Loader2,
+  RefreshCw,
+  TrendingUp,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -33,6 +33,7 @@ import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -48,8 +49,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Input } from "@/components/ui/input";
 import { downloadCSV } from "@/utils";
+
+const PROJECTION_MODES = [
+  { value: "contracted_only", label: "Contracted Only" },
+  { value: "include_approved_renewals", label: "Include Approved Renewals" },
+  { value: "include_assumed_renewals", label: "Include Assumed Renewals" },
+];
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -60,80 +66,72 @@ function safeDate(value) {
   if (!value) return null;
   try {
     const d = typeof value === "string" ? parseISO(value) : new Date(value);
-    return isNaN(d.getTime()) ? null : d;
+    return Number.isNaN(d.getTime()) ? null : d;
   } catch {
     return null;
   }
 }
 
-function leaseMonthlyRent(lease) {
-  if (lease.monthly_rent) return Number(lease.monthly_rent);
-  if (lease.annual_rent) return Number(lease.annual_rent) / 12;
-  if (lease.base_rent) return Number(lease.base_rent);
-  return 0;
+function isApprovedLease(lease) {
+  const abstract = String(lease?.abstract_status || "").toLowerCase();
+  if (abstract === "approved") return true;
+  return String(lease?.status || "").toLowerCase() === "approved";
 }
 
-function leaseAnnualRent(lease) {
-  if (lease.annual_rent) return Number(lease.annual_rent);
-  return leaseMonthlyRent(lease) * 12;
+function approvedFieldValue(lease, keys) {
+  const candidates = Array.isArray(keys) ? keys : [keys];
+  const snapshotFields = lease?.abstract_snapshot?.fields || {};
+  const extractionFields = lease?.extraction_data?.fields || {};
+  const extractedFields = lease?.extracted_fields || {};
+
+  for (const key of candidates) {
+    const snapshotValue = snapshotFields?.[key]?.value;
+    if (snapshotValue !== undefined && snapshotValue !== null && snapshotValue !== "") return snapshotValue;
+    if (lease?.[key] !== undefined && lease?.[key] !== null && lease?.[key] !== "") return lease[key];
+    const extracted = extractedFields?.[key];
+    if (extracted && typeof extracted === "object" && "value" in extracted && extracted.value !== "") return extracted.value;
+    if (extracted !== undefined && extracted !== null && extracted !== "") return extracted;
+    const extraction = extractionFields?.[key];
+    if (extraction && typeof extraction === "object" && "value" in extraction && extraction.value !== "") return extraction.value;
+    if (extraction !== undefined && extraction !== null && extraction !== "") return extraction;
+  }
+  return null;
 }
 
-function leaseSquareFootage(lease) {
-  return Number(lease.total_sf || lease.square_footage || 0);
+function approvedLeaseRsf(lease) {
+  return Number(
+    approvedFieldValue(lease, ["tenant_rsf", "rentable_area_sqft", "square_footage", "total_sf"]) || 0,
+  );
 }
 
-function leaseRentPerSf(lease) {
-  if (lease.rent_per_sf) return Number(lease.rent_per_sf);
-  const sf = leaseSquareFootage(lease);
-  const annual = leaseAnnualRent(lease);
-  return sf > 0 ? annual / sf : 0;
+function approvedLeaseAnnualRent(lease) {
+  const annual = Number(approvedFieldValue(lease, ["annual_rent"]) || 0);
+  if (annual > 0) return annual;
+  const monthly = Number(approvedFieldValue(lease, ["monthly_rent", "base_rent_monthly"]) || 0);
+  if (monthly > 0) return monthly * 12;
+  const rsf = approvedLeaseRsf(lease);
+  const rentPerSf = Number(approvedFieldValue(lease, ["rent_per_sf"]) || 0);
+  return rsf > 0 && rentPerSf > 0 ? rsf * rentPerSf : 0;
 }
 
-/**
- * Compute the projected monthly rent stream for a single lease across the
- * twelve months of the requested fiscal year. Honours start/end dates and
- * applies the lease's escalation_rate at the configured cadence.
- */
-function projectLeaseMonthly(lease, fiscalYear) {
-  const start = safeDate(lease.start_date);
-  const end = safeDate(lease.end_date);
-  const baseMonthly = leaseMonthlyRent(lease);
-  const escalationRate = Number(lease.escalation_rate || 0) / 100;
-  const escalationTiming = lease.escalation_timing || "lease_anniversary";
+function approvedLeaseMonthlyRent(lease) {
+  const monthly = Number(approvedFieldValue(lease, ["monthly_rent", "base_rent_monthly"]) || 0);
+  if (monthly > 0) return monthly;
+  const annual = approvedLeaseAnnualRent(lease);
+  return annual > 0 ? annual / 12 : 0;
+}
 
-  const months = MONTHS.map((label, idx) => {
-    const monthDate = new Date(fiscalYear, idx, 15);
-    if (start && monthDate < start) return { month: label, rent: 0 };
-    if (end && monthDate > end) return { month: label, rent: 0 };
-
-    let rent = baseMonthly;
-
-    if (escalationRate > 0 && start) {
-      let escalations = 0;
-      if (escalationTiming === "calendar_year") {
-        escalations = Math.max(0, fiscalYear - start.getFullYear());
-        // Don't apply Jan-1 step until we're actually past the new year mark.
-        if (escalations > 0 && idx === 0 && start.getMonth() !== 0) {
-          // first month of new fiscal year still applies the new step
-        }
-      } else {
-        // lease_anniversary: integer years elapsed since start
-        const monthsElapsed = differenceInMonths(monthDate, start);
-        escalations = Math.max(0, Math.floor(monthsElapsed / 12));
-      }
-      rent = baseMonthly * Math.pow(1 + escalationRate, escalations);
-    }
-
-    return { month: label, rent: Math.round(rent) };
-  });
-
-  return months;
+function scopeSelection(propertyId, buildingId, unitId) {
+  if (unitId && unitId !== "all") return { scopeLevel: "unit", scopeId: unitId };
+  if (buildingId && buildingId !== "all") return { scopeLevel: "building", scopeId: buildingId };
+  return { scopeLevel: "property", scopeId: propertyId && propertyId !== "all" ? propertyId : null };
 }
 
 export default function RentProjection() {
   const location = useLocation();
   const currentYear = new Date().getFullYear();
   const [fiscalYear, setFiscalYear] = useState(currentYear);
+  const [projectionMode, setProjectionMode] = useState("contracted_only");
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
@@ -144,8 +142,9 @@ export default function RentProjection() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
 
-  const scope = useMemo(
+  const hierarchy = useMemo(
     () =>
       buildHierarchyScope({
         search: location.search,
@@ -154,112 +153,109 @@ export default function RentProjection() {
         buildings,
         units,
       }),
-    [location.search, portfolios, properties, buildings, units]
+    [location.search, portfolios, properties, buildings, units],
   );
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : null;
+  const selectedBuildingId = scopeBuilding !== "all" ? scopeBuilding : null;
+  const selectedUnitId = scopeUnit !== "all" ? scopeUnit : null;
+  const selectedScope = scopeSelection(selectedPropertyId, selectedBuildingId, selectedUnitId);
 
-  // Snapshot data is optional — we still render the live rent roll if absent.
   const { snapshot, outputs, isFetching, refetch, hasSnapshot } = useSnapshotQuery({
     engineType: "lease",
     propertyId: selectedPropertyId,
     fiscalYear,
+    scopeLevel: selectedScope.scopeLevel,
+    scopeId: selectedScope.scopeId,
+    projectionMode,
   });
 
-  const { trigger: triggerCompute, isTriggering } = useComputeTrigger();
+  const scopedApprovedLeases = useMemo(() => {
+    return leases
+      .filter(isApprovedLease)
+      .filter((lease) =>
+        matchesHierarchyScope(lease, hierarchy, {
+          propertyKey: "property_id",
+          unitKey: "unit_id",
+        }),
+      );
+  }, [leases, hierarchy]);
 
-  // Filter leases by hierarchy scope + UI filters.
-  const scopedLeases = useMemo(() => {
-    return leases.filter((lease) =>
-      matchesHierarchyScope(lease, scope, {
-        propertyKey: "property_id",
-        unitKey: "unit_id",
-      })
-    );
-  }, [leases, scope]);
-
-  const filteredLeases = useMemo(() => {
-    return scopedLeases.filter((lease) => {
-      if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
-      if (scopeBuilding !== "all") {
-        const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) : null;
-        if (unit?.building_id !== scopeBuilding) return false;
+  const filteredApprovedLeases = useMemo(() => {
+    return scopedApprovedLeases.filter((lease) => {
+      if (selectedPropertyId && lease.property_id !== selectedPropertyId) return false;
+      if (selectedBuildingId) {
+        const unit = lease.unit_id ? hierarchy.unitById.get(lease.unit_id) : null;
+        if (unit?.building_id !== selectedBuildingId) return false;
       }
-      if (scopeUnit !== "all" && lease.unit_id !== scopeUnit) return false;
+      if (selectedUnitId && lease.unit_id !== selectedUnitId) return false;
       if (search) {
-        const haystack = [lease.tenant_name, lease.lease_type]
+        const haystack = [
+          lease.tenant_name,
+          lease.lease_type,
+          approvedFieldValue(lease, ["tenant_name"]),
+        ]
           .filter(Boolean)
-          .map((s) => String(s).toLowerCase())
+          .map((value) => String(value).toLowerCase())
           .join(" ");
         if (!haystack.includes(search.toLowerCase())) return false;
       }
       return true;
     });
-  }, [scopedLeases, scopeProperty, scopeBuilding, scopeUnit, search, scope.unitById]);
+  }, [scopedApprovedLeases, selectedPropertyId, selectedBuildingId, selectedUnitId, search, hierarchy.unitById]);
 
-  // Aggregate rent roll metrics from live lease data.
-  const stats = useMemo(() => {
-    const totalLeases = filteredLeases.length;
-    const totalSf = filteredLeases.reduce((sum, l) => sum + leaseSquareFootage(l), 0);
-    const totalAnnual = filteredLeases.reduce((sum, l) => sum + leaseAnnualRent(l), 0);
-    const totalMonthly = filteredLeases.reduce((sum, l) => sum + leaseMonthlyRent(l), 0);
+  const liveStats = useMemo(() => {
+    const totalLeases = filteredApprovedLeases.length;
+    const totalSf = filteredApprovedLeases.reduce((sum, lease) => sum + approvedLeaseRsf(lease), 0);
+    const totalAnnual = filteredApprovedLeases.reduce((sum, lease) => sum + approvedLeaseAnnualRent(lease), 0);
+    const totalMonthly = filteredApprovedLeases.reduce((sum, lease) => sum + approvedLeaseMonthlyRent(lease), 0);
     const avgRentPerSf = totalSf > 0 ? totalAnnual / totalSf : 0;
     const today = new Date();
-    const expiring12mo = filteredLeases.filter((l) => {
-      const end = safeDate(l.end_date);
+    const expiring12mo = filteredApprovedLeases.filter((lease) => {
+      const end = safeDate(approvedFieldValue(lease, ["expiration_date", "end_date"]));
       if (!end) return false;
       const days = differenceInDays(end, today);
       return days > 0 && days <= 365;
     }).length;
     return { totalLeases, totalSf, totalAnnual, totalMonthly, avgRentPerSf, expiring12mo };
-  }, [filteredLeases]);
-
-  // Live 12-month projection — sums every lease's projected monthly rent.
-  const monthlyChart = useMemo(() => {
-    const buckets = MONTHS.map((label) => ({ month: label, current: 0, projected: 0 }));
-    filteredLeases.forEach((lease) => {
-      const currentSeries = projectLeaseMonthly(lease, fiscalYear);
-      const projectedSeries = projectLeaseMonthly(lease, fiscalYear + 1);
-      currentSeries.forEach((row, idx) => {
-        buckets[idx].current += row.rent;
-      });
-      projectedSeries.forEach((row, idx) => {
-        buckets[idx].projected += row.rent;
-      });
-    });
-    return buckets.map((b) => ({
-      month: b.month,
-      current: Math.round(b.current),
-      projected: Math.round(b.projected),
-    }));
-  }, [filteredLeases, fiscalYear]);
-
-  const authoritativeChart = useMemo(() => {
-    if (!hasSnapshot || !Array.isArray(outputs?.monthly_projections)) {
-      return monthlyChart;
-    }
-    return MONTHS.map((month, index) => {
-      const row = outputs.monthly_projections[index] ?? {};
-      return {
-        month,
-        current: Number(row.base_rent ?? 0),
-        projected: Number(row.projected_rent ?? 0),
-      };
-    });
-  }, [hasSnapshot, outputs, monthlyChart]);
+  }, [filteredApprovedLeases]);
 
   const displayedStats = useMemo(() => {
-    if (!hasSnapshot) return stats;
-    const summary = outputs?.summary ?? {};
+    if (!hasSnapshot) return liveStats;
+    const summary = outputs?.summary || {};
     return {
-      ...stats,
-      totalAnnual: Number(summary.total_rent ?? stats.totalAnnual),
-      totalMonthly: Number(summary.avg_monthly_rent ?? stats.totalMonthly),
-      totalLeases: Number(summary.lease_count ?? stats.totalLeases),
+      totalLeases: Number(summary.lease_count ?? liveStats.totalLeases),
+      totalSf: liveStats.totalSf,
+      totalAnnual: Number(summary.total_rent ?? liveStats.totalAnnual),
+      totalMonthly: Number(summary.avg_monthly_rent ?? liveStats.totalMonthly),
+      avgRentPerSf: Number(summary.avg_rent_psf ?? liveStats.avgRentPerSf),
+      expiring12mo: liveStats.expiring12mo,
     };
-  }, [hasSnapshot, outputs, stats]);
+  }, [hasSnapshot, outputs, liveStats]);
 
-  const projectedAnnual = authoritativeChart.reduce((sum, bucket) => sum + Number(bucket.projected || 0), 0);
+  const authoritativeChart = useMemo(() => {
+    if (!hasSnapshot || !Array.isArray(outputs?.monthly_projections)) return [];
+    return MONTHS.map((month, index) => {
+      const row = outputs.monthly_projections[index] || {};
+      return {
+        month,
+        current: Number(row.base_rent || 0),
+        projected: Number(row.projected_rent || 0),
+      };
+    });
+  }, [hasSnapshot, outputs]);
+
+  const leaseSummaryRows = useMemo(() => {
+    const rows = Array.isArray(outputs?.lease_summaries) ? outputs.lease_summaries : [];
+    if (!search) return rows;
+    const needle = search.toLowerCase();
+    return rows.filter((row) => {
+      const haystack = [row.tenant_name, row.lease_type].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [outputs, search]);
+
+  const projectedAnnual = authoritativeChart.reduce((sum, row) => sum + Number(row.projected || 0), 0);
   const projectedMonthlyAvg = projectedAnnual / 12;
   const yoyChange =
     displayedStats.totalAnnual > 0
@@ -268,77 +264,121 @@ export default function RentProjection() {
 
   const handleTriggerCompute = async () => {
     if (!selectedPropertyId) {
-      toast.info("Select a single property to run the lease engine");
+      toast.info("Select a property before running the rent projection engine.");
       return;
     }
+
     try {
       await triggerCompute(
         "compute-lease",
-        { property_id: selectedPropertyId, fiscal_year: fiscalYear },
-        { successMessage: "Computation queued — refresh shortly to view snapshot" }
+        {
+          property_id: selectedPropertyId,
+          building_id: selectedBuildingId,
+          unit_id: selectedUnitId,
+          fiscal_year: fiscalYear,
+          projection_mode: projectionMode,
+          scope_level: selectedScope.scopeLevel,
+          scope_id: selectedScope.scopeId,
+        },
+        { successMessage: "Rent projection computation queued." },
       );
       setTimeout(() => refetch(), 3000);
     } catch {
-      toast.error("Failed to trigger computation");
+      toast.error("Failed to trigger rent projection.");
     }
   };
 
   const handleExport = () => {
-    const rows = filteredLeases.map((lease) => {
-      const property = lease.property_id ? scope.propertyById.get(lease.property_id) : null;
-      const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) : null;
-      const building = unit?.building_id ? scope.buildingById.get(unit.building_id) : null;
-      return {
-        tenant: lease.tenant_name || "",
-        property: property?.name || "",
-        building: building?.name || "",
-        unit: unit?.unit_number || lease.unit_number || "",
-        type: getLeaseFieldLabel("lease_type", lease.lease_type) || lease.lease_type || "",
-        start_date: lease.start_date || "",
-        end_date: lease.end_date || "",
-        sf: leaseSquareFootage(lease),
-        rent_per_sf: leaseRentPerSf(lease).toFixed(2),
-        monthly_rent: Math.round(leaseMonthlyRent(lease)),
-        annual_rent: Math.round(leaseAnnualRent(lease)),
-        escalation_rate: lease.escalation_rate || 0,
-      };
-    });
-    if (rows.length === 0) {
-      toast.info("No rows to export");
+    if (hasSnapshot && leaseSummaryRows.length > 0) {
+      downloadCSV(
+        leaseSummaryRows.map((row) => ({
+          tenant: row.tenant_name || "",
+          property: row.property_id || "",
+          building: row.building_id || "",
+          unit: row.unit_id || "",
+          lease_type: row.lease_type || "",
+          lease_start: row.lease_start || "",
+          rent_commencement_date: row.rent_commencement_date || "",
+          lease_end: row.lease_end || "",
+          rsf: row.rsf || 0,
+          fy_scheduled_rent: Math.round(Number(row.fy_scheduled_rent || 0)),
+          annualized_rent: Math.round(Number(row.annualized_rent || 0)),
+          rent_psf: row.rent_psf == null ? "" : Number(row.rent_psf).toFixed(2),
+          next_fy_scheduled_rent: Math.round(Number(row.next_fy_scheduled_rent || 0)),
+          next_fy_note: row.next_fy_zero_explanation || "",
+        })),
+        `rent-projection-${fiscalYear}-${projectionMode}.csv`,
+      );
       return;
     }
-    downloadCSV(rows, `rent-roll-${fiscalYear}.csv`);
+
+    if (filteredApprovedLeases.length === 0) {
+      toast.info("No approved leases to export.");
+      return;
+    }
+
+    downloadCSV(
+      filteredApprovedLeases.map((lease) => ({
+        tenant: approvedFieldValue(lease, ["tenant_name"]) || "",
+        property: hierarchy.propertyById.get(lease.property_id)?.name || "",
+        building: hierarchy.buildingById.get(hierarchy.unitById.get(lease.unit_id)?.building_id)?.name || "",
+        unit: hierarchy.unitById.get(lease.unit_id)?.unit_number || lease.unit_number || "",
+        lease_type: getLeaseFieldLabel("lease_type", lease.lease_type) || lease.lease_type || "",
+        lease_start: approvedFieldValue(lease, ["commencement_date", "start_date"]) || "",
+        rent_commencement_date: approvedFieldValue(lease, ["rent_commencement_date"]) || "",
+        lease_end: approvedFieldValue(lease, ["expiration_date", "end_date"]) || "",
+        rsf: approvedLeaseRsf(lease),
+        annual_rent: Math.round(approvedLeaseAnnualRent(lease)),
+      })),
+      `approved-leases-${fiscalYear}.csv`,
+    );
   };
 
   return (
     <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
       <PageHeader
         icon={Building2}
-        title="Rent Roll & Projection"
-        subtitle={`${stats.totalLeases} active lease${stats.totalLeases === 1 ? "" : "s"} · ${fmtMoney(stats.totalAnnual)} annual rent`}
+        title="Rent Projection"
+        subtitle={`${filteredApprovedLeases.length} approved lease${filteredApprovedLeases.length === 1 ? "" : "s"} in scope`}
         iconColor="from-blue-600 to-indigo-700"
       >
         <div className="flex items-center gap-2 flex-wrap">
-          <Select value={String(fiscalYear)} onValueChange={(v) => setFiscalYear(Number(v))}>
+          <Select value={String(fiscalYear)} onValueChange={(value) => setFiscalYear(Number(value))}>
             <SelectTrigger className="w-32">
               <CalendarDays className="w-3.5 h-3.5 mr-1 text-slate-400" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map((y) => (
-                <SelectItem key={y} value={String(y)}>
-                  FY {y}
+              {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map((year) => (
+                <SelectItem key={year} value={String(year)}>
+                  FY {year}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+
+          <Select value={projectionMode} onValueChange={setProjectionMode}>
+            <SelectTrigger className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PROJECTION_MODES.map((mode) => (
+                <SelectItem key={mode.value} value={mode.value}>
+                  {mode.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="w-4 h-4 mr-1" />
             Export CSV
           </Button>
+
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
           </Button>
+
           <Button
             size="sm"
             onClick={handleTriggerCompute}
@@ -352,9 +392,9 @@ export default function RentProjection() {
       </PageHeader>
 
       <ScopeSelector
-        properties={scope.scopedProperties}
-        buildings={scope.scopedBuildings}
-        units={scope.scopedUnits}
+        properties={hierarchy.scopedProperties}
+        buildings={hierarchy.scopedBuildings}
+        units={hierarchy.scopedUnits}
         selectedProperty={scopeProperty}
         selectedBuilding={scopeBuilding}
         selectedUnit={scopeUnit}
@@ -363,18 +403,17 @@ export default function RentProjection() {
         onUnitChange={setScopeUnit}
       />
 
-      {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Card className="border-l-4 border-l-blue-500">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Total Annual Rent</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase">FY Scheduled Rent</p>
             <p className="text-2xl font-bold text-slate-900">{fmtMoney(displayedStats.totalAnnual)}</p>
-            <p className="text-[10px] text-slate-400">{fmtMoney(displayedStats.totalMonthly)}/mo</p>
+            <p className="text-[10px] text-slate-400">{fmtMoney(displayedStats.totalMonthly)}/mo avg</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-emerald-500">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Projected (Next FY)</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase">Next FY Scheduled</p>
             <p className="text-2xl font-bold text-emerald-600">{fmtMoney(projectedAnnual)}</p>
             <p className="text-[10px] text-emerald-500">{fmtMoney(projectedMonthlyAvg)}/mo avg</p>
           </CardContent>
@@ -383,9 +422,7 @@ export default function RentProjection() {
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">YoY Change</p>
             <p className="text-2xl font-bold">
-              {yoyChange === null ? (
-                "—"
-              ) : (
+              {yoyChange == null ? "—" : (
                 <span className={yoyChange >= 0 ? "text-emerald-600" : "text-red-500"}>
                   {yoyChange >= 0 ? "+" : ""}
                   {yoyChange.toFixed(1)}%
@@ -397,30 +434,39 @@ export default function RentProjection() {
         </Card>
         <Card className="border-l-4 border-l-slate-400">
           <CardContent className="p-4">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase">Avg Rent / SF</p>
-            <p className="text-2xl font-bold text-slate-700">${displayedStats.avgRentPerSf.toFixed(2)}</p>
-            <p className="text-[10px] text-slate-400">{Number(displayedStats.totalSf).toLocaleString()} SF leased</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase">Annualized Rent / SF</p>
+            <p className="text-2xl font-bold text-slate-700">${Number(displayedStats.avgRentPerSf || 0).toFixed(2)}</p>
+            <p className="text-[10px] text-slate-400">{Number(displayedStats.totalSf || 0).toLocaleString()} RSF</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-red-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Expiring &lt; 12 mo</p>
             <p className="text-2xl font-bold text-red-600">{displayedStats.expiring12mo}</p>
-            <p className="text-[10px] text-slate-400">Renewal risk</p>
+            <p className="text-[10px] text-slate-400">Approved lease risk</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Snapshot status banner */}
-      {!hasSnapshot && selectedPropertyId && (
+      {!selectedPropertyId && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+            <div className="text-sm text-amber-800">
+              Select a property to compute an authoritative rent projection snapshot. Building and unit scopes run inside the selected property.
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {selectedPropertyId && !hasSnapshot && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-4 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-amber-800">No engine snapshot for this property yet</p>
+              <p className="text-sm font-semibold text-amber-800">No authoritative snapshot for this scope yet</p>
               <p className="text-xs text-amber-600 mt-0.5">
-                Showing a preview computed from lease records. Click <strong>Run Engine</strong> to
-                generate a full computation snapshot with CAM allocation and recovery schedules.
+                Rent Projection now reads from approved lease abstracts plus approved rent schedule rows. Run the engine to compute FY{fiscalYear} for the selected scope and projection mode.
               </p>
             </div>
           </CardContent>
@@ -429,41 +475,35 @@ export default function RentProjection() {
 
       {hasSnapshot && (
         <div className="text-[11px] text-slate-400">
-          Snapshot computed {new Date(snapshot.computed_at).toLocaleString()} ·
-          {" "}
-          {outputs?.tenant_schedules?.length || 0} tenant schedules in engine output
+          Snapshot computed {new Date(snapshot.computed_at).toLocaleString()} · {outputs?.summary?.lease_count || 0} approved lease(s) · {PROJECTION_MODES.find((mode) => mode.value === projectionMode)?.label}
         </div>
       )}
 
-      {/* Monthly projection chart */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-blue-500" />
-            Monthly Rent — FY{fiscalYear} vs FY{fiscalYear + 1}
+            Monthly Scheduled Rent — FY{fiscalYear} vs FY{fiscalYear + 1}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {filteredLeases.length === 0 ? (
+          {!hasSnapshot ? (
             <p className="text-center py-12 text-sm text-slate-400">
-              No leases in current scope — projection unavailable.
+              Run the engine to view authoritative monthly rent projections for this scope.
             </p>
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={authoritativeChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
-                />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
                 <Tooltip formatter={(value) => fmtMoney(value)} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="current" name={`FY${fiscalYear} Rent`} fill="#1a2744" radius={[4, 4, 0, 0]} barSize={22} />
+                <Bar dataKey="current" name={`FY${fiscalYear} Scheduled`} fill="#1a2744" radius={[4, 4, 0, 0]} barSize={22} />
                 <Line
                   type="monotone"
                   dataKey="projected"
-                  name={`FY${fiscalYear + 1} Projection`}
+                  name={`FY${fiscalYear + 1} Scheduled`}
                   stroke="#10b981"
                   strokeWidth={2.5}
                   dot={{ r: 3 }}
@@ -474,16 +514,15 @@ export default function RentProjection() {
         </CardContent>
       </Card>
 
-      {/* Rent Roll table */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <CardTitle className="text-base">Rent Roll</CardTitle>
+            <CardTitle className="text-base">Lease Projection Detail</CardTitle>
             <div className="relative w-64">
               <Input
-                placeholder="Search tenant or type…"
+                placeholder="Search tenant or type..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(event) => setSearch(event.target.value)}
                 className="h-8 text-xs"
               />
             </div>
@@ -497,80 +536,59 @@ export default function RentProjection() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Unit</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Type</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Start</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">End</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">SF</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">Rent/SF</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">Monthly</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">Annual</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Escalation</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease Start</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rent Start</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease End</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">RSF</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">FY{fiscalYear}</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">Annualized</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">Rent / SF</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500 text-right">FY{fiscalYear + 1}</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Next FY Note</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {leasesLoading ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-12">
+                  <TableCell colSpan={13} className="text-center py-12">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />
                   </TableCell>
                 </TableRow>
-              ) : filteredLeases.length === 0 ? (
+              ) : !hasSnapshot ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-12 text-sm text-slate-400">
-                    No leases match the current scope.
+                  <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
+                    Authoritative projection rows appear here after the engine runs for the selected scope.
+                  </TableCell>
+                </TableRow>
+              ) : leaseSummaryRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={13} className="text-center py-12 text-sm text-slate-400">
+                    No approved leases match the current scope.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredLeases.map((lease) => {
-                  const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) : null;
-                  const property = lease.property_id ? scope.propertyById.get(lease.property_id) : null;
-                  const sf = leaseSquareFootage(lease);
-                  const monthly = leaseMonthlyRent(lease);
-                  const annual = leaseAnnualRent(lease);
-                  const rentPerSf = leaseRentPerSf(lease);
-                  const end = safeDate(lease.end_date);
-                  const expiring = end && differenceInDays(end, new Date()) <= 365 && end > new Date();
+                leaseSummaryRows.map((row) => {
+                  const property = row.property_id ? hierarchy.propertyById.get(row.property_id) : null;
+                  const unit = row.unit_id ? hierarchy.unitById.get(row.unit_id) : null;
                   return (
-                    <TableRow key={lease.id} className="hover:bg-slate-50">
-                      <TableCell className="text-sm font-medium text-slate-900">
-                        {lease.tenant_name || "—"}
-                      </TableCell>
+                    <TableRow key={row.lease_id} className="hover:bg-slate-50">
+                      <TableCell className="text-sm font-medium text-slate-900">{row.tenant_name || "—"}</TableCell>
                       <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
-                      <TableCell className="text-sm text-slate-600">
-                        {unit?.unit_number || lease.unit_number || "—"}
-                      </TableCell>
+                      <TableCell className="text-sm text-slate-600">{unit?.unit_number || "—"}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-[10px]">
-                          {getLeaseFieldLabel("lease_type", lease.lease_type) || lease.lease_type || "—"}
+                          {getLeaseFieldLabel("lease_type", row.lease_type) || row.lease_type || "—"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-xs text-slate-500">{lease.start_date || "—"}</TableCell>
-                      <TableCell className="text-xs">
-                        <span className={expiring ? "text-red-600 font-medium" : "text-slate-500"}>
-                          {lease.end_date || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm font-mono text-right">
-                        {sf > 0 ? sf.toLocaleString() : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm font-mono text-right">
-                        {rentPerSf > 0 ? `$${rentPerSf.toFixed(2)}` : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm font-mono text-right">{fmtMoney(monthly)}</TableCell>
-                      <TableCell className="text-sm font-mono text-right font-bold">
-                        {fmtMoney(annual)}
-                      </TableCell>
-                      <TableCell>
-                        {lease.escalation_rate ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            {lease.escalation_rate}%
-                            {lease.escalation_type
-                              ? ` ${getLeaseFieldLabel("escalation_type", lease.escalation_type)}`
-                              : ""}
-                          </Badge>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.lease_start || "—"}</TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.rent_commencement_date || "—"}</TableCell>
+                      <TableCell className="text-xs text-slate-500">{row.lease_end || "—"}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{Number(row.rsf || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{fmtMoney(row.fy_scheduled_rent)}</TableCell>
+                      <TableCell className="text-sm font-mono text-right font-semibold">{fmtMoney(row.annualized_rent)}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{row.rent_psf == null ? "—" : `$${Number(row.rent_psf).toFixed(2)}`}</TableCell>
+                      <TableCell className="text-sm font-mono text-right">{fmtMoney(row.next_fy_scheduled_rent)}</TableCell>
+                      <TableCell className="text-xs text-slate-500 max-w-[320px]">{row.next_fy_zero_explanation || "—"}</TableCell>
                     </TableRow>
                   );
                 })

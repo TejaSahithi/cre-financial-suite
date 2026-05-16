@@ -221,14 +221,36 @@ export async function assertPageAccess(
   const scopedClient = createUserScopedClient(req);
   let allowed = false;
 
+  const shouldFallbackToPerPageChecks = (error: any) => {
+    const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ").toLowerCase();
+    return text.includes("can_write_any_page") &&
+      (text.includes("could not find") || text.includes("does not exist") || text.includes("function") || text.includes("no function matches"));
+  };
+
   if (access === "write") {
     if (pageNames.length > 1) {
       const { data, error } = await scopedClient.rpc("can_write_any_page", {
         check_org_id: orgId,
         page_names: pageNames,
       });
-      if (error) throw new Error(`Permission check failed: ${error.message}`);
-      allowed = Boolean(data);
+      if (error) {
+        if (!shouldFallbackToPerPageChecks(error)) {
+          throw new Error(`Permission check failed: ${error.message}`);
+        }
+        const checks = await Promise.all(
+          pageNames.map(async (pageName) => {
+            const single = await scopedClient.rpc("can_write_page", {
+              check_org_id: orgId,
+              page_name: pageName,
+            });
+            if (single.error) throw single.error;
+            return Boolean(single.data);
+          }),
+        );
+        allowed = checks.some(Boolean);
+      } else {
+        allowed = Boolean(data);
+      }
     } else {
       const { data, error } = await scopedClient.rpc("can_write_page", {
         check_org_id: orgId,
