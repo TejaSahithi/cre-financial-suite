@@ -12,9 +12,9 @@ export const MODULE_DEFINITIONS = {
   properties:     { label: "Properties",         pages: ["Properties", "Buildings", "Units", "BuildingsUnits", "PropertyDetail"] },
   tenants:        { label: "Tenants",            pages: ["Tenants", "TenantDetail"] },
   vendors:        { label: "Vendors",            pages: ["Vendors"] },  // nested under expenses in nav
-  leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "RentProjection"] },
-  expenses:       { label: "Expenses",           pages: ["Expenses", "AddExpense", "BulkImport", "LeaseExpenseClassification", "ExpenseReview", "ExpenseProjection"] },
-  cam:            { label: "CAM Engine",         pages: ["CAMDashboard", "CAMCalculation"] },
+  leases:         { label: "Leases",             pages: ["Leases", "LeaseUpload", "LeaseReview", "RentProjection", "CriticalDates"] },
+  expenses:       { label: "Expenses",           pages: ["Expenses", "AddExpense", "BulkImport", "LeaseExpenseRules", "LeaseExpenseClassification", "ExpenseReview", "ExpenseProjection"] },
+  cam:            { label: "CAM Engine",         pages: ["CAMDashboard", "CAMSetup", "CAMCalculation"] },
   billing:        { label: "Billing",            pages: ["Billing"] },  // billing nested under tenants in nav
   revenue:        { label: "Revenue",            pages: ["Revenue"] },
   budgets:        { label: "Budget Studio",      pages: ["BudgetDashboard", "CreateBudget", "BudgetReview"] },
@@ -26,7 +26,7 @@ export const MODULE_DEFINITIONS = {
   notifications:  { label: "Notifications",      pages: ["Notifications"] },
   documents:      { label: "Documents",          pages: ["Documents"] },
   integrations:   { label: "Integrations",       pages: ["Integrations"] },
-  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "AuditLog", "UserManagement"] },
+  admin:          { label: "Admin",              pages: ["SuperAdmin", "Stakeholders", "OrgSettings", "ChartOfAccounts", "FieldMappingRules", "ApprovalWorkflows", "AuditLog", "UserManagement"] },
 };
 
 // All module keys
