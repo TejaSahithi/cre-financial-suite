@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -17,6 +18,7 @@ import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { clearCache } from "@/services/api";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -86,6 +88,7 @@ function statusLabelFor(status) {
 export default function LeaseUpload() {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const urlParams = new URLSearchParams(location.search);
   const queryPropertyId = urlParams.get("property");
   const queryBuildingId = urlParams.get("building");
@@ -103,6 +106,7 @@ export default function LeaseUpload() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const retriedUploadedFiles = useRef(new Set());
   const retriedManualFallbackFiles = useRef(new Set());
+  const preparedLeaseDraftFiles = useRef(new Set());
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -165,6 +169,13 @@ export default function LeaseUpload() {
   const selectedUnit = scopeUnit !== "all"
     ? units.find((unit) => unit.id === scopeUnit) ?? null
     : null;
+  const leaseListUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    if (fileId) params.set("view", "drafts");
+    else params.delete("view");
+    const search = params.toString();
+    return createPageUrl("Leases") + (search ? `?${search}` : "");
+  }, [fileId, location.search]);
   const effectiveBuildingId =
     selectedUnit?.building_id ||
     (scopeBuilding !== "all" ? scopeBuilding : null);
@@ -246,6 +257,49 @@ export default function LeaseUpload() {
       return;
     }
     setFileRecord(data);
+  };
+
+  const invalidateLeaseQueries = async () => {
+    clearCache();
+    await queryClient.invalidateQueries({ queryKey: ["Lease"] });
+  };
+
+  const ensureLeaseDraft = async ({ silent = false } = {}) => {
+    if (!fileId) return null;
+
+    const existing = await findLeaseByFileId(fileId);
+    if (existing?.id) {
+      await invalidateLeaseQueries();
+      return existing.id;
+    }
+
+    if (fileRecord?.review_required !== true && fileRecord?.status !== "review_required") {
+      return null;
+    }
+
+    const data = await invokeEdgeFunction("review-approve", {
+      file_id: fileId,
+      action: "prepare",
+      review_payload: fileRecord?.ui_review_payload || null,
+    });
+
+    const insertedLeaseId =
+      data?.store_result?.inserted_ids?.[0] ||
+      data?.store_result?.insertedIds?.[0] ||
+      null;
+
+    await fetchFileRecord(fileId);
+
+    const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
+    if (linkedLeaseId) {
+      await invalidateLeaseQueries();
+      return linkedLeaseId;
+    }
+
+    if (!silent) {
+      toast.info("Lease review draft is being prepared. Try again in a moment.");
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -344,41 +398,11 @@ export default function LeaseUpload() {
     if (!fileId) return;
     setOpeningReview(true);
     try {
-      const existing = await findLeaseByFileId(fileId);
-      if (existing?.id) {
-        navigate(createPageUrl("LeaseReview", { id: existing.id }));
-        return;
-      }
-
-      const data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "approve",
-        review_payload: fileRecord?.ui_review_payload || null,
-      });
-
-      if (data?.error) {
-        toast.error(data?.message || "Could not open Lease Review");
-        return;
-      }
-
-      const insertedLeaseId =
-        data?.store_result?.inserted_ids?.[0] ||
-        data?.store_result?.insertedIds?.[0] ||
-        null;
-
-      await fetchFileRecord(fileId);
-
-      if (insertedLeaseId) {
-        navigate(createPageUrl("LeaseReview", { id: insertedLeaseId }));
-        return;
-      }
-
-      // already_approved path: look up the linked lease.
-      const linked = await findLeaseByFileId(fileId);
-      if (linked?.id) {
-        navigate(createPageUrl("LeaseReview", { id: linked.id }));
+      const leaseId = await ensureLeaseDraft();
+      if (leaseId) {
+        navigate(createPageUrl("LeaseReview", { id: leaseId }));
       } else {
-        toast.info("Lease review draft is being prepared. Try again in a moment.");
+        toast.info("Lease review draft is still being prepared. Try again in a moment.");
       }
     } catch (error) {
       toast.error(error?.message || "Could not open Lease Review");
@@ -419,18 +443,58 @@ export default function LeaseUpload() {
     () => assessLeaseExtractionQuality(reviewedRows),
     [reviewedRows]
   );
+  const hasMeaningfulExtraction = useMemo(
+    () => hasMeaningfulLeaseExtraction(reviewedRows),
+    [reviewedRows],
+  );
   const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
   const isManualReviewFallback =
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
     reviewPayload?.extraction_method === "manual_review_fallback" ||
     reviewPayload?.metadata?.manualReviewFallback === true;
   const isEmptyExtractionFallback =
-    isManualReviewFallback ||
-    reviewPayload?.extraction_method === "none" ||
-    reviewPayload?.pipeline_method === "fallback" ||
-    fallbackWarnings.some((warning) =>
-      /text is too short|no structured fields|manual review/i.test(String(warning)),
+    !hasMeaningfulExtraction &&
+    (
+      isManualReviewFallback ||
+      reviewPayload?.extraction_method === "none" ||
+      reviewPayload?.pipeline_method === "fallback" ||
+      fallbackWarnings.some((warning) =>
+        /text is too short|no structured fields|manual review/i.test(String(warning)),
+      )
     );
+
+  useEffect(() => {
+    if (
+      !fileId ||
+      !fileRecord ||
+      fileRecord.status !== "review_required" ||
+      fileRecord.review_required !== true ||
+      preparedLeaseDraftFiles.current.has(fileId)
+    ) {
+      return undefined;
+    }
+
+    preparedLeaseDraftFiles.current.add(fileId);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const leaseId = await ensureLeaseDraft({ silent: true });
+        if (!leaseId && !cancelled) {
+          preparedLeaseDraftFiles.current.delete(fileId);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          preparedLeaseDraftFiles.current.delete(fileId);
+        }
+        console.warn("[LeaseUpload] Could not auto-stage lease draft:", error?.message || error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fileId, fileRecord, queryClient]);
 
   useEffect(() => {
     if (
@@ -464,7 +528,7 @@ export default function LeaseUpload() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <Link to={createPageUrl("Leases") + location.search} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+      <Link to={leaseListUrl} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
         <ArrowLeft className="h-4 w-4" /> Back to Leases
       </Link>
 
@@ -812,4 +876,36 @@ function assessLeaseExtractionQuality(records) {
     suspicious: reasons.length > 0,
     reasons,
   };
+}
+
+function hasMeaningfulLeaseExtraction(records) {
+  return (records || []).some((record) =>
+    Object.values(getComparableRecordValues(record)).some((value) => isMeaningfulLeaseValue(value)),
+  );
+}
+
+function getComparableRecordValues(record) {
+  if (record?.values && typeof record.values === "object") return record.values;
+
+  const fieldEntries = [
+    ...(Array.isArray(record?.standard_fields) ? record.standard_fields : []),
+    ...(Array.isArray(record?.custom_fields) ? record.custom_fields : []),
+  ]
+    .filter((field) => field?.field_key)
+    .map((field) => [field.field_key, field.value]);
+
+  return Object.fromEntries(fieldEntries);
+}
+
+function isMeaningfulLeaseValue(value) {
+  if (value == null) return false;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.some((item) => isMeaningfulLeaseValue(item));
+  if (typeof value === "object") return Object.values(value).some((item) => isMeaningfulLeaseValue(item));
+
+  const text = String(value).trim();
+  if (!text) return false;
+  if (/^(n\/a|na|null|none|unknown|tbd|lease review draft)$/i.test(text)) return false;
+  return true;
 }
