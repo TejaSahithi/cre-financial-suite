@@ -28,25 +28,57 @@ export const ABSTRACT_STATUS = {
   SUPERSEDED: "superseded",
 };
 
-function isMissingAbstractColumnError(error) {
-  const message = String(error?.message || "").toLowerCase();
+function extractMissingColumn(err) {
+  const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(" ");
+  if (!message) return null;
+  let match = message.match(/Could not find the '([^']+)' column/i);
+  if (match?.[1]) return match[1];
+  match = message.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
+  if (match?.[1]) return match[1];
+  return null;
+}
+
+function isMissingColumnError(err) {
   return (
-    error?.code === "PGRST204" &&
-    (
-      message.includes("abstract_status") ||
-      message.includes("abstract_version") ||
-      message.includes("abstract_snapshot") ||
-      message.includes("abstract_approved_at") ||
-      message.includes("abstract_approved_by")
-    )
+    err?.code === "PGRST204" ||
+    err?.code === "42703" ||
+    !!extractMissingColumn(err)
   );
 }
 
-function withLegacyAbstractFallback(update, extractionData) {
-  return {
-    ...update,
-    extraction_data: extractionData,
-  };
+/**
+ * Run a lease UPDATE, stripping any columns that PostgREST/Postgres reports
+ * as missing. This protects approval/draft flows when the target Supabase
+ * schema is behind on migrations (e.g. approval_comments, abstract_status
+ * columns haven't been added yet).
+ */
+async function updateLeaseStripMissing(leaseId, payload) {
+  let workingPayload = { ...payload };
+  const stripped = [];
+  while (true) {
+    const { data, error } = await supabase
+      .from("leases")
+      .update(workingPayload)
+      .eq("id", leaseId)
+      .select()
+      .single();
+    if (!error) {
+      if (stripped.length > 0) {
+        console.warn(
+          "[leaseAbstractService] stripped unsupported columns:",
+          stripped.join(", "),
+        );
+      }
+      return data;
+    }
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in workingPayload)) {
+      throw error;
+    }
+    stripped.push(missingColumn);
+    delete workingPayload[missingColumn];
+    if (Object.keys(workingPayload).length === 0) throw error;
+  }
 }
 
 function toText(value) {
@@ -85,7 +117,14 @@ export async function persistFieldReviews({ lease, fieldReviews, reviewer }) {
     .from("lease_field_reviews")
     .upsert(rows, { onConflict: "lease_id,field_key" })
     .select();
-  if (error) throw error;
+  if (error) {
+    // Table not present yet (older schema) — don't block callers.
+    if (error.code === "PGRST205" || error.code === "42P01") {
+      console.warn("[leaseAbstractService] lease_field_reviews table missing; skipping audit upsert.");
+      return [];
+    }
+    throw error;
+  }
   return data || [];
 }
 
@@ -167,44 +206,16 @@ export async function approveLeaseAbstract({
     extraction_data: nextExtraction,
   };
 
-  const { data, error } = await supabase
-    .from("leases")
-    .update(update)
-    .eq("id", lease.id)
-    .select()
-    .single();
-  if (error) {
-    if (!isMissingAbstractColumnError(error)) throw error;
-    const legacyUpdate = withLegacyAbstractFallback(
-      {
-        status: "approved",
-        signed_by: approvedBy,
-        signed_at: signedAt || snapshot.approved_at,
-        approval_comments: comments || null,
-        approval_document_url: documentUrl || null,
-      },
-      nextExtraction,
-    );
-    const { data: legacyData, error: legacyError } = await supabase
-      .from("leases")
-      .update(legacyUpdate)
-      .eq("id", lease.id)
-      .select()
-      .single();
-    if (legacyError) throw legacyError;
-    await persistFieldReviews({
-      lease: { ...lease, ...legacyData },
-      fieldReviews,
-      reviewer: approvedBy,
-    }).catch(() => {});
-    return legacyData;
-  }
+  const data = await updateLeaseStripMissing(lease.id, update);
 
-  // Persist per-field reviews so the audit trail is queryable.
+  // Persist per-field reviews so the audit trail is queryable. If the
+  // dedicated table doesn't exist yet (older schema), don't block approval.
   await persistFieldReviews({
     lease: { ...lease, ...data },
     fieldReviews,
     reviewer: approvedBy,
+  }).catch((err) => {
+    console.warn("[leaseAbstractService] persistFieldReviews skipped:", err?.message || err);
   });
 
   return data;
@@ -227,25 +238,10 @@ export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
       ? ABSTRACT_STATUS.APPROVED  // Keep approved status; new edits create the next version on approval.
       : ABSTRACT_STATUS.PENDING_REVIEW,
   };
-  const { data, error } = await supabase
-    .from("leases")
-    .update(update)
-    .eq("id", lease.id)
-    .select()
-    .single();
-  if (error) {
-    if (!isMissingAbstractColumnError(error)) throw error;
-    const { data: legacyData, error: legacyError } = await supabase
-      .from("leases")
-      .update({ extraction_data: nextExtraction })
-      .eq("id", lease.id)
-      .select()
-      .single();
-    if (legacyError) throw legacyError;
-    await persistFieldReviews({ lease: { ...lease, ...legacyData }, fieldReviews, reviewer }).catch(() => {});
-    return legacyData;
-  }
-  await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer }).catch(() => {});
+  const data = await updateLeaseStripMissing(lease.id, update);
+  await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer }).catch((err) => {
+    console.warn("[leaseAbstractService] persistFieldReviews skipped:", err?.message || err);
+  });
   return data;
 }
 
@@ -262,31 +258,11 @@ export async function rejectLeaseAbstract({ lease, reason, reviewer }) {
       rejected_by: reviewer || null,
     },
   };
-  const { data, error } = await supabase
-    .from("leases")
-    .update({
-      status: "rejected",
-      abstract_status: ABSTRACT_STATUS.REJECTED,
-      extraction_data: nextExtraction,
-    })
-    .eq("id", lease.id)
-    .select()
-    .single();
-  if (error) {
-    if (!isMissingAbstractColumnError(error)) throw error;
-    const { data: legacyData, error: legacyError } = await supabase
-      .from("leases")
-      .update({
-        status: "rejected",
-        extraction_data: nextExtraction,
-      })
-      .eq("id", lease.id)
-      .select()
-      .single();
-    if (legacyError) throw legacyError;
-    return legacyData;
-  }
-  return data;
+  return updateLeaseStripMissing(lease.id, {
+    status: "rejected",
+    abstract_status: ABSTRACT_STATUS.REJECTED,
+    extraction_data: nextExtraction,
+  });
 }
 
 /**

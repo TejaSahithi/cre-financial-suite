@@ -74,11 +74,15 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "square_footage",     label: "Square Footage (RSF)",         tab: "parties_premises", required: true,  allowNA: false, type: "number" },
   { key: "premises_use",       label: "Permitted Use",                tab: "parties_premises", type: "text" },
 
-  // Dates & Term
-  { key: "lease_date",                 label: "Lease Date",                          tab: "dates_term", type: "date" },
-  { key: "start_date",                 label: "Commencement Date",                   tab: "dates_term", required: true,  allowNA: false, type: "date" },
+  // Dates & Term — Lease Date (signing), Commencement Date (term start),
+  // and Expiration Date are explicitly distinct. Commencement/expiration are
+  // stored on both the legacy start_date/end_date columns AND the dedicated
+  // commencement_date/expiration_date columns so downstream queries that read
+  // either pair keep working.
+  { key: "lease_date",                 label: "Lease Date (signed)",                 tab: "dates_term", type: "date" },
+  { key: "commencement_date",          label: "Commencement Date",                   tab: "dates_term", required: true,  allowNA: false, type: "date" },
   { key: "rent_commencement_date",     label: "Rent Commencement Date",              tab: "dates_term", type: "date" },
-  { key: "end_date",                   label: "Expiration Date",                     tab: "dates_term", required: true,  allowNA: false, type: "date" },
+  { key: "expiration_date",            label: "Expiration Date",                     tab: "dates_term", required: true,  allowNA: false, type: "date" },
   { key: "renewal_notice_months",      label: "Renewal Notice (months)",             tab: "dates_term", type: "number" },
   { key: "termination_notice_months",  label: "Termination Notice (months)",         tab: "dates_term", type: "number" },
   { key: "option_exercise_deadline",   label: "Option Exercise Deadline",            tab: "dates_term", type: "date" },
@@ -145,27 +149,71 @@ export const NUMERIC_REVIEW_FIELDS = new Set(
     .map((field) => field.key),
 );
 
+// A small alias map so a single review field key (e.g. commencement_date)
+// can read/write the legacy column (start_date) too. Lookups try every alias
+// before falling back to extraction_data.
+const FIELD_COLUMN_ALIASES = {
+  commencement_date: ["commencement_date", "start_date"],
+  expiration_date:   ["expiration_date", "end_date"],
+  start_date:        ["commencement_date", "start_date"],
+  end_date:          ["expiration_date", "end_date"],
+  square_footage:    ["square_footage", "total_sf", "rentable_area_sqft", "tenant_rsf"],
+  total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
+  premises_address:  ["premises_address", "property_address"],
+  premises_use:      ["premises_use", "permitted_use"],
+};
+
+function isPresent(v) {
+  return v !== undefined && v !== null && v !== "";
+}
+
 // Pull a stored normalized value for a field, regardless of whether it lives
 // on the lease row directly or inside extraction_data.
 export function readFieldValue(lease, key) {
   if (!lease) return null;
-  if (lease[key] !== undefined && lease[key] !== null && lease[key] !== "") return lease[key];
+  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
+  for (const candidate of candidates) {
+    if (isPresent(lease[candidate])) return lease[candidate];
+  }
   const extracted = lease.extracted_fields || {};
-  if (extracted[key] !== undefined && extracted[key] !== null && extracted[key] !== "") return extracted[key];
-  const inExtraction = lease.extraction_data?.fields?.[key];
-  if (inExtraction !== undefined && inExtraction !== null && inExtraction !== "") {
-    return typeof inExtraction === "object" && "value" in inExtraction ? inExtraction.value : inExtraction;
+  for (const candidate of candidates) {
+    if (isPresent(extracted[candidate])) {
+      const v = extracted[candidate];
+      return typeof v === "object" && "value" in v ? v.value : v;
+    }
+  }
+  const fields = lease.extraction_data?.fields || {};
+  for (const candidate of candidates) {
+    const inExtraction = fields[candidate];
+    if (isPresent(inExtraction)) {
+      return typeof inExtraction === "object" && "value" in inExtraction ? inExtraction.value : inExtraction;
+    }
   }
   return null;
+}
+
+// Resolve which lease columns to write for a given review field key. Edits
+// to commencement_date should also update the legacy start_date column so
+// downstream code that reads either keeps working.
+export function resolveFieldColumns(key) {
+  return FIELD_COLUMN_ALIASES[key] || [key];
 }
 
 // Best-effort lookup for the raw extraction value, source page and source text.
 // Falls back to nulls if the extraction pipeline did not provide evidence.
 export function readFieldEvidence(lease, key) {
-  const evidence = lease?.extraction_data?.field_evidence?.[key]
-    || lease?.extraction_data?.evidence?.[key]
-    || null;
-  const fieldEntry = lease?.extraction_data?.fields?.[key];
+  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
+  const evidenceMap = lease?.extraction_data?.field_evidence || lease?.extraction_data?.evidence || {};
+  const fieldsMap = lease?.extraction_data?.fields || {};
+
+  let evidence = null;
+  let fieldEntry = null;
+  for (const candidate of candidates) {
+    if (!evidence && evidenceMap[candidate]) evidence = evidenceMap[candidate];
+    if (!fieldEntry && fieldsMap[candidate]) fieldEntry = fieldsMap[candidate];
+    if (evidence && fieldEntry) break;
+  }
+
   const raw =
     evidence?.raw_value
     ?? evidence?.raw
@@ -177,20 +225,48 @@ export function readFieldEvidence(lease, key) {
   const sourceText =
     evidence?.source_text
     ?? evidence?.snippet
-    ?? (fieldEntry && typeof fieldEntry === "object" ? fieldEntry.source_text ?? fieldEntry.snippet : undefined);
+    ?? evidence?.exact_source_text
+    ?? (fieldEntry && typeof fieldEntry === "object"
+      ? fieldEntry.source_text ?? fieldEntry.snippet ?? fieldEntry.exact_source_text
+      : undefined);
+  const extractionStatus =
+    evidence?.extraction_status
+    ?? (fieldEntry && typeof fieldEntry === "object" ? fieldEntry.extraction_status : undefined);
   return {
     rawValue: raw ?? null,
     sourcePage: sourcePage ?? null,
     sourceText: sourceText ?? null,
+    extractionStatus: extractionStatus ?? null,
   };
 }
 
 export function readFieldConfidence(lease, key, fallback = null) {
-  const explicit = lease?.extraction_data?.confidence_scores?.[key];
-  if (typeof explicit === "number") return explicit;
-  const alt = lease?.extracted_fields?.[key]?.confidence;
-  if (typeof alt === "number") return alt;
+  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
+  const scores = lease?.extraction_data?.confidence_scores || {};
+  for (const candidate of candidates) {
+    if (typeof scores[candidate] === "number") return scores[candidate];
+  }
+  const extracted = lease?.extracted_fields || {};
+  for (const candidate of candidates) {
+    const alt = extracted[candidate]?.confidence;
+    if (typeof alt === "number") return alt;
+  }
+  const fields = lease?.extraction_data?.fields || {};
+  for (const candidate of candidates) {
+    const score = fields[candidate]?.confidence ?? fields[candidate]?.confidence_score;
+    if (typeof score === "number") return score;
+  }
   return fallback;
+}
+
+// Confidence bucket: "high" | "medium" | "low" | "unknown" — drives the
+// summary cards. A field with extracted data but no recorded confidence is
+// classified as "unknown", not lumped into low.
+export function classifyConfidence(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) return "unknown";
+  if (score >= 90) return "high";
+  if (score >= 75) return "medium";
+  return "low";
 }
 
 export function readFieldReview(lease, key) {

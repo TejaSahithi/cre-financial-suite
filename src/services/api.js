@@ -436,6 +436,17 @@ const COMPATIBILITY_MISSING_COLUMNS = {
     'confidence_score',
     'low_confidence_fields',
     'extracted_fields',
+    // Approved lease abstract columns (20260514120000_approved_lease_abstract.sql)
+    'abstract_status',
+    'abstract_version',
+    'abstract_approved_at',
+    'abstract_approved_by',
+    'abstract_snapshot',
+    // Date split (commencement/expiration may not exist on older schemas)
+    'commencement_date',
+    'expiration_date',
+    'lease_date',
+    'rent_commencement_date',
   ]),
   Document: new Set([
     'lease_id',
@@ -552,6 +563,10 @@ const ALLOWED_COLUMNS = {
     'extraction_data', 'confidence_score', 'low_confidence_fields', 'extracted_fields',
     // Approval / signature columns (20260413_lease_approval_and_documents.sql)
     'signed_by', 'signed_at', 'approval_comments', 'approval_document_url',
+    // Approved-lease-abstract columns (20260514120000_approved_lease_abstract.sql)
+    'abstract_status', 'abstract_version', 'abstract_approved_at',
+    'abstract_approved_by', 'abstract_snapshot',
+    'rent_commencement_date',
   ]),
   Document: new Set([
     ...COMMON_BASE_COLUMNS,
