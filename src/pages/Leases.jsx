@@ -73,12 +73,20 @@ function deriveAbstractBucket(lease) {
   return "drafts";
 }
 
+function normalizeLeaseListView(value) {
+  return ["approved", "drafts", "all"].includes(value) ? value : "approved";
+}
+
 export default function Leases() {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const urlView = useMemo(
+    () => normalizeLeaseListView(new URLSearchParams(location.search).get("view") || "approved"),
+    [location.search],
+  );
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
-  const [view, setView] = useState("approved"); // approved | drafts | all
+  const [view, setView] = useState(urlView); // approved | drafts | all
   const [showImport, setShowImport] = useState(false);
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
@@ -110,6 +118,10 @@ export default function Leases() {
     setScopeBuilding(scope.buildingId || "all");
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
+  useEffect(() => {
+    setView(urlView);
+  }, [urlView]);
 
   useEffect(() => {
     setSelectedLeaseIds((prev) => prev.filter((id) => leases.some((lease) => lease.id === id)));

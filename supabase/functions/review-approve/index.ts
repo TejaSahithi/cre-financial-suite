@@ -15,7 +15,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 
-type Action = "approve" | "reject" | "save";
+type Action = "approve" | "reject" | "save" | "prepare";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (!["approve", "reject", "save"].includes(action)) {
+    if (!["approve", "reject", "save", "prepare"].includes(action)) {
       return jsonResponse(
         { error: true, message: `Invalid action: ${action}`, error_code: "INVALID_ACTION" },
         400,
@@ -155,6 +155,68 @@ Deno.serve(async (req: Request) => {
       row_count: finalRows.length,
       reason: reject_reason ?? null,
     });
+
+    if (action === "prepare") {
+      if (!isLeaseModule(fileRecord.module_type)) {
+        return jsonResponse(
+          {
+            error: true,
+            message: "prepare is only supported for lease review files.",
+            error_code: "INVALID_PREPARE_ACTION",
+          },
+          422,
+        );
+      }
+
+      const leaseStoreResult = await ensureLeaseReviewDrafts(
+        supabaseAdmin,
+        fileRecord,
+        finalRows,
+        reviewedOutput,
+        user,
+      );
+
+      const { error: prepareErr } = await supabaseAdmin
+        .from("uploaded_files")
+        .update({
+          ui_review_payload: {
+            ...payload,
+            review_status: "pending",
+            prepared_by: user.id,
+            prepared_at: now,
+          },
+          reviewed_output: {
+            ...reviewedOutput,
+            status: "draft",
+            lease_review_ids: leaseStoreResult.inserted_ids,
+          },
+          review_audit: audit,
+          review_status: "pending",
+          valid_data: finalRows,
+          parsed_data: finalRows,
+          row_count: finalRows.length,
+          valid_count: finalRows.length,
+          updated_at: now,
+        })
+        .eq("id", file_id);
+
+      if (prepareErr) throw new Error(`Prepare failed: ${prepareErr.message}`);
+
+      return jsonResponse({
+        error: false,
+        file_id,
+        action,
+        review_status: "pending",
+        store_result: leaseStoreResult,
+        store_triggered: true,
+        reviewed_output: {
+          accepted_count: reviewedOutput.accepted_fields.length,
+          rejected_count: reviewedOutput.rejected_fields.length,
+          custom_count: reviewedOutput.custom_fields.length,
+          row_count: finalRows.length,
+        },
+      });
+    }
 
     if (action === "save") {
       const { error: saveErr } = await supabaseAdmin
