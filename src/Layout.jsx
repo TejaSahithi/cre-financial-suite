@@ -96,6 +96,8 @@ const navSections = [
       { label: "User Management", page: "UserManagement" },
       { label: "Org Settings", page: "OrgSettings" },
       { label: "Chart of Accounts", page: "ChartOfAccounts" },
+      { label: "Field Mapping Rules", page: "FieldMappingRules" },
+      { label: "Approval Workflows", page: "ApprovalWorkflows" },
       { label: "Audit Log", page: "AuditLog" },
     ]
   },

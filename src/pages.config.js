@@ -51,6 +51,8 @@ import AcceptInvite from './pages/AcceptInvite';
 import AwaitingRole from './pages/AwaitingRole';
 import AddExpense from './pages/AddExpense';
 import AuditLog from './pages/AuditLog';
+import ApprovalWorkflows from './pages/ApprovalWorkflows';
+import FieldMappingRules from './pages/FieldMappingRules';
 import BudgetDashboard from './pages/BudgetDashboard';
 import BudgetReview from './pages/BudgetReview';
 import Buildings from './pages/Buildings';
@@ -123,6 +125,8 @@ export const PAGES = {
     "AwaitingRole": AwaitingRole,
     "AddExpense": AddExpense,
     "AuditLog": AuditLog,
+    "ApprovalWorkflows": ApprovalWorkflows,
+    "FieldMappingRules": FieldMappingRules,
     "BudgetDashboard": BudgetDashboard,
     "BudgetReview": BudgetReview,
     "Buildings": Buildings,
