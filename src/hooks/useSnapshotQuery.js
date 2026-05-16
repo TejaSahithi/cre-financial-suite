@@ -31,7 +31,13 @@ function scopeMatches(snapshot, scopeLevel, scopeId) {
   return inputScopeLevel === scopeLevel && inputScopeId === scopeId;
 }
 
-async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId }) {
+function projectionModeMatches(snapshot, projectionMode) {
+  if (!projectionMode) return true;
+  const mode = snapshot?.inputs?.projection_mode ?? snapshot?.outputs?.projection_mode ?? "contracted_only";
+  return mode === projectionMode;
+}
+
+async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode }) {
   if (!supabase) return null;
 
   let query = supabase
@@ -57,7 +63,7 @@ async function fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, s
   const rows = data ?? [];
   if (!rows.length) return null;
 
-  return rows.find((row) => scopeMatches(row, scopeLevel, scopeId)) ?? null;
+  return rows.find((row) => scopeMatches(row, scopeLevel, scopeId) && projectionModeMatches(row, projectionMode)) ?? null;
 }
 
 export function useSnapshotQuery({
@@ -66,6 +72,7 @@ export function useSnapshotQuery({
   fiscalYear,
   scopeLevel,
   scopeId,
+  projectionMode,
   autoRefreshMs = 0,
 }) {
   const queryKey = [
@@ -75,11 +82,12 @@ export function useSnapshotQuery({
     fiscalYear ?? "any",
     scopeLevel ?? "property",
     scopeId ?? "all",
+    projectionMode ?? "contracted_only",
   ];
 
   const { data: snapshot, isLoading, isFetching, refetch } = useQuery({
     queryKey,
-    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId }),
+    queryFn: () => fetchSnapshot({ engineType, propertyId, fiscalYear, scopeLevel, scopeId, projectionMode }),
     // Auto-refresh if no snapshot yet (compute may still be running)
     refetchInterval: (data) => {
       if (autoRefreshMs > 0) return autoRefreshMs;
