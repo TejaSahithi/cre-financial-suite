@@ -9,7 +9,23 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Pencil, X, MinusCircle, Gavel } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  ChevronDown,
+  Eye,
+  Gavel,
+  HelpCircle,
+  MinusCircle,
+  Pencil,
+  X,
+} from "lucide-react";
 import {
   REVIEW_STATUSES,
   REVIEW_STATUS_LABELS,
@@ -143,64 +159,47 @@ export default function FieldReviewTable({
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center justify-end gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-emerald-600 hover:bg-emerald-50"
-                      title="Accept"
-                      onClick={() => onQuickAction(field, "accept")}
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-blue-600 hover:bg-blue-50"
-                      title="Edit"
-                      onClick={() => onQuickAction(field, "edit")}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-red-600 hover:bg-red-50"
-                      title="Reject"
-                      onClick={() => onQuickAction(field, "reject")}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                    {field.allowNA !== false && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-slate-600 hover:bg-slate-100"
-                        title="Mark N/A"
-                        onClick={() => onQuickAction(field, "na")}
-                      >
-                        <MinusCircle className="h-3.5 w-3.5" />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-7 text-xs">
+                        Actions
+                        <ChevronDown className="ml-1 h-3.5 w-3.5" />
                       </Button>
-                    )}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-purple-600 hover:bg-purple-50"
-                      title="Needs Legal Review"
-                      onClick={() => onQuickAction(field, "legal")}
-                    >
-                      <Gavel className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-slate-500"
-                      title="Open detail"
-                      onClick={() => onOpenDetail(field)}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem onSelect={() => onOpenDetail(field)}>
+                        <Eye className="mr-2 h-3.5 w-3.5 text-slate-500" />
+                        Open detail
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onQuickAction(field, "edit")}>
+                        <Pencil className="mr-2 h-3.5 w-3.5 text-blue-600" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => onQuickAction(field, "accept")}>
+                        <Check className="mr-2 h-3.5 w-3.5 text-emerald-600" />
+                        Accept
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onQuickAction(field, "reject")}>
+                        <X className="mr-2 h-3.5 w-3.5 text-red-600" />
+                        Reject
+                      </DropdownMenuItem>
+                      {field.allowNA !== false && (
+                        <DropdownMenuItem onSelect={() => onQuickAction(field, "na")}>
+                          <MinusCircle className="mr-2 h-3.5 w-3.5 text-slate-600" />
+                          Mark N/A
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem onSelect={() => onQuickAction(field, "manual")}>
+                        <HelpCircle className="mr-2 h-3.5 w-3.5 text-amber-600" />
+                        Manual Required
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onQuickAction(field, "legal")}>
+                        <Gavel className="mr-2 h-3.5 w-3.5 text-purple-600" />
+                        Needs Legal
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </TableCell>
               </TableRow>
             );

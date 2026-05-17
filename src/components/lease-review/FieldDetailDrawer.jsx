@@ -78,12 +78,20 @@ export default function FieldDetailDrawer({
   onReset,
   onSaveEdit,
   onSaveOverrideReason,
+  onSaveEvidence,
   onViewInDocument,
   isSaving,
 }) {
   const [mode, setMode] = useState("view");
   const [editValue, setEditValue] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
+  // Editable evidence form state — reviewer can correct what extraction
+  // missed or got wrong without re-running the pipeline.
+  const [evRaw, setEvRaw] = useState("");
+  const [evSourcePage, setEvSourcePage] = useState("");
+  const [evSourceText, setEvSourceText] = useState("");
+  const [evConfidence, setEvConfidence] = useState("");
+  const [evExtractionStatus, setEvExtractionStatus] = useState("");
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -107,6 +115,11 @@ export default function FieldDetailDrawer({
     setMode("view");
     setEditValue(value == null ? "" : String(value));
     setOverrideReason(typeof review?.note === "string" ? review.note : "");
+    setEvRaw(evidence?.rawValue == null ? "" : String(evidence.rawValue));
+    setEvSourcePage(evidence?.sourcePage == null ? "" : String(evidence.sourcePage));
+    setEvSourceText(evidence?.sourceText == null ? "" : String(evidence.sourceText));
+    setEvConfidence(typeof confidence === "number" ? String(confidence) : "");
+    setEvExtractionStatus(evidence?.extractionStatus || inferredExtractionStatus || "");
   }, [open, field?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Whether this field needs an override reason to clear the approval gate.
@@ -259,28 +272,119 @@ export default function FieldDetailDrawer({
             )}
           </section>
 
-          {/* Raw extracted */}
-          <section className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Raw Value</p>
-              <p className="mt-1 break-words text-sm text-slate-700">{rawValue ?? "—"}</p>
+          {/* Editable evidence form — reviewer can correct extractor output
+              without re-running the pipeline. Persists via onSaveEvidence. */}
+          <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50/50 p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Evidence (editable)
+              </p>
+              <span className="text-[10px] text-slate-500">All fields below can be corrected by the reviewer</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Raw Value</Label>
+                <Input
+                  className="mt-1"
+                  value={evRaw}
+                  onChange={(e) => setEvRaw(e.target.value)}
+                  placeholder="e.g. $1,400 per month"
+                  disabled={!onSaveEvidence || isSaving}
+                />
+              </div>
+              <div>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Source Page</Label>
+                <Input
+                  className="mt-1"
+                  type="number"
+                  value={evSourcePage}
+                  onChange={(e) => setEvSourcePage(e.target.value)}
+                  placeholder="e.g. 3"
+                  disabled={!onSaveEvidence || isSaving}
+                />
+              </div>
             </div>
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Source Page</p>
-              <p className="mt-1 text-sm text-slate-700">{sourcePage ?? "—"}</p>
+              <Label className="text-[10px] font-semibold uppercase text-slate-500">Exact Source Text</Label>
+              <Textarea
+                className="mt-1"
+                rows={3}
+                value={evSourceText}
+                onChange={(e) => setEvSourceText(e.target.value)}
+                placeholder="Paste the verbatim sentence from the lease document"
+                disabled={!onSaveEvidence || isSaving}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Confidence Score (0–100)</Label>
+                <Input
+                  className="mt-1"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={evConfidence}
+                  onChange={(e) => setEvConfidence(e.target.value)}
+                  placeholder="e.g. 95"
+                  disabled={!onSaveEvidence || isSaving}
+                />
+              </div>
+              <div>
+                <Label className="text-[10px] font-semibold uppercase text-slate-500">Extraction Status</Label>
+                <Select value={evExtractionStatus} onValueChange={setEvExtractionStatus} disabled={!onSaveEvidence || isSaving}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="extracted">Extracted</SelectItem>
+                    <SelectItem value="extracted_no_confidence">Extracted (no confidence)</SelectItem>
+                    <SelectItem value="missing_source_evidence">Missing Source Evidence</SelectItem>
+                    <SelectItem value="not_found">Not Found</SelectItem>
+                    <SelectItem value="manual_required">Manual Required</SelectItem>
+                    <SelectItem value="calculated">Calculated</SelectItem>
+                    <SelectItem value="conflict_detected">Conflict Detected</SelectItem>
+                    <SelectItem value="missing">Missing</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setEvRaw(evidence?.rawValue == null ? "" : String(evidence.rawValue));
+                  setEvSourcePage(evidence?.sourcePage == null ? "" : String(evidence.sourcePage));
+                  setEvSourceText(evidence?.sourceText == null ? "" : String(evidence.sourceText));
+                  setEvConfidence(typeof confidence === "number" ? String(confidence) : "");
+                  setEvExtractionStatus(evidence?.extractionStatus || inferredExtractionStatus || "");
+                }}
+                disabled={isSaving}
+              >
+                Reset
+              </Button>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700"
+                disabled={!onSaveEvidence || isSaving}
+                onClick={() =>
+                  onSaveEvidence && onSaveEvidence(field, {
+                    raw_value: evRaw.trim() || null,
+                    source_page: evSourcePage === "" ? null : Number(evSourcePage),
+                    source_text: evSourceText.trim() || null,
+                    confidence: evConfidence === "" ? null : Number(evConfidence),
+                    extraction_status: evExtractionStatus || null,
+                  })
+                }
+              >
+                {isSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                Save Evidence
+              </Button>
             </div>
           </section>
 
-          <section>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Exact Source Text</p>
-            <p className="mt-1 whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-xs italic text-slate-700">
-              {sourceText || "No source text captured."}
-            </p>
-          </section>
-
           <section className="grid gap-3 sm:grid-cols-2">
-            <Meta label="Confidence Score" value={confidenceLabel} />
-            <Meta label="Extraction Status" value={extractionStatusLabel} />
             <Meta label="Review Status" value={REVIEW_STATUS_LABELS[status]} />
             <Meta label="Reviewer" value={review?.reviewer || "—"} />
             <Meta label="Reviewed At" value={formatTime(review?.reviewed_at)} />

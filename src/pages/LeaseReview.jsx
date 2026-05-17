@@ -1555,7 +1555,7 @@ export default function LeaseReview() {
                     setDrawerField(field);
                   } else if (action === "reject") handleReject(field);
                   else if (action === "na") handleMarkNA(field);
-                  else if (action === "legal") handleNeedsLegal(field);
+                  else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
                 }}
               />
             </TabsContent>
@@ -1576,7 +1576,7 @@ export default function LeaseReview() {
               else if (action === "edit") setDrawerField(field);
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field);
+              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
           />
           <RentScheduleTable leaseId={lease.id} />
@@ -1594,7 +1594,7 @@ export default function LeaseReview() {
               else if (action === "edit") setDrawerField(field);
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field);
+              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
           />
           <ExpenseRulesTable leaseId={lease.id} />
@@ -1612,7 +1612,7 @@ export default function LeaseReview() {
               else if (action === "edit") setDrawerField(field);
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field);
+              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
           />
           <CamRulesTable leaseId={lease.id} />
@@ -1713,6 +1713,70 @@ export default function LeaseReview() {
           }
         }}
         onViewInDocument={() => drawerField && viewInDocument(drawerField)}
+        onSaveEvidence={async (f, evidencePatch) => {
+          // Reviewer-corrected evidence. Lands in extraction_data.field_evidence
+          // and (mirrored) in extraction_data.fields so every downstream reader
+          // sees the same shape the extractor would have produced.
+          try {
+            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
+            const prevField = lease.extraction_data?.fields?.[f.key] || null;
+            const cleanPatch = {
+              raw_value: evidencePatch.raw_value ?? null,
+              source_page:
+                typeof evidencePatch.source_page === "number" && Number.isFinite(evidencePatch.source_page)
+                  ? evidencePatch.source_page
+                  : null,
+              source_text: evidencePatch.source_text ?? null,
+              extraction_status: evidencePatch.extraction_status ?? null,
+            };
+            const confValue =
+              typeof evidencePatch.confidence === "number" && Number.isFinite(evidencePatch.confidence)
+                ? Math.max(0, Math.min(100, Math.round(evidencePatch.confidence)))
+                : null;
+
+            const nextExtraction = {
+              ...(lease.extraction_data || {}),
+              fields: {
+                ...(lease.extraction_data?.fields || {}),
+                [f.key]: {
+                  ...(prevField || {}),
+                  ...cleanPatch,
+                  confidence: confValue,
+                  manually_edited_evidence: true,
+                  edited_at: new Date().toISOString(),
+                },
+              },
+              field_evidence: {
+                ...(lease.extraction_data?.field_evidence || {}),
+                [f.key]: cleanPatch,
+              },
+              confidence_scores: {
+                ...(lease.extraction_data?.confidence_scores || {}),
+                ...(confValue != null ? { [f.key]: confValue } : {}),
+              },
+            };
+            const { error: updateErr } = await supabase
+              .from("leases")
+              .update({ extraction_data: nextExtraction })
+              .eq("id", lease.id);
+            if (updateErr) throw updateErr;
+            await logAudit({
+              entityType: "LeaseFieldReview",
+              entityId: lease.id,
+              action: "field_evidence_edit",
+              orgId: lease.org_id,
+              fieldChanged: f.key,
+              oldValue: prevEvidence ? JSON.stringify(prevEvidence) : null,
+              newValue: JSON.stringify({ ...cleanPatch, confidence: confValue }),
+              propertyId: lease.property_id || null,
+            });
+            toast.success(`Evidence saved for ${f.label}`);
+            queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+          } catch (err) {
+            console.error("[LeaseReview] evidence save failed:", err);
+            toast.error(err?.message || "Could not save evidence");
+          }
+        }}
         onSaveOverrideReason={async (f, reason) => {
           // Persists the reason into fieldReviews[key].note so the approval
           // gate's `hasEvidenceOverride` check unblocks the field.
