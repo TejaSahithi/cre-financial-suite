@@ -231,6 +231,92 @@ export default function LeaseReview() {
     };
   }, [lease]);
 
+  // Backfill evidence for legacy leases. If a lease has values but no
+  // extraction_data.workflow_output / field_evidence (created via the older
+  // review-approve path or the previous client fallback), reach back to the
+  // source uploaded_files.ui_review_payload and persist the missing
+  // workflow_output + fields-with-evidence + field_evidence shapes so the
+  // table can render Raw / Page / Source Text / Confidence without a
+  // re-extraction.
+  useEffect(() => {
+    if (!lease?.id || !supabase) return;
+    const ed = lease.extraction_data || {};
+    const hasEvidence = Boolean(
+      ed.field_evidence
+      || ed.workflow_output?.lease_fields
+      || ed.workflow_output?.records?.[0]?.lease_fields
+      || lease.abstract_snapshot?.fields,
+    );
+    const sourceFileId = ed.source_file_id;
+    if (hasEvidence || !sourceFileId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: file, error } = await supabase
+          .from("uploaded_files")
+          .select("ui_review_payload")
+          .eq("id", sourceFileId)
+          .maybeSingle();
+        if (error || !file?.ui_review_payload || cancelled) return;
+        const records = file.ui_review_payload.records || file.ui_review_payload.rows || [];
+        const record = records[0];
+        if (!record) return;
+
+        const fieldsWithEvidence = {};
+        const fieldEvidence = {};
+        const allFields = [...(record.standard_fields || []), ...(record.custom_fields || [])];
+        for (const field of allFields) {
+          if (!field?.field_key) continue;
+          fieldsWithEvidence[field.field_key] = {
+            value: field.value ?? null,
+            confidence: typeof field.confidence === "number" ? field.confidence : null,
+            source: field.source ?? null,
+            evidence: field.evidence ?? null,
+            source_page: field.evidence?.page_number ?? null,
+            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+            raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
+            extraction_status: field.status ?? null,
+          };
+          if (field.evidence) {
+            fieldEvidence[field.field_key] = {
+              raw_value: field.original_value ?? field.evidence.raw_value ?? null,
+              source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
+              source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+              extraction_status: field.status ?? null,
+            };
+          }
+        }
+
+        const wf = file.ui_review_payload?.metadata?.workflow_output;
+        const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
+
+        const nextExtraction = {
+          ...ed,
+          fields: { ...(ed.fields || {}), ...fieldsWithEvidence },
+          field_evidence: { ...(ed.field_evidence || {}), ...fieldEvidence },
+          ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
+          evidence_backfilled_at: new Date().toISOString(),
+        };
+
+        const { error: updateErr } = await supabase
+          .from("leases")
+          .update({ extraction_data: nextExtraction })
+          .eq("id", lease.id);
+        if (updateErr) {
+          console.warn("[LeaseReview] evidence backfill update failed:", updateErr.message);
+          return;
+        }
+        queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      } catch (err) {
+        console.warn("[LeaseReview] evidence backfill failed:", err?.message || err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Mark related notifications as read.
   useEffect(() => {
     if (!leaseId) return;

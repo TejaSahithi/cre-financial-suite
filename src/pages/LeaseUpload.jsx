@@ -916,6 +916,14 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
     .filter(([, score]) => typeof score === "number" && score < 75)
     .map(([field]) => field);
 
+  // Pull per-field evidence (source page, exact source text) AND the workflow
+  // output so the Lease Review table can render Raw / Page / Source Text /
+  // Confidence columns even when the lease was created via this fallback
+  // instead of review-approve. Without this, evidence is silently lost.
+  const fieldsWithEvidence = buildFieldsWithEvidence(fileRecord?.ui_review_payload);
+  const fieldEvidence = buildFieldEvidenceMap(fileRecord?.ui_review_payload);
+  const workflowOutput = extractWorkflowOutputForFirstRow(fileRecord?.ui_review_payload);
+
   const numeric = (v) => {
     if (v == null || v === "") return null;
     const n = Number(String(v).replace(/[$,%\s,]/g, ""));
@@ -962,7 +970,14 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
       source_file_name: fileRecord.file_name ?? null,
       document_subtype: fileRecord.document_subtype ?? null,
       confidence_scores: confidenceScores,
-      fields: candidateRows[0] || {},
+      // Replace bare row with per-field { value, confidence, source, evidence }
+      // so the Lease Review reader can pull source_page + source_text.
+      fields: fieldsWithEvidence,
+      field_evidence: fieldEvidence,
+      // Forward the workflow output (lease_fields with full provenance) so
+      // the UI's getWorkflowLeaseFields resolver lights up Raw / Page /
+      // Source Text / Confidence columns.
+      workflow_output: workflowOutput,
     },
     confidence_score: averageConfidence(confidenceScores),
     low_confidence_fields: lowConfidenceFields,
@@ -992,6 +1007,73 @@ function extractRowsFromUiReview(payload) {
     }
     return row;
   });
+}
+
+// Build extraction_data.fields as { key: { value, confidence, source, evidence }
+// }. The Lease Review reader uses this when probing each field for raw +
+// page + source-text + status. Bare row values (the previous shape) had no
+// evidence, which is why the columns rendered as "—".
+function buildFieldsWithEvidence(payload) {
+  const records = payload?.records || payload?.rows || [];
+  const record = records[0];
+  if (!record) return {};
+  const out = {};
+  const fields = [
+    ...(record.standard_fields || []),
+    ...(record.custom_fields || []),
+  ];
+  for (const field of fields) {
+    if (!field?.field_key) continue;
+    if (field.status === "rejected") continue;
+    out[field.field_key] = {
+      value: field.value ?? null,
+      confidence: typeof field.confidence === "number" ? field.confidence : null,
+      source: field.source ?? null,
+      evidence: field.evidence ?? null,
+      // Mirror evidence as flat keys so the resolver finds them regardless
+      // of whether it reads from extraction_data.fields[key] or
+      // extraction_data.field_evidence[key].
+      source_page: field.evidence?.page_number ?? null,
+      source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+      raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
+      extraction_status: field.status ?? null,
+    };
+  }
+  return out;
+}
+
+// Build extraction_data.field_evidence keyed by field. This is the primary
+// shape the resolver expects when populated by review-approve; the
+// client-side fallback now produces it too.
+function buildFieldEvidenceMap(payload) {
+  const records = payload?.records || payload?.rows || [];
+  const record = records[0];
+  if (!record) return {};
+  const out = {};
+  for (const field of record.standard_fields || []) {
+    if (!field?.field_key || !field?.evidence) continue;
+    out[field.field_key] = {
+      raw_value: field.original_value ?? field.evidence.raw_value ?? null,
+      source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
+      source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+      extraction_status: field.status ?? null,
+    };
+  }
+  return out;
+}
+
+// The normalize-pdf-output edge function stores the per-row workflow output
+// (lease_fields, expense_rules, cam_profile, lease_clauses) under
+// ui_review_payload.metadata.workflow_output.records[rowIndex]. Pull the
+// first row's view so extraction_data.workflow_output mirrors what
+// review-approve would have written on the happy path.
+function extractWorkflowOutputForFirstRow(payload) {
+  const wf = payload?.metadata?.workflow_output;
+  if (!wf) return null;
+  if (Array.isArray(wf.records)) {
+    return wf.records[0] ?? null;
+  }
+  return wf;
 }
 
 function collectConfidenceFromPayload(payload) {
