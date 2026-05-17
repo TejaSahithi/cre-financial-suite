@@ -235,7 +235,7 @@ export default function LeaseUpload() {
       .select(
         "id, file_name, file_url, status, error_message, review_required, review_status, " +
         "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
-        "property_id, building_id, unit_id, updated_at",
+        "org_id, property_id, building_id, unit_id, updated_at",
       )
       .eq("id", id)
       .maybeSingle();
@@ -243,7 +243,7 @@ export default function LeaseUpload() {
     if (error) {
       const fallback = await supabase
         .from("uploaded_files")
-        .select("id, file_name, file_url, status, error_message, row_count, updated_at")
+        .select("id, file_name, file_url, status, error_message, row_count, org_id, updated_at")
         .eq("id", id)
         .maybeSingle();
       data = fallback.data;
@@ -427,8 +427,8 @@ export default function LeaseUpload() {
     }
   };
 
-  const handleViewDocument = () => {
-    const url = fileRecord?.file_url;
+  const handleViewDocument = async () => {
+    const url = await resolveUploadedFileUrl(fileRecord);
     if (!url) {
       toast.error("Document URL is not available.");
       return;
@@ -929,4 +929,43 @@ function isMeaningfulLeaseValue(value) {
 function isUnsupportedPrepareAction(error) {
   const message = String(error?.message || "");
   return /invalid action:\s*prepare/i.test(message);
+}
+
+async function resolveUploadedFileUrl(fileRecord) {
+  if (!fileRecord) return null;
+
+  const storagePath = deriveFinancialUploadPath(fileRecord);
+  if (storagePath) {
+    const { data, error } = await supabase.storage
+      .from("financial-uploads")
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (!error && data?.signedUrl) {
+      return data.signedUrl;
+    }
+  }
+
+  return fileRecord.file_url || null;
+}
+
+function deriveFinancialUploadPath(fileRecord) {
+  const rawUrl = String(fileRecord?.file_url || "");
+  const publicPrefix = "/storage/v1/object/public/financial-uploads/";
+  const signPrefix = "/storage/v1/object/sign/financial-uploads/";
+
+  const publicIndex = rawUrl.indexOf(publicPrefix);
+  if (publicIndex >= 0) {
+    return rawUrl.slice(publicIndex + publicPrefix.length).split("?")[0];
+  }
+
+  const signIndex = rawUrl.indexOf(signPrefix);
+  if (signIndex >= 0) {
+    return rawUrl.slice(signIndex + signPrefix.length).split("?")[0];
+  }
+
+  if (fileRecord?.org_id && fileRecord?.id) {
+    return `${fileRecord.org_id}/${fileRecord.id}`;
+  }
+
+  return null;
 }
