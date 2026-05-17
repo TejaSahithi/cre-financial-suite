@@ -160,7 +160,7 @@ const FIELD_COLUMN_ALIASES = {
   expiration_date:   ["expiration_date", "end_date"],
   start_date:        ["commencement_date", "start_date"],
   end_date:          ["expiration_date", "end_date"],
-  landlord_name:     ["landlord_name", "lessor_name", "owner_name"],
+  landlord_name:     ["landlord_name", "lessor_name", "owner_name", "landlord", "lessor", "owner"],
   square_footage:    ["square_footage", "total_sf", "rentable_area_sqft", "tenant_rsf"],
   total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
   premises_address:  ["premises_address", "property_address", "premises_location"],
@@ -172,22 +172,132 @@ const FIELD_COLUMN_ALIASES = {
   escalation_type:   ["escalation_type", "rent_escalation_type"],
   escalation_rate:   ["escalation_rate", "renewal_escalation_percent"],
   escalation_timing: ["escalation_timing", "rent_escalation_timing"],
+  free_rent_months:  ["free_rent_months", "rent_abatement_months", "abatement_months"],
+  ti_allowance:      ["ti_allowance", "tenant_improvement_allowance", "improvement_allowance"],
+  security_deposit:  ["security_deposit", "deposit_amount"],
+  lease_type:        ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
   expense_stop:      ["expense_stop", "expense_stop_amount"],
   cam_cap_pct:       ["cam_cap_pct", "cam_cap_percent", "cam_cap_rate"],
   gross_up_threshold:["gross_up_threshold", "gross_up_percent", "gross_up_target_occupancy_pct"],
   base_year:         ["base_year", "base_year_amount"],
   renewal_notice_months: ["renewal_notice_months", "renewal_notice_days"],
+  option_exercise_deadline: ["option_exercise_deadline", "renewal_exercise_deadline"],
   responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
   responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
   responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
   responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
   property_insurance_responsibility: ["property_insurance_responsibility", "insurance_responsibility"],
-  tenant_insurance_required: ["tenant_insurance_required", "tenant_insurance"],
+  tenant_insurance_required: ["tenant_insurance_required", "tenant_insurance", "tenant_property_insurance_required", "commercial_general_liability_required", "insurance_required"],
+  general_liability_min: ["general_liability_min", "general_liability_amount", "commercial_general_liability_amount", "commercial_general_liability_limit", "liability_insurance_amount"],
+  waiver_of_subrogation: ["waiver_of_subrogation", "waiver_subrogation_required"],
+  additional_insureds_required: ["additional_insureds_required", "additional_insured_required", "additional_insured"],
+  renewal_type: ["renewal_type", "renewal_option_type"],
+  renewal_options: ["renewal_options", "renewal_option_count"],
+  right_of_first_refusal: ["right_of_first_refusal", "rofr"],
+  early_termination_option: ["early_termination_option", "termination_option"],
+  assignment_provisions: ["assignment_provisions", "assignment_clause", "assignment_rights"],
   default_cure_period: ["default_cure_period", "late_fee_grace_days"],
 };
 
 function isPresent(v) {
   return v !== undefined && v !== null && v !== "";
+}
+
+function normalizeLookupKey(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseStoredNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned.replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function collectEntryVariants(entry) {
+  if (!entry || typeof entry !== "object") return [];
+
+  const variants = [entry];
+  const nestedKeys = ["evidence", "match", "metadata", "source"];
+  const arrayKeys = ["evidence", "citations", "sources", "clauses", "supporting_clauses", "matches"];
+
+  for (const key of nestedKeys) {
+    const nested = entry[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      variants.push(nested);
+    }
+  }
+
+  for (const key of arrayKeys) {
+    const items = entry[key];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (item && typeof item === "object") variants.push(item);
+    }
+  }
+
+  return [...new Set(variants)];
+}
+
+function readFromEntry(entry, ...keys) {
+  for (const variant of collectEntryVariants(entry)) {
+    for (const key of keys) {
+      if (variant[key] !== undefined && variant[key] !== null && variant[key] !== "") {
+        return variant[key];
+      }
+    }
+  }
+  return undefined;
+}
+
+function unwrapFieldValue(entry) {
+  if (!isPresent(entry)) return null;
+  if (typeof entry !== "object") return entry;
+  return (
+    readFromEntry(entry, "value", "normalized_value", "extracted_value", "raw_value", "raw")
+    ?? null
+  );
+}
+
+function pickCandidateEntry(map, candidates) {
+  if (!map) return null;
+
+  if (Array.isArray(map)) {
+    const normalizedCandidates = new Set(candidates.map(normalizeLookupKey));
+    for (const item of map) {
+      if (!item || typeof item !== "object") continue;
+      const itemKey = item.field_key ?? item.key ?? item.name ?? null;
+      if (itemKey && normalizedCandidates.has(normalizeLookupKey(itemKey))) return item;
+    }
+    return null;
+  }
+
+  for (const candidate of candidates) {
+    if (Object.prototype.hasOwnProperty.call(map, candidate) && isPresent(map[candidate])) {
+      return map[candidate];
+    }
+  }
+
+  const normalizedCandidates = new Set(candidates.map(normalizeLookupKey));
+  for (const [mapKey, value] of Object.entries(map)) {
+    if (normalizedCandidates.has(normalizeLookupKey(mapKey)) && isPresent(value)) {
+      return value;
+    }
+  }
+
+  for (const value of Object.values(map)) {
+    if (!value || typeof value !== "object") continue;
+    const itemKey = value.field_key ?? value.key ?? value.name ?? null;
+    if (itemKey && normalizedCandidates.has(normalizeLookupKey(itemKey))) return value;
+  }
+
+  return null;
 }
 
 function getLeaseWorkflowOutput(lease) {
@@ -310,32 +420,21 @@ export function readFieldValue(lease, key) {
     if (isPresent(lease[candidate])) return lease[candidate];
   }
   const extracted = lease.extracted_fields || {};
-  for (const candidate of candidates) {
-    if (isPresent(extracted[candidate])) {
-      const v = extracted[candidate];
-      return typeof v === "object" && "value" in v ? v.value : v;
-    }
-  }
+  const extractedEntry = pickCandidateEntry(extracted, candidates);
+  if (isPresent(extractedEntry)) return unwrapFieldValue(extractedEntry);
   const fields = lease.extraction_data?.fields || {};
-  for (const candidate of candidates) {
-    const inExtraction = fields[candidate];
-    if (isPresent(inExtraction)) {
-      return typeof inExtraction === "object" && "value" in inExtraction ? inExtraction.value : inExtraction;
-    }
-  }
+  const extractionEntry = pickCandidateEntry(fields, candidates);
+  if (isPresent(extractionEntry)) return unwrapFieldValue(extractionEntry);
   const workflowFields = getWorkflowLeaseFields(lease);
-  for (const candidate of candidates) {
-    const workflowEntry = workflowFields[candidate];
-    if (isPresent(workflowEntry)) {
-      return typeof workflowEntry === "object" && "value" in workflowEntry
-        ? workflowEntry.value
-        : workflowEntry;
-    }
-  }
+  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
+  if (isPresent(workflowEntry)) return unwrapFieldValue(workflowEntry);
   for (const candidate of candidates) {
     const derived = buildDerivedWorkflowEntry(lease, candidate);
     if (isPresent(derived?.value)) return derived.value;
   }
+  const snapshotFields = lease?.abstract_snapshot?.fields || {};
+  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
+  if (isPresent(snapshotEntry)) return unwrapFieldValue(snapshotEntry);
   return null;
 }
 
@@ -359,55 +458,39 @@ export function readFieldEvidence(lease, key) {
   const fieldsMap = lease?.extraction_data?.fields || {};
   const workflowFields = getWorkflowLeaseFields(lease);
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
-
-  const pick = (map) => {
-    for (const candidate of candidates) {
-      if (map?.[candidate]) return map[candidate];
-    }
-    return null;
-  };
-
-  const evidence = pick(evidenceMap);
-  const fieldEntry = pick(fieldsMap);
-  const workflowEntry = pick(workflowFields);
+  const evidence = pickCandidateEntry(evidenceMap, candidates);
+  const fieldEntry = pickCandidateEntry(fieldsMap, candidates);
+  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
   const derivedEntry = candidates.map((candidate) => buildDerivedWorkflowEntry(lease, candidate)).find(Boolean) || null;
-  const snapshotEntry = pick(snapshotFields);
-
-  const readFrom = (entry, ...keys) => {
-    if (!entry || typeof entry !== "object") return undefined;
-    for (const k of keys) {
-      if (entry[k] !== undefined && entry[k] !== null && entry[k] !== "") return entry[k];
-    }
-    return undefined;
-  };
+  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
 
   const raw =
-    readFrom(evidence, "raw_value", "raw")
-    ?? readFrom(fieldEntry, "raw_value", "raw")
-    ?? readFrom(workflowEntry, "raw_value", "source_clause")
-    ?? readFrom(derivedEntry, "raw_value", "source_clause")
-    ?? readFrom(snapshotEntry, "raw_value", "raw");
+    readFromEntry(evidence, "raw_value", "raw", "original_value", "extracted_value")
+    ?? readFromEntry(fieldEntry, "raw_value", "raw", "original_value", "extracted_value")
+    ?? readFromEntry(workflowEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
+    ?? readFromEntry(derivedEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
+    ?? readFromEntry(snapshotEntry, "raw_value", "raw", "original_value", "extracted_value");
   const sourcePage =
-    readFrom(evidence, "source_page", "page")
-    ?? readFrom(fieldEntry, "source_page", "page")
-    ?? readFrom(workflowEntry, "source_page", "page")
-    ?? readFrom(derivedEntry, "source_page", "page")
-    ?? readFrom(snapshotEntry, "source_page", "page");
+    readFromEntry(evidence, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
+    ?? readFromEntry(fieldEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
+    ?? readFromEntry(workflowEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
+    ?? readFromEntry(derivedEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
+    ?? readFromEntry(snapshotEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage");
   const sourceText =
-    readFrom(evidence, "source_text", "snippet", "exact_source_text", "source_clause")
-    ?? readFrom(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause")
-    ?? readFrom(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text")
-    ?? readFrom(derivedEntry, "source_clause", "source_text", "snippet", "exact_source_text")
-    ?? readFrom(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause");
+    readFromEntry(evidence, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
+    ?? readFromEntry(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
+    ?? readFromEntry(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
+    ?? readFromEntry(derivedEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
+    ?? readFromEntry(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt");
   const extractionStatus =
-    readFrom(evidence, "extraction_status")
-    ?? readFrom(fieldEntry, "extraction_status")
-    ?? readFrom(workflowEntry, "extraction_status")
-    ?? readFrom(derivedEntry, "extraction_status")
-    ?? readFrom(snapshotEntry, "extraction_status");
+    readFromEntry(evidence, "extraction_status")
+    ?? readFromEntry(fieldEntry, "extraction_status")
+    ?? readFromEntry(workflowEntry, "extraction_status")
+    ?? readFromEntry(derivedEntry, "extraction_status")
+    ?? readFromEntry(snapshotEntry, "extraction_status");
   return {
-    rawValue: raw ?? null,
-    sourcePage: sourcePage ?? null,
+    rawValue: raw ?? unwrapFieldValue(fieldEntry) ?? unwrapFieldValue(workflowEntry) ?? null,
+    sourcePage: parseStoredNumber(sourcePage) ?? sourcePage ?? null,
     sourceText: sourceText ?? null,
     extractionStatus: extractionStatus ?? null,
   };
@@ -417,32 +500,39 @@ export function readFieldConfidence(lease, key, fallback = null) {
   const candidates = FIELD_COLUMN_ALIASES[key] || [key];
   const scores = lease?.extraction_data?.confidence_scores || {};
   for (const candidate of candidates) {
-    if (typeof scores[candidate] === "number") return scores[candidate];
+    const score = parseStoredNumber(scores[candidate]);
+    if (score != null) return normalizeStoredConfidence(score);
   }
   const extracted = lease?.extracted_fields || {};
-  for (const candidate of candidates) {
-    const alt = extracted[candidate]?.confidence;
-    if (typeof alt === "number") return alt;
-  }
+  const extractedEntry = pickCandidateEntry(extracted, candidates);
+  const extractedConfidence = parseStoredNumber(
+    readFromEntry(extractedEntry, "confidence", "confidence_score", "score"),
+  );
+  if (extractedConfidence != null) return normalizeStoredConfidence(extractedConfidence);
   const fields = lease?.extraction_data?.fields || {};
-  for (const candidate of candidates) {
-    const score = fields[candidate]?.confidence ?? fields[candidate]?.confidence_score;
-    if (typeof score === "number") return normalizeStoredConfidence(score);
-  }
+  const fieldEntry = pickCandidateEntry(fields, candidates);
+  const fieldConfidence = parseStoredNumber(
+    readFromEntry(fieldEntry, "confidence", "confidence_score", "score"),
+  );
+  if (fieldConfidence != null) return normalizeStoredConfidence(fieldConfidence);
   const workflowFields = getWorkflowLeaseFields(lease);
+  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
+  const workflowConfidence = parseStoredNumber(
+    readFromEntry(workflowEntry, "confidence_score", "confidence", "score"),
+  );
+  if (workflowConfidence != null) return normalizeStoredConfidence(workflowConfidence);
   for (const candidate of candidates) {
-    const score = workflowFields[candidate]?.confidence_score ?? workflowFields[candidate]?.confidence;
-    if (typeof score === "number") return normalizeStoredConfidence(score);
-  }
-  for (const candidate of candidates) {
-    const score = buildDerivedWorkflowEntry(lease, candidate)?.confidence_score;
-    if (typeof score === "number") return normalizeStoredConfidence(score);
+    const score = parseStoredNumber(
+      readFromEntry(buildDerivedWorkflowEntry(lease, candidate), "confidence_score", "confidence", "score"),
+    );
+    if (score != null) return normalizeStoredConfidence(score);
   }
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
-  for (const candidate of candidates) {
-    const score = snapshotFields[candidate]?.confidence ?? snapshotFields[candidate]?.confidence_score;
-    if (typeof score === "number") return normalizeStoredConfidence(score);
-  }
+  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
+  const snapshotConfidence = parseStoredNumber(
+    readFromEntry(snapshotEntry, "confidence", "confidence_score", "score"),
+  );
+  if (snapshotConfidence != null) return normalizeStoredConfidence(snapshotConfidence);
   return fallback;
 }
 
