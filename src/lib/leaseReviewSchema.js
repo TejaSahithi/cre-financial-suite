@@ -164,6 +164,21 @@ const FIELD_COLUMN_ALIASES = {
   total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
   premises_address:  ["premises_address", "property_address"],
   premises_use:      ["premises_use", "permitted_use"],
+  monthly_rent:      ["monthly_rent", "base_rent_monthly", "base_rent"],
+  annual_rent:       ["annual_rent", "base_rent_annual"],
+  billing_frequency: ["billing_frequency", "rent_frequency"],
+  escalation_rate:   ["escalation_rate", "renewal_escalation_percent"],
+  expense_stop:      ["expense_stop", "expense_stop_amount"],
+  cam_cap_pct:       ["cam_cap_pct", "cam_cap_percent", "cam_cap_rate"],
+  gross_up_threshold:["gross_up_threshold", "gross_up_percent", "gross_up_target_occupancy_pct"],
+  renewal_notice_months: ["renewal_notice_months", "renewal_notice_days"],
+  responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
+  responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
+  responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
+  responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
+  property_insurance_responsibility: ["property_insurance_responsibility", "insurance_responsibility"],
+  tenant_insurance_required: ["tenant_insurance_required", "tenant_insurance"],
+  default_cure_period: ["default_cure_period", "late_fee_grace_days"],
 };
 
 function isPresent(v) {
@@ -190,6 +205,15 @@ export function readFieldValue(lease, key) {
     const inExtraction = fields[candidate];
     if (isPresent(inExtraction)) {
       return typeof inExtraction === "object" && "value" in inExtraction ? inExtraction.value : inExtraction;
+    }
+  }
+  const workflowFields = lease.extraction_data?.workflow_output?.lease_fields || {};
+  for (const candidate of candidates) {
+    const workflowEntry = workflowFields[candidate];
+    if (isPresent(workflowEntry)) {
+      return typeof workflowEntry === "object" && "value" in workflowEntry
+        ? workflowEntry.value
+        : workflowEntry;
     }
   }
   return null;
