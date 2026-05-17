@@ -14,10 +14,13 @@ import {
   REVIEW_STATUSES,
   REVIEW_STATUS_LABELS,
   REVIEW_STATUS_STYLES,
+  EXTRACTION_STATUS_LABELS,
+  EXTRACTION_STATUS_STYLES,
   classifyConfidence,
   readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  resolveExtractionStatus,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
 
@@ -85,16 +88,18 @@ export default function FieldReviewTable({
             const review = fieldReviews?.[field.key];
             const status = review?.status || REVIEW_STATUSES.PENDING;
             const value = readFieldValue(lease, field.key);
-            const { rawValue, sourcePage, sourceText, extractionStatus } = readFieldEvidence(lease, field.key);
+            const evidence = readFieldEvidence(lease, field.key);
+            const { rawValue, sourcePage, sourceText } = evidence;
             const confidence = readFieldConfidence(lease, field.key);
             const confidenceLabel = classifyConfidence(confidence) === "unknown" ? "Unknown" : `${Math.round(confidence)}%`;
-            const inferredExtractionStatus =
-              extractionStatus
-              || (value === null || value === undefined || value === ""
-                ? "missing"
-                : classifyConfidence(confidence) === "unknown"
-                  ? "extracted_no_confidence"
-                  : "extracted");
+            // Honor backend-stamped status; otherwise derive from value/confidence.
+            const inferredExtractionStatus = resolveExtractionStatus(lease, field.key, {
+              value,
+              confidence,
+              evidence,
+            });
+            const extractionStatusLabel = EXTRACTION_STATUS_LABELS[inferredExtractionStatus] || inferredExtractionStatus;
+            const extractionStatusClass = EXTRACTION_STATUS_STYLES[inferredExtractionStatus] || "bg-slate-100 text-slate-700";
             const required = field.required;
             const rowClass = status === REVIEW_STATUSES.PENDING && required
               ? "bg-amber-50/40 hover:bg-amber-50/70"
@@ -128,7 +133,9 @@ export default function FieldReviewTable({
                   <Badge className={`text-[10px] ${confidenceClass(confidence)}`}>{confidenceLabel}</Badge>
                 </TableCell>
                 <TableCell>
-                  <Badge className="bg-slate-100 text-[10px] text-slate-700">{inferredExtractionStatus}</Badge>
+                  <Badge className={`text-[10px] ${extractionStatusClass}`} title={inferredExtractionStatus}>
+                    {extractionStatusLabel}
+                  </Badge>
                 </TableCell>
                 <TableCell>
                   <Badge className={`text-[10px] ${REVIEW_STATUS_STYLES[status] || "bg-slate-100 text-slate-700"}`}>
