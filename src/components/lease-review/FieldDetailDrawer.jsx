@@ -77,11 +77,13 @@ export default function FieldDetailDrawer({
   onMarkManualRequired,
   onReset,
   onSaveEdit,
+  onSaveOverrideReason,
   onViewInDocument,
   isSaving,
 }) {
   const [mode, setMode] = useState("view");
   const [editValue, setEditValue] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -104,7 +106,22 @@ export default function FieldDetailDrawer({
     if (!open || !field) return;
     setMode("view");
     setEditValue(value == null ? "" : String(value));
+    setOverrideReason(typeof review?.note === "string" ? review.note : "");
   }, [open, field?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Whether this field needs an override reason to clear the approval gate.
+  const hasEvidence = Boolean(
+    evidence?.sourcePage
+    || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
+    || evidence?.rawValue,
+  );
+  const valuePresent = value !== null && value !== undefined && value !== "";
+  const needsOverride =
+    field?.required
+    && valuePresent
+    && !hasEvidence
+    && (review?.status === REVIEW_STATUSES.ACCEPTED || review?.status === REVIEW_STATUSES.EDITED);
+  const hasStoredOverride = typeof review?.note === "string" && review.note.trim().length > 0;
 
   // Load audit history when drawer opens.
   useEffect(() => {
@@ -299,13 +316,55 @@ export default function FieldDetailDrawer({
             )}
           </section>
 
-          <Textarea
-            placeholder="Notes for this review (optional)…"
-            rows={2}
-            value={review?.note || ""}
-            onChange={() => { /* read-only here; edits flow through the action panel */ }}
-            disabled
-          />
+          <section className={`space-y-2 rounded-md border p-3 ${needsOverride ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Reviewer Override / Note
+              </p>
+              {needsOverride && !hasStoredOverride && (
+                <Badge className="bg-amber-100 text-[10px] text-amber-800">Required for approval</Badge>
+              )}
+              {hasStoredOverride && (
+                <Badge className="bg-emerald-100 text-[10px] text-emerald-800">Override stored</Badge>
+              )}
+            </div>
+            <Textarea
+              placeholder={
+                needsOverride
+                  ? "Explain why this value is accepted without source evidence (e.g. confirmed verbally with tenant, reviewed in source PDF page 3)…"
+                  : "Optional reviewer note for this field…"
+              }
+              rows={3}
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              disabled={!onSaveOverrideReason || isSaving}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setOverrideReason(typeof review?.note === "string" ? review.note : "")}
+                disabled={isSaving}
+              >
+                Reset
+              </Button>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => onSaveOverrideReason && onSaveOverrideReason(field, overrideReason)}
+                disabled={!onSaveOverrideReason || isSaving || overrideReason === (review?.note || "")}
+              >
+                {isSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                Save Reason
+              </Button>
+            </div>
+            {needsOverride && (
+              <p className="text-[11px] text-amber-700">
+                This required field has no extracted source page/text. Either provide an override reason here, or
+                Edit and re-confirm to attach evidence — otherwise approval stays blocked.
+              </p>
+            )}
+          </section>
         </div>
 
         <div className="sticky bottom-0 border-t border-slate-200 bg-white px-5 py-3">

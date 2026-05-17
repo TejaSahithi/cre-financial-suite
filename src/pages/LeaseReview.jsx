@@ -75,6 +75,7 @@ import {
   isResolvedReview,
   classifyConfidence,
   resolveFieldColumns,
+  hasEvidenceOverride,
 } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -678,16 +679,30 @@ export default function LeaseReview() {
     ruleSetSummary.ruleSet &&
     (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
     !approvedRuleSet;
-  // A required field needs source evidence ONLY while it's still pending
-  // review. Once the reviewer has accepted/edited/marked-NA/manual-required,
-  // they've taken responsibility for the value, so missing evidence is no
-  // longer a blocker — only a hint. This prevents the contradictory state
-  // where the user has reviewed every required field but approval is still
-  // blocked on "missing source evidence".
-  const missingSourceEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
+  // Source-evidence gate. Two separate buckets:
+  //  - pendingNoEvidence: required field, never reviewed, no docling/extractor
+  //    evidence. Reviewer hasn't taken responsibility; would be auto-accepted
+  //    silently without this gate.
+  //  - acceptedNoEvidence: required field that IS marked accepted/edited but
+  //    has no source page/text/raw — the reviewer eyeballed it but didn't
+  //    record where the value came from. The screenshot bug. To approve, they
+  //    must either (a) provide an override reason on the field, or (b) edit
+  //    & re-confirm so evidence is set, or (c) mark Manual Required / N/A.
+  const pendingNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
     if (isResolvedReview(fieldReviews[key])) return false;
-    const { sourcePage, sourceText } = readFieldEvidence(lease, key);
-    return !sourcePage && !sourceText;
+    const { sourcePage, sourceText, rawValue } = readFieldEvidence(lease, key);
+    return !sourcePage && !sourceText && !rawValue;
+  });
+  const acceptedNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
+    const review = fieldReviews[key];
+    if (!review) return false;
+    const status = review.status;
+    // N/A and Manual Required are intentional decisions — no evidence required.
+    if (status === REVIEW_STATUSES.N_A || status === REVIEW_STATUSES.MANUAL_REQUIRED) return false;
+    if (!isResolvedReview(review)) return false;
+    if (hasEvidenceOverride(review)) return false;
+    const { sourcePage, sourceText, rawValue } = readFieldEvidence(lease, key);
+    return !sourcePage && !sourceText && !rawValue;
   });
 
   const approvalBlockers = [];
@@ -714,11 +729,20 @@ export default function LeaseReview() {
       detail: `${ruleSetSummary.expense.total} expense rules, ${ruleSetSummary.cam.total} CAM rules awaiting approval`,
     });
   }
-  if (missingSourceEvidence.length > 0) {
+  if (pendingNoEvidence.length > 0) {
     approvalBlockers.push({
-      kind: "missing_evidence",
-      title: `${missingSourceEvidence.length} required field(s) without source evidence`,
-      detail: missingSourceEvidence
+      kind: "pending_no_evidence",
+      title: `${pendingNoEvidence.length} required field(s) pending without source evidence`,
+      detail: pendingNoEvidence
+        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
+        .join(", "),
+    });
+  }
+  if (acceptedNoEvidence.length > 0) {
+    approvalBlockers.push({
+      kind: "accepted_no_evidence",
+      title: `${acceptedNoEvidence.length} accepted required field(s) lack source evidence — provide override reason`,
+      detail: acceptedNoEvidence
         .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
         .join(", "),
     });
@@ -729,7 +753,7 @@ export default function LeaseReview() {
     : approvalBlockers.map((b) => b.title).join(" • ");
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
-    : "Cannot approve: required fields are pending, conflicts exist, or source evidence is missing.";
+    : "Cannot approve: required fields are pending, conflicts exist, or required fields lack source evidence (provide an override reason in the field detail drawer).";
 
   // --- Field-action helpers -----------------------------------------------
 
@@ -1627,6 +1651,40 @@ export default function LeaseReview() {
           }
         }}
         onViewInDocument={() => drawerField && viewInDocument(drawerField)}
+        onSaveOverrideReason={async (f, reason) => {
+          // Persists the reason into fieldReviews[key].note so the approval
+          // gate's `hasEvidenceOverride` check unblocks the field.
+          const trimmed = (reason || "").trim();
+          const previousReview = fieldReviews[f.key];
+          const next = {
+            ...fieldReviews,
+            [f.key]: {
+              ...(previousReview || {}),
+              note: trimmed || null,
+              evidence_override: trimmed.length > 0,
+              reviewed_at: new Date().toISOString(),
+            },
+          };
+          setFieldReviews(next);
+          try {
+            await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
+            await logAudit({
+              entityType: "LeaseFieldReview",
+              entityId: lease.id,
+              action: trimmed ? "field_override_reason_set" : "field_override_reason_cleared",
+              orgId: lease.org_id,
+              fieldChanged: f.key,
+              oldValue: previousReview?.note || null,
+              newValue: trimmed || null,
+              propertyId: lease.property_id || null,
+            });
+            toast.success(trimmed ? "Override reason saved" : "Override reason cleared");
+          } catch (err) {
+            console.error("[LeaseReview] override save failed:", err);
+            toast.error(err?.message || "Could not save override reason");
+            setFieldReviews(fieldReviews);
+          }
+        }}
         isSaving={updateLeaseMutation.isPending}
       />
 

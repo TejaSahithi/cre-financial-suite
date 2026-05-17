@@ -723,10 +723,11 @@ export const EXTRACTION_STATUS_STYLES = {
 /**
  * Infer an extraction status from the lease + field. Honors any explicit
  * status set by the backend, otherwise uses these rules:
- *   - value present + confidence       → "extracted"
- *   - value present + no confidence    → "extracted_no_confidence"
- *   - no value + extractor was run     → "not_found"
- *   - no value + extractor didn't run  → "missing"
+ *   - value present + source evidence + confidence  → "extracted"
+ *   - value present + source evidence + no confidence → "extracted_no_confidence"
+ *   - value present + NO source evidence            → "missing_source_evidence"
+ *   - no value + extractor was run                  → "not_found"
+ *   - no value + extractor didn't run               → "missing"
  *
  * "manual_required" can only be set by the backend or by a user action — we
  * never infer it client-side because it implies a policy decision.
@@ -735,7 +736,13 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
   const explicit = evidence?.extractionStatus;
   if (explicit) return explicit;
   const present = value !== null && value !== undefined && value !== "";
+  const hasEvidence = Boolean(
+    evidence?.sourcePage
+    || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
+    || evidence?.rawValue,
+  );
   if (present) {
+    if (!hasEvidence) return EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE;
     return typeof confidence === "number"
       ? EXTRACTION_STATUSES.EXTRACTED
       : EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE;
@@ -751,6 +758,18 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
     || lease?.extracted_fields,
   );
   return extractorRan ? EXTRACTION_STATUSES.NOT_FOUND : EXTRACTION_STATUSES.MISSING;
+}
+
+/**
+ * Did the reviewer provide an override reason for a field that has no
+ * source evidence? Stored in fieldReviews[key].note as a free-text
+ * justification. A non-empty note is treated as an override.
+ */
+export function hasEvidenceOverride(review) {
+  if (!review) return false;
+  if (review.evidence_override === true) return true;
+  if (typeof review.note === "string" && review.note.trim().length > 0) return true;
+  return false;
 }
 
 export function readFieldReview(lease, key) {
