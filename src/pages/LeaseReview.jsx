@@ -1407,9 +1407,18 @@ export default function LeaseReview() {
               Save Review Draft
             </Button>
             <Button
-              className="bg-emerald-600 hover:bg-emerald-700"
-              onClick={() => setShowApproval(true)}
-              disabled={!canApprove}
+              className={
+                canApprove
+                  ? "bg-emerald-600 hover:bg-emerald-700"
+                  : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+              }
+              onClick={() => {
+                if (!canApprove) {
+                  toast.error(blockerMessage);
+                  return;
+                }
+                setShowApproval(true);
+              }}
               title={approvalDisabledTooltip}
             >
               <CheckCircle2 className="mr-1 h-4 w-4" />
