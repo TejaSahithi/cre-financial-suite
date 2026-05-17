@@ -160,17 +160,22 @@ const FIELD_COLUMN_ALIASES = {
   expiration_date:   ["expiration_date", "end_date"],
   start_date:        ["commencement_date", "start_date"],
   end_date:          ["expiration_date", "end_date"],
+  landlord_name:     ["landlord_name", "lessor_name", "owner_name"],
   square_footage:    ["square_footage", "total_sf", "rentable_area_sqft", "tenant_rsf"],
   total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
-  premises_address:  ["premises_address", "property_address"],
+  premises_address:  ["premises_address", "property_address", "premises_location"],
   premises_use:      ["premises_use", "permitted_use"],
   monthly_rent:      ["monthly_rent", "base_rent_monthly", "base_rent"],
   annual_rent:       ["annual_rent", "base_rent_annual"],
+  rent_per_sf:       ["rent_per_sf", "tenant_rent_per_rsf"],
   billing_frequency: ["billing_frequency", "rent_frequency"],
+  escalation_type:   ["escalation_type", "rent_escalation_type"],
   escalation_rate:   ["escalation_rate", "renewal_escalation_percent"],
+  escalation_timing: ["escalation_timing", "rent_escalation_timing"],
   expense_stop:      ["expense_stop", "expense_stop_amount"],
   cam_cap_pct:       ["cam_cap_pct", "cam_cap_percent", "cam_cap_rate"],
   gross_up_threshold:["gross_up_threshold", "gross_up_percent", "gross_up_target_occupancy_pct"],
+  base_year:         ["base_year", "base_year_amount"],
   renewal_notice_months: ["renewal_notice_months", "renewal_notice_days"],
   responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
   responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
@@ -183,6 +188,117 @@ const FIELD_COLUMN_ALIASES = {
 
 function isPresent(v) {
   return v !== undefined && v !== null && v !== "";
+}
+
+function getLeaseWorkflowOutput(lease) {
+  const workflowOutput = lease?.extraction_data?.workflow_output ?? lease?.abstract_snapshot?.workflow_output ?? null;
+  if (!workflowOutput) return null;
+  if (workflowOutput.lease_fields || workflowOutput.expense_rules || workflowOutput.cam_profile) return workflowOutput;
+  if (Array.isArray(workflowOutput.records)) {
+    return workflowOutput.records[0] ?? null;
+  }
+  return workflowOutput;
+}
+
+function getWorkflowLeaseFields(lease) {
+  return getLeaseWorkflowOutput(lease)?.lease_fields || {};
+}
+
+function getWorkflowExpenseRules(lease) {
+  const rules = getLeaseWorkflowOutput(lease)?.expense_rules;
+  return Array.isArray(rules) ? rules : [];
+}
+
+function getWorkflowCamProfile(lease) {
+  return getLeaseWorkflowOutput(lease)?.cam_profile || null;
+}
+
+function firstMatchingExpenseRule(lease, categories = [], predicate = () => true) {
+  const rules = getWorkflowExpenseRules(lease);
+  return rules.find((rule) =>
+    categories.includes(rule?.expense_category) &&
+    predicate(rule),
+  ) || null;
+}
+
+function buildDerivedWorkflowEntry(lease, key) {
+  const camProfile = getWorkflowCamProfile(lease);
+
+  const fromRule = (rule, value, extractionStatus = null) =>
+    rule
+      ? {
+          value,
+          raw_value: value,
+          source_page: rule.source_page ?? null,
+          source_clause: rule.source_clause ?? rule.notes ?? null,
+          confidence_score: rule.confidence_score ?? null,
+          extraction_status: extractionStatus ?? rule.status ?? null,
+        }
+      : null;
+
+  switch (key) {
+    case "responsibility_taxes": {
+      const rule = firstMatchingExpenseRule(lease, ["real_estate_taxes"], (entry) => isPresent(entry?.responsibility));
+      return fromRule(rule, rule?.responsibility ?? null);
+    }
+    case "responsibility_insurance":
+    case "property_insurance_responsibility": {
+      const rule = firstMatchingExpenseRule(lease, ["property_insurance"], (entry) => isPresent(entry?.responsibility));
+      return fromRule(rule, rule?.responsibility ?? null);
+    }
+    case "responsibility_utilities": {
+      const rule = firstMatchingExpenseRule(
+        lease,
+        ["utilities", "electricity", "water", "sewer", "gas", "hvac", "separately_metered_charges", "excess_usage", "excess_utilities"],
+        (entry) => isPresent(entry?.responsibility),
+      );
+      return fromRule(rule, rule?.responsibility ?? null);
+    }
+    case "responsibility_repairs": {
+      const rule = firstMatchingExpenseRule(
+        lease,
+        ["interior_repairs", "exterior_repairs", "roof_structure", "foundation_structure", "capital_expenditures", "hvac"],
+        (entry) => isPresent(entry?.responsibility),
+      );
+      return fromRule(rule, rule?.responsibility ?? null);
+    }
+    case "base_year": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "real_estate_taxes", "property_insurance"], (entry) => isPresent(entry?.base_year));
+      return fromRule(rule, rule?.base_year ?? null, rule?.base_year != null ? "calculated" : null);
+    }
+    case "expense_stop": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "real_estate_taxes", "property_insurance"], (entry) => isPresent(entry?.expense_stop_amount));
+      return fromRule(rule, rule?.expense_stop_amount ?? null, rule?.expense_stop_amount != null ? "calculated" : null);
+    }
+    case "cam_cap_type": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "real_estate_taxes", "property_insurance", "management_fees", "administrative_fees"], (entry) => isPresent(entry?.cap_type));
+      const value = camProfile?.cam_cap_type ?? rule?.cap_type ?? null;
+      return fromRule(rule, value, value != null ? "calculated" : null);
+    }
+    case "cam_cap_pct": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "real_estate_taxes", "property_insurance", "management_fees", "administrative_fees"], (entry) => isPresent(entry?.cap_percent));
+      const value = camProfile?.cam_cap_percent ?? rule?.cap_percent ?? null;
+      return fromRule(rule, value, value != null ? "calculated" : null);
+    }
+    case "admin_fee_pct": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "management_fees", "administrative_fees"], (entry) => isPresent(entry?.admin_fee_percent));
+      const value = camProfile?.admin_fee_percent ?? rule?.admin_fee_percent ?? null;
+      return fromRule(rule, value, value != null ? "calculated" : null);
+    }
+    case "gross_up_enabled": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "management_fees", "administrative_fees"], (entry) => isPresent(entry?.gross_up_percent));
+      const rawValue = camProfile?.gross_up_percent ?? rule?.gross_up_percent ?? null;
+      const value = rawValue == null ? null : Number(rawValue) > 0;
+      return fromRule(rule, value, rawValue != null ? "calculated" : null);
+    }
+    case "gross_up_threshold": {
+      const rule = firstMatchingExpenseRule(lease, ["cam", "common_area_maintenance", "operating_expenses", "management_fees", "administrative_fees"], (entry) => isPresent(entry?.gross_up_percent));
+      const value = camProfile?.gross_up_percent ?? rule?.gross_up_percent ?? null;
+      return fromRule(rule, value, value != null ? "calculated" : null);
+    }
+    default:
+      return null;
+  }
 }
 
 // Pull a stored normalized value for a field, regardless of whether it lives
@@ -207,7 +323,7 @@ export function readFieldValue(lease, key) {
       return typeof inExtraction === "object" && "value" in inExtraction ? inExtraction.value : inExtraction;
     }
   }
-  const workflowFields = lease.extraction_data?.workflow_output?.lease_fields || {};
+  const workflowFields = getWorkflowLeaseFields(lease);
   for (const candidate of candidates) {
     const workflowEntry = workflowFields[candidate];
     if (isPresent(workflowEntry)) {
@@ -215,6 +331,10 @@ export function readFieldValue(lease, key) {
         ? workflowEntry.value
         : workflowEntry;
     }
+  }
+  for (const candidate of candidates) {
+    const derived = buildDerivedWorkflowEntry(lease, candidate);
+    if (isPresent(derived?.value)) return derived.value;
   }
   return null;
 }
@@ -237,7 +357,7 @@ export function readFieldEvidence(lease, key) {
   const candidates = FIELD_COLUMN_ALIASES[key] || [key];
   const evidenceMap = lease?.extraction_data?.field_evidence || lease?.extraction_data?.evidence || {};
   const fieldsMap = lease?.extraction_data?.fields || {};
-  const workflowFields = lease?.extraction_data?.workflow_output?.lease_fields || {};
+  const workflowFields = getWorkflowLeaseFields(lease);
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
 
   const pick = (map) => {
@@ -250,6 +370,7 @@ export function readFieldEvidence(lease, key) {
   const evidence = pick(evidenceMap);
   const fieldEntry = pick(fieldsMap);
   const workflowEntry = pick(workflowFields);
+  const derivedEntry = candidates.map((candidate) => buildDerivedWorkflowEntry(lease, candidate)).find(Boolean) || null;
   const snapshotEntry = pick(snapshotFields);
 
   const readFrom = (entry, ...keys) => {
@@ -264,21 +385,25 @@ export function readFieldEvidence(lease, key) {
     readFrom(evidence, "raw_value", "raw")
     ?? readFrom(fieldEntry, "raw_value", "raw")
     ?? readFrom(workflowEntry, "raw_value", "source_clause")
+    ?? readFrom(derivedEntry, "raw_value", "source_clause")
     ?? readFrom(snapshotEntry, "raw_value", "raw");
   const sourcePage =
     readFrom(evidence, "source_page", "page")
     ?? readFrom(fieldEntry, "source_page", "page")
     ?? readFrom(workflowEntry, "source_page", "page")
+    ?? readFrom(derivedEntry, "source_page", "page")
     ?? readFrom(snapshotEntry, "source_page", "page");
   const sourceText =
     readFrom(evidence, "source_text", "snippet", "exact_source_text", "source_clause")
     ?? readFrom(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause")
     ?? readFrom(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text")
+    ?? readFrom(derivedEntry, "source_clause", "source_text", "snippet", "exact_source_text")
     ?? readFrom(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause");
   const extractionStatus =
     readFrom(evidence, "extraction_status")
     ?? readFrom(fieldEntry, "extraction_status")
     ?? readFrom(workflowEntry, "extraction_status")
+    ?? readFrom(derivedEntry, "extraction_status")
     ?? readFrom(snapshotEntry, "extraction_status");
   return {
     rawValue: raw ?? null,
@@ -304,9 +429,13 @@ export function readFieldConfidence(lease, key, fallback = null) {
     const score = fields[candidate]?.confidence ?? fields[candidate]?.confidence_score;
     if (typeof score === "number") return normalizeStoredConfidence(score);
   }
-  const workflowFields = lease?.extraction_data?.workflow_output?.lease_fields || {};
+  const workflowFields = getWorkflowLeaseFields(lease);
   for (const candidate of candidates) {
     const score = workflowFields[candidate]?.confidence_score ?? workflowFields[candidate]?.confidence;
+    if (typeof score === "number") return normalizeStoredConfidence(score);
+  }
+  for (const candidate of candidates) {
+    const score = buildDerivedWorkflowEntry(lease, candidate)?.confidence_score;
     if (typeof score === "number") return normalizeStoredConfidence(score);
   }
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
@@ -397,6 +526,7 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
     lease?.extraction_data?.fields
     || lease?.extraction_data?.field_evidence
     || lease?.extraction_data?.confidence_scores
+    || lease?.extraction_data?.workflow_output
     || lease?.abstract_snapshot?.fields
     || lease?.extracted_fields,
   );
