@@ -667,7 +667,14 @@ export default function LeaseReview() {
     ruleSetSummary.ruleSet &&
     (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
     !approvedRuleSet;
+  // A required field needs source evidence ONLY while it's still pending
+  // review. Once the reviewer has accepted/edited/marked-NA/manual-required,
+  // they've taken responsibility for the value, so missing evidence is no
+  // longer a blocker — only a hint. This prevents the contradictory state
+  // where the user has reviewed every required field but approval is still
+  // blocked on "missing source evidence".
   const missingSourceEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
+    if (isResolvedReview(fieldReviews[key])) return false;
     const { sourcePage, sourceText } = readFieldEvidence(lease, key);
     return !sourcePage && !sourceText;
   });
