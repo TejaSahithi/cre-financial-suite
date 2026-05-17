@@ -19,6 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
+import { leaseService } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -273,46 +274,76 @@ export default function LeaseUpload() {
       return existing.id;
     }
 
-    if (fileRecord?.review_required !== true && fileRecord?.status !== "review_required") {
+    // Statuses where the file has been processed enough that a lease draft is
+    // either already expected or can be safely manufactured client-side.
+    const fileIsReady =
+      fileRecord?.review_required === true ||
+      ["review_required", "validated", "approved", "storing", "stored", "computing", "completed"].includes(fileRecord?.status || "");
+
+    if (!fileIsReady) {
       return null;
     }
 
-    let data;
+    let data = null;
+    let edgeFailed = false;
+    let edgeError = null;
     try {
       data = await invokeEdgeFunction("review-approve", {
         file_id: fileId,
         action: "prepare",
         review_payload: fileRecord?.ui_review_payload || null,
       });
-    } catch (error) {
-      // Backward compatibility: older deployed edge functions do not support
-      // the new "prepare" action yet. Fall back to the legacy "approve"
-      // action so users can still open Lease Review and create the draft.
-      if (!isUnsupportedPrepareAction(error)) {
-        throw error;
+    } catch (prepareErr) {
+      if (!isUnsupportedPrepareAction(prepareErr)) {
+        edgeFailed = true;
+        edgeError = prepareErr;
+      } else {
+        try {
+          data = await invokeEdgeFunction("review-approve", {
+            file_id: fileId,
+            action: "approve",
+            review_payload: fileRecord?.ui_review_payload || null,
+          });
+        } catch (approveErr) {
+          edgeFailed = true;
+          edgeError = approveErr;
+        }
       }
-
-      data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "approve",
-        review_payload: fileRecord?.ui_review_payload || null,
-      });
     }
 
-    const insertedLeaseId =
-      data?.store_result?.inserted_ids?.[0] ||
-      data?.store_result?.insertedIds?.[0] ||
-      null;
+    if (!edgeFailed) {
+      const insertedLeaseId =
+        data?.store_result?.inserted_ids?.[0] ||
+        data?.store_result?.insertedIds?.[0] ||
+        null;
 
-    await fetchFileRecord(fileId);
-
-    const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
-    if (linkedLeaseId) {
-      await invalidateLeaseQueries();
-      return linkedLeaseId;
+      await fetchFileRecord(fileId);
+      const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
+      if (linkedLeaseId) {
+        await invalidateLeaseQueries();
+        return linkedLeaseId;
+      }
     }
 
-    if (!silent) {
+    // Client-side fallback. If review-approve isn't usable on this deployment
+    // (older function, schema drift, or any 4xx), create the lease row
+    // directly from the reviewed UI payload so the user can still open Lease
+    // Review and edit fields. This is the same shape review-approve would
+    // produce on the happy path.
+    try {
+      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, fileRecord);
+      if (fallbackLeaseId) {
+        await invalidateLeaseQueries();
+        await fetchFileRecord(fileId);
+        return fallbackLeaseId;
+      }
+    } catch (fallbackErr) {
+      console.warn("[LeaseUpload] client-side lease draft fallback failed:", fallbackErr?.message || fallbackErr);
+    }
+
+    if (edgeError && !silent) {
+      toast.error(edgeError?.message || "Could not prepare lease review draft.");
+    } else if (!silent) {
       toast.info("Lease review draft is being prepared. Try again in a moment.");
     }
     return null;
@@ -539,8 +570,18 @@ export default function LeaseUpload() {
   }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
 
   const { activeIndex, failed } = pipelineProgress(fileRecord?.status);
-  const canOpenReview =
-    fileRecord?.status === "review_required" || fileRecord?.status === "completed";
+  // The lease draft can be opened as soon as the file is past extraction.
+  // Including `validated`, `storing`, `stored`, and `computing` lets users
+  // open Lease Review for files that bypassed the review_required gate.
+  const canOpenReview = [
+    "validated",
+    "review_required",
+    "approved",
+    "storing",
+    "stored",
+    "computing",
+    "completed",
+  ].includes(fileRecord?.status || "");
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -844,6 +885,139 @@ async function findLeaseByFileId(fileId) {
   return data;
 }
 
+// Client-side lease-draft creation. Used when review-approve fails or isn't
+// available on the deployment. Mirrors the row shape that review-approve's
+// ensureLeaseReviewDrafts produces, so downstream Lease Review can edit the
+// draft normally.
+async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
+  if (!fileId) return null;
+
+  let fileRecord = cachedFileRecord;
+  if (!fileRecord || !fileRecord.org_id) {
+    const { data, error } = await supabase
+      .from("uploaded_files")
+      .select("id, org_id, property_id, building_id, unit_id, file_name, ui_review_payload, reviewed_output, parsed_data, valid_data, extraction_method, document_subtype")
+      .eq("id", fileId)
+      .maybeSingle();
+    if (error || !data) return null;
+    fileRecord = data;
+  }
+
+  const candidateRows =
+    extractRowsFromUiReview(fileRecord?.ui_review_payload) ||
+    asArrayOrNull(fileRecord?.reviewed_output?.final_records) ||
+    asArrayOrNull(fileRecord?.valid_data) ||
+    asArrayOrNull(fileRecord?.parsed_data) ||
+    [];
+  const firstRow = candidateRows[0] || {};
+
+  const confidenceScores = collectConfidenceFromPayload(fileRecord?.ui_review_payload);
+  const lowConfidenceFields = Object.entries(confidenceScores)
+    .filter(([, score]) => typeof score === "number" && score < 75)
+    .map(([field]) => field);
+
+  const numeric = (v) => {
+    if (v == null || v === "") return null;
+    const n = Number(String(v).replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const normalizeDate = (v) => {
+    if (!v) return null;
+    const text = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const d = new Date(text);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  };
+
+  const payload = {
+    org_id: fileRecord.org_id,
+    property_id: firstRow.property_id ?? fileRecord.property_id ?? null,
+    building_id: firstRow.building_id ?? fileRecord.building_id ?? null,
+    unit_id: firstRow.unit_id ?? fileRecord.unit_id ?? null,
+    tenant_name: firstRow.tenant_name || "Lease Review Draft",
+    start_date: normalizeDate(firstRow.start_date || firstRow.lease_start),
+    end_date: normalizeDate(firstRow.end_date || firstRow.lease_end),
+    commencement_date: normalizeDate(firstRow.commencement_date),
+    expiration_date: normalizeDate(firstRow.expiration_date),
+    lease_date: normalizeDate(firstRow.lease_date),
+    rent_commencement_date: normalizeDate(firstRow.rent_commencement_date),
+    monthly_rent: numeric(firstRow.monthly_rent ?? firstRow.base_rent) ?? 0,
+    annual_rent: numeric(firstRow.annual_rent),
+    square_footage: numeric(firstRow.square_footage ?? firstRow.total_sf) ?? 0,
+    lease_type: firstRow.lease_type ?? null,
+    cam_amount: numeric(firstRow.cam_amount),
+    nnn_amount: numeric(firstRow.nnn_amount),
+    security_deposit: numeric(firstRow.security_deposit),
+    escalation_rate: numeric(firstRow.escalation_rate),
+    escalation_type: firstRow.escalation_type ?? null,
+    escalation_timing: firstRow.escalation_timing ?? null,
+    free_rent_months: numeric(firstRow.free_rent_months),
+    renewal_options: firstRow.renewal_options ?? null,
+    renewal_type: firstRow.renewal_type ?? null,
+    status: "draft",
+    notes: firstRow.notes ?? null,
+    extraction_data: {
+      source: "client_fallback",
+      source_file_id: fileRecord.id,
+      source_file_name: fileRecord.file_name ?? null,
+      document_subtype: fileRecord.document_subtype ?? null,
+      confidence_scores: confidenceScores,
+      fields: candidateRows[0] || {},
+    },
+    confidence_score: averageConfidence(confidenceScores),
+    low_confidence_fields: lowConfidenceFields,
+    extracted_fields: firstRow,
+  };
+
+  const created = await leaseService.create(payload);
+  return created?.id || null;
+}
+
+function asArrayOrNull(value) {
+  return Array.isArray(value) && value.length > 0 ? value : null;
+}
+
+function extractRowsFromUiReview(payload) {
+  if (!payload) return null;
+  const records = payload.records || payload.rows;
+  if (!Array.isArray(records) || records.length === 0) return null;
+  return records.map((record) => {
+    if (record?.values && typeof record.values === "object") return record.values;
+    const row = {};
+    for (const field of record?.standard_fields || []) {
+      if (field?.field_key && field?.status !== "rejected") row[field.field_key] = field.value ?? null;
+    }
+    for (const field of record?.custom_fields || []) {
+      if (field?.field_key && field?.status !== "rejected") row[field.field_key] = field.value ?? null;
+    }
+    return row;
+  });
+}
+
+function collectConfidenceFromPayload(payload) {
+  const scores = {};
+  const records = payload?.records || payload?.rows || [];
+  for (const record of records) {
+    const fields = [
+      ...(record?.standard_fields || []),
+      ...(record?.custom_fields || []),
+    ];
+    for (const field of fields) {
+      if (!field?.field_key) continue;
+      const c = field.confidence;
+      if (typeof c !== "number") continue;
+      scores[field.field_key] = c <= 1 ? Math.round(c * 100) : Math.round(c);
+    }
+  }
+  return scores;
+}
+
+function averageConfidence(scores) {
+  const values = Object.values(scores).filter((s) => typeof s === "number" && !Number.isNaN(s));
+  if (values.length === 0) return null;
+  return Math.round(values.reduce((sum, s) => sum + s, 0) / values.length);
+}
+
 function getRecordValue(record, key) {
   if (record?.values && Object.prototype.hasOwnProperty.call(record.values, key)) return record.values[key];
   const standard = record?.standard_fields?.find?.((field) => field.field_key === key);
@@ -927,8 +1101,16 @@ function isMeaningfulLeaseValue(value) {
 }
 
 function isUnsupportedPrepareAction(error) {
-  const message = String(error?.message || "");
-  return /invalid action:\s*prepare/i.test(message);
+  const message = String(error?.message || "").toLowerCase();
+  if (/invalid action[:\s]*prepare/.test(message)) return true;
+  if (/unknown action[:\s]*prepare/.test(message)) return true;
+  if (/unsupported action[:\s]*prepare/.test(message)) return true;
+  if (/prepare/.test(message) && /(invalid|unknown|unsupported|bad request|not supported)/.test(message)) return true;
+  // Some deployed builds drop the message; fall back to status-only detection
+  // so an old function returning a generic 400 still triggers the approve path.
+  const status = Number(error?.context?.status ?? error?.status ?? error?.statusCode ?? 0);
+  if (status === 400 || status === 404 || status === 405) return true;
+  return false;
 }
 
 async function resolveUploadedFileUrl(fileRecord) {
