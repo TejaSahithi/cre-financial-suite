@@ -529,32 +529,64 @@ function buildDerivedWorkflowEntry(lease, key) {
   }
 }
 
+// Strings that the extractor sometimes uses as a literal "I don't know"
+// stand-in. These must not be treated as real values — they shouldn't fill
+// the Normalized column and they shouldn't trigger text-matching evidence.
+const SENTINEL_NOT_FOUND_VALUES = new Set([
+  "unknown", "n/a", "na", "none", "null", "tbd", "not specified",
+  "not applicable", "see lease", "as set forth", "per lease",
+]);
+
+function isMeaningfulValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "string") return true;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return !SENTINEL_NOT_FOUND_VALUES.has(trimmed.toLowerCase());
+}
+
 // Pull a stored normalized value for a field, regardless of whether it lives
-// on the lease row directly or inside extraction_data.
+// on the lease row directly or inside extraction_data. Treats sentinel
+// "unknown" / "n/a" strings as if they were missing so the UI shows
+// Not Found instead of a fake "Extracted" badge.
 export function readFieldValue(lease, key) {
   if (!lease) return null;
   const candidates = FIELD_COLUMN_ALIASES[key] || [key];
   for (const candidate of candidates) {
-    if (isPresent(lease[candidate])) return lease[candidate];
+    if (isMeaningfulValue(lease[candidate])) return lease[candidate];
   }
   const extracted = lease.extracted_fields || {};
   const extractedEntry = pickCandidateEntry(extracted, candidates);
-  if (isPresent(extractedEntry)) return unwrapFieldValue(extractedEntry);
+  if (isPresent(extractedEntry)) {
+    const v = unwrapFieldValue(extractedEntry);
+    if (isMeaningfulValue(v)) return v;
+  }
   const fields = lease.extraction_data?.fields || {};
   const extractionEntry = pickCandidateEntry(fields, candidates);
-  if (isPresent(extractionEntry)) return unwrapFieldValue(extractionEntry);
+  if (isPresent(extractionEntry)) {
+    const v = unwrapFieldValue(extractionEntry);
+    if (isMeaningfulValue(v)) return v;
+  }
   const workflowFields = getWorkflowLeaseFields(lease);
   const workflowEntry = pickCandidateEntry(workflowFields, candidates);
-  if (isPresent(workflowEntry)) return unwrapFieldValue(workflowEntry);
+  if (isPresent(workflowEntry)) {
+    const v = unwrapFieldValue(workflowEntry);
+    if (isMeaningfulValue(v)) return v;
+  }
   for (const candidate of candidates) {
     const derived = buildDerivedWorkflowEntry(lease, candidate);
-    if (isPresent(derived?.value)) return derived.value;
+    if (isMeaningfulValue(derived?.value)) return derived.value;
   }
   const clauseFallback = findClauseFallbackEntry(lease, key);
-  if (isPresent(clauseFallback?.value)) return clauseFallback.value;
+  if (isMeaningfulValue(clauseFallback?.value)) return clauseFallback.value;
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
   const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
-  if (isPresent(snapshotEntry)) return unwrapFieldValue(snapshotEntry);
+  if (isPresent(snapshotEntry)) {
+    const v = unwrapFieldValue(snapshotEntry);
+    if (isMeaningfulValue(v)) return v;
+  }
   return null;
 }
 

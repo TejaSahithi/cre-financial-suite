@@ -498,14 +498,37 @@ export function CriticalDatesTable({ lease }) {
   // Predefined enterprise checklist — every row is always shown. Missing
   // values surface as "Not Found" so reviewers know what's outstanding
   // rather than silently dropping the row.
+  const leaseDate = lease?.lease_date;
+  const commencement = lease?.commencement_date || lease?.start_date;
+  const expiration = lease?.expiration_date || lease?.end_date;
+
+  // Date sanity flags so the table can surface "Conflict" inline rather than
+  // showing a green "Captured" badge for an obviously broken date.
+  const flags = {};
+  if (commencement && expiration) {
+    const startMs = new Date(commencement).getTime();
+    const endMs = new Date(expiration).getTime();
+    if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+      if (endMs <= startMs) {
+        flags.expiration = "Expiration is on or before commencement";
+      } else {
+        const days = Math.round((endMs - startMs) / 86400000);
+        if (days < 30) flags.expiration = `Term is only ${days} day(s) — verify year`;
+      }
+    }
+  }
+  if (leaseDate && commencement && new Date(leaseDate).toDateString() === new Date(commencement).toDateString()) {
+    flags.commencement = "Same as lease signing date — verify";
+  }
+
   const rows = [
-    { label: "Lease Date (signed)", value: lease?.lease_date },
-    { label: "Commencement Date", value: lease?.commencement_date || lease?.start_date },
-    { label: "Rent Commencement Date", value: lease?.rent_commencement_date },
-    { label: "Expiration Date", value: lease?.expiration_date || lease?.end_date },
-    { label: "Renewal Notice (months)", value: lease?.renewal_notice_months },
-    { label: "Termination Notice (months)", value: lease?.termination_notice_months },
-    { label: "Option Exercise Deadline", value: lease?.option_exercise_deadline },
+    { key: "lease_date", label: "Lease Date (signed)", value: leaseDate },
+    { key: "commencement", label: "Commencement Date", value: commencement },
+    { key: "rent_commencement", label: "Rent Commencement Date", value: lease?.rent_commencement_date },
+    { key: "expiration", label: "Expiration Date", value: expiration },
+    { key: "renewal_notice", label: "Renewal Notice (months)", value: lease?.renewal_notice_months },
+    { key: "termination_notice", label: "Termination Notice (months)", value: lease?.termination_notice_months },
+    { key: "option_exercise", label: "Option Exercise Deadline", value: lease?.option_exercise_deadline },
   ];
   const captured = rows.filter((r) => r.value != null && r.value !== "").length;
 
@@ -533,16 +556,27 @@ export function CriticalDatesTable({ lease }) {
             <TableBody>
               {rows.map((row) => {
                 const present = row.value != null && row.value !== "";
+                const conflict = flags[row.key] || null;
+                let badgeClass = "bg-amber-50 text-amber-700";
+                let badgeText = "Not Found";
+                if (present && conflict) {
+                  badgeClass = "bg-red-100 text-red-700";
+                  badgeText = "Conflict";
+                } else if (present) {
+                  badgeClass = "bg-emerald-50 text-emerald-700";
+                  badgeText = "Captured";
+                }
                 return (
-                  <TableRow key={row.label}>
+                  <TableRow key={row.label} className={conflict ? "bg-red-50/40" : ""}>
                     <TableCell className="text-xs text-slate-700">{row.label}</TableCell>
                     <TableCell className="text-xs font-medium text-slate-900">
                       {present ? formatDate(row.value) : "—"}
+                      {conflict && (
+                        <div className="text-[10px] font-normal text-red-700">{conflict}</div>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Badge className={`text-[10px] ${present ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                        {present ? "Captured" : "Not Found"}
-                      </Badge>
+                      <Badge className={`text-[10px] ${badgeClass}`}>{badgeText}</Badge>
                     </TableCell>
                   </TableRow>
                 );

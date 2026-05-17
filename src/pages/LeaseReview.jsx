@@ -137,22 +137,52 @@ function buildSearchBlocks(docling) {
   return blocks;
 }
 
+// Generic / sentinel values that produce false matches if we text-search
+// for them anywhere in the document. The extractor sometimes stores these
+// as a literal string when it couldn't read the field — they should not
+// generate evidence.
+const JUNK_NEEDLE_VALUES = new Set([
+  "unknown", "n/a", "na", "none", "null", "tbd", "not specified",
+  "not applicable", "see lease", "as set forth", "per lease",
+  // Internal/category-key shaped strings the workflow sometimes leaks.
+  "renewal_options", "tax_responsibility", "insurance_responsibility",
+  "maintenance_responsibility", "utilities_responsibility",
+  "hvac", "cam", "nnn", "gross", "full_service", "modified_gross",
+]);
+
+function isJunkNeedle(text) {
+  if (!text) return true;
+  const lowered = String(text).trim().toLowerCase();
+  if (lowered.length < 4) return true;             // single words / 3-char tokens match too broadly
+  if (JUNK_NEEDLE_VALUES.has(lowered)) return true;
+  // category-key shape: lowercase + underscores, no spaces, no digits
+  if (/^[a-z]+(?:_[a-z]+)+$/.test(lowered)) return true;
+  // pure number under 4 digits (matches in too many places — page numbers, list indices)
+  if (/^\d{1,3}$/.test(lowered)) return true;
+  return false;
+}
+
 // Normalize a value for matching: lowercase, currency stripped, common
-// punctuation removed. Produces a set of candidate needles to try.
+// punctuation removed. Produces a set of candidate needles to try, with
+// junk filtered out.
 function candidateNeedles(value, field) {
   const needles = [];
   const push = (s) => {
     const t = String(s ?? "").trim();
-    if (t && !needles.includes(t)) needles.push(t);
+    if (!t) return;
+    if (isJunkNeedle(t)) return;
+    if (!needles.includes(t)) needles.push(t);
   };
-  push(value);
   const asString = String(value ?? "").trim();
   if (!asString) return needles;
+  if (isJunkNeedle(asString)) return needles;
+  push(asString);
 
   // Currency / numeric: try with and without thousands separators, with $.
   if (field?.type === "currency" || field?.type === "number") {
     const num = Number(String(value).replace(/[$,%\s,]/g, ""));
-    if (Number.isFinite(num)) {
+    if (Number.isFinite(num) && num >= 1000) {
+      // Skip small numbers — they match too broadly (page numbers, "Unit 5", etc.)
       push(num.toString());
       push(num.toLocaleString("en-US"));
       push(`$${num.toLocaleString("en-US")}`);
@@ -177,7 +207,7 @@ function candidateNeedles(value, field) {
     }
   }
 
-  // Entity names: try without trailing punctuation and without entity suffix.
+  // Entity names: try without trailing punctuation.
   if (field?.type === "text" || field?.type === undefined) {
     push(asString.replace(/[,.]+$/, ""));
   }
@@ -192,6 +222,12 @@ function findEvidenceForValue(blocks, value, field) {
     for (const block of blocks) {
       const hit = block.lowered.indexOf(loweredNeedle);
       if (hit < 0) continue;
+      // Require a word-boundary on at least one side so "1110" doesn't match
+      // inside "11102025" or a page footer like "Page 1110".
+      const before = hit === 0 ? "" : block.lowered[hit - 1];
+      const after = block.lowered[hit + loweredNeedle.length] || "";
+      const isWordChar = (c) => /[a-z0-9]/.test(c);
+      if (isWordChar(before) && isWordChar(after)) continue;
       // Pull a ~160-char window centered on the match.
       const start = Math.max(0, hit - 60);
       const end = Math.min(block.text.length, hit + needle.length + 100);
@@ -239,6 +275,32 @@ function detectFieldConflicts(lease) {
       label: "Lease signed after commencement",
       detail: `signed ${leaseDate}, commences ${start}`,
     });
+  }
+  // Commencement equals the lease-signing date — almost always means the
+  // extractor put the signing date into start_date by mistake. Real CRE
+  // leases rarely start the day they're signed.
+  if (leaseDate && start && new Date(leaseDate).toDateString() === new Date(start).toDateString()) {
+    conflicts.push({
+      field_key: "commencement_date",
+      label: "Commencement date equals lease signing date",
+      detail: `Likely extractor copied the signing date (${leaseDate}) into start_date — verify the actual commencement.`,
+    });
+  }
+  // Term shorter than 30 days — usually means end_date got the wrong year
+  // (e.g. "January 31" was assumed to be the same year as the start).
+  if (start && end) {
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+      const days = Math.round((endMs - startMs) / 86400000);
+      if (days < 30) {
+        conflicts.push({
+          field_key: "expiration_date",
+          label: `Lease term is only ${days} day(s)`,
+          detail: `${start} → ${end} is suspiciously short. The expiration date may have been extracted with the wrong year (commonly +1 year off).`,
+        });
+      }
+    }
   }
   return conflicts;
 }
