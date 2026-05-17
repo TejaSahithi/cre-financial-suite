@@ -350,6 +350,19 @@ function conditionApplied(rule) {
   return CONDITIONAL_KEYWORDS.some((keyword) => source.includes(keyword) || notes.includes(keyword));
 }
 
+// Treat any of the lease-expense-rule supporting tables not being deployed
+// as "no rules" rather than throwing — this code runs on every lease save
+// and approval, and a missing optional table shouldn't break the user's
+// happy path.
+function isMissingExpenseRuleTable(error) {
+  if (!error) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (code === "PGRST205" || code === "42P01") return true;
+  const text = String(error.message || error.details || "").toLowerCase();
+  return /lease_expense_rule_sets|lease_expense_rules|lease_expense_values|lease_expense_rule_clauses|expense_categories/.test(text)
+    && /does not exist|could not find/.test(text);
+}
+
 async function fetchApprovedRuleArtifacts(leaseIds = []) {
   if (!supabase || leaseIds.length === 0) {
     return { ruleSets: [], rules: [], categories: [] };
@@ -361,7 +374,13 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
     .in("lease_id", leaseIds)
     .eq("status", "approved");
 
-  if (ruleSetError) throw ruleSetError;
+  if (ruleSetError) {
+    if (isMissingExpenseRuleTable(ruleSetError)) {
+      console.warn("[expenseService] lease_expense_rule_sets table missing — treating as no rules.");
+      return { ruleSets: [], rules: [], categories: [] };
+    }
+    throw ruleSetError;
+  }
   if (!ruleSets?.length) return { ruleSets: [], rules: [], categories: [] };
 
   const ruleSetIds = ruleSets.map((ruleSet) => ruleSet.id);
@@ -370,7 +389,13 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
     .select("*")
     .in("rule_set_id", ruleSetIds);
 
-  if (rulesError) throw rulesError;
+  if (rulesError) {
+    if (isMissingExpenseRuleTable(rulesError)) {
+      console.warn("[expenseService] lease_expense_rules table missing — treating as no rules.");
+      return { ruleSets, rules: [], categories: [] };
+    }
+    throw rulesError;
+  }
 
   const ruleIds = (rules || []).map((rule) => rule.id);
   const categoryIds = [...new Set((rules || []).map((rule) => rule.expense_category_id).filter(Boolean))];
@@ -387,13 +412,17 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (valuesError) throw valuesError;
-  if (clausesError) throw clausesError;
-  if (categoriesError) throw categoriesError;
+  // Optional supporting tables: missing → empty, not throw.
+  if (valuesError && !isMissingExpenseRuleTable(valuesError)) throw valuesError;
+  if (clausesError && !isMissingExpenseRuleTable(clausesError)) throw clausesError;
+  if (categoriesError && !isMissingExpenseRuleTable(categoriesError)) throw categoriesError;
+  const safeValues = valuesError ? [] : (values || []);
+  const safeClauses = clausesError ? [] : (clauses || []);
+  const safeCategories = categoriesError ? [] : (categories || []);
 
-  const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
+  const valuesByRuleId = new Map(safeValues.map((value) => [value.rule_id, value]));
   const clausesByRuleId = new Map();
-  (clauses || []).forEach((clause) => {
+  safeClauses.forEach((clause) => {
     const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
     existing.push(clause);
     clausesByRuleId.set(clause.lease_expense_rule_id, existing);
@@ -409,7 +438,7 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
   return {
     ruleSets: ruleSets || [],
     rules: rulesWithRelations,
-    categories: categories || [],
+    categories: safeCategories,
   };
 }
 

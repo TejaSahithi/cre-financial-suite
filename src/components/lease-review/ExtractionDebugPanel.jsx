@@ -1,9 +1,14 @@
-import React, { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -47,17 +52,29 @@ function Section({ title, count, children, badge }) {
  *   4. Review table rows (per LEASE_REVIEW_FIELDS — what the operator sees)
  *   5. Field mapping warnings (extraction_data.workflow_output.validations)
  *   6. Source matching results (per-field source_text + source_page)
+ *
+ * Plus operator actions:
+ *   - Re-run extraction (invokes ingest-file on the source uploaded_files row)
+ *   - Re-link source document (set extraction_data.source_file_id manually)
+ *   - Apply latest extraction (pull fresh values + evidence from the source's
+ *     ui_review_payload into the lease record)
  */
 export default function ExtractionDebugPanel({ lease }) {
+  const queryClient = useQueryClient();
   const sourceFileId = lease?.extraction_data?.source_file_id || null;
+  const [rerunning, setRerunning] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [relinkOpen, setRelinkOpen] = useState(false);
+  const [relinkValue, setRelinkValue] = useState("");
+  const [relinking, setRelinking] = useState(false);
 
-  const { data: uploadedFile, isLoading: fileLoading } = useQuery({
+  const { data: uploadedFile, isLoading: fileLoading, refetch: refetchUploadedFile } = useQuery({
     queryKey: ["debug-uploaded-file", sourceFileId],
     enabled: !!sourceFileId && !!supabase,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("id, file_name, docling_raw, ui_review_payload, normalized_output, parsed_data, valid_data, extraction_method, status")
+        .select("id, file_name, docling_raw, ui_review_payload, normalized_output, parsed_data, valid_data, extraction_method, status, module_type, updated_at")
         .eq("id", sourceFileId)
         .maybeSingle();
       if (error) throw error;
@@ -102,11 +119,216 @@ export default function ExtractionDebugPanel({ lease }) {
     (r) => r.value != null && r.value !== "" && !r.sourcePage && !r.sourceText,
   );
 
+  // ── Actions ──────────────────────────────────────────────────────────
+
+  const handleRerunExtraction = async () => {
+    if (!sourceFileId) {
+      toast.error("This lease has no source file linked. Use Re-link Source Document first.");
+      return;
+    }
+    setRerunning(true);
+    try {
+      const moduleType = uploadedFile?.module_type || "leases";
+      const data = await invokeEdgeFunction("ingest-file", {
+        file_id: sourceFileId,
+        module_type: moduleType,
+        force_reextract: true,
+      });
+      if (data?.error) throw new Error(data?.message || "Re-extraction failed");
+      toast.success("Re-extraction kicked off. The source file will reprocess; refresh in a moment then run Apply Latest Extraction.");
+      await refetchUploadedFile();
+    } catch (err) {
+      console.error("[ExtractionDebug] re-run failed:", err);
+      toast.error(err?.message || "Could not re-run extraction");
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const handleApplyLatestExtraction = async () => {
+    if (!sourceFileId || !uploadedFile) {
+      toast.error("No source file available to read from.");
+      return;
+    }
+    setApplying(true);
+    try {
+      const reviewedRow = (uploadedFile.ui_review_payload?.records || uploadedFile.ui_review_payload?.rows || [])[0];
+      const wf = uploadedFile.ui_review_payload?.metadata?.workflow_output;
+      const workflowOutputFromFile = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
+
+      const fieldsWithEvidence = {};
+      const evidenceMap = {};
+      const confidenceMap = {};
+
+      if (reviewedRow) {
+        const allFields = [
+          ...(reviewedRow.standard_fields || []),
+          ...(reviewedRow.custom_fields || []),
+        ];
+        for (const field of allFields) {
+          if (!field?.field_key) continue;
+          fieldsWithEvidence[field.field_key] = {
+            value: field.value ?? null,
+            confidence: typeof field.confidence === "number" ? field.confidence : null,
+            source: field.source ?? null,
+            source_page: field.evidence?.page_number ?? null,
+            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+            raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
+            extraction_status: field.status ?? null,
+          };
+          evidenceMap[field.field_key] = {
+            raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
+            source_page: field.evidence?.page_number ?? null,
+            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+            extraction_status: field.status ?? null,
+          };
+          if (typeof field.confidence === "number") {
+            confidenceMap[field.field_key] = field.confidence <= 1 ? Math.round(field.confidence * 100) : Math.round(field.confidence);
+          }
+        }
+      }
+
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        fields: { ...(lease.extraction_data?.fields || {}), ...fieldsWithEvidence },
+        field_evidence: { ...(lease.extraction_data?.field_evidence || {}), ...evidenceMap },
+        confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
+        ...(workflowOutputFromFile ? { workflow_output: workflowOutputFromFile } : {}),
+        evidence_refreshed_at: new Date().toISOString(),
+      };
+
+      const { error: updateErr } = await supabase
+        .from("leases")
+        .update({ extraction_data: nextExtraction })
+        .eq("id", lease.id);
+      if (updateErr) throw updateErr;
+      toast.success("Lease refreshed with latest extraction from source file.");
+      queryClient.invalidateQueries({ queryKey: ["lease", lease.id] });
+    } catch (err) {
+      console.error("[ExtractionDebug] apply latest failed:", err);
+      toast.error(err?.message || "Could not apply latest extraction");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const handleRelinkSource = async () => {
+    const trimmed = relinkValue.trim();
+    if (!trimmed) {
+      toast.error("Enter an uploaded_files ID to link.");
+      return;
+    }
+    setRelinking(true);
+    try {
+      // Verify the file exists and belongs to the same org before writing.
+      const { data: file, error: lookupErr } = await supabase
+        .from("uploaded_files")
+        .select("id, org_id, file_name")
+        .eq("id", trimmed)
+        .maybeSingle();
+      if (lookupErr) throw lookupErr;
+      if (!file) throw new Error(`No uploaded_files row found for id ${trimmed}`);
+      if (file.org_id && lease.org_id && file.org_id !== lease.org_id) {
+        throw new Error("Source file belongs to a different organization");
+      }
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        source_file_id: trimmed,
+        source_file_name: file.file_name ?? null,
+        source_relinked_at: new Date().toISOString(),
+      };
+      const { error: updateErr } = await supabase
+        .from("leases")
+        .update({ extraction_data: nextExtraction })
+        .eq("id", lease.id);
+      if (updateErr) throw updateErr;
+      toast.success(`Source file linked: ${file.file_name || trimmed}`);
+      setRelinkOpen(false);
+      setRelinkValue("");
+      queryClient.invalidateQueries({ queryKey: ["lease", lease.id] });
+      queryClient.invalidateQueries({ queryKey: ["debug-uploaded-file", trimmed] });
+    } catch (err) {
+      console.error("[ExtractionDebug] relink failed:", err);
+      toast.error(err?.message || "Could not relink source document");
+    } finally {
+      setRelinking(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-        For diagnosing extraction issues. Read-only view of every layer between the document and the review table.
+      <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+        <div>
+          For diagnosing extraction issues. Read-only view of every layer between the document and the review table.
+          {sourceFileId ? null : (
+            <div className="mt-1 text-amber-900">
+              No source file is linked to this lease. Use <strong>Re-link Source Document</strong> to point this lease at an uploaded file.
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRerunExtraction}
+            disabled={rerunning || !sourceFileId}
+            title={sourceFileId ? "Re-runs ingest-file on the source upload" : "No source file linked"}
+          >
+            {rerunning ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+            Re-run Extraction
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleApplyLatestExtraction}
+            disabled={applying || !sourceFileId || !uploadedFile?.ui_review_payload}
+            title="Copy the latest extraction (values + evidence) from the source file into this lease"
+          >
+            {applying ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Wand2 className="mr-1 h-3.5 w-3.5" />}
+            Apply Latest Extraction
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setRelinkOpen((open) => !open)}
+          >
+            <Link2 className="mr-1 h-3.5 w-3.5" />
+            Re-link Source Document
+          </Button>
+        </div>
       </div>
+
+      {relinkOpen && (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <Label className="text-xs font-semibold text-slate-700">uploaded_files.id</Label>
+            <p className="text-[11px] text-slate-500">
+              Paste the row ID of the uploaded file you want this lease to point at. Find it on the Upload Lease page's
+              File ID line.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={relinkValue}
+                onChange={(e) => setRelinkValue(e.target.value)}
+                placeholder="e08b313e-65b6-49d1-a24d-3875c27bb5a7"
+                className="flex-1 min-w-[280px]"
+              />
+              <Button
+                size="sm"
+                onClick={handleRelinkSource}
+                disabled={relinking || !relinkValue.trim()}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {relinking && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                Link
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setRelinkOpen(false); setRelinkValue(""); }}>
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Section
         title="1. Docling page text"

@@ -474,12 +474,17 @@ export default function LeaseReview() {
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
 
   // Lease expense rule set status + counts (drives the warning banner and
-  // the Expense/CAM card on the summary tab).
+  // the Expense/CAM card on the summary tab). If the dedicated tables aren't
+  // deployed yet (PGRST205), degrade silently with empty totals instead of
+  // throwing — otherwise the approval flow sees an error toast for an
+  // optional side feature.
   const { data: ruleSetSummary } = useQuery({
     queryKey: ["lease-expense-rule-summary", leaseId],
     enabled: !!leaseId,
+    retry: false,
     queryFn: async () => {
-      if (!supabase || !leaseId) return null;
+      const EMPTY = { ruleSet: null, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: false };
+      if (!supabase || !leaseId) return EMPTY;
       const { data: ruleSets, error } = await supabase
         .from("lease_expense_rule_sets")
         .select("id, status, approved_at, version")
@@ -487,15 +492,21 @@ export default function LeaseReview() {
         .neq("status", "archived")
         .order("version", { ascending: false })
         .limit(1);
-      if (error) throw error;
-      const ruleSet = ruleSets?.[0] || null;
-      if (!ruleSet) {
-        return { ruleSet: null, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 } };
+      if (error) {
+        if (error.code === "PGRST205" || error.code === "42P01" || /lease_expense_rule_sets/i.test(error.message || "")) {
+          return { ...EMPTY, tableMissing: true };
+        }
+        throw error;
       }
-      const { data: rules } = await supabase
+      const ruleSet = ruleSets?.[0] || null;
+      if (!ruleSet) return EMPTY;
+      const { data: rules, error: rulesErr } = await supabase
         .from("lease_expense_rules")
         .select("id, row_status, mentioned_in_lease, is_recoverable, expense_category_id, gross_up_applicable, is_subject_to_cap, cap_type, admin_fee_applicable")
         .eq("rule_set_id", ruleSet.id);
+      if (rulesErr && (rulesErr.code === "PGRST205" || rulesErr.code === "42P01")) {
+        return { ruleSet, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: true };
+      }
       const approvedSet = ruleSet.status === "approved";
       const totals = (rules || []).reduce(
         (acc, r) => {
@@ -513,7 +524,7 @@ export default function LeaseReview() {
         },
         { expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 } },
       );
-      return { ruleSet, ...totals };
+      return { ruleSet, ...totals, tableMissing: false };
     },
   });
   const approvedRuleSet = ruleSetSummary?.ruleSet?.status === "approved" ? ruleSetSummary.ruleSet : null;
@@ -959,10 +970,22 @@ export default function LeaseReview() {
         ).catch(() => {});
       }
 
-      await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
+      // Post-approval side effects MUST NOT block the approval itself.
+      // Missing tables in this environment (lease_expense_rule_sets,
+      // lease_expense_values, etc.) used to throw out of syncLeaseDerivedExpenses
+      // and roll the whole approve back even though the lease was already saved.
+      try {
+        await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
+      } catch (syncErr) {
+        console.warn("[LeaseReview] expense sync skipped:", syncErr?.message || syncErr);
+      }
       if (approvedRuleSet?.id) {
-        const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
-        await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
+        try {
+          const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
+          await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
+        } catch (classifyErr) {
+          console.warn("[LeaseReview] expense classification skipped:", classifyErr?.message || classifyErr);
+        }
       }
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
 
