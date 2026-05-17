@@ -277,11 +277,27 @@ export default function LeaseUpload() {
       return null;
     }
 
-    const data = await invokeEdgeFunction("review-approve", {
-      file_id: fileId,
-      action: "prepare",
-      review_payload: fileRecord?.ui_review_payload || null,
-    });
+    let data;
+    try {
+      data = await invokeEdgeFunction("review-approve", {
+        file_id: fileId,
+        action: "prepare",
+        review_payload: fileRecord?.ui_review_payload || null,
+      });
+    } catch (error) {
+      // Backward compatibility: older deployed edge functions do not support
+      // the new "prepare" action yet. Fall back to the legacy "approve"
+      // action so users can still open Lease Review and create the draft.
+      if (!isUnsupportedPrepareAction(error)) {
+        throw error;
+      }
+
+      data = await invokeEdgeFunction("review-approve", {
+        file_id: fileId,
+        action: "approve",
+        review_payload: fileRecord?.ui_review_payload || null,
+      });
+    }
 
     const insertedLeaseId =
       data?.store_result?.inserted_ids?.[0] ||
@@ -908,4 +924,9 @@ function isMeaningfulLeaseValue(value) {
   if (!text) return false;
   if (/^(n\/a|na|null|none|unknown|tbd|lease review draft)$/i.test(text)) return false;
   return true;
+}
+
+function isUnsupportedPrepareAction(error) {
+  const message = String(error?.message || "");
+  return /invalid action:\s*prepare/i.test(message);
 }
