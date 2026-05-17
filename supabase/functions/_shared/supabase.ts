@@ -221,10 +221,22 @@ export async function assertPageAccess(
   const scopedClient = createUserScopedClient(req);
   let allowed = false;
 
+  // Broad fallback: if `can_write_any_page` is missing, signature-mismatched,
+  // not in the PostgREST schema cache, or the caller lacks EXECUTE — fall
+  // back to the single-page helper which has shipped since 20260422 and is
+  // present on every environment.
   const shouldFallbackToPerPageChecks = (error: any) => {
+    const code = String(error?.code || "").toUpperCase();
+    if (code === "PGRST202" || code === "42883" || code === "42P01" || code === "PGRST205") return true;
     const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ").toLowerCase();
-    return text.includes("can_write_any_page") &&
-      (text.includes("could not find") || text.includes("does not exist") || text.includes("function") || text.includes("no function matches"));
+    if (!text) return false;
+    if (text.includes("can_write_any_page")) return true;
+    return (
+      text.includes("could not find") ||
+      text.includes("does not exist") ||
+      text.includes("no function matches") ||
+      text.includes("function") && text.includes("not unique")
+    );
   };
 
   if (access === "write") {

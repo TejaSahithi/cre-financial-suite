@@ -131,6 +131,17 @@ function computeLeaseProjection(
   };
 }
 
+// Detect a missing rent_schedules table — older environments where the
+// 20260516 migration hasn't been applied yet. In that case we still want
+// projections to work using the in-memory generator.
+function isMissingRentSchedulesTable(error: any): boolean {
+  const code = String(error?.code || "").toUpperCase();
+  if (code === "42P01" || code === "PGRST205") return true;
+  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return false;
+  return text.includes("rent_schedules") && (text.includes("does not exist") || text.includes("could not find"));
+}
+
 async function ensureApprovedRentSchedules(
   supabaseAdmin: any,
   leases: Record<string, any>[],
@@ -147,6 +158,10 @@ async function ensureApprovedRentSchedules(
     .eq("status", "approved");
 
   if (existingError) {
+    if (isMissingRentSchedulesTable(existingError)) {
+      console.warn("[compute-lease] rent_schedules table missing — using in-memory projection.");
+      return leases.flatMap((lease) => generateApprovedRentScheduleRows(lease));
+    }
     throw new Error(`Failed to fetch approved rent schedules: ${existingError.message}`);
   }
 
@@ -177,6 +192,10 @@ async function ensureApprovedRentSchedules(
       .in("lease_id", deleteLeaseIds);
 
     if (deleteError) {
+      if (isMissingRentSchedulesTable(deleteError)) {
+        console.warn("[compute-lease] rent_schedules table missing — using in-memory projection.");
+        return leases.flatMap((lease) => generateApprovedRentScheduleRows(lease));
+      }
       throw new Error(`Failed to refresh approved rent schedules: ${deleteError.message}`);
     }
 
@@ -186,6 +205,10 @@ async function ensureApprovedRentSchedules(
         .from("rent_schedules")
         .insert(rowsToInsert);
       if (insertError) {
+        if (isMissingRentSchedulesTable(insertError)) {
+          console.warn("[compute-lease] rent_schedules table missing — using in-memory projection.");
+          return leases.flatMap((lease) => generateApprovedRentScheduleRows(lease));
+        }
         throw new Error(`Failed to store approved rent schedules: ${insertError.message}`);
       }
     }
@@ -199,6 +222,10 @@ async function ensureApprovedRentSchedules(
     .eq("status", "approved");
 
   if (finalError) {
+    if (isMissingRentSchedulesTable(finalError)) {
+      console.warn("[compute-lease] rent_schedules table missing — using in-memory projection.");
+      return leases.flatMap((lease) => generateApprovedRentScheduleRows(lease));
+    }
     throw new Error(`Failed to reload approved rent schedules: ${finalError.message}`);
   }
 

@@ -85,6 +85,14 @@ import {
   rejectLeaseAbstract,
 } from "@/services/leaseAbstractService";
 import { logAudit } from "@/services/audit";
+import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
+import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
+import {
+  RentScheduleTable,
+  ExpenseRulesTable,
+  CamRulesTable,
+  CriticalDatesTable,
+} from "@/components/lease-review/SpecializedTables";
 
 const documentService = createEntityService("Document");
 
@@ -170,6 +178,10 @@ export default function LeaseReview() {
 
   // Field review state — keyed by field key.
   const [fieldReviews, setFieldReviews] = useState({});
+
+  // Field detail drawer state
+  const [drawerField, setDrawerField] = useState(null);
+  const drawerReview = drawerField ? fieldReviews[drawerField.key] : null;
 
   // Lease query
   const { data: lease, isLoading } = useQuery({
@@ -1175,27 +1187,73 @@ export default function LeaseReview() {
           </div>
         </TabsContent>
 
-        {/* Field tabs */}
-        {LEASE_REVIEW_TABS.filter((t) => !["summary", "documents_exhibits", "budget_preview"].includes(t.key)).map((tab) => (
-          <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
-            {(FIELDS_BY_TAB[tab.key] || []).map((field) => (
-              <FieldReviewRow
-                key={field.key}
-                field={field}
+        {/* Field tabs — table-first per business section. */}
+        {LEASE_REVIEW_TABS
+          .filter((t) => !["summary", "rent_schedule", "expenses_recoveries", "cam_rules", "critical_dates", "documents_exhibits", "budget_preview"].includes(t.key))
+          .map((tab) => (
+            <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
+              <FieldReviewTable
+                fields={FIELDS_BY_TAB[tab.key] || []}
                 lease={lease}
-                review={fieldReviews[field.key]}
-                onAccept={() => handleAccept(field)}
-                onEdit={() => openEdit(field)}
-                onReject={() => handleReject(field)}
-                onMarkNA={() => handleMarkNA(field)}
-                onNeedsLegal={() => handleNeedsLegal(field)}
-                onMarkManualRequired={() => handleMarkManualRequired(field)}
-                onReset={() => handleResetField(field)}
-                onViewInDocument={() => viewInDocument(field)}
+                fieldReviews={fieldReviews}
+                onOpenDetail={(field) => setDrawerField(field)}
+                onQuickAction={(field, action) => {
+                  if (action === "accept") handleAccept(field);
+                  else if (action === "edit") {
+                    setDrawerField(field);
+                  } else if (action === "reject") handleReject(field);
+                  else if (action === "na") handleMarkNA(field);
+                  else if (action === "legal") handleNeedsLegal(field);
+                }}
               />
-            ))}
-          </TabsContent>
-        ))}
+            </TabsContent>
+          ))}
+
+        {/* Rent Schedule — repeatable records from rent_schedules. */}
+        <TabsContent value="rent_schedule" className="mt-4 space-y-3">
+          <RentScheduleTable leaseId={lease.id} />
+        </TabsContent>
+
+        {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
+        <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
+          <FieldReviewTable
+            fields={FIELDS_BY_TAB.expenses_recoveries || []}
+            lease={lease}
+            fieldReviews={fieldReviews}
+            onOpenDetail={(field) => setDrawerField(field)}
+            onQuickAction={(field, action) => {
+              if (action === "accept") handleAccept(field);
+              else if (action === "edit") setDrawerField(field);
+              else if (action === "reject") handleReject(field);
+              else if (action === "na") handleMarkNA(field);
+              else if (action === "legal") handleNeedsLegal(field);
+            }}
+          />
+          <ExpenseRulesTable leaseId={lease.id} />
+        </TabsContent>
+
+        {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
+        <TabsContent value="cam_rules" className="mt-4 space-y-4">
+          <FieldReviewTable
+            fields={FIELDS_BY_TAB.cam_rules || []}
+            lease={lease}
+            fieldReviews={fieldReviews}
+            onOpenDetail={(field) => setDrawerField(field)}
+            onQuickAction={(field, action) => {
+              if (action === "accept") handleAccept(field);
+              else if (action === "edit") setDrawerField(field);
+              else if (action === "reject") handleReject(field);
+              else if (action === "na") handleMarkNA(field);
+              else if (action === "legal") handleNeedsLegal(field);
+            }}
+          />
+          <CamRulesTable leaseId={lease.id} />
+        </TabsContent>
+
+        {/* Critical Dates — derived from approved abstract. */}
+        <TabsContent value="critical_dates" className="mt-4 space-y-3">
+          <CriticalDatesTable lease={lease} />
+        </TabsContent>
 
         {/* Documents / Exhibits tab */}
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
@@ -1225,6 +1283,60 @@ export default function LeaseReview() {
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
       </Tabs>
+
+      {/* Side drawer for full field detail. */}
+      <FieldDetailDrawer
+        open={!!drawerField}
+        onOpenChange={(open) => {
+          if (!open) setDrawerField(null);
+        }}
+        field={drawerField}
+        lease={lease}
+        review={drawerReview}
+        onAccept={(f) => handleAccept(f)}
+        onReject={(f) => handleReject(f)}
+        onMarkNA={(f) => handleMarkNA(f)}
+        onNeedsLegal={(f) => handleNeedsLegal(f)}
+        onMarkManualRequired={(f) => handleMarkManualRequired(f)}
+        onReset={(f) => handleResetField(f)}
+        onSaveEdit={async (f, val) => {
+          // Mirror the existing handleFieldSave path but without the Dialog.
+          const columnUpdates = {};
+          for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
+          if (f.key === "total_sf") columnUpdates.square_footage = val;
+          const previousValue = readFieldValue(lease, f.key);
+          try {
+            const updatedLease = await updateLeaseMutation.mutateAsync({
+              id: lease.id,
+              data: {
+                ...columnUpdates,
+                extraction_data: {
+                  ...(lease.extraction_data || {}),
+                  fields: {
+                    ...(lease.extraction_data?.fields || {}),
+                    [f.key]: { value: val, manually_edited: true, edited_at: new Date().toISOString() },
+                  },
+                },
+              },
+            });
+            await persistFieldAction({
+              field: f,
+              status: REVIEW_STATUSES.EDITED,
+              value: val,
+              previousReview: { value: previousValue, status: fieldReviews[f.key]?.status },
+            });
+            if (["cam_amount", "nnn_amount", "start_date", "end_date", "commencement_date", "expiration_date", "tenant_name"].includes(f.key)) {
+              await expenseService.syncLeaseDerivedExpenses({ leases: [updatedLease] });
+              queryClient.invalidateQueries({ queryKey: ["Expense"] });
+            }
+            toast.success(`Updated ${f.label}`);
+          } catch {
+            /* toasted by mutation onError */
+          }
+        }}
+        onViewInDocument={() => drawerField && viewInDocument(drawerField)}
+        isSaving={updateLeaseMutation.isPending}
+      />
 
       {/* Sticky bottom action bar */}
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
