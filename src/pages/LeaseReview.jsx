@@ -106,6 +106,105 @@ const confidenceColor = (score) => {
   return "bg-slate-100 text-slate-500";
 };
 
+// ── Text-matching evidence synthesizer ──────────────────────────────────
+// Given a docling-shaped object ({text_blocks, full_text}) and a field
+// value, find the verbatim snippet in the document and return
+// { raw, text, page }. Lets us populate Raw / Page / Source Text even when
+// the original extractor stamped no evidence on the field.
+
+function buildSearchBlocks(docling) {
+  const blocks = [];
+  const raw = Array.isArray(docling?.text_blocks) ? docling.text_blocks : [];
+  for (const block of raw) {
+    const text = String(block?.text ?? "").trim();
+    if (!text) continue;
+    blocks.push({
+      text,
+      lowered: text.toLowerCase(),
+      page: Number.isFinite(Number(block?.page)) ? Number(block.page) : null,
+    });
+  }
+  // Add full_text as a fallback block with unknown page so single-page
+  // documents still resolve.
+  if (docling?.full_text && blocks.length === 0) {
+    blocks.push({
+      text: String(docling.full_text),
+      lowered: String(docling.full_text).toLowerCase(),
+      page: null,
+    });
+  }
+  return blocks;
+}
+
+// Normalize a value for matching: lowercase, currency stripped, common
+// punctuation removed. Produces a set of candidate needles to try.
+function candidateNeedles(value, field) {
+  const needles = [];
+  const push = (s) => {
+    const t = String(s ?? "").trim();
+    if (t && !needles.includes(t)) needles.push(t);
+  };
+  push(value);
+  const asString = String(value ?? "").trim();
+  if (!asString) return needles;
+
+  // Currency / numeric: try with and without thousands separators, with $.
+  if (field?.type === "currency" || field?.type === "number") {
+    const num = Number(String(value).replace(/[$,%\s,]/g, ""));
+    if (Number.isFinite(num)) {
+      push(num.toString());
+      push(num.toLocaleString("en-US"));
+      push(`$${num.toLocaleString("en-US")}`);
+      push(`$${num.toFixed(2)}`);
+      push(`${num.toLocaleString("en-US")}.00`);
+    }
+  }
+
+  // Dates: try several human formats around an ISO date.
+  if (field?.type === "date" && /^\d{4}-\d{2}-\d{2}$/.test(asString)) {
+    const d = new Date(`${asString}T00:00:00Z`);
+    if (!Number.isNaN(d.getTime())) {
+      const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const monthsShort = months.map((m) => m.slice(0, 3));
+      const y = d.getUTCFullYear();
+      const m1 = d.getUTCMonth();
+      const day = d.getUTCDate();
+      push(`${months[m1]} ${day}, ${y}`);
+      push(`${monthsShort[m1]} ${day}, ${y}`);
+      push(`${m1 + 1}/${day}/${y}`);
+      push(`${String(m1 + 1).padStart(2, "0")}/${String(day).padStart(2, "0")}/${y}`);
+    }
+  }
+
+  // Entity names: try without trailing punctuation and without entity suffix.
+  if (field?.type === "text" || field?.type === undefined) {
+    push(asString.replace(/[,.]+$/, ""));
+  }
+  return needles;
+}
+
+function findEvidenceForValue(blocks, value, field) {
+  const needles = candidateNeedles(value, field);
+  if (needles.length === 0) return null;
+  for (const needle of needles) {
+    const loweredNeedle = needle.toLowerCase();
+    for (const block of blocks) {
+      const hit = block.lowered.indexOf(loweredNeedle);
+      if (hit < 0) continue;
+      // Pull a ~160-char window centered on the match.
+      const start = Math.max(0, hit - 60);
+      const end = Math.min(block.text.length, hit + needle.length + 100);
+      const snippet = block.text.slice(start, end).replace(/\s+/g, " ").trim();
+      return {
+        raw: block.text.slice(hit, hit + needle.length),
+        text: snippet,
+        page: block.page,
+      };
+    }
+  }
+  return null;
+}
+
 // Detect numeric conflicts between extracted source and stored value
 // (e.g. monthly_rent vs annual_rent / 12). Returns an array of human
 // strings describing each conflict — empty array means no conflict.
@@ -241,55 +340,97 @@ export default function LeaseReview() {
   useEffect(() => {
     if (!lease?.id || !supabase) return;
     const ed = lease.extraction_data || {};
-    const hasEvidence = Boolean(
-      ed.field_evidence
-      || ed.workflow_output?.lease_fields
-      || ed.workflow_output?.records?.[0]?.lease_fields
-      || lease.abstract_snapshot?.fields,
+    const evidenceMap = ed.field_evidence || {};
+    const hasMeaningfulEvidence = Object.values(evidenceMap).some(
+      (e) => e && (e.source_text || e.source_page || e.raw_value),
+    );
+    const hasWorkflowFields = Boolean(
+      ed.workflow_output?.lease_fields
+      || ed.workflow_output?.records?.[0]?.lease_fields,
     );
     const sourceFileId = ed.source_file_id;
-    if (hasEvidence || !sourceFileId) return;
+    if ((hasMeaningfulEvidence || hasWorkflowFields) || !sourceFileId) return;
 
     let cancelled = false;
     (async () => {
       try {
         const { data: file, error } = await supabase
           .from("uploaded_files")
-          .select("ui_review_payload")
+          .select("ui_review_payload, docling_raw, normalized_output, parsed_data")
           .eq("id", sourceFileId)
           .maybeSingle();
-        if (error || !file?.ui_review_payload || cancelled) return;
-        const records = file.ui_review_payload.records || file.ui_review_payload.rows || [];
-        const record = records[0];
-        if (!record) return;
+        if (error || !file || cancelled) return;
 
+        // ── Step 1: pull whatever evidence the ui_review_payload already has.
         const fieldsWithEvidence = {};
         const fieldEvidence = {};
-        const allFields = [...(record.standard_fields || []), ...(record.custom_fields || [])];
-        for (const field of allFields) {
-          if (!field?.field_key) continue;
-          fieldsWithEvidence[field.field_key] = {
-            value: field.value ?? null,
-            confidence: typeof field.confidence === "number" ? field.confidence : null,
-            source: field.source ?? null,
-            evidence: field.evidence ?? null,
-            source_page: field.evidence?.page_number ?? null,
-            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
-            raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
-            extraction_status: field.status ?? null,
-          };
-          if (field.evidence) {
-            fieldEvidence[field.field_key] = {
-              raw_value: field.original_value ?? field.evidence.raw_value ?? null,
-              source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
-              source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+        const reviewedRow = (file.ui_review_payload?.records || file.ui_review_payload?.rows || [])[0];
+        if (reviewedRow) {
+          const allFields = [
+            ...(reviewedRow.standard_fields || []),
+            ...(reviewedRow.custom_fields || []),
+          ];
+          for (const field of allFields) {
+            if (!field?.field_key) continue;
+            fieldsWithEvidence[field.field_key] = {
+              value: field.value ?? null,
+              confidence: typeof field.confidence === "number" ? field.confidence : null,
+              source: field.source ?? null,
+              evidence: field.evidence ?? null,
+              source_page: field.evidence?.page_number ?? null,
+              source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+              raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
               extraction_status: field.status ?? null,
+            };
+            if (field.evidence) {
+              fieldEvidence[field.field_key] = {
+                raw_value: field.original_value ?? field.evidence.raw_value ?? null,
+                source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
+                source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+                extraction_status: field.status ?? null,
+              };
+            }
+          }
+        }
+
+        // ── Step 2: synthesize evidence by text-matching every known field
+        // value against the docling text blocks. This is the fallback that
+        // works even when the original extractor stamped no evidence at all.
+        const docling = file.docling_raw || file.normalized_output || null;
+        if (docling) {
+          const blocks = buildSearchBlocks(docling);
+          for (const field of LEASE_REVIEW_FIELDS) {
+            const value = readFieldValue(lease, field.key);
+            if (value == null || value === "") continue;
+            // Don't overwrite real evidence we already have.
+            const existing = fieldEvidence[field.key] || ed.field_evidence?.[field.key];
+            if (existing?.source_text || existing?.raw_value) continue;
+            const hit = findEvidenceForValue(blocks, value, field);
+            if (!hit) continue;
+            fieldEvidence[field.key] = {
+              raw_value: hit.raw,
+              source_page: hit.page,
+              source_text: hit.text,
+              extraction_status: "extracted_text_match",
+            };
+            fieldsWithEvidence[field.key] = {
+              ...(fieldsWithEvidence[field.key] || {}),
+              value,
+              raw_value: hit.raw,
+              source_page: hit.page,
+              source_text: hit.text,
+              extraction_status: "extracted_text_match",
             };
           }
         }
 
         const wf = file.ui_review_payload?.metadata?.workflow_output;
         const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
+
+        if (Object.keys(fieldEvidence).length === 0 && !workflowOutput) {
+          // Nothing to backfill — don't churn the row.
+          return;
+        }
 
         const nextExtraction = {
           ...ed,
