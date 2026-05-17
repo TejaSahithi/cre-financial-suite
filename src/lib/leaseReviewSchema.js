@@ -53,10 +53,12 @@ export const LEASE_REVIEW_TABS = [
   { key: "parties_premises", label: "Parties & Premises" },
   { key: "dates_term", label: "Dates & Term" },
   { key: "rent_charges", label: "Rent & Charges" },
+  { key: "rent_schedule", label: "Rent Schedule" },
   { key: "expenses_recoveries", label: "Expenses / Recoveries" },
   { key: "cam_rules", label: "CAM Rules" },
   { key: "insurance", label: "Insurance" },
   { key: "legal_options", label: "Legal / Options" },
+  { key: "critical_dates", label: "Critical Dates" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
   { key: "budget_preview", label: "Budget Preview" },
 ];
