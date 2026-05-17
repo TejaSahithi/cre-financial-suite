@@ -199,6 +199,29 @@ const FIELD_COLUMN_ALIASES = {
   default_cure_period: ["default_cure_period", "late_fee_grace_days"],
 };
 
+const FIELD_CLAUSE_FALLBACKS = {
+  premises_use: { clauseTypes: ["use_clause"], keywordPatterns: [/permitted use/i, /use of premises/i], useClauseTextAsValue: true },
+  assignment_provisions: { clauseTypes: ["assignment_subletting"], keywordPatterns: [/assignment/i, /subletting/i, /sublease/i], useClauseTextAsValue: true },
+  default_cure_period: { clauseTypes: ["default"], keywordPatterns: [/\b(\d{1,3})\s+days?\b/i], valueParser: "days" },
+  waiver_of_subrogation: { clauseTypes: ["insurance"], keywordPatterns: [/waiver of subrogation/i], valueParser: "boolean" },
+  additional_insureds_required: { clauseTypes: ["insurance"], keywordPatterns: [/additional insured/i], valueParser: "boolean" },
+  early_termination_option: { clauseTypes: ["remedies", "surrender"], keywordPatterns: [/early termination/i, /\bterminate\b/i], valueParser: "boolean" },
+  right_of_first_refusal: { clauseTypes: ["assignment_subletting"], keywordPatterns: [/right of first refusal/i, /\brofr\b/i], valueParser: "boolean" },
+  renewal_options: { clauseTypes: ["notices"], keywordPatterns: [/\brenew(?:al)? option/i] },
+  tenant_insurance_required: {
+    clauseTypes: ["insurance"],
+    keywordPatterns: [/tenant insurance/i, /liability insurance/i, /general liability/i, /certificate of insurance/i],
+    structuredKeys: ["tenant_property_insurance_required", "commercial_general_liability_required", "certificate_required"],
+    valueParser: "boolean",
+  },
+  general_liability_min: {
+    clauseTypes: ["insurance"],
+    keywordPatterns: [/\$?[\d,]+(?:\.\d{2})?\s*(?:each occurrence|per occurrence|aggregate)/i],
+    structuredKeys: ["liability_limit_each_occurrence", "liability_limit_aggregate"],
+    valueParser: "currency",
+  },
+};
+
 function isPresent(v) {
   return v !== undefined && v !== null && v !== "";
 }
@@ -323,6 +346,101 @@ function getWorkflowCamProfile(lease) {
   return getLeaseWorkflowOutput(lease)?.cam_profile || null;
 }
 
+function getWorkflowLeaseClauses(lease) {
+  const workflowOutput = getLeaseWorkflowOutput(lease);
+  const workflowClauses = workflowOutput?.lease_clauses;
+  if (Array.isArray(workflowClauses) && workflowClauses.length > 0) return workflowClauses;
+
+  const extractionClauses = lease?.extraction_data?.lease_clauses;
+  if (Array.isArray(extractionClauses) && extractionClauses.length > 0) return extractionClauses;
+
+  const snapshotClauses = lease?.abstract_snapshot?.workflow_output?.lease_clauses;
+  if (Array.isArray(snapshotClauses) && snapshotClauses.length > 0) return snapshotClauses;
+
+  return [];
+}
+
+function parseClauseValueFromConfig(clause, config) {
+  if (!clause || !config) return null;
+
+  const structured = clause.structured_fields_json && typeof clause.structured_fields_json === "object"
+    ? clause.structured_fields_json
+    : {};
+
+  if (Array.isArray(config.structuredKeys)) {
+    for (const key of config.structuredKeys) {
+      if (isPresent(structured[key])) return structured[key];
+    }
+  }
+
+  const clauseText = String(clause.clause_text || "");
+  if (!clauseText) return null;
+
+  if (config.valueParser === "boolean") {
+    return true;
+  }
+
+  if (config.valueParser === "days") {
+    const match = config.keywordPatterns?.map((pattern) => clauseText.match(pattern)).find((result) => result?.[1]);
+    if (match?.[1]) return parseStoredNumber(match[1]);
+    return null;
+  }
+
+  if (config.valueParser === "currency") {
+    const direct = parseStoredNumber(clauseText);
+    if (direct != null) return direct;
+    const match = clauseText.match(/\$?\s*([\d,]+(?:\.\d{2})?)/);
+    return match?.[1] ? parseStoredNumber(match[1]) : null;
+  }
+
+  if (config.useClauseTextAsValue) {
+    return clauseText;
+  }
+
+  return null;
+}
+
+function findClauseFallbackEntry(lease, key) {
+  const config = FIELD_CLAUSE_FALLBACKS[key];
+  if (!config) return null;
+
+  const clauses = getWorkflowLeaseClauses(lease);
+  if (!clauses.length) return null;
+
+  const matchingClause = clauses.find((clause) => {
+    if (!clause?.clause_text) return false;
+    if (config.clauseTypes?.length && !config.clauseTypes.includes(clause.clause_type)) return false;
+
+    if (Array.isArray(config.structuredKeys)) {
+      const structured = clause.structured_fields_json && typeof clause.structured_fields_json === "object"
+        ? clause.structured_fields_json
+        : {};
+      if (config.structuredKeys.some((structuredKey) => isPresent(structured[structuredKey]))) {
+        return true;
+      }
+    }
+
+    if (Array.isArray(config.keywordPatterns)) {
+      return config.keywordPatterns.some((pattern) => pattern.test(String(clause.clause_text || "")));
+    }
+
+    return true;
+  }) || null;
+
+  if (!matchingClause) return null;
+
+  return {
+    value: parseClauseValueFromConfig(matchingClause, config),
+    raw_value: matchingClause.clause_text ?? null,
+    source_page: matchingClause.source_page ?? null,
+    source_text: matchingClause.clause_text ?? null,
+    source_clause: matchingClause.clause_text ?? null,
+    confidence_score: matchingClause.confidence_score ?? null,
+    extraction_status: null,
+    clause_type: matchingClause.clause_type ?? null,
+  };
+}
+
 function firstMatchingExpenseRule(lease, categories = [], predicate = () => true) {
   const rules = getWorkflowExpenseRules(lease);
   return rules.find((rule) =>
@@ -432,6 +550,8 @@ export function readFieldValue(lease, key) {
     const derived = buildDerivedWorkflowEntry(lease, candidate);
     if (isPresent(derived?.value)) return derived.value;
   }
+  const clauseFallback = findClauseFallbackEntry(lease, key);
+  if (isPresent(clauseFallback?.value)) return clauseFallback.value;
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
   const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
   if (isPresent(snapshotEntry)) return unwrapFieldValue(snapshotEntry);
@@ -462,6 +582,7 @@ export function readFieldEvidence(lease, key) {
   const fieldEntry = pickCandidateEntry(fieldsMap, candidates);
   const workflowEntry = pickCandidateEntry(workflowFields, candidates);
   const derivedEntry = candidates.map((candidate) => buildDerivedWorkflowEntry(lease, candidate)).find(Boolean) || null;
+  const clauseFallbackEntry = findClauseFallbackEntry(lease, key);
   const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
 
   const raw =
@@ -469,27 +590,31 @@ export function readFieldEvidence(lease, key) {
     ?? readFromEntry(fieldEntry, "raw_value", "raw", "original_value", "extracted_value")
     ?? readFromEntry(workflowEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
     ?? readFromEntry(derivedEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
+    ?? readFromEntry(clauseFallbackEntry, "raw_value", "source_clause", "clause_text", "source_text")
     ?? readFromEntry(snapshotEntry, "raw_value", "raw", "original_value", "extracted_value");
   const sourcePage =
     readFromEntry(evidence, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
     ?? readFromEntry(fieldEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
     ?? readFromEntry(workflowEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
     ?? readFromEntry(derivedEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
+    ?? readFromEntry(clauseFallbackEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
     ?? readFromEntry(snapshotEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage");
   const sourceText =
     readFromEntry(evidence, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
     ?? readFromEntry(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
     ?? readFromEntry(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
     ?? readFromEntry(derivedEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
+    ?? readFromEntry(clauseFallbackEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
     ?? readFromEntry(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt");
   const extractionStatus =
     readFromEntry(evidence, "extraction_status")
     ?? readFromEntry(fieldEntry, "extraction_status")
     ?? readFromEntry(workflowEntry, "extraction_status")
     ?? readFromEntry(derivedEntry, "extraction_status")
+    ?? readFromEntry(clauseFallbackEntry, "extraction_status")
     ?? readFromEntry(snapshotEntry, "extraction_status");
   return {
-    rawValue: raw ?? unwrapFieldValue(fieldEntry) ?? unwrapFieldValue(workflowEntry) ?? null,
+    rawValue: raw ?? unwrapFieldValue(fieldEntry) ?? unwrapFieldValue(workflowEntry) ?? unwrapFieldValue(clauseFallbackEntry) ?? null,
     sourcePage: parseStoredNumber(sourcePage) ?? sourcePage ?? null,
     sourceText: sourceText ?? null,
     extractionStatus: extractionStatus ?? null,
@@ -527,6 +652,11 @@ export function readFieldConfidence(lease, key, fallback = null) {
     );
     if (score != null) return normalizeStoredConfidence(score);
   }
+  const clauseFallbackEntry = findClauseFallbackEntry(lease, key);
+  const clauseFallbackConfidence = parseStoredNumber(
+    readFromEntry(clauseFallbackEntry, "confidence", "confidence_score", "score"),
+  );
+  if (clauseFallbackConfidence != null) return normalizeStoredConfidence(clauseFallbackConfidence);
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
   const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
   const snapshotConfidence = parseStoredNumber(
