@@ -480,8 +480,19 @@ Deno.serve(async (req: Request) => {
       explicitSubtype,
     });
 
-    const reviewRequired =
-      routing.route === "parse-pdf-docling" && subtypeResult.reviewRequired;
+    // Lease uploads always go through the human review gate, regardless of
+    // what the document-subtype classifier returned. Lease abstracts are
+    // legally sensitive and downstream modules (rent projection, CAM,
+    // billing) only read from the approved abstract, so skipping review
+    // would silently bypass that contract. Other modules keep the
+    // classifier-driven decision.
+    const effectiveModule = (detection.moduleType === "unknown"
+      ? (fileRecord.module_type as ModuleType) || "unknown"
+      : detection.moduleType) as ModuleType;
+    const isLeaseModule = effectiveModule === "leases" || effectiveModule === "lease";
+    const reviewRequired = isLeaseModule
+      ? true
+      : routing.route === "parse-pdf-docling" && subtypeResult.reviewRequired;
 
     await supabaseAdmin
       .from("uploaded_files")
