@@ -347,9 +347,16 @@ export default function LeaseReview() {
   // Field review state — keyed by field key.
   const [fieldReviews, setFieldReviews] = useState({});
 
-  // Field detail drawer state
+  // Field detail drawer state. drawerMode lets the dropdown's "Edit" item
+  // open the drawer already in edit mode (otherwise the user has to click
+  // Edit a second time inside the drawer).
   const [drawerField, setDrawerField] = useState(null);
+  const [drawerMode, setDrawerMode] = useState("view");
   const drawerReview = drawerField ? fieldReviews[drawerField.key] : null;
+  const openDrawer = (field, mode = "view") => {
+    setDrawerMode(mode);
+    setDrawerField(field);
+  };
 
   // Lease query
   const { data: lease, isLoading } = useQuery({
@@ -1695,14 +1702,14 @@ export default function LeaseReview() {
                 fields={FIELDS_BY_TAB[tab.key] || []}
                 lease={lease}
                 fieldReviews={fieldReviews}
-                onOpenDetail={(field) => setDrawerField(field)}
+                onOpenDetail={(field) => openDrawer(field, "view")}
                 onQuickAction={(field, action) => {
                   if (action === "accept") handleAccept(field);
-                  else if (action === "edit") {
-                    setDrawerField(field);
-                  } else if (action === "reject") handleReject(field);
+                  else if (action === "edit") openDrawer(field, "edit");
+                  else if (action === "reject") handleReject(field);
                   else if (action === "na") handleMarkNA(field);
-                  else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
+                  else if (action === "legal") handleNeedsLegal(field);
+                  else if (action === "manual") handleMarkManualRequired(field);
                 }}
               />
             </TabsContent>
@@ -1717,10 +1724,10 @@ export default function LeaseReview() {
             fields={FIELDS_BY_TAB.rent_charges || []}
             lease={lease}
             fieldReviews={fieldReviews}
-            onOpenDetail={(field) => setDrawerField(field)}
+            onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
               if (action === "accept") handleAccept(field);
-              else if (action === "edit") setDrawerField(field);
+              else if (action === "edit") openDrawer(field, "edit");
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
@@ -1735,10 +1742,10 @@ export default function LeaseReview() {
             fields={FIELDS_BY_TAB.expenses_recoveries || []}
             lease={lease}
             fieldReviews={fieldReviews}
-            onOpenDetail={(field) => setDrawerField(field)}
+            onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
               if (action === "accept") handleAccept(field);
-              else if (action === "edit") setDrawerField(field);
+              else if (action === "edit") openDrawer(field, "edit");
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
@@ -1753,10 +1760,10 @@ export default function LeaseReview() {
             fields={FIELDS_BY_TAB.cam_rules || []}
             lease={lease}
             fieldReviews={fieldReviews}
-            onOpenDetail={(field) => setDrawerField(field)}
+            onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
               if (action === "accept") handleAccept(field);
-              else if (action === "edit") setDrawerField(field);
+              else if (action === "edit") openDrawer(field, "edit");
               else if (action === "reject") handleReject(field);
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
@@ -1813,11 +1820,15 @@ export default function LeaseReview() {
       <FieldDetailDrawer
         open={!!drawerField}
         onOpenChange={(open) => {
-          if (!open) setDrawerField(null);
+          if (!open) {
+            setDrawerField(null);
+            setDrawerMode("view");
+          }
         }}
         field={drawerField}
         lease={lease}
         review={drawerReview}
+        initialMode={drawerMode}
         onAccept={(f) => handleAccept(f)}
         onReject={(f) => handleReject(f)}
         onMarkNA={(f) => handleMarkNA(f)}

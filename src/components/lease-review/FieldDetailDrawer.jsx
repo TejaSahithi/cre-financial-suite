@@ -70,6 +70,7 @@ export default function FieldDetailDrawer({
   field,
   lease,
   review,
+  initialMode = "view",
   onAccept,
   onReject,
   onMarkNA,
@@ -82,7 +83,7 @@ export default function FieldDetailDrawer({
   onViewInDocument,
   isSaving,
 }) {
-  const [mode, setMode] = useState("view");
+  const [mode, setMode] = useState(initialMode);
   const [editValue, setEditValue] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
   // Editable evidence form state — reviewer can correct what extraction
@@ -109,10 +110,12 @@ export default function FieldDetailDrawer({
     : "missing";
   const extractionStatusLabel = EXTRACTION_STATUS_LABELS[inferredExtractionStatus] || inferredExtractionStatus;
 
-  // Reset edit mode + populate when drawer opens or field changes.
+  // Reset edit mode + populate when drawer opens or field changes. Honors
+  // the parent's initialMode so the dropdown "Edit" item can open the
+  // drawer already in edit mode.
   useEffect(() => {
     if (!open || !field) return;
-    setMode("view");
+    setMode(initialMode || "view");
     setEditValue(value == null ? "" : String(value));
     setOverrideReason(typeof review?.note === "string" ? review.note : "");
     setEvRaw(evidence?.rawValue == null ? "" : String(evidence.rawValue));
