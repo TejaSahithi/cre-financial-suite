@@ -92,6 +92,7 @@ import {
   ExpenseRulesTable,
   CamRulesTable,
   CriticalDatesTable,
+  ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
 
 const documentService = createEntityService("Document");
@@ -1189,7 +1190,7 @@ export default function LeaseReview() {
 
         {/* Field tabs — table-first per business section. */}
         {LEASE_REVIEW_TABS
-          .filter((t) => !["summary", "rent_schedule", "expenses_recoveries", "cam_rules", "critical_dates", "documents_exhibits", "budget_preview"].includes(t.key))
+          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <FieldReviewTable
@@ -1209,8 +1210,24 @@ export default function LeaseReview() {
             </TabsContent>
           ))}
 
-        {/* Rent Schedule — repeatable records from rent_schedules. */}
-        <TabsContent value="rent_schedule" className="mt-4 space-y-3">
+        {/* Rent & Charges — single-value rent fields + generated rent rows.
+            The rent_schedules table remains in the backend (rent projection,
+            billing, etc. read from it); we just surface the rows here so
+            reviewers see the schedule that approval will publish. */}
+        <TabsContent value="rent_charges" className="mt-4 space-y-4">
+          <FieldReviewTable
+            fields={FIELDS_BY_TAB.rent_charges || []}
+            lease={lease}
+            fieldReviews={fieldReviews}
+            onOpenDetail={(field) => setDrawerField(field)}
+            onQuickAction={(field, action) => {
+              if (action === "accept") handleAccept(field);
+              else if (action === "edit") setDrawerField(field);
+              else if (action === "reject") handleReject(field);
+              else if (action === "na") handleMarkNA(field);
+              else if (action === "legal") handleNeedsLegal(field);
+            }}
+          />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
@@ -1248,6 +1265,11 @@ export default function LeaseReview() {
             }}
           />
           <CamRulesTable leaseId={lease.id} />
+        </TabsContent>
+
+        {/* Clause Records — all meaningful lease clauses against a predefined checklist. */}
+        <TabsContent value="clause_records" className="mt-4 space-y-3">
+          <ClauseRecordsTable lease={lease} />
         </TabsContent>
 
         {/* Critical Dates — derived from approved abstract. */}

@@ -53,11 +53,11 @@ export const LEASE_REVIEW_TABS = [
   { key: "parties_premises", label: "Parties & Premises" },
   { key: "dates_term", label: "Dates & Term" },
   { key: "rent_charges", label: "Rent & Charges" },
-  { key: "rent_schedule", label: "Rent Schedule" },
   { key: "expenses_recoveries", label: "Expenses / Recoveries" },
   { key: "cam_rules", label: "CAM Rules" },
   { key: "insurance", label: "Insurance" },
   { key: "legal_options", label: "Legal / Options" },
+  { key: "clause_records", label: "Clause Records" },
   { key: "critical_dates", label: "Critical Dates" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
   { key: "budget_preview", label: "Budget Preview" },
@@ -269,6 +269,66 @@ export function classifyConfidence(score) {
   if (score >= 90) return "high";
   if (score >= 75) return "medium";
   return "low";
+}
+
+// Canonical extraction-status values used across the review surface. The
+// extractor is expected to stamp every field with one of these; when the
+// backend doesn't (older deployments) the UI infers a value via
+// `resolveExtractionStatus`.
+export const EXTRACTION_STATUSES = {
+  EXTRACTED: "extracted",
+  EXTRACTED_NO_CONFIDENCE: "extracted_no_confidence",
+  NOT_FOUND: "not_found",
+  MANUAL_REQUIRED: "manual_required",
+  MISSING: "missing",
+};
+
+export const EXTRACTION_STATUS_LABELS = {
+  extracted: "Extracted",
+  extracted_no_confidence: "Extracted (no confidence)",
+  not_found: "Not Found",
+  manual_required: "Manual Required",
+  missing: "Missing",
+};
+
+export const EXTRACTION_STATUS_STYLES = {
+  extracted: "bg-emerald-50 text-emerald-700",
+  extracted_no_confidence: "bg-slate-100 text-slate-700",
+  not_found: "bg-amber-50 text-amber-700",
+  manual_required: "bg-purple-50 text-purple-700",
+  missing: "bg-slate-100 text-slate-600",
+};
+
+/**
+ * Infer an extraction status from the lease + field. Honors any explicit
+ * status set by the backend, otherwise uses these rules:
+ *   - value present + confidence       → "extracted"
+ *   - value present + no confidence    → "extracted_no_confidence"
+ *   - no value + extractor was run     → "not_found"
+ *   - no value + extractor didn't run  → "missing"
+ *
+ * "manual_required" can only be set by the backend or by a user action — we
+ * never infer it client-side because it implies a policy decision.
+ */
+export function resolveExtractionStatus(lease, key, { value, confidence, evidence } = {}) {
+  const explicit = evidence?.extractionStatus;
+  if (explicit) return explicit;
+  const present = value !== null && value !== undefined && value !== "";
+  if (present) {
+    return typeof confidence === "number"
+      ? EXTRACTION_STATUSES.EXTRACTED
+      : EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE;
+  }
+  // The extractor "ran" if any structural extraction metadata exists on the
+  // lease. This avoids labelling fresh, never-extracted leases as not_found.
+  const extractorRan = Boolean(
+    lease?.extraction_data?.fields
+    || lease?.extraction_data?.field_evidence
+    || lease?.extraction_data?.confidence_scores
+    || lease?.abstract_snapshot?.fields
+    || lease?.extracted_fields,
+  );
+  return extractorRan ? EXTRACTION_STATUSES.NOT_FOUND : EXTRACTION_STATUSES.MISSING;
 }
 
 export function readFieldReview(lease, key) {

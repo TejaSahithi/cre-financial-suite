@@ -35,10 +35,12 @@ import {
   REVIEW_STATUSES,
   REVIEW_STATUS_LABELS,
   REVIEW_STATUS_STYLES,
+  EXTRACTION_STATUS_LABELS,
   classifyConfidence,
   readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  resolveExtractionStatus,
   NUMERIC_REVIEW_FIELDS,
 } from "@/lib/leaseReviewSchema";
 import {
@@ -84,20 +86,18 @@ export default function FieldDetailDrawer({
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const value = field ? readFieldValue(lease, field.key) : null;
-  const { rawValue, sourcePage, sourceText, extractionStatus } = field
+  const evidence = field
     ? readFieldEvidence(lease, field.key)
     : { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
+  const { rawValue, sourcePage, sourceText } = evidence;
   const confidence = field ? readFieldConfidence(lease, field.key) : null;
   const status = review?.status || REVIEW_STATUSES.PENDING;
   const confidenceLabel =
     classifyConfidence(confidence) === "unknown" ? "Unknown Confidence" : `${Math.round(confidence)}%`;
-  const inferredExtractionStatus =
-    extractionStatus
-    || (value === null || value === undefined || value === ""
-      ? "missing"
-      : classifyConfidence(confidence) === "unknown"
-        ? "extracted_no_confidence"
-        : "extracted");
+  const inferredExtractionStatus = field
+    ? resolveExtractionStatus(lease, field.key, { value, confidence, evidence })
+    : "missing";
+  const extractionStatusLabel = EXTRACTION_STATUS_LABELS[inferredExtractionStatus] || inferredExtractionStatus;
 
   // Reset edit mode + populate when drawer opens or field changes.
   useEffect(() => {
@@ -263,7 +263,7 @@ export default function FieldDetailDrawer({
 
           <section className="grid gap-3 sm:grid-cols-2">
             <Meta label="Confidence Score" value={confidenceLabel} />
-            <Meta label="Extraction Status" value={inferredExtractionStatus} />
+            <Meta label="Extraction Status" value={extractionStatusLabel} />
             <Meta label="Review Status" value={REVIEW_STATUS_LABELS[status]} />
             <Meta label="Reviewer" value={review?.reviewer || "—"} />
             <Meta label="Reviewed At" value={formatTime(review?.reviewed_at)} />
