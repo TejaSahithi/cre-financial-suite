@@ -173,8 +173,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
     patterns: [
       /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /(?:monthly|base)\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
     ],
-    description: "Base rent per month in USD (plain number, no $ or commas)",
+    description:
+      "The base rent paid PER MONTH in USD (plain number, no $ or commas). " +
+      "ONLY use the number explicitly described as 'per month', 'monthly', or 'monthly rent'. " +
+      "NEVER use annual rent or year totals; if only an annual figure is shown, leave monthly_rent NULL " +
+      "and the calculator will derive it.",
   },
   annual_rent: {
     type: "number",
@@ -185,7 +190,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i,
     ],
-    description: "Annual rent in USD. Can be extracted or computed from monthly rent.",
+    description:
+      "The base rent paid PER YEAR in USD (plain number). " +
+      "ONLY use the number explicitly described as 'per year', 'annual', or 'yearly'. " +
+      "NEVER pull a roll-up or total of multiple lines as annual_rent. " +
+      "If only monthly rent is shown, leave annual_rent NULL — the calculator computes monthly × 12.",
   },
   rent_per_sf: {
     type: "number",
@@ -197,10 +206,16 @@ export const LEASE_SCHEMA: ModuleSchema = {
   square_footage: {
     type: "number",
     min: 0,
-    labels: ["square footage", "rentable area", "leased area", "premises rentable square feet", "rentable square feet", "sq ft", "rsf", "usable area", "area"],
-    tableHeaders: ["square_footage", "sqft", "sq ft", "sf", "rsf", "area", "square footage", "rentable sf"],
-    patterns: [/([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i],
-    description: "Leased area in square feet (plain number)",
+    labels: ["rentable area", "leased area", "premises rentable square feet", "rentable square feet", "rsf", "leased sf", "tenant rsf", "premises area"],
+    tableHeaders: ["square_footage", "sqft", "sq ft", "sf", "rsf", "rentable sf", "leased sf"],
+    patterns: [
+      /(?:premises|leased|rentable)[^\n]{0,40}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i,
+      /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i,
+    ],
+    description:
+      "The rentable square footage of THE LEASED PREMISES (the tenant's space), in plain number form (no commas). " +
+      "DO NOT use building totals, project totals, common area, or property-wide square footage. " +
+      "If the lease says 'Premises containing approximately 1,110 rentable square feet', use 1110, NOT the building total.",
   },
   lease_type: {
     type: "enum",
@@ -920,11 +935,32 @@ export function getSchema(moduleType: ModuleType): ModuleSchema {
 // Each group is one LLM call — keeps prompts focused and reduces hallucination
 
 const LEASE_GROUPS: FieldGroup[] = [
-  { name: "parties", fields: ["tenant_name", "landlord_name", "property_name", "property_address", "unit_number"], hint: "Identify the tenant, landlord, property name, property address/premises, and unit/suite." },
+  {
+    name: "parties",
+    fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name", "property_name", "property_address", "unit_number"],
+    hint:
+      "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
+      "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
+      "Also extract property name, premises address, and unit/suite if present.",
+  },
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, and notice address." },
   { name: "dates", fields: ["start_date", "end_date"], hint: "Find lease commencement and expiration dates." },
-  { name: "financial", fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"], hint: "Extract monthly rent, annual rent, deposits, CAM charges, and escalation rates." },
-  { name: "terms", fields: ["square_footage", "lease_type", "lease_term_months", "renewal_options", "ti_allowance", "free_rent_months", "status"], hint: "Find space size, lease type, term months, renewal terms, and TI allowance." },
+  {
+    name: "financial",
+    fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"],
+    hint:
+      "Extract base rent values EXACTLY as labeled in the lease. " +
+      "monthly_rent must be the per-month rent; annual_rent must be the per-year rent. " +
+      "If only one is present, leave the other NULL — the system will derive it. " +
+      "Never put an annual figure into monthly_rent or vice versa.",
+  },
+  {
+    name: "terms",
+    fields: ["square_footage", "lease_type", "lease_term_months", "renewal_options", "ti_allowance", "free_rent_months", "status"],
+    hint:
+      "Find the LEASED PREMISES square footage (tenant's space, not the whole building), " +
+      "lease type, term length, renewal terms, and TI allowance.",
+  },
 ];
 
 const EXPENSE_GROUPS: FieldGroup[] = [

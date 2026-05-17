@@ -61,6 +61,7 @@ export const LEASE_REVIEW_TABS = [
   { key: "critical_dates", label: "Critical Dates" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
   { key: "budget_preview", label: "Budget Preview" },
+  { key: "extraction_debug", label: "Extraction Debug" },
 ];
 
 // Field metadata.
@@ -319,6 +320,9 @@ export const EXTRACTION_STATUSES = {
   NOT_FOUND: "not_found",
   MANUAL_REQUIRED: "manual_required",
   MISSING: "missing",
+  MISSING_SOURCE_EVIDENCE: "missing_source_evidence",
+  CALCULATED: "calculated",
+  CONFLICT: "conflict_detected",
 };
 
 export const EXTRACTION_STATUS_LABELS = {
@@ -327,6 +331,9 @@ export const EXTRACTION_STATUS_LABELS = {
   not_found: "Not Found",
   manual_required: "Manual Required",
   missing: "Missing",
+  missing_source_evidence: "Missing Source Evidence",
+  calculated: "Calculated",
+  conflict_detected: "Conflict Detected",
 };
 
 export const EXTRACTION_STATUS_STYLES = {
@@ -335,6 +342,9 @@ export const EXTRACTION_STATUS_STYLES = {
   not_found: "bg-amber-50 text-amber-700",
   manual_required: "bg-purple-50 text-purple-700",
   missing: "bg-slate-100 text-slate-600",
+  missing_source_evidence: "bg-amber-100 text-amber-800",
+  calculated: "bg-blue-50 text-blue-700",
+  conflict_detected: "bg-red-100 text-red-700",
 };
 
 /**

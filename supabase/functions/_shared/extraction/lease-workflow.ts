@@ -130,12 +130,16 @@ const FIELD_SPECS = [
   { key: "landlord_name", group: "lease_header", aliases: ["landlord_name"] },
   { key: "landlord_address", group: "lease_header", aliases: ["landlord_address"], patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
   { key: "tenant_name", group: "lease_header", aliases: ["tenant_name"] },
-  { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name"], patterns: [/\btenant(?:\s+contact|\s+representative)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
+  // tenant_contact_name aliases must include tenant_signatory_name (set by
+  // the Gemini extractor) so the signer goes here, NOT into tenant_name.
+  // The fallback regex for `By: <name>` is left in place for documents
+  // where the signer wasn't tagged explicitly.
+  { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
   { key: "property_name", group: "premises", aliases: ["property_name"] },
   { key: "property_address", group: "lease_header", aliases: ["property_address"] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
-  { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "square_footage"], patterns: [/([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i] },
+  { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "tenant_rsf", "square_footage"], patterns: [/(?:premises|leased|tenant)[^\n]{0,40}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i, /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i] },
   { key: "lease_type", group: "lease_header", aliases: ["lease_type"] },
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises)\b[:\s-]+([^\n.]{4,220})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
@@ -154,7 +158,11 @@ const FIELD_SPECS = [
   { key: "late_fee_percent", group: "rent_terms", aliases: ["late_fee_percent"], patterns: [/\blate\s+fee\b[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i] },
   { key: "default_interest_rate_formula", group: "rent_terms", aliases: ["default_interest_rate_formula"], clauseType: "default", patterns: [/\b(?:prime rate[^.\n]{0,80}|interest[^.\n]{0,160}maximum legal rate)/i] },
   { key: "building_rsf", group: "premises", aliases: ["building_rsf", "building_square_footage"], patterns: [/building[^\n]{0,40}?([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i], manualRequired: true },
-  { key: "tenant_rsf", group: "premises", aliases: ["tenant_rsf", "square_footage", "rentable_area_sqft"] },
+  // tenant_rsf must NOT fall back to property-level square_footage; only the
+  // explicitly tenant-scoped fields apply. The rentable_area_sqft alias
+  // resolves first because the extractor specifically scopes that to the
+  // leased premises text.
+  { key: "tenant_rsf", group: "premises", aliases: ["tenant_rsf", "rentable_area_sqft"] },
   { key: "floor_plan_reference", group: "premises", aliases: ["floor_plan_reference"], patterns: [/\bexhibit\s+([A-Z0-9-]+)/i] },
   { key: "parking_rights", group: "premises", aliases: ["parking_rights"], patterns: [/\bparking\b[^\n.]{0,180}/i] },
   { key: "common_area_description", group: "premises", aliases: ["common_area_description"], patterns: [/\bcommon areas?\b[^\n.]{0,220}/i] },

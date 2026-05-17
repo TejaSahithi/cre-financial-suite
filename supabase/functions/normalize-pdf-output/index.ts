@@ -147,6 +147,7 @@ function buildReviewPayload(opts: {
     }
     const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
     const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
+    const fieldEvidence = (r._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null }>;
     const rowConfidence = normalizeConfidence(
       r.confidence_score ?? result.metadata?.avgConfidence,
     ) ?? avgConfidence;
@@ -154,6 +155,24 @@ function buildReviewPayload(opts: {
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
       const value = values[fieldKey] ?? null;
       const workflowField = workflowOutput?.lease_fields?.[fieldKey] ?? null;
+      // Prefer evidence produced by the LLM/rule extractor; fall back to the
+      // workflow's snippet match. This is what makes Raw Extracted / Source
+      // Page / Exact Source Text light up in the Lease Review table.
+      const llmEvidence = fieldEvidence[fieldKey];
+      const mergedSourcePage =
+        llmEvidence?.source_page
+        ?? workflowField?.source_page
+        ?? null;
+      const mergedSourceText =
+        llmEvidence?.source_text
+        ?? workflowField?.source_clause
+        ?? null;
+      const hasEvidence = mergedSourcePage != null || (typeof mergedSourceText === "string" && mergedSourceText.length > 0);
+      const inferredStatus = value == null || value === ""
+        ? "missing"
+        : hasEvidence
+          ? (workflowField?.extraction_status ?? "extracted")
+          : "missing_source_evidence";
       return buildReviewField({
         recordIndex: index,
         fieldKey,
@@ -164,13 +183,11 @@ function buildReviewPayload(opts: {
         required: !!def.required,
         fieldType: def.type ?? "string",
         description: def.description,
-        evidence: workflowField
-          ? {
-              page_number: workflowField.source_page ?? null,
-              source_clause: workflowField.source_clause ?? null,
-            }
-          : null,
-        status: workflowField?.extraction_status ?? undefined,
+        evidence: {
+          page_number: mergedSourcePage,
+          source_clause: mergedSourceText,
+        },
+        status: workflowField?.extraction_status ?? inferredStatus,
         editable: workflowField?.editable ?? true,
       });
     });
