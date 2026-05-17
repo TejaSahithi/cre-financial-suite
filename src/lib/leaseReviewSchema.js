@@ -202,38 +202,59 @@ export function resolveFieldColumns(key) {
 }
 
 // Best-effort lookup for the raw extraction value, source page and source text.
-// Falls back to nulls if the extraction pipeline did not provide evidence.
+// Walks multiple shapes the backend may produce, in priority order:
+//   1. extraction_data.field_evidence[key] (current shape from review-approve)
+//   2. extraction_data.evidence[key]       (legacy shape)
+//   3. extraction_data.fields[key]         (current shape)
+//   4. extraction_data.workflow_output.lease_fields[key] (raw workflow output)
+//   5. abstract_snapshot.fields[key]       (post-approval frozen snapshot)
 export function readFieldEvidence(lease, key) {
   const candidates = FIELD_COLUMN_ALIASES[key] || [key];
   const evidenceMap = lease?.extraction_data?.field_evidence || lease?.extraction_data?.evidence || {};
   const fieldsMap = lease?.extraction_data?.fields || {};
+  const workflowFields = lease?.extraction_data?.workflow_output?.lease_fields || {};
+  const snapshotFields = lease?.abstract_snapshot?.fields || {};
 
-  let evidence = null;
-  let fieldEntry = null;
-  for (const candidate of candidates) {
-    if (!evidence && evidenceMap[candidate]) evidence = evidenceMap[candidate];
-    if (!fieldEntry && fieldsMap[candidate]) fieldEntry = fieldsMap[candidate];
-    if (evidence && fieldEntry) break;
-  }
+  const pick = (map) => {
+    for (const candidate of candidates) {
+      if (map?.[candidate]) return map[candidate];
+    }
+    return null;
+  };
+
+  const evidence = pick(evidenceMap);
+  const fieldEntry = pick(fieldsMap);
+  const workflowEntry = pick(workflowFields);
+  const snapshotEntry = pick(snapshotFields);
+
+  const readFrom = (entry, ...keys) => {
+    if (!entry || typeof entry !== "object") return undefined;
+    for (const k of keys) {
+      if (entry[k] !== undefined && entry[k] !== null && entry[k] !== "") return entry[k];
+    }
+    return undefined;
+  };
 
   const raw =
-    evidence?.raw_value
-    ?? evidence?.raw
-    ?? (fieldEntry && typeof fieldEntry === "object" ? fieldEntry.raw_value ?? fieldEntry.raw : undefined);
+    readFrom(evidence, "raw_value", "raw")
+    ?? readFrom(fieldEntry, "raw_value", "raw")
+    ?? readFrom(workflowEntry, "raw_value", "source_clause")
+    ?? readFrom(snapshotEntry, "raw_value", "raw");
   const sourcePage =
-    evidence?.source_page
-    ?? evidence?.page
-    ?? (fieldEntry && typeof fieldEntry === "object" ? fieldEntry.source_page ?? fieldEntry.page : undefined);
+    readFrom(evidence, "source_page", "page")
+    ?? readFrom(fieldEntry, "source_page", "page")
+    ?? readFrom(workflowEntry, "source_page", "page")
+    ?? readFrom(snapshotEntry, "source_page", "page");
   const sourceText =
-    evidence?.source_text
-    ?? evidence?.snippet
-    ?? evidence?.exact_source_text
-    ?? (fieldEntry && typeof fieldEntry === "object"
-      ? fieldEntry.source_text ?? fieldEntry.snippet ?? fieldEntry.exact_source_text
-      : undefined);
+    readFrom(evidence, "source_text", "snippet", "exact_source_text", "source_clause")
+    ?? readFrom(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause")
+    ?? readFrom(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text")
+    ?? readFrom(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause");
   const extractionStatus =
-    evidence?.extraction_status
-    ?? (fieldEntry && typeof fieldEntry === "object" ? fieldEntry.extraction_status : undefined);
+    readFrom(evidence, "extraction_status")
+    ?? readFrom(fieldEntry, "extraction_status")
+    ?? readFrom(workflowEntry, "extraction_status")
+    ?? readFrom(snapshotEntry, "extraction_status");
   return {
     rawValue: raw ?? null,
     sourcePage: sourcePage ?? null,
@@ -256,9 +277,26 @@ export function readFieldConfidence(lease, key, fallback = null) {
   const fields = lease?.extraction_data?.fields || {};
   for (const candidate of candidates) {
     const score = fields[candidate]?.confidence ?? fields[candidate]?.confidence_score;
-    if (typeof score === "number") return score;
+    if (typeof score === "number") return normalizeStoredConfidence(score);
+  }
+  const workflowFields = lease?.extraction_data?.workflow_output?.lease_fields || {};
+  for (const candidate of candidates) {
+    const score = workflowFields[candidate]?.confidence_score ?? workflowFields[candidate]?.confidence;
+    if (typeof score === "number") return normalizeStoredConfidence(score);
+  }
+  const snapshotFields = lease?.abstract_snapshot?.fields || {};
+  for (const candidate of candidates) {
+    const score = snapshotFields[candidate]?.confidence ?? snapshotFields[candidate]?.confidence_score;
+    if (typeof score === "number") return normalizeStoredConfidence(score);
   }
   return fallback;
+}
+
+// The extractor stores confidence as 0–1; everything else stores 0–100.
+// Treat values <= 1 as fractions and scale them so the UI sees one shape.
+function normalizeStoredConfidence(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) return null;
+  return score <= 1 ? Math.round(score * 100) : Math.round(score);
 }
 
 // Confidence bucket: "high" | "medium" | "low" | "unknown" — drives the
