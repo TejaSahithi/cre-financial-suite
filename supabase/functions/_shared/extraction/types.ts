@@ -26,6 +26,7 @@ export interface ExtractedField {
   source: ExtractionSource;
   confidence: number;
   sourceText?: string; // the raw text snippet this was extracted from
+  sourcePage?: number | null; // page number in the source document, if known
 }
 
 /** One extracted record (row) — a map of fieldName → ExtractedField */

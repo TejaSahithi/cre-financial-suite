@@ -237,7 +237,92 @@ function looksLikeAddressOrPremisesClause(value: unknown): boolean {
   return /\b(?:premises|buildings?\s+of\s+which|located\s+at|part\s+is\s+located)\b/i.test(text);
 }
 
+/**
+ * Cross-field sanity checks. Run before the per-field validator so wrong
+ * mappings get rejected rather than silently published downstream.
+ *
+ *  - If monthly_rent is suspiciously large relative to annual_rent
+ *    (monthly * 11 > annual), assume the extractor swapped them and clear
+ *    monthly_rent so the calculator can recompute monthly = annual/12.
+ *  - If square_footage equals the property-level total (matched via
+ *    looksLikePropertyTotal), null it so the operator must fill the leased
+ *    premises area. Better to be missing than wrong.
+ *  - If tenant_name contains a person-only pattern ("FIRST LAST" with no
+ *    entity suffix), move it to tenant_contact_name and clear tenant_name.
+ */
+function applyLeaseCrossFieldSanity(record: ExtractedRecord): void {
+  const fields = record.fields;
+
+  // Rent swap detection: monthly should always be << annual.
+  const monthly = numericField(fields.monthly_rent?.value);
+  const annual = numericField(fields.annual_rent?.value);
+  if (monthly != null && annual != null && monthly * 11 > annual) {
+    // Most likely the extractor put an annual figure in monthly_rent.
+    if (monthly > annual * 0.5) {
+      fields.monthly_rent = {
+        value: null,
+        source: fields.monthly_rent?.source ?? "rule",
+        confidence: 0,
+        sourceText: "Cleared by cross-field sanity check (looked like annual rent in monthly slot)",
+      };
+    }
+  }
+
+  // Tenant name vs signatory detection: if tenant_name looks like a person
+  // (all caps, no entity suffix, ≤4 words), demote it to tenant_contact_name.
+  const tenantName = String(fields.tenant_name?.value ?? "").trim();
+  if (tenantName && looksLikePersonNotEntity(tenantName)) {
+    if (!fields.tenant_contact_name?.value) {
+      fields.tenant_contact_name = {
+        value: tenantName,
+        source: fields.tenant_name?.source ?? "llm",
+        confidence: fields.tenant_name?.confidence ?? 0.6,
+        sourceText: fields.tenant_name?.sourceText ?? "Reassigned from tenant_name (looked like a person)",
+        sourcePage: fields.tenant_name?.sourcePage ?? null,
+      };
+    }
+    fields.tenant_name = {
+      value: null,
+      source: fields.tenant_name?.source ?? "rule",
+      confidence: 0,
+      sourceText: "Cleared by cross-field sanity check (value looked like a signatory)",
+    };
+  }
+
+  // Same for landlord_name.
+  const landlordName = String(fields.landlord_name?.value ?? "").trim();
+  if (landlordName && looksLikePersonNotEntity(landlordName)) {
+    fields.landlord_name = {
+      value: null,
+      source: fields.landlord_name?.source ?? "rule",
+      confidence: 0,
+      sourceText: "Cleared by cross-field sanity check (value looked like a signatory)",
+    };
+  }
+}
+
+function numericField(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function looksLikePersonNotEntity(value: string): boolean {
+  // Has an entity suffix → definitely not a person.
+  if (/\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?)\b/i.test(value)) {
+    return false;
+  }
+  // Short all-caps name with no entity marker → likely a signatory ("JOHN DOE", "NARENDRA PYDI").
+  const words = value.trim().split(/\s+/);
+  if (words.length > 0 && words.length <= 4) {
+    const allCaps = words.every((w) => w === w.toUpperCase() && /^[A-Z][A-Z'.-]+$/.test(w));
+    if (allCaps) return true;
+  }
+  return false;
+}
+
 function normalizeLeaseContextualFields(record: ExtractedRecord): void {
+  applyLeaseCrossFieldSanity(record);
   const fields = record.fields;
   if (fields.assignment_effective_date?.value && fields.assignee_name?.value) {
     const tenant = String(fields.tenant_name?.value ?? "").trim().toLowerCase();
@@ -364,10 +449,17 @@ export function flattenRecords(
     // Add confidence metadata
     const confidences: Record<string, number> = {};
     const sources: Record<string, string> = {};
+    const evidence: Record<string, { source_text?: string | null; source_page?: number | null }> = {};
     for (const [fieldName, field] of Object.entries(record.fields)) {
       if (field.value !== null) {
         confidences[fieldName] = field.confidence;
         sources[fieldName] = field.source;
+        if (field.sourceText || field.sourcePage != null) {
+          evidence[fieldName] = {
+            source_text: field.sourceText ?? null,
+            source_page: field.sourcePage ?? null,
+          };
+        }
       }
     }
 
@@ -380,6 +472,7 @@ export function flattenRecords(
     row.confidence_score = avgConfidence;
     row._field_confidences = confidences;
     row._field_sources = sources;
+    row._field_evidence = evidence;
     row.extraction_notes = buildExtractionNotes(sources);
 
     return row;

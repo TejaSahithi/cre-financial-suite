@@ -94,6 +94,7 @@ import {
   CriticalDatesTable,
   ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
+import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 
 const documentService = createEntityService("Document");
 
@@ -481,6 +482,9 @@ export default function LeaseReview() {
   const blockerMessage = canApprove
     ? "All checks passed. You can approve the lease abstract."
     : approvalBlockers.map((b) => b.title).join(" • ");
+  const approvalDisabledTooltip = canApprove
+    ? "Approve the lease abstract"
+    : "Cannot approve: required fields are pending, conflicts exist, or source evidence is missing.";
 
   // --- Field-action helpers -----------------------------------------------
 
@@ -519,12 +523,26 @@ export default function LeaseReview() {
     }
   };
 
-  const handleAccept = (field) =>
-    persistFieldAction({
+  const handleAccept = (field) => {
+    // Refuse auto-accept when there's no source evidence — the reviewer must
+    // either Edit + confirm, mark Manual Required, or mark N/A.
+    const value = readFieldValue(lease, field.key);
+    const { sourcePage, sourceText } = readFieldEvidence(lease, field.key);
+    const hasEvidence = sourcePage != null || (typeof sourceText === "string" && sourceText.length > 0);
+    if (value == null || value === "") {
+      toast.error("Cannot accept a field with no value. Edit, mark N/A, or mark Manual Required.");
+      return;
+    }
+    if (!hasEvidence) {
+      toast.error("Cannot accept without source evidence. Edit and confirm the value, or mark Manual Required.");
+      return;
+    }
+    return persistFieldAction({
       field,
       status: REVIEW_STATUSES.ACCEPTED,
       previousReview: fieldReviews[field.key],
     });
+  };
   const handleReject = (field) =>
     persistFieldAction({
       field,
@@ -1190,7 +1208,7 @@ export default function LeaseReview() {
 
         {/* Field tabs — table-first per business section. */}
         {LEASE_REVIEW_TABS
-          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview"].includes(t.key))
+          .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <FieldReviewTable
@@ -1304,6 +1322,11 @@ export default function LeaseReview() {
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
+
+        {/* Extraction Debug tab — diagnose extraction issues. */}
+        <TabsContent value="extraction_debug" className="mt-4 space-y-3">
+          <ExtractionDebugPanel lease={lease} />
+        </TabsContent>
       </Tabs>
 
       {/* Side drawer for full field detail. */}
@@ -1397,7 +1420,7 @@ export default function LeaseReview() {
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={() => setShowApproval(true)}
               disabled={!canApprove}
-              title={canApprove ? "Approve the lease abstract" : `Approval blocked: ${blockerMessage}`}
+              title={approvalDisabledTooltip}
             >
               <CheckCircle2 className="mr-1 h-4 w-4" />
               Approve Lease Abstract

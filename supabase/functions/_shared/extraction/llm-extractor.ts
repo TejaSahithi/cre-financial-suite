@@ -30,18 +30,26 @@ import { callVertexAIJSON, callVertexAIFileJSON } from "../vertex-ai.ts";
 // ── System prompt — short, strict, no room for hallucination ─────────────────
 
 const LLM_SYSTEM_PROMPT = `You are a CRE data extraction tool.
-You extract ONLY the specific fields requested from the provided text snippet.
+You extract ONLY the specific fields requested from the provided text snippet, with SOURCE EVIDENCE.
 
 RULES:
 1. Output ONLY valid JSON — no explanation, no markdown, no preamble.
-2. Return a JSON object with exactly the field keys requested.
-3. If a field value is NOT found in the text, return null for that field.
+2. For EVERY field requested, return an object of this shape:
+     { "value": <extracted value or null>,
+       "source_text": "<the exact phrase from the document you used, verbatim, or null>",
+       "source_page": <page number if known, else null>,
+       "confidence": <number 0.0–1.0> }
+   The top-level JSON is { "<field_key>": { value, source_text, source_page, confidence }, ... }.
+3. If a field is NOT found, return { "value": null, "source_text": null, "source_page": null, "confidence": 0 }.
 4. NEVER guess, infer, or calculate values. Only extract what is explicitly stated.
 5. NEVER calculate totals, annual amounts, or derived values.
-6. Monetary values: plain numbers only. "$12,500" → 12500.
-7. Dates: YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
-8. Percentages: plain number. "3%" → 3.
-9. Square footage: plain number. "12,000 SF" → 12000.`;
+6. Distinguish ENTITY names from PERSON names. "Tenant: Mindful Tech Solutions, Inc. By: John Doe" — tenant_name is "Mindful Tech Solutions, Inc.", tenant_signatory_name is "John Doe". NEVER put a person's name in tenant_name or landlord_name.
+7. Monetary values: plain numbers only. "$12,500" → 12500.
+8. Dates: YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
+9. Percentages: plain number. "3%" → 3.
+10. Square footage: plain number; use the LEASED PREMISES area, not the building total.
+11. Monthly vs Annual rent: only put a value in monthly_rent if the lease explicitly says "per month" / "monthly". Only put a value in annual_rent if the lease explicitly says "per year" / "annually". If only one is present, leave the other's value null.
+12. source_text must be a VERBATIM quote from the supplied snippet (max 200 chars). If you can't quote it, return null and value=null.`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 
@@ -127,28 +135,55 @@ Return ONLY the JSON array. Nothing else.`;
 
 // ── Parse LLM response safely ────────────────────────────────────────────────
 
-function parseLLMResponse(raw: unknown, expectedFields: string[]): Record<string, unknown> | null {
-  if (!raw || typeof raw !== "object") return null;
+/**
+ * Per-field evidence shape returned by the LLM under the new prompt:
+ *   { value, source_text, source_page, confidence }
+ * Legacy responses returning bare values are also accepted.
+ */
+type LlmFieldEvidence = {
+  value: unknown;
+  sourceText: string | null;
+  sourcePage: number | null;
+  confidence: number | null;
+};
 
-  const result: Record<string, unknown> = {};
-  const obj = raw as Record<string, unknown>;
-
-  for (const field of expectedFields) {
-    result[field] = obj[field] ?? null;
+function normalizeLlmEvidence(raw: unknown): LlmFieldEvidence {
+  if (raw == null) {
+    return { value: null, sourceText: null, sourcePage: null, confidence: null };
   }
+  if (typeof raw === "object" && !Array.isArray(raw) && ("value" in (raw as Record<string, unknown>))) {
+    const obj = raw as Record<string, unknown>;
+    const conf = obj.confidence;
+    return {
+      value: obj.value ?? null,
+      sourceText: typeof obj.source_text === "string" ? (obj.source_text as string).slice(0, 400) : null,
+      sourcePage: typeof obj.source_page === "number" && Number.isFinite(obj.source_page) ? Number(obj.source_page) : null,
+      confidence: typeof conf === "number" && Number.isFinite(conf) ? Math.max(0, Math.min(1, conf > 1 ? conf / 100 : conf)) : null,
+    };
+  }
+  // Legacy bare value
+  return { value: raw, sourceText: null, sourcePage: null, confidence: null };
+}
 
+function parseLLMResponse(raw: unknown, expectedFields: string[]): Record<string, LlmFieldEvidence> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const result: Record<string, LlmFieldEvidence> = {};
+  for (const field of expectedFields) {
+    result[field] = normalizeLlmEvidence(obj[field]);
+  }
   return result;
 }
 
-function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Record<string, unknown>> {
+function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Record<string, LlmFieldEvidence>> {
   const arr = Array.isArray(raw) ? raw : [raw];
   return arr
     .filter((item) => item && typeof item === "object")
     .map((item) => {
-      const result: Record<string, unknown> = {};
       const obj = item as Record<string, unknown>;
+      const result: Record<string, LlmFieldEvidence> = {};
       for (const field of expectedFields) {
-        result[field] = obj[field] ?? null;
+        result[field] = normalizeLlmEvidence(obj[field]);
       }
       return result;
     });
@@ -287,15 +322,15 @@ async function fillMissingFieldsForRecords(
         if (!records[i]) {
           records[i] = { fields: {}, rowIndex: i };
         }
-        for (const [field, value] of Object.entries(parsed[i])) {
-          if (value !== null && value !== undefined) {
-            records[i].fields[field] = {
-              value,
-              source: "llm",
-              confidence: 0.70,
-              sourceText: `LLM extracted (group: ${group.name})`,
-            };
-          }
+        for (const [field, evidence] of Object.entries(parsed[i])) {
+          if (evidence?.value == null) continue;
+          records[i].fields[field] = {
+            value: evidence.value,
+            source: "llm",
+            confidence: evidence.confidence ?? 0.70,
+            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+            sourcePage: evidence.sourcePage ?? null,
+          };
         }
       }
     } catch (err) {
@@ -356,15 +391,16 @@ async function extractFieldGroups(
 
       const parsed = parseLLMResponse(result, group.fields);
       if (parsed) {
-        for (const [field, value] of Object.entries(parsed)) {
-          if (value !== null && value !== undefined && !merged[field]) {
-            merged[field] = {
-              value,
-              source: "llm",
-              confidence: 0.70,
-              sourceText: `LLM extracted (group: ${group.name})`,
-            };
-          }
+        for (const [field, evidence] of Object.entries(parsed)) {
+          if (evidence?.value == null) continue;
+          if (merged[field]) continue;
+          merged[field] = {
+            value: evidence.value,
+            source: "llm",
+            confidence: evidence.confidence ?? 0.70,
+            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+            sourcePage: evidence.sourcePage ?? null,
+          };
         }
       }
     } catch (err) {
