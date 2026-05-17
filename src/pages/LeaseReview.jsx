@@ -701,14 +701,9 @@ export default function LeaseReview() {
     setApproving(true);
     try {
       let resolvedDocumentUrl = approvalDocumentUrl || null;
-      const sourceFileId = lease.extraction_data?.source_file_id || null;
-      if (!resolvedDocumentUrl && sourceFileId && supabase) {
-        const { data: uploadedFile } = await supabase
-          .from("uploaded_files")
-          .select("file_url")
-          .eq("id", sourceFileId)
-          .maybeSingle();
-        resolvedDocumentUrl = uploadedFile?.file_url || null;
+      if (!resolvedDocumentUrl && supabase) {
+        const uploadedFile = await findUploadedFileForLease(lease);
+        resolvedDocumentUrl = await resolveUploadedFileUrl(uploadedFile);
       }
 
       const approvedLease = await approveLeaseAbstract({
@@ -883,23 +878,18 @@ export default function LeaseReview() {
   // Open the original lease document. Resolves the source_file_id lazily so
   // every field's "View in Document" action goes to the same target.
   const viewInDocument = async (field) => {
-    const fileId = lease.extraction_data?.source_file_id || null;
     if (lease.approval_document_url) {
       window.open(lease.approval_document_url, "_blank", "noopener,noreferrer");
       return;
     }
-    if (!fileId || !supabase) {
+    if (!supabase) {
       toast.info("No source document is linked to this lease.");
       return;
     }
     try {
-      const { data, error } = await supabase
-        .from("uploaded_files")
-        .select("id, org_id, file_url")
-        .eq("id", fileId)
-        .maybeSingle();
-      const resolvedUrl = await resolveUploadedFileUrl(data);
-      if (error || !resolvedUrl) {
+      const uploadedFile = await findUploadedFileForLease(lease);
+      const resolvedUrl = await resolveUploadedFileUrl(uploadedFile);
+      if (!resolvedUrl) {
         toast.info("Source document URL is unavailable.");
         return;
       }
@@ -1313,7 +1303,7 @@ export default function LeaseReview() {
                   Approved signed copy
                 </a>
               ) : null}
-              <SourceFileLink fileId={lease.extraction_data?.source_file_id} />
+              <SourceFileLink lease={lease} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1882,23 +1872,19 @@ function FieldReviewRow({
   );
 }
 
-function SourceFileLink({ fileId }) {
+function SourceFileLink({ lease }) {
   const { data } = useQuery({
-    queryKey: ["uploaded-file-url", fileId],
+    queryKey: ["uploaded-file-url", lease?.id, lease?.extraction_data?.source_file_id],
     queryFn: async () => {
-      if (!fileId) return null;
-      const { data: row } = await supabase
-        .from("uploaded_files")
-        .select("id, org_id, file_url, file_name")
-        .eq("id", fileId)
-        .maybeSingle();
+      if (!lease) return null;
+      const row = await findUploadedFileForLease(lease);
       if (!row) return null;
       const resolvedUrl = await resolveUploadedFileUrl(row);
       return { ...row, file_url: resolvedUrl || row.file_url };
     },
-    enabled: !!fileId,
+    enabled: !!lease,
   });
-  if (!fileId) return <p className="text-xs text-slate-500">No source file linked.</p>;
+  if (!lease) return <p className="text-xs text-slate-500">No source file linked.</p>;
   if (!data?.file_url) return <p className="text-xs text-slate-500">Source file URL is unavailable.</p>;
   return (
     <a
@@ -1911,6 +1897,36 @@ function SourceFileLink({ fileId }) {
       {data.file_name || "Original upload"}
     </a>
   );
+}
+
+async function findUploadedFileForLease(lease) {
+  if (!lease || !supabase) return null;
+
+  const sourceFileId = lease.extraction_data?.source_file_id || null;
+  if (sourceFileId) {
+    const { data } = await supabase
+      .from("uploaded_files")
+      .select("id, org_id, file_url, file_name")
+      .eq("id", sourceFileId)
+      .maybeSingle();
+    if (data) return data;
+  }
+
+  if (!lease.id) return null;
+
+  let query = supabase
+    .from("uploaded_files")
+    .select("id, org_id, file_url, file_name")
+    .contains("reviewed_output", { lease_review_ids: [lease.id] })
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  if (lease.org_id) {
+    query = query.eq("org_id", lease.org_id);
+  }
+
+  const { data } = await query.maybeSingle();
+  return data || null;
 }
 
 async function resolveUploadedFileUrl(fileRecord) {
