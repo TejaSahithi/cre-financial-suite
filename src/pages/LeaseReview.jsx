@@ -16,6 +16,7 @@ import {
   Loader2,
   MinusCircle,
   Pencil,
+  RefreshCw,
   Send,
   Undo2,
   X,
@@ -324,6 +325,9 @@ export default function LeaseReview() {
   const [showSendBack, setShowSendBack] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [reextracting, setReextracting] = useState(false);
+  const [reextractStage, setReextractStage] = useState(""); // "running" | "polling" | "applying"
+  const [showReextractConfirm, setShowReextractConfirm] = useState(false);
 
   // Approval form
   const [approvalSignedBy, setApprovalSignedBy] = useState("");
@@ -1159,6 +1163,130 @@ export default function LeaseReview() {
     }
   };
 
+  // One-click re-extract: invokes ingest-file → polls until processing
+  // completes → copies the fresh ui_review_payload + workflow_output back
+  // onto this lease. Saves the reviewer from the Re-link/Re-run/Apply Latest
+  // dance for the common case where source_file_id is already set.
+  const handleReextractLease = async () => {
+    const sourceFileId = lease?.extraction_data?.source_file_id;
+    if (!sourceFileId) {
+      toast.error("No source file linked. Use Extraction Debug → Re-link Source Document first.");
+      setShowReextractConfirm(false);
+      return;
+    }
+    setReextracting(true);
+    setReextractStage("running");
+    setShowReextractConfirm(false);
+    try {
+      // 1. Trigger re-extraction
+      const ingestData = await invokeEdgeFunction("ingest-file", {
+        file_id: sourceFileId,
+        module_type: "leases",
+        force_reextract: true,
+      });
+      if (ingestData?.error) throw new Error(ingestData?.message || "Re-extraction failed");
+
+      // 2. Poll uploaded_files.status until it lands in a terminal state.
+      setReextractStage("polling");
+      const ACTIVE_STATUSES = new Set([
+        "uploaded", "parsing", "parsed", "pdf_parsed", "validating", "validated", "storing", "stored", "computing",
+      ]);
+      const MAX_POLLS = 30;
+      let attempts = 0;
+      let latestFile = null;
+      while (attempts < MAX_POLLS) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const { data: row, error } = await supabase
+          .from("uploaded_files")
+          .select("id, status, ui_review_payload, error_message")
+          .eq("id", sourceFileId)
+          .maybeSingle();
+        if (error) throw error;
+        latestFile = row;
+        const status = String(row?.status || "").toLowerCase();
+        if (status === "failed") {
+          throw new Error(row?.error_message || "Source extraction failed");
+        }
+        if (status === "review_required" || status === "completed") break;
+        if (!ACTIVE_STATUSES.has(status) && row?.ui_review_payload) break;
+        attempts += 1;
+      }
+      if (attempts >= MAX_POLLS) {
+        toast.warning("Re-extraction is still running. Use Apply Latest Extraction in a moment to pull the latest.");
+        return;
+      }
+
+      // 3. Apply the new ui_review_payload to this lease (same shape the
+      // Extraction Debug "Apply Latest" button uses).
+      setReextractStage("applying");
+      const reviewedRow = (latestFile?.ui_review_payload?.records || latestFile?.ui_review_payload?.rows || [])[0];
+      const wf = latestFile?.ui_review_payload?.metadata?.workflow_output;
+      const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
+
+      const fieldsWithEvidence = {};
+      const evidenceMap = {};
+      const confidenceMap = {};
+      if (reviewedRow) {
+        const allFields = [
+          ...(reviewedRow.standard_fields || []),
+          ...(reviewedRow.custom_fields || []),
+        ];
+        for (const f of allFields) {
+          if (!f?.field_key) continue;
+          fieldsWithEvidence[f.field_key] = {
+            value: f.value ?? null,
+            confidence: typeof f.confidence === "number" ? f.confidence : null,
+            source: f.source ?? null,
+            source_page: f.evidence?.page_number ?? null,
+            source_text: f.evidence?.source_clause ?? f.evidence?.source_text ?? null,
+            raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
+            extraction_status: f.status ?? null,
+          };
+          evidenceMap[f.field_key] = {
+            raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
+            source_page: f.evidence?.page_number ?? null,
+            source_text: f.evidence?.source_clause ?? f.evidence?.source_text ?? null,
+            extraction_status: f.status ?? null,
+          };
+          if (typeof f.confidence === "number") {
+            confidenceMap[f.field_key] = f.confidence <= 1 ? Math.round(f.confidence * 100) : Math.round(f.confidence);
+          }
+        }
+      }
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        fields: { ...(lease.extraction_data?.fields || {}), ...fieldsWithEvidence },
+        field_evidence: { ...(lease.extraction_data?.field_evidence || {}), ...evidenceMap },
+        confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
+        ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
+        evidence_refreshed_at: new Date().toISOString(),
+      };
+      const { error: updateErr } = await supabase
+        .from("leases")
+        .update({ extraction_data: nextExtraction })
+        .eq("id", lease.id);
+      if (updateErr) throw updateErr;
+
+      await logAudit({
+        entityType: "Lease",
+        entityId: lease.id,
+        action: "lease_reextracted",
+        orgId: lease.org_id,
+        propertyId: lease.property_id || null,
+        newValue: { source_file_id: sourceFileId, refreshed_at: nextExtraction.evidence_refreshed_at },
+      });
+
+      toast.success("Lease re-extracted. Latest extraction + evidence applied.");
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+    } catch (err) {
+      console.error("[LeaseReview] re-extract failed:", err);
+      toast.error(err?.message || "Could not re-extract lease");
+    } finally {
+      setReextracting(false);
+      setReextractStage("");
+    }
+  };
+
   const handleRejectDocument = async () => {
     if (!rejectReason.trim()) {
       toast.error("Please provide a rejection reason.");
@@ -1306,6 +1434,25 @@ export default function LeaseReview() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowReextractConfirm(true)}
+            disabled={reextracting || !lease?.extraction_data?.source_file_id}
+            title={
+              lease?.extraction_data?.source_file_id
+                ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
+                : "No source file is linked to this lease. Use Extraction Debug → Re-link Source Document first."
+            }
+          >
+            {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+            {reextracting
+              ? reextractStage === "polling"
+                ? "Waiting on extraction…"
+                : reextractStage === "applying"
+                  ? "Applying…"
+                  : "Re-extracting…"
+              : "Re-extract Lease"}
+          </Button>
           <Button
             variant="outline"
             onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
@@ -2043,6 +2190,41 @@ export default function LeaseReview() {
             >
               {updateLeaseMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Re-extract confirmation */}
+      <Dialog open={showReextractConfirm} onOpenChange={setShowReextractConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Re-extract this lease?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-slate-600">
+            <p>
+              This will re-run the AI extraction on the source PDF and overwrite
+              <strong> extracted values, source page/text, confidence scores, and workflow output</strong> on
+              this lease record.
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-xs text-slate-500">
+              <li>Field review decisions you've already made (Accept / Edit / N/A / Manual) are <strong>preserved</strong>.</li>
+              <li>Approval status, signed_by, and abstract_snapshot are <strong>not touched</strong>.</li>
+              <li>Source file: <code>{lease?.extraction_data?.source_file_id || "(none)"}</code></li>
+              <li>Takes ~30–60 seconds. Don't close the page while it's running.</li>
+            </ul>
+          </div>
+          <DialogFooter className="mt-3">
+            <Button variant="outline" onClick={() => setShowReextractConfirm(false)} disabled={reextracting}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={handleReextractLease}
+              disabled={reextracting || !lease?.extraction_data?.source_file_id}
+            >
+              {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+              Re-extract Now
             </Button>
           </DialogFooter>
         </DialogContent>
