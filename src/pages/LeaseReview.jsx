@@ -864,15 +864,16 @@ export default function LeaseReview() {
     try {
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("file_url")
+        .select("id, org_id, file_url")
         .eq("id", fileId)
         .maybeSingle();
-      if (error || !data?.file_url) {
+      const resolvedUrl = await resolveUploadedFileUrl(data);
+      if (error || !resolvedUrl) {
         toast.info("Source document URL is unavailable.");
         return;
       }
       const { sourcePage } = readFieldEvidence(lease, field.key);
-      const url = sourcePage ? `${data.file_url}#page=${sourcePage}` : data.file_url;
+      const url = sourcePage ? `${resolvedUrl}#page=${sourcePage}` : resolvedUrl;
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (err) {
       console.error("[LeaseReview] viewInDocument failed:", err);
@@ -1731,10 +1732,12 @@ function SourceFileLink({ fileId }) {
       if (!fileId) return null;
       const { data: row } = await supabase
         .from("uploaded_files")
-        .select("file_url, file_name")
+        .select("id, org_id, file_url, file_name")
         .eq("id", fileId)
         .maybeSingle();
-      return row;
+      if (!row) return null;
+      const resolvedUrl = await resolveUploadedFileUrl(row);
+      return { ...row, file_url: resolvedUrl || row.file_url };
     },
     enabled: !!fileId,
   });
@@ -1751,6 +1754,45 @@ function SourceFileLink({ fileId }) {
       {data.file_name || "Original upload"}
     </a>
   );
+}
+
+async function resolveUploadedFileUrl(fileRecord) {
+  if (!fileRecord) return null;
+
+  const storagePath = deriveFinancialUploadPath(fileRecord);
+  if (storagePath) {
+    const { data, error } = await supabase.storage
+      .from("financial-uploads")
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (!error && data?.signedUrl) {
+      return data.signedUrl;
+    }
+  }
+
+  return fileRecord.file_url || null;
+}
+
+function deriveFinancialUploadPath(fileRecord) {
+  const rawUrl = String(fileRecord?.file_url || "");
+  const publicPrefix = "/storage/v1/object/public/financial-uploads/";
+  const signPrefix = "/storage/v1/object/sign/financial-uploads/";
+
+  const publicIndex = rawUrl.indexOf(publicPrefix);
+  if (publicIndex >= 0) {
+    return rawUrl.slice(publicIndex + publicPrefix.length).split("?")[0];
+  }
+
+  const signIndex = rawUrl.indexOf(signPrefix);
+  if (signIndex >= 0) {
+    return rawUrl.slice(signIndex + signPrefix.length).split("?")[0];
+  }
+
+  if (fileRecord?.org_id && fileRecord?.id) {
+    return `${fileRecord.org_id}/${fileRecord.id}`;
+  }
+
+  return null;
 }
 
 function BudgetPreviewCard({ lease }) {
