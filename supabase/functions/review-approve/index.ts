@@ -891,7 +891,15 @@ function buildLeaseReviewDraftPayload(
   now: string,
   rowIndex = 0,
 ) {
-  const confidenceScores = collectConfidenceScores(reviewedOutput);
+  // Merge confidence sources: per-row field confidence (from reviewer audit)
+  // plus the workflow's per-field confidence_score. The workflow scores are
+  // critical because the upload pipeline doesn't surface per-field reviewer
+  // confidence on first publish.
+  const workflowOutputEarly = getWorkflowOutputForRow(reviewedOutput, rowIndex);
+  const confidenceScores = mergeConfidenceMaps(
+    collectConfidenceScores(reviewedOutput),
+    collectConfidenceFromWorkflow(workflowOutputEarly),
+  );
   const lowConfidenceFields = Object.entries(confidenceScores)
     .filter(([, score]) => typeof score === "number" && score < 75)
     .map(([field]) => field);
@@ -994,6 +1002,11 @@ function buildLeaseReviewDraftPayload(
       source_file_name: fileRecord.file_name ?? null,
       document_subtype: fileRecord.document_subtype ?? null,
       confidence_scores: confidenceScores,
+      // Per-field evidence map the Lease Review UI reads to render Raw
+      // Extracted / Source Page / Exact Source Text / Extraction Status.
+      // Shape matches what readFieldEvidence() in the frontend expects.
+      fields: buildPerFieldEvidence(workflowOutput, row),
+      field_evidence: buildPerFieldEvidence(workflowOutput, row),
       custom_fields: customFields,
       rejected_fields: rejectedFields,
       workflow_output: workflowOutput,
@@ -1048,9 +1061,22 @@ async function syncLeaseWorkflowArtifacts(supabaseAdmin: any, orgId: string, lea
   }
 
   if (workflowOutput?.cam_profile) {
+    // Pull the lease's property_id so the cam_profile is scoped properly.
+    let propertyId: string | null = null;
+    try {
+      const { data: leaseRow } = await supabaseAdmin
+        .from("leases")
+        .select("property_id")
+        .eq("id", leaseId)
+        .maybeSingle();
+      propertyId = leaseRow?.property_id ?? null;
+    } catch (_) {
+      propertyId = null;
+    }
     const profilePayload = {
       org_id: orgId,
       lease_id: leaseId,
+      property_id: propertyId,
       cam_structure: workflowOutput.cam_profile.cam_structure ?? null,
       recovery_status: workflowOutput.cam_profile.recovery_status ?? null,
       cam_start_date: workflowOutput.cam_profile.cam_start_date ?? null,
@@ -1080,6 +1106,192 @@ async function syncLeaseWorkflowArtifacts(supabaseAdmin: any, orgId: string, lea
       console.warn(`[review-approve] cam_profiles sync skipped: ${error?.message ?? error}`);
     }
   }
+
+  // Persist expense rules derived from the lease language. This is what
+  // populates the Expenses module (LeaseExpenseRules page) and gives CAM
+  // Setup its recoverable category list.
+  await syncLeaseExpenseRules(supabaseAdmin, orgId, leaseId, workflowOutput);
+}
+
+/**
+ * Persist workflow_output.expense_rules into lease_expense_rule_sets +
+ * lease_expense_rules. Idempotent: if a rule set already exists for this
+ * lease+version we keep it and refresh the child rows.
+ *
+ * Each expense_rule from the workflow maps a string category (e.g. "cam",
+ * "real_estate_taxes") to a row in the org's expense_categories taxonomy.
+ * Missing categories are auto-created with a stable normalized_key so the
+ * caller never has to bootstrap the taxonomy by hand.
+ */
+async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId: string, workflowOutput: any) {
+  const expenseRules = Array.isArray(workflowOutput?.expense_rules) ? workflowOutput.expense_rules : [];
+  if (expenseRules.length === 0) return;
+
+  try {
+    // 1. Ensure a draft rule set exists.
+    let ruleSetId: string | null = null;
+    const { data: existingSets } = await supabaseAdmin
+      .from("lease_expense_rule_sets")
+      .select("id, status, version")
+      .eq("lease_id", leaseId)
+      .neq("status", "archived")
+      .order("version", { ascending: false })
+      .limit(1);
+    if (existingSets && existingSets[0]?.id) {
+      ruleSetId = existingSets[0].id;
+    } else {
+      const { data: created, error: createErr } = await supabaseAdmin
+        .from("lease_expense_rule_sets")
+        .insert({
+          org_id: orgId,
+          lease_id: leaseId,
+          version: 1,
+          status: "draft",
+        })
+        .select("id")
+        .single();
+      if (createErr || !created?.id) {
+        console.warn(`[review-approve] lease_expense_rule_sets insert skipped: ${createErr?.message ?? createErr}`);
+        return;
+      }
+      ruleSetId = created.id;
+    }
+    if (!ruleSetId) return;
+
+    // 2. Resolve / create expense_categories for every category string.
+    const categoryKeys = Array.from(new Set(
+      expenseRules
+        .map((r: any) => normalizeCategoryKey(r?.expense_category || r?.category || r?.key))
+        .filter(Boolean),
+    ));
+    if (categoryKeys.length === 0) return;
+
+    // Pull both org-scoped categories AND system_default categories so we
+    // don't duplicate the global taxonomy per-org.
+    const { data: existingCategories } = await supabaseAdmin
+      .from("expense_categories")
+      .select("id, normalized_key, category_name, subcategory_name, org_id, is_system_default")
+      .or(`org_id.eq.${orgId},org_id.is.null`)
+      .in("normalized_key", categoryKeys);
+    const categoryByKey = new Map<string, any>();
+    for (const cat of existingCategories || []) {
+      if (cat?.normalized_key && !categoryByKey.has(String(cat.normalized_key))) {
+        categoryByKey.set(String(cat.normalized_key), cat);
+      }
+    }
+    const missingKeys = categoryKeys.filter((k) => !categoryByKey.has(k));
+    if (missingKeys.length > 0) {
+      const insertCats = missingKeys.map((k) => ({
+        org_id: orgId,
+        normalized_key: k,
+        category_name: humanizeFieldName(k),
+        subcategory_name: humanizeFieldName(k),
+      }));
+      const { data: insertedCats, error: insertCatsErr } = await supabaseAdmin
+        .from("expense_categories")
+        .insert(insertCats)
+        .select("id, normalized_key");
+      if (insertCatsErr) {
+        console.warn(`[review-approve] expense_categories insert skipped: ${insertCatsErr.message}`);
+      } else {
+        for (const cat of insertedCats || []) {
+          if (cat?.normalized_key) categoryByKey.set(String(cat.normalized_key), cat);
+        }
+      }
+    }
+
+    // 3. Replace existing rules for this rule set with the workflow output.
+    await supabaseAdmin
+      .from("lease_expense_rules")
+      .delete()
+      .eq("rule_set_id", ruleSetId);
+
+    const rulePayloads = expenseRules
+      .map((rule: any) => {
+        const key = normalizeCategoryKey(rule?.expense_category || rule?.category || rule?.key);
+        const category = key ? categoryByKey.get(key) : null;
+        if (!category?.id) return null;
+        const recoveryMethod = String(rule?.recovery_method || "").toLowerCase();
+        const status = mapRuleStatus(rule);
+        return {
+          rule_set_id: ruleSetId,
+          expense_category_id: category.id,
+          row_status: status,
+          mentioned_in_lease: Boolean(rule?.mentioned_in_lease ?? status !== "not_mentioned"),
+          is_recoverable: Boolean(rule?.recoverable_flag ?? rule?.recoverable_from_tenant ?? rule?.is_recoverable),
+          is_excluded: Boolean(rule?.is_excluded || rule?.excluded_from_recovery),
+          is_controllable: Boolean(rule?.is_controllable),
+          is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
+          cap_type: rule?.cap_type ?? null,
+          cap_value: toNumberOrNull(rule?.cap_value ?? rule?.cap_amount),
+          has_base_year: Boolean(rule?.has_base_year || rule?.base_year_type),
+          base_year_type: rule?.base_year_type ?? null,
+          gross_up_applicable: Boolean(rule?.gross_up_applicable),
+          admin_fee_applicable: Boolean(rule?.admin_fee_applicable),
+          admin_fee_percent: toNumberOrNull(rule?.admin_fee_percent),
+          notes: rule?.notes ?? rule?.source_clause ?? null,
+          confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
+          source: "lease_workflow",
+        };
+      })
+      .filter(Boolean);
+
+    if (rulePayloads.length > 0) {
+      const { data: insertedRules, error: insertRulesErr } = await supabaseAdmin
+        .from("lease_expense_rules")
+        .insert(rulePayloads)
+        .select("id, expense_category_id");
+      if (insertRulesErr) {
+        console.warn(`[review-approve] lease_expense_rules insert skipped: ${insertRulesErr.message}`);
+        return;
+      }
+
+      // 4. Persist supporting clauses if present, keyed back to the rule row.
+      const clausePayloads: any[] = [];
+      for (let i = 0; i < expenseRules.length; i += 1) {
+        const rule = expenseRules[i];
+        const inserted = insertedRules?.[i];
+        const text = rule?.source_clause ?? rule?.clause_text ?? rule?.notes;
+        if (!inserted?.id || !text) continue;
+        clausePayloads.push({
+          lease_expense_rule_id: inserted.id,
+          lease_id: leaseId,
+          page_number: toNumberOrNull(rule?.source_page),
+          clause_type: rule?.clause_type ?? "supporting_text",
+          clause_text: String(text).slice(0, 4000),
+          confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
+        });
+      }
+      if (clausePayloads.length > 0) {
+        await supabaseAdmin
+          .from("lease_expense_rule_clauses")
+          .insert(clausePayloads)
+          .then(() => {})
+          .catch((err: any) => console.warn(`[review-approve] rule clauses skipped: ${err?.message ?? err}`));
+      }
+    }
+  } catch (error: any) {
+    console.warn(`[review-approve] expense rule sync skipped: ${error?.message ?? error}`);
+  }
+}
+
+function normalizeCategoryKey(value: unknown): string | null {
+  if (value == null) return null;
+  const cleaned = String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || null;
+}
+
+function mapRuleStatus(rule: any): string {
+  if (!rule?.mentioned_in_lease) return "not_mentioned";
+  if (rule?.status === "approved" || rule?.status === "confirmed") return "mapped";
+  if (rule?.recoverable_flag === true || rule?.is_recoverable === true) return "mapped";
+  return "needs_review";
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(String(value).replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(n) ? n : null;
 }
 
 async function insertLeaseDraft(supabaseAdmin: any, payload: Record<string, unknown>) {
@@ -1154,6 +1366,71 @@ const LEASE_WORKFLOW_OPTIONAL_COLUMNS = [
   "parking_rights",
   "common_area_description",
 ];
+
+/**
+ * Build the per-field evidence map consumed by the Lease Review UI.
+ *
+ * For each lease_field emitted by buildLeaseWorkflowAbstraction, expose:
+ *   { value, raw_value, source_page, source_text, source_clause,
+ *     confidence, confidence_score, extraction_status, manually_edited }
+ *
+ * The frontend's readFieldEvidence() walks extraction_data.fields[key] +
+ * extraction_data.field_evidence[key]. Both are written from the same source
+ * so older readers (which look at one and not the other) still resolve.
+ */
+function buildPerFieldEvidence(workflowOutput: any, row: Record<string, unknown>): Record<string, unknown> {
+  const leaseFields = workflowOutput?.lease_fields ?? {};
+  const evidence: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(leaseFields)) {
+    if (!field || typeof field !== "object") continue;
+    const f = field as Record<string, unknown>;
+    const rawCandidate = f.raw_value ?? f.source_clause ?? row?.[key] ?? null;
+    evidence[key] = {
+      value: f.value ?? null,
+      raw_value: rawCandidate,
+      raw: rawCandidate,
+      source_page: f.source_page ?? null,
+      page: f.source_page ?? null,
+      source_text: f.source_clause ?? null,
+      exact_source_text: f.source_clause ?? null,
+      snippet: f.source_clause ?? null,
+      source_clause: f.source_clause ?? null,
+      confidence: normalizeConfidence(f.confidence_score),
+      confidence_score: normalizeConfidence(f.confidence_score),
+      extraction_status: f.extraction_status ?? null,
+      field_group: f.field_group ?? null,
+    };
+  }
+  return evidence;
+}
+
+/**
+ * Read every lease_field's confidence_score and emit a key→0-100 map.
+ * normalize-pdf-output writes lease_field.confidence_score as a 0-1 float;
+ * the UI expects 0-100 so we scale here.
+ */
+function collectConfidenceFromWorkflow(workflowOutput: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  const leaseFields = workflowOutput?.lease_fields ?? {};
+  for (const [key, field] of Object.entries(leaseFields)) {
+    if (!field || typeof field !== "object") continue;
+    const raw = (field as Record<string, unknown>).confidence_score;
+    if (typeof raw !== "number" || Number.isNaN(raw)) continue;
+    out[key] = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+  }
+  return out;
+}
+
+function mergeConfidenceMaps(...maps: Record<string, number>[]): Record<string, number> {
+  const merged: Record<string, number> = {};
+  for (const map of maps) {
+    if (!map) continue;
+    for (const [k, v] of Object.entries(map)) {
+      if (typeof v === "number" && !Number.isNaN(v)) merged[k] = v;
+    }
+  }
+  return merged;
+}
 
 function collectConfidenceScores(reviewedOutput: any): Record<string, number> {
   const scores: Record<string, number> = {};
