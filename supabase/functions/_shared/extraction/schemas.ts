@@ -52,7 +52,28 @@ export const LEASE_SCHEMA: ModuleSchema = {
     required: true,
     labels: ["tenant", "lessee", "occupant", "tenant name", "lessee name"],
     tableHeaders: ["tenant", "tenant_name", "tenant name", "lessee", "company"],
-    description: "Name of the tenant or company",
+    description:
+      "LEGAL ENTITY name of the tenant ONLY (e.g. 'Mindful Tech Solutions, Inc.'). " +
+      "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
+      "If the lease reads 'Tenant: Mindful Tech Solutions, Inc.  By: John Doe', return 'Mindful Tech Solutions, Inc.', NOT 'John Doe'.",
+  },
+  tenant_signatory_name: {
+    type: "string",
+    labels: ["signed by", "tenant signatory", "by:", "authorized signer", "tenant representative", "tenant contact"],
+    tableHeaders: ["signed_by", "tenant_signatory", "signatory", "by"],
+    patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/],
+    description:
+      "Individual person who signed the lease on behalf of the tenant. " +
+      "This is the person name found after 'By:' or 'Signed:' in the tenant signature block. " +
+      "This is NEVER the tenant entity name.",
+  },
+  landlord_signatory_name: {
+    type: "string",
+    labels: ["landlord signatory", "landlord signed by", "authorized landlord signer"],
+    tableHeaders: ["landlord_signatory"],
+    description:
+      "Individual person who signed the lease on behalf of the landlord. " +
+      "This is NEVER the landlord entity name.",
   },
   property_name: {
     type: "string",
@@ -76,7 +97,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
     tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
     patterns: [/(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i],
-    description: "Name of the landlord, lessor, or property owner",
+    description:
+      "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. '224 Partners, LLC'). " +
+      "DO NOT use the signatory or signer. " +
+      "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'.",
   },
   assignor_name: {
     type: "string",
