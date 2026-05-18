@@ -1057,6 +1057,7 @@ export default function LeaseReview() {
         documentUrl: resolvedDocumentUrl,
       });
 
+      queryClient.setQueryData(["lease", leaseId], approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       if (approvedLease?.property_id) {
@@ -1333,11 +1334,12 @@ export default function LeaseReview() {
       return;
     }
     try {
-      await rejectLeaseAbstract({
+      const rejectedLease = await rejectLeaseAbstract({
         lease,
         reason: rejectReason,
         reviewer: lease?.signed_by || null,
       });
+      queryClient.setQueryData(["lease", leaseId], rejectedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       toast.success("Lease document rejected");
