@@ -655,46 +655,53 @@ export function readFieldEvidence(lease, key) {
 
 export function readFieldConfidence(lease, key, fallback = null) {
   const candidates = FIELD_COLUMN_ALIASES[key] || [key];
+  // If the stored value for this field is a sentinel ("unknown", "n/a",
+  // null, etc.), cap whatever confidence the extractor reported. A 99%
+  // confident "unknown" is meaningless to a reviewer and creates the
+  // contradictory "Missing / 99%" display the user flagged.
+  const hasMeaningfulValue = isMeaningfulValue(readFieldValue(lease, key));
+  const clamp = (score) => (hasMeaningfulValue ? score : (score == null ? null : Math.min(score, 35)));
+
   const scores = lease?.extraction_data?.confidence_scores || {};
   for (const candidate of candidates) {
     const score = parseStoredNumber(scores[candidate]);
-    if (score != null) return normalizeStoredConfidence(score);
+    if (score != null) return clamp(normalizeStoredConfidence(score));
   }
   const extracted = lease?.extracted_fields || {};
   const extractedEntry = pickCandidateEntry(extracted, candidates);
   const extractedConfidence = parseStoredNumber(
     readFromEntry(extractedEntry, "confidence", "confidence_score", "score"),
   );
-  if (extractedConfidence != null) return normalizeStoredConfidence(extractedConfidence);
+  if (extractedConfidence != null) return clamp(normalizeStoredConfidence(extractedConfidence));
   const fields = lease?.extraction_data?.fields || {};
   const fieldEntry = pickCandidateEntry(fields, candidates);
   const fieldConfidence = parseStoredNumber(
     readFromEntry(fieldEntry, "confidence", "confidence_score", "score"),
   );
-  if (fieldConfidence != null) return normalizeStoredConfidence(fieldConfidence);
+  if (fieldConfidence != null) return clamp(normalizeStoredConfidence(fieldConfidence));
   const workflowFields = getWorkflowLeaseFields(lease);
   const workflowEntry = pickCandidateEntry(workflowFields, candidates);
   const workflowConfidence = parseStoredNumber(
     readFromEntry(workflowEntry, "confidence_score", "confidence", "score"),
   );
-  if (workflowConfidence != null) return normalizeStoredConfidence(workflowConfidence);
+  if (workflowConfidence != null) return clamp(normalizeStoredConfidence(workflowConfidence));
   for (const candidate of candidates) {
     const score = parseStoredNumber(
       readFromEntry(buildDerivedWorkflowEntry(lease, candidate), "confidence_score", "confidence", "score"),
     );
-    if (score != null) return normalizeStoredConfidence(score);
+    if (score != null) return clamp(normalizeStoredConfidence(score));
   }
   const clauseFallbackEntry = findClauseFallbackEntry(lease, key);
   const clauseFallbackConfidence = parseStoredNumber(
     readFromEntry(clauseFallbackEntry, "confidence", "confidence_score", "score"),
   );
-  if (clauseFallbackConfidence != null) return normalizeStoredConfidence(clauseFallbackConfidence);
+  if (clauseFallbackConfidence != null) return clamp(normalizeStoredConfidence(clauseFallbackConfidence));
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
   const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
   const snapshotConfidence = parseStoredNumber(
     readFromEntry(snapshotEntry, "confidence", "confidence_score", "score"),
   );
-  if (snapshotConfidence != null) return normalizeStoredConfidence(snapshotConfidence);
+  if (snapshotConfidence != null) return clamp(normalizeStoredConfidence(snapshotConfidence));
   return fallback;
 }
 

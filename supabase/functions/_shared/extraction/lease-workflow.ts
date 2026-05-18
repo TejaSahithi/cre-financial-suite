@@ -390,8 +390,14 @@ function containsAny(text: string, phrases: string[]) {
 }
 
 function excerptForKeywords(textBlocks: any[], fullText: string, keywords: string[]) {
+  // Returns the actual document snippet containing one of the keywords, or
+  // null if no real text matched. Previously fell back to `keywords[0]`
+  // (e.g. "real estate tax"), which leaked the canonical category KEY into
+  // the rule's source_text — the UI then displayed that as if it were
+  // verbatim source evidence. Now we return null so downstream code can
+  // mark the rule as missing source evidence instead of faking it.
   const snippet = extractClauseSnippet(textBlocks, fullText, keywords, 420);
-  return snippet.clause_text || keywords[0] || null;
+  return snippet.clause_text || null;
 }
 
 function inferLeaseSignals(text: string, row: Record<string, unknown>) {
@@ -1051,7 +1057,22 @@ function deriveExpenseRules(
 
     const clauseText = supportingClause?.clause_text || excerptForKeywords(textBlocks, fullText, blueprint.keywords);
     const sourcePage = supportingClause?.source_page ?? null;
-    const confidence = status === "calculated" ? 0.9 : status === "manual_required" ? 0.45 : mentioned ? 0.78 : 0.55;
+    // Honest evidence requires SOMETHING from the document: a real clause
+    // text snippet or a source_page anchor. If we have neither, the rule
+    // is at best inferred from lease-type heuristics — not extracted.
+    // Reflect that in BOTH the extraction_status and the confidence so the
+    // UI doesn't show "Missing" alongside "99%" anymore.
+    const hasRealEvidence = Boolean(clauseText) || sourcePage != null;
+    const effectiveStatus: typeof status =
+      !hasRealEvidence && (status === "extracted" || status === "inferred")
+        ? "missing_source_evidence"
+        : status;
+    const confidence =
+      effectiveStatus === "calculated" ? 0.9
+      : effectiveStatus === "manual_required" ? 0.45
+      : effectiveStatus === "missing_source_evidence" ? 0.35
+      : mentioned ? 0.78
+      : 0.55;
 
     return {
       expense_category: blueprint.key,
@@ -1074,8 +1095,8 @@ function deriveExpenseRules(
       exact_source_text: clauseText || null,
       source_page: sourcePage,
       confidence_score: confidence,
-      extraction_status: status,
-      status,
+      extraction_status: effectiveStatus,
+      status: effectiveStatus,
       editable: true,
       notes,
       fixed_monthly_amount: fixedMonthlyAmount,
