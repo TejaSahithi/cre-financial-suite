@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -370,8 +370,18 @@ export default function LeaseReview() {
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
   // to extraction_data.field_reviews for older records.
+  //
+  // We hydrate ONCE per lease id. Subsequent refetches (triggered by
+  // saveAbstractDraft, mutation invalidations, auto-extract, etc.) must NOT
+  // overwrite local state — otherwise an Accept the user just clicked would
+  // get wiped when the lease object re-renders before the DB upsert lands.
+  // After the first hydration the local fieldReviews state is the source of
+  // truth until the user reloads the page.
+  const hydratedReviewsForLeaseId = useRef(null);
   useEffect(() => {
-    if (!lease) return;
+    if (!lease?.id) return;
+    if (hydratedReviewsForLeaseId.current === lease.id) return;
+    hydratedReviewsForLeaseId.current = lease.id;
     let cancelled = false;
     (async () => {
       let nextReviews = lease.extraction_data?.field_reviews || {};
@@ -403,7 +413,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease]);
+  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-link: when a lease has no source_file_id, search uploaded_files
   // for a matching upload by tenant_name / property_id / building_id /
@@ -1876,6 +1886,31 @@ export default function LeaseReview() {
     }
   };
 
+  // Auto-run extraction the first time we land on a lease that has a source
+  // file linked but no extracted fields yet. This covers two scenarios:
+  //   1. Auto-link just wrote source_file_id but the lease still has no
+  //      extraction_data.fields — without this effect the user would have
+  //      to click "Re-extract Now" themselves.
+  //   2. A draft lease was created (Upload or Bulk Import) with a source
+  //      file but extraction was never applied on this record.
+  // Guarded by a ref so we only fire once per lease per page mount.
+  const autoExtractFiredRef = useRef(null);
+  useEffect(() => {
+    if (!lease?.id) return;
+    if (autoExtractFiredRef.current === lease.id) return;
+    if (reextracting) return;
+    const sourceFileId = lease?.extraction_data?.source_file_id;
+    if (!sourceFileId) return;
+    const fieldCount = Object.keys(lease?.extraction_data?.fields || {}).length;
+    const extractedCount = Object.keys(lease?.extraction_data?.extracted_fields || {}).length;
+    const hasWorkflow = !!lease?.extraction_data?.workflow_output;
+    if (fieldCount > 0 || extractedCount > 0 || hasWorkflow) return;
+    autoExtractFiredRef.current = lease.id;
+    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted fields");
+    toast.info("Source file linked. Running extraction in the background…");
+    handleReextractLease();
+  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleRejectDocument = async () => {
     if (!rejectReason.trim()) {
       toast.error("Please provide a rejection reason.");
@@ -2618,72 +2653,108 @@ export default function LeaseReview() {
         isSaving={updateLeaseMutation.isPending}
       />
 
-      {/* Sticky bottom action bar */}
+      {/* Sticky bottom action bar — once the abstract is approved we collapse
+          to a confirmation message + Re-extract escape hatch (re-extraction
+          creates the next version on next approval). */}
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <div className="text-xs text-slate-500">
-            {canApprove ? (
-              <span className="text-emerald-700">All checks passed. You can approve the lease abstract.</span>
-            ) : (
-              <span title={blockerMessage} className="text-amber-700">
-                Approval blocked: {blockerMessage}
-              </span>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setShowReextractConfirm(true)}
-              disabled={reextracting || !lease?.extraction_data?.source_file_id}
-              className="border-blue-300 text-blue-700 hover:bg-blue-50"
-              title={
-                lease?.extraction_data?.source_file_id
-                  ? "Re-run AI extraction on the source PDF"
-                  : "No source file linked. Use Extraction Debug → Re-link first."
-              }
-            >
-              {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-              {reextracting ? "Re-extracting…" : "Re-extract Lease"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setShowReject(true)}
-              className="text-red-700"
-            >
-              <Ban className="mr-1 h-4 w-4" />
-              Reject Document
-            </Button>
-            <Button variant="outline" onClick={() => setShowSendBack(true)}>
-              <Undo2 className="mr-1 h-4 w-4" />
-              Send Back for Re-extraction
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleSaveDraft}
-              disabled={savingDraft || updateLeaseMutation.isPending}
-            >
-              {savingDraft && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-              Save Review Draft
-            </Button>
-            <Button
-              className={
-                canApprove
-                  ? "bg-emerald-600 hover:bg-emerald-700"
-                  : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-              }
-              onClick={() => {
-                if (!canApprove) {
-                  toast.error(blockerMessage);
-                  return;
-                }
-                setShowApproval(true);
-              }}
-              title={approvalDisabledTooltip}
-            >
-              <CheckCircle2 className="mr-1 h-4 w-4" />
-              Approve Lease Abstract
-            </Button>
-          </div>
+          {lease?.abstract_status === "approved" ? (
+            <>
+              <div className="text-xs">
+                <span className="font-semibold text-emerald-700">
+                  ✓ Lease abstract approved
+                  {lease.abstract_version ? ` (v${lease.abstract_version})` : ""}
+                </span>
+                {lease.signed_by ? (
+                  <span className="ml-2 text-slate-500">
+                    by {lease.signed_by}
+                    {lease.signed_at ? ` on ${new Date(lease.signed_at).toLocaleString()}` : ""}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link to={createPageUrl("LeaseDetail") + `?id=${lease.id}`}>
+                  <Button variant="outline">Open Lease Detail</Button>
+                </Link>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReextractConfirm(true)}
+                  disabled={reextracting || !lease?.extraction_data?.source_file_id}
+                  className="border-blue-300 text-blue-700 hover:bg-blue-50"
+                  title="Re-run AI extraction — next approval will create a new version"
+                >
+                  {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+                  {reextracting ? "Re-extracting…" : "Re-extract Lease"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-slate-500">
+                {canApprove ? (
+                  <span className="text-emerald-700">All checks passed. You can approve the lease abstract.</span>
+                ) : (
+                  <span title={blockerMessage} className="text-amber-700">
+                    Approval blocked: {blockerMessage}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReextractConfirm(true)}
+                  disabled={reextracting || !lease?.extraction_data?.source_file_id}
+                  className="border-blue-300 text-blue-700 hover:bg-blue-50"
+                  title={
+                    lease?.extraction_data?.source_file_id
+                      ? "Re-run AI extraction on the source PDF"
+                      : "No source file linked. Use Extraction Debug → Re-link first."
+                  }
+                >
+                  {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+                  {reextracting ? "Re-extracting…" : "Re-extract Lease"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReject(true)}
+                  className="text-red-700"
+                >
+                  <Ban className="mr-1 h-4 w-4" />
+                  Reject Document
+                </Button>
+                <Button variant="outline" onClick={() => setShowSendBack(true)}>
+                  <Undo2 className="mr-1 h-4 w-4" />
+                  Send Back for Re-extraction
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleSaveDraft}
+                  disabled={savingDraft || updateLeaseMutation.isPending}
+                >
+                  {savingDraft && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                  Save Review Draft
+                </Button>
+                <Button
+                  className={
+                    canApprove
+                      ? "bg-emerald-600 hover:bg-emerald-700"
+                      : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                  }
+                  onClick={() => {
+                    if (!canApprove) {
+                      toast.error(blockerMessage);
+                      return;
+                    }
+                    setShowApproval(true);
+                  }}
+                  title={approvalDisabledTooltip}
+                >
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                  Approve Lease Abstract
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

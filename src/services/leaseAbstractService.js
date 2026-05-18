@@ -17,7 +17,9 @@ import {
   readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  resolveFieldColumns,
   LEASE_REVIEW_FIELDS,
+  NUMERIC_REVIEW_FIELDS,
 } from "@/lib/leaseReviewSchema";
 
 export const ABSTRACT_STATUS = {
@@ -192,7 +194,40 @@ export async function approveLeaseAbstract({
     },
   };
 
+  // Sync the latest reviewed values back to the dedicated lease columns
+  // (landlord_name, lease_type, monthly_rent, commencement_date, etc.) so
+  // downstream consumers — Leases list, dashboard cards, expense engine —
+  // see the approved values without having to dig into extraction_data.
+  // Without this, columns retain whatever was set at upload time (often
+  // null) even though the abstract shows the extracted values.
+  const columnSync = {};
+  for (const field of LEASE_REVIEW_FIELDS) {
+    const rawValue = readFieldValue(lease, field.key);
+    if (rawValue === undefined || rawValue === null) continue;
+    let value = rawValue;
+    if (NUMERIC_REVIEW_FIELDS.has(field.key)) {
+      const n = typeof rawValue === "number"
+        ? rawValue
+        : Number(String(rawValue).replace(/[$,%\s,]/g, ""));
+      if (!Number.isFinite(n)) continue;
+      value = n;
+    } else if (field.type === "boolean") {
+      value = rawValue === true || String(rawValue).toLowerCase() === "true" || String(rawValue).toLowerCase() === "yes";
+    } else if (typeof rawValue === "string") {
+      const trimmed = rawValue.trim();
+      if (!trimmed) continue;
+      value = trimmed;
+    }
+    const columns = resolveFieldColumns(field.key);
+    if (!columns || columns.length === 0) continue;
+    for (const column of columns) {
+      // Don't clobber a column we've already set from a higher-priority field.
+      if (columnSync[column] === undefined) columnSync[column] = value;
+    }
+  }
+
   const update = {
+    ...columnSync,
     status: "approved",
     signed_by: approvedBy,
     signed_at: signedAt || snapshot.approved_at,
