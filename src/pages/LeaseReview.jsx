@@ -520,40 +520,77 @@ export default function LeaseReview() {
 
         // Decide whether to auto-link.
         //   - Score must clear the minimum (≥ 5)
-        //   - Either: top beats the runner-up by ≥ 3 points
-        //     OR: every candidate tied at the top score is the SAME file
-        //         (same normalized filename) — re-uploads of one document
-        //         are not "ambiguous", just pick the most recent.
+        //   - Decisive if ANY of:
+        //       a) Every tied-at-top candidate has the same normalized filename
+        //          (re-uploads of the same document — not ambiguous)
+        //       b) Top beats the runner-up of a DIFFERENT filename by ≥ 3 points
+        //       c) Top score is very high (≥ 10) AND >= 2 of the tied candidates
+        //          share the top's normalized filename — pick the most recent
+        //          from that filename group regardless of unrelated ties
         const top = ranked[0];
-        if (!top || top.score < 5 || cancelled) return;
+        if (!top || top.score < 5 || cancelled) {
+          console.log("[LeaseReview] auto-link: skip — no candidate clears minimum score (top:", top?.score, "min: 5)");
+          return;
+        }
         const normName = (n) => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
         const topName = normName(top.file.file_name);
         const tiedWithTop = ranked.filter((r) => r.score === top.score);
-        const allTiedSameFile = tiedWithTop.every((r) => normName(r.file.file_name) === topName);
+        const sameFileTies = tiedWithTop.filter((r) => normName(r.file.file_name) === topName);
+        const allTiedSameFile = sameFileTies.length === tiedWithTop.length;
         const runnerUpDifferentFile = ranked
           .find((r) => normName(r.file.file_name) !== topName);
         const gapClear = !runnerUpDifferentFile
           || top.score - runnerUpDifferentFile.score >= 3;
-        const decisive = allTiedSameFile || gapClear;
-        if (!decisive) return;
+        const highScoreSameFileMajority = top.score >= 10 && sameFileTies.length >= 2;
+        const decisive = allTiedSameFile || gapClear || highScoreSameFileMajority;
+        console.log("[LeaseReview] auto-link decision:", {
+          top_score: top.score,
+          tied_count: tiedWithTop.length,
+          same_file_tied_count: sameFileTies.length,
+          all_tied_same_file: allTiedSameFile,
+          runner_up_different_file_score: runnerUpDifferentFile?.score ?? null,
+          gap_clear: gapClear,
+          high_score_same_file_majority: highScoreSameFileMajority,
+          decisive,
+        });
+        if (!decisive) {
+          console.log("[LeaseReview] auto-link: skip — no decisive winner. Top tied with different-named candidates; user must pick manually.");
+          return;
+        }
+
+        // When multiple uploads tie at the top score and share the filename,
+        // pick the most recent of that group (ranked sort already ordered
+        // them updated_at desc within score). This avoids accidentally
+        // linking a different-name candidate that happens to share the score.
+        const chosen = (allTiedSameFile || highScoreSameFileMajority) ? sameFileTies[0] : top;
 
         const nextExtraction = {
           ...(lease.extraction_data || {}),
-          source_file_id: top.file.id,
-          source_file_name: top.file.file_name ?? null,
+          source_file_id: chosen.file.id,
+          source_file_name: chosen.file.file_name ?? null,
           auto_linked_at: new Date().toISOString(),
-          auto_link_score: top.score,
-          auto_link_reasons: top.reasons,
+          auto_link_score: chosen.score,
+          auto_link_reasons: chosen.reasons,
         };
         const { error: updateErr } = await supabase
           .from("leases")
           .update({ extraction_data: nextExtraction })
           .eq("id", lease.id);
         if (updateErr) {
-          console.warn("[LeaseReview] auto-link write failed:", updateErr.message);
+          console.warn("[LeaseReview] auto-link write failed:", updateErr.message, updateErr.details || "");
           return;
         }
-        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${top.file.id} (score=${top.score}, reasons=${top.reasons.join("+")})`);
+        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
+
+        // Update the React-Query cache immediately so the page reflects the
+        // new source_file_id without waiting for a refetch round-trip. The
+        // invalidate still runs so server state is the source of truth.
+        try {
+          queryClient.setQueryData(["lease", leaseId], (prev) => {
+            if (!prev) return prev;
+            return { ...prev, extraction_data: nextExtraction };
+          });
+        } catch { /* setQueryData best-effort */ }
         queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       } catch (err) {
         console.warn("[LeaseReview] auto-link skipped:", err?.message || err);
@@ -812,7 +849,12 @@ export default function LeaseReview() {
   });
 
   // Auto-run extraction the first time we land on a lease that has a source
-  // file linked but no extracted fields yet.
+  // file linked but no MEANINGFUL extracted data yet. "Meaningful" =
+  // workflow_output present (the extractor actually ran) OR at least one
+  // field key with a non-null value (real extraction, not a placeholder
+  // shell from upload). A stale empty `fields: {}` object from a previous
+  // failed attempt must NOT block auto-extraction — that was preventing
+  // re-extract from firing on partially-initialized leases.
   const autoExtractFiredRef = useRef(null);
   useEffect(() => {
     if (!lease?.id) return;
@@ -820,12 +862,29 @@ export default function LeaseReview() {
     if (reextracting) return;
     const sourceFileId = lease?.extraction_data?.source_file_id;
     if (!sourceFileId) return;
-    const fieldCount = Object.keys(lease?.extraction_data?.fields || {}).length;
-    const extractedCount = Object.keys(lease?.extraction_data?.extracted_fields || {}).length;
+
     const hasWorkflow = !!lease?.extraction_data?.workflow_output;
-    if (fieldCount > 0 || extractedCount > 0 || hasWorkflow) return;
+    const hasMeaningfulField = (obj) => {
+      if (!obj || typeof obj !== "object") return false;
+      return Object.values(obj).some((v) => {
+        if (v == null) return false;
+        if (typeof v === "object") return v?.value != null && v.value !== "";
+        return v !== "" && v !== "unknown" && v !== "n/a";
+      });
+    };
+    const hasRealFields =
+      hasMeaningfulField(lease?.extraction_data?.fields) ||
+      hasMeaningfulField(lease?.extraction_data?.extracted_fields);
+    if (hasWorkflow || hasRealFields) {
+      console.log("[LeaseReview] auto-extract: skip — lease already has extraction data", {
+        hasWorkflow,
+        hasRealFields,
+      });
+      autoExtractFiredRef.current = lease.id;
+      return;
+    }
     autoExtractFiredRef.current = lease.id;
-    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted fields");
+    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted data yet");
     toast.info("Source file linked. Running extraction in the background…");
     handleReextractLease();
   }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]); // eslint-disable-line react-hooks/exhaustive-deps
