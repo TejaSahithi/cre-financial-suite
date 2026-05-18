@@ -2006,7 +2006,7 @@ export default function LeaseReview() {
     : `Required Pending ${requiredPendingKeys.length}`;
 
   return (
-    <div className="space-y-6 p-6 pb-32">
+    <div className="space-y-6 p-6">
       <Link
         to={createPageUrl("Leases")}
         className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
@@ -2655,8 +2655,13 @@ export default function LeaseReview() {
 
       {/* Sticky bottom action bar — once the abstract is approved we collapse
           to a confirmation message + Re-extract escape hatch (re-extraction
-          creates the next version on next approval). */}
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
+          creates the next version on next approval).
+          Uses `sticky bottom-0` (not `fixed`) so the bar stays contained
+          inside the Lease Review page's scroll area and does not overlap
+          the sidebar / other modules. The negative horizontal margin lets
+          the bar span the full width of the content area while the page
+          itself keeps its `p-6` padding. */}
+      <div className="sticky bottom-0 z-30 -mx-6 mt-4 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
           {lease?.abstract_status === "approved" ? (
             <>
