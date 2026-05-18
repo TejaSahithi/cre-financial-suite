@@ -405,6 +405,87 @@ export default function LeaseReview() {
     };
   }, [lease]);
 
+  // Auto-link: when a lease has no source_file_id, search uploaded_files
+  // for a matching upload by tenant_name / property_id / building_id /
+  // unit_id and link it automatically. Most "no source file" cases come
+  // from leases created via the client-side fallback before the upload
+  // pipeline wired source_file_id properly.
+  useEffect(() => {
+    if (!lease?.id || !supabase) return;
+    if (lease.extraction_data?.source_file_id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Pull recent lease uploads for this org. Filter by property/unit/
+        // tenant in JS to keep the query simple — there usually aren't
+        // many lease uploads per org.
+        const { data: files, error } = await supabase
+          .from("uploaded_files")
+          .select("id, file_name, property_id, building_id, unit_id, ui_review_payload, status, updated_at")
+          .eq("org_id", lease.org_id)
+          .eq("module_type", "leases")
+          .in("status", ["review_required", "validated", "stored", "completed", "approved"])
+          .order("updated_at", { ascending: false })
+          .limit(40);
+        if (error || cancelled || !files?.length) return;
+
+        const norm = (s) => String(s ?? "").trim().toLowerCase();
+        const tenant = norm(lease.tenant_name);
+
+        const score = (file) => {
+          let s = 0;
+          if (lease.unit_id && file.unit_id === lease.unit_id) s += 4;
+          if (lease.building_id && file.building_id === lease.building_id) s += 2;
+          if (lease.property_id && file.property_id === lease.property_id) s += 2;
+          if (tenant) {
+            const records = file?.ui_review_payload?.records || file?.ui_review_payload?.rows || [];
+            const fileTenants = records.flatMap((r) => {
+              const std = r?.standard_fields || [];
+              const fromStd = std.find((f) => f?.field_key === "tenant_name")?.value;
+              const fromVals = r?.values?.tenant_name;
+              return [fromStd, fromVals].filter(Boolean).map(norm);
+            });
+            if (fileTenants.some((t) => t === tenant || (t && tenant.includes(t)) || (t && t.includes(tenant)))) {
+              s += 5;
+            }
+            if (norm(file.file_name).includes(tenant.slice(0, 8))) s += 1;
+          }
+          return s;
+        };
+
+        const ranked = files
+          .map((f) => ({ file: f, score: score(f) }))
+          .filter((entry) => entry.score >= 2)
+          .sort((a, b) => b.score - a.score);
+        if (cancelled || ranked.length === 0) return;
+        const best = ranked[0].file;
+
+        const nextExtraction = {
+          ...(lease.extraction_data || {}),
+          source_file_id: best.id,
+          source_file_name: best.file_name ?? null,
+          auto_linked_at: new Date().toISOString(),
+          auto_link_score: ranked[0].score,
+        };
+        const { error: updateErr } = await supabase
+          .from("leases")
+          .update({ extraction_data: nextExtraction })
+          .eq("id", lease.id);
+        if (updateErr) {
+          console.warn("[LeaseReview] auto-link failed:", updateErr.message);
+          return;
+        }
+        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${best.id} (score=${ranked[0].score})`);
+        queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      } catch (err) {
+        console.warn("[LeaseReview] auto-link skipped:", err?.message || err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Backfill evidence for legacy leases. If a lease has values but no
   // extraction_data.workflow_output / field_evidence (created via the older
   // review-approve path or the previous client fallback), reach back to the
@@ -1246,6 +1327,44 @@ export default function LeaseReview() {
       const wf = latestFile?.ui_review_payload?.metadata?.workflow_output;
       const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
 
+      // Diagnostic dump — shows exactly what the deployed pipeline returned
+      // for each field. If a field appears here with value=null, that's the
+      // extractor giving up on it (rule patterns missed + LLM returned null).
+      // If it's missing from this dump entirely, the field isn't in the
+      // pipeline's schema/groups.
+      try {
+        const stdFields = reviewedRow?.standard_fields || [];
+        const wfFields = workflowOutput?.lease_fields || {};
+        console.group("[Re-extract] Pipeline output");
+        console.log("ui_review_payload.records count:", (latestFile?.ui_review_payload?.records || []).length);
+        console.log("standard_fields count:", stdFields.length);
+        console.log("workflow_output.lease_fields keys:", Object.keys(wfFields));
+        console.log("workflow_output.expense_rules count:", workflowOutput?.expense_rules?.length || 0);
+        console.log("workflow_output.lease_clauses count:", workflowOutput?.lease_clauses?.length || 0);
+        const summary = stdFields.map((f) => ({
+          field_key: f.field_key,
+          value: f.value,
+          source: f.source,
+          confidence: f.confidence,
+          status: f.status,
+          source_page: f.evidence?.page_number ?? null,
+          source_text: (f.evidence?.source_clause ?? f.evidence?.source_text ?? "")?.slice(0, 60),
+        }));
+        console.table(summary);
+        // What's MISSING from the pipeline output (the most useful info)
+        const expected = ["tenant_name","landlord_name","property_address","permitted_use","square_footage",
+                          "monthly_rent","annual_rent","commencement_date","expiration_date","lease_type",
+                          "security_deposit","responsibility_taxes","responsibility_insurance","responsibility_utilities"];
+        const returnedKeys = new Set(stdFields.map((f) => f.field_key));
+        const missing = expected.filter((k) => !returnedKeys.has(k));
+        const nullValues = stdFields.filter((f) => expected.includes(f.field_key) && (f.value == null || f.value === "")).map((f) => f.field_key);
+        if (missing.length) console.warn("Expected fields NOT in pipeline output (schema gap):", missing);
+        if (nullValues.length) console.warn("Pipeline returned NULL for these expected fields (extractor missed them):", nullValues);
+        console.groupEnd();
+      } catch (logErr) {
+        console.warn("[Re-extract] diag dump failed:", logErr);
+      }
+
       const fieldsWithEvidence = {};
       const evidenceMap = {};
       const confidenceMap = {};
@@ -1546,6 +1665,31 @@ export default function LeaseReview() {
           </Button>
         </div>
       </div>
+
+      {/* Source-file banner — surfaces the most common silent failure:
+          lease has no extraction_data.source_file_id, so extraction can't
+          run and the Re-extract button is disabled. Tells the user exactly
+          what to do (Re-link via Extraction Debug) instead of leaving them
+          staring at empty fields. */}
+      {!lease?.extraction_data?.source_file_id && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="min-w-0">
+            <p className="font-semibold">No source file linked to this lease.</p>
+            <p className="text-xs text-red-700">
+              Extraction (Docling + Gemini) can't run, evidence backfill has nothing to read, and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
+              {" "}Auto-link looks for a matching upload by tenant name and property — if none is found, open Extraction Debug → Re-link Source Document and paste the uploaded_files.id from the Upload Lease page.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-red-300 bg-white text-red-700 hover:bg-red-100"
+            onClick={() => setActiveTab("extraction_debug")}
+          >
+            Open Extraction Debug
+          </Button>
+        </div>
+      )}
 
       {/* Rule readiness banner */}
       <div
