@@ -407,36 +407,52 @@ export default function LeaseReview() {
 
   // Auto-link: when a lease has no source_file_id, search uploaded_files
   // for a matching upload by tenant_name / property_id / building_id /
-  // unit_id and link it automatically. Most "no source file" cases come
-  // from leases created via the client-side fallback before the upload
-  // pipeline wired source_file_id properly.
+  // unit_id and link it automatically. Also keeps the ranked candidate
+  // list around so the banner can show a picker if no candidate clears
+  // the score threshold.
+  const [linkCandidates, setLinkCandidates] = useState([]); // [{id, file_name, score, status}]
+  const [autoLinkDebug, setAutoLinkDebug] = useState(null); // { query_count, tenant, found, top_score }
   useEffect(() => {
     if (!lease?.id || !supabase) return;
-    if (lease.extraction_data?.source_file_id) return;
+    if (lease.extraction_data?.source_file_id) {
+      setLinkCandidates([]);
+      setAutoLinkDebug(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        // Pull recent lease uploads for this org. Filter by property/unit/
-        // tenant in JS to keep the query simple — there usually aren't
-        // many lease uploads per org.
+        // Cast a wide net — every module_type, broad status filter.
+        // Older uploads may have module_type='lease' (singular), or null.
         const { data: files, error } = await supabase
           .from("uploaded_files")
-          .select("id, file_name, property_id, building_id, unit_id, ui_review_payload, status, updated_at")
+          .select("id, file_name, property_id, building_id, unit_id, ui_review_payload, status, module_type, updated_at")
           .eq("org_id", lease.org_id)
-          .eq("module_type", "leases")
-          .in("status", ["review_required", "validated", "stored", "completed", "approved"])
           .order("updated_at", { ascending: false })
-          .limit(40);
-        if (error || cancelled || !files?.length) return;
+          .limit(60);
+        if (cancelled) return;
+        if (error) {
+          console.warn("[LeaseReview] auto-link query failed:", error.message);
+          setAutoLinkDebug({ query_count: 0, error: error.message });
+          return;
+        }
+        // Prefer lease uploads but don't exclude others outright — the
+        // module_type column has been inconsistent across the codebase.
+        const leaseLike = (files || []).filter((f) => {
+          const mod = String(f.module_type || "").toLowerCase();
+          if (!mod) return true; // unknown module → include
+          return mod === "leases" || mod === "lease";
+        });
 
         const norm = (s) => String(s ?? "").trim().toLowerCase();
         const tenant = norm(lease.tenant_name);
 
         const score = (file) => {
           let s = 0;
-          if (lease.unit_id && file.unit_id === lease.unit_id) s += 4;
-          if (lease.building_id && file.building_id === lease.building_id) s += 2;
-          if (lease.property_id && file.property_id === lease.property_id) s += 2;
+          let reasons = [];
+          if (lease.unit_id && file.unit_id === lease.unit_id) { s += 4; reasons.push("unit"); }
+          if (lease.building_id && file.building_id === lease.building_id) { s += 2; reasons.push("building"); }
+          if (lease.property_id && file.property_id === lease.property_id) { s += 2; reasons.push("property"); }
           if (tenant) {
             const records = file?.ui_review_payload?.records || file?.ui_review_payload?.rows || [];
             const fileTenants = records.flatMap((r) => {
@@ -447,35 +463,68 @@ export default function LeaseReview() {
             });
             if (fileTenants.some((t) => t === tenant || (t && tenant.includes(t)) || (t && t.includes(tenant)))) {
               s += 5;
+              reasons.push("tenant_payload");
             }
-            if (norm(file.file_name).includes(tenant.slice(0, 8))) s += 1;
+            const fileNameLower = norm(file.file_name);
+            if (tenant.split(/\s+/).some((token) => token.length >= 4 && fileNameLower.includes(token))) {
+              s += 2;
+              reasons.push("tenant_in_filename");
+            }
           }
-          return s;
+          return { s, reasons };
         };
 
-        const ranked = files
-          .map((f) => ({ file: f, score: score(f) }))
-          .filter((entry) => entry.score >= 2)
+        const ranked = leaseLike
+          .map((f) => {
+            const { s, reasons } = score(f);
+            return { file: f, score: s, reasons };
+          })
           .sort((a, b) => b.score - a.score);
-        if (cancelled || ranked.length === 0) return;
-        const best = ranked[0].file;
+
+        const candidates = ranked.slice(0, 10).map((r) => ({
+          id: r.file.id,
+          file_name: r.file.file_name,
+          score: r.score,
+          status: r.file.status,
+          updated_at: r.file.updated_at,
+          reasons: r.reasons,
+        }));
+        if (!cancelled) setLinkCandidates(candidates);
+
+        const dbg = {
+          query_count: files?.length ?? 0,
+          lease_like: leaseLike.length,
+          tenant,
+          top_score: candidates[0]?.score ?? 0,
+          top_candidate: candidates[0]?.file_name ?? null,
+        };
+        if (!cancelled) setAutoLinkDebug(dbg);
+        console.log("[LeaseReview] auto-link diagnostic:", dbg, "candidates:", candidates.slice(0, 5));
+
+        // Only auto-link when the top candidate clearly wins (score ≥ 5
+        // OR top is at least 3 points ahead of the runner-up).
+        const top = ranked[0];
+        const second = ranked[1];
+        const decisive = top && top.score >= 5 && (!second || top.score - second.score >= 3);
+        if (!decisive || cancelled) return;
 
         const nextExtraction = {
           ...(lease.extraction_data || {}),
-          source_file_id: best.id,
-          source_file_name: best.file_name ?? null,
+          source_file_id: top.file.id,
+          source_file_name: top.file.file_name ?? null,
           auto_linked_at: new Date().toISOString(),
-          auto_link_score: ranked[0].score,
+          auto_link_score: top.score,
+          auto_link_reasons: top.reasons,
         };
         const { error: updateErr } = await supabase
           .from("leases")
           .update({ extraction_data: nextExtraction })
           .eq("id", lease.id);
         if (updateErr) {
-          console.warn("[LeaseReview] auto-link failed:", updateErr.message);
+          console.warn("[LeaseReview] auto-link write failed:", updateErr.message);
           return;
         }
-        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${best.id} (score=${ranked[0].score})`);
+        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${top.file.id} (score=${top.score}, reasons=${top.reasons.join("+")})`);
         queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       } catch (err) {
         console.warn("[LeaseReview] auto-link skipped:", err?.message || err);
@@ -485,6 +534,30 @@ export default function LeaseReview() {
       cancelled = true;
     };
   }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Manual link from the banner picker.
+  const handleLinkSourceFile = async (fileId) => {
+    if (!fileId || !lease?.id) return;
+    try {
+      const picked = linkCandidates.find((c) => c.id === fileId);
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        source_file_id: fileId,
+        source_file_name: picked?.file_name ?? null,
+        manually_linked_at: new Date().toISOString(),
+      };
+      const { error: updateErr } = await supabase
+        .from("leases")
+        .update({ extraction_data: nextExtraction })
+        .eq("id", lease.id);
+      if (updateErr) throw updateErr;
+      toast.success(`Linked to ${picked?.file_name || fileId}`);
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+    } catch (err) {
+      console.error("[LeaseReview] manual link failed:", err);
+      toast.error(err?.message || "Could not link source file");
+    }
+  };
 
   // Backfill evidence for legacy leases. If a lease has values but no
   // extraction_data.workflow_output / field_evidence (created via the older
@@ -1666,27 +1739,63 @@ export default function LeaseReview() {
         </div>
       </div>
 
-      {/* Source-file banner — surfaces the most common silent failure:
-          lease has no extraction_data.source_file_id, so extraction can't
-          run and the Re-extract button is disabled. Tells the user exactly
-          what to do (Re-link via Extraction Debug) instead of leaving them
-          staring at empty fields. */}
+      {/* Source-file banner with inline file picker. Shows the ranked list
+          of uploaded_files candidates the auto-link found in this org —
+          one click links the lease, no UUID copying needed. */}
       {!lease?.extraction_data?.source_file_id && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <div className="min-w-0">
+        <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div>
             <p className="font-semibold">No source file linked to this lease.</p>
             <p className="text-xs text-red-700">
-              Extraction (Docling + Gemini) can't run, evidence backfill has nothing to read, and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
-              {" "}Auto-link looks for a matching upload by tenant name and property — if none is found, open Extraction Debug → Re-link Source Document and paste the uploaded_files.id from the Upload Lease page.
+              Extraction (Docling + Gemini) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
+              {autoLinkDebug ? (
+                <span className="block mt-1 italic">
+                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "—"}" against tenant "{autoLinkDebug.tenant || "—"}". A decisive link needs score ≥ 5 — pick one manually below.
+                </span>
+              ) : null}
             </p>
           </div>
+          {linkCandidates.length > 0 ? (
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-red-900">Recent lease uploads in this org</p>
+              <div className="max-h-64 space-y-1 overflow-auto rounded border border-red-200 bg-white">
+                {linkCandidates.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-2 border-b border-red-100 px-3 py-2 last:border-b-0">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-slate-900" title={c.file_name}>
+                        {c.file_name || c.id}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        score {c.score}
+                        {c.reasons?.length ? ` · ${c.reasons.join("+")}` : ""}
+                        {" · "}{c.status}
+                        {" · "}{c.updated_at ? new Date(c.updated_at).toLocaleString() : ""}
+                        {" · "}<code className="text-slate-400">{String(c.id).slice(0, 8)}…</code>
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="bg-red-600 text-white hover:bg-red-700"
+                      onClick={() => handleLinkSourceFile(c.id)}
+                    >
+                      Link
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs italic text-red-700">
+              No lease uploads found in this org. Upload a lease PDF first on the Upload Lease page, then come back here.
+            </p>
+          )}
           <Button
             size="sm"
             variant="outline"
             className="border-red-300 bg-white text-red-700 hover:bg-red-100"
             onClick={() => setActiveTab("extraction_debug")}
           >
-            Open Extraction Debug
+            Or paste a UUID manually (Extraction Debug)
           </Button>
         </div>
       )}
