@@ -5,7 +5,7 @@
  * approval surface backed by the existing rule-set tables.
  */
 import React, { useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -63,7 +63,7 @@ const ROW_STATUS_LABEL = {
 };
 
 function isApprovedRule(rule) {
-  return rule?.review_status === "reviewed" && rule?.approval_status === "approved";
+  return ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase()) && rule?.approval_status === "approved";
 }
 
 function needsReviewRule(rule) {
@@ -72,6 +72,18 @@ function needsReviewRule(rule) {
     rule?.row_status === "needs_review" ||
     rule?.row_status === "uncertain"
   );
+}
+
+function getRecoverableDecision(rule) {
+  return leaseExpenseRuleService.getRecoverableDecision(rule);
+}
+
+function getCamEligibleDecision(rule) {
+  return leaseExpenseRuleService.getCamEligibleDecision(rule);
+}
+
+function getPaymentTreatment(rule) {
+  return leaseExpenseRuleService.getPaymentTreatment(rule);
 }
 
 function formatConfidence(value) {
@@ -89,6 +101,7 @@ function truncate(value, length = 140) {
 
 export default function LeaseExpenseRules() {
   const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -205,7 +218,7 @@ export default function LeaseExpenseRules() {
     }
 
     if (statusFilter === "all") return true;
-    if (statusFilter === "recoverable") return (rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded;
+    if (statusFilter === "recoverable") return ["yes", "conditional"].includes(getRecoverableDecision(rule)) && !rule.is_excluded;
     if (statusFilter === "excluded") return rule.is_excluded;
     if (statusFilter === "needs_review") return needsReviewRule(rule);
     if (statusFilter === "approved") return isApprovedRule(rule);
@@ -222,7 +235,7 @@ export default function LeaseExpenseRules() {
     };
 
     for (const { rule } of flattenedRows) {
-      if ((rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded) summary.recoverable += 1;
+      if (["yes", "conditional"].includes(getRecoverableDecision(rule)) && !rule.is_excluded) summary.recoverable += 1;
       if (rule.is_excluded) summary.excluded += 1;
       if (needsReviewRule(rule)) summary.needs_review += 1;
       if (isApprovedRule(rule)) summary.approved += 1;
@@ -253,7 +266,7 @@ export default function LeaseExpenseRules() {
       ruleId: rule.id,
       patch: {
         row_status: "mapped",
-        review_status: "reviewed",
+        review_status: "approved",
         approval_status: "approved",
         is_excluded: false,
         published_to_cam: false,
@@ -278,13 +291,26 @@ export default function LeaseExpenseRules() {
       ruleId: rule.id,
       patch: {
         row_status: "unmapped",
-        review_status: "reviewed",
+        review_status: "approved",
         approval_status: "draft",
         is_excluded: true,
         is_recoverable: false,
         published_to_cam: false,
       },
     }).then(() => toast.success("Rule marked N/A"));
+
+  const publishRuleToCam = (rule, propertyId) =>
+    updateRuleMutation.mutateAsync({
+      ruleId: rule.id,
+      patch: {
+        published_to_cam: true,
+        review_status: "approved",
+        approval_status: "approved",
+      },
+    }).then(() => {
+      toast.success("Rule published to CAM");
+      navigate(createPageUrl("CAMSetup") + `?property=${propertyId}`);
+    });
 
   const subtitle = getScopeSubtitle(scope, {
     default: `${filteredRows.length} lease expense rule${filteredRows.length === 1 ? "" : "s"}`,
@@ -359,21 +385,27 @@ export default function LeaseExpenseRules() {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50">
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Subcategory</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Included In Rent</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Responsibility</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Payment Treatment</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recoverable</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Eligible</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recovery Method</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Allocation</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Cap</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Admin Fee</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing Frequency</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Reconciliation Required</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Page</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Exact Source Text</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Published To CAM</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
@@ -381,24 +413,27 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={17} className="py-12 text-center">
+                  <TableCell colSpan={22} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={17} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={22} className="py-12 text-center text-sm text-slate-400">
                     No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredRows.map(({ rule, ruleSet, lease, property, category }) => {
+                  const recoverableDecision = getRecoverableDecision(rule);
+                  const camEligibleDecision = getCamEligibleDecision(rule);
+                  const paymentTreatment = getPaymentTreatment(rule);
                   const responsibility = rule.responsibility || (
                     rule.included_in_base_rent
                       ? "Included in base rent"
                       : rule.is_excluded
                         ? "Tenant pays directly"
-                        : (rule.is_recoverable || rule.recoverable_from_tenant)
+                        : ["yes", "conditional"].includes(recoverableDecision)
                           ? "Landlord (recoverable)"
                           : "Landlord"
                   );
@@ -408,16 +443,16 @@ export default function LeaseExpenseRules() {
                       : rule.base_year || rule.has_base_year
                         ? "Base year"
                         : rule.expense_stop_amount != null
-                          ? "Expense stop"
-                          : rule.is_subject_to_cap
-                            ? "Capped"
-                            : (rule.is_recoverable || rule.recoverable_from_tenant)
+                        ? "Expense stop"
+                        : rule.is_subject_to_cap
+                          ? "Capped"
+                            : ["yes", "conditional"].includes(recoverableDecision)
                               ? "Annual pass-through"
                               : "-"
                   );
                   const allocationBasis =
                     rule.allocation_basis ||
-                    ((rule.is_recoverable || rule.recoverable_from_tenant) ? "Pro-rata" : "-");
+                    (["yes", "conditional"].includes(recoverableDecision) ? "Pro-rata" : "-");
                   const capDisplay = rule.is_subject_to_cap
                     ? [
                         rule.cap_type || "",
@@ -452,11 +487,9 @@ export default function LeaseExpenseRules() {
                         <div className="font-medium text-slate-900">
                           {rule.category_name || rule.expense_category || category?.category_name || "-"}
                         </div>
-                        {(rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name) && (
-                          <div className="text-[10px] text-slate-500">
-                            {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name}
-                          </div>
-                        )}
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-700">
+                        {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name || "-"}
                       </TableCell>
                       <TableCell>
                         <Badge className={`text-[10px] ${rule.included_in_base_rent ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
@@ -464,9 +497,15 @@ export default function LeaseExpenseRules() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{responsibility}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{paymentTreatment}</TableCell>
                       <TableCell>
-                        <Badge className={`text-[10px] ${(rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                          {rule.is_excluded ? "No" : (rule.is_recoverable || rule.recoverable_from_tenant) ? "Yes" : "No"}
+                        <Badge className={`text-[10px] ${["yes", "conditional"].includes(recoverableDecision) && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                          {recoverableDecision || "no"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${["yes", "conditional"].includes(camEligibleDecision) ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-600"}`}>
+                          {camEligibleDecision || "no"}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{recoveryMethod}</TableCell>
@@ -478,17 +517,11 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-sm text-slate-700">
                         {rule.gross_up_applicable ? (rule.gross_up_percent ? `${rule.gross_up_percent}%` : "Yes") : "-"}
                       </TableCell>
+                      <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{sourcePage ?? "-"}</TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
-                        {sourcePage ? (
-                          <div>
-                            <span className="font-semibold text-slate-500">p. {sourcePage}</span>{" "}
-                            <span className="italic">"{truncate(sourceText)}"</span>
-                          </div>
-                        ) : sourceText && sourceText !== "-" ? (
-                          <span className="italic">"{truncate(sourceText)}"</span>
-                        ) : (
-                          "-"
-                        )}
+                        {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
                       </TableCell>
                       <TableCell className="text-xs text-slate-700">{formatConfidence(rule.confidence_score)}</TableCell>
                       <TableCell className="text-xs text-slate-700">{rule.extraction_status || "-"}</TableCell>
@@ -552,13 +585,17 @@ export default function LeaseExpenseRules() {
                             <MinusCircle className="mr-1 h-3.5 w-3.5" />
                             N/A
                           </Button>
-                          {lease?.property_id && isApprovedRule(rule) ? (
-                            <Link to={createPageUrl("CAMSetup") + `?property=${lease.property_id}`}>
-                              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-700 hover:text-blue-800">
-                                <Send className="mr-1 h-3.5 w-3.5" />
-                                Publish to CAM
-                              </Button>
-                            </Link>
+                          {lease?.property_id && leaseExpenseRuleService.canPublishRuleToCam(rule) ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-blue-700 hover:text-blue-800"
+                              onClick={() => publishRuleToCam(rule, lease.property_id)}
+                              disabled={updateRuleMutation.isPending}
+                            >
+                              <Send className="mr-1 h-3.5 w-3.5" />
+                              Publish to CAM
+                            </Button>
                           ) : lease?.property_id ? (
                             <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-slate-400" disabled>
                               <Send className="mr-1 h-3.5 w-3.5" />

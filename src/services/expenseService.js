@@ -190,6 +190,7 @@ function buildApprovedRuleLookups(ruleRows = [], categories = []) {
   const rulesByLeaseId = new Map();
 
   for (const rule of ruleRows || []) {
+    if (!approvedRuleForMatching(rule)) continue;
     const existing = rulesByLeaseId.get(rule.lease_id) || [];
     existing.push({
       ...rule,
@@ -344,6 +345,55 @@ function scoreRuleMatch(expense, rule) {
   return score;
 }
 
+function servicePeriodOverlaps(expense, lease) {
+  const expenseStart = expense?.billing_period_start || expense?.expense_date || expense?.date;
+  const expenseEnd = expense?.billing_period_end || expense?.expense_date || expense?.date;
+  const leaseStart = lease?.start_date;
+  const leaseEnd = lease?.end_date;
+  if (!expenseStart || !leaseStart) return true;
+
+  const start = new Date(`${expenseStart}T00:00:00`);
+  const end = new Date(`${expenseEnd || expenseStart}T23:59:59`);
+  const leaseStartDate = new Date(`${leaseStart}T00:00:00`);
+  const leaseEndDate = leaseEnd ? new Date(`${leaseEnd}T23:59:59`) : null;
+  if ([start, end, leaseStartDate, leaseEndDate].filter(Boolean).some((value) => Number.isNaN(value.getTime?.()))) return true;
+  if (leaseEndDate && start > leaseEndDate) return false;
+  if (end < leaseStartDate) return false;
+  return true;
+}
+
+function scoreScopeMatch(expense, rule) {
+  let score = 0;
+  if (expense?.lease_id && expense.lease_id === rule?.lease_id) score += 400;
+  if (expense?.unit_id && rule?.unit_id && expense.unit_id === rule.unit_id) score += 220;
+  if (expense?.building_id && rule?.building_id && expense.building_id === rule.building_id) score += 140;
+  if (expense?.property_id && rule?.property_id && expense.property_id === rule.property_id) score += 120;
+  return score;
+}
+
+function approvedRuleForMatching(rule) {
+  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  return normalizeText(rule?.approval_status) === "approved" && reviewStatus === "approved";
+}
+
+function recoverabilityResultFromRule(rule) {
+  const decision = leaseExpenseRuleService.getRecoverableDecision(rule);
+  if (rule?.is_excluded) return "excluded";
+  if (decision === "yes") return "recoverable";
+  if (decision === "conditional") return "conditional";
+  return "non_recoverable";
+}
+
+function buildMatchReason(expense, rule, score) {
+  if (!rule) return "No approved lease expense rule matched this actual expense.";
+  const category = rule?.category_name || rule?.expense_category || "expense rule";
+  const paymentTreatment = leaseExpenseRuleService.getPaymentTreatment(rule);
+  const recoverability = leaseExpenseRuleService.getRecoverableDecision(rule);
+  const sourceText = String(rule?.exact_source_text || rule?.source || "").trim();
+  const evidenceNote = sourceText ? ` Evidence: "${sourceText.slice(0, 120)}${sourceText.length > 120 ? "..." : ""}"` : "";
+  return `Matched approved ${category} rule at score ${score}. Payment treatment: ${paymentTreatment}. Recoverable: ${recoverability}.${evidenceNote}`;
+}
+
 function conditionApplied(rule) {
   const source = normalizeText(rule?.source);
   const notes = normalizeText(rule?.notes);
@@ -457,6 +507,61 @@ async function upsertExpenseClassification(payload) {
 export const expenseService = {
   ...baseExpenseService,
 
+  matchActualExpenseToLeaseRule(actualExpense, { leases = [], rulesByLeaseId = new Map() } = {}) {
+    const expenseLeaseId = actualExpense?.lease_id || null;
+    const candidateLeases = expenseLeaseId
+      ? (leases || []).filter((lease) => lease?.id === expenseLeaseId)
+      : (leases || []).filter((lease) => {
+          if (actualExpense?.property_id && lease?.property_id !== actualExpense.property_id) return false;
+          if (actualExpense?.building_id && lease?.building_id && lease.building_id !== actualExpense.building_id) return false;
+          if (actualExpense?.unit_id && lease?.unit_id && lease.unit_id !== actualExpense.unit_id) return false;
+          return servicePeriodOverlaps(actualExpense, lease);
+        });
+
+    let matchedRule = null;
+    let matchedLease = null;
+    let bestScore = 0;
+
+    for (const lease of candidateLeases) {
+      const candidateRules = rulesByLeaseId.get(lease.id) || [];
+      for (const rule of candidateRules) {
+        const scopeScore = scoreScopeMatch(actualExpense, rule);
+        const categoryScore = scoreRuleMatch(actualExpense, rule);
+        const periodScore = servicePeriodOverlaps(actualExpense, lease) ? 40 : -1000;
+        const score = scopeScore + categoryScore + periodScore;
+        if (score > bestScore) {
+          bestScore = score;
+          matchedRule = rule;
+          matchedLease = lease;
+        }
+      }
+    }
+
+    if (!matchedRule || bestScore < 120) {
+      return {
+        linked_expense_rule_id: null,
+        recoverability_result: "needs_review",
+        cam_eligible: "conditional",
+        recovery_method: null,
+        reason: "No approved lease expense rule matched this actual expense with enough confidence.",
+        lease: matchedLease,
+        rule: null,
+        score: bestScore,
+      };
+    }
+
+    return {
+      linked_expense_rule_id: matchedRule.id,
+      recoverability_result: recoverabilityResultFromRule(matchedRule),
+      cam_eligible: leaseExpenseRuleService.getCamEligibleDecision(matchedRule),
+      recovery_method: matchedRule.recovery_method || null,
+      reason: buildMatchReason(actualExpense, matchedRule, bestScore),
+      lease: matchedLease,
+      rule: matchedRule,
+      score: bestScore,
+    };
+  },
+
   async syncLeaseDerivedExpenses({ leases = [], existingExpenses = [], properties: _properties = [] } = {}) {
     const leaseIds = new Set((leases || []).map((lease) => lease?.id).filter(Boolean));
     if (leaseIds.size === 0) return { created: 0, updated: 0, deleted: 0 };
@@ -508,43 +613,27 @@ export const expenseService = {
     let classified = 0;
 
     for (const expense of actualExpenses) {
-      const expenseLeaseId = expense.lease_id || null;
-      const candidateLeases = expenseLeaseId
-        ? [leaseById.get(expenseLeaseId)].filter(Boolean)
-        : allLeases.filter((lease) => {
-            if (expense.property_id && lease.property_id !== expense.property_id) return false;
-            if (expense.unit_id && lease.unit_id && lease.unit_id !== expense.unit_id) return false;
-            if (expense.building_id && lease.building_id && lease.building_id !== expense.building_id) return false;
-            return SYNCABLE_LEASE_STATUSES.has(normalizeLeaseStatus(lease.status));
-          });
-
-      let matchedRule = null;
-      let matchedLease = null;
-      let matchedRuleSet = null;
-      let bestScore = 0;
-
-      for (const lease of candidateLeases) {
-        const candidateRules = rulesByLeaseId.get(lease.id) || [];
-        for (const rule of candidateRules) {
-          const score = scoreRuleMatch(expense, rule);
-          if (score > bestScore) {
-            bestScore = score;
-            matchedRule = rule;
-            matchedLease = lease;
-            matchedRuleSet = ruleSets.find((ruleSet) => ruleSet.id === rule.rule_set_id) || null;
-          }
-        }
-      }
-
-      const recoveryStatus = matchedRule ? normalizeRecoveryStatus(matchedRule) : "needs_review";
-      const isConditional = matchedRule ? recoveryStatus === "conditional" || conditionApplied(matchedRule) : false;
+      const match = this.matchActualExpenseToLeaseRule(expense, { leases: allLeases, rulesByLeaseId });
+      const matchedRule = match.rule;
+      const matchedLease = match.lease || (expense.lease_id ? leaseById.get(expense.lease_id) : null);
+      const matchedRuleSet = matchedRule ? ruleSets.find((ruleSet) => ruleSet.id === matchedRule.rule_set_id) || null : null;
+      const recoveryStatus = match.recoverability_result === "non_recoverable" ? "non_recoverable" : match.recoverability_result;
+      const isConditional = recoveryStatus === "conditional" || (matchedRule ? conditionApplied(matchedRule) : false);
       const confidenceScore = matchedRule
-        ? asNumberOrNull(matchedRule.confidence) ?? Math.min(bestScore / 100, 1)
+        ? asNumberOrNull(matchedRule.confidence_score ?? matchedRule.confidence) ?? Math.min(match.score / 100, 1)
         : 0;
       const approvedStatus =
-        matchedRule && !isConditional && confidenceScore >= 0.75
-          ? "classified"
+        matchedRule &&
+        !isConditional &&
+        recoveryStatus !== "needs_review"
+          ? "approved"
           : "needs_review";
+      const linkedExpenseRuleId = match.linked_expense_rule_id;
+      const camEligible = matchedRule
+        ? (matchedRule.published_to_cam ? match.cam_eligible : "no")
+        : "conditional";
+      const recoveryMethod = match.recovery_method || null;
+      const recoveryReason = match.reason;
 
       const updatePayload = {
         lease_id: expense.lease_id || matchedLease?.id || null,
@@ -552,15 +641,27 @@ export const expenseService = {
         tenant_name: expense.tenant_name || matchedLease?.tenant_name || null,
         classification: recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus,
         recovery_status: recoveryStatus,
+        recoverability_result: recoveryStatus,
         allocation_method: expense.allocation_method || expense.allocation_type || matchedLease?.allocation_method || "pro_rata",
         allocation_type: expense.allocation_type || expense.allocation_method || matchedLease?.allocation_method || "pro_rata",
-        recovery_rule_id: matchedRule?.id || null,
+        recovery_rule_id: linkedExpenseRuleId,
+        linked_expense_rule_id: linkedExpenseRuleId,
         rule_source: matchedRule ? "lease" : (expense.rule_source || "default"),
+        cam_eligible: camEligible,
+        recovery_method: recoveryMethod,
+        recovery_reason: recoveryReason,
+        cam_pool_id: camEligible === "no" ? null : (matchedRule?.expense_category_id || null),
         confidence_score: confidenceScore,
-        evidence_text: matchedRule?.source || null,
+        evidence_text: matchedRule?.source || recoveryReason,
         evidence_page_number: matchedRule?.clauses?.[0]?.page_number ?? null,
         approved_status: approvedStatus,
         classification_updated_at: new Date().toISOString(),
+        recovery_meta: {
+          ...(expense.recovery_meta || {}),
+          match_score: match.score,
+          payment_treatment: matchedRule ? leaseExpenseRuleService.getPaymentTreatment(matchedRule) : null,
+          billing_treatment: matchedRule ? leaseExpenseRuleService.getBillingTreatment(matchedRule) : null,
+        },
       };
 
       await baseExpenseService.update(expense.id, updatePayload);
@@ -581,19 +682,25 @@ export const expenseService = {
         lease_id: expense.lease_id || matchedLease?.id || null,
         tenant_id: expense.tenant_id || matchedLease?.tenant_id || null,
         rule_set_id: matchedRuleSet?.id || null,
-        recovery_rule_id: matchedRule?.id || null,
+        recovery_rule_id: linkedExpenseRuleId,
+        linked_expense_rule_id: linkedExpenseRuleId,
         recovery_status: recoveryStatus,
+        recoverability_result: recoveryStatus,
+        cam_eligible: camEligible,
+        recovery_method: recoveryMethod,
+        recovery_reason: recoveryReason,
+        cam_pool_id: updatePayload.cam_pool_id,
         allocation_method: updatePayload.allocation_method,
         cap_applied: Boolean(matchedRule?.is_subject_to_cap),
         exclusion_applied: Boolean(matchedRule?.is_excluded),
         condition_applied: isConditional,
-        condition_reason: isConditional ? matchedRule?.notes || matchedRule?.source || "Conditional lease rule requires review" : null,
+        condition_reason: isConditional ? matchedRule?.notes || matchedRule?.source || recoveryReason || "Conditional lease rule requires review" : null,
         rule_source: updatePayload.rule_source,
         confidence_score: confidenceScore,
-        evidence_text: matchedRule?.source || null,
+        evidence_text: matchedRule?.source || recoveryReason,
         evidence_page_number: matchedRule?.clauses?.[0]?.page_number ?? null,
         approved_status: approvedStatus,
-        notes: matchedRule?.notes || null,
+        notes: matchedRule?.notes || recoveryReason || null,
         classified_at: new Date().toISOString(),
       });
     }

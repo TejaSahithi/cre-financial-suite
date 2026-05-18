@@ -269,7 +269,7 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
                       <Badge className="bg-slate-100 text-[10px] text-slate-700">{rule.row_status || "needs_review"}</Badge>
                     </TableCell>
                     <TableCell className="text-xs">
-                      {rule.is_recoverable || rule.recoverable_from_tenant ? "Yes" : rule.is_excluded ? "Excluded" : "No"}
+                      {rule.is_excluded ? "Excluded" : leaseExpenseRuleService.getRecoverableDecision(rule)}
                     </TableCell>
                     {kind === "cam" && (
                       <TableCell className="text-xs">

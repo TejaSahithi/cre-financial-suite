@@ -11,6 +11,18 @@ function asNumber(value: unknown) {
   return Number.isFinite(num) ? num : 0;
 }
 
+function normalizeText(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeDecision(value: unknown) {
+  const normalized = normalizeText(value);
+  if (["yes", "true", "recoverable", "approved"].includes(normalized)) return "yes";
+  if (["conditional"].includes(normalized)) return "conditional";
+  if (["no", "false", "excluded", "non_recoverable"].includes(normalized)) return "no";
+  return normalized || "no";
+}
+
 function leaseOverlapsFiscalYear(lease: any, fiscalYear: number) {
   const status = String(lease?.status || "active").toLowerCase();
   if (status === "expired") return false;
@@ -251,8 +263,23 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
         for (const rule of rs.lease_expense_rules || []) {
           const catName = rule.expense_categories?.category_name;
           if (!catName) continue;
-          
-          if (rule.is_excluded || rule.is_recoverable === false || rule.row_status === 'unmapped') {
+
+          const reviewStatus = normalizeText(rule.review_status) === "reviewed" ? "approved" : normalizeText(rule.review_status);
+          const approvalStatus = normalizeText(rule.approval_status);
+          const recoverableDecision = normalizeDecision(rule.recoverable_from_tenant);
+          const camEligibleDecision = normalizeDecision(rule.cam_eligible);
+          const paymentTreatment = normalizeText(rule.payment_treatment);
+
+          if (
+            reviewStatus !== "approved" ||
+            approvalStatus !== "approved" ||
+            rule.published_to_cam !== true ||
+            recoverableDecision === "no" ||
+            camEligibleDecision === "no" ||
+            paymentTreatment === "included_in_base_rent" ||
+            rule.is_excluded ||
+            rule.row_status === "unmapped"
+          ) {
             if (!excludedCategories.includes(catName)) {
               excludedCategories.push(catName);
             }
@@ -385,20 +412,22 @@ Deno.serve(async (req: Request) => {
 
     const actualExpenses = expenses.filter((expense: any) => {
       const sourceType = String(expense.source_type || expense.source || "").toLowerCase();
-      return sourceType !== "lease_import";
+      return sourceType !== "lease_import" && normalizeText(expense.approved_status) === "approved";
     });
 
     if (actualExpenses.length === 0) {
       throw new Error("No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation.");
     }
 
-    const reviewBlockingExpenses = expenses.filter((expense: any) => {
-      const recoveryStatus = String(expense.recovery_status || expense.classification || "").toLowerCase();
-      const approvedStatus = String(expense.approved_status || "").toLowerCase();
+    const reviewBlockingExpenses = actualExpenses.filter((expense: any) => {
+      const recoveryStatus = normalizeText(expense.recoverability_result || expense.recovery_status || expense.classification);
+      const approvedStatus = normalizeText(expense.approved_status);
+      const camEligible = normalizeDecision(expense.cam_eligible);
       return (
         recoveryStatus === "needs_review" ||
         recoveryStatus === "conditional" ||
         approvedStatus === "needs_review" ||
+        camEligible === "no" ||
         !expense.category
       );
     });
@@ -408,9 +437,11 @@ Deno.serve(async (req: Request) => {
     }
 
     // Filter recoverable expenses — accept 'recoverable', 'cam', 'nnn', or null classification
-    const recoverableExpenses = expenses.filter((expense: any) => {
-      const cls = String(expense.classification || "").toLowerCase();
-      return cls === "recoverable" || cls === "cam" || cls === "nnn" || cls === "";
+    const recoverableExpenses = actualExpenses.filter((expense: any) => {
+      const cls = normalizeText(expense.recoverability_result || expense.classification);
+      const camEligible = normalizeDecision(expense.cam_eligible);
+      return (cls === "recoverable" || cls === "conditional" || cls === "cam" || cls === "nnn" || cls === "") &&
+        ["yes", "conditional"].includes(camEligible);
     });
 
     const activeScopedLeases = leases.filter((lease: any) =>

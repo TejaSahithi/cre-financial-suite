@@ -1231,14 +1231,18 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
           unit_id: leaseRow?.unit_id ?? null,
           expense_category: deriveExpenseRuleCategoryName(rule),
           expense_subcategory: deriveExpenseRuleSubcategoryName(rule),
+          operational_responsibility: deriveExpenseRuleOperationalResponsibility(rule),
           responsibility: deriveExpenseRuleResponsibility(rule),
+          payment_treatment: deriveExpenseRulePaymentTreatment(rule),
           included_in_base_rent: deriveExpenseRuleIncludedInBaseRent(rule),
           recoverable_from_tenant: deriveExpenseRuleRecoverableFromTenant(rule),
+          cam_eligible: deriveExpenseRuleCamEligible(rule),
+          billing_treatment: deriveExpenseRuleBillingTreatment(rule),
           recovery_method: deriveExpenseRuleRecoveryMethod(rule),
           allocation_basis: deriveExpenseRuleAllocationBasis(rule),
           row_status: status,
           mentioned_in_lease: Boolean(rule?.mentioned_in_lease ?? status !== "not_mentioned"),
-          is_recoverable: Boolean(deriveExpenseRuleRecoverableFromTenant(rule)),
+          is_recoverable: ["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule)),
           is_excluded: Boolean(rule?.is_excluded || rule?.excluded_from_recovery),
           is_controllable: Boolean(rule?.is_controllable),
           is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
@@ -1338,19 +1342,79 @@ function deriveExpenseRuleIncludedInBaseRent(rule: any): boolean {
   );
 }
 
-function deriveExpenseRuleRecoverableFromTenant(rule: any): boolean {
-  if (typeof rule?.recoverable_from_tenant === "boolean") return rule.recoverable_from_tenant;
-  if (typeof rule?.recoverable_flag === "boolean") return rule.recoverable_flag;
-  if (typeof rule?.is_recoverable === "boolean") return rule.is_recoverable;
-  return ["recoverable", "conditional"].includes(normalizeText(rule?.rule_classification));
+function normalizeExpenseRuleDecision(value: unknown, fallback: string | null = null): string | null {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  const normalized = normalizeText(value);
+  if (["yes", "true", "recoverable", "approved"].includes(normalized)) return "yes";
+  if (["no", "false", "non_recoverable", "excluded"].includes(normalized)) return "no";
+  if (["conditional", "shared"].includes(normalized)) return "conditional";
+  return fallback;
+}
+
+function deriveExpenseRuleOperationalResponsibility(rule: any): string {
+  const explicit = normalizeText(rule?.operational_responsibility ?? rule?.responsibility);
+  if (["landlord", "owner"].includes(explicit)) return "landlord";
+  if (["tenant", "tenant_direct", "tenant_direct_contract"].includes(explicit)) return "tenant";
+  if (["shared", "joint"].includes(explicit)) return "shared";
+  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "landlord";
+  if (rule?.is_excluded || rule?.excluded_from_recovery) return "tenant";
+  if (["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule))) return "landlord";
+  return "unknown";
+}
+
+function deriveExpenseRulePaymentTreatment(rule: any): string {
+  const explicit = normalizeText(rule?.payment_treatment);
+  if (["included_in_base_rent", "separately_billed", "tenant_direct_contract", "reimbursable", "not_applicable"].includes(explicit)) {
+    return explicit;
+  }
+  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
+  if (normalizeText(rule?.recovery_method) === "tenant_direct_contract" || rule?.is_excluded || rule?.excluded_from_recovery) {
+    return "tenant_direct_contract";
+  }
+  if (["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule))) return "reimbursable";
+  if (rule?.separately_billed === true) return "separately_billed";
+  return "not_applicable";
+}
+
+function deriveExpenseRuleRecoverableFromTenant(rule: any): string {
+  const explicit = normalizeExpenseRuleDecision(rule?.recoverable_from_tenant);
+  if (explicit) return explicit;
+  if (typeof rule?.recoverable_flag === "boolean") return rule.recoverable_flag ? "yes" : "no";
+  if (typeof rule?.is_recoverable === "boolean") return rule.is_recoverable ? "yes" : "no";
+  const classification = normalizeText(rule?.rule_classification);
+  if (classification === "conditional") return "conditional";
+  if (classification === "recoverable") return "yes";
+  if (["non_recoverable", "excluded"].includes(classification)) return "no";
+  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "no";
+  return "no";
+}
+
+function deriveExpenseRuleCamEligible(rule: any): string {
+  const explicit = normalizeExpenseRuleDecision(rule?.cam_eligible);
+  if (explicit) return explicit;
+
+  const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
+  const recoverable = deriveExpenseRuleRecoverableFromTenant(rule);
+  if (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract") return "no";
+  if (recoverable === "no") return "no";
+  return recoverable === "yes" ? "yes" : "conditional";
+}
+
+function deriveExpenseRuleBillingTreatment(rule: any): string {
+  const explicit = normalizeText(rule?.billing_treatment);
+  if (["included", "direct_bill", "cam_estimate", "reconciliation", "none"].includes(explicit)) return explicit;
+  const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
+  const recoveryMethod = normalizeText(rule?.recovery_method);
+  if (paymentTreatment === "included_in_base_rent") return "included";
+  if (["direct_bill", "actual_usage", "tenant_direct_contract"].includes(recoveryMethod)) return "direct_bill";
+  if (["base_year", "expense_stop", "base_year_excess", "expense_stop_excess"].includes(recoveryMethod)) return "reconciliation";
+  if (["fixed_monthly", "pro_rata_share", "monthly_reimbursement", "pass_through"].includes(recoveryMethod)) return "cam_estimate";
+  return "none";
 }
 
 function deriveExpenseRuleResponsibility(rule: any): string {
-  if (rule?.responsibility) return String(rule.responsibility);
-  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
-  if (rule?.is_excluded || rule?.excluded_from_recovery) return "tenant_direct";
-  if (deriveExpenseRuleRecoverableFromTenant(rule)) return "landlord_recoverable";
-  return "landlord_non_recoverable";
+  return deriveExpenseRuleOperationalResponsibility(rule);
 }
 
 function deriveExpenseRuleRecoveryMethod(rule: any): string | null {
@@ -1386,13 +1450,14 @@ function deriveExpenseRuleExtractionStatus(rule: any, rowStatus: string): string
 
 function deriveExpenseRuleReviewStatus(rule: any, rowStatus: string): string {
   if (rule?.review_status) return String(rule.review_status);
-  if (["mapped", "manually_added"].includes(rowStatus)) return "reviewed";
+  if (["mapped", "manually_added"].includes(rowStatus)) return "approved";
   if (rowStatus === "not_mentioned") return "not_found";
   return "needs_review";
 }
 
 function deriveExpenseRuleApprovalStatus(rule: any, ruleSetStatus: string): string {
   if (rule?.approval_status) return String(rule.approval_status);
+  if (deriveExpenseRuleReviewStatus(rule, mapRuleStatus(rule)) !== "approved") return "draft";
   return ruleSetStatus === "approved" ? "approved" : "draft";
 }
 

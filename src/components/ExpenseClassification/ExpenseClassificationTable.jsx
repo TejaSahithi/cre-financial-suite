@@ -12,7 +12,7 @@ function formatConfidence(value) {
 }
 
 function getStatusBadge(rule) {
-  if (rule?.review_status === "reviewed" && rule?.approval_status === "approved") {
+  if (["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase()) && rule?.approval_status === "approved") {
     return <Badge className="bg-emerald-100 text-emerald-800">Approved</Badge>;
   }
   if (rule?.review_status === "needs_review" || rule?.row_status === "uncertain" || rule?.row_status === "needs_review") {
@@ -74,9 +74,11 @@ export default function ExpenseClassificationTable({ categories, rules, onEditRu
                 <TableCell className="text-center">
                   {renderBooleanIcon(typeof rule.included_in_base_rent === "boolean" ? rule.included_in_base_rent : null)}
                 </TableCell>
-                <TableCell className="text-center">{renderBooleanIcon(rule.is_recoverable ?? rule.recoverable_from_tenant)}</TableCell>
+                <TableCell className="text-center">
+                  {renderBooleanIcon(["yes", "conditional"].includes(String(rule.recoverable_from_tenant || "").toLowerCase()) ? true : rule.recoverable_from_tenant === "no" ? false : rule.is_recoverable)}
+                </TableCell>
                 <TableCell className="text-sm text-slate-700">
-                  {rule.recovery_method || "-"}
+                  {rule.payment_treatment || rule.recovery_method || "-"}
                 </TableCell>
                 <TableCell className="text-right font-mono">
                   {displayValue != null && displayValue !== "" ? `$${Number(displayValue).toLocaleString()}` : <span className="text-slate-300">-</span>}

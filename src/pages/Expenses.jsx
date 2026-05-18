@@ -625,7 +625,7 @@ export default function Expenses() {
               </p>
             ) : (
               <p>
-                No actual expense rows or reviewed lease rules are visible yet in this scope.
+                No actual expense rows or approved lease rules are visible yet in this scope.
                 Upload expenses, import them in bulk, or complete lease expense classification.
               </p>
             )}

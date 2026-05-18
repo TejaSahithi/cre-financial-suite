@@ -415,7 +415,7 @@ export default function LeaseExpenseClassification() {
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-sm font-medium text-slate-700">Categories Mapped</span>
                   <span className="font-bold text-slate-900">
-                    {localRules.filter(r => r.review_status === 'reviewed').length} / {effectiveCategories.length}
+                    {localRules.filter(r => r.review_status === 'approved').length} / {effectiveCategories.length}
                   </span>
                 </div>
 

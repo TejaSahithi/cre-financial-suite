@@ -525,7 +525,7 @@ function classifyLeaseType(text: string, extractedExpenseRules: any[], signals: 
     return "Gross Lease";
   }
 
-  const recoverableRules = extractedExpenseRules.filter((rule) => rule?.recoverable_from_tenant === true).length;
+  const recoverableRules = extractedExpenseRules.filter((rule) => ["yes", "conditional", true].includes(rule?.recoverable_from_tenant as any)).length;
   const includedRules = extractedExpenseRules.filter((rule) => rule?.included_in_base_rent === true).length;
   if (includedRules > 0 && recoverableRules > 0) return "Hybrid / Custom";
   return "Unknown / Manual Review";
@@ -1116,7 +1116,7 @@ function deriveCamProfile(fieldMap: Record<string, LeaseWorkflowField>, expenseR
   ];
   const camRules = expenseRules.filter((rule) => camCategories.includes(rule.expense_category));
   const includedExpenses = camRules.filter((rule) => rule.included_in_base_rent === true).map((rule) => rule.expense_category);
-  const recoverableExpenses = camRules.filter((rule) => rule.recoverable_from_tenant === true).map((rule) => rule.expense_category);
+  const recoverableExpenses = camRules.filter((rule) => ["yes", "conditional", true].includes(rule.recoverable_from_tenant as any)).map((rule) => rule.expense_category);
   const excludedExpenses = camRules.filter((rule) => rule.rule_classification === "excluded").map((rule) => rule.expense_category);
   const estimateBasedRules = camRules.filter((rule) =>
     ["pro_rata_share", "base_year_excess", "expense_stop_excess"].includes(rule.recovery_method),
@@ -1455,6 +1455,7 @@ function isExpenseRuleResponsibilityKnown(value: unknown) {
 
 function isExpenseRuleRecoverableKnown(rule: Record<string, unknown>) {
   if (typeof rule?.recoverable_from_tenant === "boolean") return true;
+  if (["yes", "no", "conditional"].includes(normalizeToken(rule?.recoverable_from_tenant))) return true;
   if (typeof rule?.included_in_base_rent === "boolean") return true;
   return ["recoverable", "conditional", "non_recoverable", "excluded"].includes(normalizeToken(rule?.rule_classification));
 }
@@ -1509,7 +1510,7 @@ function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
       isExpenseRuleRecoveryMethodSpecific(rule?.recovery_method) &&
       confidenceScore != null &&
       confidenceScore >= 0.82;
-    const reviewStatus = autoApproved ? "reviewed" : "needs_review";
+    const reviewStatus = autoApproved ? "approved" : "needs_review";
     const normalizedRule = {
       ...rule,
       expense_category: canonical.canonicalKey,

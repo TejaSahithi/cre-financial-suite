@@ -18,7 +18,7 @@ function formatConfidence(value) {
 }
 
 function ruleStatusTone(rule) {
-  if (rule?.review_status === "reviewed" && rule?.approval_status === "approved") {
+  if (["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase()) && rule?.approval_status === "approved") {
     return "bg-emerald-100 text-emerald-700";
   }
   if (rule?.review_status === "needs_review") {
@@ -75,7 +75,13 @@ export default function ClauseEvidenceDrawer({ isOpen, onClose, category, rule }
               <span>{rule.recovery_method || "manual_review"}</span>
             </InfoCard>
             <InfoCard label="Recoverable From Tenant">
-              <span>{typeof rule.recoverable_from_tenant === "boolean" ? String(rule.recoverable_from_tenant) : "-"}</span>
+              <span>{rule.recoverable_from_tenant || "-"}</span>
+            </InfoCard>
+            <InfoCard label="Payment Treatment">
+              <span>{rule.payment_treatment || "-"}</span>
+            </InfoCard>
+            <InfoCard label="CAM Eligible">
+              <span>{rule.cam_eligible || "-"}</span>
             </InfoCard>
             <InfoCard label="Source Page">
               <span>{rule.source_page ?? "-"}</span>
