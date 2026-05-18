@@ -1702,12 +1702,28 @@ export const leaseExpenseRuleService = {
       ruleSetId = createdRuleSet.id;
     }
 
-    const savableRules = finalizeLeaseExpenseRules(resolvedRules, status).filter((rule) => isUuid(rule?.expense_category_id));
+    // Save every rule we have a canonical category text for, even if the
+    // expense_categories lookup failed (table missing, RLS denial, or org
+    // hasn't seeded). The `expense_category` text column is now the source
+    // of truth — the FK to expense_categories is nice-to-have for joins,
+    // but losing it must not lose the rule. Previously this filter dropped
+    // every rule whenever expense_categories was unavailable, which is why
+    // the page showed 0 after approval.
+    const finalized = finalizeLeaseExpenseRules(resolvedRules, status);
+    const savableRules = finalized.filter((rule) => {
+      if (isUuid(rule?.expense_category_id)) return true;
+      const canonicalKey = rule?.normalized_key || rule?.fallback_category_key || rule?.expense_category;
+      return Boolean(canonicalKey);
+    });
+    const unmappedCount = finalized.length - savableRules.length;
+    if (unmappedCount > 0) {
+      console.warn(`[leaseExpenseRuleService] saveRuleSet: ${unmappedCount} rules dropped (no canonical category)`);
+    }
     const approvedAtIso = status === "approved" ? now : null;
     const rulePayloads = savableRules.map((rule) => ({
       id: isUuid(rule?.id) ? rule.id : undefined,
       rule_set_id: ruleSetId,
-      expense_category_id: rule.expense_category_id,
+      expense_category_id: isUuid(rule?.expense_category_id) ? rule.expense_category_id : null,
       // Denormalized scope so the Lease Expense Rules page can filter
       // without joining lease_expense_rule_sets. The migration backfills
       // these for existing rows.
