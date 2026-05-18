@@ -108,20 +108,15 @@ export default function FieldReviewTable({
             const { rawValue, sourcePage, sourceText } = evidence;
             const confidence = readFieldConfidence(lease, field.key);
             const confidenceLabel = classifyConfidence(confidence) === "unknown" ? "Unknown" : `${Math.round(confidence)}%`;
-            // Auto-fill the Normalized column only when the extractor is
-            // confident AND has source evidence. Otherwise show the value as
-            // a "Suggested:" hint so the reviewer must explicitly accept/edit.
-            // Once the reviewer has touched the field (any non-pending status),
-            // the value renders as confirmed regardless of confidence.
+            // Always render the extracted value in bold. Source-evidence
+            // status is communicated separately via the Extraction column
+            // badge (Extracted / Missing Source Evidence / Not Found) and
+            // via the bottom approval-blockers bar.
             const hasEvidence = Boolean(
               evidence?.sourcePage
               || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
               || evidence?.rawValue,
             );
-            const confidenceBucket = classifyConfidence(confidence);
-            const isConfirmed = status !== REVIEW_STATUSES.PENDING;
-            const isHighConfidence = confidenceBucket === "high" && hasEvidence;
-            const valueIsSuggestion = value != null && value !== "" && !isConfirmed && !isHighConfidence;
             // Honor backend-stamped status; otherwise derive from value/confidence.
             const inferredExtractionStatus = resolveExtractionStatus(lease, field.key, {
               value,
@@ -152,15 +147,8 @@ export default function FieldReviewTable({
                 <TableCell className="text-xs">
                   {value == null || value === "" ? (
                     <span className="text-slate-400">—</span>
-                  ) : valueIsSuggestion ? (
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                        Suggested · verify
-                      </span>
-                      <span className="italic text-slate-600">{displayValue(field, value)}</span>
-                    </div>
                   ) : (
-                    <span className="font-medium text-slate-900">{displayValue(field, value)}</span>
+                    <span className="font-semibold text-slate-900">{displayValue(field, value)}</span>
                   )}
                 </TableCell>
                 <TableCell className="text-xs text-slate-600" title={rawValue ?? ""}>

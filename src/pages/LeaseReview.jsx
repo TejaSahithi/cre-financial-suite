@@ -2058,6 +2058,20 @@ export default function LeaseReview() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
+              onClick={() => setShowReextractConfirm(true)}
+              disabled={reextracting || !lease?.extraction_data?.source_file_id}
+              className="border-blue-300 text-blue-700 hover:bg-blue-50"
+              title={
+                lease?.extraction_data?.source_file_id
+                  ? "Re-run AI extraction on the source PDF"
+                  : "No source file linked. Use Extraction Debug → Re-link first."
+              }
+            >
+              {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+              {reextracting ? "Re-extracting…" : "Re-extract Lease"}
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => setShowReject(true)}
               className="text-red-700"
             >
