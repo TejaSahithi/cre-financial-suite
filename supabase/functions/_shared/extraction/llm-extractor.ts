@@ -83,8 +83,30 @@ RULES:
 
 10. Monetary values: plain numbers only. "$12,500" → 12500.
 11. Percentages: plain number. "3%" → 3.
-12. source_text must be a VERBATIM quote from the supplied snippet (max 200 chars).
-    If you can't quote it verbatim, return source_text=null AND value=null with confidence=0.`;
+12. source_text is BEST EFFORT, not gating. Prefer a verbatim 30–200 char excerpt from the snippet.
+    If the text is OCR-garbled or you can only paraphrase, paraphrase concisely — the VALUE still goes through.
+    Only return value=null when the field is truly not present in the snippet.
+
+13. Numbered-summary documents are common — leases often start with a section like:
+        "1. Date: January 9, 2024
+         2. Landlord: 224 Partners, LLC
+         3. Address of Landlord: 224 S Peters Road, Suite 212 Knoxville, TN 37923
+         4. Tenant: Mindful Tech Solutions, Inc.
+         5. Address of Tenant: 224 S Peters Road Suite #211 Knoxville, TN 37923
+         6. Premises: 1,110 rentable square feet
+         9. Rent: $1,400 per month
+         10. Permitted Use: IT work"
+    The label after the number IS the field label. Extract from these lines even though they don't say
+    "Landlord Name:" or "Property Address:" verbatim.
+
+14. Multi-line labeled values: when an address spans several lines, join with commas.
+    "Address: 224 S Peters Road / Suite #211 / Knoxville, TN 37923" → "224 S Peters Road, Suite #211, Knoxville, TN 37923".
+
+15. Premises Address vs Landlord Address vs Tenant Mailing Address:
+    property_address / premises_address = the address of the LEASED PREMISES (where the tenant operates).
+    In single-tenant office leases this often equals "Address of Tenant" (suite #).
+    "Address of Landlord" is the landlord's mailing address — DO NOT use it as property_address.
+    The "Building:" or "Premises:" line is the most authoritative source for property_address.`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 

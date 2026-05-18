@@ -87,6 +87,7 @@ import {
   rejectLeaseAbstract,
 } from "@/services/leaseAbstractService";
 import { logAudit } from "@/services/audit";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
 import {
@@ -1317,8 +1318,27 @@ export default function LeaseReview() {
         },
       });
 
-      toast.success("Lease re-extracted. Latest extraction + evidence applied.");
+      // Also extract expense/CAM rules from the same source text so the
+      // Expenses/Recoveries and CAM Rules tabs populate without a separate
+      // user trip to the LeaseExpenseClassification page.
+      setReextractStage("extracting_rules");
+      try {
+        const { data: categories } = await supabase
+          .from("expense_categories")
+          .select("id, category_name, subcategory_name, normalized_key, expense_classification");
+        const refreshedLease = { ...lease, extraction_data: nextExtraction };
+        await leaseExpenseRuleService.extractDraftRuleSet({
+          lease: refreshedLease,
+          categories: categories || [],
+        });
+      } catch (ruleErr) {
+        console.warn("[LeaseReview] expense rule extraction skipped:", ruleErr?.message || ruleErr);
+      }
+
+      toast.success("Lease re-extracted. Latest values, evidence, and expense rules applied.");
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseId] });
     } catch (err) {
       console.error("[LeaseReview] re-extract failed:", err);
       toast.error(err?.message || "Could not re-extract lease");
@@ -1491,8 +1511,10 @@ export default function LeaseReview() {
               ? reextractStage === "polling"
                 ? "Waiting on extraction…"
                 : reextractStage === "applying"
-                  ? "Applying…"
-                  : "Re-extracting…"
+                  ? "Applying values…"
+                  : reextractStage === "extracting_rules"
+                    ? "Extracting expense rules…"
+                    : "Re-extracting…"
               : "Re-extract Lease"}
           </Button>
           <Button

@@ -52,6 +52,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
     required: true,
     labels: ["tenant", "lessee", "occupant", "tenant name", "lessee name"],
     tableHeaders: ["tenant", "tenant_name", "tenant name", "lessee", "company"],
+    patterns: [
+      // Numbered summary: "4. Tenant: Mindful Tech Solutions, Inc."
+      // Stop at newline OR before contact info (phone, email, address line).
+      /\d+\s*\.\s*tenant\s*[:.]?\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
+      // Plain labeled line: "Tenant: Mindful Tech Solutions, Inc."
+      /(?:^|\n)\s*tenant\s*[:.]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
+    ],
     description:
       "LEGAL ENTITY name of the tenant ONLY (e.g. 'Mindful Tech Solutions, Inc.'). " +
       "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
@@ -84,19 +91,32 @@ export const LEASE_SCHEMA: ModuleSchema = {
   property_address: {
     type: "string",
     required: true,
-    labels: ["property address", "premises", "premises address", "address", "location", "street address"],
-    tableHeaders: ["property_address", "property address", "premises", "address", "location", "street address"],
+    labels: ["property address", "premises", "premises address", "address", "location", "street address", "building", "address of tenant"],
+    tableHeaders: ["property_address", "property address", "premises", "address", "location", "street address", "building"],
     patterns: [
-      /(?:premises|property\s+address|premises\s+address|street\s+address|address)[:\s]+([^\n]{4,180})/i,
+      // Building location line: "Building: ... located at 224 S Peters Road Knoxville, TN 37923"
+      /\bbuilding\b[^\n]{0,80}?(?:located\s+at|address[:\s]+)\s*([^\n.]{8,180})/i,
+      // Numbered summary: "5. Address of Tenant: 224 S Peters Road Suite #211 Knoxville, TN 37923"
+      /\d+\s*\.\s*(?:address\s+of\s+(?:tenant|premises|landlord)|property\s+address|premises\s+address|street\s+address|premises|building)\s*[:.]?\s*([^\n]{8,180})/i,
+      // Inline label variants
+      /(?:premises|property\s+address|premises\s+address|street\s+address|address)\s*[:.]\s*([^\n]{4,180})/i,
     ],
-    description: "Street address or premises description for the leased property",
+    description: "Street address or premises description for the leased property (NOT the landlord's mailing address)",
   },
   landlord_name: {
     type: "string",
     required: true,
     labels: ["landlord", "lessor", "owner", "landlord name", "lessor name"],
     tableHeaders: ["landlord", "landlord_name", "landlord name", "lessor", "owner"],
-    patterns: [/(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i],
+    patterns: [
+      // Numbered summary: "2. Landlord: 224 Partners, LLC"
+      /\d+\s*\.\s*landlord\s*[:.]?\s*([^\n]{2,120})/i,
+      // Plain labeled line: "Landlord: 224 Partners, LLC"
+      /(?:^|\n)\s*landlord\s*[:.]\s*([^\n]{2,120})/i,
+      /(?:^|\n)\s*lessor\s*[:.]\s*([^\n]{2,120})/i,
+      // Legacy variants
+      /(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i,
+    ],
     description:
       "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. '224 Partners, LLC'). " +
       "DO NOT use the signatory or signer. " +
@@ -228,6 +248,19 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:modified[\s-]gross)/i,
     ],
     description: "One of: nnn, gross, modified_gross, nn, net",
+  },
+  permitted_use: {
+    type: "string",
+    labels: ["permitted use", "use", "use of premises", "tenant use"],
+    tableHeaders: ["permitted_use", "permitted use", "use"],
+    patterns: [
+      // Numbered summary: "10. Permitted Use: IT work"
+      /\d+\s*\.\s*permitted\s+use\s*[:.]?\s*([^\n]{2,200})/i,
+      // Plain labeled line
+      /(?:^|\n)\s*permitted\s+use\s*[:.]\s*([^\n]{2,200})/i,
+      /(?:^|\n)\s*use\s+of\s+premises\s*[:.]\s*([^\n]{2,200})/i,
+    ],
+    description: "Permitted use of the premises (e.g. 'IT work', 'General office', 'Retail sales of women's apparel'). Often a short phrase.",
   },
   security_deposit: {
     type: "number",
@@ -387,6 +420,270 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: [],
     description: "Additional notes or context",
+  },
+
+  // ─── Dates extension ────────────────────────────────────────────────
+  commencement_date: {
+    type: "date",
+    labels: ["commencement date", "lease commencement", "term commencement", "term start"],
+    tableHeaders: ["commencement_date", "commencement", "term commencement"],
+    patterns: [
+      /\d+\s*\.\s*commencement\s+date\s*[:.]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      /(?:commencement\s+date|term\s+commencement)\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+    ],
+    description: "Lease term commencement date in YYYY-MM-DD (often different from lease signing date)",
+  },
+  expiration_date: {
+    type: "date",
+    labels: ["expiration date", "term expiration", "term end", "lease expiration"],
+    tableHeaders: ["expiration_date", "expiration", "term expiration"],
+    patterns: [
+      /\d+\s*\.\s*expiration\s+date\s*[:.]?\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      /(?:expiration\s+date|term\s+expiration)\s*[:.]\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+    ],
+    description: "Lease expiration / end date in YYYY-MM-DD. If text says 'January 31 of each year' with commencement YYYY, use YYYY+1.",
+  },
+  rent_commencement_date: {
+    type: "date",
+    labels: ["rent commencement date", "rent start", "rent commencement"],
+    tableHeaders: ["rent_commencement_date", "rent commencement"],
+    patterns: [/(?:rent\s+commencement|rent\s+start)\s*(?:date)?\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i],
+    description: "Date rent payments begin (may differ from term commencement when free-rent applies)",
+  },
+  renewal_notice_months: {
+    type: "number",
+    min: 0,
+    labels: ["renewal notice", "notice of renewal", "renewal notice period"],
+    tableHeaders: ["renewal_notice_months", "renewal notice"],
+    patterns: [/(?:renewal\s+notice|notice\s+(?:to|of)\s+renew)[^\n]{0,40}?(\d{1,3})\s*month/i],
+    description: "Months of notice required to exercise renewal option (or convert from days: months = round(days/30))",
+  },
+  termination_notice_months: {
+    type: "number",
+    min: 0,
+    labels: ["termination notice", "notice of termination", "termination notice period"],
+    tableHeaders: ["termination_notice_months", "termination notice"],
+    patterns: [/(?:termination\s+notice|notice\s+of\s+termination)[^\n]{0,40}?(\d{1,3})\s*month/i],
+    description: "Months of notice required to terminate the lease early",
+  },
+  option_exercise_deadline: {
+    type: "date",
+    labels: ["option deadline", "option exercise deadline", "exercise deadline"],
+    tableHeaders: ["option_exercise_deadline"],
+    description: "Latest date to exercise a renewal/extension option, in YYYY-MM-DD",
+  },
+
+  // ─── Rent extension ─────────────────────────────────────────────────
+  billing_frequency: {
+    type: "enum",
+    enumValues: ["monthly", "quarterly", "annual"],
+    labels: ["billing frequency", "rent frequency", "payment frequency"],
+    tableHeaders: ["billing_frequency", "rent frequency"],
+    patterns: [/\b(monthly|quarterly|annually|annual)\b/i],
+    description: "How often rent is billed (monthly, quarterly, annual)",
+  },
+  escalation_type: {
+    type: "enum",
+    enumValues: ["fixed_pct", "cpi", "stepped", "fmv", "none"],
+    labels: ["escalation type", "rent escalation type", "increase type"],
+    tableHeaders: ["escalation_type", "escalation type"],
+    patterns: [/(?:escalation|rent\s+increase|rent\s+adjustment)[^\n]{0,80}?\b(fixed|percent|cpi|stepped|fair\s+market|fmv|none)\b/i],
+    description: "Type of rent escalation: fixed_pct, cpi, stepped, fmv, or none",
+  },
+  escalation_timing: {
+    type: "enum",
+    enumValues: ["lease_anniversary", "calendar_year", "fiscal_year"],
+    labels: ["escalation timing"],
+    tableHeaders: ["escalation_timing"],
+    description: "When escalations occur (lease_anniversary, calendar_year, fiscal_year)",
+  },
+
+  // ─── Expense / recovery responsibilities ────────────────────────────
+  responsibility_taxes: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["real estate taxes", "property taxes", "taxes"],
+    tableHeaders: ["responsibility_taxes", "tax responsibility"],
+    patterns: [/\b(?:real\s+estate\s+taxes|property\s+taxes|taxes)\b[^\n]{0,120}\b(tenant|landlord|landlord\s+with\s+cap|shared|both)\b/i],
+    description: "Party responsible for property/real estate taxes: landlord, tenant, shared, landlord_with_cap",
+  },
+  responsibility_insurance: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["insurance responsibility", "property insurance responsibility"],
+    tableHeaders: ["responsibility_insurance", "insurance responsibility"],
+    patterns: [/\binsurance\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
+    description: "Party responsible for property insurance",
+  },
+  responsibility_utilities: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["utilities responsibility", "utilities"],
+    tableHeaders: ["responsibility_utilities", "utilities responsibility"],
+    patterns: [/\b(?:utilities|electricity|water|gas|sewer)\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
+    description: "Party responsible for utilities (electric, water, gas, sewer)",
+  },
+  responsibility_repairs: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["repairs", "maintenance", "repairs and maintenance"],
+    tableHeaders: ["responsibility_repairs", "repairs"],
+    patterns: [/\b(?:repairs?|maintenance|r&m)\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
+    description: "Party responsible for repairs & maintenance",
+  },
+  base_year: {
+    type: "number",
+    min: 1900,
+    max: 2100,
+    labels: ["base year"],
+    tableHeaders: ["base_year"],
+    patterns: [/\bbase\s+year\b[^\n]{0,30}?(\d{4})/i],
+    description: "Base year for expense pass-throughs (e.g. 2024)",
+  },
+  expense_stop: {
+    type: "number",
+    min: 0,
+    labels: ["expense stop"],
+    tableHeaders: ["expense_stop"],
+    patterns: [/\bexpense\s+stop\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    description: "Expense stop amount in USD (cap above which tenant pays excess)",
+  },
+
+  // ─── CAM structure ──────────────────────────────────────────────────
+  cam_cap_type: {
+    type: "enum",
+    enumValues: ["none", "cumulative", "non_cumulative", "compounding"],
+    labels: ["cam cap type", "cap type"],
+    tableHeaders: ["cam_cap_type"],
+    patterns: [/\bcam\b[^\n]{0,80}\b(cumulative|non[\s-]cumulative|compounding|capped)\b/i],
+    description: "CAM cap type: none, cumulative, non_cumulative, compounding",
+  },
+  cam_cap_pct: {
+    type: "number",
+    min: 0,
+    max: 100,
+    labels: ["cam cap percent", "cam cap"],
+    tableHeaders: ["cam_cap_pct"],
+    patterns: [/\bcam\b[^\n]{0,80}?(?:cap|increase)[^\n]{0,30}?(\d{1,2}(?:\.\d+)?)\s*%/i],
+    description: "Annual cap percentage on CAM increases (e.g. 5 for 5%)",
+  },
+  admin_fee_pct: {
+    type: "number",
+    min: 0,
+    max: 100,
+    labels: ["admin fee", "administrative fee", "management fee"],
+    tableHeaders: ["admin_fee_pct"],
+    patterns: [/(?:admin(?:istrative)?\s+fee|management\s+fee)[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i],
+    description: "Administrative fee percentage charged on CAM (e.g. 15 for 15%)",
+  },
+  management_fee_basis: {
+    type: "enum",
+    enumValues: ["cam_pool_pro_rata", "tenant_annual_rent", "gross_rent", "fixed"],
+    labels: ["management fee basis", "mgmt fee basis"],
+    tableHeaders: ["management_fee_basis"],
+    description: "What management fees are calculated on: cam_pool_pro_rata, tenant_annual_rent, gross_rent, fixed",
+  },
+  hvac_responsibility: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["hvac responsibility", "hvac"],
+    tableHeaders: ["hvac_responsibility"],
+    patterns: [/\bhvac\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
+    description: "Party responsible for HVAC maintenance",
+  },
+  gross_up_enabled: {
+    type: "boolean",
+    labels: ["gross up", "gross-up"],
+    tableHeaders: ["gross_up_enabled"],
+    patterns: [/\bgross[\s-]up\b/i],
+    description: "Whether the lease includes a gross-up provision",
+  },
+  gross_up_threshold: {
+    type: "number",
+    min: 0,
+    max: 100,
+    labels: ["gross up threshold", "gross-up threshold"],
+    tableHeaders: ["gross_up_threshold"],
+    patterns: [/\bgross[\s-]up\b[^\n]{0,40}?(\d{1,3})\s*%/i],
+    description: "Occupancy percentage threshold for gross-up (typically 95%)",
+  },
+
+  // ─── Insurance ──────────────────────────────────────────────────────
+  tenant_insurance_required: {
+    type: "boolean",
+    labels: ["tenant insurance", "tenant insurance required", "liability insurance"],
+    tableHeaders: ["tenant_insurance_required"],
+    patterns: [/\btenant\s+shall\s+(?:maintain|carry|obtain|provide)[^\n]{0,80}\b(?:insurance|liability)\b/i],
+    description: "Whether tenant is required to carry insurance",
+  },
+  general_liability_min: {
+    type: "number",
+    min: 0,
+    labels: ["general liability", "commercial general liability", "cgl", "liability minimum"],
+    tableHeaders: ["general_liability_min"],
+    patterns: [/(?:commercial\s+general\s+liability|cgl|general\s+liability)[^\n]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    description: "Minimum commercial general liability coverage in USD",
+  },
+  property_insurance_responsibility: {
+    type: "enum",
+    enumValues: ["landlord", "tenant", "shared", "landlord_with_cap"],
+    labels: ["property insurance"],
+    tableHeaders: ["property_insurance_responsibility"],
+    patterns: [/\bproperty\s+insurance\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i],
+    description: "Party responsible for property insurance on the building",
+  },
+  waiver_of_subrogation: {
+    type: "boolean",
+    labels: ["waiver of subrogation"],
+    tableHeaders: ["waiver_of_subrogation"],
+    patterns: [/\bwaiver\s+of\s+subrogation\b/i],
+    description: "Whether mutual waiver of subrogation is present",
+  },
+  additional_insureds_required: {
+    type: "boolean",
+    labels: ["additional insureds", "additional insured", "name as additional insured"],
+    tableHeaders: ["additional_insureds_required"],
+    patterns: [/\b(?:name|name\s+landlord|landlord)[^\n]{0,40}additional\s+insured/i, /\badditional\s+insured/i],
+    description: "Whether landlord must be named as additional insured",
+  },
+
+  // ─── Legal / Options ────────────────────────────────────────────────
+  renewal_type: {
+    type: "enum",
+    enumValues: ["fixed_term", "fair_market", "fixed_increase", "cpi_indexed", "negotiated", "automatic", "none"],
+    labels: ["renewal type", "renewal option type"],
+    tableHeaders: ["renewal_type"],
+    patterns: [/\brenewal\b[^\n]{0,80}\b(fixed\s+term|fair\s+market|fixed\s+increase|cpi|negotiated|automatic|none)\b/i],
+    description: "Type of renewal option: fixed_term, fair_market, fixed_increase, cpi_indexed, negotiated, automatic, none",
+  },
+  right_of_first_refusal: {
+    type: "boolean",
+    labels: ["right of first refusal", "rofr"],
+    tableHeaders: ["right_of_first_refusal"],
+    patterns: [/\bright\s+of\s+first\s+refusal\b|\brofr\b/i],
+    description: "Whether tenant has right of first refusal on additional space",
+  },
+  early_termination_option: {
+    type: "boolean",
+    labels: ["early termination", "early out", "termination option"],
+    tableHeaders: ["early_termination_option"],
+    patterns: [/\bearly\s+termination\b|\bearly\s+out\b/i],
+    description: "Whether tenant has an early termination / early-out option",
+  },
+  assignment_provisions: {
+    type: "string",
+    labels: ["assignment", "assignment provisions", "assignment rights"],
+    tableHeaders: ["assignment_provisions"],
+    patterns: [/\bassignment\b[^\n]{0,200}/i],
+    description: "Brief summary of assignment & subletting rules (e.g. 'requires landlord consent')",
+  },
+  default_cure_period: {
+    type: "number",
+    min: 0,
+    labels: ["cure period", "default cure period"],
+    tableHeaders: ["default_cure_period"],
+    patterns: [/\bdefault\b[^\n]{0,80}?(\d{1,3})\s*days?\s+(?:to\s+)?cure/i, /\bcure\b[^\n]{0,40}?(\d{1,3})\s*days?/i],
+    description: "Days a defaulting party has to cure before remedies trigger",
   },
 };
 
@@ -944,22 +1241,71 @@ const LEASE_GROUPS: FieldGroup[] = [
       "Also extract property name, premises address, and unit/suite if present.",
   },
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, and notice address." },
-  { name: "dates", fields: ["start_date", "end_date"], hint: "Find lease commencement and expiration dates." },
+  {
+    name: "dates",
+    fields: ["start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
+    hint:
+      "Find lease term dates. commencement_date and expiration_date are the term start/end. " +
+      "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
+      "If only month/day is given for expiration (e.g. 'January 31 of each year'), use commencement_year + 1. " +
+      "rent_commencement_date is when rent payments start (may differ from term commencement when free-rent applies). " +
+      "Renewal/termination notice = how many months notice required.",
+  },
   {
     name: "financial",
-    fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate"],
+    fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing", "billing_frequency"],
     hint:
       "Extract base rent values EXACTLY as labeled in the lease. " +
       "monthly_rent must be the per-month rent; annual_rent must be the per-year rent. " +
       "If only one is present, leave the other NULL — the system will derive it. " +
-      "Never put an annual figure into monthly_rent or vice versa.",
+      "escalation_type: fixed_pct / cpi / stepped / fmv / none. " +
+      "billing_frequency: monthly / quarterly / annual.",
   },
   {
     name: "terms",
-    fields: ["square_footage", "lease_type", "lease_term_months", "renewal_options", "ti_allowance", "free_rent_months", "status"],
+    fields: ["square_footage", "lease_type", "permitted_use", "lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
     hint:
       "Find the LEASED PREMISES square footage (tenant's space, not the whole building), " +
-      "lease type, term length, renewal terms, and TI allowance.",
+      "lease type, permitted use (e.g. 'IT work', 'general office'), term length, renewal type/terms, and TI allowance.",
+  },
+  {
+    name: "expense_recovery",
+    fields: ["responsibility_taxes", "responsibility_insurance", "responsibility_utilities", "responsibility_repairs", "base_year", "expense_stop"],
+    hint:
+      "Identify WHO PAYS for each expense category. Read clauses like 'Tenant shall pay all real estate taxes' → responsibility_taxes = 'tenant'. " +
+      "Use 'landlord', 'tenant', 'shared', or 'landlord_with_cap'. " +
+      "For Full Service / Gross leases, landlord pays most categories. For Triple Net (NNN), tenant pays most. " +
+      "Also extract base_year (for base-year pass-throughs) and expense_stop dollar amount if present.",
+  },
+  {
+    name: "cam_structure",
+    fields: ["cam_cap_type", "cam_cap_pct", "admin_fee_pct", "management_fee_basis", "hvac_responsibility", "gross_up_enabled", "gross_up_threshold"],
+    hint:
+      "Extract CAM (Common Area Maintenance) structural rules. " +
+      "cap_type: cumulative / non_cumulative / compounding / none. " +
+      "cap_pct: annual percentage cap on CAM increases (e.g. 5 for 5%). " +
+      "admin_fee_pct: percentage admin/management fee on CAM (e.g. 15 for 15%). " +
+      "gross_up_enabled: true if the lease includes a gross-up provision. " +
+      "gross_up_threshold: occupancy % the lease grosses up to (typically 95).",
+  },
+  {
+    name: "insurance",
+    fields: ["tenant_insurance_required", "general_liability_min", "property_insurance_responsibility", "waiver_of_subrogation", "additional_insureds_required"],
+    hint:
+      "Extract insurance requirements. " +
+      "general_liability_min: the minimum coverage amount in USD (e.g. 1000000 for $1M / $1,000,000). " +
+      "Look for clauses like 'Tenant shall maintain commercial general liability insurance in an amount not less than $X'. " +
+      "additional_insureds_required: true if landlord must be named as additional insured.",
+  },
+  {
+    name: "legal_options",
+    fields: ["right_of_first_refusal", "early_termination_option", "assignment_provisions", "default_cure_period"],
+    hint:
+      "Extract tenant options and remedies. " +
+      "right_of_first_refusal: true if tenant has ROFR on additional space. " +
+      "early_termination_option: true if tenant has an early-out clause. " +
+      "assignment_provisions: brief summary (e.g. 'requires landlord consent, not unreasonably withheld'). " +
+      "default_cure_period: days a defaulting party has to cure before remedies (e.g. 30 days for monetary, 60 for non-monetary).",
   },
 ];
 
