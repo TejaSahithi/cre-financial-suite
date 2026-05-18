@@ -1570,9 +1570,41 @@ export default function LeaseReview() {
         console.warn("[LeaseReview] critical dates auto-insert skipped:", datesErr?.message || datesErr);
       }
 
+      // Persist expense rules from the workflow extractor — every lease that
+      // mentions expense responsibility language should produce rules on
+      // approval, even if no dollar amounts were extracted. This is the
+      // authoritative source for the Lease Expense Rules page; without it
+      // the page shows 0 rules after approval.
+      //
+      // We do two writes:
+      //   1. persistExpenseRulesFromWorkflow with status="draft" — copies
+      //      workflow_output.expense_rules into lease_expense_rules. Rules
+      //      individually default to review_status="needs_review" per spec
+      //      unless strong source evidence backs them.
+      //   2. ensureApprovedRuleSet — promotes the rule_set status to
+      //      "approved" so CAM/Budget queries can see it. Individual rule
+      //      review_status is still governed by the strict policy above.
       let approvedExpenseRuleSet = null;
       try {
+        const persisted = await leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
+          lease: approvedLease,
+          status: "draft",
+          createdFrom: "approval",
+          approver: approvalSignedBy || null,
+        });
+        console.log(
+          `[LeaseReview] persistExpenseRulesFromWorkflow → ${persisted?.rules?.length || 0} rules persisted`,
+          { ruleSetId: persisted?.ruleSet?.id || null },
+        );
+      } catch (persistErr) {
+        console.warn("[LeaseReview] persistExpenseRulesFromWorkflow skipped:", persistErr?.message || persistErr);
+      }
+      try {
         approvedExpenseRuleSet = await leaseExpenseRuleService.ensureApprovedRuleSet({ lease: approvedLease });
+        console.log(
+          `[LeaseReview] ensureApprovedRuleSet → ${approvedExpenseRuleSet?.rules?.length || 0} rules in approved set`,
+          { ruleSetId: approvedExpenseRuleSet?.ruleSet?.id || null, status: approvedExpenseRuleSet?.ruleSet?.status },
+        );
       } catch (ruleErr) {
         console.warn("[LeaseReview] approved expense rule publish skipped:", ruleErr?.message || ruleErr);
       }

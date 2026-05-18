@@ -241,11 +241,43 @@ function deriveRuleExtractionStatus(rule) {
   return "extracted";
 }
 
+// Strict review-status policy (per Lease Expense Rules spec):
+// Newly extracted rules default to `needs_review`. Auto-approval requires
+// ALL of: exact source evidence, known responsibility, known recoverable
+// status, known payment treatment, specific recovery method, and high
+// confidence. Anything weaker stays in needs_review so a human ratifies.
 function deriveRuleReviewStatus(rule) {
-  if (rule?.review_status) return normalizeText(rule.review_status) === "reviewed" ? "approved" : rule.review_status;
+  if (rule?.review_status) {
+    return normalizeText(rule.review_status) === "reviewed" ? "approved" : rule.review_status;
+  }
   const status = normalizeRuleStatus(rule);
-  if (["mapped", "manually_added"].includes(status)) return "approved";
   if (status === "not_mentioned") return "not_found";
+  if (status === "manually_added") return "approved"; // explicit human input
+
+  const responsibility = deriveRuleOperationalResponsibility(rule);
+  const recoverable = deriveRuleRecoverableFromTenant(rule);
+  const treatment = deriveRulePaymentTreatment(rule);
+  const recoveryMethod = normalizeText(deriveRuleRecoveryMethod(rule));
+  const confidence = deriveRuleConfidence(rule);
+  const sourceText = deriveRuleExactSourceText(rule);
+  const sourcePage = Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null;
+
+  const hasEvidence = Boolean(sourceText) && sourcePage != null;
+  const responsibilityKnown = responsibility && responsibility !== "unknown";
+  const recoverableKnown = recoverable && recoverable !== "unknown";
+  const treatmentKnown = treatment && treatment !== "not_applicable" && treatment !== "unknown";
+  const recoveryMethodSpecific = recoveryMethod && recoveryMethod !== "manual_review" && recoveryMethod !== "needs_review";
+  const confidenceHigh = typeof confidence === "number" && confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+
+  if (status === "mapped"
+    && hasEvidence
+    && responsibilityKnown
+    && recoverableKnown
+    && treatmentKnown
+    && recoveryMethodSpecific
+    && confidenceHigh) {
+    return "approved";
+  }
   return "needs_review";
 }
 
@@ -1504,6 +1536,62 @@ export const leaseExpenseRuleService = {
     }
   },
 
+  // Fast path used during Lease Approval. Reads the expense_rules array
+  // the workflow extractor already produced (lives on
+  // `lease.extraction_data.workflow_output.expense_rules`) and persists it
+  // to `lease_expense_rule_sets` + `lease_expense_rules` without re-running
+  // the LLM. Idempotent: if an existing rule set is provided, the rules are
+  // upserted onto it; otherwise a new versioned set is created.
+  //
+  // Filters out anything that maps to base rent — base rent is a rent
+  // schedule concept, not a lease expense rule (per product spec).
+  // Returns whatever saveRuleSet returns ({ ruleSet, rules }).
+  async persistExpenseRulesFromWorkflow({
+    lease,
+    categories = [],
+    status = "draft",
+    existingRuleSetId = null,
+    createdFrom = "workflow",
+    approver = null,
+  } = {}) {
+    if (!supabase || !lease?.id) return { ruleSet: null, rules: [] };
+    const workflowRules = getLeaseWorkflowExpenseRules(lease);
+    if (workflowRules.length === 0) {
+      console.log("[leaseExpenseRuleService] persistExpenseRulesFromWorkflow: no workflow expense_rules to persist for lease", lease.id);
+      return { ruleSet: null, rules: [] };
+    }
+
+    // Strip base_rent / base rent / rent rules. saveRuleSet's resolver will
+    // also drop unmappable rules but skipping here keeps the audit log clean.
+    const BASE_RENT_KEYS = new Set(["base_rent", "rent", "minimum_rent", "fixed_rent"]);
+    const filtered = workflowRules.filter((r) => {
+      const key = String(r?.expense_category || r?.normalized_key || "").toLowerCase();
+      return !BASE_RENT_KEYS.has(key);
+    });
+
+    // Reshape workflow rule → the shape saveRuleSet expects. Most fields
+    // are passed through; we just bridge a few aliases the persister reads.
+    const rules = filtered.map((r) => ({
+      ...r,
+      normalized_key: r.expense_category || r.normalized_key,
+      category_name: r.category_name || r.expense_subcategory || null,
+      confidence: r.confidence_score ?? r.confidence ?? null,
+      source: r.exact_source_text || r.source_clause || r.notes || null,
+      frequency: r.billing_frequency || null,
+      mentioned_in_lease: r.extraction_status !== "not_found",
+    }));
+
+    return this.saveRuleSet({
+      lease,
+      rules,
+      status,
+      existingRuleSetId,
+      categories,
+      createdFrom,
+      approver,
+    });
+  },
+
   async extractDraftRuleSet({ lease, categories = [], existingRuleSetId = null, existingRules = [] }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to extract expense rules");
 
@@ -1557,7 +1645,7 @@ export const leaseExpenseRuleService = {
     });
   },
 
-  async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [] }) {
+  async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [], createdFrom = "workflow", approver = null }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to save expense rules");
 
     const orgId = await resolveWorkflowOrgId(lease);
@@ -1615,15 +1703,24 @@ export const leaseExpenseRuleService = {
     }
 
     const savableRules = finalizeLeaseExpenseRules(resolvedRules, status).filter((rule) => isUuid(rule?.expense_category_id));
+    const approvedAtIso = status === "approved" ? now : null;
     const rulePayloads = savableRules.map((rule) => ({
       id: isUuid(rule?.id) ? rule.id : undefined,
       rule_set_id: ruleSetId,
       expense_category_id: rule.expense_category_id,
+      // Denormalized scope so the Lease Expense Rules page can filter
+      // without joining lease_expense_rule_sets. The migration backfills
+      // these for existing rows.
+      org_id: orgId,
       lease_id: lease.id,
       tenant_id: lease.tenant_id || null,
       property_id: lease.property_id || null,
       building_id: lease.building_id || null,
       unit_id: lease.unit_id || null,
+      approved_lease_abstract_id: lease.approved_lease_abstract_id || lease.abstract_snapshot?.id || null,
+      created_from: createdFrom,
+      approved_by: deriveRuleReviewStatus(rule) === "approved" ? (approver || lease.signed_by || null) : null,
+      approved_at: deriveRuleReviewStatus(rule) === "approved" ? approvedAtIso : null,
       expense_category: firstPresent(rule.expense_category, rule.category_name, deriveRuleCategoryName(rule)),
       expense_subcategory: firstPresent(rule.expense_subcategory, rule.subcategory_name, deriveRuleSubcategoryName(rule)),
       operational_responsibility: deriveRuleOperationalResponsibility(rule),

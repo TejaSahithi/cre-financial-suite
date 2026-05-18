@@ -4,7 +4,7 @@
  * LeaseExpenseClassification; this page is the cross-lease audit and
  * approval surface backed by the existing rule-set tables.
  */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -196,6 +196,35 @@ export default function LeaseExpenseRules() {
     }
     return rows;
   }, [ruleSetsByLease, leaseById, categoryById, scope]);
+
+  // Dev-only diagnostic: print scope / filter / hide counts so we can see why
+  // a rule that exists in the DB might not be appearing in the table. Logged
+  // once per scope or filter change.
+  useEffect(() => {
+    if (typeof window === "undefined" || !import.meta?.env?.DEV) return;
+    const allLeaseIds = leases.map((l) => l.id);
+    const scopedLeaseIds = selectorFilteredLeases.map((l) => l.id);
+    const rulesByLeaseId = new Map();
+    for (const entry of ruleSetsByLease) rulesByLeaseId.set(entry.leaseId, entry.rules?.length || 0);
+    const totalRulesInScope = flattenedRows.length;
+    const hiddenByStatusFilter = statusFilter === "all" ? 0 : flattenedRows.length - flattenedRows.filter(({ rule }) => {
+      if (statusFilter === "recoverable") return ["yes", "conditional"].includes(leaseExpenseRuleService.getRecoverableDecision(rule)) && !rule.is_excluded;
+      if (statusFilter === "excluded") return rule.is_excluded;
+      if (statusFilter === "needs_review") return needsReviewRule(rule);
+      if (statusFilter === "approved") return isApprovedRule(rule);
+      return true;
+    }).length;
+    console.groupCollapsed("[LeaseExpenseRules] diagnostic");
+    console.log("leases in org:", allLeaseIds.length);
+    console.log("leases in scope:", scopedLeaseIds.length);
+    console.log("selected scope:", { property: scopeProperty, building: scopeBuilding, unit: scopeUnit });
+    console.log("rule_sets loaded:", ruleSetsByLease.length);
+    console.log("rules per lease (in scope):", Object.fromEntries(rulesByLeaseId));
+    console.log("total rules in flatten:", totalRulesInScope);
+    console.log("status filter:", statusFilter, "→ hidden by filter:", hiddenByStatusFilter);
+    console.log("search:", search || "(none)");
+    console.groupEnd();
+  }, [ruleSetsByLease, flattenedRows, statusFilter, search, scopeProperty, scopeBuilding, scopeUnit, leases, selectorFilteredLeases]);
 
   const filteredRows = flattenedRows.filter(({ rule, lease }) => {
     if (search) {
