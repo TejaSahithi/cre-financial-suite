@@ -1766,15 +1766,49 @@ export const leaseExpenseRuleService = {
       source: normalizeRuleSource(firstPresent(rule.source, deriveRuleExactSourceText(rule))),
     }));
 
+    // Strip-missing-columns retry: if the DB hasn't been migrated yet with
+    // the latest spec columns (payment_treatment, cam_eligible, etc.),
+    // Postgres will return PGRST204 "Could not find column X". Rather than
+    // fail the whole approve flow, peel that column out of every payload
+    // and try again. Up to 12 retries — enough to clear several missing
+    // columns without spinning forever. Logs which columns were dropped so
+    // we know which migrations are missing.
     let savedRules = [];
     if (rulePayloads.length > 0) {
-      const { data, error: ruleError } = await supabase
-        .from("lease_expense_rules")
-        .upsert(rulePayloads, { onConflict: "id" })
-        .select("*");
-
-      if (ruleError) throw ruleError;
-      savedRules = data || [];
+      let payloadsForUpsert = rulePayloads;
+      const droppedColumns = [];
+      let attemptsRemaining = 12;
+      while (attemptsRemaining > 0) {
+        const { data, error: ruleError } = await supabase
+          .from("lease_expense_rules")
+          .upsert(payloadsForUpsert, { onConflict: "id" })
+          .select("*");
+        if (!ruleError) {
+          savedRules = data || [];
+          break;
+        }
+        // PGRST204 = no schema cache for that column; 42703 = column does not exist.
+        const errorMessage = `${ruleError.message || ""} ${ruleError.details || ""} ${ruleError.hint || ""}`;
+        const colMatch =
+          errorMessage.match(/Could not find the '([^']+)' column/i) ||
+          errorMessage.match(/column "?([a-zA-Z0-9_]+)"? of relation/i) ||
+          errorMessage.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+        const missingCol = colMatch?.[1];
+        const isMissingCol = ruleError.code === "PGRST204" || ruleError.code === "42703" || !!missingCol;
+        if (!isMissingCol || !missingCol) throw ruleError;
+        droppedColumns.push(missingCol);
+        payloadsForUpsert = payloadsForUpsert.map((row) => {
+          const { [missingCol]: _stripped, ...rest } = row;
+          return rest;
+        });
+        attemptsRemaining -= 1;
+      }
+      if (droppedColumns.length > 0) {
+        console.warn(
+          `[leaseExpenseRuleService] saveRuleSet: dropped ${droppedColumns.length} missing column(s) before insert succeeded — apply latest migration to capture these fields:`,
+          droppedColumns,
+        );
+      }
     }
 
     const rulesByCategoryId = new Map(savedRules.map((rule) => [rule.expense_category_id, rule]));
