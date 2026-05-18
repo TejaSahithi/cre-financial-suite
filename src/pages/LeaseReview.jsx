@@ -811,6 +811,25 @@ export default function LeaseReview() {
     },
   });
 
+  // Auto-run extraction the first time we land on a lease that has a source
+  // file linked but no extracted fields yet.
+  const autoExtractFiredRef = useRef(null);
+  useEffect(() => {
+    if (!lease?.id) return;
+    if (autoExtractFiredRef.current === lease.id) return;
+    if (reextracting) return;
+    const sourceFileId = lease?.extraction_data?.source_file_id;
+    if (!sourceFileId) return;
+    const fieldCount = Object.keys(lease?.extraction_data?.fields || {}).length;
+    const extractedCount = Object.keys(lease?.extraction_data?.extracted_fields || {}).length;
+    const hasWorkflow = !!lease?.extraction_data?.workflow_output;
+    if (fieldCount > 0 || extractedCount > 0 || hasWorkflow) return;
+    autoExtractFiredRef.current = lease.id;
+    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted fields");
+    toast.info("Source file linked. Running extraction in the background…");
+    handleReextractLease();
+  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // --- Early returns -------------------------------------------------------
   if (!leaseId) {
     return (
@@ -1662,7 +1681,7 @@ export default function LeaseReview() {
   // completes → copies the fresh ui_review_payload + workflow_output back
   // onto this lease. Saves the reviewer from the Re-link/Re-run/Apply Latest
   // dance for the common case where source_file_id is already set.
-  const handleReextractLease = async () => {
+  async function handleReextractLease() {
     const sourceFileId = lease?.extraction_data?.source_file_id;
     if (!sourceFileId) {
       toast.error("No source file linked. Use Extraction Debug → Re-link Source Document first.");
@@ -1884,32 +1903,7 @@ export default function LeaseReview() {
       setReextracting(false);
       setReextractStage("");
     }
-  };
-
-  // Auto-run extraction the first time we land on a lease that has a source
-  // file linked but no extracted fields yet. This covers two scenarios:
-  //   1. Auto-link just wrote source_file_id but the lease still has no
-  //      extraction_data.fields — without this effect the user would have
-  //      to click "Re-extract Now" themselves.
-  //   2. A draft lease was created (Upload or Bulk Import) with a source
-  //      file but extraction was never applied on this record.
-  // Guarded by a ref so we only fire once per lease per page mount.
-  const autoExtractFiredRef = useRef(null);
-  useEffect(() => {
-    if (!lease?.id) return;
-    if (autoExtractFiredRef.current === lease.id) return;
-    if (reextracting) return;
-    const sourceFileId = lease?.extraction_data?.source_file_id;
-    if (!sourceFileId) return;
-    const fieldCount = Object.keys(lease?.extraction_data?.fields || {}).length;
-    const extractedCount = Object.keys(lease?.extraction_data?.extracted_fields || {}).length;
-    const hasWorkflow = !!lease?.extraction_data?.workflow_output;
-    if (fieldCount > 0 || extractedCount > 0 || hasWorkflow) return;
-    autoExtractFiredRef.current = lease.id;
-    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted fields");
-    toast.info("Source file linked. Running extraction in the background…");
-    handleReextractLease();
-  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const handleRejectDocument = async () => {
     if (!rejectReason.trim()) {
