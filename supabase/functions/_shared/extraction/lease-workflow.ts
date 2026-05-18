@@ -237,6 +237,29 @@ function getRowConfidence(row: Record<string, unknown>, key: string) {
   return null;
 }
 
+/**
+ * Pull per-field evidence from the row's `_field_evidence` map. This is
+ * stamped by the LLM extractor (validator.ts:flattenRecords) with the
+ * source_text / source_page that Gemini quoted verbatim. Honoring this
+ * here means workflow_output.lease_fields[key].source_clause / source_page
+ * reflect what Gemini actually saw — not whatever the local text-matcher
+ * happens to find.
+ */
+function getLlmEvidenceForAliases(row: Record<string, unknown>, aliases: string[] = []) {
+  const evidenceMap = (row?._field_evidence ?? {}) as Record<string, { source_text?: string | null; source_page?: number | null }>;
+  for (const alias of aliases) {
+    const e = evidenceMap?.[alias];
+    if (!e) continue;
+    if ((typeof e.source_text === "string" && e.source_text.length > 0) || typeof e.source_page === "number") {
+      return {
+        source_text: typeof e.source_text === "string" && e.source_text.length > 0 ? e.source_text : null,
+        source_page: typeof e.source_page === "number" && Number.isFinite(e.source_page) ? e.source_page : null,
+      };
+    }
+  }
+  return null;
+}
+
 function getFirstValue(row: Record<string, unknown>, aliases: string[] = []) {
   for (const alias of aliases) {
     const value = row?.[alias];
@@ -572,13 +595,22 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     const relatedClause = spec.clauseType
       ? clauses.find((clause) => clause.clause_type === spec.clauseType && clause.clause_text)
       : null;
-    const evidence = findEvidenceForValue(doclingRaw, spec.key, value, relatedClause?.clause_title || null);
+    // Evidence resolution order:
+    //   1. Related clause snippet (highest fidelity for clause-bound fields)
+    //   2. LLM-quoted evidence (Gemini's verbatim source_text + source_page)
+    //   3. Local text-matcher fallback (docling text search)
+    // This makes sure Gemini's evidence doesn't get overwritten by a
+    // text-match against a generic value like "unknown" or "1110".
+    const llmEvidence = getLlmEvidenceForAliases(row, spec.aliases || [spec.key]);
+    const textMatchEvidence = (relatedClause || llmEvidence)
+      ? { source_page: null as number | null, source_clause: null as string | null }
+      : findEvidenceForValue(doclingRaw, spec.key, value, relatedClause?.clause_title || null);
 
     fieldMap[spec.key] = {
       key: spec.key,
       value: normalizeWorkflowFieldValue(spec.key, value),
-      source_page: relatedClause?.source_page ?? evidence.source_page,
-      source_clause: relatedClause?.clause_text ?? evidence.source_clause,
+      source_page: relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page,
+      source_clause: relatedClause?.clause_text ?? llmEvidence?.source_text ?? textMatchEvidence.source_clause,
       confidence_score: extractionStatus === "not_found" || extractionStatus === "manual_required" ? null : round2(confidenceScore),
       extraction_status: extractionStatus,
       editable: true,

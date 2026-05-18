@@ -402,6 +402,8 @@ Deno.serve(async (req: Request) => {
       module_type: explicitModuleType,
       document_subtype: explicitSubtype,   // optional override from caller (UI)
       defer_store = false,
+      force_reextract = false,             // when true, reset file status so the
+                                           // pipeline can re-run on already-processed files
     } = body;
     requestedFileId = file_id ?? null;
 
@@ -429,6 +431,37 @@ Deno.serve(async (req: Request) => {
         }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
+    }
+
+    // Re-extract support: when the caller flags force_reextract=true on a
+    // file that's already past parsing, hard-reset the status to 'uploaded'
+    // so the FSM accepts the new parsing → pdf_parsed → ... transitions.
+    // Without this, calling ingest-file on a stored/completed file would
+    // fail at the first setStatus("parsing", ...) due to the forward-only
+    // transition table in pipeline-status.ts.
+    if (force_reextract) {
+      const currentStatus = String(fileRecord.status || "").toLowerCase();
+      const needsReset = currentStatus && currentStatus !== "uploaded" && currentStatus !== "failed";
+      if (needsReset) {
+        console.log(`[ingest-file] force_reextract=true — resetting status from '${currentStatus}' to 'uploaded' for file_id=${file_id}`);
+        const { error: resetErr } = await supabaseAdmin
+          .from("uploaded_files")
+          .update({
+            status: "uploaded",
+            error_message: null,
+            processing_completed_at: null,
+            // Keep docling_raw, ui_review_payload, etc. — downstream stages
+            // will overwrite them as the pipeline progresses.
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", file_id)
+          .eq("org_id", orgId);
+        if (resetErr) {
+          throw new Error(`force_reextract reset failed: ${resetErr.message}`);
+        }
+        // Mutate the local copy so downstream code sees the reset status.
+        fileRecord.status = "uploaded";
+      }
     }
 
     // 4. Derive storage path from file_url

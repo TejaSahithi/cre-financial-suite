@@ -1260,10 +1260,39 @@ export default function LeaseReview() {
           }
         }
       }
+      // Re-extract overrides prior data. Strip stale sentinel/junk evidence
+      // (e.g. raw_value="unknown" or source_text="renewal_options") that the
+      // old extractor or the old text-matching backfill stamped. Otherwise
+      // missing fields in the new extraction would keep showing the old junk.
+      const sentinelValues = new Set([
+        "unknown", "n/a", "na", "none", "null", "tbd", "not specified",
+        "renewal_options", "tax_responsibility", "insurance_responsibility",
+        "maintenance_responsibility", "utilities_responsibility",
+      ]);
+      const isJunkSentinel = (s) => {
+        if (s == null) return false;
+        const t = String(s).trim().toLowerCase();
+        return sentinelValues.has(t) || /^[a-z]+(?:_[a-z]+)+$/.test(t);
+      };
+      const prevFields = lease.extraction_data?.fields || {};
+      const prevEvidence = lease.extraction_data?.field_evidence || {};
+      const cleanedFields = {};
+      const cleanedEvidence = {};
+      for (const [key, val] of Object.entries(prevFields)) {
+        if (!val || typeof val !== "object") continue;
+        if (isJunkSentinel(val.raw_value) || isJunkSentinel(val.value) || isJunkSentinel(val.source_text)) continue;
+        cleanedFields[key] = val;
+      }
+      for (const [key, val] of Object.entries(prevEvidence)) {
+        if (!val || typeof val !== "object") continue;
+        if (isJunkSentinel(val.raw_value) || isJunkSentinel(val.source_text)) continue;
+        cleanedEvidence[key] = val;
+      }
+
       const nextExtraction = {
         ...(lease.extraction_data || {}),
-        fields: { ...(lease.extraction_data?.fields || {}), ...fieldsWithEvidence },
-        field_evidence: { ...(lease.extraction_data?.field_evidence || {}), ...evidenceMap },
+        fields: { ...cleanedFields, ...fieldsWithEvidence },
+        field_evidence: { ...cleanedEvidence, ...evidenceMap },
         confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
         ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
         evidence_refreshed_at: new Date().toISOString(),
@@ -1280,7 +1309,11 @@ export default function LeaseReview() {
         action: "lease_reextracted",
         orgId: lease.org_id,
         propertyId: lease.property_id || null,
-        newValue: { source_file_id: sourceFileId, refreshed_at: nextExtraction.evidence_refreshed_at },
+        newValue: {
+          source_file_id: sourceFileId,
+          refreshed_at: nextExtraction.evidence_refreshed_at,
+          stripped_junk_fields: Object.keys(prevFields).length - Object.keys(cleanedFields).length,
+        },
       });
 
       toast.success("Lease re-extracted. Latest extraction + evidence applied.");

@@ -332,12 +332,47 @@ export async function callVertexAIJSON<T = unknown>(opts: VertexAIOptions): Prom
   // Strip markdown code fences if model added them despite responseMimeType
   text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    console.error("[vertex-ai] Failed to parse JSON response:", text.slice(0, 300));
+  if (!text) {
+    console.error(`[vertex-ai] Empty response from ${response.model} (in=${response.inputTokens} out=${response.outputTokens} tokens). Likely model refusal or safety filter.`);
     return null;
   }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (err) {
+    // Try to repair common JSON truncation issues first.
+    const repaired = tryRepairJson(text);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        console.warn(`[vertex-ai] Recovered from malformed JSON via repair (orig length ${text.length}). Prompt: "${opts.userPrompt.slice(0, 120)}…"`);
+        return parsed;
+      } catch {
+        // fall through to error reporting
+      }
+    }
+    console.error(
+      `[vertex-ai] Failed to parse JSON from ${response.model} ` +
+      `(out=${response.outputTokens} tokens, content length=${text.length}). ` +
+      `First 400 chars: ${JSON.stringify(text.slice(0, 400))} ` +
+      `Last 200 chars: ${JSON.stringify(text.slice(-200))} ` +
+      `Parse error: ${err?.message || err}`,
+    );
+    return null;
+  }
+}
+
+// Handles the common truncation case where Gemini hits maxOutputTokens mid-
+// object — closes any open string + balances braces. Returns null when the
+// text is too malformed to recover.
+function tryRepairJson(text: string): string | null {
+  let candidate = text;
+  // If the last char is mid-string, drop everything after the last whole
+  // value so we can close cleanly.
+  const lastClose = Math.max(candidate.lastIndexOf("}"), candidate.lastIndexOf("]"));
+  if (lastClose < 0) return null;
+  candidate = candidate.slice(0, lastClose + 1);
+  return candidate;
 }
 
 /**

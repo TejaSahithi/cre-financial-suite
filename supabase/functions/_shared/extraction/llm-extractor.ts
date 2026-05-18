@@ -43,13 +43,48 @@ RULES:
 3. If a field is NOT found, return { "value": null, "source_text": null, "source_page": null, "confidence": 0 }.
 4. NEVER guess, infer, or calculate values. Only extract what is explicitly stated.
 5. NEVER calculate totals, annual amounts, or derived values.
-6. Distinguish ENTITY names from PERSON names. "Tenant: Mindful Tech Solutions, Inc. By: John Doe" — tenant_name is "Mindful Tech Solutions, Inc.", tenant_signatory_name is "John Doe". NEVER put a person's name in tenant_name or landlord_name.
-7. Monetary values: plain numbers only. "$12,500" → 12500.
-8. Dates: YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
-9. Percentages: plain number. "3%" → 3.
-10. Square footage: plain number; use the LEASED PREMISES area, not the building total.
-11. Monthly vs Annual rent: only put a value in monthly_rent if the lease explicitly says "per month" / "monthly". Only put a value in annual_rent if the lease explicitly says "per year" / "annually". If only one is present, leave the other's value null.
-12. source_text must be a VERBATIM quote from the supplied snippet (max 200 chars). If you can't quote it, return null and value=null.`;
+
+6. ENTITY vs PERSON disambiguation — critical:
+   tenant_name and landlord_name are LEGAL ENTITY names (LLC, Inc., Corp, Trust, individual property owner).
+   Signatory / signer / "By:" lines belong to tenant_signatory_name or landlord_signatory_name, NEVER to *_name.
+
+   EXAMPLES:
+     Input:  "TENANT: Mindful Tech Solutions, Inc.   By: NARENDRA PYDI, President"
+     Output: tenant_name.value = "Mindful Tech Solutions, Inc."
+             tenant_signatory_name.value = "NARENDRA PYDI"
+
+     Input:  "LANDLORD: 224 Partners, LLC   By: Jane Doe, Manager"
+     Output: landlord_name.value = "224 Partners, LLC"
+             landlord_signatory_name.value = "Jane Doe"
+
+     Input:  "This Lease is between John Smith ('Landlord') and Acme Corp ('Tenant')"
+     Output: landlord_name.value = "John Smith"  (the entity here is a natural person)
+             tenant_name.value = "Acme Corp"
+
+   When extracting tenant_name, look for the FIRST entity name following the word "Tenant" / "Lessee" / "Occupant",
+   STOPPING at "By:" / "Signed:" / "Its:" / "Title:".
+
+7. Date conventions:
+   YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
+   When the lease shows "commences on February 1, 2024 and ends January 31" with year elided,
+   the end year is one year AFTER the commencement year unless the lease explicitly says otherwise.
+   So "commences February 1, 2024 and ends January 31" → end_date.value = "2025-01-31".
+   If unsure of the year, leave value null with confidence 0.
+
+8. Monthly vs Annual rent:
+   Only put a value in monthly_rent if the lease explicitly says "per month" / "monthly" / "$X/mo".
+   Only put a value in annual_rent if the lease explicitly says "per year" / "annually" / "p.a." / "/yr".
+   If only one is present, leave the other's value null.
+
+9. Square footage scope:
+   square_footage / rentable_area_sqft = the LEASED PREMISES area (tenant's space).
+   NEVER use building total, complex total, gross leasable area for the whole project.
+   Look for "Premises containing approximately X rentable square feet" or "Leased Premises: X SF".
+
+10. Monetary values: plain numbers only. "$12,500" → 12500.
+11. Percentages: plain number. "3%" → 3.
+12. source_text must be a VERBATIM quote from the supplied snippet (max 200 chars).
+    If you can't quote it verbatim, return source_text=null AND value=null with confidence=0.`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 

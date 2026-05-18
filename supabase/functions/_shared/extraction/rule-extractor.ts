@@ -804,6 +804,11 @@ export function extractRuleBased(
     if (inferred) merged.lease_type = inferred;
   }
 
+  // Post-process: stamp source_page on each rule-extracted field by matching
+  // its sourceText against the docling text_blocks. Cheap O(blocks*fields)
+  // pass that gives the UI a real page number for evidence-aware display.
+  attachSourcePages(merged, docling);
+
   // Only create a record if we found meaningful data
   const fieldCount = Object.keys(merged).length;
   if (fieldCount === 0) {
@@ -813,4 +818,29 @@ export function extractRuleBased(
 
   const record: ExtractedRecord = { fields: merged, rowIndex: 0 };
   return { records: [record], warnings };
+}
+
+function attachSourcePages(
+  merged: Record<string, ExtractedField>,
+  docling: DoclingOutput,
+) {
+  const blocks = Array.isArray(docling.text_blocks) ? docling.text_blocks : [];
+  if (blocks.length === 0) return;
+  for (const [key, field] of Object.entries(merged)) {
+    if (field.sourcePage != null) continue;
+    const needle = String(field.sourceText ?? field.value ?? "").trim();
+    if (!needle || needle.length < 4) continue;
+    const loweredNeedle = needle.toLowerCase().slice(0, 80);
+    for (const block of blocks) {
+      const blockText = String(block?.text || "");
+      if (!blockText) continue;
+      if (blockText.toLowerCase().includes(loweredNeedle)) {
+        const page = Number(block?.page);
+        if (Number.isFinite(page)) {
+          merged[key] = { ...field, sourcePage: page };
+        }
+        break;
+      }
+    }
+  }
 }
