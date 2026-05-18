@@ -1188,31 +1188,39 @@ export default function LeaseReview() {
     setShowReextractConfirm(false);
     try {
       // 1. Trigger re-extraction
+      console.log("[Re-extract] calling ingest-file", { source_file_id: sourceFileId });
       const ingestData = await invokeEdgeFunction("ingest-file", {
         file_id: sourceFileId,
         module_type: "leases",
         force_reextract: true,
       });
+      console.log("[Re-extract] ingest-file response:", ingestData);
       if (ingestData?.error) throw new Error(ingestData?.message || "Re-extraction failed");
 
-      // 2. Poll uploaded_files.status until it lands in a terminal state.
+      // 2. Poll uploaded_files.status. With the expanded LEASE_GROUPS the
+      // pipeline now makes ~9 Gemini calls so allow up to 3 minutes total.
       setReextractStage("polling");
       const ACTIVE_STATUSES = new Set([
         "uploaded", "parsing", "parsed", "pdf_parsed", "validating", "validated", "storing", "stored", "computing",
       ]);
-      const MAX_POLLS = 30;
+      const MAX_POLLS = 90; // 90 × 2s = 3 minutes
       let attempts = 0;
       let latestFile = null;
+      let lastStatus = "";
       while (attempts < MAX_POLLS) {
         await new Promise((r) => setTimeout(r, 2000));
         const { data: row, error } = await supabase
           .from("uploaded_files")
-          .select("id, status, ui_review_payload, error_message")
+          .select("id, status, ui_review_payload, error_message, updated_at")
           .eq("id", sourceFileId)
           .maybeSingle();
         if (error) throw error;
         latestFile = row;
         const status = String(row?.status || "").toLowerCase();
+        if (status !== lastStatus) {
+          console.log(`[Re-extract] poll #${attempts + 1}: status="${status}"`);
+          lastStatus = status;
+        }
         if (status === "failed") {
           throw new Error(row?.error_message || "Source extraction failed");
         }
@@ -1220,9 +1228,15 @@ export default function LeaseReview() {
         if (!ACTIVE_STATUSES.has(status) && row?.ui_review_payload) break;
         attempts += 1;
       }
+      // Even on timeout, apply whatever's in ui_review_payload right now —
+      // partial extraction is better than nothing, and the user can see what
+      // came through.
       if (attempts >= MAX_POLLS) {
-        toast.warning("Re-extraction is still running. Use Apply Latest Extraction in a moment to pull the latest.");
-        return;
+        console.warn("[Re-extract] polling timed out after 3 minutes — applying partial result if any");
+        toast.warning("Re-extraction is taking longer than expected. Applying whatever's available now; check Extraction Debug for full status.");
+      }
+      if (!latestFile?.ui_review_payload) {
+        throw new Error("Re-extraction produced no review payload. Check the source file in Extraction Debug.");
       }
 
       // 3. Apply the new ui_review_payload to this lease (same shape the
