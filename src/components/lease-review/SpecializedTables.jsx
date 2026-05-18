@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/services/supabaseClient";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { createPageUrl } from "@/utils";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 
@@ -133,24 +134,7 @@ function useLeaseExpenseRules(leaseId) {
   return useQuery({
     queryKey: ["lease-expense-rules-detail", leaseId],
     enabled: !!leaseId && !!supabase,
-    queryFn: async () => {
-      const { data: sets, error: setsErr } = await supabase
-        .from("lease_expense_rule_sets")
-        .select("id, status, version, approved_at")
-        .eq("lease_id", leaseId)
-        .neq("status", "archived")
-        .order("version", { ascending: false })
-        .limit(1);
-      if (setsErr) throw setsErr;
-      const ruleSet = sets?.[0] || null;
-      if (!ruleSet) return { ruleSet: null, rules: [] };
-      const { data: rules, error: rulesErr } = await supabase
-        .from("lease_expense_rules")
-        .select("*, expense_categories:expense_category_id (category_name, subcategory_name)")
-        .eq("rule_set_id", ruleSet.id);
-      if (rulesErr) throw rulesErr;
-      return { ruleSet, rules: rules || [] };
-    },
+    queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId),
     retry: false,
   });
 }
@@ -210,7 +194,7 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
         <div>
           <CardTitle className="text-base">{title}</CardTitle>
           <p className="text-xs text-slate-500">
-            Source: <code>lease_expense_rules</code>
+            Source: <code>{ruleSet?.is_fallback ? "workflow_output.expense_rules" : "lease_expense_rules"}</code>
             {ruleSet ? ` · v${ruleSet.version} · ${ruleSet.status}` : " · no rule set yet"}
           </p>
         </div>
@@ -279,15 +263,23 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
                 {rules.map((rule) => (
                   <TableRow key={rule.id}>
                     <TableCell className="text-xs font-medium text-slate-700">
-                      {rule.expense_categories?.subcategory_name || rule.expense_categories?.category_name || rule.expense_category_id}
+                      {rule.subcategory_name || rule.category_name || rule.expense_category || rule.expense_category_id}
                     </TableCell>
                     <TableCell className="text-xs">
                       <Badge className="bg-slate-100 text-[10px] text-slate-700">{rule.row_status || "needs_review"}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs">{rule.is_recoverable ? "Yes" : rule.is_excluded ? "Excluded" : "No"}</TableCell>
+                    <TableCell className="text-xs">
+                      {rule.is_recoverable || rule.recoverable_from_tenant ? "Yes" : rule.is_excluded ? "Excluded" : "No"}
+                    </TableCell>
                     {kind === "cam" && (
                       <TableCell className="text-xs">
-                        {rule.is_subject_to_cap ? `${rule.cap_type || ""} ${rule.cap_value ?? ""}` : "—"}
+                        {rule.is_subject_to_cap
+                          ? [
+                              rule.cap_type || "",
+                              rule.cap_percent != null ? `${rule.cap_percent}%` : null,
+                              rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : rule.cap_value ?? null,
+                            ].filter(Boolean).join(" ")
+                          : "—"}
                       </TableCell>
                     )}
                     {kind === "cam" && (
@@ -299,7 +291,11 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
                       <TableCell className="text-xs">{rule.gross_up_applicable ? "Yes" : "—"}</TableCell>
                     )}
                     <TableCell className="text-right text-xs">
-                      {rule.confidence != null ? `${Math.round(Number(rule.confidence))}%` : "—"}
+                      {rule.confidence_score != null
+                        ? `${Math.round(Number(rule.confidence_score) <= 1 ? Number(rule.confidence_score) * 100 : Number(rule.confidence_score))}%`
+                        : rule.confidence != null
+                          ? `${Math.round(Number(rule.confidence) <= 1 ? Number(rule.confidence) * 100 : Number(rule.confidence))}%`
+                          : "—"}
                     </TableCell>
                   </TableRow>
                 ))}

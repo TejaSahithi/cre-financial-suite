@@ -1128,8 +1128,15 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
   if (expenseRules.length === 0) return;
 
   try {
+    const { data: leaseRow } = await supabaseAdmin
+      .from("leases")
+      .select("id, tenant_id, property_id, building_id, unit_id")
+      .eq("id", leaseId)
+      .maybeSingle();
+
     // 1. Ensure a draft rule set exists.
     let ruleSetId: string | null = null;
+    let ruleSetStatus = "draft";
     const { data: existingSets } = await supabaseAdmin
       .from("lease_expense_rule_sets")
       .select("id, status, version")
@@ -1139,6 +1146,7 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
       .limit(1);
     if (existingSets && existingSets[0]?.id) {
       ruleSetId = existingSets[0].id;
+      ruleSetStatus = existingSets[0].status || "draft";
     } else {
       const { data: created, error: createErr } = await supabaseAdmin
         .from("lease_expense_rule_sets")
@@ -1216,20 +1224,48 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
         return {
           rule_set_id: ruleSetId,
           expense_category_id: category.id,
+          lease_id: leaseId,
+          tenant_id: leaseRow?.tenant_id ?? null,
+          property_id: leaseRow?.property_id ?? null,
+          building_id: leaseRow?.building_id ?? null,
+          unit_id: leaseRow?.unit_id ?? null,
+          expense_category: deriveExpenseRuleCategoryName(rule),
+          expense_subcategory: deriveExpenseRuleSubcategoryName(rule),
+          responsibility: deriveExpenseRuleResponsibility(rule),
+          included_in_base_rent: deriveExpenseRuleIncludedInBaseRent(rule),
+          recoverable_from_tenant: deriveExpenseRuleRecoverableFromTenant(rule),
+          recovery_method: deriveExpenseRuleRecoveryMethod(rule),
+          allocation_basis: deriveExpenseRuleAllocationBasis(rule),
           row_status: status,
           mentioned_in_lease: Boolean(rule?.mentioned_in_lease ?? status !== "not_mentioned"),
-          is_recoverable: Boolean(rule?.recoverable_flag ?? rule?.recoverable_from_tenant ?? rule?.is_recoverable),
+          is_recoverable: Boolean(deriveExpenseRuleRecoverableFromTenant(rule)),
           is_excluded: Boolean(rule?.is_excluded || rule?.excluded_from_recovery),
           is_controllable: Boolean(rule?.is_controllable),
           is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
           cap_type: rule?.cap_type ?? null,
           cap_value: toNumberOrNull(rule?.cap_value ?? rule?.cap_amount),
+          cap_amount: toNumberOrNull(rule?.cap_amount ?? rule?.cap_value),
+          cap_percent: toNumberOrNull(rule?.cap_percent),
           has_base_year: Boolean(rule?.has_base_year || rule?.base_year_type),
           base_year_type: rule?.base_year_type ?? null,
+          base_year: rule?.base_year ?? rule?.base_year_type ?? null,
+          base_year_amount: toNumberOrNull(rule?.base_year_amount),
+          expense_stop_amount: toNumberOrNull(rule?.expense_stop_amount),
           gross_up_applicable: Boolean(rule?.gross_up_applicable),
+          gross_up_percent: toNumberOrNull(rule?.gross_up_percent),
           admin_fee_applicable: Boolean(rule?.admin_fee_applicable),
           admin_fee_percent: toNumberOrNull(rule?.admin_fee_percent),
-          notes: rule?.notes ?? rule?.source_clause ?? null,
+          billing_frequency: rule?.billing_frequency ?? rule?.frequency ?? null,
+          reconciliation_required: deriveExpenseRuleReconciliationRequired(rule),
+          reconciliation_frequency: deriveExpenseRuleReconciliationFrequency(rule),
+          source_page: toNumberOrNull(rule?.source_page),
+          exact_source_text: deriveExpenseRuleSourceText(rule),
+          confidence_score: toNumberOrNull(rule?.confidence_score ?? rule?.confidence),
+          extraction_status: deriveExpenseRuleExtractionStatus(rule, status),
+          review_status: deriveExpenseRuleReviewStatus(rule, status),
+          approval_status: deriveExpenseRuleApprovalStatus(rule, ruleSetStatus),
+          published_to_cam: Boolean(rule?.published_to_cam),
+          notes: rule?.notes ?? deriveExpenseRuleSourceText(rule),
           confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
           source: "lease_workflow",
         };
@@ -1279,6 +1315,85 @@ function normalizeCategoryKey(value: unknown): string | null {
   if (value == null) return null;
   const cleaned = String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return cleaned || null;
+}
+
+function normalizeText(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function deriveExpenseRuleCategoryName(rule: any): string | null {
+  const raw = rule?.expense_category ?? rule?.category ?? rule?.key ?? null;
+  return raw ? humanizeFieldName(String(raw)) : null;
+}
+
+function deriveExpenseRuleSubcategoryName(rule: any): string | null {
+  return rule?.expense_subcategory ? humanizeFieldName(String(rule.expense_subcategory)) : null;
+}
+
+function deriveExpenseRuleIncludedInBaseRent(rule: any): boolean {
+  return Boolean(
+    rule?.included_in_base_rent ??
+    rule?.included_in_rent ??
+    /included/.test(normalizeText(rule?.lease_treatment))
+  );
+}
+
+function deriveExpenseRuleRecoverableFromTenant(rule: any): boolean {
+  if (typeof rule?.recoverable_from_tenant === "boolean") return rule.recoverable_from_tenant;
+  if (typeof rule?.recoverable_flag === "boolean") return rule.recoverable_flag;
+  if (typeof rule?.is_recoverable === "boolean") return rule.is_recoverable;
+  return ["recoverable", "conditional"].includes(normalizeText(rule?.rule_classification));
+}
+
+function deriveExpenseRuleResponsibility(rule: any): string {
+  if (rule?.responsibility) return String(rule.responsibility);
+  if (deriveExpenseRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
+  if (rule?.is_excluded || rule?.excluded_from_recovery) return "tenant_direct";
+  if (deriveExpenseRuleRecoverableFromTenant(rule)) return "landlord_recoverable";
+  return "landlord_non_recoverable";
+}
+
+function deriveExpenseRuleRecoveryMethod(rule: any): string | null {
+  return rule?.recovery_method ??
+    (rule?.base_year || rule?.base_year_type ? "base_year" : null) ??
+    (rule?.expense_stop_amount ? "expense_stop" : null) ??
+    (deriveExpenseRuleIncludedInBaseRent(rule) ? "included_in_rent" : null) ??
+    ((rule?.billing_frequency ?? rule?.frequency) === "monthly" ? "monthly_reimbursement" : null) ??
+    (deriveExpenseRuleRecoverableFromTenant(rule) ? "pass_through" : null);
+}
+
+function deriveExpenseRuleAllocationBasis(rule: any): string | null {
+  return rule?.allocation_basis ?? rule?.allocation_method ?? rule?.pro_rata_basis ?? "pro_rata_share";
+}
+
+function deriveExpenseRuleSourceText(rule: any): string | null {
+  return rule?.exact_source_text ?? rule?.source_clause ?? rule?.clause_text ?? rule?.notes ?? null;
+}
+
+function deriveExpenseRuleReconciliationRequired(rule: any): boolean {
+  if (typeof rule?.reconciliation_required === "boolean") return rule.reconciliation_required;
+  return ["base_year", "expense_stop", "pass_through"].includes(normalizeText(deriveExpenseRuleRecoveryMethod(rule)));
+}
+
+function deriveExpenseRuleReconciliationFrequency(rule: any): string | null {
+  return rule?.reconciliation_frequency ?? (deriveExpenseRuleReconciliationRequired(rule) ? "annual" : null);
+}
+
+function deriveExpenseRuleExtractionStatus(rule: any, rowStatus: string): string {
+  if (rule?.extraction_status) return String(rule.extraction_status);
+  return rowStatus === "not_mentioned" ? "not_found" : "extracted";
+}
+
+function deriveExpenseRuleReviewStatus(rule: any, rowStatus: string): string {
+  if (rule?.review_status) return String(rule.review_status);
+  if (["mapped", "manually_added"].includes(rowStatus)) return "reviewed";
+  if (rowStatus === "not_mentioned") return "not_found";
+  return "needs_review";
+}
+
+function deriveExpenseRuleApprovalStatus(rule: any, ruleSetStatus: string): string {
+  if (rule?.approval_status) return String(rule.approval_status);
+  return ruleSetStatus === "approved" ? "approved" : "draft";
 }
 
 function mapRuleStatus(rule: any): string {

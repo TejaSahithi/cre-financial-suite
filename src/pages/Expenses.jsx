@@ -88,7 +88,7 @@ export default function Expenses() {
 
   const getPropertyName = (propertyId) => scope.propertyById.get(propertyId)?.name || "—";
 
-  const scopedExpenses = expenses.filter((expense) =>
+  const scopedAllExpenses = expenses.filter((expense) =>
     matchesHierarchyScope(expense, scope, {
       portfolioKey: "portfolio_id",
       propertyKey: "property_id",
@@ -97,12 +97,16 @@ export default function Expenses() {
     })
   );
 
-  const selectorScopedExpenses = scopedExpenses.filter((expense) => {
+  const selectorScopedAllExpenses = scopedAllExpenses.filter((expense) => {
     if (scopeProperty !== "all" && expense.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && expense.building_id !== scopeBuilding) return false;
     if (scopeUnit !== "all" && expense.unit_id !== scopeUnit) return false;
     return true;
   });
+
+  const selectorScopedExpenses = selectorScopedAllExpenses.filter(
+    (expense) => expense.source_type !== "lease_import" && expense.source !== "lease_import"
+  );
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
   const selectorScopedLeases = leases.filter((lease) => {
@@ -156,7 +160,10 @@ export default function Expenses() {
         .eq("is_active", true)
         .order("display_order", { ascending: true });
 
-      if (error) throw error;
+      if (error) {
+        console.warn("[Expenses] expense_categories query failed:", error.message);
+        return [];
+      }
       return data || [];
     },
   });
@@ -233,7 +240,7 @@ export default function Expenses() {
       try {
         const result = await expenseService.syncLeaseDerivedExpenses({
           leases: selectorScopedLeases,
-          existingExpenses: selectorScopedExpenses,
+          existingExpenses: selectorScopedAllExpenses,
           properties,
         });
 
@@ -255,7 +262,7 @@ export default function Expenses() {
     return () => {
       cancelled = true;
     };
-  }, [leaseExpenseSyncKey, properties, queryClient, selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
+  }, [leaseExpenseSyncKey, properties, queryClient, selectedPropertyId, selectorScopedAllExpenses, selectorScopedLeases]);
 
   const classificationSyncKey = useMemo(() => {
     if (!selectedPropertyId) return "";
@@ -604,22 +611,21 @@ export default function Expenses() {
           <CardContent className="space-y-3 text-sm text-slate-700">
             {selectorScopedExpenses.length > 0 ? (
               <p>
-                {selectorScopedExpenses.length} expense row(s) are loaded in this scope, including
-                {" "}{selectorScopedExpenses.filter((expense) => expense.source_type === "lease_import").length} lease-derived charge row(s).
+                {selectorScopedExpenses.length} actual expense row(s) are loaded in this scope.
               </p>
             ) : scopedRuleSummary.total > 0 ? (
               <p>
                 Lease rules are ready, but no actual expense rows have been uploaded yet.
-                Only explicit CAM/NNN/tax/insurance/utility charges should auto-create lease-derived rows from the lease itself.
+                CAM and Budget can use approved lease rules, while Actual Expenses stays empty until invoice/import data arrives.
               </p>
             ) : selectorScopedLeases.length === 0 ? (
               <p>
                 No scoped lease records are available yet, so there is nothing to classify or sync into CAM.
-                Finish Lease Review approval first, then upload actual expenses or rely on explicit lease charge imports where the lease provides real amounts.
+                Finish Lease Review approval first, then upload actual expenses when invoice/import data is available.
               </p>
             ) : (
               <p>
-                No expense rows or reviewed lease rules are visible yet in this scope.
+                No actual expense rows or reviewed lease rules are visible yet in this scope.
                 Upload expenses, import them in bulk, or complete lease expense classification.
               </p>
             )}

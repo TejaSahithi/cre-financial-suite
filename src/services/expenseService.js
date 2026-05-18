@@ -457,88 +457,27 @@ async function upsertExpenseClassification(payload) {
 export const expenseService = {
   ...baseExpenseService,
 
-  async syncLeaseDerivedExpenses({ leases = [], existingExpenses = [], properties = [] } = {}) {
-    const propertyById = buildPropertyLookup(properties);
+  async syncLeaseDerivedExpenses({ leases = [], existingExpenses = [], properties: _properties = [] } = {}) {
     const leaseIds = new Set((leases || []).map((lease) => lease?.id).filter(Boolean));
-    const relevantLeases = (leases || []).filter((lease) => lease?.id);
-    const { rules, categories } = await fetchApprovedRuleArtifacts([...leaseIds]);
-    const { rulesByLeaseId } = buildApprovedRuleLookups(rules, categories);
+    if (leaseIds.size === 0) return { created: 0, updated: 0, deleted: 0 };
 
-    const targetPayloads = relevantLeases.flatMap((lease) => {
-      const corePayloads = buildCoreLeaseDerivedPayloads(lease, propertyById);
-      const rulePayloads = buildRuleDerivedPayloads(lease, rulesByLeaseId.get(lease.id) || [], propertyById);
-      return [...corePayloads, ...rulePayloads];
-    });
-
-    const relevantCategories = new Set(targetPayloads.map((payload) => payload.category));
     const allExistingExpenses =
       Array.isArray(existingExpenses) && existingExpenses.length > 0
         ? existingExpenses
         : await baseExpenseService.list();
 
-    const relevantExistingExpenses = (allExistingExpenses || []).filter((expense) =>
+    const legacyLeaseImportExpenses = (allExistingExpenses || []).filter((expense) =>
       normalizeSourceType(expense) === "lease_import" &&
-      leaseIds.has(expense.lease_id) &&
-      relevantCategories.has(expense.category)
+      leaseIds.has(expense.lease_id)
     );
 
-    const targetByKey = new Map(targetPayloads.map((payload) => [expenseSyncKey(payload), payload]));
-    const existingByKey = new Map();
-    const duplicateExistingExpenses = [];
-
-    for (const expense of relevantExistingExpenses) {
-      const key = expenseSyncKey({
-        lease_id: expense.lease_id,
-        category: expense.category,
-        fiscal_year: expense.fiscal_year,
-        source_type: normalizeSourceType(expense),
-      });
-
-      if (existingByKey.has(key)) {
-        duplicateExistingExpenses.push(expense);
-        continue;
-      }
-      existingByKey.set(key, expense);
+    let deleted = 0;
+    for (const expense of legacyLeaseImportExpenses) {
+      const removed = await baseExpenseService.delete(expense.id);
+      if (removed) deleted += 1;
     }
 
-    const summary = { created: 0, updated: 0, deleted: 0 };
-
-    for (const duplicateExpense of duplicateExistingExpenses) {
-      const removed = await baseExpenseService.delete(duplicateExpense.id);
-      if (removed) summary.deleted += 1;
-    }
-
-    for (const existingExpense of existingByKey.values()) {
-      const key = expenseSyncKey({
-        lease_id: existingExpense.lease_id,
-        category: existingExpense.category,
-        fiscal_year: existingExpense.fiscal_year,
-        source_type: normalizeSourceType(existingExpense),
-      });
-
-      if (!targetByKey.has(key)) {
-        const removed = await baseExpenseService.delete(existingExpense.id);
-        if (removed) summary.deleted += 1;
-      }
-    }
-
-    for (const payload of targetPayloads) {
-      const key = expenseSyncKey(payload);
-      const existingExpense = existingByKey.get(key);
-
-      if (!existingExpense) {
-        await baseExpenseService.create(payload);
-        summary.created += 1;
-        continue;
-      }
-
-      if (shouldUpdateExpense(existingExpense, payload)) {
-        await baseExpenseService.update(existingExpense.id, payload);
-        summary.updated += 1;
-      }
-    }
-
-    return summary;
+    return { created: 0, updated: 0, deleted };
   },
 
   async classifyExpenses({ expenses = [], leases = [] } = {}) {
@@ -547,7 +486,9 @@ export const expenseService = {
         ? expenses
         : await baseExpenseService.list();
 
-    if (!allExpenses.length) {
+    const actualExpenses = allExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
+
+    if (!actualExpenses.length) {
       return { updated: 0, needsReview: 0, classified: 0 };
     }
 
@@ -566,7 +507,7 @@ export const expenseService = {
     let needsReview = 0;
     let classified = 0;
 
-    for (const expense of allExpenses) {
+    for (const expense of actualExpenses) {
       const expenseLeaseId = expense.lease_id || null;
       const candidateLeases = expenseLeaseId
         ? [leaseById.get(expenseLeaseId)].filter(Boolean)
@@ -687,9 +628,9 @@ export const expenseService = {
     const approvedRuleLeaseIds = new Set((ruleSets || []).map((ruleSet) => ruleSet.lease_id));
 
     const actualExpenses = scopedExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
-    const needsReviewExpenses = scopedExpenses.filter((expense) => normalizeText(expense.approved_status) === "needs_review" || normalizeText(expense.recovery_status) === "needs_review");
-    const missingCategoryExpenses = scopedExpenses.filter((expense) => !expense.category && !expense.expense_subcategory);
-    const conditionalExpenses = scopedExpenses.filter((expense) => normalizeText(expense.recovery_status) === "conditional");
+    const needsReviewExpenses = actualExpenses.filter((expense) => normalizeText(expense.approved_status) === "needs_review" || normalizeText(expense.recovery_status) === "needs_review");
+    const missingCategoryExpenses = actualExpenses.filter((expense) => !expense.category && !expense.expense_subcategory);
+    const conditionalExpenses = actualExpenses.filter((expense) => normalizeText(expense.recovery_status) === "conditional");
     const missingSqftLeases = scopedLeases.filter((lease) => !toNumber(lease.square_footage));
     const missingDatesLeases = scopedLeases.filter((lease) => !lease.start_date || !lease.end_date);
 
@@ -697,7 +638,7 @@ export const expenseService = {
       scopedLeaseCount: scopedLeases.length,
       approvedLeaseCount: scopedLeases.filter((lease) => ["approved", "budget_ready", "active", "executed"].includes(normalizeLeaseStatus(lease.status))).length,
       approvedRuleLeaseCount: approvedRuleLeaseIds.size,
-      expenseCount: scopedExpenses.length,
+      expenseCount: actualExpenses.length,
       actualExpenseCount: actualExpenses.length,
       needsReviewCount: needsReviewExpenses.length,
       conditionalExpenseCount: conditionalExpenses.length,

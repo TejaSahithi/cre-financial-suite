@@ -1191,10 +1191,6 @@ export default function LeaseReview() {
         previousReview: { value: previousValue, status: fieldReviews[key]?.status },
       });
 
-      if (["cam_amount", "nnn_amount", "start_date", "end_date", "commencement_date", "expiration_date", "tenant_name"].includes(key)) {
-        await expenseService.syncLeaseDerivedExpenses({ leases: [updatedLease] });
-        queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      }
       toast.success(`Updated ${editingField.label}`);
       setEditingField(null);
     } catch {
@@ -1574,16 +1570,18 @@ export default function LeaseReview() {
         console.warn("[LeaseReview] critical dates auto-insert skipped:", datesErr?.message || datesErr);
       }
 
-      // Post-approval side effects MUST NOT block the approval itself.
-      // Missing tables in this environment (lease_expense_rule_sets,
-      // lease_expense_values, etc.) used to throw out of syncLeaseDerivedExpenses
-      // and roll the whole approve back even though the lease was already saved.
+      let approvedExpenseRuleSet = null;
+      try {
+        approvedExpenseRuleSet = await leaseExpenseRuleService.ensureApprovedRuleSet({ lease: approvedLease });
+      } catch (ruleErr) {
+        console.warn("[LeaseReview] approved expense rule publish skipped:", ruleErr?.message || ruleErr);
+      }
       try {
         await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
       } catch (syncErr) {
-        console.warn("[LeaseReview] expense sync skipped:", syncErr?.message || syncErr);
+        console.warn("[LeaseReview] legacy lease-import cleanup skipped:", syncErr?.message || syncErr);
       }
-      if (approvedRuleSet?.id) {
+      if (approvedExpenseRuleSet?.ruleSet?.id || approvedRuleSet?.id) {
         try {
           const propertyExpenses = await expenseService.filter({ property_id: approvedLease.property_id });
           await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [approvedLease] });
@@ -2536,10 +2534,6 @@ export default function LeaseReview() {
               value: val,
               previousReview: { value: previousValue, status: fieldReviews[f.key]?.status },
             });
-            if (["cam_amount", "nnn_amount", "start_date", "end_date", "commencement_date", "expiration_date", "tenant_name"].includes(f.key)) {
-              await expenseService.syncLeaseDerivedExpenses({ leases: [updatedLease] });
-              queryClient.invalidateQueries({ queryKey: ["Expense"] });
-            }
             toast.success(`Updated ${f.label}`);
           } catch {
             /* toasted by mutation onError */

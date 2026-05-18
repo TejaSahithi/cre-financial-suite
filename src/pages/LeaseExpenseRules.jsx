@@ -176,6 +176,12 @@ export default function LeaseExpenseRules() {
         lease?.tenant_name,
         rule.category_name,
         rule.subcategory_name,
+        rule.expense_category,
+        rule.expense_subcategory,
+        rule.responsibility,
+        rule.recovery_method,
+        rule.allocation_basis,
+        rule.exact_source_text,
         rule.notes,
         rule.source,
       ]
@@ -184,7 +190,7 @@ export default function LeaseExpenseRules() {
       if (!haystack.some((s) => s.includes(search.toLowerCase()))) return false;
     }
     if (statusFilter === "all") return true;
-    if (statusFilter === "recoverable") return rule.is_recoverable && !rule.is_excluded;
+    if (statusFilter === "recoverable") return (rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded;
     if (statusFilter === "excluded") return rule.is_excluded;
     if (statusFilter === "needs_review") return rule.row_status === "needs_review" || rule.row_status === "uncertain";
     if (statusFilter === "approved") return rule.row_status === "mapped" || rule.row_status === "manually_added";
@@ -200,7 +206,7 @@ export default function LeaseExpenseRules() {
       approved: 0,
     };
     for (const { rule } of flattenedRows) {
-      if (rule.is_recoverable && !rule.is_excluded) c.recoverable += 1;
+      if ((rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded) c.recoverable += 1;
       if (rule.is_excluded) c.excluded += 1;
       if (rule.row_status === "needs_review" || rule.row_status === "uncertain") c.needs_review += 1;
       if (rule.row_status === "mapped" || rule.row_status === "manually_added") c.approved += 1;
@@ -351,22 +357,40 @@ export default function LeaseExpenseRules() {
                 </TableRow>
               ) : (
                 filteredRows.map(({ rule, ruleSet, lease, property, category }) => {
-                  const responsibility = rule.is_excluded
-                    ? "Tenant pays directly"
-                    : rule.is_recoverable
-                    ? "Landlord (recoverable)"
-                    : "Landlord";
-                  const recoveryMethod =
-                    rule.frequency === "monthly"
+                  const responsibility = rule.responsibility || (
+                    rule.included_in_base_rent
+                      ? "Included in base rent"
+                      : rule.is_excluded
+                        ? "Tenant pays directly"
+                        : (rule.is_recoverable || rule.recoverable_from_tenant)
+                          ? "Landlord (recoverable)"
+                          : "Landlord"
+                  );
+                  const recoveryMethod = rule.recovery_method || (
+                    (rule.billing_frequency || rule.frequency) === "monthly"
                       ? "Monthly billing"
-                      : rule.has_base_year
-                      ? "Base year"
-                      : rule.is_subject_to_cap
-                      ? "Capped"
-                      : rule.is_recoverable
-                      ? "Annual pass-through"
-                      : "—";
+                      : rule.base_year || rule.has_base_year
+                        ? "Base year"
+                        : rule.expense_stop_amount != null
+                          ? "Expense stop"
+                          : rule.is_subject_to_cap
+                            ? "Capped"
+                            : (rule.is_recoverable || rule.recoverable_from_tenant)
+                              ? "Annual pass-through"
+                              : "—"
+                  );
+                  const allocationBasis = rule.allocation_basis || ((rule.is_recoverable || rule.recoverable_from_tenant) ? "Pro-rata" : "—");
+                  const capDisplay = rule.is_subject_to_cap
+                    ? [
+                        rule.cap_type || "",
+                        rule.cap_percent != null ? `${rule.cap_percent}%` : null,
+                        rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : null,
+                        rule.cap_value != null && rule.cap_amount == null ? String(rule.cap_value) : null,
+                      ].filter(Boolean).join(" ")
+                    : "—";
                   const clause = (rule.clauses || [])[0];
+                  const sourcePage = rule.source_page ?? clause?.page_number ?? null;
+                  const sourceText = rule.exact_source_text || clause?.clause_text || rule.source || rule.notes || "—";
                   return (
                     <TableRow key={rule.id} className="align-top hover:bg-slate-50">
                       <TableCell className="text-sm font-medium text-slate-900">
@@ -387,27 +411,23 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
                       <TableCell className="text-sm">
                         <div className="font-medium text-slate-900">
-                          {rule.category_name || category?.category_name || "—"}
+                          {rule.expense_category || rule.category_name || category?.category_name || "—"}
                         </div>
-                        {(rule.subcategory_name || category?.subcategory_name) && (
+                        {(rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name) && (
                           <div className="text-[10px] text-slate-500">
-                            {rule.subcategory_name || category?.subcategory_name}
+                            {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name}
                           </div>
                         )}
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{responsibility}</TableCell>
                       <TableCell>
-                        <Badge className={`text-[10px] ${rule.is_recoverable && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                          {rule.is_excluded ? "No" : rule.is_recoverable ? "Yes" : "No"}
+                        <Badge className={`text-[10px] ${(rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                          {rule.is_excluded ? "No" : (rule.is_recoverable || rule.recoverable_from_tenant) ? "Yes" : "No"}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{recoveryMethod}</TableCell>
-                      <TableCell className="text-sm text-slate-700">
-                        {rule.is_recoverable ? "Pro-rata" : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-slate-700">
-                        {rule.is_subject_to_cap ? (rule.cap_percent ? `${rule.cap_percent}%` : "Yes") : "—"}
-                      </TableCell>
+                      <TableCell className="text-sm text-slate-700">{allocationBasis}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{capDisplay}</TableCell>
                       <TableCell className="text-sm text-slate-700">
                         {rule.admin_fee_applicable ? (rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "Yes") : "—"}
                       </TableCell>
@@ -415,13 +435,13 @@ export default function LeaseExpenseRules() {
                         {rule.gross_up_applicable ? (rule.gross_up_percent ? `${rule.gross_up_percent}%` : "Yes") : "—"}
                       </TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
-                        {clause?.page_number ? (
+                        {sourcePage ? (
                           <div>
-                            <span className="font-semibold text-slate-500">p. {clause.page_number}</span>{" "}
-                            <span className="italic">"{(clause.clause_text || "").slice(0, 140)}{clause.clause_text?.length > 140 ? "…" : ""}"</span>
+                            <span className="font-semibold text-slate-500">p. {sourcePage}</span>{" "}
+                            <span className="italic">"{String(sourceText).slice(0, 140)}{String(sourceText).length > 140 ? "…" : ""}"</span>
                           </div>
-                        ) : rule.source ? (
-                          <span className="italic">"{String(rule.source).slice(0, 140)}{String(rule.source).length > 140 ? "…" : ""}"</span>
+                        ) : sourceText && sourceText !== "—" ? (
+                          <span className="italic">"{String(sourceText).slice(0, 140)}{String(sourceText).length > 140 ? "…" : ""}"</span>
                         ) : (
                           "—"
                         )}
