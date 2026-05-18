@@ -75,28 +75,59 @@ ALTER TABLE public.lease_expense_rules
   ADD COLUMN IF NOT EXISTS approved_at                  TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS created_from                 TEXT DEFAULT 'workflow';    -- workflow | manual | reextract | import
 
--- Backfill scope columns from the parent rule_set so existing rows query
--- correctly under the new scope-aware page filter. Safe to re-run.
-UPDATE public.lease_expense_rules r
-SET
-  org_id      = COALESCE(r.org_id,      s.org_id),
-  lease_id    = COALESCE(r.lease_id,    s.lease_id),
-  property_id = COALESCE(r.property_id, s.property_id),
-  building_id = COALESCE(r.building_id, s.building_id),
-  unit_id     = COALESCE(r.unit_id,     s.unit_id)
-FROM public.lease_expense_rule_sets s
-WHERE r.rule_set_id = s.id
-  AND (r.org_id IS NULL OR r.lease_id IS NULL OR r.property_id IS NULL);
+-- Backfill scope columns. The rule_set only carries org_id, lease_id, and
+-- property_id — building_id / unit_id / tenant_id live on the lease itself.
+-- Wrapped in a DO so the migration tolerates older rule_set shapes that may
+-- be missing some of these columns.
+DO $$
+BEGIN
+  -- Phase 1: org_id / lease_id / property_id come from the rule_set parent.
+  UPDATE public.lease_expense_rules r
+  SET
+    org_id      = COALESCE(r.org_id,      s.org_id),
+    lease_id    = COALESCE(r.lease_id,    s.lease_id),
+    property_id = COALESCE(r.property_id, s.property_id)
+  FROM public.lease_expense_rule_sets s
+  WHERE r.rule_set_id = s.id
+    AND (r.org_id IS NULL OR r.lease_id IS NULL OR r.property_id IS NULL);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Skipping rule_set scope backfill: %', SQLERRM;
+END $$;
 
--- Backfill canonical category text from expense_categories. Lets us drop
--- the join when reading rule lists.
-UPDATE public.lease_expense_rules r
-SET
-  expense_category    = COALESCE(r.expense_category,    c.normalized_key, c.category_name),
-  expense_subcategory = COALESCE(r.expense_subcategory, c.subcategory_name)
-FROM public.expense_categories c
-WHERE r.expense_category_id = c.id
-  AND r.expense_category IS NULL;
+DO $$
+BEGIN
+  -- Phase 2: building_id / unit_id / tenant_id come from the lease row.
+  -- Only sets values where the rule's column is currently NULL — never
+  -- clobbers an existing value.
+  UPDATE public.lease_expense_rules r
+  SET
+    building_id = COALESCE(r.building_id, l.building_id),
+    unit_id     = COALESCE(r.unit_id,     l.unit_id),
+    tenant_id   = COALESCE(r.tenant_id,   l.tenant_id),
+    org_id      = COALESCE(r.org_id,      l.org_id),
+    property_id = COALESCE(r.property_id, l.property_id)
+  FROM public.leases l
+  WHERE r.lease_id = l.id
+    AND (r.building_id IS NULL OR r.unit_id IS NULL OR r.tenant_id IS NULL OR r.org_id IS NULL OR r.property_id IS NULL);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Skipping lease scope backfill: %', SQLERRM;
+END $$;
+
+-- Backfill canonical category text from expense_categories. Wrapped in DO
+-- so a missing expense_categories table (likely on first deploy before the
+-- companion migration runs) doesn't abort this whole migration.
+DO $$
+BEGIN
+  UPDATE public.lease_expense_rules r
+  SET
+    expense_category    = COALESCE(r.expense_category,    c.normalized_key, c.category_name),
+    expense_subcategory = COALESCE(r.expense_subcategory, c.subcategory_name)
+  FROM public.expense_categories c
+  WHERE r.expense_category_id = c.id
+    AND r.expense_category IS NULL;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Skipping expense_category text backfill (run the expense_categories migration next): %', SQLERRM;
+END $$;
 
 -- Indexes on the new scope columns so the Lease Expense Rules page filter
 -- stays fast as rule volume grows.
