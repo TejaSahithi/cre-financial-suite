@@ -59,6 +59,26 @@ const PROJECTION_MODES = [
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+const APPROVED_FIELD_ALIASES = {
+  commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  rent_commencement_date: ["rent_commencement_date", "commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  expiration_date: ["expiration_date", "end_date", "lease_end_date", "term_end_date"],
+  tenant_rsf: ["tenant_rsf", "rentable_area_sqft", "square_footage", "total_sf"],
+  monthly_rent: ["monthly_rent", "base_rent_monthly", "base_rent", "monthly_base_rent"],
+  annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
+  rent_per_sf: ["rent_per_sf", "tenant_rent_per_rsf", "base_rent_psf"],
+  escalation_type: ["escalation_type", "rent_escalation_type"],
+  escalation_rate: ["escalation_rate", "renewal_escalation_percent", "renewal_escalation_pct"],
+  escalation_timing: ["escalation_timing", "rent_escalation_timing"],
+  free_rent_months: ["free_rent_months", "rent_abatement_months", "abatement_months", "free_rent"],
+  renewal_options: ["renewal_options", "renewal_option_count", "option_to_renew", "renewal_option"],
+  holdover_rent_multiplier: ["holdover_rent_multiplier", "holdover_multiplier"],
+  renewal_escalation_percent: ["renewal_escalation_percent", "renewal_escalation_pct", "escalation_rate"],
+  ground_rent: ["ground_rent", "ground_rent_monthly"],
+  percentage_rent: ["percentage_rent", "percentage_rent_monthly"],
+  lease_type: ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
+};
+
 const fmtMoney = (n, opts = {}) =>
   `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0, ...opts })}`;
 
@@ -79,7 +99,9 @@ function isApprovedLease(lease) {
 }
 
 function approvedFieldValue(lease, keys) {
-  const candidates = Array.isArray(keys) ? keys : [keys];
+  const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => (
+    APPROVED_FIELD_ALIASES[key] || [key]
+  ));
   const snapshotFields = lease?.abstract_snapshot?.fields || {};
   const extractionFields = lease?.extraction_data?.fields || {};
   const extractedFields = lease?.extracted_fields || {};

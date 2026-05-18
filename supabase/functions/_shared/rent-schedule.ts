@@ -155,6 +155,26 @@ function extractedFields(lease: Record<string, any>): Record<string, any> {
   return safeObject(lease?.extracted_fields);
 }
 
+const APPROVED_FIELD_ALIASES: Record<string, string[]> = {
+  commencement_date: ["commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  rent_commencement_date: ["rent_commencement_date", "commencement_date", "start_date", "lease_start_date", "term_start_date"],
+  expiration_date: ["expiration_date", "end_date", "lease_end_date", "term_end_date"],
+  tenant_rsf: ["tenant_rsf", "rentable_area_sqft", "square_footage", "total_sf"],
+  monthly_rent: ["monthly_rent", "base_rent_monthly", "base_rent", "monthly_base_rent"],
+  annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
+  rent_per_sf: ["rent_per_sf", "tenant_rent_per_rsf", "base_rent_psf"],
+  escalation_type: ["escalation_type", "rent_escalation_type"],
+  escalation_rate: ["escalation_rate", "renewal_escalation_percent", "renewal_escalation_pct"],
+  escalation_timing: ["escalation_timing", "rent_escalation_timing"],
+  free_rent_months: ["free_rent_months", "rent_abatement_months", "abatement_months", "free_rent"],
+  renewal_options: ["renewal_options", "renewal_option_count", "option_to_renew", "renewal_option"],
+  holdover_rent_multiplier: ["holdover_rent_multiplier", "holdover_multiplier"],
+  renewal_escalation_percent: ["renewal_escalation_percent", "renewal_escalation_pct", "escalation_rate"],
+  ground_rent: ["ground_rent", "ground_rent_monthly"],
+  percentage_rent: ["percentage_rent", "percentage_rent_monthly"],
+  lease_type: ["lease_type", "expense_structure", "lease_structure", "cam_structure"],
+};
+
 export function asNumber(value: unknown): number | null {
   if (value == null || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -187,7 +207,9 @@ export function approvedFieldValue(
   lease: Record<string, any>,
   keys: string | string[],
 ): unknown {
-  const candidates = Array.isArray(keys) ? keys : [keys];
+  const candidates = (Array.isArray(keys) ? keys : [keys]).flatMap((key) => (
+    APPROVED_FIELD_ALIASES[key] ?? [key]
+  ));
   const snapshot = snapshotFields(lease);
   const extraction = extractionFields(lease);
   const extracted = extractedFields(lease);
