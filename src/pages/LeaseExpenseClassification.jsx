@@ -87,11 +87,19 @@ export default function LeaseExpenseClassification() {
         .select('*')
         .eq('is_active', true)
         .order('display_order', { ascending: true });
-      if (error) throw error;
+      if (error) {
+        console.warn("[LeaseExpenseClassification] categories query failed:", error.message);
+        return [];
+      }
       return data || [];
     },
     enabled: !!lease
   });
+
+  const effectiveCategories = useMemo(() => {
+    if (categories.length > 0) return categories;
+    return leaseExpenseRuleService.buildFallbackCategories({ lease, rules: localRules });
+  }, [categories, lease, localRules]);
 
   // Fetch Active Rule Set & Rules
   const { data: ruleSetData, isLoading: isLoadingRules } = useQuery({
@@ -113,7 +121,7 @@ export default function LeaseExpenseClassification() {
     mutationFn: async ({ silent = false } = {}) => {
       const persisted = await leaseExpenseRuleService.extractDraftRuleSet({
         lease,
-        categories,
+        categories: effectiveCategories,
         existingRuleSetId: activeRuleSetId,
         existingRules: localRules,
       });
@@ -141,7 +149,7 @@ export default function LeaseExpenseClassification() {
         rules: localRules,
         status,
         existingRuleSetId: activeRuleSetId,
-        categories,
+        categories: effectiveCategories,
       });
 
       if (status === "approved") {
@@ -166,17 +174,17 @@ export default function LeaseExpenseClassification() {
   });
 
   React.useEffect(() => {
-    if (!lease?.id || categories.length === 0 || isLoadingRules) return;
+    if (!lease?.id || effectiveCategories.length === 0 || isLoadingRules) return;
     if (extractRulesMutation.isPending) return;
     if (autoExtractedLeaseIds.current.has(lease.id)) return;
     if ((localRules || []).length > 0) return;
 
     autoExtractedLeaseIds.current.add(lease.id);
     extractRulesMutation.mutate({ silent: true });
-  }, [categories, extractRulesMutation, isLoadingRules, lease?.id, localRules]);
+  }, [effectiveCategories, extractRulesMutation, isLoadingRules, lease?.id, localRules]);
 
   const groupedCategories = useMemo(() => {
-    return categories.reduce((groups, category) => {
+    return effectiveCategories.reduce((groups, category) => {
       const key = categorizeCategory(category, localRules);
       groups[key].push(category);
       return groups;
@@ -186,7 +194,7 @@ export default function LeaseExpenseClassification() {
       conditional: [],
       needsReview: [],
     });
-  }, [categories, localRules]);
+  }, [effectiveCategories, localRules]);
 
   const ruleGroups = useMemo(
     () => leaseExpenseRuleService.groupRulesByRecoveryStatus(localRules),
@@ -407,7 +415,7 @@ export default function LeaseExpenseClassification() {
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-sm font-medium text-slate-700">Categories Mapped</span>
                   <span className="font-bold text-slate-900">
-                    {localRules.filter(r => r.row_status === 'mapped').length} / {categories.length}
+                    {localRules.filter(r => r.row_status === 'mapped').length} / {effectiveCategories.length}
                   </span>
                 </div>
 

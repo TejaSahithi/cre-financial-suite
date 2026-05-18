@@ -32,6 +32,22 @@ function normalizeCategoryToken(value) {
     .trim();
 }
 
+function normalizeCategoryKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function humanizeLabel(value) {
+  const text = String(value || "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  if (!text) return "Uncategorized";
+  return text.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function normalizeRuleStatus(rule) {
   const raw = String(rule?.row_status || "").trim().toLowerCase();
   return raw || "needs_review";
@@ -274,6 +290,167 @@ function getLeaseWorkflowOutput(lease) {
   if (!workflow || typeof workflow !== "object") return null;
   if (Array.isArray(workflow?.records) && workflow.records[0]) return workflow.records[0];
   return workflow;
+}
+
+function getLeaseWorkflowExpenseRules(lease) {
+  return asArray(getLeaseWorkflowOutput(lease)?.expense_rules);
+}
+
+function hasWorkflowExpenseRules(lease) {
+  return getLeaseWorkflowExpenseRules(lease).length > 0;
+}
+
+function isMissingExpenseRuleTable(error) {
+  if (!error) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (code === "PGRST205" || code === "42P01") return true;
+  const text = String(error.message || error.details || error.hint || "").toLowerCase();
+  return /expense_categories|scope_expense_categories|lease_expense_rule_sets|lease_expense_rules|lease_expense_values|lease_expense_rule_clauses/.test(text)
+    && /does not exist|could not find/.test(text);
+}
+
+function workflowRuleCategoryId(rule, index) {
+  const key = normalizeCategoryKey(
+    rule?.expense_category ||
+    rule?.category ||
+    rule?.key ||
+    rule?.expense_subcategory ||
+    `workflow_rule_${index + 1}`
+  );
+  return `workflow:${key || `rule_${index + 1}`}`;
+}
+
+function workflowRuleStatus(rule) {
+  const explicit = normalizeText(rule?.status);
+  if (explicit === "manual_required") return "needs_review";
+  if (explicit === "not_mentioned") return "not_mentioned";
+  if (explicit === "missing_value") return "missing_value";
+
+  const recoveryClass = normalizeText(rule?.rule_classification);
+  if (recoveryClass === "conditional") return "uncertain";
+  if (recoveryClass === "excluded") return "mapped";
+
+  const explicitValue = asNumber(
+    rule?.explicit_charge_amount ??
+    rule?.charge_amount ??
+    rule?.amount ??
+    rule?.extracted_value
+  );
+
+  if (explicitValue != null || rule?.recoverable_flag != null || recoveryClass) {
+    return "mapped";
+  }
+  return "needs_review";
+}
+
+function buildWorkflowRuleClause(rule, leaseId) {
+  const clauseText = String(
+    rule?.source_clause ??
+    rule?.clause_text ??
+    rule?.notes ??
+    rule?.lease_treatment ??
+    ""
+  ).trim();
+  if (!clauseText) return [];
+
+  return [{
+    lease_expense_rule_id: null,
+    lease_id: leaseId,
+    page_number: Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null,
+    clause_type: rule?.clause_type || "supporting_text",
+    clause_text: clauseText,
+    confidence: asNumber(rule?.confidence ?? rule?.confidence_score),
+  }];
+}
+
+function buildFallbackRulesFromWorkflow(lease) {
+  return getLeaseWorkflowExpenseRules(lease).map((rule, index) => {
+    const categoryKey = normalizeCategoryKey(rule?.expense_category || rule?.category || rule?.key);
+    const subcategoryKey = normalizeCategoryKey(rule?.expense_subcategory);
+    const explicitValue = asNumber(
+      rule?.explicit_charge_amount ??
+      rule?.charge_amount ??
+      rule?.amount ??
+      rule?.extracted_value
+    );
+    const recoveryClass = normalizeText(rule?.rule_classification);
+    const categoryName = rule?.expense_category
+      ? humanizeLabel(rule.expense_category)
+      : humanizeLabel(rule?.category || rule?.key);
+    const subcategoryName = rule?.expense_subcategory
+      ? humanizeLabel(rule.expense_subcategory)
+      : null;
+
+    return {
+      id: `workflow-rule-${lease.id}-${index}`,
+      rule_set_id: `workflow-rule-set-${lease.id}`,
+      expense_category_id: workflowRuleCategoryId(rule, index),
+      category_name: categoryName,
+      subcategory_name: subcategoryName,
+      normalized_key: categoryKey || null,
+      row_status: workflowRuleStatus(rule),
+      mentioned_in_lease: true,
+      is_recoverable: Boolean(
+        rule?.recoverable_flag === true ||
+        rule?.recoverable_from_tenant === true ||
+        rule?.is_recoverable === true ||
+        recoveryClass === "recoverable" ||
+        recoveryClass === "conditional"
+      ),
+      is_excluded: recoveryClass === "excluded" || rule?.excluded_from_recovery === true,
+      is_controllable: Boolean(rule?.is_controllable),
+      is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
+      cap_type: rule?.cap_type || null,
+      cap_value: asNumber(rule?.cap_value ?? rule?.cap_amount),
+      has_base_year: Boolean(rule?.has_base_year || rule?.base_year_type),
+      base_year_type: rule?.base_year_type || null,
+      base_year_amount: asNumber(rule?.base_year_amount),
+      gross_up_applicable: Boolean(rule?.gross_up_applicable),
+      gross_up_percent: asNumber(rule?.gross_up_percent),
+      admin_fee_applicable: Boolean(rule?.admin_fee_applicable),
+      admin_fee_percent: asNumber(rule?.admin_fee_percent),
+      extracted_value: explicitValue,
+      manual_value: null,
+      final_value: explicitValue,
+      frequency: normalizeFrequency(rule?.billing_frequency || rule?.frequency),
+      confidence: asNumber(rule?.confidence ?? rule?.confidence_score) ?? 0.7,
+      notes: rule?.notes || null,
+      source: rule?.source_clause || rule?.lease_treatment || null,
+      clauses: buildWorkflowRuleClause(rule, lease.id),
+      source_type: "workflow_output",
+      is_fallback: true,
+      fallback_category_key: subcategoryKey || categoryKey || null,
+    };
+  });
+}
+
+function buildFallbackRuleSetEntry(lease) {
+  const rules = buildFallbackRulesFromWorkflow(lease);
+  if (rules.length === 0) return null;
+
+  return {
+    leaseId: lease.id,
+    ruleSet: {
+      id: `workflow-rule-set-${lease.id}`,
+      lease_id: lease.id,
+      property_id: lease.property_id || null,
+      version: 0,
+      status: "draft",
+      source: "workflow_output",
+      is_fallback: true,
+    },
+    rules,
+  };
+}
+
+async function fetchLeasesForFallback(leaseIds = []) {
+  if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("leases")
+    .select("*")
+    .in("id", leaseIds);
+  if (error) throw error;
+  return data || [];
 }
 
 function findCategoryByKeywords(categories = [], keywords = []) {
@@ -522,85 +699,133 @@ export const leaseExpenseRuleService = {
   async loadRuleSet(leaseId) {
     if (!supabase || !leaseId) return { ruleSet: null, rules: [] };
 
-    const { data: ruleSets, error } = await supabase
-      .from("lease_expense_rule_sets")
-      .select("*")
-      .eq("lease_id", leaseId)
-      .not("status", "eq", "archived")
-      .order("version", { ascending: false })
-      .limit(1);
+    try {
+      const { data: ruleSets, error } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("*")
+        .eq("lease_id", leaseId)
+        .not("status", "eq", "archived")
+        .order("version", { ascending: false })
+        .limit(1);
 
-    if (error) throw error;
+      if (error) throw error;
 
-    const ruleSet = ruleSets?.[0] || null;
-    if (!ruleSet) return { ruleSet: null, rules: [] };
+      const ruleSet = ruleSets?.[0] || null;
+      if (!ruleSet) {
+        const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
+        const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
+        return fallbackEntry
+          ? { ruleSet: fallbackEntry.ruleSet, rules: fallbackEntry.rules }
+          : { ruleSet: null, rules: [] };
+      }
 
-    const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
-    const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
+      const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
+      const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
 
-    return { ruleSet, rules: mergedRules };
+      if (mergedRules.length === 0) {
+        const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
+        const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
+        if (fallbackEntry) {
+          return { ruleSet: ruleSet || fallbackEntry.ruleSet, rules: fallbackEntry.rules };
+        }
+      }
+
+      return { ruleSet, rules: mergedRules };
+    } catch (error) {
+      if (!isMissingExpenseRuleTable(error)) throw error;
+      const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
+      const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
+      return fallbackEntry
+        ? { ruleSet: fallbackEntry.ruleSet, rules: fallbackEntry.rules }
+        : { ruleSet: null, rules: [] };
+    }
   },
 
   async loadRuleSets(leaseIds = []) {
     if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) return [];
 
-    const { data: ruleSets, error } = await supabase
-      .from("lease_expense_rule_sets")
-      .select("*")
-      .in("lease_id", leaseIds)
-      .not("status", "eq", "archived")
-      .order("version", { ascending: false });
+    const leasesForFallback = await fetchLeasesForFallback(leaseIds);
+    const fallbackByLeaseId = new Map(
+      leasesForFallback
+        .map((lease) => [lease.id, buildFallbackRuleSetEntry(lease)])
+        .filter(([, entry]) => Boolean(entry))
+    );
 
-    if (error) throw error;
+    try {
+      const { data: ruleSets, error } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("*")
+        .in("lease_id", leaseIds)
+        .not("status", "eq", "archived")
+        .order("version", { ascending: false });
 
-    const latestRuleSetByLeaseId = new Map();
-    for (const ruleSet of ruleSets || []) {
-      if (!latestRuleSetByLeaseId.has(ruleSet.lease_id)) {
-        latestRuleSetByLeaseId.set(ruleSet.lease_id, ruleSet);
+      if (error) throw error;
+
+      const latestRuleSetByLeaseId = new Map();
+      for (const ruleSet of ruleSets || []) {
+        if (!latestRuleSetByLeaseId.has(ruleSet.lease_id)) {
+          latestRuleSetByLeaseId.set(ruleSet.lease_id, ruleSet);
+        }
       }
+
+      const latestRuleSets = [...latestRuleSetByLeaseId.values()];
+      const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
+      if (ruleSetIds.length === 0) {
+        return [...fallbackByLeaseId.values()].filter(Boolean);
+      }
+
+      const { data: rules, error: rulesError } = await supabase
+        .from("lease_expense_rules")
+        .select("*")
+        .in("rule_set_id", ruleSetIds);
+
+      if (rulesError) throw rulesError;
+
+      const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
+      const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
+        ruleIds.length > 0
+          ? supabase.from("lease_expense_values").select("*").in("rule_id", ruleIds)
+          : Promise.resolve({ data: [], error: null }),
+        ruleIds.length > 0
+          ? supabase.from("lease_expense_rule_clauses").select("*").in("lease_expense_rule_id", ruleIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (valuesError) throw valuesError;
+      if (clausesError) throw clausesError;
+
+      const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
+      const clausesByRuleId = new Map();
+      (clauses || []).forEach((clause) => {
+        const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
+        existing.push(clause);
+        clausesByRuleId.set(clause.lease_expense_rule_id, existing);
+      });
+
+      const persistedEntries = latestRuleSets.map((ruleSet) => {
+        const mergedRules = mergeRulesWithRelations(
+          (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id),
+          valuesByRuleId,
+          clausesByRuleId
+        );
+        const fallbackEntry = fallbackByLeaseId.get(ruleSet.lease_id);
+        return {
+          leaseId: ruleSet.lease_id,
+          ruleSet,
+          rules: mergedRules.length > 0 ? mergedRules : (fallbackEntry?.rules || []),
+        };
+      });
+
+      const persistedLeaseIds = new Set(persistedEntries.map((entry) => entry.leaseId));
+      const fallbackEntries = [...fallbackByLeaseId.values()].filter(
+        (entry) => entry && !persistedLeaseIds.has(entry.leaseId)
+      );
+
+      return [...persistedEntries, ...fallbackEntries];
+    } catch (error) {
+      if (!isMissingExpenseRuleTable(error)) throw error;
+      return [...fallbackByLeaseId.values()].filter(Boolean);
     }
-
-    const latestRuleSets = [...latestRuleSetByLeaseId.values()];
-    const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
-    if (ruleSetIds.length === 0) return [];
-
-    const { data: rules, error: rulesError } = await supabase
-      .from("lease_expense_rules")
-      .select("*")
-      .in("rule_set_id", ruleSetIds);
-
-    if (rulesError) throw rulesError;
-
-    const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
-    const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
-      ruleIds.length > 0
-        ? supabase.from("lease_expense_values").select("*").in("rule_id", ruleIds)
-        : Promise.resolve({ data: [], error: null }),
-      ruleIds.length > 0
-        ? supabase.from("lease_expense_rule_clauses").select("*").in("lease_expense_rule_id", ruleIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    if (valuesError) throw valuesError;
-    if (clausesError) throw clausesError;
-
-    const valuesByRuleId = new Map((values || []).map((value) => [value.rule_id, value]));
-    const clausesByRuleId = new Map();
-    (clauses || []).forEach((clause) => {
-      const existing = clausesByRuleId.get(clause.lease_expense_rule_id) || [];
-      existing.push(clause);
-      clausesByRuleId.set(clause.lease_expense_rule_id, existing);
-    });
-
-    return latestRuleSets.map((ruleSet) => ({
-      leaseId: ruleSet.lease_id,
-      ruleSet,
-      rules: mergeRulesWithRelations(
-        (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id),
-        valuesByRuleId,
-        clausesByRuleId
-      ),
-    }));
   },
 
   async extractDraftRuleSet({ lease, categories = [], existingRuleSetId = null, existingRules = [] }) {
@@ -834,6 +1059,47 @@ export const leaseExpenseRuleService = {
     }
 
     return groups;
+  },
+
+  buildFallbackCategories({ lease, rules = [] } = {}) {
+    const categories = [];
+    const seenIds = new Set();
+
+    for (const [index, workflowRule] of getLeaseWorkflowExpenseRules(lease).entries()) {
+      const id = workflowRuleCategoryId(workflowRule, index);
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      categories.push({
+        id,
+        category_name: workflowRule?.expense_category
+          ? humanizeLabel(workflowRule.expense_category)
+          : humanizeLabel(workflowRule?.category || workflowRule?.key),
+        subcategory_name: workflowRule?.expense_subcategory
+          ? humanizeLabel(workflowRule.expense_subcategory)
+          : null,
+        normalized_key: normalizeCategoryKey(
+          workflowRule?.expense_category || workflowRule?.category || workflowRule?.key
+        ) || null,
+        display_order: categories.length,
+        is_fallback: true,
+      });
+    }
+
+    for (const rule of rules || []) {
+      const id = rule?.expense_category_id;
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      categories.push({
+        id,
+        category_name: rule?.category_name || humanizeLabel(rule?.normalized_key || id),
+        subcategory_name: rule?.subcategory_name || null,
+        normalized_key: rule?.normalized_key || rule?.fallback_category_key || null,
+        display_order: categories.length,
+        is_fallback: true,
+      });
+    }
+
+    return categories;
   },
 
   normalizeRecoveryStatus,
