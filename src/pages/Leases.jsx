@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { differenceInDays } from "date-fns";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Calculator,
@@ -43,18 +43,40 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { createPageUrl, downloadCSV } from "@/utils";
 import { leaseService } from "@/services/leaseService";
+import { supabase } from "@/services/supabaseClient";
 
-function deriveLeaseStatus(lease) {
+// Derived lease lifecycle status:
+//   draft       → no review work done (or rejected)
+//   validated   → review fields complete but abstract not yet approved
+//   approved    → abstract approved, expense/CAM rules NOT yet approved
+//   budget_ready → abstract approved AND expense rule set approved AND
+//                  inside its active term — feeds Budget Studio + CAM
+//   expired     → past the expiration date
+//
+// budgetReadyLeaseIds is a Set<lease.id> for leases whose
+// lease_expense_rule_sets row is status='approved'. Computed at the page
+// level so we hit the DB once per page load, not per lease.
+function deriveLeaseStatus(lease, budgetReadyLeaseIds) {
   const raw = String(lease?.status || "").toLowerCase();
-  if (raw === "budget_ready") return "budget_ready";
-  if (raw === "approved") return "approved";
-  if (raw === "validated" || raw === "active") return "validated";
+  const abstractStatus = String(lease?.abstract_status || "").toLowerCase();
+  const today = new Date();
+
+  // Hard expiry first — overrides everything else.
+  const end = lease?.expiration_date || lease?.end_date;
+  if (end) {
+    const endDate = new Date(end);
+    if (!Number.isNaN(endDate.getTime()) && endDate < today) return "expired";
+  }
   if (raw === "expired") return "expired";
 
-  if (lease?.end_date) {
-    const end = new Date(lease.end_date);
-    if (!Number.isNaN(end.getTime()) && end < new Date()) return "expired";
-  }
+  const abstractApproved = abstractStatus === "approved" || raw === "approved";
+  const rulesApproved = budgetReadyLeaseIds && budgetReadyLeaseIds.has(lease?.id);
+
+  if (abstractApproved && rulesApproved) return "budget_ready";
+  if (abstractApproved) return "approved";
+
+  if (abstractStatus === "pending_review" || raw === "validated" || raw === "active") return "validated";
+  if (abstractStatus === "rejected" || raw === "rejected") return "draft";
 
   return "draft";
 }
@@ -100,6 +122,32 @@ export default function Leases() {
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+
+  // Approved expense rule sets feed the "Budget Ready" derived status.
+  // We scope the query to lease IDs we already have to avoid pulling every
+  // org's rule sets, and degrade gracefully if the table doesn't exist yet.
+  const leaseIdList = useMemo(() => leases.map((l) => l.id).filter(Boolean), [leases]);
+  const { data: approvedRuleSetLeaseIds = [] } = useQuery({
+    queryKey: ["lease_expense_rule_sets_approved", leaseIdList],
+    enabled: leaseIdList.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("lease_id,status")
+        .in("lease_id", leaseIdList)
+        .eq("status", "approved");
+      if (error) {
+        // Table missing or RLS — non-fatal, leases just won't be flagged budget-ready.
+        return [];
+      }
+      return (data || []).map((row) => row.lease_id).filter(Boolean);
+    },
+  });
+
+  const budgetReadyLeaseIds = useMemo(
+    () => new Set(approvedRuleSetLeaseIds),
+    [approvedRuleSetLeaseIds],
+  );
 
   const scope = useMemo(
     () =>
@@ -189,7 +237,7 @@ export default function Leases() {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
 
-    const derivedStatus = deriveLeaseStatus(lease);
+    const derivedStatus = deriveLeaseStatus(lease, budgetReadyLeaseIds);
     const matchFilter = filter === "all" || derivedStatus === filter;
     return matchSearch && matchFilter;
   });
@@ -252,13 +300,13 @@ export default function Leases() {
     },
   });
 
-  const statusCounts = {
-    approved: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "approved").length,
-    budget_ready: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "budget_ready").length,
-    validated: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "validated").length,
-    draft: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "draft").length,
-    expired: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease) === "expired").length,
-  };
+  const statusCounts = useMemo(() => ({
+    approved: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease, budgetReadyLeaseIds) === "approved").length,
+    budget_ready: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease, budgetReadyLeaseIds) === "budget_ready").length,
+    validated: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease, budgetReadyLeaseIds) === "validated").length,
+    draft: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease, budgetReadyLeaseIds) === "draft").length,
+    expired: viewFilteredLeases.filter((lease) => deriveLeaseStatus(lease, budgetReadyLeaseIds) === "expired").length,
+  }), [viewFilteredLeases, budgetReadyLeaseIds]);
 
   const subtitleScope = getScopeSubtitle(scope, {
     default: `${filtered.length} lease records · OCR extraction and abstraction pipeline`,
@@ -448,7 +496,7 @@ export default function Leases() {
                 const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
                 const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
-                const derivedStatus = deriveLeaseStatus(lease);
+                const derivedStatus = deriveLeaseStatus(lease, budgetReadyLeaseIds);
                 const annualRent = Number(lease.annual_rent || Number(lease.monthly_rent || 0) * 12 || 0);
                 const unitLabel =
                   lease.unit_number ||

@@ -1215,12 +1215,214 @@ export default function LeaseReview() {
       queryClient.setQueryData(["lease", leaseId], approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
+      // Auto-build rent projection snapshots for the surrounding fiscal
+      // years (and both projection modes) so the Rent Projection page has
+      // authoritative monthly_projections to render — without the user
+      // having to click Run Engine. Done across:
+      //   - current FY, current+1, current-1 (covers the most common views)
+      //   - the FY that contains the lease commencement (term first year)
+      //   - both contracted_only and include_approved_renewals modes
       if (approvedLease?.property_id) {
-        triggerCompute(
-          "compute-lease",
-          { property_id: approvedLease.property_id, fiscal_year: new Date().getFullYear() },
-          { silent: true },
-        ).catch(() => {});
+        const currentYear = new Date().getFullYear();
+        // Parse any commencement/expiration format (ISO, US, "Feb 1, 2024",
+        // Date objects). We want the FY spanned by the lease term so the
+        // first/last year of the schedule are pre-computed for any document.
+        const safeYear = (raw) => {
+          if (!raw) return null;
+          if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw.getFullYear();
+          const s = String(raw).trim();
+          const isoMatch = s.match(/^(\d{4})-\d{2}-\d{2}/);
+          if (isoMatch) return Number(isoMatch[1]);
+          const parsed = new Date(s);
+          return Number.isNaN(parsed.getTime()) ? null : parsed.getFullYear();
+        };
+        const commencementYear = safeYear(
+          approvedLease.commencement_date
+          ?? approvedLease.start_date
+          ?? approvedLease.lease_start_date
+          ?? approvedLease.term_start_date,
+        );
+        const expirationYear = safeYear(
+          approvedLease.expiration_date
+          ?? approvedLease.end_date
+          ?? approvedLease.lease_end_date
+          ?? approvedLease.term_end_date,
+        );
+        const fiscalYears = Array.from(new Set([
+          currentYear - 1,
+          currentYear,
+          currentYear + 1,
+          ...(commencementYear ? [commencementYear, commencementYear + 1] : []),
+          ...(expirationYear ? [expirationYear] : []),
+        ])).filter((y) => Number.isFinite(y) && y > 1900 && y < 2100);
+        const modes = ["contracted_only", "include_approved_renewals"];
+        for (const fy of fiscalYears) {
+          for (const mode of modes) {
+            triggerCompute(
+              "compute-lease",
+              {
+                property_id: approvedLease.property_id,
+                building_id: approvedLease.building_id || undefined,
+                unit_id: approvedLease.unit_id || undefined,
+                fiscal_year: fy,
+                projection_mode: mode,
+              },
+              { silent: true },
+            ).catch(() => {});
+          }
+        }
+        queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
+      }
+
+      // Auto-populate lease_critical_dates from the approved abstract.
+      // Same shape the migration backfill uses, but for new approvals
+      // going forward. Idempotent via ON CONFLICT (lease_id, date_type,
+      // due_date). Failures degrade silently if the table isn't there.
+      //
+      // Format-agnostic: any date string ("2024-02-01", "02/01/2024",
+      // "February 1, 2024", ISO with time, etc.) is coerced to YYYY-MM-DD.
+      // Renewal notice accepts numeric days/months OR text like
+      // "90 days" / "3 months" / "6-month notice". Falls back through
+      // every known alias so leases from different document templates work.
+      try {
+        const toIsoDate = (value) => {
+          if (!value) return null;
+          if (value instanceof Date) {
+            if (Number.isNaN(value.getTime())) return null;
+            return value.toISOString().slice(0, 10);
+          }
+          const raw = String(value).trim();
+          if (!raw) return null;
+          // Already YYYY-MM-DD (with or without trailing time) — keep as-is.
+          const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+          if (isoMatch) return isoMatch[1];
+          // MM/DD/YYYY or M/D/YYYY → reorder.
+          const usMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+          if (usMatch) {
+            const [, m, d, y] = usMatch;
+            const yyyy = y.length === 2 ? (Number(y) > 50 ? `19${y}` : `20${y}`) : y;
+            return `${yyyy}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+          }
+          const parsed = new Date(raw);
+          if (Number.isNaN(parsed.getTime())) return null;
+          // Use UTC slice so timezone offset doesn't shift the date.
+          return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()))
+            .toISOString()
+            .slice(0, 10);
+        };
+
+        const toNoticeDays = (lease) => {
+          // Numeric days first.
+          for (const key of ["renewal_notice_days"]) {
+            const v = Number(lease?.[key]);
+            if (Number.isFinite(v) && v > 0) return v;
+          }
+          // Numeric months → days.
+          for (const key of ["renewal_notice_months"]) {
+            const v = Number(lease?.[key]);
+            if (Number.isFinite(v) && v > 0) return Math.round(v * 30);
+          }
+          // Free-text fallback: "90 days", "3 months", "6-month notice".
+          for (const key of ["renewal_notice_period", "renewal_notice", "notice_period"]) {
+            const raw = String(lease?.[key] || "").toLowerCase();
+            if (!raw) continue;
+            const m = raw.match(/(\d+(?:\.\d+)?)\s*(day|month|year)/);
+            if (!m) continue;
+            const n = Number(m[1]);
+            if (!Number.isFinite(n) || n <= 0) continue;
+            if (m[2].startsWith("day")) return Math.round(n);
+            if (m[2].startsWith("month")) return Math.round(n * 30);
+            if (m[2].startsWith("year")) return Math.round(n * 365);
+          }
+          return null;
+        };
+
+        const commencement = toIsoDate(
+          approvedLease.commencement_date
+          ?? approvedLease.start_date
+          ?? approvedLease.lease_start_date
+          ?? approvedLease.term_start_date,
+        );
+        const expiration = toIsoDate(
+          approvedLease.expiration_date
+          ?? approvedLease.end_date
+          ?? approvedLease.lease_end_date
+          ?? approvedLease.term_end_date,
+        );
+        const optionDeadline = toIsoDate(
+          approvedLease.option_exercise_deadline
+          ?? approvedLease.renewal_exercise_deadline
+          ?? approvedLease.option_deadline,
+        );
+        const rentCommencement = toIsoDate(approvedLease.rent_commencement_date);
+        const renewalNoticeDays = toNoticeDays(approvedLease);
+
+        const today = new Date().toISOString().slice(0, 10);
+        const baseRow = {
+          org_id: approvedLease.org_id,
+          lease_id: approvedLease.id,
+          property_id: approvedLease.property_id ?? null,
+          source: "derived",
+        };
+        const rows = [];
+        if (commencement) {
+          rows.push({
+            ...baseRow,
+            date_type: "commencement",
+            due_date: commencement,
+            status: commencement <= today ? "completed" : "open",
+          });
+        }
+        if (rentCommencement && rentCommencement !== commencement) {
+          rows.push({
+            ...baseRow,
+            date_type: "rent_commencement",
+            due_date: rentCommencement,
+            status: rentCommencement <= today ? "completed" : "open",
+          });
+        }
+        if (expiration) {
+          rows.push({
+            ...baseRow,
+            date_type: "expiration",
+            due_date: expiration,
+            status: expiration < today ? "completed" : "open",
+          });
+          if (renewalNoticeDays && renewalNoticeDays > 0) {
+            const expirationDate = new Date(`${expiration}T00:00:00Z`);
+            expirationDate.setUTCDate(expirationDate.getUTCDate() - renewalNoticeDays);
+            const noticeIso = expirationDate.toISOString().slice(0, 10);
+            rows.push({
+              ...baseRow,
+              date_type: "renewal_notice",
+              due_date: noticeIso,
+              status: noticeIso < today ? "completed" : "open",
+              reminder_days_before: 30,
+            });
+          }
+        }
+        if (optionDeadline) {
+          rows.push({
+            ...baseRow,
+            date_type: "option_exercise",
+            due_date: optionDeadline,
+            status: optionDeadline < today ? "completed" : "open",
+            reminder_days_before: 60,
+          });
+        }
+        if (rows.length > 0 && supabase) {
+          const { error: criticalErr } = await supabase
+            .from("lease_critical_dates")
+            .upsert(rows, { onConflict: "lease_id,date_type,due_date", ignoreDuplicates: true });
+          if (criticalErr) {
+            console.warn("[LeaseReview] lease_critical_dates upsert skipped:", criticalErr.message);
+          } else {
+            console.log(`[LeaseReview] inserted/refreshed ${rows.length} lease_critical_dates rows`);
+            queryClient.invalidateQueries({ queryKey: ["lease_critical_dates"] });
+          }
+        }
+      } catch (datesErr) {
+        console.warn("[LeaseReview] critical dates auto-insert skipped:", datesErr?.message || datesErr);
       }
 
       // Post-approval side effects MUST NOT block the approval itself.
