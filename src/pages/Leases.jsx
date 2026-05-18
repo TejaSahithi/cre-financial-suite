@@ -44,6 +44,7 @@ import {
 import { createPageUrl, downloadCSV } from "@/utils";
 import { leaseService } from "@/services/leaseService";
 import { supabase } from "@/services/supabaseClient";
+import { isMeaningfulValue } from "@/lib/leaseReviewSchema";
 
 // Derived lease lifecycle status:
 //   draft       → no review work done (or rejected)
@@ -534,7 +535,7 @@ export default function Leases() {
                     <TableCell className="text-sm text-slate-600">{unitLabel}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-[10px]">
-                        {lease.lease_type || "—"}
+                        {isMeaningfulValue(lease.lease_type) ? lease.lease_type : "—"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm">{lease.start_date || lease.commencement_date || "—"}</TableCell>

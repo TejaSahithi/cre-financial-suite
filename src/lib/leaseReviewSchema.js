@@ -537,7 +537,7 @@ const SENTINEL_NOT_FOUND_VALUES = new Set([
   "not applicable", "see lease", "as set forth", "per lease",
 ]);
 
-function isMeaningfulValue(value) {
+export function isMeaningfulValue(value) {
   if (value === null || value === undefined) return false;
   if (typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);

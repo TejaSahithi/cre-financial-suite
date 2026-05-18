@@ -474,12 +474,19 @@ export default function LeaseReview() {
           return { s, reasons };
         };
 
+        // Sort by score desc, then by updated_at desc — so ties between
+        // re-uploads of the same file always put the freshest one first.
         const ranked = leaseLike
           .map((f) => {
             const { s, reasons } = score(f);
             return { file: f, score: s, reasons };
           })
-          .sort((a, b) => b.score - a.score);
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            const tb = new Date(b.file.updated_at || 0).getTime();
+            const ta = new Date(a.file.updated_at || 0).getTime();
+            return tb - ta;
+          });
 
         const candidates = ranked.slice(0, 10).map((r) => ({
           id: r.file.id,
@@ -501,12 +508,24 @@ export default function LeaseReview() {
         if (!cancelled) setAutoLinkDebug(dbg);
         console.log("[LeaseReview] auto-link diagnostic:", dbg, "candidates:", candidates.slice(0, 5));
 
-        // Only auto-link when the top candidate clearly wins (score ≥ 5
-        // OR top is at least 3 points ahead of the runner-up).
+        // Decide whether to auto-link.
+        //   - Score must clear the minimum (≥ 5)
+        //   - Either: top beats the runner-up by ≥ 3 points
+        //     OR: every candidate tied at the top score is the SAME file
+        //         (same normalized filename) — re-uploads of one document
+        //         are not "ambiguous", just pick the most recent.
         const top = ranked[0];
-        const second = ranked[1];
-        const decisive = top && top.score >= 5 && (!second || top.score - second.score >= 3);
-        if (!decisive || cancelled) return;
+        if (!top || top.score < 5 || cancelled) return;
+        const normName = (n) => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
+        const topName = normName(top.file.file_name);
+        const tiedWithTop = ranked.filter((r) => r.score === top.score);
+        const allTiedSameFile = tiedWithTop.every((r) => normName(r.file.file_name) === topName);
+        const runnerUpDifferentFile = ranked
+          .find((r) => normName(r.file.file_name) !== topName);
+        const gapClear = !runnerUpDifferentFile
+          || top.score - runnerUpDifferentFile.score >= 3;
+        const decisive = allTiedSameFile || gapClear;
+        if (!decisive) return;
 
         const nextExtraction = {
           ...(lease.extraction_data || {}),
@@ -1215,6 +1234,107 @@ export default function LeaseReview() {
       queryClient.setQueryData(["lease", leaseId], approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
+
+      // Auto-resolve building_id / unit_id when the lease was uploaded
+      // without them. Looks up buildings & units under the lease's property
+      // and matches against extracted text (building_name, suite_number,
+      // unit_number, premises_address). Format-agnostic — works whenever
+      // the document mentions a recognizable suite or building label.
+      try {
+        if (
+          supabase &&
+          approvedLease?.id &&
+          approvedLease?.property_id &&
+          (!approvedLease.building_id || !approvedLease.unit_id)
+        ) {
+          const extractionData = approvedLease.extraction_data || {};
+          const extractedFields = approvedLease.extracted_fields
+            || extractionData.extracted_fields
+            || extractionData.fields
+            || {};
+          const fieldVal = (key) => {
+            const entry = extractedFields?.[key];
+            if (entry == null) return null;
+            if (typeof entry === "object") return entry.value ?? entry.raw_value ?? null;
+            return entry;
+          };
+          const extractedBuildingName = String(
+            fieldVal("building_name")
+            ?? fieldVal("building")
+            ?? approvedLease.building_name
+            ?? "",
+          ).trim();
+          const extractedUnitText = String(
+            fieldVal("unit_number")
+            ?? fieldVal("suite_number")
+            ?? fieldVal("suite")
+            ?? approvedLease.unit_number
+            ?? "",
+          ).trim();
+          const premisesAddress = String(
+            fieldVal("premises_address")
+            ?? fieldVal("property_address")
+            ?? "",
+          ).trim();
+
+          const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+          const [{ data: candidateBuildings }, { data: candidateUnits }] = await Promise.all([
+            supabase
+              .from("buildings")
+              .select("id, name, building_id_code, property_id")
+              .eq("property_id", approvedLease.property_id),
+            supabase
+              .from("units")
+              .select("id, unit_number, unit_id_code, building_id, property_id")
+              .eq("property_id", approvedLease.property_id),
+          ]);
+
+          const updates = {};
+
+          if (!approvedLease.building_id && (extractedBuildingName || premisesAddress) && candidateBuildings?.length) {
+            const needles = [extractedBuildingName, premisesAddress].filter(Boolean).map(norm);
+            const match = candidateBuildings.find((b) => {
+              const haystack = [b.name, b.building_id_code].map(norm).filter(Boolean);
+              return haystack.some((h) => needles.some((n) => n && (n.includes(h) || h.includes(n))));
+            });
+            if (match?.id) updates.building_id = match.id;
+          }
+
+          const buildingIdForUnit = updates.building_id || approvedLease.building_id || null;
+          if (!approvedLease.unit_id && extractedUnitText && candidateUnits?.length) {
+            const needle = norm(extractedUnitText);
+            const scoped = buildingIdForUnit
+              ? candidateUnits.filter((u) => u.building_id === buildingIdForUnit)
+              : candidateUnits;
+            const match = (scoped.length ? scoped : candidateUnits).find((u) => {
+              const haystack = [u.unit_number, u.unit_id_code].map(norm).filter(Boolean);
+              return haystack.some((h) => h && (h === needle || h.includes(needle) || needle.includes(h)));
+            });
+            if (match?.id) {
+              updates.unit_id = match.id;
+              if (!updates.building_id && match.building_id) updates.building_id = match.building_id;
+            }
+          }
+
+          if (Object.keys(updates).length > 0) {
+            const { error: linkErr } = await supabase
+              .from("leases")
+              .update(updates)
+              .eq("id", approvedLease.id);
+            if (linkErr) {
+              console.warn("[LeaseReview] building/unit auto-link skipped:", linkErr.message);
+            } else {
+              Object.assign(approvedLease, updates);
+              console.log("[LeaseReview] auto-linked building/unit:", updates);
+              queryClient.invalidateQueries({ queryKey: ["leases"] });
+            }
+          }
+        }
+      } catch (linkErr) {
+        console.warn("[LeaseReview] building/unit auto-link error:", linkErr?.message || linkErr);
+      }
+
       // Auto-build rent projection snapshots for the surrounding fiscal
       // years (and both projection modes) so the Rent Projection page has
       // authoritative monthly_projections to render — without the user
@@ -1952,7 +2072,7 @@ export default function LeaseReview() {
               Extraction (Docling + Gemini) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
               {autoLinkDebug ? (
                 <span className="block mt-1 italic">
-                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "—"}" against tenant "{autoLinkDebug.tenant || "—"}". A decisive link needs score ≥ 5 — pick one manually below.
+                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "—"}" against tenant "{autoLinkDebug.tenant || "—"}". If you see duplicates below, they're re-uploads of the same file — picking the most recent (top of the list) is safe. The UUID is just an internal identifier; you don't need to memorize it.
                 </span>
               ) : null}
             </p>
