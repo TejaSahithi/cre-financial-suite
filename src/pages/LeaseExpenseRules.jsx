@@ -1,18 +1,12 @@
 /**
- * LeaseExpenseRules — portfolio-wide view of lease expense rules extracted
+ * LeaseExpenseRules - portfolio-wide view of lease expense rules extracted
  * from approved leases. The single-lease editor remains
  * LeaseExpenseClassification; this page is the cross-lease audit and
  * approval surface backed by the existing rule-set tables.
- *
- * Rule rows come from lease_expense_rule_sets → lease_expense_rules →
- * lease_expense_values + lease_expense_rule_clauses via
- * leaseExpenseRuleService.loadRuleSets(). Per-row actions write back via
- * supabase directly so this page does not depend on the heavier draft/save
- * cycle in leaseExpenseRuleService.
  */
 import React, { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -37,11 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -72,10 +62,35 @@ const ROW_STATUS_LABEL = {
   missing_value: "Missing Value",
 };
 
+function isApprovedRule(rule) {
+  return rule?.review_status === "reviewed" && rule?.approval_status === "approved";
+}
+
+function needsReviewRule(rule) {
+  return (
+    rule?.review_status === "needs_review" ||
+    rule?.row_status === "needs_review" ||
+    rule?.row_status === "uncertain"
+  );
+}
+
+function formatConfidence(value) {
+  if (value == null) return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return `${Math.round(numeric <= 1 ? numeric * 100 : numeric)}%`;
+}
+
+function truncate(value, length = 140) {
+  const text = String(value || "");
+  if (!text) return "-";
+  return text.length > length ? `${text.slice(0, length)}...` : text;
+}
+
 export default function LeaseExpenseRules() {
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("all"); // all | recoverable | excluded | needs_review | approved
+  const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
 
   const { data: leases = [] } = useOrgQuery("Lease");
@@ -131,7 +146,7 @@ export default function LeaseExpenseRules() {
     return true;
   });
 
-  const leaseIds = selectorFilteredLeases.map((l) => l.id);
+  const leaseIds = selectorFilteredLeases.map((lease) => lease.id);
 
   const { data: ruleSetsByLease = [], isLoading } = useQuery({
     queryKey: ["lease-expense-rule-sets", leaseIds.join(",")],
@@ -140,15 +155,15 @@ export default function LeaseExpenseRules() {
   });
 
   const leaseById = useMemo(() => {
-    const m = new Map();
-    for (const l of leases) m.set(l.id, l);
-    return m;
+    const map = new Map();
+    for (const lease of leases) map.set(lease.id, lease);
+    return map;
   }, [leases]);
 
   const categoryById = useMemo(() => {
-    const m = new Map();
-    for (const c of categories) m.set(c.id, c);
-    return m;
+    const map = new Map();
+    for (const category of categories) map.set(category.id, category);
+    return map;
   }, [categories]);
 
   const flattenedRows = useMemo(() => {
@@ -157,13 +172,12 @@ export default function LeaseExpenseRules() {
       const lease = leaseById.get(entry.leaseId);
       const property = lease?.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
       for (const rule of entry.rules || []) {
-        const category = rule.expense_category_id ? categoryById.get(rule.expense_category_id) : null;
         rows.push({
           rule,
           ruleSet: entry.ruleSet,
           lease,
           property,
-          category,
+          category: rule.expense_category_id ? categoryById.get(rule.expense_category_id) : null,
         });
       }
     }
@@ -186,37 +200,37 @@ export default function LeaseExpenseRules() {
         rule.source,
       ]
         .filter(Boolean)
-        .map((v) => String(v).toLowerCase());
-      if (!haystack.some((s) => s.includes(search.toLowerCase()))) return false;
+        .map((value) => String(value).toLowerCase());
+      if (!haystack.some((value) => value.includes(search.toLowerCase()))) return false;
     }
+
     if (statusFilter === "all") return true;
     if (statusFilter === "recoverable") return (rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded;
     if (statusFilter === "excluded") return rule.is_excluded;
-    if (statusFilter === "needs_review") return rule.row_status === "needs_review" || rule.row_status === "uncertain";
-    if (statusFilter === "approved") return rule.row_status === "mapped" || rule.row_status === "manually_added";
+    if (statusFilter === "needs_review") return needsReviewRule(rule);
+    if (statusFilter === "approved") return isApprovedRule(rule);
     return true;
   });
 
   const counts = useMemo(() => {
-    const c = {
+    const summary = {
       all: flattenedRows.length,
       recoverable: 0,
       excluded: 0,
       needs_review: 0,
       approved: 0,
     };
+
     for (const { rule } of flattenedRows) {
-      if ((rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded) c.recoverable += 1;
-      if (rule.is_excluded) c.excluded += 1;
-      if (rule.row_status === "needs_review" || rule.row_status === "uncertain") c.needs_review += 1;
-      if (rule.row_status === "mapped" || rule.row_status === "manually_added") c.approved += 1;
+      if ((rule.is_recoverable || rule.recoverable_from_tenant) && !rule.is_excluded) summary.recoverable += 1;
+      if (rule.is_excluded) summary.excluded += 1;
+      if (needsReviewRule(rule)) summary.needs_review += 1;
+      if (isApprovedRule(rule)) summary.approved += 1;
     }
-    return c;
+
+    return summary;
   }, [flattenedRows]);
 
-  // Direct rule updates — bypass the heavier saveRuleSet pipeline for per-row
-  // actions. This is safe because we only flip status/recoverable/excluded
-  // and the service layer will reconcile on the next saveRuleSet call.
   const updateRuleMutation = useMutation({
     mutationFn: async ({ ruleId, patch }) => {
       const { data, error } = await supabase
@@ -231,25 +245,45 @@ export default function LeaseExpenseRules() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
     },
-    onError: (err) => toast.error(err?.message || "Could not update rule"),
+    onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
 
   const approveRule = (rule) =>
     updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: { row_status: "mapped", is_excluded: false },
+      patch: {
+        row_status: "mapped",
+        review_status: "reviewed",
+        approval_status: "approved",
+        is_excluded: false,
+        published_to_cam: false,
+      },
     }).then(() => toast.success("Rule approved"));
 
   const rejectRule = (rule) =>
     updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: { row_status: "needs_review", is_recoverable: false, is_excluded: true },
+      patch: {
+        row_status: "needs_review",
+        review_status: "needs_review",
+        approval_status: "draft",
+        is_recoverable: false,
+        is_excluded: true,
+        published_to_cam: false,
+      },
     }).then(() => toast.success("Rule rejected"));
 
   const markNARule = (rule) =>
     updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: { row_status: "unmapped", is_excluded: true, is_recoverable: false },
+      patch: {
+        row_status: "unmapped",
+        review_status: "reviewed",
+        approval_status: "draft",
+        is_excluded: true,
+        is_recoverable: false,
+        published_to_cam: false,
+      },
     }).then(() => toast.success("Rule marked N/A"));
 
   const subtitle = getScopeSubtitle(scope, {
@@ -271,9 +305,8 @@ export default function LeaseExpenseRules() {
           <div>
             <p className="font-medium">Rules vs. Actuals</p>
             <p className="text-xs">
-              Lease expense rules come from the lease document (responsibilities, recovery method,
-              caps, gross-up, etc.). Actual expense dollars come from invoices, imports, or
-              accounting integrations — see{" "}
+              Lease expense rules come from the lease document. Actual expense dollars come from
+              invoices, imports, or accounting integrations - see{" "}
               <Link to={createPageUrl("Expenses")} className="underline">
                 Actual Expenses
               </Link>
@@ -308,7 +341,7 @@ export default function LeaseExpenseRules() {
           className="max-w-sm"
           placeholder="Search tenant, category, clause..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
         />
         <Tabs value={statusFilter} onValueChange={setStatusFilter}>
           <TabsList className="bg-white border">
@@ -329,6 +362,7 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Lease</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Included In Rent</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Responsibility</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recoverable</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Recovery Method</TableHead>
@@ -337,22 +371,24 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Admin Fee</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Published To CAM</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-12 text-center">
+                  <TableCell colSpan={17} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-12 text-center text-sm text-slate-400">
-                    No lease expense rules in this view. Approve a lease abstract and run rule
-                    extraction to populate this list.
+                  <TableCell colSpan={17} className="py-12 text-center text-sm text-slate-400">
+                    No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -377,9 +413,11 @@ export default function LeaseExpenseRules() {
                             ? "Capped"
                             : (rule.is_recoverable || rule.recoverable_from_tenant)
                               ? "Annual pass-through"
-                              : "—"
+                              : "-"
                   );
-                  const allocationBasis = rule.allocation_basis || ((rule.is_recoverable || rule.recoverable_from_tenant) ? "Pro-rata" : "—");
+                  const allocationBasis =
+                    rule.allocation_basis ||
+                    ((rule.is_recoverable || rule.recoverable_from_tenant) ? "Pro-rata" : "-");
                   const capDisplay = rule.is_subject_to_cap
                     ? [
                         rule.cap_type || "",
@@ -387,10 +425,11 @@ export default function LeaseExpenseRules() {
                         rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : null,
                         rule.cap_value != null && rule.cap_amount == null ? String(rule.cap_value) : null,
                       ].filter(Boolean).join(" ")
-                    : "—";
+                    : "-";
                   const clause = (rule.clauses || [])[0];
                   const sourcePage = rule.source_page ?? clause?.page_number ?? null;
-                  const sourceText = rule.exact_source_text || clause?.clause_text || rule.source || rule.notes || "—";
+                  const sourceText = rule.exact_source_text || clause?.clause_text || rule.source || rule.notes || "-";
+
                   return (
                     <TableRow key={rule.id} className="align-top hover:bg-slate-50">
                       <TableCell className="text-sm font-medium text-slate-900">
@@ -402,22 +441,27 @@ export default function LeaseExpenseRules() {
                             {lease.tenant_name || lease.id.slice(0, 8)}
                           </Link>
                         ) : (
-                          "—"
+                          "-"
                         )}
                         <p className="text-[10px] text-slate-400">
-                          Rule set v{ruleSet?.version} · {ruleSet?.status}
+                          Rule set v{ruleSet?.version} - {ruleSet?.status}
                         </p>
                       </TableCell>
-                      <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
+                      <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
                       <TableCell className="text-sm">
                         <div className="font-medium text-slate-900">
-                          {rule.expense_category || rule.category_name || category?.category_name || "—"}
+                          {rule.category_name || rule.expense_category || category?.category_name || "-"}
                         </div>
                         {(rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name) && (
                           <div className="text-[10px] text-slate-500">
                             {rule.expense_subcategory || rule.subcategory_name || category?.subcategory_name}
                           </div>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${rule.included_in_base_rent ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                          {rule.included_in_base_rent ? "Included" : "Separate"}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{responsibility}</TableCell>
                       <TableCell>
@@ -429,26 +473,43 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-sm text-slate-700">{allocationBasis}</TableCell>
                       <TableCell className="text-sm text-slate-700">{capDisplay}</TableCell>
                       <TableCell className="text-sm text-slate-700">
-                        {rule.admin_fee_applicable ? (rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "Yes") : "—"}
+                        {rule.admin_fee_applicable ? (rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "Yes") : "-"}
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">
-                        {rule.gross_up_applicable ? (rule.gross_up_percent ? `${rule.gross_up_percent}%` : "Yes") : "—"}
+                        {rule.gross_up_applicable ? (rule.gross_up_percent ? `${rule.gross_up_percent}%` : "Yes") : "-"}
                       </TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
                         {sourcePage ? (
                           <div>
                             <span className="font-semibold text-slate-500">p. {sourcePage}</span>{" "}
-                            <span className="italic">"{String(sourceText).slice(0, 140)}{String(sourceText).length > 140 ? "…" : ""}"</span>
+                            <span className="italic">"{truncate(sourceText)}"</span>
                           </div>
-                        ) : sourceText && sourceText !== "—" ? (
-                          <span className="italic">"{String(sourceText).slice(0, 140)}{String(sourceText).length > 140 ? "…" : ""}"</span>
+                        ) : sourceText && sourceText !== "-" ? (
+                          <span className="italic">"{truncate(sourceText)}"</span>
                         ) : (
-                          "—"
+                          "-"
                         )}
                       </TableCell>
+                      <TableCell className="text-xs text-slate-700">{formatConfidence(rule.confidence_score)}</TableCell>
+                      <TableCell className="text-xs text-slate-700">{rule.extraction_status || "-"}</TableCell>
                       <TableCell>
-                        <Badge className={`text-[10px] ${ROW_STATUS_STYLE[rule.row_status] || "bg-slate-100 text-slate-700"}`}>
-                          {ROW_STATUS_LABEL[rule.row_status] || rule.row_status || "—"}
+                        <Badge className={`text-[10px] ${
+                          isApprovedRule(rule)
+                            ? "bg-emerald-100 text-emerald-700"
+                            : needsReviewRule(rule)
+                              ? "bg-amber-100 text-amber-800"
+                              : ROW_STATUS_STYLE[rule.row_status] || "bg-slate-100 text-slate-700"
+                        }`}>
+                          {isApprovedRule(rule)
+                            ? "Approved"
+                            : needsReviewRule(rule)
+                              ? "Needs Review"
+                              : ROW_STATUS_LABEL[rule.row_status] || rule.row_status || "-"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${rule.published_to_cam ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                          {rule.published_to_cam ? "Published" : "Not Published"}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -491,14 +552,19 @@ export default function LeaseExpenseRules() {
                             <MinusCircle className="mr-1 h-3.5 w-3.5" />
                             N/A
                           </Button>
-                          {lease?.property_id && (
+                          {lease?.property_id && isApprovedRule(rule) ? (
                             <Link to={createPageUrl("CAMSetup") + `?property=${lease.property_id}`}>
                               <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-700 hover:text-blue-800">
                                 <Send className="mr-1 h-3.5 w-3.5" />
                                 Publish to CAM
                               </Button>
                             </Link>
-                          )}
+                          ) : lease?.property_id ? (
+                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-slate-400" disabled>
+                              <Send className="mr-1 h-3.5 w-3.5" />
+                              Publish to CAM
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -512,8 +578,8 @@ export default function LeaseExpenseRules() {
 
       <p className="text-xs text-slate-500">
         Looking for actual expense rows (invoices, imports, vendor bills)? Go to{" "}
-        <Link to={createPageUrl("Expenses")} className="underline">Actual Expenses</Link>. Looking for
-        CAM recovery setup? Go to <Link to={createPageUrl("CAMSetup")} className="underline">CAM Setup</Link>.
+        <Link to={createPageUrl("Expenses")} className="underline">Actual Expenses</Link>. Looking for CAM recovery setup? Go to{" "}
+        <Link to={createPageUrl("CAMSetup")} className="underline">CAM Setup</Link>.
       </p>
 
       <Card className="border-slate-200 bg-slate-50">
@@ -523,7 +589,7 @@ export default function LeaseExpenseRules() {
             Approved lease expense rules feed CAM Setup and Recovery Budget.
           </span>
           <Link to={createPageUrl("CAMDashboard")} className="text-blue-600 hover:text-blue-700">
-            Go to CAM Dashboard →
+            Go to CAM Dashboard {"->"}
           </Link>
         </CardContent>
       </Card>

@@ -173,6 +173,283 @@ function deriveRuleConfidence(rule) {
   return asNumber(firstPresent(rule?.confidence, rule?.confidence_score)) ?? 0.7;
 }
 
+const RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.82;
+
+const CANONICAL_EXPENSE_CATEGORY_CONFIG = [
+  {
+    canonicalKey: "common_area_maintenance",
+    categoryName: "Common Area Maintenance",
+    aliases: ["cam", "common_area_maintenance", "common area maintenance"],
+  },
+  {
+    canonicalKey: "real_estate_taxes",
+    categoryName: "Real Estate Taxes",
+    aliases: ["property_tax", "real_estate_taxes", "taxes", "taxes_real_estate", "property taxes"],
+  },
+  {
+    canonicalKey: "property_insurance",
+    categoryName: "Property Insurance",
+    aliases: ["insurance", "property_insurance", "property insurance"],
+  },
+  {
+    canonicalKey: "repairs_maintenance",
+    categoryName: "Repairs & Maintenance",
+    aliases: [
+      "maintenance",
+      "repairs",
+      "repairs_maintenance",
+      "interior_repairs",
+      "exterior_repairs",
+      "roof_structure",
+      "foundation_structure",
+      "hvac",
+    ],
+  },
+  {
+    canonicalKey: "legal_enforcement_fees",
+    categoryName: "Legal / Enforcement Fees",
+    aliases: [
+      "legal_fees",
+      "enforcement_fees",
+      "attorneys_fees",
+      "legal_default_costs",
+      "legal_enforcement_fees",
+    ],
+  },
+  {
+    canonicalKey: "utilities",
+    categoryName: "Utilities",
+    aliases: ["utilities", "utility"],
+  },
+  {
+    canonicalKey: "electricity",
+    parentKey: "utilities",
+    categoryName: "Utilities",
+    subcategoryName: "Electricity",
+    aliases: ["electricity", "electric"],
+  },
+  {
+    canonicalKey: "water",
+    parentKey: "utilities",
+    categoryName: "Utilities",
+    subcategoryName: "Water",
+    aliases: ["water"],
+  },
+  {
+    canonicalKey: "sewer",
+    parentKey: "utilities",
+    categoryName: "Utilities",
+    subcategoryName: "Sewer",
+    aliases: ["sewer"],
+  },
+  {
+    canonicalKey: "gas",
+    parentKey: "utilities",
+    categoryName: "Utilities",
+    subcategoryName: "Gas",
+    aliases: ["gas"],
+  },
+];
+
+const EXCLUDED_LEASE_EXPENSE_RULE_KEYS = new Set(["base_rent", "monthly_rent", "annual_rent", "additional_rent"]);
+
+const GENERIC_SOURCE_PATTERNS = [
+  /included in base rent under/i,
+  /recoverable under/i,
+  /explicit recurring charge extracted/i,
+  /lease mentions this category/i,
+  /direct reimbursement obligation/i,
+  /mixed included and recoverable treatment/i,
+  /tenant pays directly under the lease/i,
+  /fixed cam amount extracted/i,
+  /percentage rent rules were extracted/i,
+  /billable exception charge under/i,
+];
+
+function normalizeConfidenceScore(value) {
+  const numeric = asNumber(value);
+  if (numeric == null) return null;
+  if (numeric <= 1) return Math.max(0, Math.min(1, numeric));
+  return Math.max(0, Math.min(1, numeric / 100));
+}
+
+function resolveCanonicalExpenseCategory(rule, index = 0) {
+  const candidates = [
+    rule?.expense_subcategory,
+    rule?.expense_category,
+    rule?.category_name,
+    rule?.subcategory_name,
+    rule?.category,
+    rule?.key,
+    rule?.normalized_key,
+    rule?.fallback_category_key,
+  ]
+    .map(normalizeCategoryKey)
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    for (const config of CANONICAL_EXPENSE_CATEGORY_CONFIG) {
+      if (config.aliases.some((alias) => normalizeCategoryKey(alias) === candidate)) {
+        return {
+          canonicalKey: config.parentKey || config.canonicalKey,
+          normalizedKey: config.parentKey || config.canonicalKey,
+          categoryName: config.categoryName,
+          subcategoryName: config.subcategoryName || null,
+        };
+      }
+    }
+  }
+
+  const fallbackKey = deriveRuleNormalizedKey(rule, index);
+  return {
+    canonicalKey: fallbackKey,
+    normalizedKey: fallbackKey,
+    categoryName: humanizeLabel(deriveRuleCategoryName(rule)),
+    subcategoryName: deriveRuleSubcategoryName(rule),
+  };
+}
+
+function isRuleExcludedFromLeaseExpenses(rule, canonicalKey) {
+  return EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(canonicalKey) ||
+    EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(normalizeCategoryKey(rule?.expense_category)) ||
+    EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(normalizeCategoryKey(rule?.category_name)) ||
+    EXCLUDED_LEASE_EXPENSE_RULE_KEYS.has(normalizeCategoryKey(rule?.normalized_key));
+}
+
+function isWeakSourceText(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized || normalized.length < 18) return true;
+  return GENERIC_SOURCE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function hasStrongRuleEvidence(rule) {
+  return Number.isFinite(Number(rule?.source_page)) && !isWeakSourceText(deriveRuleExactSourceText(rule));
+}
+
+function isRuleResponsibilityKnown(rule) {
+  const responsibility = normalizeText(firstPresent(rule?.responsibility, deriveRuleResponsibility(rule)));
+  return Boolean(responsibility) && !["unknown", "manual_review"].includes(responsibility);
+}
+
+function isRuleRecoverableKnown(rule) {
+  if (typeof rule?.recoverable_from_tenant === "boolean") return true;
+  if (typeof rule?.is_recoverable === "boolean") return true;
+  if (deriveRuleIncludedInBaseRent(rule) || rule?.is_excluded) return true;
+  return ["recoverable", "conditional", "non_recoverable", "excluded"].includes(normalizeText(rule?.rule_classification));
+}
+
+function isRuleRecoveryMethodSpecific(rule) {
+  const recoveryMethod = normalizeText(firstPresent(rule?.recovery_method, deriveRuleRecoveryMethod(rule)));
+  return Boolean(recoveryMethod) && !["manual_review", "none", "unknown"].includes(recoveryMethod);
+}
+
+function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
+  const exactSourceText = deriveRuleExactSourceText(rule);
+  const confidence = normalizeConfidenceScore(firstPresent(rule?.confidence_score, rule?.confidence));
+  const strongEvidence = hasStrongRuleEvidence({ ...rule, exact_source_text: exactSourceText });
+  const explicitExtractionStatus = normalizeText(rule?.extraction_status || rule?.status);
+  const inferred = explicitExtractionStatus === "inferred" || !strongEvidence;
+  const responsibilityKnown = isRuleResponsibilityKnown(rule);
+  const recoverableKnown = isRuleRecoverableKnown(rule);
+  const recoveryMethodSpecific = isRuleRecoveryMethodSpecific(rule);
+  const autoApproved =
+    !inferred &&
+    strongEvidence &&
+    responsibilityKnown &&
+    recoverableKnown &&
+    recoveryMethodSpecific &&
+    confidence != null &&
+    confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+
+  const extractionStatus = explicitExtractionStatus || (strongEvidence ? "extracted" : "inferred");
+  const reviewStatus = normalizeText(rule?.review_status) || (autoApproved ? "reviewed" : "needs_review");
+  const approvalStatus = normalizeText(rule?.approval_status) || (autoApproved && ruleSetStatus === "approved" ? "approved" : "draft");
+  const rowStatus =
+    extractionStatus === "not_found"
+      ? "not_mentioned"
+      : (autoApproved || normalizeText(rule?.row_status) === "manually_added")
+        ? normalizeText(rule?.row_status) || "mapped"
+        : "needs_review";
+
+  return {
+    exactSourceText,
+    confidence,
+    strongEvidence,
+    extractionStatus,
+    reviewStatus,
+    approvalStatus,
+    rowStatus,
+    publishedToCam: autoApproved && approvalStatus === "approved" ? Boolean(rule?.published_to_cam) : false,
+  };
+}
+
+function canonicalRuleDedupKey(rule, index = 0) {
+  const category = resolveCanonicalExpenseCategory(rule, index);
+  return `${category.normalizedKey}::${normalizeCategoryKey(category.subcategoryName) || ""}`;
+}
+
+function scoreRuleForDedup(rule) {
+  const state = resolveRuleWorkflowState(rule, normalizeText(rule?.approval_status) === "approved" ? "approved" : "draft");
+  return [
+    state.approvalStatus === "approved" ? 500 : 0,
+    state.reviewStatus === "reviewed" ? 250 : 0,
+    state.strongEvidence ? 200 : 0,
+    Number.isFinite(Number(rule?.source_page)) ? 120 : 0,
+    state.confidence != null ? Math.round(state.confidence * 100) : 0,
+    deriveRuleExactSourceText(rule) ? 40 : 0,
+    extractRuleValue(rule) != null ? 25 : 0,
+  ].reduce((sum, score) => sum + score, 0);
+}
+
+function finalizeLeaseExpenseRules(rules = [], ruleSetStatus = "draft") {
+  const deduped = new Map();
+
+  (rules || []).forEach((rule, index) => {
+    const category = resolveCanonicalExpenseCategory(rule, index);
+    if (isRuleExcludedFromLeaseExpenses(rule, category.canonicalKey)) return;
+
+    const workflowState = resolveRuleWorkflowState(rule, ruleSetStatus);
+    const normalizedRule = {
+      ...rule,
+      normalized_key: category.normalizedKey,
+      fallback_category_key: category.normalizedKey,
+      category_name: category.categoryName,
+      subcategory_name: category.subcategoryName || null,
+      expense_category: category.categoryName,
+      expense_subcategory: category.subcategoryName || null,
+      responsibility: isRuleResponsibilityKnown(rule) ? deriveRuleResponsibility(rule) : "unknown",
+      included_in_base_rent: deriveRuleIncludedInBaseRent(rule),
+      recoverable_from_tenant: typeof rule?.recoverable_from_tenant === "boolean"
+        ? rule.recoverable_from_tenant
+        : deriveRuleRecoverableFromTenant(rule),
+      recovery_method: firstPresent(rule?.recovery_method, deriveRuleRecoveryMethod(rule), "manual_review"),
+      allocation_basis: firstPresent(rule?.allocation_basis, deriveRuleAllocationBasis(rule)),
+      exact_source_text: workflowState.exactSourceText,
+      source_page: Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null,
+      confidence: workflowState.confidence ?? deriveRuleConfidence(rule),
+      confidence_score: workflowState.confidence ?? deriveRuleConfidence(rule),
+      extraction_status: workflowState.extractionStatus,
+      review_status: workflowState.reviewStatus,
+      approval_status: workflowState.approvalStatus,
+      published_to_cam: workflowState.publishedToCam,
+      row_status: workflowState.rowStatus,
+      source: firstPresent(rule?.source, workflowState.exactSourceText),
+      is_recoverable: workflowState.reviewStatus === "needs_review"
+        ? Boolean(rule?.is_recoverable || deriveRuleRecoverableFromTenant(rule))
+        : Boolean(rule?.is_recoverable || deriveRuleRecoverableFromTenant(rule)),
+      is_fallback: rule?.is_fallback || workflowState.extractionStatus === "inferred",
+    };
+
+    const dedupKey = canonicalRuleDedupKey(normalizedRule, index);
+    const existing = deduped.get(dedupKey);
+    if (!existing || scoreRuleForDedup(normalizedRule) >= scoreRuleForDedup(existing)) {
+      deduped.set(dedupKey, normalizedRule);
+    }
+  });
+
+  return [...deduped.values()];
+}
+
 function normalizeRuleStatus(rule) {
   const raw = String(rule?.row_status || "").trim().toLowerCase();
   return raw || "needs_review";
@@ -694,13 +971,14 @@ function buildFallbackRulesFromWorkflow(lease) {
 }
 
 function buildFallbackRuleSetEntry(lease) {
-  const rules = buildFallbackRulesFromWorkflow(lease);
-  if (rules.length === 0) return null;
+  const rawRules = buildFallbackRulesFromWorkflow(lease);
   const fallbackStatus = ["approved", "budget_ready", "active", "executed"].includes(
     normalizeText(lease?.abstract_status || lease?.status)
   )
     ? "approved"
     : "draft";
+  const rules = finalizeLeaseExpenseRules(rawRules, fallbackStatus);
+  if (rules.length === 0) return null;
 
   return {
     leaseId: lease.id,
@@ -995,8 +1273,9 @@ export const leaseExpenseRuleService = {
 
       const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
       const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
+      const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft");
 
-      if (mergedRules.length === 0) {
+      if (finalizedRules.length === 0) {
         const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
         const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
         if (fallbackEntry) {
@@ -1004,7 +1283,7 @@ export const leaseExpenseRuleService = {
         }
       }
 
-      return { ruleSet, rules: mergedRules };
+      return { ruleSet, rules: finalizedRules };
     } catch (error) {
       if (!isMissingExpenseRuleTable(error)) throw error;
       const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
@@ -1082,11 +1361,12 @@ export const leaseExpenseRuleService = {
           valuesByRuleId,
           clausesByRuleId
         );
+        const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft");
         const fallbackEntry = fallbackByLeaseId.get(ruleSet.lease_id);
         return {
           leaseId: ruleSet.lease_id,
           ruleSet,
-          rules: mergedRules.length > 0 ? mergedRules : (fallbackEntry?.rules || []),
+          rules: finalizedRules.length > 0 ? finalizedRules : (fallbackEntry?.rules || []),
         };
       });
 
@@ -1163,10 +1443,11 @@ export const leaseExpenseRuleService = {
       throw new Error("Unable to resolve organization for lease expense rules");
     }
 
+    const normalizedRules = finalizeLeaseExpenseRules(rules, status);
     const { categories: persistedCategories, rules: resolvedRules } = await ensurePersistentCategories({
       orgId,
       categories,
-      rules,
+      rules: normalizedRules,
     });
     const categoriesById = new Map((persistedCategories || []).map((category) => [category.id, category]));
     const now = new Date().toISOString();
@@ -1211,7 +1492,7 @@ export const leaseExpenseRuleService = {
       ruleSetId = createdRuleSet.id;
     }
 
-    const savableRules = resolvedRules.filter((rule) => isUuid(rule?.expense_category_id));
+    const savableRules = finalizeLeaseExpenseRules(resolvedRules, status).filter((rule) => isUuid(rule?.expense_category_id));
     const rulePayloads = savableRules.map((rule) => ({
       id: isUuid(rule?.id) ? rule.id : undefined,
       rule_set_id: ruleSetId,
@@ -1373,20 +1654,16 @@ export const leaseExpenseRuleService = {
     const categories = [];
     const seenIds = new Set();
 
-    for (const [index, workflowRule] of getLeaseWorkflowExpenseRules(lease).entries()) {
+    for (const [index, workflowRule] of finalizeLeaseExpenseRules(getLeaseWorkflowExpenseRules(lease)).entries()) {
       const id = workflowRuleCategoryId(workflowRule, index);
       if (seenIds.has(id)) continue;
       seenIds.add(id);
       categories.push({
         id,
-        category_name: workflowRule?.expense_category
-          ? humanizeLabel(workflowRule.expense_category)
-          : humanizeLabel(workflowRule?.category || workflowRule?.key),
-        subcategory_name: workflowRule?.expense_subcategory
-          ? humanizeLabel(workflowRule.expense_subcategory)
-          : null,
+        category_name: workflowRule?.expense_category || workflowRule?.category_name || humanizeLabel(workflowRule?.category || workflowRule?.key),
+        subcategory_name: workflowRule?.expense_subcategory || workflowRule?.subcategory_name || null,
         normalized_key: normalizeCategoryKey(
-          workflowRule?.expense_category || workflowRule?.category || workflowRule?.key
+          workflowRule?.normalized_key || workflowRule?.expense_category || workflowRule?.category || workflowRule?.key
         ) || null,
         display_order: categories.length,
         is_fallback: true,

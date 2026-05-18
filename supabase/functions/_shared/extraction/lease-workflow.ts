@@ -107,6 +107,42 @@ const EXPENSE_RULE_BLUEPRINTS = [
   { key: "tenant_alterations", title: "Tenant Alterations", keywords: ["alteration", "improvement", "tenant work"], tenantDirect: true },
 ];
 
+const EXCLUDED_EXPENSE_RULE_KEYS = new Set([
+  "base_rent",
+  "monthly_rent",
+  "annual_rent",
+  "additional_rent",
+]);
+
+const CANONICAL_EXPENSE_RULE_CONFIG = [
+  { canonicalKey: "common_area_maintenance", categoryName: "Common Area Maintenance", aliases: ["cam", "common_area_maintenance", "common area maintenance"] },
+  { canonicalKey: "real_estate_taxes", categoryName: "Real Estate Taxes", aliases: ["property_tax", "real_estate_taxes", "taxes", "property taxes", "taxes and assessments"] },
+  { canonicalKey: "property_insurance", categoryName: "Property Insurance", aliases: ["insurance", "property_insurance", "property insurance"] },
+  { canonicalKey: "repairs_maintenance", categoryName: "Repairs & Maintenance", aliases: ["maintenance", "repairs", "repairs_maintenance", "interior_repairs", "exterior_repairs", "roof_structure", "foundation_structure", "hvac"] },
+  { canonicalKey: "legal_enforcement_fees", categoryName: "Legal / Enforcement Fees", aliases: ["legal_fees", "legal_default_costs", "enforcement_fees", "attorneys_fees", "legal_enforcement_fees"] },
+  { canonicalKey: "tenant_caused_damage", categoryName: "Tenant-Caused Damage", aliases: ["tenant_caused_damage", "tenant_caused_repairs"] },
+  { canonicalKey: "excess_usage", categoryName: "Excess Usage", aliases: ["excess_usage", "excess_utilities", "special_equipment_usage"] },
+  { canonicalKey: "alterations", categoryName: "Alterations", aliases: ["alterations", "tenant_alterations"] },
+  { canonicalKey: "utilities", categoryName: "Utilities", aliases: ["utilities", "utility"] },
+  { canonicalKey: "electricity", categoryName: "Utilities", subcategoryName: "Electricity", aliases: ["electricity", "electric"] },
+  { canonicalKey: "water", categoryName: "Utilities", subcategoryName: "Water", aliases: ["water"] },
+  { canonicalKey: "sewer", categoryName: "Utilities", subcategoryName: "Sewer", aliases: ["sewer"] },
+  { canonicalKey: "gas", categoryName: "Utilities", subcategoryName: "Gas", aliases: ["gas"] },
+];
+
+const GENERIC_EXPENSE_RULE_SOURCE_PATTERNS = [
+  /included in base rent under/i,
+  /recoverable under/i,
+  /explicit recurring charge extracted/i,
+  /lease mentions this category/i,
+  /direct reimbursement obligation/i,
+  /mixed included and recoverable treatment/i,
+  /tenant pays directly under the lease/i,
+  /fixed cam amount extracted/i,
+  /percentage rent rules were extracted/i,
+  /billable exception charge under/i,
+];
+
 const CLAUSE_DEFINITIONS = [
   { type: "use_clause", title: "Use Clause", keywords: ["permitted use", "use of premises"], maxChars: 520 },
   { type: "assignment_subletting", title: "Assignment / Subletting", keywords: ["assignment", "subletting", "sublease"], maxChars: 620 },
@@ -242,7 +278,7 @@ function getRowConfidence(row: Record<string, unknown>, key: string) {
  * stamped by the LLM extractor (validator.ts:flattenRecords) with the
  * source_text / source_page that Gemini quoted verbatim. Honoring this
  * here means workflow_output.lease_fields[key].source_clause / source_page
- * reflect what Gemini actually saw — not whatever the local text-matcher
+ * reflect what Gemini actually saw - not whatever the local text-matcher
  * happens to find.
  */
 function getLlmEvidenceForAliases(row: Record<string, unknown>, aliases: string[] = []) {
@@ -763,7 +799,7 @@ function deriveExpenseRules(
   const explicitAdminFee = asNumber(row?.admin_fee_pct);
   const explicitGrossUp = asNumber(row?.gross_up_percent ?? row?.cam_cap_rate);
 
-  return EXPENSE_RULE_BLUEPRINTS.map((blueprint) => {
+  return finalizeDerivedExpenseRules(EXPENSE_RULE_BLUEPRINTS.map((blueprint) => {
     const supportingClause = findSupportingClauseForRule(clauses, textBlocks, fullText, blueprint.keywords);
 
     const mentioned = containsAny(fullText, blueprint.keywords);
@@ -1020,6 +1056,7 @@ function deriveExpenseRules(
     return {
       expense_category: blueprint.key,
       expense_subcategory: null,
+      category_name: blueprint.title,
       responsibility,
       included_in_base_rent: includedInBaseRent,
       separately_billed: separatelyBilled,
@@ -1034,8 +1071,10 @@ function deriveExpenseRules(
       admin_fee_percent: adminFeePercent,
       gross_up_percent: grossUpPercent,
       source_clause: clauseText || null,
+      exact_source_text: clauseText || null,
       source_page: sourcePage,
       confidence_score: confidence,
+      extraction_status: status,
       status,
       editable: true,
       notes,
@@ -1057,7 +1096,7 @@ function deriveExpenseRules(
         }]
         : [],
     };
-  });
+  }));
 }
 
 function deriveCamProfile(fieldMap: Record<string, LeaseWorkflowField>, expenseRules: any[]) {
@@ -1323,7 +1362,7 @@ function buildValidationResults(fieldMap: Record<string, LeaseWorkflowField>, ex
     }
   }
 
-  for (const category of ["excess_utilities", "tenant_caused_repairs", "legal_default_costs"]) {
+  for (const category of ["excess_usage", "tenant_caused_damage", "legal_enforcement_fees"]) {
     const rule = expenseRules.find((item) => item.expense_category === category);
     if (rule) {
       results.push({
@@ -1335,7 +1374,7 @@ function buildValidationResults(fieldMap: Record<string, LeaseWorkflowField>, ex
   }
 
   if (/fixed cam/i.test(leaseType)) {
-    const fixedCamRule = expenseRules.find((item) => item.expense_category === "cam");
+    const fixedCamRule = expenseRules.find((item) => ["common_area_maintenance", "cam"].includes(item.expense_category));
     results.push({
       rule: "fixed_cam_has_monthly_charge",
       pass: (camProfile.monthly_cam_charge ?? 0) > 0 || asNumber(fixedCamRule?.fixed_monthly_amount) != null,
@@ -1370,6 +1409,133 @@ function round2(value: number) {
 
 function round4(value: number) {
   return Math.round(value * 10000) / 10000;
+}
+
+function normalizeConfidenceScore(value: unknown) {
+  const numeric = asNumber(value);
+  if (numeric == null) return null;
+  if (numeric <= 1) return Math.max(0, Math.min(1, numeric));
+  return Math.max(0, Math.min(1, numeric / 100));
+}
+
+function resolveCanonicalExpenseRuleConfig(value: unknown) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  for (const config of CANONICAL_EXPENSE_RULE_CONFIG) {
+    if (config.aliases.some((alias) => normalizeToken(alias).replace(/[^a-z0-9]+/g, "_") === normalized)) {
+      return config;
+    }
+  }
+
+  return {
+    canonicalKey: normalized || "uncategorized",
+    categoryName: humanize(normalized || "uncategorized"),
+    subcategoryName: null,
+  };
+}
+
+function normalizeExpenseRuleSourceText(rule: Record<string, unknown>) {
+  return cleanText(rule?.exact_source_text || rule?.source_clause || rule?.source || rule?.notes || "");
+}
+
+function isWeakExpenseRuleSourceText(value: unknown) {
+  const text = cleanText(value);
+  if (!text || text.length < 18) return true;
+  return GENERIC_EXPENSE_RULE_SOURCE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isExpenseRuleResponsibilityKnown(value: unknown) {
+  const normalized = normalizeToken(value);
+  return Boolean(normalized) && !["unknown", "manual_review"].includes(normalized);
+}
+
+function isExpenseRuleRecoverableKnown(rule: Record<string, unknown>) {
+  if (typeof rule?.recoverable_from_tenant === "boolean") return true;
+  if (typeof rule?.included_in_base_rent === "boolean") return true;
+  return ["recoverable", "conditional", "non_recoverable", "excluded"].includes(normalizeToken(rule?.rule_classification));
+}
+
+function isExpenseRuleRecoveryMethodSpecific(value: unknown) {
+  const normalized = normalizeToken(value);
+  return Boolean(normalized) && !["manual_review", "none", "unknown"].includes(normalized);
+}
+
+function scoreExpenseRuleCandidate(rule: Record<string, unknown>) {
+  const confidence = normalizeConfidenceScore(rule?.confidence_score) ?? 0;
+  const sourceText = normalizeExpenseRuleSourceText(rule);
+  const hasPage = Number.isFinite(Number(rule?.source_page));
+  return (
+    (hasPage ? 200 : 0) +
+    (isWeakExpenseRuleSourceText(sourceText) ? 0 : 160) +
+    Math.round(confidence * 100) +
+    (asNumber(rule?.explicit_charge_amount) != null || asNumber(rule?.fixed_monthly_amount) != null ? 25 : 0) +
+    (normalizeToken(rule?.status) === "extracted" ? 20 : 0)
+  );
+}
+
+function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
+  const deduped = new Map<string, Record<string, unknown>>();
+
+  for (const rule of rules || []) {
+    const canonical = resolveCanonicalExpenseRuleConfig(rule?.expense_category || rule?.category || rule?.key);
+    if (EXCLUDED_EXPENSE_RULE_KEYS.has(canonical.canonicalKey)) continue;
+
+    const exactSourceText = normalizeExpenseRuleSourceText(rule);
+    const hasStrongEvidence =
+      Number.isFinite(Number(rule?.source_page)) &&
+      !isWeakExpenseRuleSourceText(exactSourceText);
+    const explicitExtractionStatus = normalizeToken(rule?.extraction_status || rule?.status);
+    const extractionStatus =
+      explicitExtractionStatus === "not_found"
+        ? "not_found"
+        : explicitExtractionStatus === "manual_required"
+          ? "manual_required"
+          : explicitExtractionStatus === "calculated" && hasStrongEvidence
+            ? "calculated"
+            : hasStrongEvidence
+              ? "extracted"
+              : "inferred";
+    const confidenceScore = normalizeConfidenceScore(rule?.confidence_score);
+    const autoApproved =
+      extractionStatus !== "inferred" &&
+      extractionStatus !== "manual_required" &&
+      hasStrongEvidence &&
+      isExpenseRuleResponsibilityKnown(rule?.responsibility) &&
+      isExpenseRuleRecoverableKnown(rule) &&
+      isExpenseRuleRecoveryMethodSpecific(rule?.recovery_method) &&
+      confidenceScore != null &&
+      confidenceScore >= 0.82;
+    const reviewStatus = autoApproved ? "reviewed" : "needs_review";
+    const normalizedRule = {
+      ...rule,
+      expense_category: canonical.canonicalKey,
+      category_name: canonical.categoryName,
+      expense_subcategory: canonical.subcategoryName || null,
+      subcategory_name: canonical.subcategoryName || null,
+      normalized_key: canonical.canonicalKey,
+      exact_source_text: exactSourceText || null,
+      extraction_status: extractionStatus,
+      status: extractionStatus,
+      confidence_score: confidenceScore,
+      review_status: reviewStatus,
+      approval_status: "draft",
+      published_to_cam: false,
+      row_status: extractionStatus === "not_found" ? "not_mentioned" : autoApproved ? "mapped" : "needs_review",
+      responsibility: isExpenseRuleResponsibilityKnown(rule?.responsibility) ? rule?.responsibility : "unknown",
+    };
+
+    const dedupKey = `${canonical.canonicalKey}::${normalizeToken(canonical.subcategoryName).replace(/[^a-z0-9]+/g, "_")}`;
+    const existing = deduped.get(dedupKey);
+    if (!existing || scoreExpenseRuleCandidate(normalizedRule) >= scoreExpenseRuleCandidate(existing)) {
+      deduped.set(dedupKey, normalizedRule);
+    }
+  }
+
+  return [...deduped.values()];
 }
 
 export function buildLeaseWorkflowAbstraction(args: {

@@ -415,7 +415,7 @@ export default function LeaseExpenseClassification() {
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-sm font-medium text-slate-700">Categories Mapped</span>
                   <span className="font-bold text-slate-900">
-                    {localRules.filter(r => r.row_status === 'mapped').length} / {effectiveCategories.length}
+                    {localRules.filter(r => r.review_status === 'reviewed').length} / {effectiveCategories.length}
                   </span>
                 </div>
 
@@ -436,13 +436,13 @@ export default function LeaseExpenseClassification() {
                 <div className="flex justify-between items-center pb-2">
                   <span className="text-sm font-medium text-slate-700">Needs Review</span>
                   <span className="font-bold text-amber-600">
-                    {localRules.filter(r => r.row_status === 'uncertain').length}
+                    {localRules.filter(r => r.review_status === 'needs_review' || r.row_status === 'needs_review' || r.row_status === 'uncertain').length}
                   </span>
                 </div>
               </div>
 
               <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
-                Approving this rule set updates lease CAM config, persists clause evidence and values, creates explicit lease-derived charge rows when amounts exist, and refreshes expense classification readiness.
+                Approving this rule set updates lease CAM config, persists clause evidence and values, and refreshes downstream classification readiness without creating Actual Expense rows.
               </div>
               <Button
                 className="mt-4 w-full bg-slate-900 hover:bg-slate-800"
