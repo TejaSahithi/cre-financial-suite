@@ -16,6 +16,11 @@ import {
   Download,
   ClipboardCheck,
   FileSearch,
+  MoreVertical,
+  Check,
+  X,
+  CircleDollarSign,
+  HelpCircle,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 import { toast } from "sonner";
@@ -41,6 +46,14 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
@@ -462,6 +475,75 @@ export default function Expenses() {
     },
   });
 
+  // ── Inline edit mutations (recovery / approval / amount) ───────────────
+  // Lets the reviewer set recovery_status + approved_status from the row
+  // dropdown without leaving the page. Approved actuals are what flow into
+  // Expense Classification's "Run Classification" step alongside approved
+  // lease_expense_rules.
+  const updateExpenseMutation = useMutation({
+    mutationFn: async ({ id, patch }) => {
+      const updated = await ExpenseService.update(id, patch);
+      if (!updated) throw new Error("Update failed");
+      return updated;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    },
+    onError: (err) => {
+      toast.error(`Could not update expense: ${err?.message || "Unknown error"}`);
+    },
+  });
+
+  // Single-row helpers
+  const setRecoveryStatus = (expense, recoveryStatus) => {
+    const classification = recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus;
+    updateExpenseMutation.mutate(
+      { id: expense.id, patch: { recovery_status: recoveryStatus, classification, rule_source: "manual" } },
+      { onSuccess: () => toast.success(`Marked ${String(recoveryStatus).replace("_", " ")}`) },
+    );
+  };
+
+  const approveExpense = (expense) => {
+    updateExpenseMutation.mutate(
+      { id: expense.id, patch: { approved_status: "approved" } },
+      { onSuccess: () => toast.success("Expense approved") },
+    );
+  };
+
+  const promptForAmount = (expense) => {
+    const input = window.prompt(
+      `Enter amount for ${expense.vendor || expense.category || "this expense"}:`,
+      expense.amount != null ? String(expense.amount) : "",
+    );
+    if (input == null) return;
+    const cleaned = String(input).replace(/[$,\s]/g, "");
+    const amount = Number(cleaned);
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error("Invalid amount");
+      return;
+    }
+    updateExpenseMutation.mutate(
+      { id: expense.id, patch: { amount } },
+      { onSuccess: () => toast.success(`Amount set to $${amount.toLocaleString()}`) },
+    );
+  };
+
+  // Bulk approve for selected rows
+  const bulkApproveMutation = useMutation({
+    mutationFn: async (ids) => {
+      await Promise.all(
+        ids.map((id) => ExpenseService.update(id, { approved_status: "approved" })),
+      );
+      return ids.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      setSelectedExpenseIds([]);
+      toast.success(`${count} expense${count === 1 ? "" : "s"} approved.`);
+    },
+    onError: (err) => toast.error(`Bulk approve failed: ${err?.message || "Unknown error"}`),
+  });
+
   const allFilteredSelected = filtered.length > 0 && filtered.every((expense) => selectedExpenseIds.includes(expense.id));
 
   const toggleExpenseSelection = (expenseId) => {
@@ -744,6 +826,16 @@ export default function Expenses() {
                   Clear
                 </Button>
                 <Button
+                  size="sm"
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={() => bulkApproveMutation.mutate(selectedExpenseIds)}
+                  disabled={bulkApproveMutation.isPending}
+                  title="Mark selected expenses as approved so they flow into Expense Classification"
+                >
+                  <ClipboardCheck className="w-4 h-4 mr-1" />
+                  {bulkApproveMutation.isPending ? "Approving…" : `Approve ${selectedExpenseIds.length}`}
+                </Button>
+                <Button
                   variant="outline"
                   size="sm"
                   className="border-red-200 text-red-600 hover:bg-red-50"
@@ -858,20 +950,59 @@ export default function Expenses() {
                         </TableCell>
                         <TableCell className="text-[10px] text-slate-400 capitalize">{expense.source_type || expense.source}</TableCell>
                         <TableCell>
-                          <div className="flex gap-1">
-                            <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
-                              <Button variant="ghost" size="sm" className="text-[10px] h-6 px-1.5">
-                                <Pencil className="w-3 h-3" />
-                              </Button>
-                            </Link>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-[10px] h-6 px-1.5 text-red-500"
-                              onClick={() => setDeleteTarget(expense)}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
+                          <div className="flex items-center gap-1">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" title="Actions">
+                                  <MoreVertical className="h-3 w-3" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-56">
+                                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
+                                  Set recovery
+                                </DropdownMenuLabel>
+                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "recoverable")}>
+                                  <Check className="mr-2 h-3.5 w-3.5 text-emerald-600" /> Recoverable
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "non_recoverable")}>
+                                  <X className="mr-2 h-3.5 w-3.5 text-rose-600" /> Non-Recoverable
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "conditional")}>
+                                  <HelpCircle className="mr-2 h-3.5 w-3.5 text-amber-600" /> Conditional
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "excluded")}>
+                                  <X className="mr-2 h-3.5 w-3.5 text-slate-500" /> Excluded
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRecoveryStatus(expense, "needs_review")}>
+                                  <HelpCircle className="mr-2 h-3.5 w-3.5 text-slate-500" /> Needs Review
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => approveExpense(expense)}
+                                  disabled={expense.approved_status === "approved"}
+                                  className="text-emerald-700 focus:text-emerald-800"
+                                >
+                                  <ClipboardCheck className="mr-2 h-3.5 w-3.5" />
+                                  {expense.approved_status === "approved" ? "Already approved" : "Approve expense"}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => promptForAmount(expense)}>
+                                  <CircleDollarSign className="mr-2 h-3.5 w-3.5" />
+                                  {expense.amount ? "Edit amount" : "Set amount"}
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem asChild>
+                                  <Link to={createPageUrl("AddExpense", { id: expense.id }) + location.search.replace("?", "&")}>
+                                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit details
+                                  </Link>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => setDeleteTarget(expense)}
+                                  className="text-red-600 focus:text-red-700"
+                                >
+                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </TableCell>
                       </TableRow>
