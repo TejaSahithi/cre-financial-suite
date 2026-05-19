@@ -201,11 +201,11 @@ export default function ExpenseReview() {
 
   const reviewMutation = useMutation({
     mutationFn: async ({ expenseId, recoveryStatus, approvedStatus }) => {
-      const classification = recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus;
-      return expenseService.update(expenseId, {
-        recovery_status: recoveryStatus,
-        classification,
-        approved_status: approvedStatus,
+      return expenseService.reviewExpense(expenseId, {
+        recoveryStatus,
+        approvedStatus,
+        ruleSource: "manual",
+        reason: "Manual review update from Expense Review",
       });
     },
     onSuccess: () => {

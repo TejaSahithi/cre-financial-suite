@@ -120,6 +120,10 @@ export default function Expenses() {
   const selectorScopedExpenses = selectorScopedAllExpenses.filter(
     (expense) => expense.source_type !== "lease_import" && expense.source !== "lease_import"
   );
+  const selectorScopedExpenseIds = useMemo(
+    () => selectorScopedExpenses.map((expense) => expense.id).filter(Boolean),
+    [selectorScopedExpenses]
+  );
 
   const selectedPropertyId = scopeProperty !== "all" ? scopeProperty : scope.propertyId || null;
   const selectorScopedLeases = leases.filter((lease) => {
@@ -184,6 +188,68 @@ export default function Expenses() {
   const selectorScopedLeaseIds = useMemo(
     () => selectorScopedLeases.map((lease) => lease.id).filter(Boolean),
     [selectorScopedLeases]
+  );
+
+  const { data: selectorScopedClassifications = [] } = useQuery({
+    queryKey: ["expense-dashboard-classifications", selectorScopedExpenseIds.join("|")],
+    queryFn: async () => {
+      if (selectorScopedExpenseIds.length === 0) return [];
+      const { data, error } = await supabase
+        .from("expense_classifications")
+        .select(
+          "expense_id, recovery_status, recoverability_result, approved_status, rule_source, " +
+          "classification_status, confidence_score, recovery_reason, cam_eligible, recovery_method, " +
+          "approved_at, reviewed_at, finalized_at"
+        )
+        .in("expense_id", selectorScopedExpenseIds);
+      if (error) {
+        console.warn("[Expenses] expense_classifications query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: selectorScopedExpenseIds.length > 0,
+  });
+
+  const classificationByExpenseId = useMemo(
+    () => new Map(selectorScopedClassifications.map((classification) => [classification.expense_id, classification])),
+    [selectorScopedClassifications]
+  );
+
+  const displayedExpenses = useMemo(() => {
+    return selectorScopedExpenses.map((expense) => {
+      const classification = classificationByExpenseId.get(expense.id);
+      if (!classification) return expense;
+
+      const effectiveRecovery =
+        classification.recoverability_result ||
+        classification.recovery_status ||
+        expense.recovery_status ||
+        expense.classification ||
+        "needs_review";
+
+      return {
+        ...expense,
+        recovery_status: classification.recovery_status || effectiveRecovery,
+        recoverability_result: classification.recoverability_result || effectiveRecovery,
+        classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
+        approved_status: classification.approved_status || expense.approved_status,
+        rule_source: classification.rule_source || expense.rule_source,
+        classification_status: classification.classification_status || expense.classification_status,
+        confidence_score: classification.confidence_score ?? expense.confidence_score,
+        recovery_reason: classification.recovery_reason || expense.recovery_reason,
+        cam_eligible: classification.cam_eligible || expense.cam_eligible,
+        recovery_method: classification.recovery_method || expense.recovery_method,
+        approved_at: classification.approved_at || expense.approved_at,
+        reviewed_at: classification.reviewed_at || expense.reviewed_at,
+        finalized_at: classification.finalized_at || expense.finalized_at,
+      };
+    });
+  }, [classificationByExpenseId, selectorScopedExpenses]);
+
+  const displayedExpenseById = useMemo(
+    () => new Map(displayedExpenses.map((expense) => [expense.id, expense])),
+    [displayedExpenses]
   );
 
   const { data: selectorScopedRuleSets = [] } = useQuery({
@@ -343,8 +409,8 @@ export default function Expenses() {
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
-  const currentYearExpenses = selectorScopedExpenses.filter((expense) => expense.fiscal_year === currentYear);
-  const prevYearExpenses = selectorScopedExpenses.filter((expense) => expense.fiscal_year === prevYear);
+  const currentYearExpenses = displayedExpenses.filter((expense) => expense.fiscal_year === currentYear);
+  const prevYearExpenses = displayedExpenses.filter((expense) => expense.fiscal_year === prevYear);
   const prevYearTotal = prevYearExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
   const currentBudget = budgets.find((budget) => {
     if ((budget.budget_year || budget.fiscal_year) !== currentYear) return false;
@@ -393,14 +459,14 @@ export default function Expenses() {
   });
 
   const totals = {
-    all: selectorScopedExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    recoverable: selectorScopedExpenses
+    all: displayedExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0),
+    recoverable: displayedExpenses
       .filter((expense) => expense.classification === "recoverable")
       .reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    non_recoverable: selectorScopedExpenses
+    non_recoverable: displayedExpenses
       .filter((expense) => expense.classification === "non_recoverable")
       .reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    conditional: selectorScopedExpenses
+    conditional: displayedExpenses
       .filter((expense) => expense.classification === "conditional")
       .reduce((sum, expense) => sum + (expense.amount || 0), 0),
   };
@@ -411,7 +477,7 @@ export default function Expenses() {
     { name: "Conditional", value: totals.conditional, color: "#f59e0b" },
   ].filter((entry) => entry.value > 0);
 
-  const filtered = selectorScopedExpenses.filter((expense) => {
+  const filtered = displayedExpenses.filter((expense) => {
     const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
     const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
     const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
@@ -429,12 +495,12 @@ export default function Expenses() {
   });
 
   const subtitleScope = getScopeSubtitle(scope, {
-    default: `${selectorScopedExpenses.length} expense records · Classification and recovery tracking`,
-    portfolio: (portfolio) => `${selectorScopedExpenses.length} expense records in ${portfolio.name}`,
-    property: (property) => `${selectorScopedExpenses.length} expense records for ${property.name}`,
-    building: (building) => `${selectorScopedExpenses.length} expense records for ${building.name}`,
-    unit: (unit) => `${selectorScopedExpenses.length} expense records for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
-    org: () => `${selectorScopedExpenses.length} expense records in selected organization`,
+    default: `${displayedExpenses.length} expense records · Classification and recovery tracking`,
+    portfolio: (portfolio) => `${displayedExpenses.length} expense records in ${portfolio.name}`,
+    property: (property) => `${displayedExpenses.length} expense records for ${property.name}`,
+    building: (building) => `${displayedExpenses.length} expense records for ${building.name}`,
+    unit: (unit) => `${displayedExpenses.length} expense records for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
+    org: () => `${displayedExpenses.length} expense records in selected organization`,
   });
 
   const deleteMutation = useMutation({
@@ -481,13 +547,24 @@ export default function Expenses() {
   // Expense Classification's "Run Classification" step alongside approved
   // lease_expense_rules.
   const updateExpenseMutation = useMutation({
-    mutationFn: async ({ id, patch }) => {
-      const updated = await ExpenseService.update(id, patch);
+    mutationFn: async ({ expense, id, patch }) => {
+      const hasReviewFields =
+        patch &&
+        (patch.recovery_status !== undefined || patch.approved_status !== undefined);
+      const updated = hasReviewFields
+        ? await expenseService.reviewExpense(expense || id, {
+            recoveryStatus: patch.recovery_status,
+            approvedStatus: patch.approved_status,
+            ruleSource: patch.rule_source || "manual",
+            reason: patch.recovery_reason || "Manual review update from Actual Expenses",
+          })
+        : await ExpenseService.update(id, patch);
       if (!updated) throw new Error("Update failed");
       return updated;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
     },
     onError: (err) => {
       toast.error(`Could not update expense: ${err?.message || "Unknown error"}`);
@@ -498,14 +575,33 @@ export default function Expenses() {
   const setRecoveryStatus = (expense, recoveryStatus) => {
     const classification = recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus;
     updateExpenseMutation.mutate(
-      { id: expense.id, patch: { recovery_status: recoveryStatus, classification, rule_source: "manual" } },
+      {
+        id: expense.id,
+        expense,
+        patch: {
+          recovery_status: recoveryStatus,
+          classification,
+          approved_status: expense.approved_status === "approved" ? "approved" : undefined,
+          rule_source: "manual",
+          recovery_reason: "Manual review update from Actual Expenses",
+        },
+      },
       { onSuccess: () => toast.success(`Marked ${String(recoveryStatus).replace("_", " ")}`) },
     );
   };
 
   const approveExpense = (expense) => {
     updateExpenseMutation.mutate(
-      { id: expense.id, patch: { approved_status: "approved" } },
+      {
+        id: expense.id,
+        expense,
+        patch: {
+          recovery_status: expense.recovery_status || expense.recoverability_result || expense.classification || "needs_review",
+          approved_status: "approved",
+          rule_source: expense.rule_source || "manual",
+          recovery_reason: expense.recovery_reason || "Manually approved from Actual Expenses",
+        },
+      },
       { onSuccess: () => toast.success("Expense approved") },
     );
   };
@@ -532,12 +628,19 @@ export default function Expenses() {
   const bulkApproveMutation = useMutation({
     mutationFn: async (ids) => {
       await Promise.all(
-        ids.map((id) => ExpenseService.update(id, { approved_status: "approved" })),
+        ids.map((id) =>
+          expenseService.reviewExpense(displayedExpenseById.get(id) || id, {
+            approvedStatus: "approved",
+            ruleSource: (displayedExpenseById.get(id)?.rule_source || "manual"),
+            reason: "Bulk approved from Actual Expenses",
+          })
+        ),
       );
       return ids.length;
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
       setSelectedExpenseIds([]);
       toast.success(`${count} expense${count === 1 ? "" : "s"} approved.`);
     },
@@ -686,14 +789,14 @@ export default function Expenses() {
           </CardContent>
         </Card>
 
-        <Card className={selectorScopedExpenses.length > 0 ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
+        <Card className={displayedExpenses.length > 0 ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
           <CardHeader>
             <CardTitle className="text-base">Expense Pipeline Status</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-slate-700">
-            {selectorScopedExpenses.length > 0 ? (
+            {displayedExpenses.length > 0 ? (
               <p>
-                {selectorScopedExpenses.length} actual expense row(s) are loaded in this scope.
+                {displayedExpenses.length} actual expense row(s) are loaded in this scope.
               </p>
             ) : scopedRuleSummary.total > 0 ? (
               <p>
@@ -712,7 +815,7 @@ export default function Expenses() {
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              <Badge className="bg-white text-slate-700">{selectorScopedExpenses.length} expense rows</Badge>
+              <Badge className="bg-white text-slate-700">{displayedExpenses.length} expense rows</Badge>
               <Badge className="bg-white text-slate-700">{selectorScopedLeases.length} scoped leases</Badge>
               <Badge className="bg-white text-slate-700">{scopedRuleSummary.approvedRuleSets} approved rule set(s)</Badge>
             </div>
@@ -756,7 +859,7 @@ export default function Expenses() {
           <CardContent>
             {(() => {
               const categoryTotals = {};
-              selectorScopedExpenses
+              displayedExpenses
                 .filter((expense) => expense.classification === "recoverable")
                 .forEach((expense) => {
                   categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + (expense.amount || 0);
@@ -1013,12 +1116,12 @@ export default function Expenses() {
             </Table>
           </Card>
           <div className="text-xs text-slate-400 text-right">
-            {filtered.length} of {selectorScopedExpenses.length} expenses
+            {filtered.length} of {displayedExpenses.length} expenses
           </div>
         </TabsContent>
 
         <TabsContent value="vendor_spend">
-          <VendorSpendAnalysis expenses={selectorScopedExpenses} vendors={vendors} budgets={budgets} />
+          <VendorSpendAnalysis expenses={displayedExpenses} vendors={vendors} budgets={budgets} />
         </TabsContent>
 
       <TabsContent value="audit">

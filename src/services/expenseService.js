@@ -504,8 +504,196 @@ async function upsertExpenseClassification(payload) {
   }
 }
 
+async function fetchExistingExpenseClassifications(expenseIds = []) {
+  if (!supabase || expenseIds.length === 0) return [];
+  try {
+    const { data, error } = await supabase
+      .from("expense_classifications")
+      .select(
+        "id, org_id, expense_id, property_id, building_id, unit_id, lease_id, tenant_id, " +
+        "rule_set_id, recovery_rule_id, linked_expense_rule_id, recovery_status, recoverability_result, " +
+        "cam_pool_id, recovery_reason, cam_eligible, recovery_method, allocation_method, rule_source, " +
+        "confidence_score, evidence_text, evidence_page_number, approved_status, notes, " +
+        "classified_by, classified_at, approved_by, approved_at, reviewed_at, finalized_at, " +
+        "classification_status, exception_type, amount"
+      )
+      .in("expense_id", expenseIds);
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    if (isMissingExpenseRuleTable(error)) {
+      console.warn("[expenseService] expense_classifications table missing — treating as no persisted classifications.");
+      return [];
+    }
+    console.warn("[expenseService] failed to load persisted classifications:", error);
+    return [];
+  }
+}
+
 export const expenseService = {
   ...baseExpenseService,
+
+  async reviewExpense(expenseOrId, { recoveryStatus, approvedStatus, ruleSource = "manual", reason = null } = {}) {
+    const expense =
+      expenseOrId && typeof expenseOrId === "object"
+        ? expenseOrId
+        : await baseExpenseService.get(expenseOrId);
+
+    if (!expense?.id) {
+      throw new Error("Expense not found");
+    }
+
+    const [existingClassification, orgIdFallback, authResult] = await Promise.all([
+      fetchExistingExpenseClassifications([expense.id]).then((rows) => rows[0] || null),
+      getCurrentOrgId(),
+      supabase?.auth?.getUser?.() || Promise.resolve(null),
+    ]);
+
+    const now = new Date().toISOString();
+    const userId = authResult?.data?.user?.id || null;
+    const effectiveRecoveryStatus =
+      recoveryStatus ||
+      existingClassification?.recoverability_result ||
+      existingClassification?.recovery_status ||
+      expense.recovery_status ||
+      expense.classification ||
+      "needs_review";
+    const effectiveApprovedStatus =
+      approvedStatus ||
+      existingClassification?.approved_status ||
+      expense.approved_status ||
+      (effectiveRecoveryStatus === "needs_review" || effectiveRecoveryStatus === "conditional"
+        ? "needs_review"
+        : "approved");
+    const effectiveRuleSource =
+      ruleSource ||
+      existingClassification?.rule_source ||
+      expense.rule_source ||
+      "manual";
+    const effectiveReason =
+      reason ||
+      existingClassification?.recovery_reason ||
+      existingClassification?.notes ||
+      expense.recovery_reason ||
+      "Manual review override";
+    const classification =
+      effectiveRecoveryStatus === "excluded" ? "non_recoverable" : effectiveRecoveryStatus;
+
+    const expensePatch = {
+      classification,
+      recovery_status: effectiveRecoveryStatus,
+      recoverability_result: effectiveRecoveryStatus,
+      approved_status: effectiveApprovedStatus,
+      rule_source: effectiveRuleSource,
+      recovery_reason: effectiveReason,
+      classification_updated_at: now,
+    };
+    if (userId) {
+      expensePatch.classification_updated_by = userId;
+    }
+
+    const updatedExpense = await baseExpenseService.update(expense.id, expensePatch);
+
+    await upsertExpenseClassification({
+      id: existingClassification?.id,
+      org_id: expense.org_id || existingClassification?.org_id || orgIdFallback,
+      expense_id: expense.id,
+      actual_expense_id: expense.id,
+      property_id: expense.property_id || existingClassification?.property_id || null,
+      building_id: expense.building_id || existingClassification?.building_id || null,
+      unit_id: expense.unit_id || existingClassification?.unit_id || null,
+      lease_id: expense.lease_id || existingClassification?.lease_id || null,
+      tenant_id: expense.tenant_id || existingClassification?.tenant_id || null,
+      rule_set_id: existingClassification?.rule_set_id || null,
+      recovery_rule_id:
+        existingClassification?.recovery_rule_id ||
+        expense.recovery_rule_id ||
+        expense.linked_expense_rule_id ||
+        null,
+      linked_expense_rule_id:
+        existingClassification?.linked_expense_rule_id ||
+        expense.linked_expense_rule_id ||
+        expense.recovery_rule_id ||
+        null,
+      category: expense.category || null,
+      subcategory: expense.expense_subcategory || expense.subcategory || null,
+      amount: Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : existingClassification?.amount ?? null,
+      service_period_start:
+        expense.service_period_start ||
+        expense.billing_period_start ||
+        expense.expense_date ||
+        expense.date ||
+        null,
+      service_period_end:
+        expense.service_period_end ||
+        expense.billing_period_end ||
+        expense.expense_date ||
+        expense.date ||
+        null,
+      recovery_status: effectiveRecoveryStatus,
+      recoverability_result: effectiveRecoveryStatus,
+      cam_eligible:
+        existingClassification?.cam_eligible ||
+        expense.cam_eligible ||
+        (effectiveRecoveryStatus === "recoverable"
+          ? "yes"
+          : effectiveRecoveryStatus === "conditional"
+            ? "conditional"
+            : "no"),
+      recovery_method: existingClassification?.recovery_method || expense.recovery_method || null,
+      recovery_reason: effectiveReason,
+      cam_pool_id: existingClassification?.cam_pool_id || expense.cam_pool_id || null,
+      allocation_method:
+        expense.allocation_method ||
+        expense.allocation_type ||
+        existingClassification?.allocation_method ||
+        "pro_rata",
+      cap_applied: Boolean(existingClassification?.cap_applied),
+      exclusion_applied: ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus),
+      condition_applied: effectiveRecoveryStatus === "conditional",
+      condition_reason: effectiveRecoveryStatus === "conditional" ? effectiveReason : null,
+      rule_source: effectiveRuleSource,
+      confidence_score: existingClassification?.confidence_score ?? expense.confidence_score ?? 1,
+      evidence_text: existingClassification?.evidence_text || expense.evidence_text || effectiveReason,
+      evidence_page_number: existingClassification?.evidence_page_number || expense.evidence_page_number || null,
+      approved_status: effectiveApprovedStatus,
+      classification_status:
+        effectiveApprovedStatus === "approved"
+          ? (effectiveRecoveryStatus === "recoverable"
+              ? "finalized"
+              : effectiveRecoveryStatus === "conditional"
+                ? "conditional"
+                : "excluded")
+          : effectiveRecoveryStatus === "needs_review"
+            ? "exception"
+            : effectiveRecoveryStatus === "conditional"
+              ? "conditional"
+              : ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus)
+                ? "excluded"
+                : "matched",
+      exception_type: effectiveRecoveryStatus === "needs_review" ? "manual_review" : null,
+      finalized_at:
+        effectiveApprovedStatus === "approved" && effectiveRecoveryStatus === "recoverable"
+          ? (existingClassification?.finalized_at || now)
+          : null,
+      reviewed_at: now,
+      approved_at: effectiveApprovedStatus === "approved" ? (existingClassification?.approved_at || now) : null,
+      approved_by: effectiveApprovedStatus === "approved" ? (userId || existingClassification?.approved_by || null) : null,
+      classified_at: existingClassification?.classified_at || now,
+      classified_by: userId || existingClassification?.classified_by || null,
+      notes: effectiveReason || existingClassification?.notes || null,
+    });
+
+    return {
+      ...updatedExpense,
+      recovery_status: effectiveRecoveryStatus,
+      recoverability_result: effectiveRecoveryStatus,
+      approved_status: effectiveApprovedStatus,
+      rule_source: effectiveRuleSource,
+      recovery_reason: effectiveReason,
+      classification,
+    };
+  },
 
   matchActualExpenseToLeaseRule(actualExpense, { leases = [], rulesByLeaseId = new Map() } = {}) {
     const expenseLeaseId = actualExpense?.lease_id || null;
@@ -607,33 +795,86 @@ export const expenseService = {
     const { rulesByLeaseId } = buildApprovedRuleLookups(rules, categories);
     const leaseById = buildLeaseLookup(allLeases);
     const orgIdFallback = await getCurrentOrgId();
+    const existingClassificationsByExpenseId = new Map(
+      (await fetchExistingExpenseClassifications(actualExpenses.map((expense) => expense.id)))
+        .map((classification) => [classification.expense_id, classification])
+    );
 
     let updated = 0;
     let needsReview = 0;
     let classified = 0;
 
     for (const expense of actualExpenses) {
+      const existingClassification = existingClassificationsByExpenseId.get(expense.id) || null;
+      const preserveManualReview =
+        normalizeText(existingClassification?.rule_source) === "manual" ||
+        (
+          normalizeText(expense?.rule_source) === "manual" &&
+          normalizeText(existingClassification?.approved_status || expense?.approved_status) === "approved"
+        );
       const match = this.matchActualExpenseToLeaseRule(expense, { leases: allLeases, rulesByLeaseId });
       const matchedRule = match.rule;
       const matchedLease = match.lease || (expense.lease_id ? leaseById.get(expense.lease_id) : null);
       const matchedRuleSet = matchedRule ? ruleSets.find((ruleSet) => ruleSet.id === matchedRule.rule_set_id) || null : null;
-      const recoveryStatus = match.recoverability_result === "non_recoverable" ? "non_recoverable" : match.recoverability_result;
-      const isConditional = recoveryStatus === "conditional" || (matchedRule ? conditionApplied(matchedRule) : false);
+      let recoveryStatus = match.recoverability_result === "non_recoverable" ? "non_recoverable" : match.recoverability_result;
+      let isConditional = recoveryStatus === "conditional" || (matchedRule ? conditionApplied(matchedRule) : false);
       const confidenceScore = matchedRule
         ? asNumberOrNull(matchedRule.confidence_score ?? matchedRule.confidence) ?? Math.min(match.score / 100, 1)
-        : 0;
-      const approvedStatus =
+        : (existingClassification?.confidence_score ?? 0);
+      let approvedStatus =
         matchedRule &&
         !isConditional &&
         recoveryStatus !== "needs_review"
           ? "approved"
           : "needs_review";
-      const linkedExpenseRuleId = match.linked_expense_rule_id;
-      const camEligible = matchedRule
+      let linkedExpenseRuleId = match.linked_expense_rule_id;
+      let camEligible = matchedRule
         ? (matchedRule.published_to_cam ? match.cam_eligible : "no")
         : "conditional";
-      const recoveryMethod = match.recovery_method || null;
-      const recoveryReason = match.reason;
+      let recoveryMethod = match.recovery_method || null;
+      let recoveryReason = match.reason;
+      let ruleSource = matchedRule ? "lease" : (expense.rule_source || "default");
+
+      if (preserveManualReview) {
+        recoveryStatus =
+          existingClassification?.recoverability_result ||
+          existingClassification?.recovery_status ||
+          expense.recovery_status ||
+          expense.classification ||
+          "needs_review";
+        isConditional = recoveryStatus === "conditional";
+        approvedStatus =
+          existingClassification?.approved_status ||
+          expense.approved_status ||
+          approvedStatus;
+        linkedExpenseRuleId =
+          existingClassification?.linked_expense_rule_id ||
+          existingClassification?.recovery_rule_id ||
+          expense.linked_expense_rule_id ||
+          expense.recovery_rule_id ||
+          linkedExpenseRuleId;
+        camEligible =
+          existingClassification?.cam_eligible ||
+          expense.cam_eligible ||
+          (recoveryStatus === "recoverable"
+            ? "yes"
+            : recoveryStatus === "conditional"
+              ? "conditional"
+              : "no");
+        recoveryMethod =
+          existingClassification?.recovery_method ||
+          expense.recovery_method ||
+          recoveryMethod;
+        recoveryReason =
+          existingClassification?.recovery_reason ||
+          existingClassification?.notes ||
+          expense.recovery_reason ||
+          "Manual review override preserved.";
+        ruleSource =
+          existingClassification?.rule_source ||
+          expense.rule_source ||
+          "manual";
+      }
 
       const updatePayload = {
         lease_id: expense.lease_id || matchedLease?.id || null,
@@ -646,7 +887,7 @@ export const expenseService = {
         allocation_type: expense.allocation_type || expense.allocation_method || matchedLease?.allocation_method || "pro_rata",
         recovery_rule_id: linkedExpenseRuleId,
         linked_expense_rule_id: linkedExpenseRuleId,
-        rule_source: matchedRule ? "lease" : (expense.rule_source || "default"),
+        rule_source: ruleSource,
         cam_eligible: camEligible,
         recovery_method: recoveryMethod,
         recovery_reason: recoveryReason,
@@ -701,10 +942,10 @@ export const expenseService = {
       // approved AND the recovery decision is unambiguous. Anything else
       // stays in matched/conditional/exception until a human confirms.
       if (
-        matchedRule &&
-        matchedRule.approval_status === "approved" &&
+        (preserveManualReview || matchedRule) &&
+        (preserveManualReview || matchedRule.approval_status === "approved") &&
         recoveryStatus === "recoverable" &&
-        confidenceScore >= 0.82 &&
+        (preserveManualReview || confidenceScore >= 0.82) &&
         !isConditional
       ) {
         classificationStatus = "finalized";

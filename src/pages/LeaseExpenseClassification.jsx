@@ -9,7 +9,7 @@ import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, ArrowLeft } from "lucide-react";
+import { FileText, ArrowLeft, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import ExpenseClassificationTable from "@/components/ExpenseClassification/ExpenseClassificationTable";
 import ExpenseValuePanel from "@/components/ExpenseClassification/ExpenseValuePanel";
