@@ -5,7 +5,9 @@ import { supabase } from "@/services/supabaseClient";
 import { ExpenseService } from "@/services/api";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
+import useOrgQuery from "@/hooks/useOrgQuery";
 import PageHeader from "@/components/PageHeader";
+import ScopeSelector from "@/components/ScopeSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -62,6 +64,12 @@ function isExceptionRow(row) {
   );
 }
 
+function resolveBuildingId(record, unitById) {
+  if (record?.building_id) return record.building_id;
+  if (record?.unit_id) return unitById.get(record.unit_id)?.building_id || null;
+  return null;
+}
+
 export default function LeaseExpenseClassification() {
   // The link from Lease Expense Rules / Leases uses `?id=` (query string),
   // not a path param. Reading via useSearchParams handles both shapes.
@@ -77,6 +85,9 @@ export default function LeaseExpenseClassification() {
   // Filters State
   const [scopeType, setScopeType] = useState('property');
   const [frequency, setFrequency] = useState('yearly');
+  const [selectedProperty, setSelectedProperty] = useState("all");
+  const [selectedBuilding, setSelectedBuilding] = useState("all");
+  const [selectedUnit, setSelectedUnit] = useState("all");
 
   // UI State
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -95,6 +106,23 @@ export default function LeaseExpenseClassification() {
     },
     enabled: !!id
   });
+
+  const { data: allExpenses = [] } = useOrgQuery("Expense");
+  const { data: allLeases = [] } = useOrgQuery("Lease");
+  const { data: properties = [] } = useOrgQuery("Property");
+  const { data: buildings = [] } = useOrgQuery("Building");
+  const { data: units = [] } = useOrgQuery("Unit");
+
+  const propertyById = useMemo(() => new Map(properties.map((property) => [property.id, property])), [properties]);
+  const buildingById = useMemo(() => new Map(buildings.map((building) => [building.id, building])), [buildings]);
+  const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
+
+  React.useEffect(() => {
+    if (!lease) return;
+    setSelectedProperty((prev) => (prev === "all" ? (lease.property_id || "all") : prev));
+    setSelectedBuilding((prev) => (prev === "all" ? (lease.building_id || "all") : prev));
+    setSelectedUnit((prev) => (prev === "all" ? (lease.unit_id || "all") : prev));
+  }, [lease]);
 
   // Fetch Taxonomies
   const { data: categories = [], isLoading: isLoadingCategories } = useQuery({
@@ -150,6 +178,27 @@ export default function LeaseExpenseClassification() {
     setActiveRuleSetId(ruleSetData.ruleSet?.id || null);
     setLocalRules(ruleSetData.rules || []);
   }, [ruleSetData]);
+
+  const scopedLeases = useMemo(() => {
+    return (allLeases || []).filter((candidateLease) => {
+      if (selectedProperty !== "all" && candidateLease.property_id !== selectedProperty) return false;
+      const candidateBuildingId = resolveBuildingId(candidateLease, unitById);
+      if (selectedBuilding !== "all" && candidateBuildingId !== selectedBuilding) return false;
+      if (selectedUnit !== "all" && candidateLease.unit_id !== selectedUnit) return false;
+      return true;
+    });
+  }, [allLeases, selectedProperty, selectedBuilding, selectedUnit, unitById]);
+
+  const scopedLeaseIds = useMemo(
+    () => scopedLeases.map((candidateLease) => candidateLease.id).filter(Boolean),
+    [scopedLeases]
+  );
+
+  const { data: scopedRuleSetEntries = [] } = useQuery({
+    queryKey: ["lease-expense-scope-rule-sets", scopedLeaseIds.join("|")],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(scopedLeaseIds),
+    enabled: scopedLeaseIds.length > 0,
+  });
 
   // Mutation: Extract with AI
   const extractRulesMutation = useMutation({
@@ -215,33 +264,23 @@ export default function LeaseExpenseClassification() {
   // Expense Review and Expense Projection downstream pages.
   const classifyExpensesMutation = useMutation({
     mutationFn: async () => {
-      if (!lease?.id) throw new Error("No lease loaded");
+      if (scopedLeases.length === 0) throw new Error("No leases found in the selected scope");
       return expenseService.classifyExpenses({
         expenses: approvedActualExpenses,
-        leases: [lease],
+        leases: scopedLeases,
       });
     },
     onSuccess: (result) => {
       toast.success(
         `Classification complete: ${result?.classified || 0} matched, ${result?.needsReview || 0} need review.`,
       );
-      queryClient.invalidateQueries({ queryKey: ["lease-actual-expenses", id] });
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
     },
     onError: (err) => {
       toast.error(`Classification failed: ${err?.message || "Unknown error"}`);
     },
   });
-
-  React.useEffect(() => {
-    if (!lease?.id || effectiveCategories.length === 0 || isLoadingRules) return;
-    if (extractRulesMutation.isPending) return;
-    if (autoExtractedLeaseIds.current.has(lease.id)) return;
-    if ((localRules || []).length > 0) return;
-
-    autoExtractedLeaseIds.current.add(lease.id);
-    extractRulesMutation.mutate({ silent: true });
-  }, [effectiveCategories, extractRulesMutation, isLoadingRules, lease?.id, localRules]);
 
   const groupedCategories = useMemo(() => {
     return effectiveCategories.reduce((groups, category) => {
@@ -261,35 +300,34 @@ export default function LeaseExpenseClassification() {
     [localRules]
   );
 
-  const approvedRules = useMemo(
-    () => localRules.filter(isApprovedLeaseRule),
-    [localRules],
-  );
+  const approvedRules = useMemo(() => {
+    const byId = new Map();
+    scopedRuleSetEntries.forEach((entry) => {
+      (entry.rules || []).forEach((rule) => {
+        if (isApprovedLeaseRule(rule)) {
+          byId.set(rule.id, rule);
+        }
+      });
+    });
+    return [...byId.values()];
+  }, [scopedRuleSetEntries]);
 
   // ── Actual Expenses for this lease ────────────────────────────────────
   // Pulls all `expenses` rows the user can read where lease_id matches OR
   // (lease_id is null AND the expense scope overlaps this lease's
   // property/building/unit). This is the "actuals" side of the
   // rules-vs-actuals coordination shown below the grid.
-  const { data: actualExpenses = [], isLoading: isLoadingActuals } = useQuery({
-    queryKey: ["lease-actual-expenses", id, lease?.property_id],
-    enabled: !!lease?.id,
-    queryFn: async () => {
-      const orFilter = [`lease_id.eq.${lease.id}`];
-      if (lease.property_id) orFilter.push(`and(lease_id.is.null,property_id.eq.${lease.property_id})`);
-      const { data, error } = await supabase
-        .from("expenses")
-        .select("id, org_id, lease_id, property_id, building_id, unit_id, tenant_id, tenant_name, category, expense_subcategory, amount, vendor, vendor_name, date, expense_date, source, source_type, description, invoice_number, approved_status, review_status, classification, recovery_status, recoverability_result, cam_eligible, recovery_method, rule_source, fiscal_year, month, gl_code")
-        .or(orFilter.join(","))
-        .order("date", { ascending: false })
-        .limit(500);
-      if (error) {
-        console.warn("[LeaseExpenseClassification] actuals query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
-  });
+  const actualExpenses = useMemo(() => {
+    return (allExpenses || []).filter((expense) => {
+      if (selectedProperty !== "all" && expense.property_id !== selectedProperty) return false;
+      const expenseBuildingId = resolveBuildingId(expense, unitById);
+      if (selectedBuilding !== "all" && expenseBuildingId !== selectedBuilding) return false;
+      if (selectedUnit !== "all" && expense.unit_id !== selectedUnit) return false;
+      return true;
+    });
+  }, [allExpenses, selectedProperty, selectedBuilding, selectedUnit, unitById]);
+
+  const isLoadingActuals = false;
 
   const approvedActualExpenses = useMemo(
     () => actualExpenses.filter(isApprovedActualExpense),
@@ -300,23 +338,26 @@ export default function LeaseExpenseClassification() {
   // classification run, not just the live in-browser match (which can
   // change if rules change).
   const { data: persistedClassifications = [] } = useQuery({
-    queryKey: ["lease-expense-classifications", id, lease?.property_id],
-    enabled: !!lease?.id,
+    queryKey: ["lease-expense-classifications", approvedActualExpenses.map((expense) => expense.id).join("|")],
+    enabled: approvedActualExpenses.length > 0,
     queryFn: () =>
-      expenseService.listExpenseClassificationsForLease({
-        leaseId: lease.id,
-        propertyId: lease.property_id || null,
-        limit: 1000,
-      }),
+      expenseService.listExpenseClassificationsForExpenses(
+        approvedActualExpenses.map((expense) => expense.id)
+      ),
   });
 
   // Pair each actual expense to its best-matching rule (if any) using the
   // existing matcher service. Computes variance against the rule's
   // annualized expected amount where possible.
   const matchedActuals = useMemo(() => {
-    if (!lease?.id || approvedActualExpenses.length === 0) return [];
-    const rulesByLeaseId = new Map([[lease.id, approvedRules]]);
-    const leases = [lease];
+    if (approvedActualExpenses.length === 0 || scopedLeases.length === 0) return [];
+    const rulesByLeaseId = new Map(
+      scopedRuleSetEntries.map((entry) => [
+        entry.leaseId,
+        (entry.rules || []).filter(isApprovedLeaseRule),
+      ])
+    );
+    const leases = scopedLeases;
 
     const ruleAnnualExpected = (rule) => {
       const raw = Number(rule?.final_value ?? rule?.manual_value ?? rule?.extracted_value ?? rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount);
@@ -375,7 +416,7 @@ export default function LeaseExpenseClassification() {
         variance,
       };
     });
-  }, [approvedActualExpenses, approvedRules, lease]);
+  }, [approvedActualExpenses, approvedRules, scopedLeases, scopedRuleSetEntries]);
 
   // Roll up matched actuals by bucket so the totals card can show
   // "Actual vs Rule" comparison alongside the rule-based forecast.
@@ -417,7 +458,12 @@ export default function LeaseExpenseClassification() {
 
   const classificationRows = useMemo(() => {
     const rowsByKey = new Map();
-    const rulesByLeaseId = new Map([[lease?.id, approvedRules]]);
+    const rulesByLeaseId = new Map(
+      scopedRuleSetEntries.map((entry) => [
+        entry.leaseId,
+        (entry.rules || []).filter(isApprovedLeaseRule),
+      ])
+    );
 
     for (const classification of persistedClassifications) {
       const expenseId = classification.expense_id || classification.actual_expense_id;
@@ -433,7 +479,7 @@ export default function LeaseExpenseClassification() {
       const amount = Number(expense?.amount ?? classification.amount ?? 0);
       const classificationKey =
         classification.classification_key ||
-        buildFallbackClassificationKey(lease?.org_id || lease?.id, expenseId, ruleId);
+        buildFallbackClassificationKey(expense?.org_id || lease?.org_id || lease?.id, expenseId, ruleId);
 
       rowsByKey.set(classificationKey, {
         id: classification.id,
@@ -444,10 +490,24 @@ export default function LeaseExpenseClassification() {
         expenseDate: expense?.expense_date || expense?.date || classification.service_period_start || null,
         vendor: expense?.vendor || expense?.vendor_name || "—",
         invoiceNumber: expense?.invoice_number || "—",
-        propertyLabel: lease?.property_name || lease?.property_id || classification.property_id || "—",
-        buildingLabel: expense?.building_id || classification.building_id || "—",
-        unitLabel: expense?.unit_id || classification.unit_id || "—",
-        leaseTenantLabel: lease?.tenant_name || expense?.tenant_name || "—",
+        propertyLabel:
+          propertyById.get(expense?.property_id || classification.property_id)?.name ||
+          lease?.property_name ||
+          expense?.property_id ||
+          classification.property_id ||
+          "—",
+        buildingLabel:
+          buildingById.get(resolveBuildingId(expense || classification, unitById) || classification.building_id)?.name ||
+          resolveBuildingId(expense || classification, unitById) ||
+          classification.building_id ||
+          "—",
+        unitLabel:
+          unitById.get(expense?.unit_id || classification.unit_id)?.unit_number ||
+          unitById.get(expense?.unit_id || classification.unit_id)?.unit_id_code ||
+          expense?.unit_id ||
+          classification.unit_id ||
+          "—",
+        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "—",
         category: classification.category || expense?.category || "—",
         subcategory: classification.subcategory || expense?.expense_subcategory || "—",
         actualAmount: amount,
@@ -477,7 +537,7 @@ export default function LeaseExpenseClassification() {
       const expense = matchRow.expense;
       const rule = matchRow.rule;
       const ruleId = rule?.id || null;
-      const key = buildFallbackClassificationKey(lease?.org_id || lease?.id, expense?.id, ruleId);
+      const key = buildFallbackClassificationKey(expense?.org_id || lease?.org_id || lease?.id, expense?.id, ruleId);
       if (rowsByKey.has(key)) continue;
       const amount = Number(expense?.amount || 0);
       const recoverabilityResult = matchRow.recoverability || "needs_review";
@@ -490,10 +550,21 @@ export default function LeaseExpenseClassification() {
         expenseDate: expense?.expense_date || expense?.date || null,
         vendor: expense?.vendor || expense?.vendor_name || "—",
         invoiceNumber: expense?.invoice_number || "—",
-        propertyLabel: lease?.property_name || lease?.property_id || expense?.property_id || "—",
-        buildingLabel: expense?.building_id || "—",
-        unitLabel: expense?.unit_id || "—",
-        leaseTenantLabel: lease?.tenant_name || expense?.tenant_name || "—",
+        propertyLabel:
+          propertyById.get(expense?.property_id)?.name ||
+          lease?.property_name ||
+          expense?.property_id ||
+          "—",
+        buildingLabel:
+          buildingById.get(resolveBuildingId(expense, unitById))?.name ||
+          resolveBuildingId(expense, unitById) ||
+          "—",
+        unitLabel:
+          unitById.get(expense?.unit_id)?.unit_number ||
+          unitById.get(expense?.unit_id)?.unit_id_code ||
+          expense?.unit_id ||
+          "—",
+        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "—",
         category: expense?.category || "—",
         subcategory: expense?.expense_subcategory || "—",
         actualAmount: amount,
@@ -524,7 +595,7 @@ export default function LeaseExpenseClassification() {
       const rightDate = String(right.expenseDate || "");
       return rightDate.localeCompare(leftDate);
     });
-  }, [approvedActualExpenses, approvedRules, expenseById, lease, matchedActuals, persistedClassifications, ruleById]);
+  }, [approvedActualExpenses, approvedRules, buildingById, expenseById, lease, matchedActuals, persistedClassifications, propertyById, ruleById, scopedRuleSetEntries, unitById]);
 
   const tabCounts = useMemo(() => {
     const build = (rows) => ({
@@ -745,7 +816,7 @@ export default function LeaseExpenseClassification() {
         icon={FileText}
         title="Expense Recoverability"
         subtitle={lease
-          ? `Matching actual expenses to approved lease rules for: ${lease.tenant_name || 'Lease'}`
+          ? `Matching approved actual expenses to approved lease rules for ${lease.tenant_name || "the selected lease scope"}`
           : 'Loading...'}
         iconColor="from-blue-600 to-indigo-600"
       >
@@ -785,6 +856,18 @@ export default function LeaseExpenseClassification() {
         </div>
       </PageHeader>
 
+      <ScopeSelector
+        properties={properties}
+        buildings={buildings}
+        units={units}
+        selectedProperty={selectedProperty}
+        selectedBuilding={selectedBuilding}
+        selectedUnit={selectedUnit}
+        onPropertyChange={setSelectedProperty}
+        onBuildingChange={setSelectedBuilding}
+        onUnitChange={setSelectedUnit}
+      />
+
       {/* ── Empty-state guards ────────────────────────────────────────────
           Per spec: don't show fake zero charts. If actuals or approved
           rules are missing, surface the precondition prominently. */}
@@ -793,9 +876,9 @@ export default function LeaseExpenseClassification() {
           <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div className="flex-1">
-              <p className="font-semibold">No approved actual expenses found for this lease.</p>
+              <p className="font-semibold">No approved actual expenses found in this scope.</p>
               <p className="mt-1 text-xs">
-                Add or import expenses, then approve them on Actual Expenses before classification.{" "}
+                Select property, building, and unit above, then add or import expenses and approve them on Actual Expenses before classification.{" "}
                 <Link to={createPageUrl("AddExpense", { lease_id: id })} className="underline">Add one manually</Link>
                 {" or "}
                 <Link to={createPageUrl("BulkImport", { lease_id: id })} className="underline">bulk import a CSV</Link>.
@@ -809,9 +892,9 @@ export default function LeaseExpenseClassification() {
           <CardContent className="flex items-start gap-3 p-4 text-sm text-rose-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div className="flex-1">
-              <p className="font-semibold">No approved lease expense rules found.</p>
+              <p className="font-semibold">No approved lease expense rules found in this scope.</p>
               <p className="mt-1 text-xs">
-                Approve lease expense rules before classification.{" "}
+                Approve lease expense rules for the selected property, building, and unit before classification.{" "}
                 <Link to={createPageUrl("LeaseExpenseRules")} className="underline">Open Lease Expense Rules</Link>{" "}
                 to extract and approve them.
               </p>
