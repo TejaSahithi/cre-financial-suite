@@ -2070,7 +2070,25 @@ export const leaseExpenseRuleService = {
         .select("*")
         .single();
 
-      if (createRuleSetError) throw createRuleSetError;
+      if (createRuleSetError) {
+        // The most common cause is RLS: the user's role doesn't satisfy the
+        // INSERT policy on lease_expense_rule_sets. Surface a clear, actionable
+        // error so we don't have to chase generic "42501 row-level security"
+        // messages.
+        const code = String(createRuleSetError.code || "");
+        const message = `${createRuleSetError.message || ""} ${createRuleSetError.details || ""}`;
+        if (code === "42501" || /row-level security/i.test(message)) {
+          const enhanced = new Error(
+            "RLS denied INSERT into lease_expense_rule_sets. " +
+            "Apply migration 20260518130000_fix_lease_expense_rls.sql in Supabase SQL editor — " +
+            "the existing policy requires is_super_admin()/can_write_org_data() which aren't returning true for this user. " +
+            `Underlying error: ${createRuleSetError.message}`,
+          );
+          enhanced.code = createRuleSetError.code;
+          throw enhanced;
+        }
+        throw createRuleSetError;
+      }
       ruleSetId = createdRuleSet.id;
     }
 
