@@ -312,7 +312,7 @@ export default function LeaseExpenseRules() {
   // a rule that exists in the DB might not be appearing in the table. Logged
   // once per scope or filter change.
   useEffect(() => {
-    if (typeof window === "undefined" || !import.meta?.env?.DEV) return;
+    if (typeof window === "undefined") return;
     const allLeaseIds = leases.map((l) => l.id);
     const scopedLeaseIds = selectorFilteredLeases.map((l) => l.id);
     const rulesByLeaseId = new Map();

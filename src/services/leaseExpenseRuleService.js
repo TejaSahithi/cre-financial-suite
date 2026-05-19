@@ -1484,7 +1484,11 @@ export const leaseExpenseRuleService = {
   },
 
   async loadRuleSets(leaseIds = []) {
-    if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) return [];
+    const tag = `[loadRuleSets leaseIds=${leaseIds?.length || 0}]`;
+    if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) {
+      console.log(`${tag} early return — no leaseIds`);
+      return [];
+    }
 
     const leasesForFallback = await fetchLeasesForFallback(leaseIds);
     const fallbackByLeaseId = new Map(
@@ -1501,7 +1505,11 @@ export const leaseExpenseRuleService = {
         .not("status", "eq", "archived")
         .order("version", { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error(`${tag} rule_sets query failed:`, error);
+        throw error;
+      }
+      console.log(`${tag} rule_sets read: ${ruleSets?.length || 0}`, ruleSets?.map((s) => ({ id: s.id?.slice(0, 8), lease: s.lease_id?.slice(0, 8), v: s.version, status: s.status })));
 
       const latestRuleSetByLeaseId = new Map();
       for (const ruleSet of ruleSets || []) {
@@ -1521,7 +1529,11 @@ export const leaseExpenseRuleService = {
         .select("*")
         .in("rule_set_id", ruleSetIds);
 
-      if (rulesError) throw rulesError;
+      if (rulesError) {
+        console.error(`${tag} rules query failed:`, rulesError);
+        throw rulesError;
+      }
+      console.log(`${tag} rules read: ${rules?.length || 0} for ${ruleSetIds.length} rule_set(s)`);
 
       const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
       const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
@@ -1545,19 +1557,18 @@ export const leaseExpenseRuleService = {
       });
 
       const persistedEntries = latestRuleSets.map((ruleSet) => {
-        const mergedRules = mergeRulesWithRelations(
-          (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id),
-          valuesByRuleId,
-          clausesByRuleId
-        );
+        const rulesForSet = (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id);
+        const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
         const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft");
         const fallbackEntry = fallbackByLeaseId.get(ruleSet.lease_id);
+        console.log(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
         return {
           leaseId: ruleSet.lease_id,
           ruleSet,
           rules: finalizedRules.length > 0 ? finalizedRules : (fallbackEntry?.rules || []),
         };
       });
+      console.log(`${tag} returning ${persistedEntries.length} entries`);
 
       const persistedLeaseIds = new Set(persistedEntries.map((entry) => entry.leaseId));
       const fallbackEntries = [...fallbackByLeaseId.values()].filter(
