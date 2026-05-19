@@ -11,6 +11,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
+import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -216,6 +217,130 @@ export default function ExpenseReview() {
     },
   });
 
+  // ── Exception Queue ───────────────────────────────────────────────────
+  // Per spec: Expense Review's primary job is resolving classification
+  // exceptions, NOT browsing every classified row. The Exception Queue
+  // pulls from expense_classifications WHERE classification_status is
+  // 'unmatched'/'exception'/'conditional' OR exception_type is non-null.
+  // Each row is one decision the reviewer must make.
+  const { data: exceptionRows = [], isLoading: isLoadingExceptions } = useQuery({
+    queryKey: [
+      "expense-review-exceptions",
+      scopedLeaseIds.join("|"),
+      scopeProperty,
+    ],
+    queryFn: async () => {
+      // Scope: any classification whose lease_id is in the scoped lease set
+      // OR (lease_id is null AND property_id matches selected property).
+      const leaseFilter = scopedLeaseIds.length > 0
+        ? `lease_id.in.(${scopedLeaseIds.join(",")})`
+        : null;
+      const propertyFilter = scopeProperty !== "all"
+        ? `and(lease_id.is.null,property_id.eq.${scopeProperty})`
+        : null;
+      const orParts = [leaseFilter, propertyFilter].filter(Boolean);
+      let query = supabase
+        .from("expense_classifications")
+        .select(
+          "id, expense_id, actual_expense_id, lease_id, property_id, building_id, unit_id, " +
+          "lease_expense_rule_id, recovery_rule_id, recoverability_result, recovery_status, " +
+          "cam_eligible, recovery_method, recovery_reason, classification_status, " +
+          "exception_type, confidence_score, evidence_text, category, subcategory, " +
+          "amount, classified_at, reviewed_at, finalized_at, notes",
+        )
+        .or("classification_status.in.(unmatched,exception,conditional),exception_type.not.is.null")
+        .order("classified_at", { ascending: false })
+        .limit(500);
+      if (orParts.length > 0) {
+        query = query.or(orParts.join(","));
+      }
+      const { data, error } = await query;
+      if (error) {
+        console.warn("[ExpenseReview] exceptions query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: scopedLeaseIds.length > 0 || scopeProperty !== "all",
+  });
+
+  // Join in actual expense details (vendor, date) for each exception so the
+  // queue can show "Vendor X, invoice $Y, dated Z" without a separate fetch.
+  const expenseById = useMemo(() => {
+    const map = new Map();
+    for (const e of expenses) map.set(e.id, e);
+    return map;
+  }, [expenses]);
+
+  const enrichedExceptions = useMemo(() => {
+    return exceptionRows.map((row) => {
+      const expenseId = row.expense_id || row.actual_expense_id;
+      const expense = expenseId ? expenseById.get(expenseId) : null;
+      return {
+        ...row,
+        expense_id: expenseId,
+        expense_vendor: expense?.vendor || null,
+        expense_date: expense?.date || null,
+        expense_amount: expense?.amount ?? row.amount,
+        expense_category: expense?.category || row.category,
+        expense_description: expense?.description,
+        expense_invoice_number: expense?.invoice_number,
+      };
+    });
+  }, [exceptionRows, expenseById]);
+
+  const exceptionCounts = useMemo(() => ({
+    unmatched: enrichedExceptions.filter((e) => e.classification_status === "unmatched").length,
+    low_confidence: enrichedExceptions.filter((e) => e.exception_type === "low_confidence").length,
+    conditional: enrichedExceptions.filter((e) => e.classification_status === "conditional").length,
+    other_exception: enrichedExceptions.filter((e) => e.classification_status === "exception" && e.exception_type !== "low_confidence").length,
+    total: enrichedExceptions.length,
+  }), [enrichedExceptions]);
+
+  const exceptionMutation = useMutation({
+    mutationFn: async ({ classificationId, action }) => {
+      // Action → patch shape
+      // approve   → classification_status='finalized', reviewed/finalized timestamps
+      // reject    → classification_status='excluded', recoverability_result='excluded'
+      // mark_na   → classification_status='excluded', recoverability_result='non_recoverable'
+      // resolve   → classification_status='matched' (sends back to normal review)
+      const now = new Date().toISOString();
+      const patch = { reviewed_at: now };
+      if (action === "approve") {
+        patch.classification_status = "finalized";
+        patch.finalized_at = now;
+        patch.exception_type = null;
+      } else if (action === "reject") {
+        patch.classification_status = "excluded";
+        patch.recoverability_result = "excluded";
+        patch.exception_type = null;
+      } else if (action === "mark_na") {
+        patch.classification_status = "excluded";
+        patch.recoverability_result = "non_recoverable";
+        patch.exception_type = null;
+      } else if (action === "resolve") {
+        patch.classification_status = "matched";
+        patch.exception_type = null;
+      }
+      const { error } = await supabase
+        .from("expense_classifications")
+        .update(patch)
+        .eq("id", classificationId);
+      if (error) throw error;
+      return { classificationId, action };
+    },
+    onSuccess: ({ action }) => {
+      const label = {
+        approve: "Approved", reject: "Rejected", mark_na: "Marked N/A", resolve: "Resolved",
+      }[action] || "Updated";
+      toast.success(`${label}.`);
+      queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
+    },
+    onError: (err) => {
+      toast.error(err?.message || "Could not update classification");
+    },
+  });
+
   const subtitle = getScopeSubtitle(scope, {
     default: `${scopedExpenses.length} expense rows under review`,
     portfolio: (portfolio) => `${scopedExpenses.length} expense rows in ${portfolio.name}`,
@@ -334,9 +459,145 @@ export default function ExpenseReview() {
         </Card>
       </div>
 
+      {/* ── Exception Queue (primary review surface, per spec) ───────────── */}
+      <Card className="border-amber-200">
+        <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-amber-600" />
+              Exception Queue
+            </CardTitle>
+            <p className="mt-1 text-xs text-slate-500">
+              Classifications that need a human decision before they're finalized. Approving here promotes the row to <code>finalized</code> and lets it flow into Projection / CAM / Budget.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge className="bg-rose-100 text-rose-800 text-[10px] uppercase">
+              {exceptionCounts.unmatched} unmatched
+            </Badge>
+            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">
+              {exceptionCounts.low_confidence} low-confidence
+            </Badge>
+            <Badge className="bg-amber-100 text-amber-800 text-[10px] uppercase">
+              {exceptionCounts.conditional} conditional
+            </Badge>
+            <Badge className="bg-slate-200 text-slate-700 text-[10px] uppercase">
+              {exceptionCounts.other_exception} other
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoadingExceptions ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading exceptions…
+            </div>
+          ) : enrichedExceptions.length === 0 ? (
+            <div className="rounded-md border border-dashed border-emerald-200 bg-emerald-50 px-4 py-6 text-center text-sm text-emerald-800">
+              <CheckCircle2 className="mx-auto mb-2 h-5 w-5" />
+              No exceptions in this scope. Run classification on Expense Classification if you've added new actual expenses.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-slate-200">
+              <Table>
+                <TableHeader className="bg-slate-50">
+                  <TableRow>
+                    <TableHead className="text-[10px] uppercase">Exception</TableHead>
+                    <TableHead className="text-[10px] uppercase">Vendor / Invoice</TableHead>
+                    <TableHead className="text-[10px] uppercase">Category</TableHead>
+                    <TableHead className="text-[10px] uppercase text-right">Amount</TableHead>
+                    <TableHead className="text-[10px] uppercase">Reason</TableHead>
+                    <TableHead className="text-[10px] uppercase">Confidence</TableHead>
+                    <TableHead className="text-[10px] uppercase text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {enrichedExceptions.map((row) => {
+                    const exceptionTone =
+                      row.classification_status === "unmatched" ? "bg-rose-100 text-rose-800"
+                      : row.exception_type === "low_confidence" ? "bg-amber-100 text-amber-800"
+                      : row.classification_status === "conditional" ? "bg-amber-100 text-amber-800"
+                      : "bg-slate-200 text-slate-700";
+                    const exceptionLabel = row.exception_type || row.classification_status;
+                    const confidencePct = Number.isFinite(Number(row.confidence_score))
+                      ? `${Math.round((Number(row.confidence_score) <= 1 ? Number(row.confidence_score) * 100 : Number(row.confidence_score)))}%`
+                      : "—";
+                    return (
+                      <TableRow key={row.id} className="hover:bg-slate-50">
+                        <TableCell>
+                          <Badge className={`${exceptionTone} text-[10px] uppercase`}>
+                            {String(exceptionLabel || "—").replace(/_/g, " ")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          <div className="font-medium text-slate-900">{row.expense_vendor || "—"}</div>
+                          <div className="text-[10px] text-slate-500">
+                            {row.expense_invoice_number ? `#${row.expense_invoice_number} · ` : ""}{row.expense_date || ""}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-700">{row.expense_category || "—"}</TableCell>
+                        <TableCell className="text-sm text-right font-mono">
+                          {Number.isFinite(Number(row.expense_amount)) ? `$${Math.round(Number(row.expense_amount)).toLocaleString()}` : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600 max-w-[260px] truncate" title={row.recovery_reason || row.evidence_text || ""}>
+                          {row.recovery_reason || row.evidence_text || "—"}
+                        </TableCell>
+                        <TableCell className="text-xs">{confidencePct}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-emerald-700 hover:text-emerald-800"
+                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "approve" })}
+                              disabled={exceptionMutation.isPending}
+                              title="Promote to finalized — row flows into Projection / CAM"
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-rose-700 hover:text-rose-800"
+                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "reject" })}
+                              disabled={exceptionMutation.isPending}
+                              title="Reject as not recoverable / excluded"
+                            >
+                              Reject
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-slate-600"
+                              onClick={() => exceptionMutation.mutate({ classificationId: row.id, action: "mark_na" })}
+                              disabled={exceptionMutation.isPending}
+                              title="Mark non-recoverable but keep in the books"
+                            >
+                              N/A
+                            </Button>
+                            {row.lease_id && (
+                              <Link
+                                to={createPageUrl("LeaseExpenseClassification", { id: row.lease_id })}
+                                className="text-[10px] text-blue-600 underline"
+                                title="Open the per-lease classification view"
+                              >
+                                Open
+                              </Link>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Review Buckets</CardTitle>
+          <CardTitle className="text-base">Review Buckets <span className="ml-2 text-xs font-normal text-slate-400">(reference — all expenses in scope)</span></CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="relative max-w-sm">

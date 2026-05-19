@@ -1,15 +1,19 @@
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 import { budgetService } from "@/services/budgetService";
 import { expenseService } from "@/services/expenseService";
 import { propertyService } from "@/services/propertyService";
+import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { createPageUrl } from "@/utils";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ALL_PROPERTIES = "__all__";
@@ -44,9 +48,76 @@ export default function ExpenseProjection() {
         : budgetService.list(),
   });
 
+  // ── Finalized classifications ──────────────────────────────────────────
+  // Per spec: Expense Projection should be driven from finalized
+  // expense_classifications, not raw expenses. We query the table once and
+  // build a Map<expense_id, classification> for fast lookup. The data feeds:
+  //   - the "Finalized" filter — only expenses whose classification is
+  //     status='finalized' contribute to the projection numbers
+  //   - a Recoverable vs Non-Recoverable split on top of the existing totals
+  //   - a per-category Recovery Status column on the breakdown table
+  const { data: finalizedClassifications = [], isLoading: isLoadingClassifications } = useQuery({
+    queryKey: ["expense-projection-finalized", selectedProperty],
+    queryFn: async () => {
+      let q = supabase
+        .from("expense_classifications")
+        .select(
+          "id, expense_id, actual_expense_id, lease_id, property_id, " +
+          "recoverability_result, classification_status, cam_eligible, " +
+          "amount, category, recovery_method, finalized_at",
+        )
+        .eq("classification_status", "finalized")
+        .limit(5000);
+      if (selectedPropertyId) q = q.eq("property_id", selectedPropertyId);
+      const { data, error } = await q;
+      if (error) {
+        console.warn("[ExpenseProjection] finalized classifications query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+  });
+
+  const finalizedByExpenseId = useMemo(() => {
+    const map = new Map();
+    for (const c of finalizedClassifications) {
+      const eid = c.expense_id || c.actual_expense_id;
+      if (eid) map.set(eid, c);
+    }
+    return map;
+  }, [finalizedClassifications]);
+
+  // When the user has finalized classifications, use ONLY those expenses.
+  // Otherwise fall back to raw expenses so the page is never empty for
+  // legacy data — but show the readiness banner so reviewers know they
+  // need to run classification to get authoritative numbers.
+  const hasFinalizedData = finalizedByExpenseId.size > 0;
+  const expensesForProjection = useMemo(() => {
+    if (!hasFinalizedData) return expenses;
+    return expenses.filter((e) => finalizedByExpenseId.has(e.id));
+  }, [expenses, hasFinalizedData, finalizedByExpenseId]);
+
   const currentBudget = budgets.find((budget) => budget.budget_year === currentYear);
-  const currentExpenses = expenses.filter((expense) => expense.fiscal_year === currentYear);
-  const prevExpenses = expenses.filter((expense) => expense.fiscal_year === prevYear);
+  const currentExpenses = expensesForProjection.filter((expense) => expense.fiscal_year === currentYear);
+  const prevExpenses = expensesForProjection.filter((expense) => expense.fiscal_year === prevYear);
+
+  // Recoverable / Non-Recoverable split — only meaningful when finalized
+  // classifications exist (raw expenses don't carry recoverability_result
+  // on their own row, only via the classification join).
+  const recoveryTotals = useMemo(() => {
+    if (!hasFinalizedData) return { recoverable: 0, nonRecoverable: 0, conditional: 0 };
+    const totals = { recoverable: 0, nonRecoverable: 0, conditional: 0 };
+    for (const expense of currentExpenses) {
+      const classification = finalizedByExpenseId.get(expense.id);
+      if (!classification) continue;
+      const amount = Number(expense.amount) || 0;
+      const result = classification.recoverability_result;
+      if (result === "recoverable") totals.recoverable += amount;
+      else if (result === "conditional") totals.conditional += amount;
+      else totals.nonRecoverable += amount;
+    }
+    return totals;
+  }, [currentExpenses, hasFinalizedData, finalizedByExpenseId]);
 
   const categoryData = useMemo(() => {
     const categories = {};
@@ -54,9 +125,21 @@ export default function ExpenseProjection() {
     currentExpenses.forEach((expense) => {
       const category = expense.category || "other";
       if (!categories[category]) {
-        categories[category] = { current: 0, prev: 0, budgeted: 0, classification: expense.classification };
+        categories[category] = {
+          current: 0,
+          prev: 0,
+          budgeted: 0,
+          classification: expense.classification,
+          recoverability: null,        // populated below from finalized class
+        };
       }
       categories[category].current += expense.amount || 0;
+      // Pick up recoverability from the finalized classification (overrides
+      // any stale `expense.classification` text on the expense row).
+      const cls = finalizedByExpenseId.get(expense.id);
+      if (cls?.recoverability_result && !categories[category].recoverability) {
+        categories[category].recoverability = cls.recoverability_result;
+      }
     });
 
     prevExpenses.forEach((expense) => {
@@ -134,6 +217,61 @@ export default function ExpenseProjection() {
         </Select>
       </div>
 
+      {!hasFinalizedData && !isLoadingClassifications && (
+        <Card className="border-amber-200 bg-amber-50/70">
+          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-medium">
+                No finalized expense classifications yet for {selectedPropertyId ? "this property" : "your portfolio"}.
+              </p>
+              <p className="mt-1 text-xs">
+                The numbers below are derived from raw <code>expenses</code> rows and are not authoritative. Complete{" "}
+                <Link to={createPageUrl("LeaseExpenseClassification")} className="underline">
+                  Expense Classification
+                </Link>{" "}
+                to generate the projection, and resolve exceptions on{" "}
+                <Link to={createPageUrl("ExpenseReview")} className="underline">
+                  Expense Review
+                </Link>. Recoverability split, CAM-eligible totals, and the
+                tenant recovery estimate need finalized classifications.
+              </p>
+            </div>
+            <Link to={createPageUrl("LeaseExpenseClassification")}>
+              <Button size="sm" className="bg-amber-700 text-white hover:bg-amber-800">
+                Open Classification
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      {hasFinalizedData && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <Card className="border-l-4 border-l-emerald-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-emerald-700">Recoverable from tenant</p>
+              <p className="text-2xl font-bold text-emerald-900">${Math.round(recoveryTotals.recoverable).toLocaleString()}</p>
+              <p className="text-[10px] text-emerald-700/70">finalized {currentYear} classifications</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-amber-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-amber-700">Conditional</p>
+              <p className="text-2xl font-bold text-amber-900">${Math.round(recoveryTotals.conditional).toLocaleString()}</p>
+              <p className="text-[10px] text-amber-700/70">depends on caps / triggers</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-rose-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-rose-700">Non-recoverable</p>
+              <p className="text-2xl font-bold text-rose-900">${Math.round(recoveryTotals.nonRecoverable).toLocaleString()}</p>
+              <p className="text-[10px] text-rose-700/70">landlord absorbs</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="border-l-4 border-l-blue-500">
           <CardContent className="p-4">
@@ -202,6 +340,7 @@ export default function ExpenseProjection() {
               <TableHeader>
                 <TableRow className="bg-slate-50">
                   <TableHead className="text-[11px]">CATEGORY</TableHead>
+                  <TableHead className="text-[11px]">RECOVERY</TableHead>
                   <TableHead className="text-[11px] text-right">ACTUAL {currentYear}</TableHead>
                   <TableHead className="text-[11px] text-right">ACTUAL {prevYear}</TableHead>
                   <TableHead className="text-[11px] text-right">BUDGET {currentYear}</TableHead>
@@ -214,10 +353,20 @@ export default function ExpenseProjection() {
                 {categoryData.map((category) => {
                   const yoy = category.prev > 0 ? ((category.current - category.prev) / category.prev * 100).toFixed(1) : null;
                   const budgetVariance = category.budgeted > 0 ? ((category.current - category.budgeted) / category.budgeted * 100).toFixed(1) : null;
+                  const recoveryTone =
+                    category.recoverability === "recoverable" ? "bg-emerald-100 text-emerald-800"
+                    : category.recoverability === "conditional" ? "bg-amber-100 text-amber-800"
+                    : category.recoverability === "non_recoverable" || category.recoverability === "excluded" ? "bg-rose-100 text-rose-800"
+                    : "bg-slate-100 text-slate-500";
 
                   return (
                     <TableRow key={category.category}>
                       <TableCell className="text-sm capitalize">{category.category.replace(/_/g, " ")}</TableCell>
+                      <TableCell>
+                        <Badge className={`${recoveryTone} text-[10px] uppercase`}>
+                          {category.recoverability ? category.recoverability.replace(/_/g, " ") : "—"}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="text-sm font-mono text-right">${category.current.toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right text-slate-400">${category.prev.toLocaleString()}</TableCell>
                       <TableCell className="text-sm font-mono text-right text-blue-600">${category.budgeted.toLocaleString()}</TableCell>
