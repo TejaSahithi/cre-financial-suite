@@ -2222,6 +2222,56 @@ export const leaseExpenseRuleService = {
       return payload;
     });
 
+    // ── Preserve user-approved fields on upsert ─────────────────────────
+    // Per Part 1 spec idempotency rule:
+    //   "If rule_key exists and review_status is approved, do not overwrite
+    //    user-reviewed fields."
+    //
+    // We fetch existing rows for the target rule_set keyed by rule_key,
+    // and for any row whose existing review_status is 'approved', we
+    // override the new payload's review/approval/published fields with the
+    // preserved values. Without this, an extract click that hits the same
+    // rule_key UPSERTs the row back to 'needs_review' and silently undoes
+    // the user's approval.
+    let preservedByKey = new Map();
+    if (rulePayloads.length > 0 && ruleSetId) {
+      try {
+        const ruleKeys = rulePayloads.map((p) => p.rule_key).filter(Boolean);
+        if (ruleKeys.length > 0) {
+          const { data: existing } = await supabase
+            .from("lease_expense_rules")
+            .select("rule_key, review_status, approval_status, approved_by, approved_at, published_to_cam, notes")
+            .eq("rule_set_id", ruleSetId)
+            .in("rule_key", ruleKeys);
+          for (const row of existing || []) {
+            preservedByKey.set(row.rule_key, row);
+          }
+        }
+      } catch (err) {
+        console.warn(`${tag} existing-rule pre-fetch skipped:`, err?.message || err);
+      }
+    }
+    if (preservedByKey.size > 0) {
+      let preservedApprovedCount = 0;
+      for (const payload of rulePayloads) {
+        const existing = preservedByKey.get(payload.rule_key);
+        if (!existing) continue;
+        if (existing.review_status === "approved" || existing.approval_status === "approved") {
+          preservedApprovedCount += 1;
+          payload.review_status = existing.review_status || payload.review_status;
+          payload.approval_status = existing.approval_status || payload.approval_status;
+          payload.approved_by = existing.approved_by ?? payload.approved_by;
+          payload.approved_at = existing.approved_at ?? payload.approved_at;
+          payload.published_to_cam = existing.published_to_cam ?? payload.published_to_cam;
+          // Keep human-edited notes too if they exist
+          if (existing.notes && !payload.notes) payload.notes = existing.notes;
+        }
+      }
+      if (preservedApprovedCount > 0) {
+        console.log(`[leaseExpenseRuleService] saveRuleSet preserved approval on ${preservedApprovedCount} existing rule(s)`);
+      }
+    }
+
     // Strip-missing-columns retry: if the DB hasn't been migrated yet with
     // the latest spec columns (payment_treatment, cam_eligible, etc.),
     // Postgres will return PGRST204 "Could not find column X". Rather than
