@@ -413,6 +413,56 @@ function isMissingExpenseRuleTable(error) {
     && /does not exist|could not find/.test(text);
 }
 
+function extractMissingColumn(error) {
+  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ");
+  if (!text) return null;
+
+  let match = text.match(/Could not find the '([^']+)' column/i);
+  if (match?.[1]) return match[1];
+
+  match = text.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
+  if (match?.[1]) return match[1];
+
+  return null;
+}
+
+function isMissingColumnError(error) {
+  return (
+    error?.code === "PGRST204" ||
+    error?.code === "42703" ||
+    Boolean(extractMissingColumn(error))
+  );
+}
+
+async function selectExpenseClassifications({ columns = [], apply = (query) => query } = {}) {
+  if (!supabase || columns.length === 0) return [];
+
+  const remainingColumns = [...columns];
+
+  while (remainingColumns.length > 0) {
+    let query = supabase.from("expense_classifications").select(remainingColumns.join(", "));
+    query = apply(query);
+
+    const { data, error } = await query;
+    if (!error) {
+      return data || [];
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn) {
+      throw error;
+    }
+
+    const index = remainingColumns.indexOf(missingColumn);
+    if (index === -1) {
+      throw error;
+    }
+    remainingColumns.splice(index, 1);
+  }
+
+  return [];
+}
+
 async function fetchApprovedRuleArtifacts(leaseIds = []) {
   if (!supabase || leaseIds.length === 0) {
     return { ruleSets: [], rules: [], categories: [] };
@@ -495,10 +545,20 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 async function upsertExpenseClassification(payload) {
   if (!supabase || !payload?.expense_id || !payload?.org_id) return;
   try {
-    const { error } = await supabase
-      .from("expense_classifications")
-      .upsert(payload, { onConflict: "org_id,expense_id" });
-    if (error) throw error;
+    const nextPayload = { ...payload };
+
+    while (Object.keys(nextPayload).length > 0) {
+      const { error } = await supabase
+        .from("expense_classifications")
+        .upsert(nextPayload, { onConflict: "org_id,expense_id" });
+      if (!error) return;
+
+      const missingColumn = extractMissingColumn(error);
+      if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in nextPayload)) {
+        throw error;
+      }
+      delete nextPayload[missingColumn];
+    }
   } catch (error) {
     console.warn("[expenseService] expense classification persistence warning:", error);
   }
@@ -507,19 +567,44 @@ async function upsertExpenseClassification(payload) {
 async function fetchExistingExpenseClassifications(expenseIds = []) {
   if (!supabase || expenseIds.length === 0) return [];
   try {
-    const { data, error } = await supabase
-      .from("expense_classifications")
-      .select(
-        "id, org_id, expense_id, property_id, building_id, unit_id, lease_id, tenant_id, " +
-        "rule_set_id, recovery_rule_id, linked_expense_rule_id, recovery_status, recoverability_result, " +
-        "cam_pool_id, recovery_reason, cam_eligible, recovery_method, allocation_method, rule_source, " +
-        "confidence_score, evidence_text, evidence_page_number, approved_status, notes, " +
-        "classified_by, classified_at, approved_by, approved_at, reviewed_at, finalized_at, " +
-        "classification_status, exception_type, amount"
-      )
-      .in("expense_id", expenseIds);
-    if (error) throw error;
-    return data || [];
+    return await selectExpenseClassifications({
+      columns: [
+        "id",
+        "org_id",
+        "expense_id",
+        "property_id",
+        "building_id",
+        "unit_id",
+        "lease_id",
+        "tenant_id",
+        "rule_set_id",
+        "recovery_rule_id",
+        "linked_expense_rule_id",
+        "recovery_status",
+        "recoverability_result",
+        "cam_pool_id",
+        "recovery_reason",
+        "cam_eligible",
+        "recovery_method",
+        "allocation_method",
+        "rule_source",
+        "confidence_score",
+        "evidence_text",
+        "evidence_page_number",
+        "approved_status",
+        "notes",
+        "classified_by",
+        "classified_at",
+        "approved_by",
+        "approved_at",
+        "reviewed_at",
+        "finalized_at",
+        "classification_status",
+        "exception_type",
+        "amount",
+      ],
+      apply: (query) => query.in("expense_id", expenseIds),
+    });
   } catch (error) {
     if (isMissingExpenseRuleTable(error)) {
       console.warn("[expenseService] expense_classifications table missing — treating as no persisted classifications.");
@@ -532,6 +617,72 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
 
 export const expenseService = {
   ...baseExpenseService,
+
+  async listExpenseClassificationsForExpenses(expenseIds = []) {
+    if (!expenseIds.length) return [];
+    try {
+      return await selectExpenseClassifications({
+        columns: [
+          "expense_id",
+          "recovery_status",
+          "recoverability_result",
+          "approved_status",
+          "rule_source",
+          "classification_status",
+          "confidence_score",
+          "recovery_reason",
+          "cam_eligible",
+          "recovery_method",
+          "approved_at",
+          "reviewed_at",
+          "finalized_at",
+        ],
+        apply: (query) => query.in("expense_id", expenseIds),
+      });
+    } catch (error) {
+      console.warn("[expenseService] listExpenseClassificationsForExpenses warning:", error);
+      return [];
+    }
+  },
+
+  async listExpenseClassificationsForLease({ leaseId, propertyId = null, limit = 1000 } = {}) {
+    if (!leaseId) return [];
+    try {
+      return await selectExpenseClassifications({
+        columns: [
+          "id",
+          "expense_id",
+          "lease_expense_rule_id",
+          "recovery_rule_id",
+          "recoverability_result",
+          "recovery_status",
+          "cam_eligible",
+          "recovery_method",
+          "recovery_reason",
+          "classification_status",
+          "exception_type",
+          "confidence_score",
+          "finalized_at",
+          "reviewed_at",
+          "amount",
+          "classified_at",
+          "lease_id",
+          "property_id",
+        ],
+        apply: (query) => {
+          const orFilter = [`lease_id.eq.${leaseId}`];
+          if (propertyId) orFilter.push(`and(lease_id.is.null,property_id.eq.${propertyId})`);
+          return query
+            .or(orFilter.join(","))
+            .order("classified_at", { ascending: false })
+            .limit(limit);
+        },
+      });
+    } catch (error) {
+      console.warn("[expenseService] listExpenseClassificationsForLease warning:", error);
+      return [];
+    }
+  },
 
   async reviewExpense(expenseOrId, { recoveryStatus, approvedStatus, ruleSource = "manual", reason = null } = {}) {
     const expense =
@@ -581,16 +732,7 @@ export const expenseService = {
 
     const expensePatch = {
       classification,
-      recovery_status: effectiveRecoveryStatus,
-      recoverability_result: effectiveRecoveryStatus,
-      approved_status: effectiveApprovedStatus,
-      rule_source: effectiveRuleSource,
-      recovery_reason: effectiveReason,
-      classification_updated_at: now,
     };
-    if (userId) {
-      expensePatch.classification_updated_by = userId;
-    }
 
     const updatedExpense = await baseExpenseService.update(expense.id, expensePatch);
 
@@ -877,32 +1019,7 @@ export const expenseService = {
       }
 
       const updatePayload = {
-        lease_id: expense.lease_id || matchedLease?.id || null,
-        tenant_id: expense.tenant_id || matchedLease?.tenant_id || null,
-        tenant_name: expense.tenant_name || matchedLease?.tenant_name || null,
         classification: recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus,
-        recovery_status: recoveryStatus,
-        recoverability_result: recoveryStatus,
-        allocation_method: expense.allocation_method || expense.allocation_type || matchedLease?.allocation_method || "pro_rata",
-        allocation_type: expense.allocation_type || expense.allocation_method || matchedLease?.allocation_method || "pro_rata",
-        recovery_rule_id: linkedExpenseRuleId,
-        linked_expense_rule_id: linkedExpenseRuleId,
-        rule_source: ruleSource,
-        cam_eligible: camEligible,
-        recovery_method: recoveryMethod,
-        recovery_reason: recoveryReason,
-        cam_pool_id: camEligible === "no" ? null : (matchedRule?.expense_category_id || null),
-        confidence_score: confidenceScore,
-        evidence_text: matchedRule?.source || recoveryReason,
-        evidence_page_number: matchedRule?.clauses?.[0]?.page_number ?? null,
-        approved_status: approvedStatus,
-        classification_updated_at: new Date().toISOString(),
-        recovery_meta: {
-          ...(expense.recovery_meta || {}),
-          match_score: match.score,
-          payment_treatment: matchedRule ? leaseExpenseRuleService.getPaymentTreatment(matchedRule) : null,
-          billing_treatment: matchedRule ? leaseExpenseRuleService.getBillingTreatment(matchedRule) : null,
-        },
       };
 
       await baseExpenseService.update(expense.id, updatePayload);

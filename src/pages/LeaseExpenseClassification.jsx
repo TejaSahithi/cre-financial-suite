@@ -260,21 +260,12 @@ export default function LeaseExpenseClassification() {
   const { data: persistedClassifications = [] } = useQuery({
     queryKey: ["lease-expense-classifications", id, lease?.property_id],
     enabled: !!lease?.id,
-    queryFn: async () => {
-      const orFilter = [`lease_id.eq.${lease.id}`];
-      if (lease.property_id) orFilter.push(`and(lease_id.is.null,property_id.eq.${lease.property_id})`);
-      const { data, error } = await supabase
-        .from("expense_classifications")
-        .select("id, expense_id, lease_expense_rule_id, recoverability_result, cam_eligible, recovery_method, recovery_reason, classification_status, exception_type, confidence_score, finalized_at, reviewed_at, amount")
-        .or(orFilter.join(","))
-        .order("classified_at", { ascending: false })
-        .limit(1000);
-      if (error) {
-        console.warn("[LeaseExpenseClassification] classifications query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
+    queryFn: () =>
+      expenseService.listExpenseClassificationsForLease({
+        leaseId: lease.id,
+        propertyId: lease.property_id || null,
+        limit: 1000,
+      }),
   });
 
   // Pair each actual expense to its best-matching rule (if any) using the

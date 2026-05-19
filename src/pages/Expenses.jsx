@@ -192,22 +192,7 @@ export default function Expenses() {
 
   const { data: selectorScopedClassifications = [] } = useQuery({
     queryKey: ["expense-dashboard-classifications", selectorScopedExpenseIds.join("|")],
-    queryFn: async () => {
-      if (selectorScopedExpenseIds.length === 0) return [];
-      const { data, error } = await supabase
-        .from("expense_classifications")
-        .select(
-          "expense_id, recovery_status, recoverability_result, approved_status, rule_source, " +
-          "classification_status, confidence_score, recovery_reason, cam_eligible, recovery_method, " +
-          "approved_at, reviewed_at, finalized_at"
-        )
-        .in("expense_id", selectorScopedExpenseIds);
-      if (error) {
-        console.warn("[Expenses] expense_classifications query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
+    queryFn: () => expenseService.listExpenseClassificationsForExpenses(selectorScopedExpenseIds),
     enabled: selectorScopedExpenseIds.length > 0,
   });
 
