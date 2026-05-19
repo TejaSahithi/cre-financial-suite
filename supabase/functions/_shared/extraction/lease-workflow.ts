@@ -761,23 +761,104 @@ function findSupportingClauseForRule(
   fullText: string,
   keywords: string[],
 ) {
+  // Score-based clause matcher.
+  //
+  // Previously this returned the FIRST clause containing any keyword —
+  // which gave bad results: "Security" expense matched the
+  // "SECURITY DEPOSIT" article (a different concept), and a single
+  // gross-lease summary paragraph got reused for utilities, repairs,
+  // janitorial, etc. (all keywords appeared in the same paragraph).
+  //
+  // Now we score every candidate clause and pick the most specific one:
+  //   +30  keyword appears in the first 80 chars (likely heading/title)
+  //   +20  keyword appears as a standalone word in a heading line (ARTICLE X foo, Section X.X Foo)
+  //   +5   per additional keyword occurrence in the clause body
+  //   -3   per *unrelated* category keyword present in the same clause
+  //         (penalizes generic paragraphs that mention many things)
+  //   -25  if a sibling "deposit"/"reserve"/"escrow" word fences the keyword
+  //         away from the expense meaning (security DEPOSIT, tax ESCROW)
+  //
+  // Clauses scoring < 5 are rejected → caller treats as missing evidence.
   const loweredKeywords = keywords.map((keyword) => normalizeToken(keyword));
-  const matchingClause = clauses.find((clause) =>
-    clause?.clause_text && loweredKeywords.some((keyword) => normalizeToken(clause.clause_text).includes(keyword))
-  );
-  if (matchingClause) {
+  const looksLikeHeading = (text: string) => /^\s*(?:article|section|exhibit|addendum)\s+[a-z0-9]+\b/i.test(text)
+    || /^\s*\d+(?:\.\d+)*\s/.test(text);
+
+  // Build a set of all OTHER category words across the blueprints so we can
+  // penalize paragraphs that look like a generic summary.
+  const allCategoryWords = new Set<string>();
+  for (const bp of EXPENSE_RULE_BLUEPRINTS) {
+    for (const k of bp.keywords) allCategoryWords.add(normalizeToken(k));
+  }
+  const ourKeywordSet = new Set(loweredKeywords);
+
+  let bestClause: LeaseWorkflowClause | null = null;
+  let bestScore = 0;
+
+  for (const clause of clauses || []) {
+    const text = clause?.clause_text || "";
+    if (!text) continue;
+    const lower = normalizeToken(text);
+    const head80 = lower.slice(0, 80);
+    let score = 0;
+    let hits = 0;
+
+    for (const kw of loweredKeywords) {
+      if (!kw) continue;
+      // Use word-boundary-ish matching: surround keyword with non-letter context.
+      const bounded = new RegExp(`(^|[^a-z0-9])${escapeForRegex(kw)}($|[^a-z0-9])`);
+      const matches = lower.match(new RegExp(bounded, "g")) || [];
+      if (matches.length === 0) continue;
+      hits += matches.length;
+      score += 5 * matches.length;
+      if (bounded.test(head80)) score += 30;
+      if (looksLikeHeading(text) && bounded.test(head80)) score += 20;
+    }
+    if (hits === 0) continue;
+
+    // Penalize generic paragraphs that mention many unrelated categories.
+    let unrelated = 0;
+    for (const cw of allCategoryWords) {
+      if (ourKeywordSet.has(cw)) continue;
+      const cwRe = new RegExp(`(^|[^a-z0-9])${escapeForRegex(cw)}($|[^a-z0-9])`);
+      if (cwRe.test(lower)) unrelated += 1;
+    }
+    score -= unrelated * 3;
+
+    // Specific "deposit/escrow" defence: "security" keyword colliding with
+    // "security deposit" is the canonical false-positive in this codebase.
+    for (const kw of loweredKeywords) {
+      const collider = new RegExp(`${escapeForRegex(kw)}\\s+(?:deposit|reserve|escrow|interest|account)`);
+      if (collider.test(lower)) score -= 25;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestClause = clause;
+    }
+  }
+
+  if (bestClause && bestScore >= 5) {
     return {
-      clause_text: matchingClause.clause_text,
-      source_page: matchingClause.source_page,
-      clause_type: matchingClause.clause_type,
+      clause_text: bestClause.clause_text,
+      source_page: bestClause.source_page,
+      clause_type: bestClause.clause_type,
     };
   }
+
+  // No good clause match — try a paragraph-level snippet from raw text.
+  // extractClauseSnippet returns null for clause_text now when no document
+  // text matches (no more keyword fallback), so the caller will correctly
+  // mark the rule as missing source evidence.
   const fallback = extractClauseSnippet(textBlocks, fullText, keywords, 420);
   return {
     clause_text: fallback.clause_text,
     source_page: fallback.source_page,
     clause_type: "supporting_text",
   };
+}
+
+function escapeForRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function deriveExpenseRules(
