@@ -377,6 +377,11 @@ function extractMissingColumn(err) {
   let match = message.match(/Could not find the '([^']+)' column/i);
   if (match?.[1]) return match[1];
 
+  match = message.match(/column\s+["']?([a-zA-Z0-9_.]+)["']?/i);
+  if (match?.[1]) {
+    return String(match[1]).split('.').pop();
+  }
+
   match = message.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
   if (match?.[1]) return match[1];
 
@@ -491,7 +496,16 @@ const COMPATIBILITY_MISSING_COLUMNS = {
     'evidence_text',
     'evidence_page_number',
     'approved_status',
+    'review_status',
+    'approved_by',
+    'approved_at',
+    'notes',
+    'is_controllable',
+    'created_by',
     'allocation_method',
+    'allocation_type',
+    'allocation_meta',
+    'direct_tenant_ids',
     'recovery_meta',
     'classification_updated_at',
     'classification_updated_by',

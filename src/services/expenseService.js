@@ -518,6 +518,11 @@ function extractMissingColumn(error) {
   let match = text.match(/Could not find the '([^']+)' column/i);
   if (match?.[1]) return match[1];
 
+  match = text.match(/column\s+["']?([a-zA-Z0-9_.]+)["']?/i);
+  if (match?.[1]) {
+    return String(match[1]).split(".").pop();
+  }
+
   match = text.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
   if (match?.[1]) return match[1];
 
