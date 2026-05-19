@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { ExpenseService } from "@/services/api";
@@ -32,7 +32,10 @@ function categorizeCategory(category, rules) {
 }
 
 export default function LeaseExpenseClassification() {
-  const { id } = useParams();
+  // The link from Lease Expense Rules / Leases uses `?id=` (query string),
+  // not a path param. Reading via useSearchParams handles both shapes.
+  const [searchParams] = useSearchParams();
+  const id = searchParams.get("id") || searchParams.get("lease_id") || null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -200,6 +203,158 @@ export default function LeaseExpenseClassification() {
     () => leaseExpenseRuleService.groupRulesByRecoveryStatus(localRules),
     [localRules]
   );
+
+  // ── Actual Expenses for this lease ────────────────────────────────────
+  // Pulls all `expenses` rows the user can read where lease_id matches OR
+  // (lease_id is null AND the expense scope overlaps this lease's
+  // property/building/unit). This is the "actuals" side of the
+  // rules-vs-actuals coordination shown below the grid.
+  const { data: actualExpenses = [], isLoading: isLoadingActuals } = useQuery({
+    queryKey: ["lease-actual-expenses", id, lease?.property_id],
+    enabled: !!lease?.id,
+    queryFn: async () => {
+      const orFilter = [`lease_id.eq.${lease.id}`];
+      if (lease.property_id) orFilter.push(`and(lease_id.is.null,property_id.eq.${lease.property_id})`);
+      const { data, error } = await supabase
+        .from("expenses")
+        .select("id, lease_id, property_id, building_id, unit_id, category, amount, vendor, date, source, description, invoice_number")
+        .or(orFilter.join(","))
+        .order("date", { ascending: false })
+        .limit(500);
+      if (error) {
+        console.warn("[LeaseExpenseClassification] actuals query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+  });
+
+  // Pair each actual expense to its best-matching rule (if any) using the
+  // existing matcher service. Computes variance against the rule's
+  // annualized expected amount where possible.
+  const matchedActuals = useMemo(() => {
+    if (!lease?.id || actualExpenses.length === 0) return [];
+    const rulesByLeaseId = new Map([[lease.id, localRules]]);
+    const leases = [lease];
+
+    const ruleAnnualExpected = (rule) => {
+      const raw = Number(rule?.final_value ?? rule?.manual_value ?? rule?.extracted_value ?? rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount);
+      if (!Number.isFinite(raw) || raw === 0) return null;
+      const f = String(rule?.frequency || rule?.billing_frequency || "yearly").toLowerCase();
+      if (f === "monthly") return raw * 12;
+      if (f === "quarterly") return raw * 4;
+      return raw;
+    };
+
+    return actualExpenses.map((expense) => {
+      const match = expenseService.matchActualExpenseToLeaseRule(expense, { leases, rulesByLeaseId });
+      const rule = match?.rule || null;
+      const expectedAnnual = ruleAnnualExpected(rule);
+      const actualAmount = Number(expense?.amount) || 0;
+      const variance = expectedAnnual != null ? actualAmount - (expectedAnnual / 12) : null; // per-month variance (most expenses are monthly invoices)
+      return {
+        expense,
+        rule,
+        matchScore: match?.score ?? 0,
+        recoverability: match?.recoverability_result || "needs_review",
+        recoveryMethod: match?.recovery_method || rule?.recovery_method || null,
+        camEligible: match?.cam_eligible || null,
+        reason: match?.reason || null,
+        expectedAnnual,
+        variance,
+      };
+    });
+  }, [actualExpenses, localRules, lease]);
+
+  // Roll up matched actuals by bucket so the totals card can show
+  // "Actual vs Rule" comparison alongside the rule-based forecast.
+  const actualTotals = useMemo(() => {
+    const buckets = {
+      recoverable: { count: 0, ytd: 0 },
+      non_recoverable: { count: 0, ytd: 0 },
+      conditional: { count: 0, ytd: 0 },
+      needs_review: { count: 0, ytd: 0 },
+      unmatched: { count: 0, ytd: 0 },
+    };
+    let total = 0;
+    for (const m of matchedActuals) {
+      const amount = Number(m.expense?.amount) || 0;
+      total += amount;
+      const key =
+        m.recoverability === "recoverable" ? "recoverable"
+        : m.recoverability === "non_recoverable" || m.recoverability === "excluded" ? "non_recoverable"
+        : m.recoverability === "conditional" ? "conditional"
+        : !m.rule ? "unmatched"
+        : "needs_review";
+      buckets[key].count += 1;
+      buckets[key].ytd += amount;
+    }
+    return { buckets, total };
+  }, [matchedActuals]);
+
+  // ── Total Expense Calculation ─────────────────────────────────────────
+  // Rolls up dollar amounts across rules into recoverable / non-recoverable /
+  // conditional totals at both monthly and annual cadence. Used by the
+  // sidebar's "Total Expense Calculation" card. Per-rule frequency is
+  // normalized to annual; rules without a value are excluded from the sum
+  // but counted under "needs value".
+  const expenseTotals = useMemo(() => {
+    const toNumber = (v) => {
+      if (v == null || v === "") return null;
+      const n = Number(String(v).replace(/[$,%\s,]/g, ""));
+      return Number.isFinite(n) ? n : null;
+    };
+    const annualize = (amount, freq) => {
+      if (amount == null) return null;
+      const f = String(freq || "").toLowerCase();
+      if (f === "monthly") return amount * 12;
+      if (f === "quarterly") return amount * 4;
+      if (f === "yearly" || f === "annual" || !f) return amount;
+      if (f === "triggered" || f === "none") return null;
+      return amount;
+    };
+    const buckets = {
+      recoverable:    { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
+      non_recoverable:{ annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
+      conditional:    { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
+      excluded:       { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
+    };
+    const categoryRows = []; // for the per-category breakdown table
+    for (const rule of localRules) {
+      const decision = leaseExpenseRuleService.normalizeRecoveryStatus(rule);
+      const bucketKey =
+        rule.is_excluded ? "excluded"
+        : decision === "recoverable" ? "recoverable"
+        : decision === "conditional" ? "conditional"
+        : decision === "non_recoverable" || decision === "excluded" ? "non_recoverable"
+        : null;
+      if (!bucketKey) continue;
+      const bucket = buckets[bucketKey];
+      bucket.count += 1;
+      const rawAmount = toNumber(rule.final_value ?? rule.manual_value ?? rule.extracted_value ?? rule.fixed_monthly_amount ?? rule.explicit_charge_amount);
+      const annual = annualize(rawAmount, rule.frequency || rule.billing_frequency);
+      if (annual != null) {
+        bucket.annual += annual;
+        bucket.monthly += annual / 12;
+        bucket.withValue += 1;
+      } else {
+        bucket.noValue += 1;
+      }
+      if (rawAmount != null) {
+        categoryRows.push({
+          category: rule.category_name || rule.subcategory_name || rule.expense_category,
+          bucket: bucketKey,
+          frequency: rule.frequency || rule.billing_frequency || "yearly",
+          amount: rawAmount,
+          annual: annual ?? 0,
+        });
+      }
+    }
+    const totalAnnual = buckets.recoverable.annual + buckets.non_recoverable.annual + buckets.conditional.annual + buckets.excluded.annual;
+    return { buckets, totalAnnual, totalMonthly: totalAnnual / 12, categoryRows };
+  }, [localRules]);
+
+  const fmtMoney = (n) => `$${Math.round(n || 0).toLocaleString()}`;
 
   const handleEditRule = (category, rule) => {
     setSelectedCategory(category);
@@ -398,10 +553,215 @@ export default function LeaseExpenseClassification() {
               )}
             </CardContent>
           </Card>
+
+          {/* ── Actuals vs Rules Coordination ──────────────────────────── */}
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle>Actual Expenses vs Lease Rules</CardTitle>
+                <p className="mt-1 text-sm text-slate-500">
+                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Rules say what the lease allows; actuals say what really happened. The recovery decision + variance comes from the matcher.
+                </p>
+              </div>
+              <div className="flex flex-shrink-0 flex-col items-end gap-1">
+                <Badge variant="outline" className="text-[10px] uppercase">
+                  {matchedActuals.length} actuals
+                </Badge>
+                <Badge variant="outline" className="text-[10px] uppercase text-slate-500">
+                  YTD {`$${Math.round(actualTotals.total).toLocaleString()}`}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {isLoadingActuals ? (
+                <div className="py-8 text-center text-sm text-slate-500">Loading actuals…</div>
+              ) : matchedActuals.length === 0 ? (
+                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                  <p className="font-medium text-slate-700">No actual expenses imported yet for this lease.</p>
+                  <p className="mt-1 text-xs">
+                    Use <Link to={createPageUrl("AddExpense", { lease_id: lease?.id })} className="text-blue-600 underline">Add Expense</Link>,{" "}
+                    <Link to={createPageUrl("BulkImport", { lease_id: lease?.id })} className="text-blue-600 underline">Bulk Import</Link>,
+                    or connect an invoice feed. They'll be matched against the rules above automatically.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Per-bucket summary chips */}
+                  <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                    <ActualsBucketChip label="Recoverable"     count={actualTotals.buckets.recoverable.count}     amount={actualTotals.buckets.recoverable.ytd}     tone="emerald" />
+                    <ActualsBucketChip label="Conditional"     count={actualTotals.buckets.conditional.count}     amount={actualTotals.buckets.conditional.ytd}     tone="amber" />
+                    <ActualsBucketChip label="Non-Recoverable" count={actualTotals.buckets.non_recoverable.count} amount={actualTotals.buckets.non_recoverable.ytd} tone="rose" />
+                    <ActualsBucketChip label="Needs Review"    count={actualTotals.buckets.needs_review.count}    amount={actualTotals.buckets.needs_review.ytd}    tone="slate" />
+                    <ActualsBucketChip label="Unmatched"       count={actualTotals.buckets.unmatched.count}       amount={actualTotals.buckets.unmatched.ytd}       tone="red" />
+                  </div>
+
+                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Date</th>
+                          <th className="px-3 py-2 text-left">Vendor / Invoice</th>
+                          <th className="px-3 py-2 text-left">Category</th>
+                          <th className="px-3 py-2 text-right">Actual</th>
+                          <th className="px-3 py-2 text-left">Matched Rule</th>
+                          <th className="px-3 py-2 text-right">Rule (annual)</th>
+                          <th className="px-3 py-2 text-right">Variance / mo</th>
+                          <th className="px-3 py-2 text-left">Recovery</th>
+                          <th className="px-3 py-2 text-left">Source</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {matchedActuals.map(({ expense, rule, recoverability, expectedAnnual, variance, recoveryMethod }) => {
+                          const recoveryTone =
+                            recoverability === "recoverable" ? "bg-emerald-100 text-emerald-800"
+                            : recoverability === "conditional" ? "bg-amber-100 text-amber-800"
+                            : recoverability === "non_recoverable" || recoverability === "excluded" ? "bg-rose-100 text-rose-800"
+                            : !rule ? "bg-red-100 text-red-800"
+                            : "bg-slate-200 text-slate-700";
+                          return (
+                            <tr key={expense.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 text-slate-700">{expense.date || "—"}</td>
+                              <td className="px-3 py-2">
+                                <div className="font-medium text-slate-900">{expense.vendor || "—"}</div>
+                                {expense.invoice_number && (
+                                  <div className="text-[10px] text-slate-500">#{expense.invoice_number}</div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700">{expense.category || "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono font-semibold text-slate-900">
+                                {`$${Math.round(Number(expense.amount) || 0).toLocaleString()}`}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700">
+                                {rule ? (
+                                  <div>
+                                    <div className="font-medium">{rule.category_name || rule.expense_category}</div>
+                                    {recoveryMethod && (
+                                      <div className="text-[10px] text-slate-500">{recoveryMethod.replace(/_/g, " ")}</div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-red-700">No matching rule</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono text-slate-700">
+                                {expectedAnnual != null ? `$${Math.round(expectedAnnual).toLocaleString()}` : "—"}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-mono ${variance == null ? "text-slate-400" : variance > 0 ? "text-rose-700" : variance < 0 ? "text-emerald-700" : "text-slate-700"}`}>
+                                {variance == null ? "—" : `${variance > 0 ? "+" : ""}$${Math.round(variance).toLocaleString()}`}
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge className={`${recoveryTone} text-[10px] uppercase`}>
+                                  {recoverability?.replace(/_/g, " ") || "—"}
+                                </Badge>
+                              </td>
+                              <td className="px-3 py-2 text-[10px] text-slate-500">{expense.source || "manual"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="mt-3 text-[11px] text-slate-500">
+                    Variance is per-month: actual amount minus (rule annual ÷ 12). Negative = under-budget, positive = over-budget. Rules with no dollar value can't compute variance.
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Sidebar Area */}
         <div className="space-y-4">
+          {/* ── Total Expense Calculation ─────────────────────────────── */}
+          <Card className="border-slate-200">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Total Expense Calculation</CardTitle>
+                <Badge variant="outline" className="text-[10px] uppercase">Lease total</Badge>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Annualized rollup of all rule amounts. Rules with no dollar value are excluded from the total but counted separately.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="rounded-lg bg-slate-900 px-4 py-3 text-white">
+                <div className="text-[10px] uppercase tracking-wider text-slate-300">Estimated Annual</div>
+                <div className="mt-1 text-2xl font-bold">{fmtMoney(expenseTotals.totalAnnual)}</div>
+                <div className="mt-0.5 text-xs text-slate-300">
+                  {fmtMoney(expenseTotals.totalMonthly)} / month
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <TotalRow
+                  label="Recoverable from tenant"
+                  count={expenseTotals.buckets.recoverable.count}
+                  withValue={expenseTotals.buckets.recoverable.withValue}
+                  annual={expenseTotals.buckets.recoverable.annual}
+                  tone="emerald"
+                />
+                <TotalRow
+                  label="Conditional"
+                  count={expenseTotals.buckets.conditional.count}
+                  withValue={expenseTotals.buckets.conditional.withValue}
+                  annual={expenseTotals.buckets.conditional.annual}
+                  tone="amber"
+                />
+                <TotalRow
+                  label="Non-recoverable"
+                  count={expenseTotals.buckets.non_recoverable.count}
+                  withValue={expenseTotals.buckets.non_recoverable.withValue}
+                  annual={expenseTotals.buckets.non_recoverable.annual}
+                  tone="rose"
+                />
+                <TotalRow
+                  label="Excluded"
+                  count={expenseTotals.buckets.excluded.count}
+                  withValue={expenseTotals.buckets.excluded.withValue}
+                  annual={expenseTotals.buckets.excluded.annual}
+                  tone="slate"
+                />
+              </div>
+
+              {expenseTotals.categoryRows.length > 0 && (
+                <details className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                  <summary className="cursor-pointer font-medium text-slate-700">
+                    Per-category breakdown ({expenseTotals.categoryRows.length})
+                  </summary>
+                  <table className="mt-2 w-full text-[11px]">
+                    <thead className="text-slate-500">
+                      <tr>
+                        <th className="text-left">Category</th>
+                        <th className="text-left">Freq</th>
+                        <th className="text-right">Amount</th>
+                        <th className="text-right">Annual</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {expenseTotals.categoryRows.map((row, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="py-1 pr-2 text-slate-700">{row.category}</td>
+                          <td className="py-1 pr-2 text-slate-500">{row.frequency}</td>
+                          <td className="py-1 pr-2 text-right font-mono text-slate-700">{fmtMoney(row.amount)}</td>
+                          <td className="py-1 text-right font-mono font-semibold text-slate-900">{fmtMoney(row.annual)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              )}
+
+              <div className="border-t border-slate-200 pt-2 text-[11px] text-slate-500">
+                Rules with no dollar amount yet:{" "}
+                <span className="font-semibold text-slate-700">
+                  {Object.values(expenseTotals.buckets).reduce((s, b) => s + b.noValue, 0)}
+                </span>
+                {" "}— set values in Edit rule details to include them.
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Impact Summary</CardTitle>
@@ -478,6 +838,49 @@ export default function LeaseExpenseClassification() {
         onSave={handleSaveRule}
       />
 
+    </div>
+  );
+}
+
+function ActualsBucketChip({ label, count, amount, tone }) {
+  const TONE = {
+    emerald: "border-emerald-300 bg-emerald-50 text-emerald-800",
+    rose:    "border-rose-300 bg-rose-50 text-rose-800",
+    amber:   "border-amber-300 bg-amber-50 text-amber-900",
+    slate:   "border-slate-300 bg-slate-50 text-slate-700",
+    red:     "border-red-300 bg-red-50 text-red-800",
+  };
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 ${TONE[tone] || TONE.slate}`}>
+      <span className="font-medium">{label}</span>
+      <span className="font-mono text-slate-900">{count}</span>
+      <span className="text-slate-500">·</span>
+      <span className="font-mono">{`$${Math.round(amount || 0).toLocaleString()}`}</span>
+    </span>
+  );
+}
+
+function TotalRow({ label, count, withValue, annual, tone }) {
+  const TONE_CLASSES = {
+    emerald: { label: "text-emerald-700", chip: "bg-emerald-100 text-emerald-800", value: "text-emerald-900" },
+    rose:    { label: "text-rose-700",    chip: "bg-rose-100 text-rose-800",       value: "text-rose-900" },
+    amber:   { label: "text-amber-700",   chip: "bg-amber-100 text-amber-900",     value: "text-amber-900" },
+    slate:   { label: "text-slate-600",   chip: "bg-slate-200 text-slate-700",     value: "text-slate-800" },
+  };
+  const c = TONE_CLASSES[tone] || TONE_CLASSES.slate;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-white px-3 py-2">
+      <div>
+        <div className={`text-[11px] font-medium ${c.label}`}>{label}</div>
+        <div className="mt-0.5 text-[10px] text-slate-500">
+          {count} rule{count === 1 ? "" : "s"}
+          {withValue < count ? ` · ${count - withValue} without value` : ""}
+        </div>
+      </div>
+      <div className={`text-right font-mono text-sm font-semibold ${c.value}`}>
+        {`$${Math.round(annual || 0).toLocaleString()}`}
+        <div className="text-[10px] font-normal text-slate-400">/ yr</div>
+      </div>
     </div>
   );
 }
