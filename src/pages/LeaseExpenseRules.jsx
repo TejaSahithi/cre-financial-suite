@@ -194,9 +194,41 @@ export default function LeaseExpenseRules() {
       return;
     }
     setBackfillState({ running: true, done: 0, total: backfillCandidates.length });
+
+    // Pre-flight diagnostic: dump the pipeline state for EVERY candidate so
+    // we know exactly where rules come from (workflow / extract / text) and
+    // why any lease produces zero. This is the table the spec asked for.
+    console.groupCollapsed(`[LeaseExpenseRules] backfill diagnostic for ${backfillCandidates.length} approved lease(s)`);
+    const preDiagnostics = [];
+    for (const lease of backfillCandidates) {
+      const d = await leaseExpenseRuleService.diagnoseExpenseRulePipeline(lease);
+      preDiagnostics.push(d);
+    }
+    console.table(preDiagnostics.map((d) => ({
+      lease_id: d.lease_id?.slice(0, 8),
+      tenant: d.tenant_name || "—",
+      approved_abstract_id: d.approved_lease_abstract_id?.slice(0, 8) || "—",
+      property_id: d.property_id?.slice(0, 8) || "—",
+      building_id: d.building_id?.slice(0, 8) || "—",
+      unit_id: d.unit_id?.slice(0, 8) || "—",
+      abstract_status: d.abstract_status,
+      has_workflow_output: d.has_workflow_output,
+      expense_rules_in_payload: d.expense_rules_count,
+      clauses: d.clause_records_count,
+      source_file_id: d.source_file_id?.slice(0, 8) || "—",
+      source_text_chars: d.source_text_length,
+      source_text_field: d.source_text_field || "—",
+      existing_rule_sets: d.existing_rule_sets_count,
+      existing_rules: d.existing_rules_count,
+    })));
+    console.log("Full diagnostic objects:", preDiagnostics);
+    console.groupEnd();
+
     let persistedTotal = 0;
+    const perLeaseResults = [];
     for (let i = 0; i < backfillCandidates.length; i += 1) {
       const lease = backfillCandidates[i];
+      const leaseStart = performance.now();
       try {
         const result = await leaseExpenseRuleService.ensureLeaseExpenseRules({
           lease,
@@ -207,14 +239,42 @@ export default function LeaseExpenseRules() {
         });
         const count = result?.rules?.length || 0;
         persistedTotal += count;
-        console.log(`[LeaseExpenseRules] backfill: lease ${lease.id} (${lease.tenant_name || "—"}) → ${count} rules`);
+        perLeaseResults.push({
+          lease_id: lease.id.slice(0, 8),
+          tenant: lease.tenant_name || "—",
+          rules_persisted: count,
+          rule_set_id: result?.ruleSet?.id?.slice(0, 8) || "—",
+          rule_set_status: result?.ruleSet?.status || "—",
+          ms: Math.round(performance.now() - leaseStart),
+        });
       } catch (err) {
-        console.warn(`[LeaseExpenseRules] backfill failed for lease ${lease.id}:`, err?.message || err);
+        console.error(`[LeaseExpenseRules] backfill FAILED for lease ${lease.id} (${lease.tenant_name}):`, err);
+        perLeaseResults.push({
+          lease_id: lease.id.slice(0, 8),
+          tenant: lease.tenant_name || "—",
+          rules_persisted: 0,
+          error: err?.message || String(err),
+          ms: Math.round(performance.now() - leaseStart),
+        });
       }
       setBackfillState((prev) => ({ ...prev, done: i + 1 }));
     }
     setBackfillState({ running: false, done: 0, total: 0 });
-    toast.success(`Backfill complete — ${persistedTotal} rules across ${backfillCandidates.length} leases.`);
+
+    // Post-flight summary the spec asked for.
+    console.groupCollapsed(`[LeaseExpenseRules] backfill summary`);
+    console.table(perLeaseResults);
+    console.log("Totals:", {
+      approved_leases_found: backfillCandidates.length,
+      leases_with_workflow_output: preDiagnostics.filter((d) => d.has_workflow_output).length,
+      leases_with_expense_rules_in_payload: preDiagnostics.filter((d) => d.expense_rules_count > 0).length,
+      leases_with_source_text: preDiagnostics.filter((d) => d.source_text_length > 0).length,
+      rules_persisted_total: persistedTotal,
+      leases_with_zero_rules: perLeaseResults.filter((r) => r.rules_persisted === 0).length,
+    });
+    console.groupEnd();
+
+    toast.success(`Backfill complete — ${persistedTotal} rules across ${backfillCandidates.length} leases. Open DevTools console for diagnostic table.`);
     queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
   };
 

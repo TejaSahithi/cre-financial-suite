@@ -1571,6 +1571,109 @@ export const leaseExpenseRuleService = {
     }
   },
 
+  // Diagnostic: dump the full state of the lease expense-rule pipeline for
+  // a single lease. Used by the backfill UI before each persist attempt so
+  // we can see EXACTLY where rules come from (or fail to come from). Pure
+  // read-only — does not write anything.
+  async diagnoseExpenseRulePipeline(lease) {
+    if (!lease?.id) return { error: "no_lease_id" };
+    const extraction = lease.extraction_data || {};
+    const workflow = extraction.workflow_output || null;
+    const wfRecord = Array.isArray(workflow?.records) ? workflow.records[0] : workflow;
+    const expenseRules = asArray(wfRecord?.expense_rules);
+    const camProfile = wfRecord?.cam_profile || null;
+    const clauses = asArray(wfRecord?.lease_clauses);
+    const sourceFileId = extraction.source_file_id || null;
+
+    let sourceTextLength = 0;
+    let sourceTextField = null;
+    let uploadedFile = null;
+    if (sourceFileId) {
+      try {
+        const { data } = await supabase
+          .from("uploaded_files")
+          .select("id, normalized_output, parsed_data, docling_raw, ui_review_payload, status")
+          .eq("id", sourceFileId)
+          .maybeSingle();
+        uploadedFile = data || null;
+        if (uploadedFile) {
+          const candidates = [
+            ["normalized_output.raw_text", uploadedFile?.normalized_output?.raw_text],
+            ["normalized_output.text", uploadedFile?.normalized_output?.text],
+            ["parsed_data.raw_text", uploadedFile?.parsed_data?.raw_text],
+            ["parsed_data.text", uploadedFile?.parsed_data?.text],
+            ["parsed_data.full_text", uploadedFile?.parsed_data?.full_text],
+            ["docling_raw.full_text", uploadedFile?.docling_raw?.full_text],
+            ["docling_raw.markdown", uploadedFile?.docling_raw?.markdown],
+            ["docling_raw.text", uploadedFile?.docling_raw?.text],
+            ["docling_raw.body", uploadedFile?.docling_raw?.body],
+          ];
+          for (const [field, value] of candidates) {
+            const trimmed = String(value || "").trim();
+            if (trimmed) {
+              sourceTextLength = trimmed.length;
+              sourceTextField = field;
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[diagnose] uploaded_files lookup failed:", err?.message || err);
+      }
+    }
+
+    // Existing persisted rules for this lease
+    let existingRuleSets = [];
+    let existingRules = [];
+    try {
+      const sets = await supabase
+        .from("lease_expense_rule_sets")
+        .select("id, status, version, created_at")
+        .eq("lease_id", lease.id)
+        .order("version", { ascending: false });
+      existingRuleSets = sets.data || [];
+      if (existingRuleSets.length > 0) {
+        const setIds = existingRuleSets.map((s) => s.id);
+        const rules = await supabase
+          .from("lease_expense_rules")
+          .select("id, rule_set_id, expense_category, review_status")
+          .in("rule_set_id", setIds);
+        existingRules = rules.data || [];
+      }
+    } catch (err) {
+      console.warn("[diagnose] rule lookup failed:", err?.message || err);
+    }
+
+    return {
+      lease_id: lease.id,
+      tenant_name: lease.tenant_name,
+      approved_lease_abstract_id: lease.approved_lease_abstract_id || lease.abstract_snapshot?.id || null,
+      org_id: lease.org_id,
+      property_id: lease.property_id,
+      building_id: lease.building_id,
+      unit_id: lease.unit_id,
+      tenant_id: lease.tenant_id,
+      abstract_status: lease.abstract_status,
+      // Workflow payload state
+      has_workflow_output: !!workflow,
+      workflow_record_count: Array.isArray(workflow?.records) ? workflow.records.length : (workflow ? 1 : 0),
+      expense_rules_count: expenseRules.length,
+      expense_rule_categories: expenseRules.map((r) => r?.expense_category).filter(Boolean),
+      cam_profile_present: !!camProfile,
+      clause_records_count: clauses.length,
+      // Source text state
+      source_file_id: sourceFileId,
+      source_file_found: !!uploadedFile,
+      source_file_status: uploadedFile?.status || null,
+      source_text_length: sourceTextLength,
+      source_text_field: sourceTextField,
+      // Persisted state
+      existing_rule_sets_count: existingRuleSets.length,
+      existing_rule_sets: existingRuleSets,
+      existing_rules_count: existingRules.length,
+    };
+  },
+
   // Fast path used during Lease Approval. Reads the expense_rules array
   // the workflow extractor already produced (lives on
   // `lease.extraction_data.workflow_output.expense_rules`) and persists it
@@ -1589,10 +1692,16 @@ export const leaseExpenseRuleService = {
     createdFrom = "workflow",
     approver = null,
   } = {}) {
-    if (!supabase || !lease?.id) return { ruleSet: null, rules: [] };
+    const tag = `[persistExpenseRulesFromWorkflow lease=${lease?.id}]`;
+    if (!supabase || !lease?.id) {
+      console.warn(`${tag} skipped: no supabase or no lease.id`);
+      return { ruleSet: null, rules: [] };
+    }
     const workflowRules = getLeaseWorkflowExpenseRules(lease);
+    console.log(`${tag} workflow_rules received: ${workflowRules.length}`);
     if (workflowRules.length === 0) {
-      console.log("[leaseExpenseRuleService] persistExpenseRulesFromWorkflow: no workflow expense_rules to persist for lease", lease.id);
+      const wfOut = lease?.extraction_data?.workflow_output;
+      console.warn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(lease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
       return { ruleSet: null, rules: [] };
     }
 
@@ -1603,6 +1712,7 @@ export const leaseExpenseRuleService = {
       const key = String(r?.expense_category || r?.normalized_key || "").toLowerCase();
       return !BASE_RENT_KEYS.has(key);
     });
+    console.log(`${tag} after base-rent strip: ${filtered.length} rules; categories=`, filtered.map((r) => r?.expense_category));
 
     // Reshape workflow rule → the shape saveRuleSet expects. Most fields
     // are passed through; we just bridge a few aliases the persister reads.
@@ -1616,23 +1726,149 @@ export const leaseExpenseRuleService = {
       mentioned_in_lease: r.extraction_status !== "not_found",
     }));
 
-    return this.saveRuleSet({
-      lease,
-      rules,
-      status,
-      existingRuleSetId,
-      categories,
-      createdFrom,
-      approver,
-    });
+    // Idempotency: reuse the most-recent non-archived rule_set for this
+    // lease as the target so we don't pile up phantom versions per click.
+    // Approved rule_sets are preserved (do NOT update them — they may have
+    // human-reviewed rules); only draft sets get reused.
+    let targetRuleSetId = existingRuleSetId;
+    if (!targetRuleSetId) {
+      try {
+        const { data: existingSets } = await supabase
+          .from("lease_expense_rule_sets")
+          .select("id, status, version")
+          .eq("lease_id", lease.id)
+          .not("status", "eq", "archived")
+          .order("version", { ascending: false })
+          .limit(1);
+        const latest = existingSets?.[0];
+        if (latest?.id && latest.status !== "approved") {
+          targetRuleSetId = latest.id;
+          console.log(`${tag} reusing existing draft rule_set ${latest.id} (v${latest.version}, status=${latest.status})`);
+        }
+      } catch (err) {
+        console.warn(`${tag} existing rule_set lookup failed:`, err?.message || err);
+      }
+    }
+
+    let result = { ruleSet: null, rules: [] };
+    try {
+      result = await this.saveRuleSet({
+        lease,
+        rules,
+        status,
+        existingRuleSetId: targetRuleSetId,
+        categories,
+        createdFrom,
+        approver,
+      });
+      console.log(`${tag} saveRuleSet returned ${result?.rules?.length || 0} persisted rules; ruleSet=`, result?.ruleSet?.id);
+    } catch (err) {
+      console.error(`${tag} saveRuleSet THREW:`, err?.message || err, err?.details || "", err?.code || "");
+      throw err;
+    }
+    return result;
+  },
+
+  // Keyword-based extractor that scans raw lease text for the canonical
+  // expense category vocabulary and emits a draft rule per category found.
+  // Per spec: rules are created even when no dollar amount exists. Used as
+  // a last-resort fallback when workflow_output is empty AND extractDraftRuleSet
+  // (LLM + deterministic) returned nothing.
+  buildTextFallbackRules(sourceText) {
+    const text = String(sourceText || "").toLowerCase();
+    if (!text) return [];
+    // Each entry: [canonical_key, [phrase aliases]]. Cover the spec category list.
+    const SCANS = [
+      ["common_area_maintenance", ["common area maintenance", "cam charge", "cam expense", " cam "]],
+      ["operating_expenses",      ["operating expenses", "operating costs", "opex"]],
+      ["real_estate_taxes",       ["real estate tax", "property tax", "taxes and assessments", "ad valorem"]],
+      ["property_insurance",      ["property insurance", "casualty insurance", "fire insurance", "all-risk insurance"]],
+      ["utilities",               ["utilities", "utility service", "utility charge"]],
+      ["electricity",             ["electricity", " electric ", "electrical service"]],
+      ["water",                   [" water ", "water service", "potable water"]],
+      ["sewer",                   ["sewer", "sewage"]],
+      ["gas",                     ["natural gas", " gas service", " gas "]],
+      ["hvac",                    [" hvac", "heating, ventilation", "air conditioning", "air-conditioning"]],
+      ["janitorial",              ["janitorial", "cleaning service"]],
+      ["trash_removal",           ["trash removal", "garbage", "refuse"]],
+      ["security",                ["security service", "security guard"]],
+      ["landscaping",             ["landscaping", "landscape maintenance"]],
+      ["snow_removal",            ["snow removal", "snow plow"]],
+      ["parking",                 ["parking lot", "parking area", "parking maintenance"]],
+      ["repairs_maintenance",     ["repairs and maintenance", "repair and maintenance"]],
+      ["roof_structure",          [" roof ", "roof and structure"]],
+      ["foundation_structure",    ["foundation", "structural component"]],
+      ["capital_expenditures",    ["capital expenditure", "capital improvement", "capex"]],
+      ["management_fees",         ["management fee", "property management"]],
+      ["administrative_fees",     ["administrative fee", "admin fee", "administration fee"]],
+      ["tenant_insurance",        ["tenant insurance", "tenant's insurance", "liability insurance"]],
+      ["tenant_improvements",     ["tenant improvement", "ti allowance", "buildout"]],
+      ["alterations",             ["alterations", "tenant alteration"]],
+      ["tenant_caused_damage",    ["caused by tenant", "tenant-caused", "tenant caused damage"]],
+      ["separately_metered_charges", ["separately metered", "separate meter", "submetered"]],
+      ["excess_usage",            ["excess use", "excess utility", "over and above"]],
+      ["legal_enforcement_fees",  ["attorneys' fees", "attorney's fees", "legal fee", "enforcement"]],
+      ["late_fees",               ["late fee", "late charge"]],
+      ["interest",                ["interest at", "interest rate", "prime rate"]],
+    ];
+    const rules = [];
+    for (const [key, phrases] of SCANS) {
+      let matchedPhrase = null;
+      for (const phrase of phrases) {
+        if (text.includes(phrase)) {
+          matchedPhrase = phrase.trim();
+          break;
+        }
+      }
+      if (!matchedPhrase) continue;
+
+      // Extract a window of surrounding text (~200 chars) as evidence
+      const idx = text.indexOf(matchedPhrase);
+      const start = Math.max(0, idx - 80);
+      const end = Math.min(text.length, idx + matchedPhrase.length + 200);
+      const snippet = sourceText.substring(start, end).trim();
+
+      // Light heuristic: is responsibility hinted near the match?
+      const window = text.substring(Math.max(0, idx - 200), Math.min(text.length, idx + matchedPhrase.length + 400));
+      let responsibility = "unknown";
+      if (/\btenant\b.{0,80}\b(?:pay|reimburse|responsible)/.test(window)) responsibility = "tenant";
+      else if (/\blandlord\b.{0,80}\b(?:pay|provide|responsible)/.test(window)) responsibility = "landlord";
+      else if (/\bshared\b|\bpro rata\b|\bapportioned\b/.test(window)) responsibility = "shared";
+
+      const includedInRent = /\bincluded in (?:base )?rent\b|\bfull[-\s]?service\b|\bgross lease\b/.test(window);
+      const recoverable =
+        includedInRent ? false
+        : responsibility === "tenant" ? true
+        : null;
+
+      rules.push({
+        expense_category: key,
+        normalized_key: key,
+        category_name: humanizeLabel(key),
+        responsibility,
+        recoverable_from_tenant: recoverable === true ? "yes" : recoverable === false ? "no" : "unknown",
+        included_in_base_rent: includedInRent,
+        recovery_method: includedInRent ? "included_in_rent" : (recoverable ? "manual_review" : "manual_review"),
+        exact_source_text: snippet,
+        source_clause: snippet,
+        source_page: null,
+        confidence_score: 0.55,
+        extraction_status: "inferred",
+        status: "needs_review",
+        mentioned_in_lease: true,
+        notes: `Inferred from lease language matching keyword "${matchedPhrase}"`,
+      });
+    }
+    return rules;
   },
 
   // Robust persistence path for both the approval flow and the backfill
-  // button. Tries the cheap workflow-output path first; if that produces
-  // zero rules (because workflow_output wasn't populated yet, or the
-  // extractor genuinely returned nothing), falls back to
-  // extractDraftRuleSet which pulls source text and runs the LLM /
-  // deterministic extractor. Returns the same shape as saveRuleSet.
+  // button. Three-phase fallback:
+  //   Phase 1 — workflow_output.expense_rules (fast, no IO)
+  //   Phase 2 — extractDraftRuleSet (LLM + deterministic builder)
+  //   Phase 3 — buildTextFallbackRules (keyword scan over source text)
+  // First phase that yields rules wins. Per spec: rules are created even
+  // when there are no dollar amounts.
   async ensureLeaseExpenseRules({
     lease,
     categories = [],
@@ -1640,6 +1876,7 @@ export const leaseExpenseRuleService = {
     createdFrom = "approval",
     approver = null,
   } = {}) {
+    const tag = `[ensureLeaseExpenseRules lease=${lease?.id}]`;
     if (!lease?.id) return { ruleSet: null, rules: [] };
 
     // Phase 1: cheap workflow-output read.
@@ -1653,16 +1890,16 @@ export const leaseExpenseRuleService = {
         approver,
       });
     } catch (err) {
-      console.warn("[leaseExpenseRuleService] ensureLeaseExpenseRules: workflow path failed:", err?.message || err);
+      console.warn(`${tag} workflow path failed:`, err?.message || err);
     }
     if (result?.rules?.length > 0) {
+      console.log(`${tag} ✓ Phase 1 (workflow) produced ${result.rules.length} rules`);
       return result;
     }
 
     // Phase 2: workflow gave us nothing. Run the full extractor pipeline
-    // (LLM call + deterministic fallback). Only fires if Phase 1 produced
-    // zero rules — never duplicates work.
-    console.log("[leaseExpenseRuleService] ensureLeaseExpenseRules: workflow produced 0 rules; falling back to extractDraftRuleSet for lease", lease.id);
+    // (LLM call + deterministic fallback).
+    console.log(`${tag} Phase 1 produced 0 rules → trying Phase 2 (extractDraftRuleSet)`);
     try {
       const fallback = await this.extractDraftRuleSet({
         lease,
@@ -1670,7 +1907,42 @@ export const leaseExpenseRuleService = {
         existingRuleSetId: result?.ruleSet?.id || null,
         existingRules: [],
       });
-      return fallback || result;
+      if (fallback?.rules?.length > 0) {
+        console.log(`${tag} ✓ Phase 2 (LLM/deterministic) produced ${fallback.rules.length} rules`);
+        return fallback;
+      }
+      result = fallback || result;
+    } catch (err) {
+      console.warn(`${tag} Phase 2 failed:`, err?.message || err);
+    }
+
+    // Phase 3: keyword scan on raw text. Last-resort — guarantees rules
+    // exist for any lease that mentions any of the canonical category
+    // vocabulary, even when nothing else worked.
+    console.log(`${tag} Phase 2 produced 0 rules → trying Phase 3 (text fallback)`);
+    try {
+      const sourceText = await this.getLeaseSourceText(
+        lease.id,
+        lease?.extraction_data?.source_file_id || null,
+      );
+      if (!sourceText) {
+        console.warn(`${tag} Phase 3 skipped — no source text available`);
+        return result;
+      }
+      const textRules = this.buildTextFallbackRules(sourceText);
+      console.log(`${tag} Phase 3 keyword scan found ${textRules.length} category matches`);
+      if (textRules.length === 0) return result;
+      const saved = await this.saveRuleSet({
+        lease,
+        rules: textRules,
+        status,
+        existingRuleSetId: result?.ruleSet?.id || null,
+        categories,
+        createdFrom: "text_fallback",
+        approver,
+      });
+      console.log(`${tag} ✓ Phase 3 persisted ${saved?.rules?.length || 0} rules`);
+      return saved;
     } catch (err) {
       console.warn("[leaseExpenseRuleService] ensureLeaseExpenseRules: fallback extract failed:", err?.message || err);
       return result;
