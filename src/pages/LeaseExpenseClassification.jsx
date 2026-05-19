@@ -368,7 +368,7 @@ export default function LeaseExpenseClassification() {
       return raw;
     };
 
-    // Plain-English explanation per row — what a non-engineer reading the
+    // Plain-English explanation per row � what a non-engineer reading the
     // page needs to understand the classification decision.
     const buildPlainReason = (expense, rule, match) => {
       const cat = expense?.category || rule?.category_name || rule?.expense_category || "this expense";
@@ -388,7 +388,7 @@ export default function LeaseExpenseClassification() {
         return `This ${niceCat} expense is recoverable from the tenant${method} per the approved ${niceRule} rule.`;
       }
       if (recoverable === "conditional") {
-        return `This ${niceCat} expense is conditionally recoverable — the approved ${niceRule} rule has a cap, base year, or condition that needs human review before recovery.`;
+        return `This ${niceCat} expense is conditionally recoverable � the approved ${niceRule} rule has a cap, base year, or condition that needs human review before recovery.`;
       }
       if (recoverable === "excluded" || recoverable === "non_recoverable") {
         return `This ${niceCat} expense is non-recoverable per the approved ${niceRule} rule.`;
@@ -488,42 +488,42 @@ export default function LeaseExpenseClassification() {
         expense,
         rule,
         expenseDate: expense?.expense_date || expense?.date || classification.service_period_start || null,
-        vendor: expense?.vendor || expense?.vendor_name || "—",
-        invoiceNumber: expense?.invoice_number || "—",
+        vendor: expense?.vendor || expense?.vendor_name || "�",
+        invoiceNumber: expense?.invoice_number || "�",
         propertyLabel:
           propertyById.get(expense?.property_id || classification.property_id)?.name ||
           lease?.property_name ||
           expense?.property_id ||
           classification.property_id ||
-          "—",
+          "�",
         buildingLabel:
           buildingById.get(resolveBuildingId(expense || classification, unitById) || classification.building_id)?.name ||
           resolveBuildingId(expense || classification, unitById) ||
           classification.building_id ||
-          "—",
+          "�",
         unitLabel:
           unitById.get(expense?.unit_id || classification.unit_id)?.unit_number ||
           unitById.get(expense?.unit_id || classification.unit_id)?.unit_id_code ||
           expense?.unit_id ||
           classification.unit_id ||
-          "—",
-        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "—",
-        category: classification.category || expense?.category || "—",
-        subcategory: classification.subcategory || expense?.expense_subcategory || "—",
+          "�",
+        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "�",
+        category: classification.category || expense?.category || "�",
+        subcategory: classification.subcategory || expense?.expense_subcategory || "�",
         actualAmount: amount,
         editableAmount: amount,
         matchedLeaseRule: rule?.category_name || rule?.expense_category || (ruleId ? ruleId : "Unmatched"),
-        ruleCategory: rule?.category_name || rule?.expense_category || "—",
+        ruleCategory: rule?.category_name || rule?.expense_category || "�",
         ruleSource: classification.rule_source || "lease",
         recoverabilityResult: classification.recoverability_result || classification.recovery_status || "needs_review",
         camEligible: classification.cam_eligible || "no",
-        recoveryMethod: classification.recovery_method || "—",
+        recoveryMethod: classification.recovery_method || "�",
         allocationBasis: classification.allocation_basis || classification.allocation_method || "pro_rata",
         recoverableAmount: Number(classification.recoverable_amount ?? (classification.recoverability_result === "recoverable" ? amount : 0)),
         nonRecoverableAmount: Number(classification.non_recoverable_amount ?? (classification.recoverability_result === "non_recoverable" ? amount : 0)),
         conditionalAmount: Number(classification.conditional_amount ?? (classification.recoverability_result === "conditional" ? amount : 0)),
         excludedAmount: Number(classification.excluded_amount ?? (classification.recoverability_result === "excluded" ? amount : 0)),
-        recoveryReason: classification.recovery_reason || "—",
+        recoveryReason: classification.recovery_reason || "�",
         confidence: classification.confidence_score,
         classificationStatus: classification.classification_status || "matched",
         exceptionType: classification.exception_type || null,
@@ -548,33 +548,33 @@ export default function LeaseExpenseClassification() {
         expense,
         rule,
         expenseDate: expense?.expense_date || expense?.date || null,
-        vendor: expense?.vendor || expense?.vendor_name || "—",
-        invoiceNumber: expense?.invoice_number || "—",
+        vendor: expense?.vendor || expense?.vendor_name || "�",
+        invoiceNumber: expense?.invoice_number || "�",
         propertyLabel:
           propertyById.get(expense?.property_id)?.name ||
           lease?.property_name ||
           expense?.property_id ||
-          "—",
+          "�",
         buildingLabel:
           buildingById.get(resolveBuildingId(expense, unitById))?.name ||
           resolveBuildingId(expense, unitById) ||
-          "—",
+          "�",
         unitLabel:
           unitById.get(expense?.unit_id)?.unit_number ||
           unitById.get(expense?.unit_id)?.unit_id_code ||
           expense?.unit_id ||
-          "—",
-        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "—",
-        category: expense?.category || "—",
-        subcategory: expense?.expense_subcategory || "—",
+          "�",
+        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "�",
+        category: expense?.category || "�",
+        subcategory: expense?.expense_subcategory || "�",
         actualAmount: amount,
         editableAmount: amount,
         matchedLeaseRule: rule?.category_name || rule?.expense_category || "Unmatched",
-        ruleCategory: rule?.category_name || rule?.expense_category || "—",
+        ruleCategory: rule?.category_name || rule?.expense_category || "�",
         ruleSource: rule ? "lease" : "unmatched",
         recoverabilityResult,
         camEligible: matchRow.camEligible || "no",
-        recoveryMethod: matchRow.recoveryMethod || "—",
+        recoveryMethod: matchRow.recoveryMethod || "�",
         allocationBasis: expense?.allocation_method || "pro_rata",
         recoverableAmount: recoverabilityResult === "recoverable" ? amount : 0,
         nonRecoverableAmount: recoverabilityResult === "non_recoverable" ? amount : 0,
@@ -911,14 +911,14 @@ export default function LeaseExpenseClassification() {
         <CardContent className="grid gap-3 p-4 md:grid-cols-3">
           <div className="text-sm text-slate-700">
             <div className="text-[11px] font-semibold uppercase text-slate-500">Scope</div>
-            <div className="mt-1">Property: {lease?.property_name || lease?.property_id || "â€”"}</div>
-            <div>Building: {lease?.building_id || "Lease-level"}</div>
-            <div>Unit: {lease?.unit_id || "Lease-level"}</div>
+            <div className="mt-1">Property: {lease?.property_name || (lease?.property_id ? `Property ${String(lease.property_id).slice(0, 8)}` : "All Properties")}</div>
+            <div>Building: {lease?.building_id ? `Building ${String(lease.building_id).slice(0, 8)}` : "Lease-level"}</div>
+            <div>Unit: {lease?.unit_id ? `Unit ${String(lease.unit_id).slice(0, 8)}` : "Lease-level"}</div>
           </div>
           <div className="text-sm text-slate-700">
             <div className="text-[11px] font-semibold uppercase text-slate-500">Lease</div>
-            <div className="mt-1">Lease: {lease?.id || "â€”"}</div>
-            <div>Tenant: {lease?.tenant_name || "â€”"}</div>
+            <div className="mt-1">Lease: {lease?.tenant_name ? `${lease.tenant_name} lease` : (lease?.id ? `Lease ${String(lease.id).slice(0, 8)}` : "No lease selected")}</div>
+            <div>Tenant: {lease?.tenant_name || "No tenant selected"}</div>
             <div>Fiscal Year: {approvedActualExpenses[0]?.fiscal_year || new Date().getFullYear()}</div>
           </div>
           <div className="text-sm text-slate-700">
@@ -962,7 +962,7 @@ export default function LeaseExpenseClassification() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {/* Main area — Actuals vs Rules table is the primary surface now.
+        {/* Main area � Actuals vs Rules table is the primary surface now.
             The per-lease rule grid was previously the main content; it has
             been demoted to a collapsible "Lease Rule Reference" panel
             below because rule approval belongs on the Lease Expense Rules
@@ -972,7 +972,7 @@ export default function LeaseExpenseClassification() {
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">
               Lease Rule Reference
               <span className="ml-2 text-xs font-normal text-slate-500">
-                ({localRules.length} rules — open Lease Expense Rules to approve / edit)
+                ({localRules.length} rules � open Lease Expense Rules to approve / edit)
               </span>
             </summary>
             <div className="border-t border-slate-200 p-4">
@@ -1089,7 +1089,7 @@ export default function LeaseExpenseClassification() {
                       <tbody className="divide-y divide-slate-100">
                         {filteredClassificationRows.map((row) => (
                           <tr key={row.classificationKey} className="align-top hover:bg-slate-50">
-                            <td className="px-3 py-2">{row.expenseDate || "â€”"}</td>
+                            <td className="px-3 py-2">{row.expenseDate || "—"}</td>
                             <td className="px-3 py-2 font-medium text-slate-900">{row.vendor}</td>
                             <td className="px-3 py-2">{row.invoiceNumber}</td>
                             <td className="px-3 py-2">{row.propertyLabel}</td>
@@ -1105,7 +1105,7 @@ export default function LeaseExpenseClassification() {
                             <td className="px-3 py-2">{row.ruleSource}</td>
                             <td className="px-3 py-2">
                               <Badge className="text-[10px] uppercase">
-                                {String(row.recoverabilityResult || "â€”").replace(/_/g, " ")}
+                                {String(row.recoverabilityResult || "—").replace(/_/g, " ")}
                               </Badge>
                             </td>
                             <td className="px-3 py-2">{row.camEligible}</td>
@@ -1116,9 +1116,9 @@ export default function LeaseExpenseClassification() {
                             <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.conditionalAmount)}</td>
                             <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.excludedAmount)}</td>
                             <td className="max-w-[280px] px-3 py-2 text-[11px] text-slate-600">{row.recoveryReason}</td>
-                            <td className="px-3 py-2">{row.confidence == null ? "â€”" : `${Math.round(Number(row.confidence) <= 1 ? Number(row.confidence) * 100 : Number(row.confidence))}%`}</td>
+                            <td className="px-3 py-2">{row.confidence == null ? "—" : `${Math.round(Number(row.confidence) <= 1 ? Number(row.confidence) * 100 : Number(row.confidence))}%`}</td>
                             <td className="px-3 py-2">{row.classificationStatus}</td>
-                            <td className="px-3 py-2">{row.exceptionType || "â€”"}</td>
+                            <td className="px-3 py-2">{row.exceptionType || "—"}</td>
                             <td className="px-3 py-2">{row.nextStep}</td>
                             <td className="px-3 py-2">
                               <div className="flex flex-wrap gap-1">
@@ -1169,7 +1169,7 @@ export default function LeaseExpenseClassification() {
               <div>
                 <CardTitle>Actual Expenses vs Lease Rules</CardTitle>
                 <p className="mt-1 text-sm text-slate-500">
-                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Click <em>Run Classification</em> to persist decisions to <code>expense_classifications</code> — that's what feeds Expense Review and Expense Projection.
+                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Click <em>Run Classification</em> to persist decisions to <code>expense_classifications</code> � that's what feeds Expense Review and Expense Projection.
                 </p>
               </div>
               <div className="flex flex-shrink-0 flex-col items-end gap-2">
@@ -1256,14 +1256,14 @@ export default function LeaseExpenseClassification() {
                             : "bg-slate-200 text-slate-700";
                           return (
                             <tr key={expense.id} className="hover:bg-slate-50">
-                              <td className="px-3 py-2 text-slate-700">{expense.date || "—"}</td>
+                              <td className="px-3 py-2 text-slate-700">{expense.date || "�"}</td>
                               <td className="px-3 py-2">
-                                <div className="font-medium text-slate-900">{expense.vendor || "—"}</div>
+                                <div className="font-medium text-slate-900">{expense.vendor || "�"}</div>
                                 {expense.invoice_number && (
                                   <div className="text-[10px] text-slate-500">#{expense.invoice_number}</div>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-slate-700">{expense.category || "—"}</td>
+                              <td className="px-3 py-2 text-slate-700">{expense.category || "�"}</td>
                               <td className="px-3 py-2 text-right font-mono font-semibold text-slate-900">
                                 {`$${Math.round(Number(expense.amount) || 0).toLocaleString()}`}
                               </td>
@@ -1285,18 +1285,18 @@ export default function LeaseExpenseClassification() {
                                   : camEligible === "conditional" ? "bg-amber-100 text-amber-800"
                                   : "bg-slate-100 text-slate-600"
                                 }`}>
-                                  {camEligible ? String(camEligible).replace(/_/g, " ") : "—"}
+                                  {camEligible ? String(camEligible).replace(/_/g, " ") : "�"}
                                 </Badge>
                               </td>
                               <td className="px-3 py-2 text-right font-mono text-slate-700">
-                                {expectedAnnual != null ? `$${Math.round(expectedAnnual).toLocaleString()}` : "—"}
+                                {expectedAnnual != null ? `$${Math.round(expectedAnnual).toLocaleString()}` : "�"}
                               </td>
                               <td className={`px-3 py-2 text-right font-mono ${variance == null ? "text-slate-400" : variance > 0 ? "text-rose-700" : variance < 0 ? "text-emerald-700" : "text-slate-700"}`}>
-                                {variance == null ? "—" : `${variance > 0 ? "+" : ""}$${Math.round(variance).toLocaleString()}`}
+                                {variance == null ? "�" : `${variance > 0 ? "+" : ""}$${Math.round(variance).toLocaleString()}`}
                               </td>
                               <td className="px-3 py-2">
                                 <Badge className={`${recoveryTone} text-[10px] uppercase`}>
-                                  {recoverability?.replace(/_/g, " ") || "—"}
+                                  {recoverability?.replace(/_/g, " ") || "�"}
                                 </Badge>
                               </td>
                               <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[320px]" title={plainReason}>
@@ -1405,7 +1405,7 @@ export default function LeaseExpenseClassification() {
                 <span className="font-semibold text-slate-700">
                   {Object.values(expenseTotals.buckets).reduce((s, b) => s + b.noValue, 0)}
                 </span>
-                {" "}— set values in Edit rule details to include them.
+                {" "}� set values in Edit rule details to include them.
               </div>
             </CardContent>
           </Card>
