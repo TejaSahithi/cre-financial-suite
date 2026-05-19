@@ -167,28 +167,68 @@ export default function Expenses() {
       const classification = classificationByExpenseId.get(expense.id);
       if (!classification) return expense;
 
+      const expenseWorkflowUpdatedAt = Date.parse(
+        expense.classification_updated_at || expense.updated_at || ""
+      );
+      const classificationUpdatedAt = Date.parse(
+        classification.updated_at ||
+        classification.classified_at ||
+        classification.reviewed_at ||
+        classification.approved_at ||
+        classification.finalized_at ||
+        ""
+      );
+      const preferBaseWorkflow =
+        Number.isFinite(expenseWorkflowUpdatedAt) &&
+        (!Number.isFinite(classificationUpdatedAt) || expenseWorkflowUpdatedAt > classificationUpdatedAt);
+
       const effectiveRecovery =
-        classification.recoverability_result ||
-        classification.recovery_status ||
+        (preferBaseWorkflow
+          ? (expense.recoverability_result || expense.recovery_status || expense.classification)
+          : (classification.recoverability_result || classification.recovery_status)) ||
         expense.recovery_status ||
         expense.classification ||
         "needs_review";
 
       return {
         ...expense,
-        recovery_status: classification.recovery_status || effectiveRecovery,
-        recoverability_result: classification.recoverability_result || effectiveRecovery,
+        recovery_status: preferBaseWorkflow
+          ? (expense.recovery_status || expense.recoverability_result || effectiveRecovery)
+          : (classification.recovery_status || effectiveRecovery),
+        recoverability_result: preferBaseWorkflow
+          ? (expense.recoverability_result || expense.recovery_status || effectiveRecovery)
+          : (classification.recoverability_result || effectiveRecovery),
         classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
-        approved_status: classification.approved_status || expense.approved_status,
-        rule_source: classification.rule_source || expense.rule_source,
-        classification_status: classification.classification_status || expense.classification_status,
-        confidence_score: classification.confidence_score ?? expense.confidence_score,
-        recovery_reason: classification.recovery_reason || expense.recovery_reason,
-        cam_eligible: classification.cam_eligible || expense.cam_eligible,
-        recovery_method: classification.recovery_method || expense.recovery_method,
-        approved_at: classification.approved_at || expense.approved_at,
-        reviewed_at: classification.reviewed_at || expense.reviewed_at,
-        finalized_at: classification.finalized_at || expense.finalized_at,
+        approved_status: preferBaseWorkflow
+          ? (expense.approved_status || classification.approved_status)
+          : (classification.approved_status || expense.approved_status),
+        rule_source: preferBaseWorkflow
+          ? (expense.rule_source || classification.rule_source)
+          : (classification.rule_source || expense.rule_source),
+        classification_status: preferBaseWorkflow
+          ? (expense.classification_status || classification.classification_status)
+          : (classification.classification_status || expense.classification_status),
+        confidence_score: preferBaseWorkflow
+          ? (expense.confidence_score ?? classification.confidence_score)
+          : (classification.confidence_score ?? expense.confidence_score),
+        recovery_reason: preferBaseWorkflow
+          ? (expense.recovery_reason || classification.recovery_reason)
+          : (classification.recovery_reason || expense.recovery_reason),
+        cam_eligible: preferBaseWorkflow
+          ? (expense.cam_eligible || classification.cam_eligible)
+          : (classification.cam_eligible || expense.cam_eligible),
+        recovery_method: preferBaseWorkflow
+          ? (expense.recovery_method || classification.recovery_method)
+          : (classification.recovery_method || expense.recovery_method),
+        approved_at: preferBaseWorkflow
+          ? (expense.approved_at || classification.approved_at)
+          : (classification.approved_at || expense.approved_at),
+        reviewed_at: preferBaseWorkflow
+          ? (expense.reviewed_at || classification.reviewed_at)
+          : (classification.reviewed_at || expense.reviewed_at),
+        finalized_at: preferBaseWorkflow
+          ? (expense.finalized_at || classification.finalized_at)
+          : (classification.finalized_at || expense.finalized_at),
       };
     });
   }, [classificationByExpenseId, selectorScopedExpenses]);
