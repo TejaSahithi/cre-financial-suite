@@ -162,11 +162,96 @@ export default function LeaseExpenseRules() {
 
   const leaseIds = selectorFilteredLeases.map((lease) => lease.id);
 
-  const { data: ruleSetsByLease = [], isLoading } = useQuery({
+  // Primary query: scoped via the service. Goes through finalizeLeaseExpenseRules
+  // for full normalization. This is the "preferred" path.
+  const { data: ruleSetsByLeaseScoped = [], isLoading: isLoadingScoped } = useQuery({
     queryKey: ["lease-expense-rule-sets", leaseIds.join(",")],
     queryFn: () => leaseExpenseRuleService.loadRuleSets(leaseIds),
     enabled: leaseIds.length > 0,
   });
+
+  // Fallback query: direct supabase read of ALL non-archived rule sets the
+  // current user can see (RLS handles scoping). Always runs so it can rescue
+  // the page when the scoped path drops rules due to dedup/category-resolver
+  // bugs, stale React-Query cache, or any other JS-side issue. Filtered to
+  // the in-scope lease IDs after fetch, so the scope selector still works.
+  const { data: directRuleSets = [], isLoading: isLoadingDirect } = useQuery({
+    queryKey: ["lease-expense-rule-sets-direct"],
+    queryFn: async () => {
+      const { data: sets, error: setsErr } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("id, lease_id, org_id, property_id, version, status, created_at, updated_at")
+        .not("status", "eq", "archived")
+        .order("version", { ascending: false });
+      if (setsErr) {
+        console.error("[LeaseExpenseRules] direct rule_sets read failed:", setsErr);
+        return [];
+      }
+      const latestByLease = new Map();
+      for (const s of sets || []) {
+        if (!latestByLease.has(s.lease_id)) latestByLease.set(s.lease_id, s);
+      }
+      const latest = [...latestByLease.values()];
+      const setIds = latest.map((s) => s.id);
+      console.log("[LeaseExpenseRules-DIRECT] rule_sets read:", latest.length);
+      if (setIds.length === 0) return [];
+      const { data: rules, error: rulesErr } = await supabase
+        .from("lease_expense_rules")
+        .select("*")
+        .in("rule_set_id", setIds);
+      if (rulesErr) {
+        console.error("[LeaseExpenseRules] direct rules read failed:", rulesErr);
+        return latest.map((s) => ({ leaseId: s.lease_id, ruleSet: s, rules: [] }));
+      }
+      console.log("[LeaseExpenseRules-DIRECT] rules read:", rules?.length || 0);
+      const byRuleSet = new Map();
+      for (const r of rules || []) {
+        const list = byRuleSet.get(r.rule_set_id) || [];
+        list.push(r);
+        byRuleSet.set(r.rule_set_id, list);
+      }
+      return latest.map((s) => ({
+        leaseId: s.lease_id,
+        ruleSet: s,
+        rules: byRuleSet.get(s.id) || [],
+      }));
+    },
+  });
+
+  // Merge: prefer scoped result (richer normalization) but if it yields 0
+  // entries for a lease that the direct path DOES have rules for, use the
+  // direct entry. This makes the page survive any breakage in the scoped
+  // pipeline while keeping the normalized fields when they work.
+  const ruleSetsByLease = useMemo(() => {
+    const scopedByLease = new Map(
+      (ruleSetsByLeaseScoped || []).map((e) => [e.leaseId, e]),
+    );
+    const merged = [];
+    const scopeIdSet = new Set(leaseIds);
+    for (const entry of directRuleSets) {
+      // Skip leases outside the scope selector
+      if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
+      const scoped = scopedByLease.get(entry.leaseId);
+      if (scoped && (scoped.rules?.length || 0) > 0) {
+        merged.push(scoped);
+      } else {
+        merged.push(entry);
+      }
+    }
+    // Also include scoped entries for leases not in directRuleSets (shouldn't
+    // happen, but defensive).
+    for (const [leaseId, entry] of scopedByLease) {
+      if (!merged.find((m) => m.leaseId === leaseId)) merged.push(entry);
+    }
+    console.log("[LeaseExpenseRules] merged ruleSetsByLease:", {
+      scoped_entries: ruleSetsByLeaseScoped?.length || 0,
+      direct_entries: directRuleSets?.length || 0,
+      after_scope_filter: merged.length,
+    });
+    return merged;
+  }, [ruleSetsByLeaseScoped, directRuleSets, leaseIds]);
+
+  const isLoading = isLoadingScoped || isLoadingDirect;
 
   // ── Backfill: extract rules for already-approved leases that have none.
   // Used when leases were approved before the persistence flow was wired,
@@ -276,6 +361,7 @@ export default function LeaseExpenseRules() {
 
     toast.success(`Backfill complete — ${persistedTotal} rules across ${backfillCandidates.length} leases. Open DevTools console for diagnostic table.`);
     queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
   };
 
   const leaseById = useMemo(() => {
@@ -397,6 +483,7 @@ export default function LeaseExpenseRules() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
     },
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
