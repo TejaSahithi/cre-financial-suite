@@ -1592,6 +1592,56 @@ export const leaseExpenseRuleService = {
     });
   },
 
+  // Robust persistence path for both the approval flow and the backfill
+  // button. Tries the cheap workflow-output path first; if that produces
+  // zero rules (because workflow_output wasn't populated yet, or the
+  // extractor genuinely returned nothing), falls back to
+  // extractDraftRuleSet which pulls source text and runs the LLM /
+  // deterministic extractor. Returns the same shape as saveRuleSet.
+  async ensureLeaseExpenseRules({
+    lease,
+    categories = [],
+    status = "draft",
+    createdFrom = "approval",
+    approver = null,
+  } = {}) {
+    if (!lease?.id) return { ruleSet: null, rules: [] };
+
+    // Phase 1: cheap workflow-output read.
+    let result = { ruleSet: null, rules: [] };
+    try {
+      result = await this.persistExpenseRulesFromWorkflow({
+        lease,
+        categories,
+        status,
+        createdFrom,
+        approver,
+      });
+    } catch (err) {
+      console.warn("[leaseExpenseRuleService] ensureLeaseExpenseRules: workflow path failed:", err?.message || err);
+    }
+    if (result?.rules?.length > 0) {
+      return result;
+    }
+
+    // Phase 2: workflow gave us nothing. Run the full extractor pipeline
+    // (LLM call + deterministic fallback). Only fires if Phase 1 produced
+    // zero rules — never duplicates work.
+    console.log("[leaseExpenseRuleService] ensureLeaseExpenseRules: workflow produced 0 rules; falling back to extractDraftRuleSet for lease", lease.id);
+    try {
+      const fallback = await this.extractDraftRuleSet({
+        lease,
+        categories,
+        existingRuleSetId: result?.ruleSet?.id || null,
+        existingRules: [],
+      });
+      return fallback || result;
+    } catch (err) {
+      console.warn("[leaseExpenseRuleService] ensureLeaseExpenseRules: fallback extract failed:", err?.message || err);
+      return result;
+    }
+  },
+
   async extractDraftRuleSet({ lease, categories = [], existingRuleSetId = null, existingRules = [] }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to extract expense rules");
 

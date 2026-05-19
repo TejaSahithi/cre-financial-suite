@@ -16,6 +16,7 @@ import {
   MinusCircle,
   Pencil,
   Receipt,
+  RefreshCw,
   Send,
   X,
 } from "lucide-react";
@@ -166,6 +167,56 @@ export default function LeaseExpenseRules() {
     queryFn: () => leaseExpenseRuleService.loadRuleSets(leaseIds),
     enabled: leaseIds.length > 0,
   });
+
+  // ── Backfill: extract rules for already-approved leases that have none.
+  // Used when leases were approved before the persistence flow was wired,
+  // or when re-approval is impractical. Iterates serially with progress so
+  // we don't hammer the LLM with parallel requests.
+  const [backfillState, setBackfillState] = useState({ running: false, done: 0, total: 0 });
+  const backfillCandidates = useMemo(() => {
+    const ruleCountByLease = new Map();
+    for (const entry of ruleSetsByLease) {
+      ruleCountByLease.set(entry.leaseId, entry.rules?.length || 0);
+    }
+    return selectorFilteredLeases.filter((lease) => {
+      const isApproved =
+        String(lease?.abstract_status || "").toLowerCase() === "approved" ||
+        String(lease?.status || "").toLowerCase() === "approved";
+      if (!isApproved) return false;
+      return (ruleCountByLease.get(lease.id) || 0) === 0;
+    });
+  }, [ruleSetsByLease, selectorFilteredLeases]);
+
+  const runBackfill = async () => {
+    if (backfillState.running) return;
+    if (backfillCandidates.length === 0) {
+      toast.info("No approved leases in scope are missing expense rules.");
+      return;
+    }
+    setBackfillState({ running: true, done: 0, total: backfillCandidates.length });
+    let persistedTotal = 0;
+    for (let i = 0; i < backfillCandidates.length; i += 1) {
+      const lease = backfillCandidates[i];
+      try {
+        const result = await leaseExpenseRuleService.ensureLeaseExpenseRules({
+          lease,
+          categories,
+          status: "draft",
+          createdFrom: "backfill",
+          approver: lease?.signed_by || null,
+        });
+        const count = result?.rules?.length || 0;
+        persistedTotal += count;
+        console.log(`[LeaseExpenseRules] backfill: lease ${lease.id} (${lease.tenant_name || "—"}) → ${count} rules`);
+      } catch (err) {
+        console.warn(`[LeaseExpenseRules] backfill failed for lease ${lease.id}:`, err?.message || err);
+      }
+      setBackfillState((prev) => ({ ...prev, done: i + 1 }));
+    }
+    setBackfillState({ running: false, done: 0, total: 0 });
+    toast.success(`Backfill complete — ${persistedTotal} rules across ${backfillCandidates.length} leases.`);
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+  };
 
   const leaseById = useMemo(() => {
     const map = new Map();
@@ -370,6 +421,39 @@ export default function LeaseExpenseRules() {
           </div>
         </CardContent>
       </Card>
+
+      {backfillCandidates.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-900">
+            <div>
+              <p className="font-medium">
+                {backfillCandidates.length} approved {backfillCandidates.length === 1 ? "lease has" : "leases have"} no expense rules yet
+              </p>
+              <p className="text-xs">
+                Click below to extract rules from the lease document for each one. Uses the workflow output where available, otherwise re-runs extraction. Doesn't re-approve the abstract.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              onClick={runBackfill}
+              disabled={backfillState.running}
+            >
+              {backfillState.running ? (
+                <>
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  Extracting {backfillState.done}/{backfillState.total}…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-1 h-4 w-4" />
+                  Extract rules from {backfillCandidates.length} approved {backfillCandidates.length === 1 ? "lease" : "leases"}
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <ScopeSelector
         properties={scope.scopedProperties}
