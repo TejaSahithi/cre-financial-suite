@@ -241,11 +241,11 @@ function deriveRuleExtractionStatus(rule) {
   return "extracted";
 }
 
-// Strict review-status policy (per Lease Expense Rules spec):
-// Newly extracted rules default to `needs_review`. Auto-approval requires
-// ALL of: exact source evidence, known responsibility, known recoverable
-// status, known payment treatment, specific recovery method, and high
-// confidence. Anything weaker stays in needs_review so a human ratifies.
+// Auto-approve any rule whose extractor confidence is ≥ 80% AND has some
+// real evidence backing it (source text present + not a not-found row).
+// Anything below that — or rules that came back as not_found /
+// missing_source_evidence — defaults to needs_review for a human to ratify.
+// Manually-added rules and rules with explicit review_status pass through.
 function deriveRuleReviewStatus(rule) {
   if (rule?.review_status) {
     return normalizeText(rule.review_status) === "reviewed" ? "approved" : rule.review_status;
@@ -254,28 +254,14 @@ function deriveRuleReviewStatus(rule) {
   if (status === "not_mentioned") return "not_found";
   if (status === "manually_added") return "approved"; // explicit human input
 
-  const responsibility = deriveRuleOperationalResponsibility(rule);
-  const recoverable = deriveRuleRecoverableFromTenant(rule);
-  const treatment = deriveRulePaymentTreatment(rule);
-  const recoveryMethod = normalizeText(deriveRuleRecoveryMethod(rule));
+  const extractionStatus = normalizeText(rule?.extraction_status || rule?.status);
+  if (extractionStatus === "not_found" || extractionStatus === "missing_source_evidence") {
+    return "needs_review";
+  }
+
   const confidence = deriveRuleConfidence(rule);
   const sourceText = deriveRuleExactSourceText(rule);
-  const sourcePage = Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null;
-
-  const hasEvidence = Boolean(sourceText) && sourcePage != null;
-  const responsibilityKnown = responsibility && responsibility !== "unknown";
-  const recoverableKnown = recoverable && recoverable !== "unknown";
-  const treatmentKnown = treatment && treatment !== "not_applicable" && treatment !== "unknown";
-  const recoveryMethodSpecific = recoveryMethod && recoveryMethod !== "manual_review" && recoveryMethod !== "needs_review";
-  const confidenceHigh = typeof confidence === "number" && confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-
-  if (status === "mapped"
-    && hasEvidence
-    && responsibilityKnown
-    && recoverableKnown
-    && treatmentKnown
-    && recoveryMethodSpecific
-    && confidenceHigh) {
+  if (typeof confidence === "number" && confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD && sourceText) {
     return "approved";
   }
   return "needs_review";
@@ -308,7 +294,7 @@ function deriveRuleConfidence(rule) {
   return asNumber(firstPresent(rule?.confidence, rule?.confidence_score)) ?? 0.7;
 }
 
-const RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.82;
+const RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.80;
 
 const CANONICAL_EXPENSE_CATEGORY_CONFIG = [
   {
@@ -483,16 +469,15 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
   const confidence = normalizeConfidenceScore(firstPresent(rule?.confidence_score, rule?.confidence));
   const strongEvidence = hasStrongRuleEvidence({ ...rule, exact_source_text: exactSourceText });
   const explicitExtractionStatus = normalizeText(rule?.extraction_status || rule?.status);
-  const inferred = explicitExtractionStatus === "inferred" || !strongEvidence;
-  const responsibilityKnown = isRuleResponsibilityKnown(rule);
-  const recoverableKnown = isRuleRecoverableKnown(rule);
-  const recoveryMethodSpecific = isRuleRecoveryMethodSpecific(rule);
+  // Auto-approve when confidence ≥ 80% AND there's *some* source evidence
+  // (real text, not just an inferred classification). Multi-condition gate
+  // was too strict — it forced too many rules into needs_review even when
+  // the LLM was highly confident.
+  const notFoundRow = explicitExtractionStatus === "not_found"
+    || explicitExtractionStatus === "missing_source_evidence";
   const autoApproved =
-    !inferred &&
-    strongEvidence &&
-    responsibilityKnown &&
-    recoverableKnown &&
-    recoveryMethodSpecific &&
+    !notFoundRow &&
+    Boolean(exactSourceText) &&
     confidence != null &&
     confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
 

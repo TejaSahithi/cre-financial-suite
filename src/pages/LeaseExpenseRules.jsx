@@ -452,9 +452,15 @@ export default function LeaseExpenseRules() {
       if (!haystack.some((value) => value.includes(search.toLowerCase()))) return false;
     }
 
+    // Recoverable / Non-Recoverable / Conditional now have separate filter
+    // buckets (per product requirement). A rule lands in exactly ONE of
+    // them based on its recoverable_from_tenant decision; "Excluded" rules
+    // are folded into Non-Recoverable.
+    const decision = getRecoverableDecision(rule);
     if (statusFilter === "all") return true;
-    if (statusFilter === "recoverable") return ["yes", "conditional"].includes(getRecoverableDecision(rule)) && !rule.is_excluded;
-    if (statusFilter === "excluded") return rule.is_excluded;
+    if (statusFilter === "recoverable") return decision === "yes" && !rule.is_excluded;
+    if (statusFilter === "non_recoverable") return decision === "no" || rule.is_excluded;
+    if (statusFilter === "conditional") return decision === "conditional" && !rule.is_excluded;
     if (statusFilter === "needs_review") return needsReviewRule(rule);
     if (statusFilter === "approved") return isApprovedRule(rule);
     return true;
@@ -464,14 +470,17 @@ export default function LeaseExpenseRules() {
     const summary = {
       all: flattenedRows.length,
       recoverable: 0,
-      excluded: 0,
+      non_recoverable: 0,
+      conditional: 0,
       needs_review: 0,
       approved: 0,
     };
 
     for (const { rule } of flattenedRows) {
-      if (["yes", "conditional"].includes(getRecoverableDecision(rule)) && !rule.is_excluded) summary.recoverable += 1;
-      if (rule.is_excluded) summary.excluded += 1;
+      const decision = getRecoverableDecision(rule);
+      if (decision === "yes" && !rule.is_excluded) summary.recoverable += 1;
+      if (decision === "no" || rule.is_excluded) summary.non_recoverable += 1;
+      if (decision === "conditional" && !rule.is_excluded) summary.conditional += 1;
       if (needsReviewRule(rule)) summary.needs_review += 1;
       if (isApprovedRule(rule)) summary.approved += 1;
     }
@@ -623,10 +632,11 @@ export default function LeaseExpenseRules() {
         onUnitChange={setScopeUnit}
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
         <StatCard label="All Rules" value={counts.all} />
         <StatCard label="Recoverable" value={counts.recoverable} accent="border-l-emerald-500 bg-emerald-50" />
-        <StatCard label="Excluded" value={counts.excluded} accent="border-l-slate-400 bg-slate-50" />
+        <StatCard label="Non-Recoverable" value={counts.non_recoverable} accent="border-l-slate-400 bg-slate-50" />
+        <StatCard label="Conditional" value={counts.conditional} accent="border-l-purple-500 bg-purple-50" />
         <StatCard label="Needs Review" value={counts.needs_review} accent="border-l-amber-500 bg-amber-50" />
         <StatCard label="Approved" value={counts.approved} accent="border-l-blue-500 bg-blue-50" />
       </div>
@@ -642,7 +652,8 @@ export default function LeaseExpenseRules() {
           <TabsList className="bg-white border">
             <TabsTrigger value="all" className="text-xs">All ({counts.all})</TabsTrigger>
             <TabsTrigger value="recoverable" className="text-xs">Recoverable ({counts.recoverable})</TabsTrigger>
-            <TabsTrigger value="excluded" className="text-xs">Excluded ({counts.excluded})</TabsTrigger>
+            <TabsTrigger value="non_recoverable" className="text-xs">Non-Recoverable ({counts.non_recoverable})</TabsTrigger>
+            <TabsTrigger value="conditional" className="text-xs">Conditional ({counts.conditional})</TabsTrigger>
             <TabsTrigger value="needs_review" className="text-xs">Needs Review ({counts.needs_review})</TabsTrigger>
             <TabsTrigger value="approved" className="text-xs">Approved ({counts.approved})</TabsTrigger>
           </TabsList>
