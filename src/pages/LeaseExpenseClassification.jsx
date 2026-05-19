@@ -294,12 +294,41 @@ export default function LeaseExpenseClassification() {
       return raw;
     };
 
+    // Plain-English explanation per row — what a non-engineer reading the
+    // page needs to understand the classification decision.
+    const buildPlainReason = (expense, rule, match) => {
+      const cat = expense?.category || rule?.category_name || rule?.expense_category || "this expense";
+      const niceCat = String(cat).replace(/_/g, " ");
+      if (!rule) {
+        return `This ${niceCat} expense needs review because no matching approved lease rule was found in the current scope.`;
+      }
+      const ruleLabel = rule.category_name || rule.expense_category || "matching lease rule";
+      const niceRule = String(ruleLabel).replace(/_/g, " ");
+      const payment = String(rule.payment_treatment || "").toLowerCase();
+      const recoverable = String(match?.recoverability_result || rule.recoverable_from_tenant || "").toLowerCase();
+      if (payment === "included_in_base_rent") {
+        return `This ${niceCat} expense is non-recoverable because the approved ${niceRule} rule says it is included in base rent.`;
+      }
+      if (recoverable === "recoverable") {
+        const method = rule.recovery_method ? ` via ${String(rule.recovery_method).replace(/_/g, " ")}` : "";
+        return `This ${niceCat} expense is recoverable from the tenant${method} per the approved ${niceRule} rule.`;
+      }
+      if (recoverable === "conditional") {
+        return `This ${niceCat} expense is conditionally recoverable — the approved ${niceRule} rule has a cap, base year, or condition that needs human review before recovery.`;
+      }
+      if (recoverable === "excluded" || recoverable === "non_recoverable") {
+        return `This ${niceCat} expense is non-recoverable per the approved ${niceRule} rule.`;
+      }
+      return `This ${niceCat} expense matched the ${niceRule} rule but the recovery decision needs review.`;
+    };
+
     return actualExpenses.map((expense) => {
       const match = expenseService.matchActualExpenseToLeaseRule(expense, { leases, rulesByLeaseId });
       const rule = match?.rule || null;
       const expectedAnnual = ruleAnnualExpected(rule);
       const actualAmount = Number(expense?.amount) || 0;
-      const variance = expectedAnnual != null ? actualAmount - (expectedAnnual / 12) : null; // per-month variance (most expenses are monthly invoices)
+      const variance = expectedAnnual != null ? actualAmount - (expectedAnnual / 12) : null;
+      const plainReason = buildPlainReason(expense, rule, match);
       return {
         expense,
         rule,
@@ -308,6 +337,7 @@ export default function LeaseExpenseClassification() {
         recoveryMethod: match?.recovery_method || rule?.recovery_method || null,
         camEligible: match?.cam_eligible || null,
         reason: match?.reason || null,
+        plainReason,
         expectedAnnual,
         variance,
       };
@@ -440,119 +470,121 @@ export default function LeaseExpenseClassification() {
 
       <PageHeader
         icon={FileText}
-        title="Expense Classification"
-        subtitle={lease ? `Reviewing CAM & Expense Rules for: ${lease.tenant_name || 'Lease'}` : 'Loading...'}
+        title="Expense Recoverability"
+        subtitle={lease
+          ? `Matching actual expenses to approved lease rules for: ${lease.tenant_name || 'Lease'}`
+          : 'Loading...'}
         iconColor="from-blue-600 to-indigo-600"
       >
-        <div className="flex gap-2">
-          <select 
-            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm"
-            value={scopeType}
-            onChange={e => setScopeType(e.target.value)}
-          >
-            <option value="property">Property Scope</option>
-            <option value="building">Building Scope</option>
-            <option value="unit">Unit Scope</option>
-          </select>
-          <select 
-            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm"
-            value={frequency}
-            onChange={e => setFrequency(e.target.value)}
-          >
-            <option value="yearly">Yearly</option>
-            <option value="monthly">Monthly</option>
-            <option value="quarterly">Quarterly</option>
-          </select>
-          
-          <Button variant="outline" onClick={() => toast.info("Add Expense Modal (Placeholder)")} disabled={isWorking}>
-            Add Expense
-          </Button>
-          <Button variant="outline" onClick={() => toast.info("Bulk Import Modal (Placeholder)")} disabled={isWorking}>
-            Bulk Import
-          </Button>
-          
+        <div className="flex flex-wrap gap-2">
+          <Link to={createPageUrl("AddExpense", { lease_id: id })}>
+            <Button variant="outline" size="sm" disabled={isWorking}>Add Expense</Button>
+          </Link>
+          <Link to={createPageUrl("BulkImport", { lease_id: id })}>
+            <Button variant="outline" size="sm" disabled={isWorking}>Bulk Import</Button>
+          </Link>
+          <Link to={createPageUrl("LeaseExpenseRules") + (lease?.property_id ? `?property=${lease.property_id}` : "")}>
+            <Button variant="outline" size="sm" disabled={isWorking}>Manage Lease Rules</Button>
+          </Link>
           <Button
-            variant="outline"
-            onClick={() => extractRulesMutation.mutate({ silent: false })}
-            disabled={isWorking}
+            className="bg-slate-900 hover:bg-slate-800 text-white"
+            size="sm"
+            onClick={() => classifyExpensesMutation.mutate()}
+            disabled={classifyExpensesMutation.isPending || actualExpenses.length === 0 || localRules.length === 0}
+            title={
+              actualExpenses.length === 0
+                ? "Add actual expenses first"
+                : localRules.length === 0
+                ? "Approve lease expense rules first"
+                : "Match actuals against rules and persist results"
+            }
           >
-            <Wand2 className="w-4 h-4 mr-2 text-purple-600" />
-            {extractRulesMutation.isPending ? 'Extracting...' : 'Extract with AI'}
+            {classifyExpensesMutation.isPending ? "Running Classification…" : "Run Classification"}
           </Button>
           <Button
             variant="outline"
-            onClick={() => saveRuleSetMutation.mutate('draft')}
-            disabled={isWorking}
-          >
-            <Save className="w-4 h-4 mr-2" />
-            Save Draft
-          </Button>
-          <Button
-            className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => saveRuleSetMutation.mutate('approved')}
-            disabled={isWorking}
-          >
-            Approve Rule Set
-          </Button>
-          <Button
-            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            size="sm"
             onClick={() => navigate(`/LeaseReview?id=${id}`)}
             disabled={isWorking}
           >
-            Back to Lease Review
+            <ArrowLeft className="w-4 h-4 mr-1" /> Lease Review
           </Button>
         </div>
       </PageHeader>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="border-emerald-200 bg-emerald-50/70">
-          <CardContent className="p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-600">Recoverable</div>
-            <div className="mt-2 text-2xl font-bold text-emerald-800">{ruleGroups.recoverable.length}</div>
-            <div className="mt-1 text-xs text-emerald-700">Lease rules that can flow into CAM recovery.</div>
+      {/* ── Empty-state guards ────────────────────────────────────────────
+          Per spec: don't show fake zero charts. If actuals or approved
+          rules are missing, surface the precondition prominently. */}
+      {!isLoadingActuals && actualExpenses.length === 0 && (
+        <Card className="border-amber-200 bg-amber-50/70">
+          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold">No actual expenses found for this lease.</p>
+              <p className="mt-1 text-xs">
+                Add or import expenses before classification.{" "}
+                <Link to={createPageUrl("AddExpense", { lease_id: id })} className="underline">Add one manually</Link>
+                {" or "}
+                <Link to={createPageUrl("BulkImport", { lease_id: id })} className="underline">bulk import a CSV</Link>.
+              </p>
+            </div>
           </CardContent>
         </Card>
+      )}
+      {!isLoadingRules && localRules.length === 0 && (
         <Card className="border-rose-200 bg-rose-50/70">
-          <CardContent className="p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-600">Non-Recoverable</div>
-            <div className="mt-2 text-2xl font-bold text-rose-800">{ruleGroups.nonRecoverable.length}</div>
-            <div className="mt-1 text-xs text-rose-700">Explicit exclusions and landlord-borne costs.</div>
+          <CardContent className="flex items-start gap-3 p-4 text-sm text-rose-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold">No approved lease expense rules found.</p>
+              <p className="mt-1 text-xs">
+                Approve lease expense rules before classification.{" "}
+                <Link to={createPageUrl("LeaseExpenseRules")} className="underline">Open Lease Expense Rules</Link>{" "}
+                to extract and approve them.
+              </p>
+            </div>
           </CardContent>
         </Card>
-        <Card className="border-amber-200 bg-amber-50/80">
-          <CardContent className="p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">Conditional</div>
-            <div className="mt-2 text-2xl font-bold text-amber-900">{ruleGroups.conditional.length}</div>
-            <div className="mt-1 text-xs text-amber-700">Rules with caps, base years, or conditional recovery logic.</div>
-          </CardContent>
-        </Card>
-        <Card className="border-slate-200 bg-slate-50/80">
-          <CardContent className="p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Needs Review</div>
-            <div className="mt-2 text-2xl font-bold text-slate-900">{ruleGroups.needsReview.length}</div>
-            <div className="mt-1 text-xs text-slate-600">Still missing values, evidence, or final yes/no decisions.</div>
-          </CardContent>
-        </Card>
+      )}
+
+      {/* ── 8 top cards per spec ──────────────────────────────────────────
+          Actuals Loaded · Approved Rules · Matched · Recoverable $ ·
+          Non-Recoverable $ · Conditional/Needs Review $ · Finalized $ ·
+          CAM Eligible $ */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+        <SummaryCard label="Actuals Loaded"          value={actualExpenses.length}                                        tone="slate" />
+        <SummaryCard label="Approved Rules"          value={localRules.filter((r) => r.approval_status === "approved" || r.review_status === "approved").length} tone="slate" />
+        <SummaryCard label="Matched"                 value={matchedActuals.filter((m) => m.rule).length}                  tone="blue" />
+        <SummaryCard label="Recoverable"             value={fmtMoney(actualTotals.buckets.recoverable.ytd)}               tone="emerald" />
+        <SummaryCard label="Non-Recoverable"         value={fmtMoney(actualTotals.buckets.non_recoverable.ytd)}           tone="rose" />
+        <SummaryCard label="Conditional / Review"    value={fmtMoney(actualTotals.buckets.conditional.ytd + actualTotals.buckets.needs_review.ytd)} tone="amber" />
+        <SummaryCard
+          label="Finalized"
+          value={fmtMoney(persistedClassifications.filter((c) => c.classification_status === "finalized").reduce((s, c) => s + Number(c.amount || 0), 0))}
+          tone="emerald"
+        />
+        <SummaryCard
+          label="CAM Eligible"
+          value={fmtMoney(matchedActuals.filter((m) => m.camEligible === "yes" || m.camEligible === "conditional").reduce((s, m) => s + Number(m.expense?.amount || 0), 0))}
+          tone="blue"
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {/* Main Grid Area */}
+        {/* Main area — Actuals vs Rules table is the primary surface now.
+            The per-lease rule grid was previously the main content; it has
+            been demoted to a collapsible "Lease Rule Reference" panel
+            below because rule approval belongs on the Lease Expense Rules
+            page, not here. */}
         <div className="md:col-span-3 space-y-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Expense Classification Grid</CardTitle>
-                <p className="text-sm text-slate-500 mt-1">
-                  Map lease clauses to standard expense categories. Edit recovery rules, caps, and base years.
-                </p>
-              </div>
-              {ruleSet && (
-                <Badge variant={ruleSet.status === 'approved' ? 'default' : 'secondary'} className="text-sm">
-                  Status: {ruleSet.status.toUpperCase()}
-                </Badge>
-              )}
-            </CardHeader>
-            <CardContent>
+          <details className="rounded-lg border border-slate-200 bg-slate-50/60">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">
+              Lease Rule Reference
+              <span className="ml-2 text-xs font-normal text-slate-500">
+                ({localRules.length} rules — open Lease Expense Rules to approve / edit)
+              </span>
+            </summary>
+            <div className="border-t border-slate-200 p-4">
               {isLoadingCategories ? (
                 <div className="py-8 text-center text-slate-500">Loading taxonomy...</div>
               ) : (
@@ -599,8 +631,8 @@ export default function LeaseExpenseClassification() {
                   />
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </details>
 
           {/* ── Actuals vs Rules Coordination ──────────────────────────── */}
           <Card>
@@ -677,14 +709,16 @@ export default function LeaseExpenseClassification() {
                           <th className="px-3 py-2 text-left">Category</th>
                           <th className="px-3 py-2 text-right">Actual</th>
                           <th className="px-3 py-2 text-left">Matched Rule</th>
+                          <th className="px-3 py-2 text-left">CAM Eligible</th>
                           <th className="px-3 py-2 text-right">Rule (annual)</th>
                           <th className="px-3 py-2 text-right">Variance / mo</th>
                           <th className="px-3 py-2 text-left">Recovery</th>
+                          <th className="px-3 py-2 text-left max-w-[320px]">Why</th>
                           <th className="px-3 py-2 text-left">Source</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {matchedActuals.map(({ expense, rule, recoverability, expectedAnnual, variance, recoveryMethod }) => {
+                        {matchedActuals.map(({ expense, rule, recoverability, expectedAnnual, variance, recoveryMethod, camEligible, plainReason }) => {
                           const recoveryTone =
                             recoverability === "recoverable" ? "bg-emerald-100 text-emerald-800"
                             : recoverability === "conditional" ? "bg-amber-100 text-amber-800"
@@ -716,6 +750,15 @@ export default function LeaseExpenseClassification() {
                                   <span className="text-red-700">No matching rule</span>
                                 )}
                               </td>
+                              <td className="px-3 py-2">
+                                <Badge className={`text-[10px] uppercase ${
+                                  camEligible === "yes" ? "bg-emerald-100 text-emerald-800"
+                                  : camEligible === "conditional" ? "bg-amber-100 text-amber-800"
+                                  : "bg-slate-100 text-slate-600"
+                                }`}>
+                                  {camEligible ? String(camEligible).replace(/_/g, " ") : "—"}
+                                </Badge>
+                              </td>
                               <td className="px-3 py-2 text-right font-mono text-slate-700">
                                 {expectedAnnual != null ? `$${Math.round(expectedAnnual).toLocaleString()}` : "—"}
                               </td>
@@ -726,6 +769,9 @@ export default function LeaseExpenseClassification() {
                                 <Badge className={`${recoveryTone} text-[10px] uppercase`}>
                                   {recoverability?.replace(/_/g, " ") || "—"}
                                 </Badge>
+                              </td>
+                              <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[320px]" title={plainReason}>
+                                <span className="line-clamp-2">{plainReason}</span>
                               </td>
                               <td className="px-3 py-2 text-[10px] text-slate-500">{expense.source || "manual"}</td>
                             </tr>
@@ -912,6 +958,31 @@ export default function LeaseExpenseClassification() {
       />
 
     </div>
+  );
+}
+
+function SummaryCard({ label, value, tone }) {
+  const TONE = {
+    emerald: "border-emerald-200 bg-emerald-50/60",
+    rose:    "border-rose-200 bg-rose-50/60",
+    amber:   "border-amber-200 bg-amber-50/60",
+    blue:    "border-blue-200 bg-blue-50/60",
+    slate:   "border-slate-200 bg-slate-50/60",
+  };
+  const TXT = {
+    emerald: "text-emerald-900",
+    rose:    "text-rose-900",
+    amber:   "text-amber-900",
+    blue:    "text-blue-900",
+    slate:   "text-slate-900",
+  };
+  return (
+    <Card className={`border ${TONE[tone] || TONE.slate}`}>
+      <CardContent className="p-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
+        <div className={`mt-1 text-lg font-bold tabular-nums ${TXT[tone] || TXT.slate}`}>{value}</div>
+      </CardContent>
+    </Card>
   );
 }
 
