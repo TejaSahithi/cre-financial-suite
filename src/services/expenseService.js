@@ -537,6 +537,11 @@ function isMissingColumnError(error) {
   );
 }
 
+function isSchemaCompatibilityError(error) {
+  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ").toLowerCase();
+  return isMissingColumnError(error) || text.includes("schema mismatch");
+}
+
 async function selectExpenseClassifications({ columns = [], apply = (query) => query } = {}) {
   if (!supabase || columns.length === 0) return [];
 
@@ -716,6 +721,58 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
   }
 
   return null;
+}
+
+async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
+  const updatedAt =
+    expensePatch.updated_at ||
+    expensePatch.classification_updated_at ||
+    new Date().toISOString();
+
+  const attempts = [
+    expensePatch,
+    {
+      classification: expensePatch.classification,
+      recovery_status: expensePatch.recovery_status,
+      approved_status: expensePatch.approved_status,
+      review_status: expensePatch.review_status,
+      updated_at: updatedAt,
+    },
+    {
+      classification: expensePatch.classification,
+      recovery_status: expensePatch.recovery_status,
+      updated_at: updatedAt,
+    },
+    {
+      classification: expensePatch.classification,
+      updated_at: updatedAt,
+    },
+  ];
+
+  let lastError = null;
+  for (const attempt of attempts) {
+    const payload = Object.fromEntries(
+      Object.entries(attempt).filter(([, value]) => value !== undefined)
+    );
+    try {
+      return await baseExpenseService.update(expenseId, payload);
+    } catch (error) {
+      if (!isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    console.warn("[expenseService] unable to persist full expense workflow patch; falling back to classification overlay only:", lastError);
+  }
+
+  return {
+    id: expenseId,
+    ...expensePatch,
+    updated_at: updatedAt,
+  };
 }
 
 async function fetchExistingExpenseClassifications(expenseIds = []) {
@@ -981,7 +1038,7 @@ export const expenseService = {
       classification_updated_by: userId,
     };
 
-    const updatedExpense = await baseExpenseService.update(expense.id, expensePatch);
+    const updatedExpense = await persistExpenseWorkflowPatch(expense.id, expensePatch);
 
     await upsertExpenseClassification({
       id: existingClassification?.id,
@@ -1334,7 +1391,7 @@ export const expenseService = {
         classification_updated_at: new Date().toISOString(),
       };
 
-      await baseExpenseService.update(expense.id, updatePayload);
+      await persistExpenseWorkflowPatch(expense.id, updatePayload);
       updated += 1;
 
       if (approvedStatus === "needs_review") {
