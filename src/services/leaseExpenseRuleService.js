@@ -1724,22 +1724,41 @@ export const leaseExpenseRuleService = {
 
     // Idempotency: reuse the most-recent non-archived rule_set for this
     // lease as the target so we don't pile up phantom versions per click.
-    // Approved rule_sets are preserved (do NOT update them — they may have
-    // human-reviewed rules); only draft sets get reused.
+    //
+    // Rule:
+    //   - If latest rule_set is APPROVED and extraction_version matches,
+    //     reuse it. The upsert by (rule_set_id, rule_key) guarantees
+    //     approved rules with user-reviewed fields are NOT overwritten
+    //     because they share the same rule_key and the persistence layer
+    //     keeps the existing approved review_status/approval_status.
+    //   - If latest is APPROVED and extraction_version is different, leave
+    //     it frozen and create a NEW draft set for the new extraction.
+    //   - If latest is DRAFT, reuse it regardless of version.
     let targetRuleSetId = existingRuleSetId;
+    const EXTRACTION_VERSION_FOR_LOOKUP = "v1.2026.05.19";
     if (!targetRuleSetId) {
       try {
         const { data: existingSets } = await supabase
           .from("lease_expense_rule_sets")
-          .select("id, status, version")
+          .select("id, status, version, extraction_version")
           .eq("lease_id", lease.id)
           .not("status", "eq", "archived")
           .order("version", { ascending: false })
           .limit(1);
         const latest = existingSets?.[0];
-        if (latest?.id && latest.status !== "approved") {
-          targetRuleSetId = latest.id;
-          console.log(`${tag} reusing existing draft rule_set ${latest.id} (v${latest.version}, status=${latest.status})`);
+        if (latest?.id) {
+          const sameExtractionVersion =
+            !latest.extraction_version || latest.extraction_version === EXTRACTION_VERSION_FOR_LOOKUP;
+          if (latest.status !== "approved" || sameExtractionVersion) {
+            targetRuleSetId = latest.id;
+            console.log(
+              `${tag} reusing existing rule_set ${latest.id} (v${latest.version}, status=${latest.status}, ev=${latest.extraction_version || "—"})`,
+            );
+          } else {
+            console.log(
+              `${tag} latest rule_set is approved with different extraction_version (${latest.extraction_version}) — creating a new draft for ${EXTRACTION_VERSION_FOR_LOOKUP}`,
+            );
+          }
         }
       } catch (err) {
         console.warn(`${tag} existing rule_set lookup failed:`, err?.message || err);
@@ -2062,6 +2081,9 @@ export const leaseExpenseRuleService = {
           version: currentVersion,
           status,
           approved_at: status === "approved" ? now : null,
+          // Stamp the extraction version on every new rule_set so we can
+          // skip re-extraction when nothing has changed (auto-extract gate).
+          extraction_version: "v1.2026.05.19",
         })
         .select("*")
         .single();
@@ -2106,14 +2128,39 @@ export const leaseExpenseRuleService = {
       console.warn(`[leaseExpenseRuleService] saveRuleSet: ${unmappedCount} rules dropped (no canonical category)`);
     }
     const approvedAtIso = status === "approved" ? now : null;
+    // Deterministic content-derived rule_key — must match the SQL formula
+    // in 20260519101000_lease_expense_rules_rule_key_string.sql exactly so
+    // upsert(onConflict: 'rule_set_id,rule_key') hits existing rows.
+    const computeRuleKey = (ruleObj) => {
+      const norm = (v) => String(v ?? "").toLowerCase().trim();
+      const sourceText = String(deriveRuleExactSourceText(ruleObj) || "").trim();
+      const sourceTextHead = sourceText.toLowerCase().slice(0, 80).trim();
+      const sourcePage = Number.isFinite(Number(ruleObj?.source_page)) ? String(Number(ruleObj.source_page)) : "";
+      return [
+        norm(firstPresent(ruleObj.expense_category, ruleObj.category_name, deriveRuleCategoryName(ruleObj))),
+        norm(firstPresent(ruleObj.expense_subcategory, ruleObj.subcategory_name, deriveRuleSubcategoryName(ruleObj))),
+        norm(deriveRulePaymentTreatment(ruleObj)),
+        norm(deriveRuleRecoverableFromTenant(ruleObj)),
+        norm(deriveRuleRecoveryMethod(ruleObj)),
+        sourcePage,
+        sourceTextHead,
+      ].join("|");
+    };
+    const EXTRACTION_VERSION = "v1.2026.05.19";
     const rulePayloads = savableRules.map((rule) => {
       // Only include `id` when the rule actually has a UUID — sending
       // `id: undefined` in a PostgREST upsert payload triggers a 400 on
       // some clients because PostgREST expects either a complete `id` per
       // row or none. The strip-missing-column retry was masking this with
       // an unnecessary round-trip.
+      const exactSourceText = deriveRuleExactSourceText(rule);
+      const ruleKey = computeRuleKey(rule);
       const payload = {
         rule_set_id: ruleSetId,
+        rule_key: ruleKey,
+        extraction_version: rule.extraction_version || EXTRACTION_VERSION,
+        source_hash: exactSourceText ? String(exactSourceText).toLowerCase().slice(0, 80) : null,
+        generation_source: rule.generation_source || createdFrom || "workflow",
         expense_category_id: isUuid(rule?.expense_category_id) ? rule.expense_category_id : null,
         // Denormalized scope so the Lease Expense Rules page can filter
         // without joining lease_expense_rule_sets. The migration backfills
@@ -2188,9 +2235,17 @@ export const leaseExpenseRuleService = {
       const droppedColumns = [];
       let attemptsRemaining = 12;
       while (attemptsRemaining > 0) {
+        // Conflict target = (rule_set_id, rule_key). This is what makes
+        // re-extraction deterministic: clicking Extract twice with the
+        // same lease/extraction-version updates the SAME row instead of
+        // creating a new one. The migration 20260519101000_lease_expense_
+        // rules_rule_key_string.sql adds the matching UNIQUE index.
         const { data, error: ruleError } = await supabase
           .from("lease_expense_rules")
-          .upsert(payloadsForUpsert, { onConflict: "id" })
+          .upsert(payloadsForUpsert, {
+            onConflict: "rule_set_id,rule_key",
+            ignoreDuplicates: false,
+          })
           .select("*");
         if (!ruleError) {
           savedRules = data || [];

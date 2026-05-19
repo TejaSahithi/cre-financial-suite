@@ -673,9 +673,47 @@ export const expenseService = {
         classified += 1;
       }
 
+      // Spec lifecycle status + exception type — drives Expense Review's
+      // exception bucket and Expense Projection's finalized-only filter.
+      // classification_status states:
+      //   unmatched     no rule matched
+      //   exception     low confidence / rule conflict / missing fields
+      //   conditional   matched but recovery depends on cap/threshold review
+      //   matched       matched cleanly, awaiting human finalize
+      //   finalized     human approved
+      //   excluded      rule says non-recoverable
+      let classificationStatus;
+      let exceptionType = null;
+      if (!matchedRule) {
+        classificationStatus = "unmatched";
+        exceptionType = "unmatched";
+      } else if (recoveryStatus === "excluded" || recoveryStatus === "non_recoverable") {
+        classificationStatus = "excluded";
+      } else if (recoveryStatus === "needs_review") {
+        classificationStatus = "exception";
+        exceptionType = confidenceScore < 0.5 ? "low_confidence" : "missing_decision";
+      } else if (isConditional) {
+        classificationStatus = "conditional";
+      } else {
+        classificationStatus = "matched";
+      }
+      // Auto-promote to finalized only when the matched rule is itself
+      // approved AND the recovery decision is unambiguous. Anything else
+      // stays in matched/conditional/exception until a human confirms.
+      if (
+        matchedRule &&
+        matchedRule.approval_status === "approved" &&
+        recoveryStatus === "recoverable" &&
+        confidenceScore >= 0.82 &&
+        !isConditional
+      ) {
+        classificationStatus = "finalized";
+      }
+
       await upsertExpenseClassification({
         org_id: expense.org_id || matchedLease?.org_id || orgIdFallback,
         expense_id: expense.id,
+        actual_expense_id: expense.id,                       // spec alias
         property_id: expense.property_id || matchedLease?.property_id || null,
         building_id: expense.building_id || matchedLease?.building_id || null,
         unit_id: expense.unit_id || matchedLease?.unit_id || null,
@@ -684,6 +722,14 @@ export const expenseService = {
         rule_set_id: matchedRuleSet?.id || null,
         recovery_rule_id: linkedExpenseRuleId,
         linked_expense_rule_id: linkedExpenseRuleId,
+        lease_expense_rule_id: linkedExpenseRuleId,          // spec alias
+        // Denormalized snapshot — Expense Review / Projection can read
+        // these without joining expenses + lease_expense_rules.
+        category: expense.category || matchedRule?.expense_category || null,
+        subcategory: expense.subcategory || matchedRule?.expense_subcategory || null,
+        amount: Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : null,
+        service_period_start: expense.service_period_start || expense.date || null,
+        service_period_end: expense.service_period_end || expense.date || null,
         recovery_status: recoveryStatus,
         recoverability_result: recoveryStatus,
         cam_eligible: camEligible,
@@ -700,6 +746,9 @@ export const expenseService = {
         evidence_text: matchedRule?.source || recoveryReason,
         evidence_page_number: matchedRule?.clauses?.[0]?.page_number ?? null,
         approved_status: approvedStatus,
+        classification_status: classificationStatus,
+        exception_type: exceptionType,
+        finalized_at: classificationStatus === "finalized" ? new Date().toISOString() : null,
         notes: matchedRule?.notes || recoveryReason || null,
         classified_at: new Date().toISOString(),
       });

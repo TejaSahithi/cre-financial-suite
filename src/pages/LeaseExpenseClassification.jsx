@@ -176,6 +176,31 @@ export default function LeaseExpenseClassification() {
     }
   });
 
+  // ── Classification mutation ───────────────────────────────────────────
+  // Runs expenseService.classifyExpenses for this lease's actuals + rules
+  // and persists the result into expense_classifications (lifecycle status,
+  // exception type, recoverability decision, snapshot fields). Drives the
+  // Expense Review and Expense Projection downstream pages.
+  const classifyExpensesMutation = useMutation({
+    mutationFn: async () => {
+      if (!lease?.id) throw new Error("No lease loaded");
+      return expenseService.classifyExpenses({
+        expenses: actualExpenses,
+        leases: [lease],
+      });
+    },
+    onSuccess: (result) => {
+      toast.success(
+        `Classification complete: ${result?.classified || 0} matched, ${result?.needsReview || 0} need review.`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["lease-actual-expenses", id] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
+    },
+    onError: (err) => {
+      toast.error(`Classification failed: ${err?.message || "Unknown error"}`);
+    },
+  });
+
   React.useEffect(() => {
     if (!lease?.id || effectiveCategories.length === 0 || isLoadingRules) return;
     if (extractRulesMutation.isPending) return;
@@ -223,6 +248,29 @@ export default function LeaseExpenseClassification() {
         .limit(500);
       if (error) {
         console.warn("[LeaseExpenseClassification] actuals query failed:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+  });
+
+  // Persisted classifications. Read so the page reflects the LAST
+  // classification run, not just the live in-browser match (which can
+  // change if rules change).
+  const { data: persistedClassifications = [] } = useQuery({
+    queryKey: ["lease-expense-classifications", id, lease?.property_id],
+    enabled: !!lease?.id,
+    queryFn: async () => {
+      const orFilter = [`lease_id.eq.${lease.id}`];
+      if (lease.property_id) orFilter.push(`and(lease_id.is.null,property_id.eq.${lease.property_id})`);
+      const { data, error } = await supabase
+        .from("expense_classifications")
+        .select("id, expense_id, lease_expense_rule_id, recoverability_result, cam_eligible, recovery_method, recovery_reason, classification_status, exception_type, confidence_score, finalized_at, reviewed_at, amount")
+        .or(orFilter.join(","))
+        .order("classified_at", { ascending: false })
+        .limit(1000);
+      if (error) {
+        console.warn("[LeaseExpenseClassification] classifications query failed:", error.message);
         return [];
       }
       return data || [];
@@ -560,16 +608,41 @@ export default function LeaseExpenseClassification() {
               <div>
                 <CardTitle>Actual Expenses vs Lease Rules</CardTitle>
                 <p className="mt-1 text-sm text-slate-500">
-                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Rules say what the lease allows; actuals say what really happened. The recovery decision + variance comes from the matcher.
+                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Click <em>Run Classification</em> to persist decisions to <code>expense_classifications</code> — that's what feeds Expense Review and Expense Projection.
                 </p>
               </div>
-              <div className="flex flex-shrink-0 flex-col items-end gap-1">
-                <Badge variant="outline" className="text-[10px] uppercase">
-                  {matchedActuals.length} actuals
-                </Badge>
-                <Badge variant="outline" className="text-[10px] uppercase text-slate-500">
-                  YTD {`$${Math.round(actualTotals.total).toLocaleString()}`}
-                </Badge>
+              <div className="flex flex-shrink-0 flex-col items-end gap-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[10px] uppercase">
+                    {matchedActuals.length} actuals
+                  </Badge>
+                  <Badge variant="outline" className="text-[10px] uppercase text-slate-500">
+                    YTD {`$${Math.round(actualTotals.total).toLocaleString()}`}
+                  </Badge>
+                </div>
+                {persistedClassifications.length > 0 && (
+                  <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700">
+                      {persistedClassifications.filter((c) => c.classification_status === "finalized").length} finalized
+                    </Badge>
+                    <Badge variant="outline" className="bg-amber-50 text-amber-700">
+                      {persistedClassifications.filter((c) => c.classification_status === "exception" || c.exception_type).length} exceptions
+                    </Badge>
+                  </div>
+                )}
+                <Button
+                  size="sm"
+                  className="bg-slate-900 hover:bg-slate-800"
+                  onClick={() => classifyExpensesMutation.mutate()}
+                  disabled={classifyExpensesMutation.isPending || actualExpenses.length === 0}
+                  title={
+                    actualExpenses.length === 0
+                      ? "Import or add actual expenses first"
+                      : "Match every actual against approved lease rules and persist the decisions"
+                  }
+                >
+                  {classifyExpensesMutation.isPending ? "Classifying…" : "Run Classification"}
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
