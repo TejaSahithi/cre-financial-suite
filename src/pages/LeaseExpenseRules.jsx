@@ -14,6 +14,7 @@ import {
   Check,
   Loader2,
   MinusCircle,
+  MoreVertical,
   Pencil,
   Receipt,
   RefreshCw,
@@ -33,6 +34,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -806,63 +815,95 @@ export default function LeaseExpenseRules() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs text-emerald-700 hover:text-emerald-800"
-                            onClick={() => approveRule(rule)}
-                            disabled={updateRuleMutation.isPending}
-                          >
-                            <Check className="mr-1 h-3.5 w-3.5" />
-                            Approve
-                          </Button>
-                          {lease && (
-                            <Link to={createPageUrl("LeaseExpenseClassification") + `?id=${lease.id}`}>
-                              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs">
-                                <Pencil className="mr-1 h-3.5 w-3.5" />
-                                Edit
-                              </Button>
-                            </Link>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs text-red-700 hover:text-red-800"
-                            onClick={() => rejectRule(rule)}
-                            disabled={updateRuleMutation.isPending}
-                          >
-                            <X className="mr-1 h-3.5 w-3.5" />
-                            Reject
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs text-slate-600"
-                            onClick={() => markNARule(rule)}
-                            disabled={updateRuleMutation.isPending}
-                          >
-                            <MinusCircle className="mr-1 h-3.5 w-3.5" />
-                            N/A
-                          </Button>
-                          {lease?.property_id && leaseExpenseRuleService.canPublishRuleToCam(rule) ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="h-7 px-2 text-xs text-blue-700 hover:text-blue-800"
-                              onClick={() => publishRuleToCam(rule, lease.property_id)}
+                              className="h-7 w-7 p-0"
                               disabled={updateRuleMutation.isPending}
+                              aria-label="Rule actions"
                             >
-                              <Send className="mr-1 h-3.5 w-3.5" />
-                              Publish to CAM
+                              <MoreVertical className="h-3.5 w-3.5" />
                             </Button>
-                          ) : lease?.property_id ? (
-                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-slate-400" disabled>
-                              <Send className="mr-1 h-3.5 w-3.5" />
-                              Publish to CAM
-                            </Button>
-                          ) : null}
-                        </div>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Review
+                            </DropdownMenuLabel>
+                            <DropdownMenuItem
+                              onSelect={(event) => {
+                                event.preventDefault();
+                                approveRule(rule);
+                              }}
+                              className="text-emerald-700 focus:text-emerald-800"
+                            >
+                              <Check className="mr-2 h-3.5 w-3.5" />
+                              Approve rule
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={(event) => {
+                                event.preventDefault();
+                                rejectRule(rule);
+                              }}
+                              className="text-red-700 focus:text-red-800"
+                            >
+                              <X className="mr-2 h-3.5 w-3.5" />
+                              Reject rule
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={(event) => {
+                                event.preventDefault();
+                                markNARule(rule);
+                              }}
+                              className="text-slate-700"
+                            >
+                              <MinusCircle className="mr-2 h-3.5 w-3.5" />
+                              Mark N/A
+                            </DropdownMenuItem>
+
+                            {lease ? (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
+                                  Edit
+                                </DropdownMenuLabel>
+                                <DropdownMenuItem asChild>
+                                  <Link to={createPageUrl("LeaseExpenseClassification") + `?id=${lease.id}`}>
+                                    <Pencil className="mr-2 h-3.5 w-3.5" />
+                                    Edit rule details
+                                  </Link>
+                                </DropdownMenuItem>
+                              </>
+                            ) : null}
+
+                            {lease?.property_id ? (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
+                                  Downstream
+                                </DropdownMenuLabel>
+                                <DropdownMenuItem
+                                  disabled={!leaseExpenseRuleService.canPublishRuleToCam(rule)}
+                                  onSelect={(event) => {
+                                    event.preventDefault();
+                                    if (!leaseExpenseRuleService.canPublishRuleToCam(rule)) return;
+                                    publishRuleToCam(rule, lease.property_id);
+                                  }}
+                                  className="text-blue-700 focus:text-blue-800"
+                                  title={
+                                    leaseExpenseRuleService.canPublishRuleToCam(rule)
+                                      ? "Publish this rule to the CAM engine"
+                                      : "Requires approved + recoverable + cam-eligible + not included in rent"
+                                  }
+                                >
+                                  <Send className="mr-2 h-3.5 w-3.5" />
+                                  Publish to CAM
+                                </DropdownMenuItem>
+                              </>
+                            ) : null}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                   );
