@@ -109,6 +109,19 @@ function truncate(value, length = 140) {
   return text.length > length ? `${text.slice(0, length)}...` : text;
 }
 
+function isApprovedWorkflowValue(value) {
+  return String(value || "").toLowerCase() === "approved";
+}
+
+function pickPreferredRuleSet(ruleSets = []) {
+  const approvedRuleSet = ruleSets.find((ruleSet) =>
+    isApprovedWorkflowValue(ruleSet?.status) ||
+    isApprovedWorkflowValue(ruleSet?.approval_status) ||
+    isApprovedWorkflowValue(ruleSet?.review_status)
+  );
+  return approvedRuleSet || ruleSets[0] || null;
+}
+
 export default function LeaseExpenseRules() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -196,11 +209,13 @@ export default function LeaseExpenseRules() {
         console.error("[LeaseExpenseRules] direct rule_sets read failed:", setsErr);
         return [];
       }
-      const latestByLease = new Map();
+      const ruleSetsByLease = new Map();
       for (const s of sets || []) {
-        if (!latestByLease.has(s.lease_id)) latestByLease.set(s.lease_id, s);
+        const existing = ruleSetsByLease.get(s.lease_id) || [];
+        existing.push(s);
+        ruleSetsByLease.set(s.lease_id, existing);
       }
-      const latest = [...latestByLease.values()];
+      const latest = [...ruleSetsByLease.values()].map((ruleSetsForLease) => pickPreferredRuleSet(ruleSetsForLease)).filter(Boolean);
       const setIds = latest.map((s) => s.id);
       console.log("[LeaseExpenseRules-DIRECT] rule_sets read:", latest.length);
       if (setIds.length === 0) return [];

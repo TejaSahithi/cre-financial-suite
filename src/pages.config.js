@@ -64,6 +64,7 @@ import CAMSetup from './pages/CAMSetup';
 import ContactUs from './pages/ContactUs';
 import CreateBudget from './pages/CreateBudget';
 import Dashboard from './pages/Dashboard';
+import ExpenseDashboard from './pages/ExpenseDashboard';
 import Expenses from './pages/Expenses';
 import ExpenseReview from './pages/ExpenseReview';
 import Landing from './pages/Landing';
@@ -138,6 +139,7 @@ export const PAGES = {
     "ContactUs": ContactUs,
     "CreateBudget": CreateBudget,
     "Dashboard": Dashboard,
+    "ExpenseDashboard": ExpenseDashboard,
     "Expenses": Expenses,
     "ExpenseReview": ExpenseReview,
     "Landing": Landing,

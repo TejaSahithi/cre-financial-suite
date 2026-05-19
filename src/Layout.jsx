@@ -44,7 +44,7 @@ const navSections = [
   },
   {
     label: "Expenses", icon: Receipt, children: [
-      { label: "Expense Dashboard", page: "Expenses" },
+      { label: "Expense Dashboard", page: "ExpenseDashboard" },
       { label: "Lease Expense Rules", page: "LeaseExpenseRules" },
       { label: "Actual Expenses", page: "Expenses" },
       { label: "Add Expense", page: "AddExpense" },

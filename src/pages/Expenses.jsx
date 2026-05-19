@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,7 +38,6 @@ import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/
 import { ExpenseService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
-import { supabase } from "@/services/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,9 +66,6 @@ export default function Expenses() {
   const [selectedExpenseIds, setSelectedExpenseIds] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
-  const lastLeaseExpenseSyncKey = useRef("");
-  const lastClassificationKey = useRef("");
-  const lastRuleBootstrapKey = useRef("");
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
@@ -150,41 +146,6 @@ export default function Expenses() {
     return true;
   });
 
-  const leaseExpenseSyncKey = useMemo(() => {
-    if (!selectedPropertyId) return "";
-
-    return selectorScopedLeases
-      .map((lease) => [
-        lease.id,
-        lease.updated_at || "",
-        lease.status || "",
-        lease.cam_amount ?? "",
-        lease.nnn_amount ?? "",
-        lease.property_id || "",
-        lease.building_id || "",
-        lease.unit_id || "",
-      ].join(":"))
-      .sort()
-      .join("|");
-  }, [selectedPropertyId, selectorScopedLeases]);
-
-  const { data: expenseCategories = [] } = useQuery({
-    queryKey: ["expense-dashboard-categories"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("expense_categories")
-        .select("*")
-        .eq("is_active", true)
-        .order("display_order", { ascending: true });
-
-      if (error) {
-        console.warn("[Expenses] expense_categories query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
-  });
-
   const selectorScopedLeaseIds = useMemo(
     () => selectorScopedLeases.map((lease) => lease.id).filter(Boolean),
     [selectorScopedLeases]
@@ -237,160 +198,19 @@ export default function Expenses() {
     [displayedExpenses]
   );
 
+  const invalidateExpenseWorkflowQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
+  };
+
   const { data: selectorScopedRuleSets = [] } = useQuery({
     queryKey: ["expense-dashboard-rule-sets", selectorScopedLeaseIds.join("|")],
     queryFn: () => leaseExpenseRuleService.loadRuleSets(selectorScopedLeaseIds),
     enabled: selectorScopedLeaseIds.length > 0,
   });
-
-  useEffect(() => {
-    if (!selectedPropertyId || expenseCategories.length === 0 || selectorScopedLeases.length === 0) return;
-
-    const ruleSetByLeaseId = new Map((selectorScopedRuleSets || []).map((entry) => [entry.leaseId, entry]));
-    const bootstrapCandidates = selectorScopedLeases.filter((lease) => {
-      const normalizedStatus = String(lease.status || "").toLowerCase();
-      if (!["approved", "budget_ready", "active", "executed"].includes(normalizedStatus)) return false;
-      const existingRuleSet = ruleSetByLeaseId.get(lease.id);
-      return !existingRuleSet || (existingRuleSet.rules || []).length === 0;
-    });
-
-    if (bootstrapCandidates.length === 0) return;
-
-    const bootstrapKey = bootstrapCandidates
-      .map((lease) => `${lease.id}:${lease.updated_at || ""}:${lease.status || ""}`)
-      .sort()
-      .join("|");
-
-    if (!bootstrapKey || lastRuleBootstrapKey.current === bootstrapKey) return;
-
-    let cancelled = false;
-
-    const bootstrapDraftRules = async () => {
-      try {
-        await Promise.all(
-          bootstrapCandidates.map((lease) =>
-            leaseExpenseRuleService.extractDraftRuleSet({
-              lease,
-              categories: expenseCategories,
-            })
-          )
-        );
-
-        if (cancelled) return;
-        lastRuleBootstrapKey.current = bootstrapKey;
-        queryClient.invalidateQueries({ queryKey: ["expense-dashboard-rule-sets"] });
-        queryClient.invalidateQueries({ queryKey: ["lease_expense_rule_sets"] });
-      } catch (error) {
-        if (!cancelled) {
-          console.warn("[Expenses] Failed to bootstrap draft expense rules:", error);
-        }
-      }
-    };
-
-    bootstrapDraftRules();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [expenseCategories, queryClient, selectedPropertyId, selectorScopedLeases, selectorScopedRuleSets]);
-
-  useEffect(() => {
-    if (!selectedPropertyId || !leaseExpenseSyncKey) return;
-    if (lastLeaseExpenseSyncKey.current === leaseExpenseSyncKey) return;
-
-    let cancelled = false;
-
-    const syncLeaseExpenses = async () => {
-      try {
-        const result = await expenseService.syncLeaseDerivedExpenses({
-          leases: selectorScopedLeases,
-          existingExpenses: selectorScopedAllExpenses,
-          properties,
-        });
-
-        if (cancelled) return;
-        lastLeaseExpenseSyncKey.current = leaseExpenseSyncKey;
-
-        if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-          queryClient.invalidateQueries({ queryKey: ["Expense"] });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.warn("[Expenses] Failed to sync lease-derived expenses:", error);
-        }
-      }
-    };
-
-    syncLeaseExpenses();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [leaseExpenseSyncKey, properties, queryClient, selectedPropertyId, selectorScopedAllExpenses, selectorScopedLeases]);
-
-  const classificationSyncKey = useMemo(() => {
-    if (!selectedPropertyId) return "";
-
-    const expenseDriverKey = selectorScopedExpenses
-      .map((expense) => [
-        expense.id,
-        expense.amount ?? "",
-        expense.category || "",
-        expense.expense_subcategory || "",
-        expense.description || "",
-        expense.lease_id || "",
-        expense.property_id || "",
-        expense.building_id || "",
-        expense.unit_id || "",
-        expense.source_type || expense.source || "",
-      ].join(":"))
-      .sort()
-      .join("|");
-
-    const leaseDriverKey = selectorScopedLeases
-      .map((lease) => [
-        lease.id,
-        lease.updated_at || "",
-        lease.status || "",
-      ].join(":"))
-      .sort()
-      .join("|");
-
-    return `${expenseDriverKey}__${leaseDriverKey}`;
-  }, [selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
-
-  useEffect(() => {
-    if (!selectedPropertyId || !classificationSyncKey) return;
-    if (lastClassificationKey.current === classificationSyncKey) return;
-
-    let cancelled = false;
-
-    const classifyExpenses = async () => {
-      try {
-        const result = await expenseService.classifyExpenses({
-          expenses: selectorScopedExpenses,
-          leases: selectorScopedLeases,
-        });
-
-        if (cancelled) return;
-        lastClassificationKey.current = classificationSyncKey;
-
-        if (result.updated > 0) {
-          queryClient.invalidateQueries({ queryKey: ["Expense"] });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.warn("[Expenses] Failed to classify expenses:", error);
-        }
-      }
-    };
-
-    classifyExpenses();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [classificationSyncKey, queryClient, selectedPropertyId, selectorScopedExpenses, selectorScopedLeases]);
 
   const currentYear = new Date().getFullYear();
   const prevYear = currentYear - 1;
@@ -536,6 +356,7 @@ export default function Expenses() {
       const hasReviewFields =
         patch &&
         (patch.recovery_status !== undefined || patch.approved_status !== undefined);
+      const hasAmountUpdate = patch && patch.amount !== undefined;
       const updated = hasReviewFields
         ? await expenseService.reviewExpense(expense || id, {
             recoveryStatus: patch.recovery_status,
@@ -543,13 +364,16 @@ export default function Expenses() {
             ruleSource: patch.rule_source || "manual",
             reason: patch.recovery_reason || "Manual review update from Actual Expenses",
           })
-        : await ExpenseService.update(id, patch);
+        : hasAmountUpdate
+          ? await expenseService.updateExpenseAmount(id, patch.amount, {
+              reason: patch.recovery_reason || "Manual amount correction from Actual Expenses",
+            })
+          : await ExpenseService.update(id, patch);
       if (!updated) throw new Error("Update failed");
       return updated;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
+      invalidateExpenseWorkflowQueries();
     },
     onError: (err) => {
       toast.error(`Could not update expense: ${err?.message || "Unknown error"}`);
@@ -624,8 +448,7 @@ export default function Expenses() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["expense-dashboard-classifications"] });
+      invalidateExpenseWorkflowQueries();
       setSelectedExpenseIds([]);
       toast.success(`${count} expense${count === 1 ? "" : "s"} approved.`);
     },
@@ -743,8 +566,8 @@ export default function Expenses() {
               </p>
             ) : selectorScopedLeases.length > 0 ? (
               <p>
-                The expense module is preparing draft lease rules from the approved lease text for this scope.
-                If nothing appears yet, open Expense Classification to review the extraction directly.
+                No approved lease expense rules are loaded in this scope yet.
+                Open Lease Expense Rules to review and approve rule sets before sending approved actuals into Expense Classification.
               </p>
             ) : (
               <p>

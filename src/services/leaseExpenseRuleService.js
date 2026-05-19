@@ -65,6 +65,20 @@ function firstPresent(...values) {
   return null;
 }
 
+function isApprovedWorkflowStatus(value) {
+  return normalizeText(value) === "approved";
+}
+
+function selectPreferredRuleSet(ruleSets = []) {
+  if (!Array.isArray(ruleSets) || ruleSets.length === 0) return null;
+  const approvedRuleSet = ruleSets.find((ruleSet) =>
+    isApprovedWorkflowStatus(ruleSet?.status) ||
+    isApprovedWorkflowStatus(ruleSet?.approval_status) ||
+    isApprovedWorkflowStatus(ruleSet?.review_status)
+  );
+  return approvedRuleSet || ruleSets[0] || null;
+}
+
 function deriveRuleCategoryName(rule) {
   return (
     firstPresent(
@@ -1431,12 +1445,11 @@ export const leaseExpenseRuleService = {
         .select("*")
         .eq("lease_id", leaseId)
         .not("status", "eq", "archived")
-        .order("version", { ascending: false })
-        .limit(1);
+        .order("version", { ascending: false });
 
       if (error) throw error;
 
-      const ruleSet = ruleSets?.[0] || null;
+      const ruleSet = selectPreferredRuleSet(ruleSets || []);
       if (!ruleSet) {
         const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
         const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
@@ -1496,14 +1509,16 @@ export const leaseExpenseRuleService = {
       }
       console.log(`${tag} rule_sets read: ${ruleSets?.length || 0}`, ruleSets?.map((s) => ({ id: s.id?.slice(0, 8), lease: s.lease_id?.slice(0, 8), v: s.version, status: s.status })));
 
-      const latestRuleSetByLeaseId = new Map();
+      const ruleSetsByLeaseId = new Map();
       for (const ruleSet of ruleSets || []) {
-        if (!latestRuleSetByLeaseId.has(ruleSet.lease_id)) {
-          latestRuleSetByLeaseId.set(ruleSet.lease_id, ruleSet);
-        }
+        const existing = ruleSetsByLeaseId.get(ruleSet.lease_id) || [];
+        existing.push(ruleSet);
+        ruleSetsByLeaseId.set(ruleSet.lease_id, existing);
       }
 
-      const latestRuleSets = [...latestRuleSetByLeaseId.values()];
+      const latestRuleSets = [...ruleSetsByLeaseId.values()]
+        .map((leaseRuleSets) => selectPreferredRuleSet(leaseRuleSets))
+        .filter(Boolean);
       const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
       if (ruleSetIds.length === 0) {
         return [...fallbackByLeaseId.values()].filter(Boolean);
