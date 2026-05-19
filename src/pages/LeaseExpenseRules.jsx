@@ -198,7 +198,7 @@ export default function LeaseExpenseRules() {
     // Pre-flight diagnostic: dump the pipeline state for EVERY candidate so
     // we know exactly where rules come from (workflow / extract / text) and
     // why any lease produces zero. This is the table the spec asked for.
-    console.groupCollapsed(`[LeaseExpenseRules] backfill diagnostic for ${backfillCandidates.length} approved lease(s)`);
+    console.group(`[LeaseExpenseRules] backfill diagnostic for ${backfillCandidates.length} approved lease(s)`);
     const preDiagnostics = [];
     for (const lease of backfillCandidates) {
       const d = await leaseExpenseRuleService.diagnoseExpenseRulePipeline(lease);
@@ -262,7 +262,7 @@ export default function LeaseExpenseRules() {
     setBackfillState({ running: false, done: 0, total: 0 });
 
     // Post-flight summary the spec asked for.
-    console.groupCollapsed(`[LeaseExpenseRules] backfill summary`);
+    console.group(`[LeaseExpenseRules] backfill summary`);
     console.table(perLeaseResults);
     console.log("Totals:", {
       approved_leases_found: backfillCandidates.length,
@@ -325,7 +325,7 @@ export default function LeaseExpenseRules() {
       if (statusFilter === "approved") return isApprovedRule(rule);
       return true;
     }).length;
-    console.groupCollapsed("[LeaseExpenseRules] diagnostic");
+    console.group("[LeaseExpenseRules] diagnostic");
     console.log("leases in org:", allLeaseIds.length);
     console.log("leases in scope:", scopedLeaseIds.length);
     console.log("selected scope:", { property: scopeProperty, building: scopeBuilding, unit: scopeUnit });
