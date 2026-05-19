@@ -772,11 +772,32 @@ async function ensurePersistentCategories({ orgId, categories = [], rules = [] }
         .insert(insertPayload)
         .select("id, category_name, subcategory_name, normalized_key, display_order");
 
-      if (insertError) throw insertError;
-
-      for (const category of insertedCategories || []) {
-        if (!category?.normalized_key) continue;
-        categoryByKey.set(category.normalized_key, category);
+      if (insertError) {
+        // RLS denies the insert when the current user/role isn't permitted to
+        // create org-scoped categories (e.g. anon key, restricted member).
+        // Don't fail the whole rule-save — continue with whatever categories
+        // already exist (the seeded system defaults). Rules for the missing
+        // keys will fall through to the text-only path with expense_category
+        // populated but expense_category_id NULL, which we now allow.
+        const code = String(insertError.code || "");
+        const message = `${insertError.message || ""} ${insertError.details || ""}`;
+        const isRlsDenial =
+          code === "42501" ||
+          /row-level security/i.test(message) ||
+          /permission denied/i.test(message);
+        if (isRlsDenial) {
+          console.warn(
+            `[leaseExpenseRuleService] expense_categories INSERT denied by RLS for ${insertPayload.length} key(s) — using existing seeded categories. Missing keys:`,
+            insertPayload.map((p) => p.normalized_key),
+          );
+        } else {
+          throw insertError;
+        }
+      } else {
+        for (const category of insertedCategories || []) {
+          if (!category?.normalized_key) continue;
+          categoryByKey.set(category.normalized_key, category);
+        }
       }
     }
 
@@ -1392,14 +1413,28 @@ export const leaseExpenseRuleService = {
       uploadedFile = data?.uploaded_files || null;
     }
 
-    return String(
-      uploadedFile?.normalized_output?.raw_text ||
-      uploadedFile?.parsed_data?.raw_text ||
-      uploadedFile?.parsed_data?.text ||
-      uploadedFile?.docling_raw?.markdown ||
-      uploadedFile?.docling_raw?.text ||
-      ""
-    ).trim();
+    // Docling writes the OCR'd document body to `docling_raw.full_text`.
+    // Earlier this function only checked `text` and `markdown` keys, which
+    // are written by some pipelines but NOT by the Docling pipeline this
+    // project uses — so getLeaseSourceText returned empty for every lease
+    // and the fallback extractor silently failed. We now check every known
+    // key so the extractor always finds the text when it exists.
+    const candidates = [
+      uploadedFile?.normalized_output?.raw_text,
+      uploadedFile?.normalized_output?.text,
+      uploadedFile?.parsed_data?.raw_text,
+      uploadedFile?.parsed_data?.text,
+      uploadedFile?.parsed_data?.full_text,
+      uploadedFile?.docling_raw?.full_text,
+      uploadedFile?.docling_raw?.markdown,
+      uploadedFile?.docling_raw?.text,
+      uploadedFile?.docling_raw?.body,
+    ];
+    for (const candidate of candidates) {
+      const trimmed = String(candidate || "").trim();
+      if (trimmed) return trimmed;
+    }
+    return "";
   },
 
   async loadRuleSet(leaseId) {
@@ -1650,40 +1685,55 @@ export const leaseExpenseRuleService = {
       lease?.extraction_data?.source_file_id || null
     );
 
-    if (!sourceText) {
-      throw new Error("No extracted lease text found to analyze.");
-    }
-
+    // No longer a hard throw when sourceText is empty. The deterministic
+    // builder reads workflow_output.expense_rules and extracted lease
+    // columns, so it can still produce rules without raw source text.
+    // The LLM path will be skipped (it requires text), but the fallback
+    // path may still derive rules.
     let mappedRules = [];
 
-    try {
-      const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
-        body: {
-          lease_id: lease.id,
-          source_text: sourceText,
-          categories: (categories || []).map((category) => ({
-            id: category.id,
-            category_name: category.category_name,
-            subcategory_name: category.subcategory_name,
-            normalized_key: category.normalized_key,
-          })),
-        },
-      });
+    if (sourceText) {
+      try {
+        const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
+          body: {
+            lease_id: lease.id,
+            source_text: sourceText,
+            categories: (categories || []).map((category) => ({
+              id: category.id,
+              category_name: category.category_name,
+              subcategory_name: category.subcategory_name,
+              normalized_key: category.normalized_key,
+            })),
+          },
+        });
 
-      if (error) throw error;
-      mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
-    } catch (error) {
-      console.warn("[leaseExpenseRuleService] AI rule extraction fallback:", error);
-      mappedRules = [];
+        if (error) throw error;
+        mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
+      } catch (error) {
+        console.warn("[leaseExpenseRuleService] AI rule extraction fallback:", error);
+        mappedRules = [];
+      }
+    } else {
+      console.warn(
+        "[leaseExpenseRuleService] extractDraftRuleSet: no source text found; skipping LLM extract and falling back to deterministic builder",
+      );
     }
 
     if (mappedRules.length === 0) {
       mappedRules = buildDeterministicDraftRules({
         lease,
         categories,
-        sourceText,
+        sourceText: sourceText || "",
         existingRules,
       });
+    }
+
+    if (mappedRules.length === 0) {
+      console.warn(
+        "[leaseExpenseRuleService] extractDraftRuleSet: produced 0 rules (no source text AND no workflow output). Returning empty result for lease",
+        lease.id,
+      );
+      return { ruleSet: null, rules: [] };
     }
 
     return this.saveRuleSet({
