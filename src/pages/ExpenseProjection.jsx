@@ -93,7 +93,7 @@ export default function ExpenseProjection() {
   // need to run classification to get authoritative numbers.
   const hasFinalizedData = finalizedByExpenseId.size > 0;
   const expensesForProjection = useMemo(() => {
-    if (!hasFinalizedData) return expenses;
+    if (!hasFinalizedData) return [];
     return expenses.filter((e) => finalizedByExpenseId.has(e.id));
   }, [expenses, hasFinalizedData, finalizedByExpenseId]);
 
@@ -105,16 +105,44 @@ export default function ExpenseProjection() {
   // classifications exist (raw expenses don't carry recoverability_result
   // on their own row, only via the classification join).
   const recoveryTotals = useMemo(() => {
-    if (!hasFinalizedData) return { recoverable: 0, nonRecoverable: 0, conditional: 0 };
-    const totals = { recoverable: 0, nonRecoverable: 0, conditional: 0 };
+    if (!hasFinalizedData) {
+      return {
+        recoverable: 0,
+        nonRecoverable: 0,
+        conditional: 0,
+        excluded: 0,
+        camEligible: 0,
+        landlordAbsorbed: 0,
+        tenantRecoveryEstimate: 0,
+      };
+    }
+    const totals = {
+      recoverable: 0,
+      nonRecoverable: 0,
+      conditional: 0,
+      excluded: 0,
+      camEligible: 0,
+      landlordAbsorbed: 0,
+      tenantRecoveryEstimate: 0,
+    };
     for (const expense of currentExpenses) {
       const classification = finalizedByExpenseId.get(expense.id);
       if (!classification) continue;
       const amount = Number(expense.amount) || 0;
       const result = classification.recoverability_result;
-      if (result === "recoverable") totals.recoverable += amount;
-      else if (result === "conditional") totals.conditional += amount;
-      else totals.nonRecoverable += amount;
+      if (result === "recoverable") {
+        totals.recoverable += amount;
+        totals.tenantRecoveryEstimate += amount;
+        if (classification.cam_eligible === "yes") totals.camEligible += amount;
+      } else if (result === "conditional") {
+        totals.conditional += amount;
+      } else if (result === "excluded") {
+        totals.excluded += amount;
+        totals.landlordAbsorbed += amount;
+      } else {
+        totals.nonRecoverable += amount;
+        totals.landlordAbsorbed += amount;
+      }
     }
     return totals;
   }, [currentExpenses, hasFinalizedData, finalizedByExpenseId]);
@@ -223,18 +251,7 @@ export default function ExpenseProjection() {
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div className="flex-1">
               <p className="font-medium">
-                No finalized expense classifications yet for {selectedPropertyId ? "this property" : "your portfolio"}.
-              </p>
-              <p className="mt-1 text-xs">
-                The numbers below are derived from raw <code>expenses</code> rows and are not authoritative. Complete{" "}
-                <Link to={createPageUrl("LeaseExpenseClassification")} className="underline">
-                  Expense Classification
-                </Link>{" "}
-                to generate the projection, and resolve exceptions on{" "}
-                <Link to={createPageUrl("ExpenseReview")} className="underline">
-                  Expense Review
-                </Link>. Recoverability split, CAM-eligible totals, and the
-                tenant recovery estimate need finalized classifications.
+                No finalized expense classifications yet. Complete Expense Classification to generate projection.
               </p>
             </div>
             <Link to={createPageUrl("LeaseExpenseClassification")}>
@@ -267,6 +284,27 @@ export default function ExpenseProjection() {
               <p className="text-[10px] font-semibold uppercase text-rose-700">Non-recoverable</p>
               <p className="text-2xl font-bold text-rose-900">${Math.round(recoveryTotals.nonRecoverable).toLocaleString()}</p>
               <p className="text-[10px] text-rose-700/70">landlord absorbs</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-slate-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-slate-700">Excluded</p>
+              <p className="text-2xl font-bold text-slate-900">${Math.round(recoveryTotals.excluded).toLocaleString()}</p>
+              <p className="text-[10px] text-slate-700/70">finalized excluded rows</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-blue-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-blue-700">CAM-eligible</p>
+              <p className="text-2xl font-bold text-blue-900">${Math.round(recoveryTotals.camEligible).toLocaleString()}</p>
+              <p className="text-[10px] text-blue-700/70">eligible finalized rows</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-amber-500">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-semibold uppercase text-amber-700">Tenant recovery estimate</p>
+              <p className="text-2xl font-bold text-amber-900">${Math.round(recoveryTotals.tenantRecoveryEstimate).toLocaleString()}</p>
+              <p className="text-[10px] text-amber-700/70">recoverable finalized rows</p>
             </CardContent>
           </Card>
         </div>

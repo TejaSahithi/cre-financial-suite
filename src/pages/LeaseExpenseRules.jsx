@@ -506,56 +506,82 @@ export default function LeaseExpenseRules() {
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
 
-  const approveRule = (rule) =>
-    updateRuleMutation.mutateAsync({
+  const approveRule = async (rule) => {
+    const authResult = await supabase.auth.getUser();
+    const userId = authResult?.data?.user?.id || null;
+    const now = new Date().toISOString();
+    return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: {
         row_status: "mapped",
         review_status: "approved",
         approval_status: "approved",
+        approved_by: userId,
+        approved_at: now,
+        updated_at: now,
         is_excluded: false,
         published_to_cam: false,
       },
     }).then(() => toast.success("Rule approved"));
+  };
 
-  const rejectRule = (rule) =>
-    updateRuleMutation.mutateAsync({
+  const rejectRule = async (rule) => {
+    const now = new Date().toISOString();
+    return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: {
         row_status: "needs_review",
         review_status: "needs_review",
         approval_status: "draft",
+        approved_by: null,
+        approved_at: null,
+        updated_at: now,
         is_recoverable: false,
         is_excluded: true,
         published_to_cam: false,
       },
     }).then(() => toast.success("Rule rejected"));
+  };
 
-  const markNARule = (rule) =>
-    updateRuleMutation.mutateAsync({
+  const markNARule = async (rule) => {
+    const authResult = await supabase.auth.getUser();
+    const userId = authResult?.data?.user?.id || null;
+    const now = new Date().toISOString();
+    return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: {
         row_status: "unmapped",
         review_status: "approved",
-        approval_status: "draft",
+        approval_status: "approved",
+        approved_by: userId,
+        approved_at: now,
+        updated_at: now,
         is_excluded: true,
         is_recoverable: false,
         published_to_cam: false,
       },
     }).then(() => toast.success("Rule marked N/A"));
+  };
 
-  const publishRuleToCam = (rule, propertyId) =>
-    updateRuleMutation.mutateAsync({
+  const publishRuleToCam = async (rule, propertyId) => {
+    const authResult = await supabase.auth.getUser();
+    const userId = authResult?.data?.user?.id || null;
+    const now = new Date().toISOString();
+    return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: {
         published_to_cam: true,
         review_status: "approved",
         approval_status: "approved",
+        approved_by: userId,
+        approved_at: now,
+        updated_at: now,
       },
     }).then(() => {
       toast.success("Rule published to CAM");
       navigate(createPageUrl("CAMSetup") + `?property=${propertyId}`);
     });
+  };
 
   const subtitle = getScopeSubtitle(scope, {
     default: `${filteredRows.length} lease expense rule${filteredRows.length === 1 ? "" : "s"}`,

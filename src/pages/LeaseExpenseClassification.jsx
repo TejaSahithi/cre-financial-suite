@@ -9,6 +9,7 @@ import PageHeader from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileText, ArrowLeft, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import ExpenseClassificationTable from "@/components/ExpenseClassification/ExpenseClassificationTable";
@@ -29,6 +30,36 @@ function categorizeCategory(category, rules) {
   if (["non_recoverable", "excluded"].includes(recoveryStatus)) return "nonRecoverable";
   if (recoveryStatus === "conditional") return "conditional";
   return "needsReview";
+}
+
+function isApprovedActualExpense(expense) {
+  return ["approved"].includes(String(expense?.approved_status || expense?.review_status || "").toLowerCase());
+}
+
+function isApprovedLeaseRule(rule) {
+  return ["approved"].includes(String(rule?.approval_status || "").toLowerCase()) &&
+    ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase());
+}
+
+function buildFallbackClassificationKey(orgId, expenseId, ruleId = null) {
+  if (!expenseId) return null;
+  return [orgId || "", expenseId, ruleId || "unmatched"].join(":");
+}
+
+function tabForRow(row) {
+  if (row.recoverabilityResult === "recoverable") return "recoverable";
+  if (row.recoverabilityResult === "non_recoverable") return "non_recoverable";
+  if (row.recoverabilityResult === "conditional") return "conditional";
+  if (row.recoverabilityResult === "excluded") return "excluded";
+  return "needs_review";
+}
+
+function isExceptionRow(row) {
+  return (
+    ["unmatched", "exception", "conditional"].includes(String(row.classificationStatus || "").toLowerCase()) ||
+    row.recoverabilityResult === "needs_review" ||
+    (row.exceptionType && row.exceptionType !== "none")
+  );
 }
 
 export default function LeaseExpenseClassification() {
@@ -52,6 +83,7 @@ export default function LeaseExpenseClassification() {
   const [selectedRule, setSelectedRule] = useState(null);
   const [isEvidenceDrawerOpen, setIsEvidenceDrawerOpen] = useState(false);
   const [isValuePanelOpen, setIsValuePanelOpen] = useState(false);
+  const [activeResultTab, setActiveResultTab] = useState("all");
 
   // Fetch Lease
   const { data: lease, isLoading: isLoadingLease } = useQuery({
@@ -185,7 +217,7 @@ export default function LeaseExpenseClassification() {
     mutationFn: async () => {
       if (!lease?.id) throw new Error("No lease loaded");
       return expenseService.classifyExpenses({
-        expenses: actualExpenses,
+        expenses: approvedActualExpenses,
         leases: [lease],
       });
     },
@@ -229,6 +261,11 @@ export default function LeaseExpenseClassification() {
     [localRules]
   );
 
+  const approvedRules = useMemo(
+    () => localRules.filter(isApprovedLeaseRule),
+    [localRules],
+  );
+
   // ── Actual Expenses for this lease ────────────────────────────────────
   // Pulls all `expenses` rows the user can read where lease_id matches OR
   // (lease_id is null AND the expense scope overlaps this lease's
@@ -242,7 +279,7 @@ export default function LeaseExpenseClassification() {
       if (lease.property_id) orFilter.push(`and(lease_id.is.null,property_id.eq.${lease.property_id})`);
       const { data, error } = await supabase
         .from("expenses")
-        .select("id, lease_id, property_id, building_id, unit_id, category, amount, vendor, date, source, description, invoice_number")
+        .select("id, org_id, lease_id, property_id, building_id, unit_id, tenant_id, tenant_name, category, expense_subcategory, amount, vendor, vendor_name, date, expense_date, source, source_type, description, invoice_number, approved_status, review_status, classification, recovery_status, recoverability_result, cam_eligible, recovery_method, rule_source, fiscal_year, month, gl_code")
         .or(orFilter.join(","))
         .order("date", { ascending: false })
         .limit(500);
@@ -253,6 +290,11 @@ export default function LeaseExpenseClassification() {
       return data || [];
     },
   });
+
+  const approvedActualExpenses = useMemo(
+    () => actualExpenses.filter(isApprovedActualExpense),
+    [actualExpenses],
+  );
 
   // Persisted classifications. Read so the page reflects the LAST
   // classification run, not just the live in-browser match (which can
@@ -272,8 +314,8 @@ export default function LeaseExpenseClassification() {
   // existing matcher service. Computes variance against the rule's
   // annualized expected amount where possible.
   const matchedActuals = useMemo(() => {
-    if (!lease?.id || actualExpenses.length === 0) return [];
-    const rulesByLeaseId = new Map([[lease.id, localRules]]);
+    if (!lease?.id || approvedActualExpenses.length === 0) return [];
+    const rulesByLeaseId = new Map([[lease.id, approvedRules]]);
     const leases = [lease];
 
     const ruleAnnualExpected = (rule) => {
@@ -313,7 +355,7 @@ export default function LeaseExpenseClassification() {
       return `This ${niceCat} expense matched the ${niceRule} rule but the recovery decision needs review.`;
     };
 
-    return actualExpenses.map((expense) => {
+    return approvedActualExpenses.map((expense) => {
       const match = expenseService.matchActualExpenseToLeaseRule(expense, { leases, rulesByLeaseId });
       const rule = match?.rule || null;
       const expectedAnnual = ruleAnnualExpected(rule);
@@ -333,7 +375,7 @@ export default function LeaseExpenseClassification() {
         variance,
       };
     });
-  }, [actualExpenses, localRules, lease]);
+  }, [approvedActualExpenses, approvedRules, lease]);
 
   // Roll up matched actuals by bucket so the totals card can show
   // "Actual vs Rule" comparison alongside the rule-based forecast.
@@ -360,6 +402,157 @@ export default function LeaseExpenseClassification() {
     }
     return { buckets, total };
   }, [matchedActuals]);
+
+  const expenseById = useMemo(() => {
+    const map = new Map();
+    for (const expense of approvedActualExpenses) map.set(expense.id, expense);
+    return map;
+  }, [approvedActualExpenses]);
+
+  const ruleById = useMemo(() => {
+    const map = new Map();
+    for (const rule of approvedRules) map.set(rule.id, rule);
+    return map;
+  }, [approvedRules]);
+
+  const classificationRows = useMemo(() => {
+    const rowsByKey = new Map();
+    const rulesByLeaseId = new Map([[lease?.id, approvedRules]]);
+
+    for (const classification of persistedClassifications) {
+      const expenseId = classification.expense_id || classification.actual_expense_id;
+      const expense = expenseId ? expenseById.get(expenseId) : null;
+      if (expense && !isApprovedActualExpense(expense)) continue;
+
+      const ruleId =
+        classification.lease_expense_rule_id ||
+        classification.linked_expense_rule_id ||
+        classification.recovery_rule_id ||
+        null;
+      const rule = ruleId ? ruleById.get(ruleId) || null : null;
+      const amount = Number(expense?.amount ?? classification.amount ?? 0);
+      const classificationKey =
+        classification.classification_key ||
+        buildFallbackClassificationKey(lease?.org_id || lease?.id, expenseId, ruleId);
+
+      rowsByKey.set(classificationKey, {
+        id: classification.id,
+        classificationKey,
+        expenseId,
+        expense,
+        rule,
+        expenseDate: expense?.expense_date || expense?.date || classification.service_period_start || null,
+        vendor: expense?.vendor || expense?.vendor_name || "—",
+        invoiceNumber: expense?.invoice_number || "—",
+        propertyLabel: lease?.property_name || lease?.property_id || classification.property_id || "—",
+        buildingLabel: expense?.building_id || classification.building_id || "—",
+        unitLabel: expense?.unit_id || classification.unit_id || "—",
+        leaseTenantLabel: lease?.tenant_name || expense?.tenant_name || "—",
+        category: classification.category || expense?.category || "—",
+        subcategory: classification.subcategory || expense?.expense_subcategory || "—",
+        actualAmount: amount,
+        editableAmount: amount,
+        matchedLeaseRule: rule?.category_name || rule?.expense_category || (ruleId ? ruleId : "Unmatched"),
+        ruleCategory: rule?.category_name || rule?.expense_category || "—",
+        ruleSource: classification.rule_source || "lease",
+        recoverabilityResult: classification.recoverability_result || classification.recovery_status || "needs_review",
+        camEligible: classification.cam_eligible || "no",
+        recoveryMethod: classification.recovery_method || "—",
+        allocationBasis: classification.allocation_basis || classification.allocation_method || "pro_rata",
+        recoverableAmount: Number(classification.recoverable_amount ?? (classification.recoverability_result === "recoverable" ? amount : 0)),
+        nonRecoverableAmount: Number(classification.non_recoverable_amount ?? (classification.recoverability_result === "non_recoverable" ? amount : 0)),
+        conditionalAmount: Number(classification.conditional_amount ?? (classification.recoverability_result === "conditional" ? amount : 0)),
+        excludedAmount: Number(classification.excluded_amount ?? (classification.recoverability_result === "excluded" ? amount : 0)),
+        recoveryReason: classification.recovery_reason || "—",
+        confidence: classification.confidence_score,
+        classificationStatus: classification.classification_status || "matched",
+        exceptionType: classification.exception_type || null,
+        nextStep: classification.next_step || "Finalize row",
+        sentToCam: Boolean(classification.sent_to_cam),
+        approvedStatus: classification.approved_status || expense?.approved_status || expense?.review_status || "draft",
+      });
+    }
+
+    for (const matchRow of matchedActuals) {
+      const expense = matchRow.expense;
+      const rule = matchRow.rule;
+      const ruleId = rule?.id || null;
+      const key = buildFallbackClassificationKey(lease?.org_id || lease?.id, expense?.id, ruleId);
+      if (rowsByKey.has(key)) continue;
+      const amount = Number(expense?.amount || 0);
+      const recoverabilityResult = matchRow.recoverability || "needs_review";
+      rowsByKey.set(key, {
+        id: null,
+        classificationKey: key,
+        expenseId: expense?.id,
+        expense,
+        rule,
+        expenseDate: expense?.expense_date || expense?.date || null,
+        vendor: expense?.vendor || expense?.vendor_name || "—",
+        invoiceNumber: expense?.invoice_number || "—",
+        propertyLabel: lease?.property_name || lease?.property_id || expense?.property_id || "—",
+        buildingLabel: expense?.building_id || "—",
+        unitLabel: expense?.unit_id || "—",
+        leaseTenantLabel: lease?.tenant_name || expense?.tenant_name || "—",
+        category: expense?.category || "—",
+        subcategory: expense?.expense_subcategory || "—",
+        actualAmount: amount,
+        editableAmount: amount,
+        matchedLeaseRule: rule?.category_name || rule?.expense_category || "Unmatched",
+        ruleCategory: rule?.category_name || rule?.expense_category || "—",
+        ruleSource: rule ? "lease" : "unmatched",
+        recoverabilityResult,
+        camEligible: matchRow.camEligible || "no",
+        recoveryMethod: matchRow.recoveryMethod || "—",
+        allocationBasis: expense?.allocation_method || "pro_rata",
+        recoverableAmount: recoverabilityResult === "recoverable" ? amount : 0,
+        nonRecoverableAmount: recoverabilityResult === "non_recoverable" ? amount : 0,
+        conditionalAmount: recoverabilityResult === "conditional" ? amount : 0,
+        excludedAmount: recoverabilityResult === "excluded" ? amount : 0,
+        recoveryReason: matchRow.plainReason,
+        confidence: typeof matchRow.matchScore === "number" ? Math.min(matchRow.matchScore / 100, 1) : null,
+        classificationStatus: !rule ? "unmatched" : recoverabilityResult === "conditional" ? "conditional" : recoverabilityResult === "needs_review" ? "exception" : "matched",
+        exceptionType: !rule ? "unmatched" : recoverabilityResult === "needs_review" ? "manual_review" : null,
+        nextStep: !rule ? "Review exception" : "Finalize row",
+        sentToCam: false,
+        approvedStatus: expense?.approved_status || expense?.review_status || "draft",
+      });
+    }
+
+    return Array.from(rowsByKey.values()).sort((left, right) => {
+      const leftDate = String(left.expenseDate || "");
+      const rightDate = String(right.expenseDate || "");
+      return rightDate.localeCompare(leftDate);
+    });
+  }, [approvedActualExpenses, approvedRules, expenseById, lease, matchedActuals, persistedClassifications, ruleById]);
+
+  const tabCounts = useMemo(() => {
+    const build = (rows) => ({
+      count: rows.length,
+      amount: rows.reduce((sum, row) => sum + Number(row.actualAmount || 0), 0),
+    });
+
+    const recoverableRows = classificationRows.filter((row) => row.recoverabilityResult === "recoverable");
+    const nonRecoverableRows = classificationRows.filter((row) => row.recoverabilityResult === "non_recoverable");
+    const conditionalRows = classificationRows.filter((row) => row.recoverabilityResult === "conditional");
+    const excludedRows = classificationRows.filter((row) => row.recoverabilityResult === "excluded");
+    const exceptionRows = classificationRows.filter(isExceptionRow);
+
+    return {
+      all: build(classificationRows),
+      recoverable: build(recoverableRows),
+      non_recoverable: build(nonRecoverableRows),
+      conditional: build(conditionalRows),
+      excluded: build(excludedRows),
+      needs_review: build(exceptionRows),
+    };
+  }, [classificationRows]);
+
+  const filteredClassificationRows = useMemo(() => {
+    if (activeResultTab === "all") return classificationRows;
+    if (activeResultTab === "needs_review") return classificationRows.filter(isExceptionRow);
+    return classificationRows.filter((row) => tabForRow(row) === activeResultTab);
+  }, [activeResultTab, classificationRows]);
 
   // ── Total Expense Calculation ─────────────────────────────────────────
   // Rolls up dollar amounts across rules into recoverable / non-recoverable /
@@ -451,6 +644,95 @@ export default function LeaseExpenseClassification() {
     setIsValuePanelOpen(false);
   };
 
+  const rowActionMutation = useMutation({
+    mutationFn: async ({ type, row }) => {
+      if (type === "editAmount") {
+        const nextAmount = window.prompt("Enter updated amount", String(row.editableAmount ?? row.actualAmount ?? ""));
+        if (nextAmount == null) return null;
+        return expenseService.updateExpenseAmount(row.expenseId, Number(nextAmount));
+      }
+
+      if (type === "override") {
+        const nextStatus = window.prompt(
+          "Enter recoverable, non_recoverable, conditional, excluded, or needs_review",
+          row.recoverabilityResult || "recoverable",
+        );
+        if (!nextStatus) return null;
+        return expenseService.reviewExpense(row.expenseId, {
+          recoveryStatus: nextStatus,
+          approvedStatus: ["recoverable", "non_recoverable", "excluded"].includes(nextStatus) ? "approved" : "needs_review",
+          ruleSource: "manual",
+          reason: "Manual override from Expense Classification",
+        });
+      }
+
+      if (type === "sendToReview") {
+        if (row.id) return expenseService.sendExpenseClassificationToReview(row.id);
+        return expenseService.reviewExpense(row.expenseId, {
+          recoveryStatus: "needs_review",
+          approvedStatus: "needs_review",
+          ruleSource: "manual",
+          reason: "Sent to review from Expense Classification",
+        });
+      }
+
+      if (type === "finalize") {
+        if (row.id) return expenseService.finalizeExpenseClassification(row.id);
+        return expenseService.reviewExpense(row.expenseId, {
+          recoveryStatus: row.recoverabilityResult,
+          approvedStatus: "approved",
+          ruleSource: row.rule ? "lease" : "manual",
+          reason: row.recoveryReason,
+        });
+      }
+
+      if (type === "reopen") {
+        return expenseService.reopenExpenseClassification(row.id);
+      }
+
+      if (type === "sendToCam") {
+        return expenseService.sendClassificationToCam(row);
+      }
+
+      return null;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["lease-actual-expenses", id] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
+      toast.success("Classification updated.");
+    },
+    onError: (error) => {
+      toast.error(error?.message || "Could not update classification.");
+    },
+  });
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !lease?.id) return;
+    const duplicateCount = classificationRows.length - new Set(classificationRows.map((row) => row.classificationKey)).size;
+    console.group("[LeaseExpenseClassification] diagnostic");
+    console.log("scope", {
+      property: lease?.property_id || null,
+      building: lease?.building_id || null,
+      unit: lease?.unit_id || null,
+      lease: lease?.id || null,
+      tenant: lease?.tenant_id || null,
+      period: approvedActualExpenses.map((expense) => expense.expense_date || expense.date).filter(Boolean),
+    });
+    console.log("approved_rules_in_scope", approvedRules.length);
+    console.log("approved_actuals_in_scope", approvedActualExpenses.length);
+    console.log("classification_rows", classificationRows.length);
+    console.log("duplicate_classification_key_count", duplicateCount);
+    console.log("recoverable", tabCounts.recoverable);
+    console.log("non_recoverable", tabCounts.non_recoverable);
+    console.log("conditional", tabCounts.conditional);
+    console.log("excluded", tabCounts.excluded);
+    console.log("needs_review", tabCounts.needs_review);
+    console.log("finalized_count", classificationRows.filter((row) => row.classificationStatus === "finalized").length);
+    console.log("sent_to_cam_count", classificationRows.filter((row) => row.sentToCam).length);
+    console.groupEnd();
+  }, [approvedActualExpenses, approvedRules, classificationRows, lease, tabCounts]);
+
   const isWorking = isLoadingLease || isLoadingCategories || isLoadingRules || extractRulesMutation.isPending || saveRuleSetMutation.isPending;
 
   return (
@@ -481,11 +763,11 @@ export default function LeaseExpenseClassification() {
             className="bg-slate-900 hover:bg-slate-800 text-white"
             size="sm"
             onClick={() => classifyExpensesMutation.mutate()}
-            disabled={classifyExpensesMutation.isPending || actualExpenses.length === 0 || localRules.length === 0}
+            disabled={classifyExpensesMutation.isPending || approvedActualExpenses.length === 0 || approvedRules.length === 0}
             title={
-              actualExpenses.length === 0
-                ? "Add actual expenses first"
-                : localRules.length === 0
+              approvedActualExpenses.length === 0
+                ? "Approve actual expenses first"
+                : approvedRules.length === 0
                 ? "Approve lease expense rules first"
                 : "Match actuals against rules and persist results"
             }
@@ -506,14 +788,14 @@ export default function LeaseExpenseClassification() {
       {/* ── Empty-state guards ────────────────────────────────────────────
           Per spec: don't show fake zero charts. If actuals or approved
           rules are missing, surface the precondition prominently. */}
-      {!isLoadingActuals && actualExpenses.length === 0 && (
+      {!isLoadingActuals && approvedActualExpenses.length === 0 && (
         <Card className="border-amber-200 bg-amber-50/70">
           <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div className="flex-1">
-              <p className="font-semibold">No actual expenses found for this lease.</p>
+              <p className="font-semibold">No approved actual expenses found for this lease.</p>
               <p className="mt-1 text-xs">
-                Add or import expenses before classification.{" "}
+                Add or import expenses, then approve them on Actual Expenses before classification.{" "}
                 <Link to={createPageUrl("AddExpense", { lease_id: id })} className="underline">Add one manually</Link>
                 {" or "}
                 <Link to={createPageUrl("BulkImport", { lease_id: id })} className="underline">bulk import a CSV</Link>.
@@ -522,7 +804,7 @@ export default function LeaseExpenseClassification() {
           </CardContent>
         </Card>
       )}
-      {!isLoadingRules && localRules.length === 0 && (
+      {!isLoadingRules && approvedRules.length === 0 && (
         <Card className="border-rose-200 bg-rose-50/70">
           <CardContent className="flex items-start gap-3 p-4 text-sm text-rose-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -542,22 +824,57 @@ export default function LeaseExpenseClassification() {
           Actuals Loaded · Approved Rules · Matched · Recoverable $ ·
           Non-Recoverable $ · Conditional/Needs Review $ · Finalized $ ·
           CAM Eligible $ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-        <SummaryCard label="Actuals Loaded"          value={actualExpenses.length}                                        tone="slate" />
-        <SummaryCard label="Approved Rules"          value={localRules.filter((r) => r.approval_status === "approved" || r.review_status === "approved").length} tone="slate" />
-        <SummaryCard label="Matched"                 value={matchedActuals.filter((m) => m.rule).length}                  tone="blue" />
-        <SummaryCard label="Recoverable"             value={fmtMoney(actualTotals.buckets.recoverable.ytd)}               tone="emerald" />
-        <SummaryCard label="Non-Recoverable"         value={fmtMoney(actualTotals.buckets.non_recoverable.ytd)}           tone="rose" />
-        <SummaryCard label="Conditional / Review"    value={fmtMoney(actualTotals.buckets.conditional.ytd + actualTotals.buckets.needs_review.ytd)} tone="amber" />
+      <Card className="border-slate-200 bg-slate-50/70">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-3">
+          <div className="text-sm text-slate-700">
+            <div className="text-[11px] font-semibold uppercase text-slate-500">Scope</div>
+            <div className="mt-1">Property: {lease?.property_name || lease?.property_id || "â€”"}</div>
+            <div>Building: {lease?.building_id || "Lease-level"}</div>
+            <div>Unit: {lease?.unit_id || "Lease-level"}</div>
+          </div>
+          <div className="text-sm text-slate-700">
+            <div className="text-[11px] font-semibold uppercase text-slate-500">Lease</div>
+            <div className="mt-1">Lease: {lease?.id || "â€”"}</div>
+            <div>Tenant: {lease?.tenant_name || "â€”"}</div>
+            <div>Fiscal Year: {approvedActualExpenses[0]?.fiscal_year || new Date().getFullYear()}</div>
+          </div>
+          <div className="text-sm text-slate-700">
+            <div className="text-[11px] font-semibold uppercase text-slate-500">Counts In Scope</div>
+            <div className="mt-1">Approved rules: {approvedRules.length}</div>
+            <div>Approved actuals: {approvedActualExpenses.length}</div>
+            <div>Classification rows: {classificationRows.length}</div>
+            <div>Exceptions: {tabCounts.needs_review.count}</div>
+            <div>Finalized: {classificationRows.filter((row) => row.classificationStatus === "finalized").length}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5 lg:grid-cols-10">
+        <SummaryCard label="Approved Actuals Loaded" value={approvedActualExpenses.length} tone="slate" />
+        <SummaryCard label="Approved Lease Rules Loaded" value={approvedRules.length} tone="slate" />
+        <SummaryCard label="Matched Expenses" value={classificationRows.filter((row) => row.rule).length} tone="blue" />
+        <SummaryCard label="Recoverable Costs" value={fmtMoney(tabCounts.recoverable.amount)} tone="emerald" />
+        <SummaryCard label="Non-Recoverable Costs" value={fmtMoney(tabCounts.non_recoverable.amount)} tone="rose" />
+        <SummaryCard label="Conditional Costs" value={fmtMoney(tabCounts.conditional.amount)} tone="amber" />
         <SummaryCard
-          label="Finalized"
-          value={fmtMoney(persistedClassifications.filter((c) => c.classification_status === "finalized").reduce((s, c) => s + Number(c.amount || 0), 0))}
+          label="Excluded Costs"
+          value={fmtMoney(tabCounts.excluded.amount)}
+          tone="slate"
+        />
+        <SummaryCard
+          label="CAM-Eligible Costs"
+          value={fmtMoney(classificationRows.filter((row) => row.camEligible === "yes").reduce((sum, row) => sum + Number(row.actualAmount || 0), 0))}
+          tone="blue"
+        />
+        <SummaryCard
+          label="Finalized Costs"
+          value={fmtMoney(classificationRows.filter((row) => row.classificationStatus === "finalized").reduce((sum, row) => sum + Number(row.actualAmount || 0), 0))}
           tone="emerald"
         />
         <SummaryCard
-          label="CAM Eligible"
-          value={fmtMoney(matchedActuals.filter((m) => m.camEligible === "yes" || m.camEligible === "conditional").reduce((s, m) => s + Number(m.expense?.amount || 0), 0))}
-          tone="blue"
+          label="Needs Review / Exceptions"
+          value={fmtMoney(tabCounts.needs_review.amount)}
+          tone="amber"
         />
       </div>
 
@@ -624,6 +941,144 @@ export default function LeaseExpenseClassification() {
               )}
             </div>
           </details>
+
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle>Classification Results</CardTitle>
+                <p className="mt-1 text-sm text-slate-500">
+                  Approved actual expenses matched to approved lease rules. Each row is persisted by classification key so reruns update instead of duplicating.
+                </p>
+              </div>
+              <div className="text-right text-xs text-slate-500">
+                <div>{tabCounts.all.count} rows</div>
+                <div>{fmtMoney(tabCounts.all.amount)} in scope</div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Tabs value={activeResultTab} onValueChange={setActiveResultTab}>
+                <TabsList className="mb-4 flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
+                  <TabsTrigger value="all">All ({tabCounts.all.count})</TabsTrigger>
+                  <TabsTrigger value="recoverable">Recoverable ({tabCounts.recoverable.count})</TabsTrigger>
+                  <TabsTrigger value="non_recoverable">Non-Recoverable ({tabCounts.non_recoverable.count})</TabsTrigger>
+                  <TabsTrigger value="conditional">Conditional ({tabCounts.conditional.count})</TabsTrigger>
+                  <TabsTrigger value="excluded">Excluded ({tabCounts.excluded.count})</TabsTrigger>
+                  <TabsTrigger value="needs_review">Needs Review / Exceptions ({tabCounts.needs_review.count})</TabsTrigger>
+                </TabsList>
+                <TabsContent value={activeResultTab} forceMount>
+                  <div className="mb-3 text-xs text-slate-500">
+                    Total for this tab: {fmtMoney(tabCounts[activeResultTab]?.amount ?? tabCounts.all.amount)}
+                  </div>
+                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                    <table className="min-w-[1900px] text-xs">
+                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Expense Date</th>
+                          <th className="px-3 py-2 text-left">Vendor</th>
+                          <th className="px-3 py-2 text-left">Invoice Number</th>
+                          <th className="px-3 py-2 text-left">Property</th>
+                          <th className="px-3 py-2 text-left">Building</th>
+                          <th className="px-3 py-2 text-left">Unit</th>
+                          <th className="px-3 py-2 text-left">Lease / Tenant</th>
+                          <th className="px-3 py-2 text-left">Category</th>
+                          <th className="px-3 py-2 text-left">Subcategory</th>
+                          <th className="px-3 py-2 text-right">Actual Amount</th>
+                          <th className="px-3 py-2 text-right">Editable Amount</th>
+                          <th className="px-3 py-2 text-left">Matched Lease Rule</th>
+                          <th className="px-3 py-2 text-left">Rule Category</th>
+                          <th className="px-3 py-2 text-left">Rule Source</th>
+                          <th className="px-3 py-2 text-left">Recoverability Result</th>
+                          <th className="px-3 py-2 text-left">CAM Eligible</th>
+                          <th className="px-3 py-2 text-left">Recovery Method</th>
+                          <th className="px-3 py-2 text-left">Allocation Basis</th>
+                          <th className="px-3 py-2 text-right">Recoverable Amount</th>
+                          <th className="px-3 py-2 text-right">Non-Recoverable Amount</th>
+                          <th className="px-3 py-2 text-right">Conditional Amount</th>
+                          <th className="px-3 py-2 text-right">Excluded Amount</th>
+                          <th className="px-3 py-2 text-left">Recovery Reason</th>
+                          <th className="px-3 py-2 text-left">Confidence</th>
+                          <th className="px-3 py-2 text-left">Classification Status</th>
+                          <th className="px-3 py-2 text-left">Exception Type</th>
+                          <th className="px-3 py-2 text-left">Next Step</th>
+                          <th className="px-3 py-2 text-left">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredClassificationRows.map((row) => (
+                          <tr key={row.classificationKey} className="align-top hover:bg-slate-50">
+                            <td className="px-3 py-2">{row.expenseDate || "â€”"}</td>
+                            <td className="px-3 py-2 font-medium text-slate-900">{row.vendor}</td>
+                            <td className="px-3 py-2">{row.invoiceNumber}</td>
+                            <td className="px-3 py-2">{row.propertyLabel}</td>
+                            <td className="px-3 py-2">{row.buildingLabel}</td>
+                            <td className="px-3 py-2">{row.unitLabel}</td>
+                            <td className="px-3 py-2">{row.leaseTenantLabel}</td>
+                            <td className="px-3 py-2">{row.category}</td>
+                            <td className="px-3 py-2">{row.subcategory}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.actualAmount)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.editableAmount)}</td>
+                            <td className="px-3 py-2">{row.matchedLeaseRule}</td>
+                            <td className="px-3 py-2">{row.ruleCategory}</td>
+                            <td className="px-3 py-2">{row.ruleSource}</td>
+                            <td className="px-3 py-2">
+                              <Badge className="text-[10px] uppercase">
+                                {String(row.recoverabilityResult || "â€”").replace(/_/g, " ")}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2">{row.camEligible}</td>
+                            <td className="px-3 py-2">{row.recoveryMethod}</td>
+                            <td className="px-3 py-2">{row.allocationBasis}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.recoverableAmount)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.nonRecoverableAmount)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.conditionalAmount)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.excludedAmount)}</td>
+                            <td className="max-w-[280px] px-3 py-2 text-[11px] text-slate-600">{row.recoveryReason}</td>
+                            <td className="px-3 py-2">{row.confidence == null ? "â€”" : `${Math.round(Number(row.confidence) <= 1 ? Number(row.confidence) * 100 : Number(row.confidence))}%`}</td>
+                            <td className="px-3 py-2">{row.classificationStatus}</td>
+                            <td className="px-3 py-2">{row.exceptionType || "â€”"}</td>
+                            <td className="px-3 py-2">{row.nextStep}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex flex-wrap gap-1">
+                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "editAmount", row })}>Edit Amount</Button>
+                                <Link to={createPageUrl("AddExpense", { lease_id: id })}>
+                                  <Button size="sm" variant="outline">View Actual Expense</Button>
+                                </Link>
+                                <Link to={createPageUrl("LeaseExpenseRules", lease?.property_id ? { property: lease.property_id } : {})}>
+                                  <Button size="sm" variant="outline">View Lease Rule</Button>
+                                </Link>
+                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "override", row })}>Override Classification</Button>
+                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "sendToReview", row })}>Send to Review</Button>
+                                {row.classificationStatus === "finalized" ? (
+                                  <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "reopen", row })}>Reopen Finalized Row</Button>
+                                ) : (
+                                  <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "finalize", row })}>Finalize Row</Button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!row.id || row.sentToCam || row.classificationStatus !== "finalized" || row.camEligible !== "yes" || row.recoverabilityResult !== "recoverable"}
+                                  onClick={() => rowActionMutation.mutate({ type: "sendToCam", row })}
+                                >
+                                  {row.sentToCam ? "Sent to CAM" : "Send to CAM"}
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredClassificationRows.length === 0 && (
+                          <tr>
+                            <td colSpan={28} className="px-4 py-8 text-center text-sm text-slate-500">
+                              No classification rows in this tab.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
 
           {/* ── Actuals vs Rules Coordination ──────────────────────────── */}
           <Card>

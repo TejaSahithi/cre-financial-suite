@@ -248,7 +248,7 @@ export default function ExpenseReview() {
           "exception_type, confidence_score, evidence_text, category, subcategory, " +
           "amount, classified_at, reviewed_at, finalized_at, notes",
         )
-        .or("classification_status.in.(unmatched,exception,conditional),exception_type.not.is.null")
+        .or("classification_status.in.(unmatched,exception,conditional),recoverability_result.eq.needs_review,exception_type.not.is.null")
         .order("classified_at", { ascending: false })
         .limit(500);
       if (orParts.length > 0) {
@@ -299,6 +299,38 @@ export default function ExpenseReview() {
 
   const exceptionMutation = useMutation({
     mutationFn: async ({ classificationId, action }) => {
+      if (action === "approve") {
+        await expenseService.finalizeExpenseClassification(classificationId);
+        return { classificationId, action };
+      }
+      if (action === "reject") {
+        await expenseService.updateExpenseClassification(classificationId, {
+          classification_status: "excluded",
+          recoverability_result: "excluded",
+          recovery_status: "excluded",
+          exception_type: null,
+          next_step: "Ready for projection",
+        });
+        return { classificationId, action };
+      }
+      if (action === "mark_na") {
+        await expenseService.updateExpenseClassification(classificationId, {
+          classification_status: "excluded",
+          recoverability_result: "non_recoverable",
+          recovery_status: "non_recoverable",
+          exception_type: null,
+          next_step: "Ready for projection",
+        });
+        return { classificationId, action };
+      }
+      if (action === "resolve") {
+        await expenseService.updateExpenseClassification(classificationId, {
+          classification_status: "matched",
+          exception_type: null,
+          next_step: "Finalize row",
+        });
+        return { classificationId, action };
+      }
       // Action → patch shape
       // approve   → classification_status='finalized', reviewed/finalized timestamps
       // reject    → classification_status='excluded', recoverability_result='excluded'

@@ -400,6 +400,104 @@ function conditionApplied(rule) {
   return CONDITIONAL_KEYWORDS.some((keyword) => source.includes(keyword) || notes.includes(keyword));
 }
 
+function isApprovedExpenseRecord(expense, classification = null) {
+  const approvalStatus = normalizeText(
+    classification?.approved_status ||
+    expense?.approved_status ||
+    expense?.review_status
+  );
+  return approvalStatus === "approved";
+}
+
+function buildClassificationKey({ orgId, expenseId, leaseExpenseRuleId = null } = {}) {
+  if (!expenseId) return null;
+  return [orgId || "", expenseId, leaseExpenseRuleId || "unmatched"].join(":");
+}
+
+function buildAmountBuckets(actualAmount, recoverabilityResult) {
+  const amount = toNumber(actualAmount);
+  return {
+    recoverable_amount: recoverabilityResult === "recoverable" ? amount : 0,
+    non_recoverable_amount: recoverabilityResult === "non_recoverable" ? amount : 0,
+    conditional_amount: recoverabilityResult === "conditional" ? amount : 0,
+    excluded_amount: recoverabilityResult === "excluded" ? amount : 0,
+  };
+}
+
+function buildPlainEnglishReason({ expense, rule, recoverabilityResult, fallbackReason }) {
+  const expenseLabel = String(
+    expense?.category ||
+    expense?.expense_subcategory ||
+    rule?.category_name ||
+    rule?.expense_category ||
+    "expense"
+  ).replace(/_/g, " ");
+
+  if (!rule) {
+    return `This ${expenseLabel} expense needs review because no approved lease rule matched this category.`;
+  }
+
+  const paymentTreatment = normalizeText(getPaymentTreatment(rule));
+  if (paymentTreatment === "included_in_base_rent") {
+    return `This ${expenseLabel} expense is non-recoverable because the approved lease rule says it is included in base rent.`;
+  }
+
+  if (recoverabilityResult === "recoverable") {
+    return `This ${expenseLabel} expense is recoverable because the approved lease rule allows recovery from the tenant.`;
+  }
+
+  if (recoverabilityResult === "conditional") {
+    return `This ${expenseLabel} expense needs review because the approved lease rule applies a cap, threshold, or other condition before recovery.`;
+  }
+
+  if (recoverabilityResult === "excluded") {
+    return `This ${expenseLabel} expense is excluded because the matched lease rule is marked not applicable or excluded.`;
+  }
+
+  if (recoverabilityResult === "non_recoverable") {
+    return `This ${expenseLabel} expense is non-recoverable because the approved lease rule does not allow tenant recovery.`;
+  }
+
+  return fallbackReason || `This ${expenseLabel} expense needs review before it can move forward.`;
+}
+
+function buildClassificationNextStep({
+  classificationStatus,
+  recoverabilityResult,
+  sentToCam,
+  camEligible,
+} = {}) {
+  if (sentToCam) return "Sent to CAM";
+  if (classificationStatus === "finalized" && camEligible === "yes" && recoverabilityResult === "recoverable") {
+    return "Send to CAM";
+  }
+  if (classificationStatus === "finalized") return "Ready for projection";
+  if (classificationStatus === "conditional") return "Resolve condition";
+  if (classificationStatus === "exception" || classificationStatus === "unmatched" || recoverabilityResult === "needs_review") {
+    return "Review exception";
+  }
+  return "Finalize row";
+}
+
+function canSendClassificationToCam({ classification, expense, rule }) {
+  const amount = toNumber(classification?.amount ?? expense?.amount);
+  const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
+  const classificationStatus = normalizeText(classification?.classification_status);
+  const camEligible = normalizeText(classification?.cam_eligible);
+  const approvalStatus = normalizeText(classification?.approved_status || expense?.approved_status || expense?.review_status);
+  const paymentTreatment = normalizeText(getPaymentTreatment(rule));
+
+  return (
+    classificationStatus === "finalized" &&
+    approvalStatus === "approved" &&
+    ["recoverable"].includes(recoverabilityResult) &&
+    camEligible === "yes" &&
+    amount > 0 &&
+    !classification?.sent_to_cam &&
+    paymentTreatment !== "included_in_base_rent"
+  );
+}
+
 // Treat any of the lease-expense-rule supporting tables not being deployed
 // as "no rules" rather than throwing — this code runs on every lease save
 // and approval, and a missing optional table shouldn't break the user's
@@ -543,25 +641,76 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 }
 
 async function upsertExpenseClassification(payload) {
-  if (!supabase || !payload?.expense_id || !payload?.org_id) return;
+  if (!supabase || !(payload?.expense_id || payload?.actual_expense_id) || !payload?.org_id) return;
   try {
-    const nextPayload = { ...payload };
+    const nextPayload = {
+      ...payload,
+      expense_id: payload.expense_id || payload.actual_expense_id,
+      actual_expense_id: payload.actual_expense_id || payload.expense_id,
+    };
+    const conflictTargets = nextPayload.classification_key
+      ? ["classification_key", "org_id,expense_id"]
+      : ["org_id,expense_id"];
 
-    while (Object.keys(nextPayload).length > 0) {
-      const { error } = await supabase
-        .from("expense_classifications")
-        .upsert(nextPayload, { onConflict: "org_id,expense_id" });
-      if (!error) return;
+    for (const onConflict of conflictTargets) {
+      const attemptPayload = { ...nextPayload };
 
-      const missingColumn = extractMissingColumn(error);
-      if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in nextPayload)) {
-        throw error;
+      while (Object.keys(attemptPayload).length > 0) {
+        const { error } = await supabase
+          .from("expense_classifications")
+          .upsert(attemptPayload, { onConflict });
+        if (!error) return;
+
+        const conflictError = String(error?.message || error?.details || "").toLowerCase();
+        if (
+          onConflict === "classification_key" &&
+          (error?.code === "42P10" || conflictError.includes("no unique") || conflictError.includes("no constraint"))
+        ) {
+          break;
+        }
+
+        const missingColumn = extractMissingColumn(error);
+        if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
+          throw error;
+        }
+        delete attemptPayload[missingColumn];
       }
-      delete nextPayload[missingColumn];
     }
   } catch (error) {
     console.warn("[expenseService] expense classification persistence warning:", error);
   }
+}
+
+async function updateExpenseClassificationRecord(classificationId, patch = {}) {
+  if (!supabase || !classificationId) {
+    throw new Error("Classification record not found");
+  }
+
+  const payload = {
+    ...patch,
+    updated_at: patch.updated_at || new Date().toISOString(),
+  };
+
+  while (Object.keys(payload).length > 0) {
+    const { data, error } = await supabase
+      .from("expense_classifications")
+      .update(payload)
+      .eq("id", classificationId)
+      .select()
+      .single();
+
+    if (!error) {
+      return data;
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
+      throw error;
+    }
+    delete payload[missingColumn];
+  }
+
+  return null;
 }
 
 async function fetchExistingExpenseClassifications(expenseIds = []) {
@@ -571,7 +720,9 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       columns: [
         "id",
         "org_id",
+        "classification_key",
         "expense_id",
+        "actual_expense_id",
         "property_id",
         "building_id",
         "unit_id",
@@ -580,6 +731,7 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
         "rule_set_id",
         "recovery_rule_id",
         "linked_expense_rule_id",
+        "lease_expense_rule_id",
         "recovery_status",
         "recoverability_result",
         "cam_pool_id",
@@ -587,6 +739,7 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
         "cam_eligible",
         "recovery_method",
         "allocation_method",
+        "allocation_basis",
         "rule_source",
         "confidence_score",
         "evidence_text",
@@ -597,11 +750,21 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
         "classified_at",
         "approved_by",
         "approved_at",
+        "reviewed_by",
         "reviewed_at",
         "finalized_at",
         "classification_status",
         "exception_type",
         "amount",
+        "recoverable_amount",
+        "non_recoverable_amount",
+        "conditional_amount",
+        "excluded_amount",
+        "sent_to_cam",
+        "sent_to_cam_at",
+        "sent_to_cam_by",
+        "cam_status",
+        "next_step",
       ],
       apply: (query) => query.in("expense_id", expenseIds),
     });
@@ -623,19 +786,35 @@ export const expenseService = {
     try {
       return await selectExpenseClassifications({
         columns: [
+          "id",
+          "classification_key",
           "expense_id",
+          "actual_expense_id",
+          "lease_expense_rule_id",
+          "linked_expense_rule_id",
           "recovery_status",
           "recoverability_result",
           "approved_status",
           "rule_source",
           "classification_status",
+          "exception_type",
           "confidence_score",
           "recovery_reason",
           "cam_eligible",
           "recovery_method",
+          "allocation_basis",
+          "amount",
+          "recoverable_amount",
+          "non_recoverable_amount",
+          "conditional_amount",
+          "excluded_amount",
           "approved_at",
           "reviewed_at",
           "finalized_at",
+          "sent_to_cam",
+          "sent_to_cam_at",
+          "cam_status",
+          "next_step",
         ],
         apply: (query) => query.in("expense_id", expenseIds),
       });
@@ -651,9 +830,12 @@ export const expenseService = {
       return await selectExpenseClassifications({
         columns: [
           "id",
+          "classification_key",
           "expense_id",
+          "actual_expense_id",
           "lease_expense_rule_id",
           "recovery_rule_id",
+          "linked_expense_rule_id",
           "recoverability_result",
           "recovery_status",
           "cam_eligible",
@@ -664,10 +846,28 @@ export const expenseService = {
           "confidence_score",
           "finalized_at",
           "reviewed_at",
+          "reviewed_by",
           "amount",
+          "category",
+          "subcategory",
+          "service_period_start",
+          "service_period_end",
+          "approved_status",
+          "allocation_basis",
+          "recoverable_amount",
+          "non_recoverable_amount",
+          "conditional_amount",
+          "excluded_amount",
+          "sent_to_cam",
+          "sent_to_cam_at",
+          "cam_status",
+          "next_step",
           "classified_at",
           "lease_id",
           "property_id",
+          "building_id",
+          "unit_id",
+          "tenant_id",
         ],
         apply: (query) => {
           const orFilter = [`lease_id.eq.${leaseId}`];
@@ -682,6 +882,10 @@ export const expenseService = {
       console.warn("[expenseService] listExpenseClassificationsForLease warning:", error);
       return [];
     }
+  },
+
+  async updateExpenseClassification(classificationId, patch = {}) {
+    return updateExpenseClassificationRecord(classificationId, patch);
   },
 
   async reviewExpense(expenseOrId, { recoveryStatus, approvedStatus, ruleSource = "manual", reason = null } = {}) {
@@ -727,11 +931,49 @@ export const expenseService = {
       existingClassification?.notes ||
       expense.recovery_reason ||
       "Manual review override";
+    const effectiveReviewStatus =
+      effectiveApprovedStatus === "approved"
+        ? "approved"
+        : effectiveRecoveryStatus === "needs_review"
+          ? "needs_review"
+          : "draft";
     const classification =
       effectiveRecoveryStatus === "excluded" ? "non_recoverable" : effectiveRecoveryStatus;
+    const linkedExpenseRuleId =
+      existingClassification?.lease_expense_rule_id ||
+      existingClassification?.linked_expense_rule_id ||
+      existingClassification?.recovery_rule_id ||
+      expense.linked_expense_rule_id ||
+      expense.recovery_rule_id ||
+      null;
+    const classificationKey =
+      existingClassification?.classification_key ||
+      buildClassificationKey({
+        orgId: expense.org_id || existingClassification?.org_id || orgIdFallback,
+        expenseId: expense.id,
+        leaseExpenseRuleId: linkedExpenseRuleId,
+      });
+    const amount = Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : existingClassification?.amount ?? 0;
+    const amountBuckets = buildAmountBuckets(amount, effectiveRecoveryStatus);
+    const plainReason = buildPlainEnglishReason({
+      expense,
+      rule: null,
+      recoverabilityResult: effectiveRecoveryStatus,
+      fallbackReason: effectiveReason,
+    });
 
     const expensePatch = {
       classification,
+      recovery_status: effectiveRecoveryStatus,
+      recoverability_result: effectiveRecoveryStatus,
+      approved_status: effectiveApprovedStatus,
+      review_status: effectiveReviewStatus,
+      approved_by: effectiveApprovedStatus === "approved" ? userId : null,
+      approved_at: effectiveApprovedStatus === "approved" ? now : null,
+      rule_source: effectiveRuleSource,
+      recovery_reason: plainReason,
+      classification_updated_at: now,
+      classification_updated_by: userId,
     };
 
     const updatedExpense = await baseExpenseService.update(expense.id, expensePatch);
@@ -741,6 +983,7 @@ export const expenseService = {
       org_id: expense.org_id || existingClassification?.org_id || orgIdFallback,
       expense_id: expense.id,
       actual_expense_id: expense.id,
+      classification_key: classificationKey,
       property_id: expense.property_id || existingClassification?.property_id || null,
       building_id: expense.building_id || existingClassification?.building_id || null,
       unit_id: expense.unit_id || existingClassification?.unit_id || null,
@@ -753,13 +996,11 @@ export const expenseService = {
         expense.linked_expense_rule_id ||
         null,
       linked_expense_rule_id:
-        existingClassification?.linked_expense_rule_id ||
-        expense.linked_expense_rule_id ||
-        expense.recovery_rule_id ||
-        null,
+        linkedExpenseRuleId,
+      lease_expense_rule_id: linkedExpenseRuleId,
       category: expense.category || null,
       subcategory: expense.expense_subcategory || expense.subcategory || null,
-      amount: Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : existingClassification?.amount ?? null,
+      amount,
       service_period_start:
         expense.service_period_start ||
         expense.billing_period_start ||
@@ -783,9 +1024,15 @@ export const expenseService = {
             ? "conditional"
             : "no"),
       recovery_method: existingClassification?.recovery_method || expense.recovery_method || null,
-      recovery_reason: effectiveReason,
+      recovery_reason: plainReason,
       cam_pool_id: existingClassification?.cam_pool_id || expense.cam_pool_id || null,
       allocation_method:
+        expense.allocation_method ||
+        expense.allocation_type ||
+        existingClassification?.allocation_method ||
+        "pro_rata",
+      allocation_basis:
+        existingClassification?.allocation_basis ||
         expense.allocation_method ||
         expense.allocation_type ||
         existingClassification?.allocation_method ||
@@ -793,10 +1040,10 @@ export const expenseService = {
       cap_applied: Boolean(existingClassification?.cap_applied),
       exclusion_applied: ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus),
       condition_applied: effectiveRecoveryStatus === "conditional",
-      condition_reason: effectiveRecoveryStatus === "conditional" ? effectiveReason : null,
+      condition_reason: effectiveRecoveryStatus === "conditional" ? plainReason : null,
       rule_source: effectiveRuleSource,
       confidence_score: existingClassification?.confidence_score ?? expense.confidence_score ?? 1,
-      evidence_text: existingClassification?.evidence_text || expense.evidence_text || effectiveReason,
+      evidence_text: existingClassification?.evidence_text || expense.evidence_text || plainReason,
       evidence_page_number: existingClassification?.evidence_page_number || expense.evidence_page_number || null,
       approved_status: effectiveApprovedStatus,
       classification_status:
@@ -815,15 +1062,41 @@ export const expenseService = {
                 : "matched",
       exception_type: effectiveRecoveryStatus === "needs_review" ? "manual_review" : null,
       finalized_at:
-        effectiveApprovedStatus === "approved" && effectiveRecoveryStatus === "recoverable"
+        effectiveApprovedStatus === "approved" && ["recoverable", "non_recoverable", "excluded"].includes(effectiveRecoveryStatus)
           ? (existingClassification?.finalized_at || now)
           : null,
+      ...amountBuckets,
+      sent_to_cam: existingClassification?.sent_to_cam || false,
+      cam_status: existingClassification?.cam_status || null,
+      next_step: buildClassificationNextStep({
+        classificationStatus:
+          effectiveApprovedStatus === "approved"
+            ? (effectiveRecoveryStatus === "recoverable"
+                ? "finalized"
+                : effectiveRecoveryStatus === "conditional"
+                  ? "conditional"
+                  : "excluded")
+            : effectiveRecoveryStatus === "needs_review"
+              ? "exception"
+              : effectiveRecoveryStatus === "conditional"
+                ? "conditional"
+                : ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus)
+                  ? "excluded"
+                  : "matched",
+        recoverabilityResult: effectiveRecoveryStatus,
+        sentToCam: existingClassification?.sent_to_cam || false,
+        camEligible:
+          existingClassification?.cam_eligible ||
+          expense.cam_eligible ||
+          (effectiveRecoveryStatus === "recoverable" ? "yes" : effectiveRecoveryStatus === "conditional" ? "conditional" : "no"),
+      }),
+      reviewed_by: userId || existingClassification?.reviewed_by || null,
       reviewed_at: now,
       approved_at: effectiveApprovedStatus === "approved" ? (existingClassification?.approved_at || now) : null,
       approved_by: effectiveApprovedStatus === "approved" ? (userId || existingClassification?.approved_by || null) : null,
       classified_at: existingClassification?.classified_at || now,
       classified_by: userId || existingClassification?.classified_by || null,
-      notes: effectiveReason || existingClassification?.notes || null,
+      notes: plainReason || existingClassification?.notes || null,
     });
 
     return {
@@ -831,8 +1104,9 @@ export const expenseService = {
       recovery_status: effectiveRecoveryStatus,
       recoverability_result: effectiveRecoveryStatus,
       approved_status: effectiveApprovedStatus,
+      review_status: effectiveReviewStatus,
       rule_source: effectiveRuleSource,
-      recovery_reason: effectiveReason,
+      recovery_reason: plainReason,
       classification,
     };
   },
@@ -922,8 +1196,9 @@ export const expenseService = {
         : await baseExpenseService.list();
 
     const actualExpenses = allExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
+    const approvedActualExpenses = actualExpenses.filter((expense) => isApprovedExpenseRecord(expense));
 
-    if (!actualExpenses.length) {
+    if (!approvedActualExpenses.length) {
       return { updated: 0, needsReview: 0, classified: 0 };
     }
 
@@ -938,7 +1213,7 @@ export const expenseService = {
     const leaseById = buildLeaseLookup(allLeases);
     const orgIdFallback = await getCurrentOrgId();
     const existingClassificationsByExpenseId = new Map(
-      (await fetchExistingExpenseClassifications(actualExpenses.map((expense) => expense.id)))
+      (await fetchExistingExpenseClassifications(approvedActualExpenses.map((expense) => expense.id)))
         .map((classification) => [classification.expense_id, classification])
     );
 
@@ -946,8 +1221,12 @@ export const expenseService = {
     let needsReview = 0;
     let classified = 0;
 
-    for (const expense of actualExpenses) {
+    for (const expense of approvedActualExpenses) {
       const existingClassification = existingClassificationsByExpenseId.get(expense.id) || null;
+      if (normalizeText(existingClassification?.classification_status) === "finalized" && !existingClassification?.reopened_at) {
+        classified += 1;
+        continue;
+      }
       const preserveManualReview =
         normalizeText(existingClassification?.rule_source) === "manual" ||
         (
@@ -976,6 +1255,11 @@ export const expenseService = {
       let recoveryMethod = match.recovery_method || null;
       let recoveryReason = match.reason;
       let ruleSource = matchedRule ? "lease" : (expense.rule_source || "default");
+      let classificationKey = buildClassificationKey({
+        orgId: expense.org_id || matchedLease?.org_id || orgIdFallback,
+        expenseId: expense.id,
+        leaseExpenseRuleId: linkedExpenseRuleId,
+      });
 
       if (preserveManualReview) {
         recoveryStatus =
@@ -1016,10 +1300,33 @@ export const expenseService = {
           existingClassification?.rule_source ||
           expense.rule_source ||
           "manual";
+        classificationKey =
+          existingClassification?.classification_key ||
+          buildClassificationKey({
+            orgId: expense.org_id || matchedLease?.org_id || orgIdFallback,
+            expenseId: expense.id,
+            leaseExpenseRuleId: linkedExpenseRuleId,
+          });
       }
+
+      const plainReason = buildPlainEnglishReason({
+        expense,
+        rule: matchedRule,
+        recoverabilityResult: recoveryStatus,
+        fallbackReason: recoveryReason,
+      });
+      const amount = Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : 0;
+      const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
 
       const updatePayload = {
         classification: recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus,
+        recovery_status: recoveryStatus,
+        recoverability_result: recoveryStatus,
+        approved_status: approvedStatus,
+        review_status: approvedStatus === "approved" ? "approved" : "needs_review",
+        rule_source: ruleSource,
+        recovery_reason: plainReason,
+        classification_updated_at: new Date().toISOString(),
       };
 
       await baseExpenseService.update(expense.id, updatePayload);
@@ -1072,6 +1379,7 @@ export const expenseService = {
         org_id: expense.org_id || matchedLease?.org_id || orgIdFallback,
         expense_id: expense.id,
         actual_expense_id: expense.id,                       // spec alias
+        classification_key: existingClassification?.classification_key || classificationKey,
         property_id: expense.property_id || matchedLease?.property_id || null,
         building_id: expense.building_id || matchedLease?.building_id || null,
         unit_id: expense.unit_id || matchedLease?.unit_id || null,
@@ -1085,34 +1393,204 @@ export const expenseService = {
         // these without joining expenses + lease_expense_rules.
         category: expense.category || matchedRule?.expense_category || null,
         subcategory: expense.subcategory || matchedRule?.expense_subcategory || null,
-        amount: Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : null,
+        amount,
         service_period_start: expense.service_period_start || expense.date || null,
         service_period_end: expense.service_period_end || expense.date || null,
         recovery_status: recoveryStatus,
         recoverability_result: recoveryStatus,
         cam_eligible: camEligible,
         recovery_method: recoveryMethod,
-        recovery_reason: recoveryReason,
+        recovery_reason: plainReason,
         cam_pool_id: updatePayload.cam_pool_id,
-        allocation_method: updatePayload.allocation_method,
+        allocation_method: expense.allocation_method || expense.allocation_type || existingClassification?.allocation_method || "pro_rata",
+        allocation_basis: expense.allocation_method || expense.allocation_type || existingClassification?.allocation_basis || existingClassification?.allocation_method || "pro_rata",
         cap_applied: Boolean(matchedRule?.is_subject_to_cap),
         exclusion_applied: Boolean(matchedRule?.is_excluded),
         condition_applied: isConditional,
-        condition_reason: isConditional ? matchedRule?.notes || matchedRule?.source || recoveryReason || "Conditional lease rule requires review" : null,
-        rule_source: updatePayload.rule_source,
+        condition_reason: isConditional ? matchedRule?.notes || matchedRule?.source || plainReason || "Conditional lease rule requires review" : null,
+        rule_source: ruleSource,
         confidence_score: confidenceScore,
-        evidence_text: matchedRule?.source || recoveryReason,
+        evidence_text: matchedRule?.source || plainReason,
         evidence_page_number: matchedRule?.clauses?.[0]?.page_number ?? null,
         approved_status: approvedStatus,
         classification_status: classificationStatus,
         exception_type: exceptionType,
         finalized_at: classificationStatus === "finalized" ? new Date().toISOString() : null,
-        notes: matchedRule?.notes || recoveryReason || null,
+        reviewed_by: existingClassification?.reviewed_by || null,
+        ...amountBuckets,
+        sent_to_cam: existingClassification?.sent_to_cam || false,
+        sent_to_cam_at: existingClassification?.sent_to_cam_at || null,
+        sent_to_cam_by: existingClassification?.sent_to_cam_by || null,
+        cam_status: existingClassification?.cam_status || null,
+        next_step: buildClassificationNextStep({
+          classificationStatus,
+          recoverabilityResult: recoveryStatus,
+          sentToCam: existingClassification?.sent_to_cam || false,
+          camEligible,
+        }),
+        notes: matchedRule?.notes || plainReason || null,
         classified_at: new Date().toISOString(),
       });
     }
 
     return { updated, needsReview, classified };
+  },
+
+  async updateExpenseAmount(expenseId, amount, { reason = "Manual amount correction from Expense Classification" } = {}) {
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+      throw new Error("Enter a valid amount");
+    }
+
+    const updatedExpense = await baseExpenseService.update(expenseId, { amount: numericAmount });
+    const relatedLease = updatedExpense?.lease_id ? await baseLeaseService.get(updatedExpense.lease_id) : null;
+    await this.classifyExpenses({
+      expenses: [updatedExpense],
+      leases: relatedLease ? [relatedLease] : [],
+    });
+    return {
+      ...updatedExpense,
+      recovery_reason: reason,
+    };
+  },
+
+  async finalizeExpenseClassification(classificationId) {
+    const authResult = await supabase?.auth?.getUser?.();
+    const now = new Date().toISOString();
+    const userId = authResult?.data?.user?.id || null;
+    return updateExpenseClassificationRecord(classificationId, {
+      classification_status: "finalized",
+      approved_status: "approved",
+      reviewed_at: now,
+      reviewed_by: userId,
+      finalized_at: now,
+      approved_at: now,
+      approved_by: userId,
+      exception_type: null,
+      next_step: "Ready for projection",
+    });
+  },
+
+  async reopenExpenseClassification(classificationId) {
+    const now = new Date().toISOString();
+    return updateExpenseClassificationRecord(classificationId, {
+      classification_status: "matched",
+      finalized_at: null,
+      reviewed_at: now,
+      cam_status: null,
+      next_step: "Finalize row",
+    });
+  },
+
+  async sendExpenseClassificationToReview(classificationId) {
+    const authResult = await supabase?.auth?.getUser?.();
+    const now = new Date().toISOString();
+    const userId = authResult?.data?.user?.id || null;
+    return updateExpenseClassificationRecord(classificationId, {
+      classification_status: "exception",
+      exception_type: "manual_review",
+      reviewed_at: now,
+      reviewed_by: userId,
+      next_step: "Review exception",
+    });
+  },
+
+  async sendClassificationToCam(classificationOrId) {
+    const classification =
+      classificationOrId && typeof classificationOrId === "object"
+        ? classificationOrId
+        : await selectExpenseClassifications({
+            columns: [
+              "id",
+              "org_id",
+              "expense_id",
+              "actual_expense_id",
+              "lease_expense_rule_id",
+              "linked_expense_rule_id",
+              "property_id",
+              "building_id",
+              "unit_id",
+              "lease_id",
+              "tenant_id",
+              "category",
+              "amount",
+              "recoverability_result",
+              "recovery_status",
+              "classification_status",
+              "approved_status",
+              "cam_eligible",
+              "recovery_method",
+              "allocation_basis",
+              "sent_to_cam",
+              "cam_status",
+            ],
+            apply: (query) => query.eq("id", classificationOrId).limit(1),
+          }).then((rows) => rows[0] || null);
+
+    if (!classification?.id) {
+      throw new Error("Classification row not found");
+    }
+
+    const expenseId = classification.expense_id || classification.actual_expense_id;
+    const ruleId =
+      classification.lease_expense_rule_id ||
+      classification.linked_expense_rule_id ||
+      null;
+    const [expense, authResult, ruleResult] = await Promise.all([
+      expenseId ? baseExpenseService.get(expenseId) : Promise.resolve(null),
+      supabase?.auth?.getUser?.() || Promise.resolve(null),
+      ruleId
+        ? supabase.from("lease_expense_rules").select("*").eq("id", ruleId).single()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    if (ruleResult?.error) {
+      throw ruleResult.error;
+    }
+
+    const rule = ruleResult?.data || null;
+    if (!canSendClassificationToCam({ classification, expense, rule })) {
+      throw new Error("Only finalized, CAM-eligible, approved recoverable rows can be sent to CAM.");
+    }
+
+    const now = new Date().toISOString();
+    const userId = authResult?.data?.user?.id || null;
+    const inputPayload = {
+      org_id: classification.org_id || expense?.org_id || null,
+      property_id: classification.property_id || expense?.property_id || null,
+      building_id: classification.building_id || expense?.building_id || null,
+      unit_id: classification.unit_id || expense?.unit_id || null,
+      lease_id: classification.lease_id || expense?.lease_id || null,
+      tenant_id: classification.tenant_id || expense?.tenant_id || null,
+      actual_expense_id: expenseId,
+      classification_result_id: classification.id,
+      lease_expense_rule_id: ruleId,
+      category: classification.category || expense?.category || null,
+      amount: toNumber(classification.amount ?? expense?.amount),
+      recovery_method: classification.recovery_method || null,
+      allocation_basis: classification.allocation_basis || null,
+      source: "expense_classification",
+      status: "pending_cam_review",
+      sent_to_cam_at: now,
+      sent_to_cam_by: userId,
+      updated_at: now,
+    };
+
+    const { error } = await supabase
+      .from("cam_expense_inputs")
+      .upsert(inputPayload, { onConflict: "classification_result_id" });
+
+    if (error) {
+      throw error;
+    }
+
+    return updateExpenseClassificationRecord(classification.id, {
+      sent_to_cam: true,
+      sent_to_cam_at: now,
+      sent_to_cam_by: userId,
+      cam_status: "pending_cam_review",
+      next_step: "Sent to CAM",
+    });
   },
 
   async getWorkflowSummary({ propertyId = null, buildingId = null, unitId = null, fiscalYear = null } = {}) {
