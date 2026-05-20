@@ -1,1602 +1,330 @@
-import React, { useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import React, { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/services/supabaseClient";
-import { ExpenseService } from "@/services/api";
-import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import PageHeader from "@/components/PageHeader";
-import ScopeSelector from "@/components/ScopeSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileText, ArrowLeft, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
-import ExpenseClassificationTable from "@/components/ExpenseClassification/ExpenseClassificationTable";
-import ExpenseValuePanel from "@/components/ExpenseClassification/ExpenseValuePanel";
-import ClauseEvidenceDrawer from "@/components/ExpenseClassification/ClauseEvidenceDrawer";
+import { AlertTriangle, Info, CheckCircle, Upload, Plus, FileText, ArrowRightCircle } from "lucide-react";
 import { createPageUrl } from "@/utils";
 
-function getRuleForCategory(rules, categoryId) {
-  return rules.find((rule) => rule.expense_category_id === categoryId) || null;
-}
-
-function categorizeCategory(category, rules) {
-  const rule = getRuleForCategory(rules, category.id);
-  if (!rule) return "needsReview";
-
-  const recoveryStatus = leaseExpenseRuleService.normalizeRecoveryStatus(rule);
-  if (recoveryStatus === "recoverable") return "recoverable";
-  if (["non_recoverable", "excluded"].includes(recoveryStatus)) return "nonRecoverable";
-  if (recoveryStatus === "conditional") return "conditional";
-  return "needsReview";
-}
-
-function isApprovedActualExpense(expense) {
-  return ["approved"].includes(String(expense?.approved_status || expense?.review_status || "").toLowerCase());
-}
-
-function isApprovedLeaseRule(rule) {
-  return ["approved"].includes(String(rule?.approval_status || "").toLowerCase()) &&
-    ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase());
-}
-
-function isApprovedRuleSource(rule, ruleSet = null) {
-  return isApprovedLeaseRule(rule) || String(ruleSet?.status || "").toLowerCase() === "approved";
-}
-
-function buildFallbackClassificationKey(orgId, expenseId, ruleId = null) {
-  if (!expenseId) return null;
-  return [orgId || "", expenseId, ruleId || "unmatched"].join(":");
-}
-
-function tabForRow(row) {
-  if (row.recoverabilityResult === "recoverable") return "recoverable";
-  if (row.recoverabilityResult === "non_recoverable") return "non_recoverable";
-  if (row.recoverabilityResult === "conditional") return "conditional";
-  if (row.recoverabilityResult === "excluded") return "excluded";
-  return "needs_review";
-}
-
-function isExceptionRow(row) {
-  return (
-    ["unmatched", "exception", "conditional"].includes(String(row.classificationStatus || "").toLowerCase()) ||
-    row.recoverabilityResult === "needs_review" ||
-    (row.exceptionType && row.exceptionType !== "none")
-  );
-}
-
-function resolveBuildingId(record, unitById) {
-  if (record?.building_id) return record.building_id;
-  if (record?.unit_id) return unitById.get(record.unit_id)?.building_id || null;
-  return null;
-}
-
 export default function LeaseExpenseClassification() {
-  // The link from Lease Expense Rules / Leases uses `?id=` (query string),
-  // not a path param. Reading via useSearchParams handles both shapes.
-  const [searchParams] = useSearchParams();
-  const id = searchParams.get("id") || searchParams.get("lease_id") || null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [activeRuleSetId, setActiveRuleSetId] = useState(null);
-  const [localRules, setLocalRules] = useState([]);
-  const autoExtractedLeaseIds = useRef(new Set());
-
   // Filters State
-  const [scopeType, setScopeType] = useState('property');
-  const [frequency, setFrequency] = useState('yearly');
   const [selectedProperty, setSelectedProperty] = useState("all");
   const [selectedBuilding, setSelectedBuilding] = useState("all");
   const [selectedUnit, setSelectedUnit] = useState("all");
+  const [selectedLease, setSelectedLease] = useState("all");
+  const [selectedTenant, setSelectedTenant] = useState("all");
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  const [activeTab, setActiveTab] = useState("all");
+  const [selectedRows, setSelectedRows] = useState(new Set());
 
-  // UI State
-  const [selectedCategory, setSelectedCategory] = useState(null);
-  const [selectedRule, setSelectedRule] = useState(null);
-  const [isEvidenceDrawerOpen, setIsEvidenceDrawerOpen] = useState(false);
-  const [isValuePanelOpen, setIsValuePanelOpen] = useState(false);
-  const [activeResultTab, setActiveResultTab] = useState("all");
-
-  // Fetch Lease
-  const { data: lease, isLoading: isLoadingLease } = useQuery({
-    queryKey: ['lease', id],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('leases').select('*').eq('id', id).single();
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!id
-  });
-
-  const { data: allExpenses = [] } = useOrgQuery("Expense");
-  const { data: allLeases = [] } = useOrgQuery("Lease");
+  // Base Data
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
+  const { data: leases = [] } = useOrgQuery("Lease");
+  const { data: tenants = [] } = useOrgQuery("Tenant");
 
-  const propertyById = useMemo(() => new Map(properties.map((property) => [property.id, property])), [properties]);
-  const buildingById = useMemo(() => new Map(buildings.map((building) => [building.id, building])), [buildings]);
-  const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
+  // Scope construction
+  const scope = useMemo(() => ({
+    property_id: selectedProperty !== "all" ? selectedProperty : null,
+    building_id: selectedBuilding !== "all" ? selectedBuilding : null,
+    unit_id: selectedUnit !== "all" ? selectedUnit : null,
+    lease_id: selectedLease !== "all" ? selectedLease : null,
+    tenant_id: selectedTenant !== "all" ? selectedTenant : null,
+    fiscal_year: selectedYear !== "all" ? selectedYear : null,
+  }), [selectedProperty, selectedBuilding, selectedUnit, selectedLease, selectedTenant, selectedYear]);
 
-  React.useEffect(() => {
-    if (!lease) return;
-    setSelectedProperty((prev) => (prev === "all" ? (lease.property_id || "all") : prev));
-    setSelectedBuilding((prev) => (prev === "all" ? (lease.building_id || "all") : prev));
-    setSelectedUnit((prev) => (prev === "all" ? (lease.unit_id || "all") : prev));
-  }, [lease]);
-
-  // Fetch Taxonomies
-  const { data: categories = [], isLoading: isLoadingCategories } = useQuery({
-    queryKey: ['scope_expense_categories', scopeType, lease?.property_id, lease?.unit_id],
-    queryFn: async () => {
-      let scopeId = null;
-      if (scopeType === 'property') scopeId = lease?.property_id;
-      else if (scopeType === 'unit') scopeId = lease?.unit_id;
-
-      if (scopeId) {
-        const { data: scopeData, error: scopeErr } = await supabase
-          .from('scope_expense_categories')
-          .select('expense_category_id, is_applicable, expense_categories(*)')
-          .eq('scope_type', scopeType)
-          .eq('scope_id', scopeId)
-          .eq('is_applicable', true);
-        
-        if (!scopeErr && scopeData && scopeData.length > 0) {
-           return scopeData.map(s => s.expense_categories).filter(Boolean).sort((a,b) => a.display_order - b.display_order);
-        }
-      }
-
-      // Fallback
-      const { data, error } = await supabase.from('expense_categories')
-        .select('*')
-        .eq('is_active', true)
-        .order('display_order', { ascending: true });
-      if (error) {
-        console.warn("[LeaseExpenseClassification] categories query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
-    enabled: !!lease
+  // Fetch Workflow Scope Data
+  const { data: scopeData, isLoading, refetch } = useQuery({
+    queryKey: ['expense_recoverability_scope', scope],
+    queryFn: () => expenseService.loadExpenseRecoverabilityScope(scope),
+    enabled: true
   });
 
-  const effectiveCategories = useMemo(() => {
-    if (categories.length > 0) return categories;
-    return leaseExpenseRuleService.buildFallbackCategories({ lease, rules: localRules });
-  }, [categories, lease, localRules]);
+  const { approvedRules = [], approvedActuals = [], existingClassifications = [] } = scopeData || {};
 
-  // Fetch Active Rule Set & Rules
-  const { data: ruleSetData, isLoading: isLoadingRules } = useQuery({
-    queryKey: ['lease_expense_rule_sets', id],
-    queryFn: () => leaseExpenseRuleService.loadRuleSet(id),
-    enabled: !!id,
-  });
+  // Computed Totals
+  const totals = useMemo(() => {
+    let recoverable = 0, nonRecoverable = 0, conditional = 0, excluded = 0;
+    let camEligible = 0, finalized = 0, needsReview = 0;
 
-  const ruleSet = ruleSetData?.ruleSet;
-
-  React.useEffect(() => {
-    if (!ruleSetData) return;
-    setActiveRuleSetId(ruleSetData.ruleSet?.id || null);
-    setLocalRules(ruleSetData.rules || []);
-  }, [ruleSetData]);
-
-  const scopedLeases = useMemo(() => {
-    return (allLeases || []).filter((candidateLease) => {
-      if (selectedProperty !== "all" && candidateLease.property_id !== selectedProperty) return false;
-      const candidateBuildingId = resolveBuildingId(candidateLease, unitById);
-      if (selectedBuilding !== "all" && candidateBuildingId !== selectedBuilding) return false;
-      if (selectedUnit !== "all" && candidateLease.unit_id !== selectedUnit) return false;
-      return true;
+    existingClassifications.forEach(row => {
+      const amt = Number(row.amount) || 0;
+      if (row.recoverability_result === 'recoverable') recoverable += amt;
+      if (row.recoverability_result === 'non_recoverable') nonRecoverable += amt;
+      if (row.recoverability_result === 'conditional') conditional += amt;
+      if (row.recoverability_result === 'excluded') excluded += amt;
+      if (row.cam_eligible === 'yes' || row.cam_eligible === 'conditional') camEligible += amt;
+      if (row.classification_status === 'finalized') finalized += amt;
+      if (row.classification_status === 'exception' || row.recoverability_result === 'needs_review' || row.classification_status === 'unmatched') {
+        needsReview += amt;
+      }
     });
-  }, [allLeases, selectedProperty, selectedBuilding, selectedUnit, unitById]);
 
-  const scopedLeaseIds = useMemo(
-    () => scopedLeases.map((candidateLease) => candidateLease.id).filter(Boolean),
-    [scopedLeases]
-  );
+    return { recoverable, nonRecoverable, conditional, excluded, camEligible, finalized, needsReview };
+  }, [existingClassifications]);
 
-  const { data: scopedRuleSetEntries = [] } = useQuery({
-    queryKey: ["lease-expense-scope-rule-sets", scopedLeaseIds.join("|")],
-    queryFn: () => leaseExpenseRuleService.loadRuleSets(scopedLeaseIds),
-    enabled: scopedLeaseIds.length > 0,
-  });
-
-  // Mutation: Extract with AI
-  const extractRulesMutation = useMutation({
-    mutationFn: async ({ silent = false } = {}) => {
-      const persisted = await leaseExpenseRuleService.extractDraftRuleSet({
-        lease,
-        categories: effectiveCategories,
-        existingRuleSetId: activeRuleSetId,
-        existingRules: localRules,
-      });
-
-      return { persisted, silent };
-    },
-    onSuccess: ({ persisted, silent }) => {
-      setActiveRuleSetId(persisted?.ruleSet?.id || null);
-      setLocalRules(persisted?.rules || []);
-      queryClient.invalidateQueries(['lease_expense_rule_sets', id]);
-      if (!silent) {
-        toast.success("AI extraction complete. Please review the draft rules.");
-      }
+  // Mutations
+  const runClassificationMutation = useMutation({
+    mutationFn: () => expenseService.runExpenseClassification(scope),
+    onSuccess: (res) => {
+      toast.success(`Classification complete. Updated ${res.updated} rows.`);
+      refetch();
     },
     onError: (err) => {
-      toast.error(`Extraction failed: ${err.message}`);
+      toast.error(`Failed to run classification: ${err.message}`);
     }
   });
 
-  // Mutation: Save / Approve
-  const saveRuleSetMutation = useMutation({
-    mutationFn: async (status) => {
-      const persisted = await leaseExpenseRuleService.saveRuleSet({
-        lease,
-        rules: localRules,
-        status,
-        existingRuleSetId: activeRuleSetId,
-        categories: effectiveCategories,
-      });
-
-      if (status === "approved") {
-        await expenseService.syncLeaseDerivedExpenses({ leases: [lease] });
-        const propertyExpenses = await ExpenseService.filter({ property_id: lease.property_id });
-        await expenseService.classifyExpenses({ expenses: propertyExpenses, leases: [lease] });
-      }
-
-      return persisted;
-    },
-    onSuccess: (persisted) => {
-      setActiveRuleSetId(persisted?.ruleSet?.id || null);
-      setLocalRules(persisted?.rules || []);
-      queryClient.invalidateQueries(['lease_expense_rule_sets', id]);
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["Lease"] });
-      toast.success("Expense rules saved successfully.");
-    },
-    onError: (err) => {
-      toast.error(`Save failed: ${err.message}`);
-    }
-  });
-
-  // ── Classification mutation ───────────────────────────────────────────
-  // Runs expenseService.classifyExpenses for this lease's actuals + rules
-  // and persists the result into expense_classifications (lifecycle status,
-  // exception type, recoverability decision, snapshot fields). Drives the
-  // Expense Review and Expense Projection downstream pages.
-  const classifyExpensesMutation = useMutation({
-    mutationFn: async () => {
-      if (scopedLeases.length === 0) throw new Error("No leases found in the selected scope");
-      return expenseService.classifyExpenses({
-        expenses: approvedActualExpenses,
-        leases: scopedLeases,
-      });
-    },
-    onSuccess: (result) => {
-      toast.success(
-        `Classification complete: ${result?.classified || 0} matched, ${result?.needsReview || 0} need review.`,
-      );
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
-    },
-    onError: (err) => {
-      toast.error(`Classification failed: ${err?.message || "Unknown error"}`);
-    },
-  });
-
-  const groupedCategories = useMemo(() => {
-    return effectiveCategories.reduce((groups, category) => {
-      const key = categorizeCategory(category, localRules);
-      groups[key].push(category);
-      return groups;
-    }, {
-      recoverable: [],
-      nonRecoverable: [],
-      conditional: [],
-      needsReview: [],
-    });
-  }, [effectiveCategories, localRules]);
-
-  const ruleGroups = useMemo(
-    () => leaseExpenseRuleService.groupRulesByRecoveryStatus(localRules),
-    [localRules]
-  );
-
-  const approvedRules = useMemo(() => {
-    const byId = new Map();
-    scopedRuleSetEntries.forEach((entry) => {
-      (entry.rules || []).forEach((rule) => {
-        if (isApprovedRuleSource(rule, entry.ruleSet)) {
-          byId.set(rule.id, rule);
-        }
-      });
-    });
-    return [...byId.values()];
-  }, [scopedRuleSetEntries]);
-
-  // ── Actual Expenses for this lease ────────────────────────────────────
-  // Pulls all `expenses` rows the user can read where lease_id matches OR
-  // (lease_id is null AND the expense scope overlaps this lease's
-  // property/building/unit). This is the "actuals" side of the
-  // rules-vs-actuals coordination shown below the grid.
-  const actualExpenses = useMemo(() => {
-    return (allExpenses || []).filter((expense) => {
-      if (selectedProperty !== "all" && expense.property_id !== selectedProperty) return false;
-      const expenseBuildingId = resolveBuildingId(expense, unitById);
-      if (selectedBuilding !== "all" && expenseBuildingId !== selectedBuilding) return false;
-      if (selectedUnit !== "all" && expense.unit_id !== selectedUnit) return false;
-      return true;
-    });
-  }, [allExpenses, selectedProperty, selectedBuilding, selectedUnit, unitById]);
-
-  const isLoadingActuals = false;
-
-  const approvedActualExpenses = useMemo(
-    () => actualExpenses.filter(isApprovedActualExpense),
-    [actualExpenses],
-  );
-
-  // Persisted classifications. Read so the page reflects the LAST
-  // classification run, not just the live in-browser match (which can
-  // change if rules change).
-  const { data: persistedClassifications = [] } = useQuery({
-    queryKey: ["lease-expense-classifications", approvedActualExpenses.map((expense) => expense.id).join("|")],
-    enabled: approvedActualExpenses.length > 0,
-    queryFn: () =>
-      expenseService.listExpenseClassificationsForExpenses(
-        approvedActualExpenses.map((expense) => expense.id)
-      ),
-  });
-
-  // Pair each actual expense to its best-matching rule (if any) using the
-  // existing matcher service. Computes variance against the rule's
-  // annualized expected amount where possible.
-  const matchedActuals = useMemo(() => {
-    if (approvedActualExpenses.length === 0 || scopedLeases.length === 0) return [];
-    const rulesByLeaseId = new Map(
-      scopedRuleSetEntries.map((entry) => [
-        entry.leaseId,
-        (entry.rules || []).filter((rule) => isApprovedRuleSource(rule, entry.ruleSet)),
-      ])
-    );
-    const leases = scopedLeases;
-
-    const ruleAnnualExpected = (rule) => {
-      const raw = Number(rule?.final_value ?? rule?.manual_value ?? rule?.extracted_value ?? rule?.fixed_monthly_amount ?? rule?.explicit_charge_amount);
-      if (!Number.isFinite(raw) || raw === 0) return null;
-      const f = String(rule?.frequency || rule?.billing_frequency || "yearly").toLowerCase();
-      if (f === "monthly") return raw * 12;
-      if (f === "quarterly") return raw * 4;
-      return raw;
-    };
-
-    // Plain-English explanation per row � what a non-engineer reading the
-    // page needs to understand the classification decision.
-    const buildPlainReason = (expense, rule, match) => {
-      const cat = expense?.category || rule?.category_name || rule?.expense_category || "this expense";
-      const niceCat = String(cat).replace(/_/g, " ");
-      if (!rule) {
-        return `This ${niceCat} expense needs review because no matching approved lease rule was found in the current scope.`;
-      }
-      const ruleLabel = rule.category_name || rule.expense_category || "matching lease rule";
-      const niceRule = String(ruleLabel).replace(/_/g, " ");
-      const payment = String(rule.payment_treatment || "").toLowerCase();
-      const recoverable = String(match?.recoverability_result || rule.recoverable_from_tenant || "").toLowerCase();
-      if (payment === "included_in_base_rent") {
-        return `This ${niceCat} expense is non-recoverable because the approved ${niceRule} rule says it is included in base rent.`;
-      }
-      if (recoverable === "recoverable") {
-        const method = rule.recovery_method ? ` via ${String(rule.recovery_method).replace(/_/g, " ")}` : "";
-        return `This ${niceCat} expense is recoverable from the tenant${method} per the approved ${niceRule} rule.`;
-      }
-      if (recoverable === "conditional") {
-        return `This ${niceCat} expense is conditionally recoverable � the approved ${niceRule} rule has a cap, base year, or condition that needs human review before recovery.`;
-      }
-      if (recoverable === "excluded" || recoverable === "non_recoverable") {
-        return `This ${niceCat} expense is non-recoverable per the approved ${niceRule} rule.`;
-      }
-      return `This ${niceCat} expense matched the ${niceRule} rule but the recovery decision needs review.`;
-    };
-
-    return approvedActualExpenses.map((expense) => {
-      const match = expenseService.matchActualExpenseToLeaseRule(expense, { leases, rulesByLeaseId });
-      const rule = match?.rule || null;
-      const expectedAnnual = ruleAnnualExpected(rule);
-      const actualAmount = Number(expense?.amount) || 0;
-      const variance = expectedAnnual != null ? actualAmount - (expectedAnnual / 12) : null;
-      const plainReason = buildPlainReason(expense, rule, match);
-      return {
-        expense,
-        rule,
-        matchScore: match?.score ?? 0,
-        recoverability: match?.recoverability_result || "needs_review",
-        recoveryMethod: match?.recovery_method || rule?.recovery_method || null,
-        camEligible: match?.cam_eligible || null,
-        reason: match?.reason || null,
-        plainReason,
-        expectedAnnual,
-        variance,
-      };
-    });
-  }, [approvedActualExpenses, approvedRules, scopedLeases, scopedRuleSetEntries]);
-
-  // Roll up matched actuals by bucket so the totals card can show
-  // "Actual vs Rule" comparison alongside the rule-based forecast.
-  const actualTotals = useMemo(() => {
-    const buckets = {
-      recoverable: { count: 0, ytd: 0 },
-      non_recoverable: { count: 0, ytd: 0 },
-      conditional: { count: 0, ytd: 0 },
-      needs_review: { count: 0, ytd: 0 },
-      unmatched: { count: 0, ytd: 0 },
-    };
-    let total = 0;
-    for (const m of matchedActuals) {
-      const amount = Number(m.expense?.amount) || 0;
-      total += amount;
-      const key =
-        m.recoverability === "recoverable" ? "recoverable"
-        : m.recoverability === "non_recoverable" || m.recoverability === "excluded" ? "non_recoverable"
-        : m.recoverability === "conditional" ? "conditional"
-        : !m.rule ? "unmatched"
-        : "needs_review";
-      buckets[key].count += 1;
-      buckets[key].ytd += amount;
-    }
-    return { buckets, total };
-  }, [matchedActuals]);
-
-  const expenseById = useMemo(() => {
-    const map = new Map();
-    for (const expense of approvedActualExpenses) map.set(expense.id, expense);
-    return map;
-  }, [approvedActualExpenses]);
-
-  const ruleById = useMemo(() => {
-    const map = new Map();
-    for (const rule of approvedRules) map.set(rule.id, rule);
-    return map;
-  }, [approvedRules]);
-
-  const classificationRows = useMemo(() => {
-    const rowsByKey = new Map();
-    const rulesByLeaseId = new Map(
-      scopedRuleSetEntries.map((entry) => [
-        entry.leaseId,
-        (entry.rules || []).filter((rule) => isApprovedRuleSource(rule, entry.ruleSet)),
-      ])
-    );
-
-    for (const classification of persistedClassifications) {
-      const expenseId = classification.expense_id || classification.actual_expense_id;
-      const expense = expenseId ? expenseById.get(expenseId) : null;
-      if (expense && !isApprovedActualExpense(expense)) continue;
-
-      const ruleId =
-        classification.lease_expense_rule_id ||
-        classification.linked_expense_rule_id ||
-        classification.recovery_rule_id ||
-        null;
-      const rule = ruleId ? ruleById.get(ruleId) || null : null;
-      const amount = Number(expense?.amount ?? classification.amount ?? 0);
-      const classificationKey =
-        classification.classification_key ||
-        buildFallbackClassificationKey(expense?.org_id || lease?.org_id || lease?.id, expenseId, ruleId);
-
-      rowsByKey.set(classificationKey, {
-        id: classification.id,
-        classificationKey,
-        expenseId,
-        expense,
-        rule,
-        expenseDate: expense?.expense_date || expense?.date || classification.service_period_start || null,
-        vendor: expense?.vendor || expense?.vendor_name || "�",
-        invoiceNumber: expense?.invoice_number || "�",
-        propertyLabel:
-          propertyById.get(expense?.property_id || classification.property_id)?.name ||
-          lease?.property_name ||
-          expense?.property_id ||
-          classification.property_id ||
-          "�",
-        buildingLabel:
-          buildingById.get(resolveBuildingId(expense || classification, unitById) || classification.building_id)?.name ||
-          resolveBuildingId(expense || classification, unitById) ||
-          classification.building_id ||
-          "�",
-        unitLabel:
-          unitById.get(expense?.unit_id || classification.unit_id)?.unit_number ||
-          unitById.get(expense?.unit_id || classification.unit_id)?.unit_id_code ||
-          expense?.unit_id ||
-          classification.unit_id ||
-          "�",
-        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "�",
-        category: classification.category || expense?.category || "�",
-        subcategory: classification.subcategory || expense?.expense_subcategory || "�",
-        actualAmount: amount,
-        editableAmount: amount,
-        matchedLeaseRule: rule?.category_name || rule?.expense_category || (ruleId ? ruleId : "Unmatched"),
-        ruleCategory: rule?.category_name || rule?.expense_category || "�",
-        ruleSource: classification.rule_source || "lease",
-        recoverabilityResult: classification.recoverability_result || classification.recovery_status || "needs_review",
-        camEligible: classification.cam_eligible || "no",
-        recoveryMethod: classification.recovery_method || "�",
-        allocationBasis: classification.allocation_basis || classification.allocation_method || "pro_rata",
-        recoverableAmount: Number(classification.recoverable_amount ?? (classification.recoverability_result === "recoverable" ? amount : 0)),
-        nonRecoverableAmount: Number(classification.non_recoverable_amount ?? (classification.recoverability_result === "non_recoverable" ? amount : 0)),
-        conditionalAmount: Number(classification.conditional_amount ?? (classification.recoverability_result === "conditional" ? amount : 0)),
-        excludedAmount: Number(classification.excluded_amount ?? (classification.recoverability_result === "excluded" ? amount : 0)),
-        recoveryReason: classification.recovery_reason || "�",
-        confidence: classification.confidence_score,
-        classificationStatus: classification.classification_status || "matched",
-        exceptionType: classification.exception_type || null,
-        nextStep: classification.next_step || "Finalize row",
-        sentToCam: Boolean(classification.sent_to_cam),
-        approvedStatus: classification.approved_status || expense?.approved_status || expense?.review_status || "draft",
-      });
-    }
-
-    for (const matchRow of matchedActuals) {
-      const expense = matchRow.expense;
-      const rule = matchRow.rule;
-      const ruleId = rule?.id || null;
-      const key = buildFallbackClassificationKey(expense?.org_id || lease?.org_id || lease?.id, expense?.id, ruleId);
-      if (rowsByKey.has(key)) continue;
-      const amount = Number(expense?.amount || 0);
-      const recoverabilityResult = matchRow.recoverability || "needs_review";
-      rowsByKey.set(key, {
-        id: null,
-        classificationKey: key,
-        expenseId: expense?.id,
-        expense,
-        rule,
-        expenseDate: expense?.expense_date || expense?.date || null,
-        vendor: expense?.vendor || expense?.vendor_name || "�",
-        invoiceNumber: expense?.invoice_number || "�",
-        propertyLabel:
-          propertyById.get(expense?.property_id)?.name ||
-          lease?.property_name ||
-          expense?.property_id ||
-          "�",
-        buildingLabel:
-          buildingById.get(resolveBuildingId(expense, unitById))?.name ||
-          resolveBuildingId(expense, unitById) ||
-          "�",
-        unitLabel:
-          unitById.get(expense?.unit_id)?.unit_number ||
-          unitById.get(expense?.unit_id)?.unit_id_code ||
-          expense?.unit_id ||
-          "�",
-        leaseTenantLabel: expense?.tenant_name || lease?.tenant_name || "�",
-        category: expense?.category || "�",
-        subcategory: expense?.expense_subcategory || "�",
-        actualAmount: amount,
-        editableAmount: amount,
-        matchedLeaseRule: rule?.category_name || rule?.expense_category || "Unmatched",
-        ruleCategory: rule?.category_name || rule?.expense_category || "�",
-        ruleSource: rule ? "lease" : "unmatched",
-        recoverabilityResult,
-        camEligible: matchRow.camEligible || "no",
-        recoveryMethod: matchRow.recoveryMethod || "�",
-        allocationBasis: expense?.allocation_method || "pro_rata",
-        recoverableAmount: recoverabilityResult === "recoverable" ? amount : 0,
-        nonRecoverableAmount: recoverabilityResult === "non_recoverable" ? amount : 0,
-        conditionalAmount: recoverabilityResult === "conditional" ? amount : 0,
-        excludedAmount: recoverabilityResult === "excluded" ? amount : 0,
-        recoveryReason: matchRow.plainReason,
-        confidence: typeof matchRow.matchScore === "number" ? Math.min(matchRow.matchScore / 100, 1) : null,
-        classificationStatus: !rule ? "unmatched" : recoverabilityResult === "conditional" ? "conditional" : recoverabilityResult === "needs_review" ? "exception" : "matched",
-        exceptionType: !rule ? "unmatched" : recoverabilityResult === "needs_review" ? "manual_review" : null,
-        nextStep: !rule ? "Review exception" : "Finalize row",
-        sentToCam: false,
-        approvedStatus: expense?.approved_status || expense?.review_status || "draft",
-      });
-    }
-
-    return Array.from(rowsByKey.values()).sort((left, right) => {
-      const leftDate = String(left.expenseDate || "");
-      const rightDate = String(right.expenseDate || "");
-      return rightDate.localeCompare(leftDate);
-    });
-  }, [approvedActualExpenses, approvedRules, buildingById, expenseById, lease, matchedActuals, persistedClassifications, propertyById, ruleById, scopedRuleSetEntries, unitById]);
-
-  const tabCounts = useMemo(() => {
-    const build = (rows) => ({
-      count: rows.length,
-      amount: rows.reduce((sum, row) => sum + Number(row.actualAmount || 0), 0),
-    });
-
-    const recoverableRows = classificationRows.filter((row) => row.recoverabilityResult === "recoverable");
-    const nonRecoverableRows = classificationRows.filter((row) => row.recoverabilityResult === "non_recoverable");
-    const conditionalRows = classificationRows.filter((row) => row.recoverabilityResult === "conditional");
-    const excludedRows = classificationRows.filter((row) => row.recoverabilityResult === "excluded");
-    const exceptionRows = classificationRows.filter(isExceptionRow);
-
-    return {
-      all: build(classificationRows),
-      recoverable: build(recoverableRows),
-      non_recoverable: build(nonRecoverableRows),
-      conditional: build(conditionalRows),
-      excluded: build(excludedRows),
-      needs_review: build(exceptionRows),
-    };
-  }, [classificationRows]);
-
-  const filteredClassificationRows = useMemo(() => {
-    if (activeResultTab === "all") return classificationRows;
-    if (activeResultTab === "needs_review") return classificationRows.filter(isExceptionRow);
-    return classificationRows.filter((row) => tabForRow(row) === activeResultTab);
-  }, [activeResultTab, classificationRows]);
-
-  // ── Total Expense Calculation ─────────────────────────────────────────
-  // Rolls up dollar amounts across rules into recoverable / non-recoverable /
-  // conditional totals at both monthly and annual cadence. Used by the
-  // sidebar's "Total Expense Calculation" card. Per-rule frequency is
-  // normalized to annual; rules without a value are excluded from the sum
-  // but counted under "needs value".
-  const expenseTotals = useMemo(() => {
-    const toNumber = (v) => {
-      if (v == null || v === "") return null;
-      const n = Number(String(v).replace(/[$,%\s,]/g, ""));
-      return Number.isFinite(n) ? n : null;
-    };
-    const annualize = (amount, freq) => {
-      if (amount == null) return null;
-      const f = String(freq || "").toLowerCase();
-      if (f === "monthly") return amount * 12;
-      if (f === "quarterly") return amount * 4;
-      if (f === "yearly" || f === "annual" || !f) return amount;
-      if (f === "triggered" || f === "none") return null;
-      return amount;
-    };
-    const buckets = {
-      recoverable:    { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
-      non_recoverable:{ annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
-      conditional:    { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
-      excluded:       { annual: 0, monthly: 0, count: 0, withValue: 0, noValue: 0 },
-    };
-    const categoryRows = []; // for the per-category breakdown table
-    for (const rule of localRules) {
-      const decision = leaseExpenseRuleService.normalizeRecoveryStatus(rule);
-      const bucketKey =
-        rule.is_excluded ? "excluded"
-        : decision === "recoverable" ? "recoverable"
-        : decision === "conditional" ? "conditional"
-        : decision === "non_recoverable" || decision === "excluded" ? "non_recoverable"
-        : null;
-      if (!bucketKey) continue;
-      const bucket = buckets[bucketKey];
-      bucket.count += 1;
-      const rawAmount = toNumber(rule.final_value ?? rule.manual_value ?? rule.extracted_value ?? rule.fixed_monthly_amount ?? rule.explicit_charge_amount);
-      const annual = annualize(rawAmount, rule.frequency || rule.billing_frequency);
-      if (annual != null) {
-        bucket.annual += annual;
-        bucket.monthly += annual / 12;
-        bucket.withValue += 1;
-      } else {
-        bucket.noValue += 1;
-      }
-      if (rawAmount != null) {
-        categoryRows.push({
-          category: rule.category_name || rule.subcategory_name || rule.expense_category,
-          bucket: bucketKey,
-          frequency: rule.frequency || rule.billing_frequency || "yearly",
-          amount: rawAmount,
-          annual: annual ?? 0,
-        });
-      }
-    }
-    const totalAnnual = buckets.recoverable.annual + buckets.non_recoverable.annual + buckets.conditional.annual + buckets.excluded.annual;
-    return { buckets, totalAnnual, totalMonthly: totalAnnual / 12, categoryRows };
-  }, [localRules]);
-
-  const fmtMoney = (n) => `$${Math.round(n || 0).toLocaleString()}`;
-
-  const handleEditRule = (category, rule) => {
-    setSelectedCategory(category);
-    setSelectedRule(rule);
-    setIsValuePanelOpen(true);
-  };
-
-  const handleViewEvidence = (category, rule) => {
-    setSelectedCategory(category);
-    setSelectedRule(rule);
-    setIsEvidenceDrawerOpen(true);
-  };
-
-  const handleSaveRule = (updatedRule) => {
-    setLocalRules(prev => {
-      const existingIdx = prev.findIndex(r => r.expense_category_id === updatedRule.expense_category_id);
-      if (existingIdx >= 0) {
-        const newRules = [...prev];
-        newRules[existingIdx] = updatedRule;
-        return newRules;
-      } else {
-        return [...prev, updatedRule];
-      }
-    });
-    setIsValuePanelOpen(false);
-  };
-
-  const rowActionMutation = useMutation({
-    mutationFn: async ({ type, row }) => {
-      if (type === "editAmount") {
-        const nextAmount = window.prompt("Enter updated amount", String(row.editableAmount ?? row.actualAmount ?? ""));
-        if (nextAmount == null) return null;
-        return expenseService.updateExpenseAmount(row.expenseId, Number(nextAmount));
-      }
-
-      if (type === "override") {
-        const nextStatus = window.prompt(
-          "Enter recoverable, non_recoverable, conditional, excluded, or needs_review",
-          row.recoverabilityResult || "recoverable",
-        );
-        if (!nextStatus) return null;
-        return expenseService.reviewExpense(row.expenseId, {
-          recoveryStatus: nextStatus,
-          approvedStatus: ["recoverable", "non_recoverable", "excluded"].includes(nextStatus) ? "approved" : "needs_review",
-          ruleSource: "manual",
-          reason: "Manual override from Expense Classification",
-        });
-      }
-
-      if (type === "sendToReview") {
-        if (row.id) return expenseService.sendExpenseClassificationToReview(row.id);
-        return expenseService.reviewExpense(row.expenseId, {
-          recoveryStatus: "needs_review",
-          approvedStatus: "needs_review",
-          ruleSource: "manual",
-          reason: "Sent to review from Expense Classification",
-        });
-      }
-
-      if (type === "finalize") {
-        if (row.id) return expenseService.finalizeExpenseClassification(row.id);
-        return expenseService.reviewExpense(row.expenseId, {
-          recoveryStatus: row.recoverabilityResult,
-          approvedStatus: "approved",
-          ruleSource: row.rule ? "lease" : "manual",
-          reason: row.recoveryReason,
-        });
-      }
-
-      if (type === "reopen") {
-        return expenseService.reopenExpenseClassification(row.id);
-      }
-
-      if (type === "sendToCam") {
-        return expenseService.sendClassificationToCam(row);
-      }
-
-      return null;
-    },
+  const finalizeMutation = useMutation({
+    mutationFn: (ids) => Promise.all(ids.map(id => expenseService.finalizeExpenseClassification(id))),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
-      toast.success("Classification updated.");
-    },
-    onError: (error) => {
-      toast.error(error?.message || "Could not update classification.");
-    },
+      toast.success("Selected rows finalized");
+      setSelectedRows(new Set());
+      refetch();
+    }
   });
 
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const duplicateCount = classificationRows.length - new Set(classificationRows.map((row) => row.classificationKey)).size;
-    console.group("[LeaseExpenseClassification] diagnostic");
-    console.log("scope", {
-      property: selectedProperty !== "all" ? selectedProperty : null,
-      building: selectedBuilding !== "all" ? selectedBuilding : null,
-      unit: selectedUnit !== "all" ? selectedUnit : null,
-      lease: lease?.id || null,
-      tenant: lease?.tenant_id || null,
-      scoped_leases: scopedLeases.length,
-      period: approvedActualExpenses.map((expense) => expense.expense_date || expense.date).filter(Boolean),
-    });
-    console.log("approved_rules_in_scope", approvedRules.length);
-    console.log("approved_actuals_in_scope", approvedActualExpenses.length);
-    console.log("classification_rows", classificationRows.length);
-    console.log("duplicate_classification_key_count", duplicateCount);
-    console.log("recoverable", tabCounts.recoverable);
-    console.log("non_recoverable", tabCounts.non_recoverable);
-    console.log("conditional", tabCounts.conditional);
-    console.log("excluded", tabCounts.excluded);
-    console.log("needs_review", tabCounts.needs_review);
-    console.log("finalized_count", classificationRows.filter((row) => row.classificationStatus === "finalized").length);
-    console.log("sent_to_cam_count", classificationRows.filter((row) => row.sentToCam).length);
-    console.groupEnd();
-  }, [approvedActualExpenses, approvedRules, classificationRows, lease, scopedLeases.length, selectedBuilding, selectedProperty, selectedUnit, tabCounts]);
+  const sendToCamMutation = useMutation({
+    mutationFn: (ids) => Promise.all(ids.map(id => expenseService.sendClassificationToCam(id))),
+    onSuccess: () => {
+      toast.success("Eligible rows sent to CAM");
+      setSelectedRows(new Set());
+      refetch();
+    }
+  });
 
-  const isWorking = isLoadingLease || isLoadingCategories || isLoadingRules || extractRulesMutation.isPending || saveRuleSetMutation.isPending;
+  // Handlers
+  const toggleRow = (id) => {
+    const next = new Set(selectedRows);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedRows(next);
+  };
+
+  const handleFinalizeSelected = () => {
+    const ids = Array.from(selectedRows);
+    if (!ids.length) return toast.error("Select rows to finalize");
+    finalizeMutation.mutate(ids);
+  };
+
+  const handleSendToCamSelected = () => {
+    const ids = Array.from(selectedRows);
+    if (!ids.length) return toast.error("Select rows to send to CAM");
+    sendToCamMutation.mutate(ids);
+  };
+
+  // Filtered Rows for Tabs
+  const filteredRows = useMemo(() => {
+    return existingClassifications.filter(row => {
+      if (activeTab === 'all') return true;
+      if (activeTab === 'recoverable') return row.recoverability_result === 'recoverable';
+      if (activeTab === 'non_recoverable') return row.recoverability_result === 'non_recoverable';
+      if (activeTab === 'conditional') return row.recoverability_result === 'conditional';
+      if (activeTab === 'excluded') return row.recoverability_result === 'excluded';
+      if (activeTab === 'needs_review') return ['unmatched', 'exception'].includes(row.classification_status) || row.recoverability_result === 'needs_review';
+      if (activeTab === 'finalized') return row.classification_status === 'finalized';
+      if (activeTab === 'sent_to_cam') return row.sent_to_cam === true;
+      return true;
+    });
+  }, [existingClassifications, activeTab]);
+
+  const currency = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
   return (
-    <div className="p-4 lg:p-6 space-y-4">
-      <Button variant="ghost" onClick={() => navigate(-1)} className="mb-2">
-        <ArrowLeft className="w-4 h-4 mr-2" /> Back
-      </Button>
-
+    <div className="flex flex-col h-full bg-background min-h-screen pb-20">
       <PageHeader
-        icon={FileText}
         title="Expense Recoverability"
-        subtitle={lease
-          ? `Matching approved actual expenses to approved lease rules for ${lease.tenant_name || "the selected lease scope"}`
-          : 'Loading...'}
-        iconColor="from-blue-600 to-indigo-600"
+        subtitle="Matching approved actual expenses to approved lease rules and calculate recoverability."
       >
-        <div className="flex flex-wrap gap-2">
-          <Link to={createPageUrl("AddExpense", { lease_id: id })}>
-            <Button variant="outline" size="sm" disabled={isWorking}>Add Expense</Button>
-          </Link>
-          <Link to={createPageUrl("BulkImport", { lease_id: id })}>
-            <Button variant="outline" size="sm" disabled={isWorking}>Bulk Import</Button>
-          </Link>
-          <Link to={createPageUrl("LeaseExpenseRules") + (selectedProperty !== "all" ? `?property=${selectedProperty}` : lease?.property_id ? `?property=${lease.property_id}` : "")}>
-            <Button variant="outline" size="sm" disabled={isWorking}>Manage Lease Rules</Button>
-          </Link>
-          <Button
-            className="bg-slate-900 hover:bg-slate-800 text-white"
-            size="sm"
-            onClick={() => classifyExpensesMutation.mutate()}
-            disabled={classifyExpensesMutation.isPending || approvedActualExpenses.length === 0 || approvedRules.length === 0}
-            title={
-              approvedActualExpenses.length === 0
-                ? "Approve actual expenses first"
-                : approvedRules.length === 0
-                ? "Approve lease expense rules first"
-                : "Match actuals against rules and persist results"
-            }
-          >
-            {classifyExpensesMutation.isPending ? "Running Classification…" : "Run Classification"}
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate("/expenses/add")}><Plus className="w-4 h-4 mr-2"/>Add Expense</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate("/expenses/import")}><Upload className="w-4 h-4 mr-2"/>Bulk Import</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate("/lease-expense-rules")}><FileText className="w-4 h-4 mr-2"/>Manage Lease Rules</Button>
+          <Button variant="default" size="sm" onClick={() => runClassificationMutation.mutate()} disabled={runClassificationMutation.isPending || approvedActuals.length === 0 || approvedRules.length === 0}>
+            Run Classification
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/LeaseReview?id=${id}`)}
-            disabled={isWorking}
-          >
-            <ArrowLeft className="w-4 h-4 mr-1" /> Lease Review
+          <Button variant="secondary" size="sm" onClick={handleFinalizeSelected} disabled={selectedRows.size === 0 || finalizeMutation.isPending}>
+            Finalize Selected
+          </Button>
+          <Button variant="secondary" size="sm" onClick={handleSendToCamSelected} disabled={selectedRows.size === 0 || sendToCamMutation.isPending}>
+            <ArrowRightCircle className="w-4 h-4 mr-2"/> Send Eligible to CAM
           </Button>
         </div>
       </PageHeader>
 
-      <ScopeSelector
-        properties={properties}
-        buildings={buildings}
-        units={units}
-        selectedProperty={selectedProperty}
-        selectedBuilding={selectedBuilding}
-        selectedUnit={selectedUnit}
-        onPropertyChange={setSelectedProperty}
-        onBuildingChange={setSelectedBuilding}
-        onUnitChange={setSelectedUnit}
-      />
-
-      {/* ── Empty-state guards ────────────────────────────────────────────
-          Per spec: don't show fake zero charts. If actuals or approved
-          rules are missing, surface the precondition prominently. */}
-      {!isLoadingActuals && approvedActualExpenses.length === 0 && (
-        <Card className="border-amber-200 bg-amber-50/70">
-          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold">No approved actual expenses found in this scope.</p>
-              <p className="mt-1 text-xs">
-                Select property, building, and unit above, then add or import expenses and approve them on Actual Expenses before classification.{" "}
-                <Link to={createPageUrl("AddExpense", { lease_id: id })} className="underline">Add one manually</Link>
-                {" or "}
-                <Link to={createPageUrl("BulkImport", { lease_id: id })} className="underline">bulk import a CSV</Link>.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-      {!isLoadingRules && approvedRules.length === 0 && (
-        <Card className="border-rose-200 bg-rose-50/70">
-          <CardContent className="flex items-start gap-3 p-4 text-sm text-rose-900">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold">No approved lease expense rules found in this scope.</p>
-              <p className="mt-1 text-xs">
-                Approve lease expense rules for the selected property, building, and unit before classification.{" "}
-                <Link to={createPageUrl("LeaseExpenseRules")} className="underline">Open Lease Expense Rules</Link>{" "}
-                to extract and approve them.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── 8 top cards per spec ──────────────────────────────────────────
-          Actuals Loaded · Approved Rules · Matched · Recoverable $ ·
-          Non-Recoverable $ · Conditional/Needs Review $ · Finalized $ ·
-          CAM Eligible $ */}
-      <Card className="border-slate-200 bg-slate-50/70">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-3">
-          <div className="text-sm text-slate-700">
-            <div className="text-[11px] font-semibold uppercase text-slate-500">Scope</div>
-            <div className="mt-1">Property: {propertyById.get(selectedProperty)?.name || (selectedProperty !== "all" ? selectedProperty : "All Properties")}</div>
-            <div>Building: {buildingById.get(selectedBuilding)?.name || (selectedBuilding !== "all" ? selectedBuilding : "All Buildings")}</div>
-            <div>Unit: {unitById.get(selectedUnit)?.unit_number || unitById.get(selectedUnit)?.unit_id_code || (selectedUnit !== "all" ? selectedUnit : "All Units")}</div>
+      <div className="px-6 py-4 border-b bg-muted/20">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          <div>
+            <label className="text-xs font-medium mb-1 block">Property</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedProperty} onChange={e => setSelectedProperty(e.target.value)}>
+              <option value="all">All Properties</option>
+              {properties.map(p => <option key={p.id} value={p.id}>{p.property_name}</option>)}
+            </select>
           </div>
-          <div className="text-sm text-slate-700">
-            <div className="text-[11px] font-semibold uppercase text-slate-500">Lease Scope</div>
-            <div className="mt-1">Scoped leases: {scopedLeases.length}</div>
-            <div>Default lease: {lease?.tenant_name ? `${lease.tenant_name} lease` : (lease?.id ? `Lease ${String(lease.id).slice(0, 8)}` : "No lease selected")}</div>
-            <div>Tenant: {lease?.tenant_name || "No tenant selected"}</div>
-            <div>Fiscal Year: {approvedActualExpenses[0]?.fiscal_year || new Date().getFullYear()}</div>
+          <div>
+            <label className="text-xs font-medium mb-1 block">Building</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedBuilding} onChange={e => setSelectedBuilding(e.target.value)}>
+              <option value="all">All Buildings</option>
+              {buildings.filter(b => selectedProperty === 'all' || b.property_id === selectedProperty).map(b => <option key={b.id} value={b.id}>{b.building_name}</option>)}
+            </select>
           </div>
-          <div className="text-sm text-slate-700">
-            <div className="text-[11px] font-semibold uppercase text-slate-500">Counts In Scope</div>
-            <div className="mt-1">Approved rules: {approvedRules.length}</div>
-            <div>Approved actuals: {approvedActualExpenses.length}</div>
-            <div>Classification rows: {classificationRows.length}</div>
-            <div>Exceptions: {tabCounts.needs_review.count}</div>
-            <div>Finalized: {classificationRows.filter((row) => row.classificationStatus === "finalized").length}</div>
+          <div>
+            <label className="text-xs font-medium mb-1 block">Unit</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedUnit} onChange={e => setSelectedUnit(e.target.value)}>
+              <option value="all">All Units</option>
+              {units.map(u => <option key={u.id} value={u.id}>{u.unit_number}</option>)}
+            </select>
           </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5 lg:grid-cols-10">
-        <SummaryCard label="Approved Actuals Loaded" value={approvedActualExpenses.length} tone="slate" />
-        <SummaryCard label="Approved Lease Rules Loaded" value={approvedRules.length} tone="slate" />
-        <SummaryCard label="Matched Expenses" value={classificationRows.filter((row) => row.rule).length} tone="blue" />
-        <SummaryCard label="Recoverable Costs" value={fmtMoney(tabCounts.recoverable.amount)} tone="emerald" />
-        <SummaryCard label="Non-Recoverable Costs" value={fmtMoney(tabCounts.non_recoverable.amount)} tone="rose" />
-        <SummaryCard label="Conditional Costs" value={fmtMoney(tabCounts.conditional.amount)} tone="amber" />
-        <SummaryCard
-          label="Excluded Costs"
-          value={fmtMoney(tabCounts.excluded.amount)}
-          tone="slate"
-        />
-        <SummaryCard
-          label="CAM-Eligible Costs"
-          value={fmtMoney(classificationRows.filter((row) => row.camEligible === "yes").reduce((sum, row) => sum + Number(row.actualAmount || 0), 0))}
-          tone="blue"
-        />
-        <SummaryCard
-          label="Finalized Costs"
-          value={fmtMoney(classificationRows.filter((row) => row.classificationStatus === "finalized").reduce((sum, row) => sum + Number(row.actualAmount || 0), 0))}
-          tone="emerald"
-        />
-        <SummaryCard
-          label="Needs Review / Exceptions"
-          value={fmtMoney(tabCounts.needs_review.amount)}
-          tone="amber"
-        />
+          <div>
+            <label className="text-xs font-medium mb-1 block">Lease</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedLease} onChange={e => setSelectedLease(e.target.value)}>
+              <option value="all">All Leases</option>
+              {leases.map(l => <option key={l.id} value={l.id}>{l.tenant_name || l.id}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium mb-1 block">Tenant</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedTenant} onChange={e => setSelectedTenant(e.target.value)}>
+              <option value="all">All Tenants</option>
+              {tenants.map(t => <option key={t.id} value={t.id}>{t.tenant_name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium mb-1 block">Fiscal Year</label>
+            <select className="w-full text-sm border rounded p-1" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+              <option value="all">All Years</option>
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
+            </select>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {/* Main area � Actuals vs Rules table is the primary surface now.
-            The per-lease rule grid was previously the main content; it has
-            been demoted to a collapsible "Lease Rule Reference" panel
-            below because rule approval belongs on the Lease Expense Rules
-            page, not here. */}
-        <div className="md:col-span-3 space-y-4">
-          <details className="rounded-lg border border-slate-200 bg-slate-50/60">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">
-              Lease Rule Reference
-              <span className="ml-2 text-xs font-normal text-slate-500">
-                ({localRules.length} rules � open Lease Expense Rules to approve / edit)
-              </span>
-            </summary>
-            <div className="border-t border-slate-200 p-4">
-              {isLoadingCategories ? (
-                <div className="py-8 text-center text-slate-500">Loading taxonomy...</div>
-              ) : (
-                <div className="space-y-6">
-                  <RuleGroupSection
-                    title="Recoverable Rules"
-                    description="These lease clauses allow the expense to be recovered from the tenant."
-                    categories={groupedCategories.recoverable}
-                    rules={localRules}
-                    tone="emerald"
-                    frequency={frequency}
-                    onEditRule={handleEditRule}
-                    onViewEvidence={handleViewEvidence}
-                  />
-                  <RuleGroupSection
-                    title="Non-Recoverable Rules"
-                    description="These costs stay with ownership or are explicitly excluded."
-                    categories={groupedCategories.nonRecoverable}
-                    rules={localRules}
-                    tone="rose"
-                    frequency={frequency}
-                    onEditRule={handleEditRule}
-                    onViewEvidence={handleViewEvidence}
-                  />
-                  <RuleGroupSection
-                    title="Conditional Rules"
-                    description="These clauses depend on caps, base years, gross-up logic, or other conditions."
-                    categories={groupedCategories.conditional}
-                    rules={localRules}
-                    tone="amber"
-                    frequency={frequency}
-                    onEditRule={handleEditRule}
-                    onViewEvidence={handleViewEvidence}
-                  />
-                  <RuleGroupSection
-                    title="Needs Review / Unmapped"
-                    description="Finish the yes/no mapping or add the value manually when the lease mentions the item but no numeric amount was found."
-                    categories={groupedCategories.needsReview}
-                    rules={localRules}
-                    tone="slate"
-                    frequency={frequency}
-                    onEditRule={handleEditRule}
-                    onViewEvidence={handleViewEvidence}
-                  />
-                </div>
-              )}
+      <div className="p-6 flex-1 space-y-6">
+        
+        {/* Banners */}
+        {approvedActuals.length === 0 && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-md flex items-center justify-between">
+            <div className="flex items-center"><AlertTriangle className="w-5 h-5 mr-3"/> No approved actual expenses found for this scope. Add/import expenses and approve them before classification.</div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigate("/expenses/add")}>Add Expense</Button>
+              <Button variant="outline" size="sm" onClick={() => navigate("/expenses/import")}>Bulk Import</Button>
             </div>
-          </details>
+          </div>
+        )}
 
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div>
-                <CardTitle>Classification Results</CardTitle>
-                <p className="mt-1 text-sm text-slate-500">
-                  Approved actual expenses matched to approved lease rules. Each row is persisted by classification key so reruns update instead of duplicating.
-                </p>
-              </div>
-              <div className="text-right text-xs text-slate-500">
-                <div>{tabCounts.all.count} rows</div>
-                <div>{fmtMoney(tabCounts.all.amount)} in scope</div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Tabs value={activeResultTab} onValueChange={setActiveResultTab}>
-                <TabsList className="mb-4 flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
-                  <TabsTrigger value="all">All ({tabCounts.all.count})</TabsTrigger>
-                  <TabsTrigger value="recoverable">Recoverable ({tabCounts.recoverable.count})</TabsTrigger>
-                  <TabsTrigger value="non_recoverable">Non-Recoverable ({tabCounts.non_recoverable.count})</TabsTrigger>
-                  <TabsTrigger value="conditional">Conditional ({tabCounts.conditional.count})</TabsTrigger>
-                  <TabsTrigger value="excluded">Excluded ({tabCounts.excluded.count})</TabsTrigger>
-                  <TabsTrigger value="needs_review">Needs Review / Exceptions ({tabCounts.needs_review.count})</TabsTrigger>
-                </TabsList>
-                <TabsContent value={activeResultTab} forceMount>
-                  <div className="mb-3 text-xs text-slate-500">
-                    Total for this tab: {fmtMoney(tabCounts[activeResultTab]?.amount ?? tabCounts.all.amount)}
-                  </div>
-                  <div className="overflow-x-auto rounded-md border border-slate-200">
-                    <table className="min-w-[1900px] text-xs">
-                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left">Expense Date</th>
-                          <th className="px-3 py-2 text-left">Vendor</th>
-                          <th className="px-3 py-2 text-left">Invoice Number</th>
-                          <th className="px-3 py-2 text-left">Property</th>
-                          <th className="px-3 py-2 text-left">Building</th>
-                          <th className="px-3 py-2 text-left">Unit</th>
-                          <th className="px-3 py-2 text-left">Lease / Tenant</th>
-                          <th className="px-3 py-2 text-left">Category</th>
-                          <th className="px-3 py-2 text-left">Subcategory</th>
-                          <th className="px-3 py-2 text-right">Actual Amount</th>
-                          <th className="px-3 py-2 text-right">Editable Amount</th>
-                          <th className="px-3 py-2 text-left">Matched Lease Rule</th>
-                          <th className="px-3 py-2 text-left">Rule Category</th>
-                          <th className="px-3 py-2 text-left">Rule Source</th>
-                          <th className="px-3 py-2 text-left">Recoverability Result</th>
-                          <th className="px-3 py-2 text-left">CAM Eligible</th>
-                          <th className="px-3 py-2 text-left">Recovery Method</th>
-                          <th className="px-3 py-2 text-left">Allocation Basis</th>
-                          <th className="px-3 py-2 text-right">Recoverable Amount</th>
-                          <th className="px-3 py-2 text-right">Non-Recoverable Amount</th>
-                          <th className="px-3 py-2 text-right">Conditional Amount</th>
-                          <th className="px-3 py-2 text-right">Excluded Amount</th>
-                          <th className="px-3 py-2 text-left">Recovery Reason</th>
-                          <th className="px-3 py-2 text-left">Confidence</th>
-                          <th className="px-3 py-2 text-left">Classification Status</th>
-                          <th className="px-3 py-2 text-left">Exception Type</th>
-                          <th className="px-3 py-2 text-left">Next Step</th>
-                          <th className="px-3 py-2 text-left">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredClassificationRows.map((row) => (
-                          <tr key={row.classificationKey} className="align-top hover:bg-slate-50">
-                            <td className="px-3 py-2">{row.expenseDate || "—"}</td>
-                            <td className="px-3 py-2 font-medium text-slate-900">{row.vendor}</td>
-                            <td className="px-3 py-2">{row.invoiceNumber}</td>
-                            <td className="px-3 py-2">{row.propertyLabel}</td>
-                            <td className="px-3 py-2">{row.buildingLabel}</td>
-                            <td className="px-3 py-2">{row.unitLabel}</td>
-                            <td className="px-3 py-2">{row.leaseTenantLabel}</td>
-                            <td className="px-3 py-2">{row.category}</td>
-                            <td className="px-3 py-2">{row.subcategory}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.actualAmount)}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.editableAmount)}</td>
-                            <td className="px-3 py-2">{row.matchedLeaseRule}</td>
-                            <td className="px-3 py-2">{row.ruleCategory}</td>
-                            <td className="px-3 py-2">{row.ruleSource}</td>
-                            <td className="px-3 py-2">
-                              <Badge className="text-[10px] uppercase">
-                                {String(row.recoverabilityResult || "—").replace(/_/g, " ")}
-                              </Badge>
-                            </td>
-                            <td className="px-3 py-2">{row.camEligible}</td>
-                            <td className="px-3 py-2">{row.recoveryMethod}</td>
-                            <td className="px-3 py-2">{row.allocationBasis}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.recoverableAmount)}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.nonRecoverableAmount)}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.conditionalAmount)}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtMoney(row.excludedAmount)}</td>
-                            <td className="max-w-[280px] px-3 py-2 text-[11px] text-slate-600">{row.recoveryReason}</td>
-                            <td className="px-3 py-2">{row.confidence == null ? "—" : `${Math.round(Number(row.confidence) <= 1 ? Number(row.confidence) * 100 : Number(row.confidence))}%`}</td>
-                            <td className="px-3 py-2">{row.classificationStatus}</td>
-                            <td className="px-3 py-2">{row.exceptionType || "—"}</td>
-                            <td className="px-3 py-2">{row.nextStep}</td>
-                            <td className="px-3 py-2">
-                              <div className="flex flex-wrap gap-1">
-                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "editAmount", row })}>Edit Amount</Button>
-                                <Link to={createPageUrl("AddExpense", { lease_id: id })}>
-                                  <Button size="sm" variant="outline">View Actual Expense</Button>
-                                </Link>
-                                <Link to={createPageUrl("LeaseExpenseRules", lease?.property_id ? { property: lease.property_id } : {})}>
-                                  <Button size="sm" variant="outline">View Lease Rule</Button>
-                                </Link>
-                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "override", row })}>Override Classification</Button>
-                                <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "sendToReview", row })}>Send to Review</Button>
-                                {row.classificationStatus === "finalized" ? (
-                                  <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "reopen", row })}>Reopen Finalized Row</Button>
-                                ) : (
-                                  <Button size="sm" variant="outline" onClick={() => rowActionMutation.mutate({ type: "finalize", row })}>Finalize Row</Button>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={!row.id || row.sentToCam || row.classificationStatus !== "finalized" || row.camEligible !== "yes" || row.recoverabilityResult !== "recoverable"}
-                                  onClick={() => rowActionMutation.mutate({ type: "sendToCam", row })}
-                                >
-                                  {row.sentToCam ? "Sent to CAM" : "Send to CAM"}
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {filteredClassificationRows.length === 0 && (
-                          <tr>
-                            <td colSpan={28} className="px-4 py-8 text-center text-sm text-slate-500">
-                              No classification rows in this tab.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
+        {approvedActuals.length > 0 && approvedRules.length === 0 && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-md flex items-center justify-between">
+            <div className="flex items-center"><Info className="w-5 h-5 mr-3"/> No approved lease expense rules found for this scope. Approve lease expense rules before classification.</div>
+            <Button variant="outline" size="sm" onClick={() => navigate("/lease-expense-rules")}>Manage Lease Rules</Button>
+          </div>
+        )}
 
-          {/* ── Actuals vs Rules Coordination ──────────────────────────── */}
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div>
-                <CardTitle>Actual Expenses vs Lease Rules</CardTitle>
-                <p className="mt-1 text-sm text-slate-500">
-                  Each invoice / bulk-imported / manually-added expense for this lease, matched against the rule that governs its recovery. Click <em>Run Classification</em> to persist decisions to <code>expense_classifications</code> � that's what feeds Expense Review and Expense Projection.
-                </p>
-              </div>
-              <div className="flex flex-shrink-0 flex-col items-end gap-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px] uppercase">
-                    {matchedActuals.length} actuals
-                  </Badge>
-                  <Badge variant="outline" className="text-[10px] uppercase text-slate-500">
-                    YTD {`$${Math.round(actualTotals.total).toLocaleString()}`}
-                  </Badge>
-                </div>
-                {persistedClassifications.length > 0 && (
-                  <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700">
-                      {persistedClassifications.filter((c) => c.classification_status === "finalized").length} finalized
-                    </Badge>
-                    <Badge variant="outline" className="bg-amber-50 text-amber-700">
-                      {persistedClassifications.filter((c) => c.classification_status === "exception" || c.exception_type).length} exceptions
-                    </Badge>
-                  </div>
-                )}
-                <Button
-                  size="sm"
-                  className="bg-slate-900 hover:bg-slate-800"
-                  onClick={() => classifyExpensesMutation.mutate()}
-                  disabled={classifyExpensesMutation.isPending || actualExpenses.length === 0}
-                  title={
-                    actualExpenses.length === 0
-                      ? "Import or add actual expenses first"
-                      : "Match every actual against approved lease rules and persist the decisions"
-                  }
-                >
-                  {classifyExpensesMutation.isPending ? "Classifying…" : "Run Classification"}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {isLoadingActuals ? (
-                <div className="py-8 text-center text-sm text-slate-500">Loading actuals…</div>
-              ) : matchedActuals.length === 0 ? (
-                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-                  <p className="font-medium text-slate-700">No actual expenses imported yet for this lease.</p>
-                  <p className="mt-1 text-xs">
-                    Use <Link to={createPageUrl("AddExpense", { lease_id: lease?.id })} className="text-blue-600 underline">Add Expense</Link>,{" "}
-                    <Link to={createPageUrl("BulkImport", { lease_id: lease?.id })} className="text-blue-600 underline">Bulk Import</Link>,
-                    or connect an invoice feed. They'll be matched against the rules above automatically.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {/* Per-bucket summary chips */}
-                  <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
-                    <ActualsBucketChip label="Recoverable"     count={actualTotals.buckets.recoverable.count}     amount={actualTotals.buckets.recoverable.ytd}     tone="emerald" />
-                    <ActualsBucketChip label="Conditional"     count={actualTotals.buckets.conditional.count}     amount={actualTotals.buckets.conditional.ytd}     tone="amber" />
-                    <ActualsBucketChip label="Non-Recoverable" count={actualTotals.buckets.non_recoverable.count} amount={actualTotals.buckets.non_recoverable.ytd} tone="rose" />
-                    <ActualsBucketChip label="Needs Review"    count={actualTotals.buckets.needs_review.count}    amount={actualTotals.buckets.needs_review.ytd}    tone="slate" />
-                    <ActualsBucketChip label="Unmatched"       count={actualTotals.buckets.unmatched.count}       amount={actualTotals.buckets.unmatched.ytd}       tone="red" />
-                  </div>
+        {approvedActuals.length > 0 && approvedRules.length > 0 && existingClassifications.length === 0 && (
+          <div className="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-md flex items-center justify-between">
+            <div className="flex items-center"><CheckCircle className="w-5 h-5 mr-3"/> Ready to classify. Click Run Classification to match actual expenses against approved lease rules.</div>
+            <Button onClick={() => runClassificationMutation.mutate()} size="sm" disabled={runClassificationMutation.isPending}>Run Classification</Button>
+          </div>
+        )}
 
-                  <div className="overflow-x-auto rounded-md border border-slate-200">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left">Date</th>
-                          <th className="px-3 py-2 text-left">Vendor / Invoice</th>
-                          <th className="px-3 py-2 text-left">Category</th>
-                          <th className="px-3 py-2 text-right">Actual</th>
-                          <th className="px-3 py-2 text-left">Matched Rule</th>
-                          <th className="px-3 py-2 text-left">CAM Eligible</th>
-                          <th className="px-3 py-2 text-right">Rule (annual)</th>
-                          <th className="px-3 py-2 text-right">Variance / mo</th>
-                          <th className="px-3 py-2 text-left">Recovery</th>
-                          <th className="px-3 py-2 text-left max-w-[320px]">Why</th>
-                          <th className="px-3 py-2 text-left">Source</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {matchedActuals.map(({ expense, rule, recoverability, expectedAnnual, variance, recoveryMethod, camEligible, plainReason }) => {
-                          const recoveryTone =
-                            recoverability === "recoverable" ? "bg-emerald-100 text-emerald-800"
-                            : recoverability === "conditional" ? "bg-amber-100 text-amber-800"
-                            : recoverability === "non_recoverable" || recoverability === "excluded" ? "bg-rose-100 text-rose-800"
-                            : !rule ? "bg-red-100 text-red-800"
-                            : "bg-slate-200 text-slate-700";
-                          return (
-                            <tr key={expense.id} className="hover:bg-slate-50">
-                              <td className="px-3 py-2 text-slate-700">{expense.date || "�"}</td>
-                              <td className="px-3 py-2">
-                                <div className="font-medium text-slate-900">{expense.vendor || "�"}</div>
-                                {expense.invoice_number && (
-                                  <div className="text-[10px] text-slate-500">#{expense.invoice_number}</div>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-slate-700">{expense.category || "�"}</td>
-                              <td className="px-3 py-2 text-right font-mono font-semibold text-slate-900">
-                                {`$${Math.round(Number(expense.amount) || 0).toLocaleString()}`}
-                              </td>
-                              <td className="px-3 py-2 text-slate-700">
-                                {rule ? (
-                                  <div>
-                                    <div className="font-medium">{rule.category_name || rule.expense_category}</div>
-                                    {recoveryMethod && (
-                                      <div className="text-[10px] text-slate-500">{recoveryMethod.replace(/_/g, " ")}</div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <span className="text-red-700">No matching rule</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge className={`text-[10px] uppercase ${
-                                  camEligible === "yes" ? "bg-emerald-100 text-emerald-800"
-                                  : camEligible === "conditional" ? "bg-amber-100 text-amber-800"
-                                  : "bg-slate-100 text-slate-600"
-                                }`}>
-                                  {camEligible ? String(camEligible).replace(/_/g, " ") : "�"}
-                                </Badge>
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-slate-700">
-                                {expectedAnnual != null ? `$${Math.round(expectedAnnual).toLocaleString()}` : "�"}
-                              </td>
-                              <td className={`px-3 py-2 text-right font-mono ${variance == null ? "text-slate-400" : variance > 0 ? "text-rose-700" : variance < 0 ? "text-emerald-700" : "text-slate-700"}`}>
-                                {variance == null ? "�" : `${variance > 0 ? "+" : ""}$${Math.round(variance).toLocaleString()}`}
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge className={`${recoveryTone} text-[10px] uppercase`}>
-                                  {recoverability?.replace(/_/g, " ") || "�"}
-                                </Badge>
-                              </td>
-                              <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[320px]" title={plainReason}>
-                                <span className="line-clamp-2">{plainReason}</span>
-                              </td>
-                              <td className="px-3 py-2 text-[10px] text-slate-500">{expense.source || "manual"}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <p className="mt-3 text-[11px] text-slate-500">
-                    Variance is per-month: actual amount minus (rule annual ÷ 12). Negative = under-budget, positive = over-budget. Rules with no dollar value can't compute variance.
-                  </p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+        {/* Summary Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Actuals Loaded</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{approvedActuals.length}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Rules Loaded</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{approvedRules.length}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Matched Expenses</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{existingClassifications.length}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Recoverable Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-green-600">{currency(totals.recoverable)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Non-Recoverable Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-red-600">{currency(totals.nonRecoverable)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Conditional Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-amber-600">{currency(totals.conditional)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Excluded Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-gray-600">{currency(totals.excluded)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">CAM-Eligible Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-blue-600">{currency(totals.camEligible)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Finalized Costs</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-indigo-600">{currency(totals.finalized)}</div></CardContent></Card>
+          <Card><CardHeader className="py-3"><CardTitle className="text-xs text-muted-foreground">Needs Review</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-rose-600">{currency(totals.needsReview)}</div></CardContent></Card>
         </div>
 
-        {/* Sidebar Area */}
-        <div className="space-y-4">
-          {/* ── Total Expense Calculation ─────────────────────────────── */}
-          <Card className="border-slate-200">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base">Total Expense Calculation</CardTitle>
-                <Badge variant="outline" className="text-[10px] uppercase">Lease total</Badge>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Annualized rollup of all rule amounts. Rules with no dollar value are excluded from the total but counted separately.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-lg bg-slate-900 px-4 py-3 text-white">
-                <div className="text-[10px] uppercase tracking-wider text-slate-300">Estimated Annual</div>
-                <div className="mt-1 text-2xl font-bold">{fmtMoney(expenseTotals.totalAnnual)}</div>
-                <div className="mt-0.5 text-xs text-slate-300">
-                  {fmtMoney(expenseTotals.totalMonthly)} / month
-                </div>
-              </div>
+        {/* Tabs and Table */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <div className="flex justify-between items-center mb-4">
+            <TabsList className="bg-muted">
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="recoverable">Recoverable</TabsTrigger>
+              <TabsTrigger value="non_recoverable">Non-Recoverable</TabsTrigger>
+              <TabsTrigger value="conditional">Conditional</TabsTrigger>
+              <TabsTrigger value="excluded">Excluded</TabsTrigger>
+              <TabsTrigger value="needs_review">Needs Review</TabsTrigger>
+              <TabsTrigger value="finalized">Finalized</TabsTrigger>
+              <TabsTrigger value="sent_to_cam">Sent to CAM</TabsTrigger>
+            </TabsList>
+          </div>
 
-              <div className="space-y-2 text-xs">
-                <TotalRow
-                  label="Recoverable from tenant"
-                  count={expenseTotals.buckets.recoverable.count}
-                  withValue={expenseTotals.buckets.recoverable.withValue}
-                  annual={expenseTotals.buckets.recoverable.annual}
-                  tone="emerald"
-                />
-                <TotalRow
-                  label="Conditional"
-                  count={expenseTotals.buckets.conditional.count}
-                  withValue={expenseTotals.buckets.conditional.withValue}
-                  annual={expenseTotals.buckets.conditional.annual}
-                  tone="amber"
-                />
-                <TotalRow
-                  label="Non-recoverable"
-                  count={expenseTotals.buckets.non_recoverable.count}
-                  withValue={expenseTotals.buckets.non_recoverable.withValue}
-                  annual={expenseTotals.buckets.non_recoverable.annual}
-                  tone="rose"
-                />
-                <TotalRow
-                  label="Excluded"
-                  count={expenseTotals.buckets.excluded.count}
-                  withValue={expenseTotals.buckets.excluded.withValue}
-                  annual={expenseTotals.buckets.excluded.annual}
-                  tone="slate"
-                />
-              </div>
+          <TabsContent value={activeTab} className="border rounded-md shadow-sm bg-white overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 border-b text-xs text-slate-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-3 w-10"><input type="checkbox" onChange={e => setSelectedRows(e.target.checked ? new Set(filteredRows.map(r => r.id)) : new Set())} checked={filteredRows.length > 0 && selectedRows.size === filteredRows.length}/></th>
+                    <th className="px-3 py-3">Category</th>
+                    <th className="px-3 py-3">Amount</th>
+                    <th className="px-3 py-3">Recoverability</th>
+                    <th className="px-3 py-3">CAM Eligible</th>
+                    <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3 w-64">Reason</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {isLoading ? (
+                    <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">Loading classification data...</td></tr>
+                  ) : filteredRows.length === 0 ? (
+                    <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No records found for this view.</td></tr>
+                  ) : filteredRows.map(row => (
+                    <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-3">
+                        <input type="checkbox" checked={selectedRows.has(row.id)} onChange={() => toggleRow(row.id)} />
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="font-medium">{row.category?.replace(/_/g, " ")}</div>
+                        <div className="text-xs text-slate-500">{row.subcategory?.replace(/_/g, " ")}</div>
+                      </td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{currency(row.amount)}</td>
+                      <td className="px-3 py-3">
+                        <Badge variant={row.recoverability_result === 'recoverable' ? 'default' : row.recoverability_result === 'non_recoverable' ? 'destructive' : row.recoverability_result === 'conditional' ? 'outline' : 'secondary'}>
+                          {row.recoverability_result?.replace(/_/g, " ")}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-3">{row.cam_eligible}</td>
+                      <td className="px-3 py-3">
+                        <Badge variant={row.classification_status === 'finalized' ? 'default' : 'secondary'}>{row.classification_status}</Badge>
+                        {row.sent_to_cam && <Badge className="ml-1 bg-blue-100 text-blue-800 hover:bg-blue-200 border-none">CAM</Badge>}
+                      </td>
+                      <td className="px-3 py-3 text-xs text-slate-600 truncate max-w-xs" title={row.recovery_reason}>{row.recovery_reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </TabsContent>
+        </Tabs>
 
-              {expenseTotals.categoryRows.length > 0 && (
-                <details className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                  <summary className="cursor-pointer font-medium text-slate-700">
-                    Per-category breakdown ({expenseTotals.categoryRows.length})
-                  </summary>
-                  <table className="mt-2 w-full text-[11px]">
-                    <thead className="text-slate-500">
-                      <tr>
-                        <th className="text-left">Category</th>
-                        <th className="text-left">Freq</th>
-                        <th className="text-right">Amount</th>
-                        <th className="text-right">Annual</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {expenseTotals.categoryRows.map((row, i) => (
-                        <tr key={i} className="border-t border-slate-200">
-                          <td className="py-1 pr-2 text-slate-700">{row.category}</td>
-                          <td className="py-1 pr-2 text-slate-500">{row.frequency}</td>
-                          <td className="py-1 pr-2 text-right font-mono text-slate-700">{fmtMoney(row.amount)}</td>
-                          <td className="py-1 text-right font-mono font-semibold text-slate-900">{fmtMoney(row.annual)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </details>
-              )}
-
-              <div className="border-t border-slate-200 pt-2 text-[11px] text-slate-500">
-                Rules with no dollar amount yet:{" "}
-                <span className="font-semibold text-slate-700">
-                  {Object.values(expenseTotals.buckets).reduce((s, b) => s + b.noValue, 0)}
-                </span>
-                {" "}� set values in Edit rule details to include them.
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Impact Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 space-y-4">
-                <p className="text-sm text-slate-500 text-center mb-2">
-                  Preview based on the current drafted rules.
-                </p>
-
-                <div className="flex justify-between items-center border-b pb-2">
-                  <span className="text-sm font-medium text-slate-700">Categories Mapped</span>
-                  <span className="font-bold text-slate-900">
-                    {localRules.filter(r => r.review_status === 'approved').length} / {effectiveCategories.length}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center border-b pb-2">
-                  <span className="text-sm font-medium text-slate-700">Explicitly Excluded</span>
-                  <span className="font-bold text-rose-600">
-                    {localRules.filter(r => r.is_excluded || r.is_recoverable === false).length}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center border-b pb-2">
-                  <span className="text-sm font-medium text-slate-700">Subject to Cap</span>
-                  <span className="font-bold text-blue-600">
-                    {localRules.filter(r => r.is_subject_to_cap).length}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center pb-2">
-                  <span className="text-sm font-medium text-slate-700">Needs Review</span>
-                  <span className="font-bold text-amber-600">
-                    {localRules.filter(r => r.review_status === 'needs_review' || r.row_status === 'needs_review' || r.row_status === 'uncertain').length}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
-                Approving this rule set updates lease CAM config, persists clause evidence and values, and refreshes downstream classification readiness without creating Actual Expense rows.
-              </div>
-              <Button
-                className="mt-4 w-full bg-slate-900 hover:bg-slate-800"
-                onClick={() =>
-                  navigate(
-                    createPageUrl("ExpenseReview", {
-                      property: lease?.property_id,
-                      building: lease?.building_id,
-                      unit: lease?.unit_id,
-                    })
-                  )
-                }
-              >
-                Continue to Expense Review
-              </Button>
-            </CardContent>
-          </Card>
+        {/* Debug Panel */}
+        <div className="mt-12 p-4 bg-slate-900 text-green-400 font-mono text-xs rounded-md overflow-auto">
+          <p className="font-bold text-white mb-2">// DEBUG OUTPUT</p>
+          <pre>{JSON.stringify({
+            scope,
+            counts: scopeData?.summary,
+          }, null, 2)}</pre>
         </div>
+
       </div>
-
-      <ClauseEvidenceDrawer
-        isOpen={isEvidenceDrawerOpen}
-        onClose={() => setIsEvidenceDrawerOpen(false)}
-        category={selectedCategory}
-        rule={selectedRule}
-      />
-
-      <ExpenseValuePanel
-        isOpen={isValuePanelOpen}
-        onClose={() => setIsValuePanelOpen(false)}
-        category={selectedCategory}
-        rule={selectedRule}
-        onSave={handleSaveRule}
-      />
-
-    </div>
-  );
-}
-
-function SummaryCard({ label, value, tone }) {
-  const TONE = {
-    emerald: "border-emerald-200 bg-emerald-50/60",
-    rose:    "border-rose-200 bg-rose-50/60",
-    amber:   "border-amber-200 bg-amber-50/60",
-    blue:    "border-blue-200 bg-blue-50/60",
-    slate:   "border-slate-200 bg-slate-50/60",
-  };
-  const TXT = {
-    emerald: "text-emerald-900",
-    rose:    "text-rose-900",
-    amber:   "text-amber-900",
-    blue:    "text-blue-900",
-    slate:   "text-slate-900",
-  };
-  return (
-    <Card className={`border ${TONE[tone] || TONE.slate}`}>
-      <CardContent className="p-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
-        <div className={`mt-1 text-lg font-bold tabular-nums ${TXT[tone] || TXT.slate}`}>{value}</div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActualsBucketChip({ label, count, amount, tone }) {
-  const TONE = {
-    emerald: "border-emerald-300 bg-emerald-50 text-emerald-800",
-    rose:    "border-rose-300 bg-rose-50 text-rose-800",
-    amber:   "border-amber-300 bg-amber-50 text-amber-900",
-    slate:   "border-slate-300 bg-slate-50 text-slate-700",
-    red:     "border-red-300 bg-red-50 text-red-800",
-  };
-  return (
-    <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 ${TONE[tone] || TONE.slate}`}>
-      <span className="font-medium">{label}</span>
-      <span className="font-mono text-slate-900">{count}</span>
-      <span className="text-slate-500">·</span>
-      <span className="font-mono">{`$${Math.round(amount || 0).toLocaleString()}`}</span>
-    </span>
-  );
-}
-
-function TotalRow({ label, count, withValue, annual, tone }) {
-  const TONE_CLASSES = {
-    emerald: { label: "text-emerald-700", chip: "bg-emerald-100 text-emerald-800", value: "text-emerald-900" },
-    rose:    { label: "text-rose-700",    chip: "bg-rose-100 text-rose-800",       value: "text-rose-900" },
-    amber:   { label: "text-amber-700",   chip: "bg-amber-100 text-amber-900",     value: "text-amber-900" },
-    slate:   { label: "text-slate-600",   chip: "bg-slate-200 text-slate-700",     value: "text-slate-800" },
-  };
-  const c = TONE_CLASSES[tone] || TONE_CLASSES.slate;
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-white px-3 py-2">
-      <div>
-        <div className={`text-[11px] font-medium ${c.label}`}>{label}</div>
-        <div className="mt-0.5 text-[10px] text-slate-500">
-          {count} rule{count === 1 ? "" : "s"}
-          {withValue < count ? ` · ${count - withValue} without value` : ""}
-        </div>
-      </div>
-      <div className={`text-right font-mono text-sm font-semibold ${c.value}`}>
-        {`$${Math.round(annual || 0).toLocaleString()}`}
-        <div className="text-[10px] font-normal text-slate-400">/ yr</div>
-      </div>
-    </div>
-  );
-}
-
-function RuleGroupSection({
-  title,
-  description,
-  categories,
-  rules,
-  tone,
-  onEditRule,
-  onViewEvidence,
-}) {
-  const toneClasses = {
-    emerald: "border-emerald-200 bg-emerald-50/40",
-    rose: "border-rose-200 bg-rose-50/40",
-    amber: "border-amber-200 bg-amber-50/40",
-    slate: "border-slate-200 bg-slate-50/70",
-  };
-
-  return (
-    <div className={`rounded-xl border p-4 ${toneClasses[tone] || toneClasses.slate}`}>
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-        <p className="mt-1 text-xs text-slate-600">{description}</p>
-      </div>
-      {categories.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-center text-xs text-slate-500">
-          No categories are in this bucket yet.
-        </div>
-      ) : (
-        <ExpenseClassificationTable
-          categories={categories}
-          rules={rules}
-          onEditRule={onEditRule}
-          onViewEvidence={onViewEvidence}
-        />
-      )}
     </div>
   );
 }
