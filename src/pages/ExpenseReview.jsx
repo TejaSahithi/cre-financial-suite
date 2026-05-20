@@ -32,24 +32,6 @@ function toAmount(expense) {
   return Number(expense?.amount || 0);
 }
 
-function filterExpenseByScope(expense, scope, propertyId, buildingId, unitId) {
-  if (
-    !matchesHierarchyScope(expense, scope, {
-      portfolioKey: "portfolio_id",
-      propertyKey: "property_id",
-      buildingKey: "building_id",
-      unitKey: "unit_id",
-    })
-  ) {
-    return false;
-  }
-
-  if (propertyId !== "all" && expense.property_id !== propertyId) return false;
-  if (buildingId !== "all" && expense.building_id !== buildingId) return false;
-  if (unitId !== "all" && expense.unit_id !== unitId) return false;
-  return true;
-}
-
 function getRecoveryTone(bucket) {
   if (bucket === "recoverable") return "bg-emerald-100 text-emerald-700";
   if (bucket === "non_recoverable") return "bg-rose-100 text-rose-700";
@@ -91,10 +73,6 @@ export default function ExpenseReview() {
     setScopeUnit(scope.unitId || "all");
   }, [scope.propertyId, scope.buildingId, scope.unitId]);
 
-  const scopedExpenses = expenses.filter((expense) =>
-    filterExpenseByScope(expense, scope, scopeProperty, scopeBuilding, scopeUnit)
-  );
-
   const scopedLeases = leases.filter((lease) => {
     if (
       !matchesHierarchyScope(lease, scope, {
@@ -133,12 +111,62 @@ export default function ExpenseReview() {
         unitId: scopeUnit !== "all" ? scopeUnit : scope.unitId || null,
         fiscalYear: new Date().getFullYear(),
       }),
-    enabled: Boolean(scopeProperty !== "all" || scope.propertyId),
+    enabled: true,
   });
 
-  const actualExpenses = scopedExpenses.filter((expense) => expense.source_type !== "lease_import");
+  const classificationScope = useMemo(
+    () => ({
+      property_id: scopeProperty !== "all" ? scopeProperty : "all",
+      building_id: scopeBuilding !== "all" ? scopeBuilding : "all",
+      unit_id: scopeUnit !== "all" ? scopeUnit : "all",
+    }),
+    [scopeProperty, scopeBuilding, scopeUnit]
+  );
+
+  const { data: scopedClassifications = [], isLoading: isLoadingClassifications } = useQuery({
+    queryKey: ["expense-review-classifications", scopeProperty, scopeBuilding, scopeUnit],
+    queryFn: () => expenseService.listExpenseClassificationsForScope(classificationScope),
+  });
+
+  const expenseById = useMemo(() => {
+    const map = new Map();
+    for (const e of expenses) map.set(e.id, e);
+    return map;
+  }, [expenses]);
+
+  const reviewRows = useMemo(() => {
+    return scopedClassifications
+      .filter((row) => row.actual_expense_id || row.expense_id)
+      .map((row) => {
+        const expenseId = row.actual_expense_id || row.expense_id;
+        const expense = expenseById.get(expenseId) || null;
+        return {
+          ...expense,
+          ...row,
+          id: row.id || expenseId,
+          expense_id: expenseId,
+          actual_expense_id: expenseId,
+          amount: Number(row.amount ?? expense?.amount ?? 0),
+          category: row.category || expense?.category || null,
+          expense_subcategory: row.subcategory || expense?.expense_subcategory || expense?.subcategory || null,
+          tenant_name: expense?.tenant_name || expense?.tenant || null,
+          vendor_name: expense?.vendor_name || expense?.vendor || null,
+          vendor: expense?.vendor || expense?.vendor_name || null,
+          lease_id: row.lease_id || expense?.lease_id || null,
+          property_id: row.property_id || expense?.property_id || null,
+          building_id: row.building_id || expense?.building_id || null,
+          unit_id: row.unit_id || expense?.unit_id || null,
+          recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || expense?.recovery_rule_id || null,
+          evidence_text: row.evidence_text || expense?.evidence_text || row.recovery_reason || null,
+          classification: row.recoverability_result || row.recovery_status || expense?.classification,
+          recovery_status: row.recoverability_result || row.recovery_status || expense?.recovery_status,
+        };
+      });
+  }, [scopedClassifications, expenseById]);
+
+  const actualExpenses = reviewRows.filter((expense) => Boolean(expense.actual_expense_id));
   const bucketedExpenses = useMemo(() => {
-    return scopedExpenses.reduce((accumulator, expense) => {
+    return reviewRows.reduce((accumulator, expense) => {
       const bucket = normalizeBucket(expense);
       accumulator[bucket].push(expense);
       return accumulator;
@@ -149,20 +177,39 @@ export default function ExpenseReview() {
       conditional: [],
       needs_review: [],
     });
-  }, [scopedExpenses]);
+  }, [reviewRows]);
 
   const ruleSummary = useMemo(() => {
     const allRules = scopedRuleSets.flatMap((entry) => entry.rules || []);
     const grouped = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
+    const approvedRuleLeaseIds = new Set(
+      allRules
+        .filter((rule) => {
+          const approval = String(rule?.approval_status || "").trim().toLowerCase();
+          const review = String(rule?.review_status || "").trim().toLowerCase();
+          const status = String(rule?.status || "").trim().toLowerCase();
+          const rowStatus = String(rule?.row_status || "").trim().toLowerCase();
+          return (
+            approval === "approved" ||
+            review === "approved" ||
+            review === "reviewed" ||
+            status === "approved" ||
+            rowStatus === "mapped" ||
+            rowStatus === "manually_added"
+          );
+        })
+        .map((rule) => rule.lease_id || rule.rule_set?.lease_id)
+        .filter(Boolean)
+    );
     return {
-      approvedLeaseCount: scopedRuleSets.filter((entry) => entry.ruleSet?.status === "approved").length,
-      draftLeaseCount: scopedRuleSets.filter((entry) => entry.ruleSet?.status !== "approved").length,
+      approvedLeaseCount: approvedRuleLeaseIds.size,
+      draftLeaseCount: Math.max(scopedLeases.length - approvedRuleLeaseIds.size, 0),
       recoverableCount: grouped.recoverable.length,
       nonRecoverableCount: grouped.nonRecoverable.length,
       conditionalCount: grouped.conditional.length,
       needsReviewCount: grouped.needsReview.length,
     };
-  }, [scopedRuleSets]);
+  }, [scopedLeases.length, scopedRuleSets]);
 
   const totals = {
     recoverable: bucketedExpenses.recoverable.reduce((sum, expense) => sum + toAmount(expense), 0),
@@ -210,6 +257,10 @@ export default function ExpenseReview() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
       toast.success("Expense review updated.");
     },
     onError: (error) => {
@@ -266,12 +317,6 @@ export default function ExpenseReview() {
 
   // Join in actual expense details (vendor, date) for each exception so the
   // queue can show "Vendor X, invoice $Y, dated Z" without a separate fetch.
-  const expenseById = useMemo(() => {
-    const map = new Map();
-    for (const e of expenses) map.set(e.id, e);
-    return map;
-  }, [expenses]);
-
   const enrichedExceptions = useMemo(() => {
     return exceptionRows.map((row) => {
       const expenseId = row.expense_id || row.actual_expense_id;
@@ -374,12 +419,12 @@ export default function ExpenseReview() {
   });
 
   const subtitle = getScopeSubtitle(scope, {
-    default: `${scopedExpenses.length} expense rows under review`,
-    portfolio: (portfolio) => `${scopedExpenses.length} expense rows in ${portfolio.name}`,
-    property: (property) => `${scopedExpenses.length} expense rows for ${property.name}`,
-    building: (building) => `${scopedExpenses.length} expense rows for ${building.name}`,
-    unit: (unit) => `${scopedExpenses.length} expense rows for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
-    org: () => `${scopedExpenses.length} expense rows across the organization`,
+    default: `${reviewRows.length} classified expense rows under review`,
+    portfolio: (portfolio) => `${reviewRows.length} classified expense rows in ${portfolio.name}`,
+    property: (property) => `${reviewRows.length} classified expense rows for ${property.name}`,
+    building: (building) => `${reviewRows.length} classified expense rows for ${building.name}`,
+    unit: (unit) => `${reviewRows.length} classified expense rows for ${unit.unit_number || unit.unit_id_code || "selected unit"}`,
+    org: () => `${reviewRows.length} classified expense rows across the organization`,
   });
 
   const scopedParams = Object.fromEntries(
@@ -393,7 +438,7 @@ export default function ExpenseReview() {
     ? createPageUrl("LeaseExpenseClassification", { id: scopedLeaseIds[0] })
     : createPageUrl("LeaseExpenseClassification");
 
-  const isLoading = isLoadingExpenses || isLoadingRuleSets;
+  const isLoading = isLoadingExpenses || isLoadingRuleSets || isLoadingClassifications;
 
   return (
     <div className="p-4 lg:p-6 space-y-5">

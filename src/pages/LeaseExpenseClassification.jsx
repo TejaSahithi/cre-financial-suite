@@ -580,6 +580,22 @@ export default function LeaseExpenseClassification() {
     onError: (error) => toast.error(error?.message || "Could not send rows to CAM"),
   });
 
+  const amountMutation = useMutation({
+    mutationFn: async ({ actualExpenseId, amount }) =>
+      expenseService.updateExpenseAmount(actualExpenseId, amount, {
+        reason: "Manual amount correction from Expense Classification",
+      }),
+    onSuccess: () => {
+      toast.success("Actual expense amount updated");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not update amount"),
+  });
+
   const isLoading = loadingLeases || loadingWorkspace;
   const currentYear = new Date().getFullYear();
   const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
@@ -598,6 +614,24 @@ export default function LeaseExpenseClassification() {
 
   const toggleAll = (checked) => {
     setSelectedIds(checked ? new Set(actionableFilteredIds) : new Set());
+  };
+
+  const promptForAmount = (row) => {
+    if (!row?.actualExpenseId) return;
+    const input = window.prompt(
+      `Enter amount for ${row.vendor || row.ruleLabel || "this expense"}:`,
+      row.amount != null ? String(row.amount) : "",
+    );
+    if (input == null) return;
+
+    const cleaned = String(input).replace(/[$,\s]/g, "");
+    const amount = Number(cleaned);
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error("Invalid amount");
+      return;
+    }
+
+    amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
   };
 
   const actualEmptyState = useMemo(() => {
@@ -1005,6 +1039,12 @@ export default function LeaseExpenseClassification() {
                                     <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense"))}>
                                       <Plus className="mr-2 h-4 w-4 text-slate-500" />
                                       Add / Import Expense
+                                    </DropdownMenuItem>
+                                  )}
+                                  {row.actualExpenseId && (
+                                    <DropdownMenuItem onClick={() => promptForAmount(row)}>
+                                      <FileText className="mr-2 h-4 w-4 text-emerald-600" />
+                                      {row.amount ? "Edit Amount" : "Set Amount"}
                                     </DropdownMenuItem>
                                   )}
                                   {row.actualExpenseId && (

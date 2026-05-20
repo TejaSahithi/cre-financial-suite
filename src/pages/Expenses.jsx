@@ -10,9 +10,6 @@ import {
   Trash2,
   BookOpen,
   Receipt,
-  DollarSign,
-  TrendingDown,
-  Layers,
   Download,
   ClipboardCheck,
   FileSearch,
@@ -22,7 +19,6 @@ import {
   CircleDollarSign,
   HelpCircle,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 import { toast } from "sonner";
 
 import PipelineActions, { EXPENSE_ACTIONS } from "@/components/PipelineActions";
@@ -30,7 +26,6 @@ import ModuleLink from "@/components/ModuleLink";
 import RoleGuard from "@/components/RoleGuard";
 import AuditTrailPanel from "@/components/AuditTrailPanel";
 import PageHeader from "@/components/PageHeader";
-import MetricCard from "@/components/MetricCard";
 import ScopeSelector from "@/components/ScopeSelector";
 import VendorSpendAnalysis from "@/components/expenses/VendorSpendAnalysis";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -56,6 +51,58 @@ import {
 import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
+function normalizeExpenseDate(value) {
+  if (!value) return null;
+  const raw = String(value);
+  const parsed = raw.length === 10 ? new Date(`${raw}T00:00:00`) : new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isDisplayActiveLease(status) {
+  return ["approved", "active", "executed", "budget_ready"].includes(String(status || "").trim().toLowerCase());
+}
+
+function leaseOverlapsExpense(expense, lease) {
+  const expenseDate = normalizeExpenseDate(
+    expense?.expense_date || expense?.date || expense?.service_period_start || expense?.billing_period_start
+  );
+  if (!expenseDate) return true;
+
+  const leaseStart = normalizeExpenseDate(lease?.start_date);
+  const leaseEnd = normalizeExpenseDate(lease?.end_date);
+  if (leaseStart && expenseDate < leaseStart) return false;
+  if (leaseEnd && expenseDate > leaseEnd) return false;
+  return true;
+}
+
+function resolveDisplayLeaseForExpense(expense, leases = []) {
+  if (expense?.lease_id) {
+    return leases.find((lease) => lease.id === expense.lease_id) || null;
+  }
+
+  const candidates = (leases || [])
+    .filter((lease) => {
+      if (!isDisplayActiveLease(lease?.status)) return false;
+      if (expense?.property_id && lease?.property_id !== expense.property_id) return false;
+      if (expense?.building_id && lease?.building_id && lease.building_id !== expense.building_id) return false;
+      if (expense?.unit_id && lease?.unit_id && lease.unit_id !== expense.unit_id) return false;
+      return leaseOverlapsExpense(expense, lease);
+    })
+    .sort((left, right) => {
+      const leftScore =
+        (left?.unit_id === expense?.unit_id ? 100 : 0) +
+        (left?.building_id === expense?.building_id ? 50 : 0) +
+        (left?.property_id === expense?.property_id ? 25 : 0);
+      const rightScore =
+        (right?.unit_id === expense?.unit_id ? 100 : 0) +
+        (right?.building_id === expense?.building_id ? 50 : 0) +
+        (right?.property_id === expense?.property_id ? 25 : 0);
+      return rightScore - leftScore;
+    });
+
+  return candidates.length === 1 ? candidates[0] : candidates[0] || null;
+}
+
 export default function Expenses() {
   const location = useLocation();
   const [search, setSearch] = useState("");
@@ -69,7 +116,6 @@ export default function Expenses() {
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
-  const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
@@ -158,7 +204,12 @@ export default function Expenses() {
   });
 
   const classificationByExpenseId = useMemo(
-    () => new Map(selectorScopedClassifications.map((classification) => [classification.expense_id, classification])),
+    () =>
+      new Map(
+        selectorScopedClassifications
+          .map((classification) => [classification.expense_id || classification.actual_expense_id, classification])
+          .filter(([expenseId]) => Boolean(expenseId))
+      ),
     [selectorScopedClassifications]
   );
 
@@ -252,22 +303,6 @@ export default function Expenses() {
     enabled: selectorScopedLeaseIds.length > 0,
   });
 
-  const currentYear = new Date().getFullYear();
-  const prevYear = currentYear - 1;
-  const currentYearExpenses = displayedExpenses.filter((expense) => expense.fiscal_year === currentYear);
-  const prevYearExpenses = displayedExpenses.filter((expense) => expense.fiscal_year === prevYear);
-  const prevYearTotal = prevYearExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
-  const currentBudget = budgets.find((budget) => {
-    if ((budget.budget_year || budget.fiscal_year) !== currentYear) return false;
-    return matchesHierarchyScope(budget, scope, {
-      portfolioKey: "portfolio_id",
-      propertyKey: "property_id",
-      buildingKey: "building_id",
-      unitKey: "unit_id",
-    });
-  });
-  const budgetedTotal = currentBudget?.total_expenses || 0;
-
   const classColors = {
     recoverable: "bg-emerald-100 text-emerald-700",
     non_recoverable: "bg-red-100 text-red-700",
@@ -279,16 +314,35 @@ export default function Expenses() {
   const scopedRuleSummary = useMemo(() => {
     const allRules = selectorScopedRuleSets.flatMap((entry) => entry.rules || []);
     const groupedRules = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
+    const approvedRuleLeaseIds = new Set(
+      allRules
+        .filter((rule) => {
+          const approval = String(rule?.approval_status || "").trim().toLowerCase();
+          const review = String(rule?.review_status || "").trim().toLowerCase();
+          const status = String(rule?.status || "").trim().toLowerCase();
+          const rowStatus = String(rule?.row_status || "").trim().toLowerCase();
+          return (
+            approval === "approved" ||
+            review === "approved" ||
+            review === "reviewed" ||
+            status === "approved" ||
+            rowStatus === "mapped" ||
+            rowStatus === "manually_added"
+          );
+        })
+        .map((rule) => rule.lease_id || rule.rule_set?.lease_id)
+        .filter(Boolean)
+    );
     return {
       total: allRules.length,
-      approvedRuleSets: selectorScopedRuleSets.filter((entry) => entry.ruleSet?.status === "approved").length,
-      draftRuleSets: selectorScopedRuleSets.filter((entry) => entry.ruleSet?.status !== "approved").length,
+      approvedRuleSets: approvedRuleLeaseIds.size,
+      draftRuleSets: Math.max(selectorScopedLeaseIds.length - approvedRuleLeaseIds.size, 0),
       recoverable: groupedRules.recoverable.length,
       nonRecoverable: groupedRules.nonRecoverable.length,
       conditional: groupedRules.conditional.length,
       needsReview: groupedRules.needsReview.length,
     };
-  }, [selectorScopedRuleSets]);
+  }, [selectorScopedLeaseIds.length, selectorScopedRuleSets]);
 
   const classificationTargetLeaseId = selectorScopedLeases[0]?.id || null;
   const classificationUrl = classificationTargetLeaseId
@@ -302,25 +356,6 @@ export default function Expenses() {
   const projectionUrl = createPageUrl("ExpenseProjection", {
     property: scopeProperty !== "all" ? scopeProperty : undefined,
   });
-
-  const totals = {
-    all: displayedExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    recoverable: displayedExpenses
-      .filter((expense) => expense.classification === "recoverable")
-      .reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    non_recoverable: displayedExpenses
-      .filter((expense) => expense.classification === "non_recoverable")
-      .reduce((sum, expense) => sum + (expense.amount || 0), 0),
-    conditional: displayedExpenses
-      .filter((expense) => expense.classification === "conditional")
-      .reduce((sum, expense) => sum + (expense.amount || 0), 0),
-  };
-
-  const pieData = [
-    { name: "Recoverable", value: totals.recoverable, color: "#10b981" },
-    { name: "Non-Recoverable", value: totals.non_recoverable, color: "#ef4444" },
-    { name: "Conditional", value: totals.conditional, color: "#f59e0b" },
-  ].filter((entry) => entry.value > 0);
 
   const filtered = displayedExpenses.filter((expense) => {
     const property = expense.property_id ? scope.propertyById.get(expense.property_id) ?? null : null;
@@ -744,7 +779,7 @@ export default function Expenses() {
                     const matchedVendor = vendors.find(
                       (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
                     );
-                    const matchedLease = expense.lease_id ? leases.find(l => l.id === expense.lease_id) : null;
+                    const matchedLease = resolveDisplayLeaseForExpense(expense, leases);
                     const tenantName = expense.tenant_name || matchedLease?.tenant_name || "—";
 
                     return (

@@ -373,8 +373,7 @@ function scoreScopeMatch(expense, rule) {
 }
 
 function approvedRuleForMatching(rule) {
-  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
-  return normalizeText(rule?.approval_status) === "approved" && reviewStatus === "approved";
+  return isApprovedLeaseRule(rule);
 }
 
 function recoverabilityResultFromRule(rule) {
@@ -515,6 +514,87 @@ function ruleMatchesScope(rule, lease, scope = {}) {
 
   if (fiscal_year && fiscal_year !== "all" && lease && !leaseOverlapsFiscalYear(lease, Number(fiscal_year))) {
     return false;
+  }
+
+  return true;
+}
+
+function normalizeDateCandidate(value) {
+  if (!value) return null;
+  const raw = String(value);
+  const parsed = raw.length === 10
+    ? new Date(`${raw}T00:00:00`)
+    : new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function expenseServiceDate(expense) {
+  return (
+    expense?.expense_date ||
+    expense?.date ||
+    expense?.service_period_start ||
+    expense?.billing_period_start ||
+    expense?.period ||
+    null
+  );
+}
+
+function approvedLeaseForExpenseLink(lease) {
+  return ["approved", "active", "executed", "budget_ready"].includes(normalizeLeaseStatus(lease?.status));
+}
+
+function candidateLeaseLinkScore(expense, lease) {
+  let score = 0;
+  if (expense?.lease_id && lease?.id === expense.lease_id) score += 1000;
+  if (expense?.tenant_id && lease?.tenant_id === expense.tenant_id) score += 500;
+  if (expense?.unit_id && lease?.unit_id === expense.unit_id) score += 350;
+  if (expense?.building_id && lease?.building_id === expense.building_id) score += 200;
+  if (expense?.property_id && lease?.property_id === expense.property_id) score += 100;
+  if (servicePeriodOverlaps({ ...expense, expense_date: expenseServiceDate(expense) }, lease)) score += 50;
+  return score;
+}
+
+function findMatchingLeasesForExpense(expense, leases = []) {
+  return (leases || [])
+    .filter((lease) => {
+      if (!approvedLeaseForExpenseLink(lease)) return false;
+      if (expense?.property_id && lease?.property_id !== expense.property_id) return false;
+      if (expense?.building_id && lease?.building_id && lease.building_id !== expense.building_id) return false;
+      if (expense?.unit_id && lease?.unit_id && lease.unit_id !== expense.unit_id) return false;
+      if (expense?.tenant_id && lease?.tenant_id && lease.tenant_id !== expense.tenant_id) return false;
+      return servicePeriodOverlaps({ ...expense, expense_date: expenseServiceDate(expense) }, lease);
+    })
+    .sort((left, right) => candidateLeaseLinkScore(expense, right) - candidateLeaseLinkScore(expense, left));
+}
+
+function applyLeaseLinkToExpense(expense, lease) {
+  if (!lease) return { ...expense };
+  return {
+    ...expense,
+    lease_id: expense?.lease_id || lease.id || null,
+    tenant_id: expense?.tenant_id || lease.tenant_id || null,
+    tenant_name: expense?.tenant_name || lease.tenant_name || null,
+    property_id: expense?.property_id || lease.property_id || null,
+    building_id: expense?.building_id || lease.building_id || null,
+    unit_id: expense?.unit_id || lease.unit_id || null,
+  };
+}
+
+function classificationMatchesScope(classification, scope = {}) {
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+  if (property_id && property_id !== "all" && classification.property_id !== property_id) return false;
+  if (building_id && building_id !== "all" && classification.building_id !== building_id) return false;
+  if (unit_id && unit_id !== "all" && classification.unit_id !== unit_id) return false;
+  if (lease_id && lease_id !== "all" && classification.lease_id !== lease_id) return false;
+  if (tenant_id && tenant_id !== "all" && classification.tenant_id !== tenant_id) return false;
+
+  if (fiscal_year && fiscal_year !== "all") {
+    const start = normalizeDateCandidate(classification.service_period_start || classification.expense_date || classification.classified_at);
+    const end = normalizeDateCandidate(classification.service_period_end || classification.service_period_start || classification.expense_date || classification.classified_at);
+    const yearStart = new Date(Number(fiscal_year), 0, 1);
+    const yearEnd = new Date(Number(fiscal_year), 11, 31, 23, 59, 59);
+    if (start && start > yearEnd) return false;
+    if (end && end < yearStart) return false;
   }
 
   return true;
@@ -689,9 +769,10 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 
   const { data: ruleSets, error: ruleSetError } = await supabase
     .from("lease_expense_rule_sets")
-    .select("id, lease_id, status")
+    .select("id, lease_id, status, approval_status, review_status, property_id, version")
     .in("lease_id", leaseIds)
-    .eq("status", "approved");
+    .not("status", "eq", "archived")
+    .order("version", { ascending: false });
 
   if (ruleSetError) {
     if (isMissingExpenseRuleTable(ruleSetError)) {
@@ -702,7 +783,24 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
   }
   if (!ruleSets?.length) return { ruleSets: [], rules: [], categories: [] };
 
-  const ruleSetIds = ruleSets.map((ruleSet) => ruleSet.id);
+  const ruleSetsByLease = new Map();
+  for (const ruleSet of ruleSets || []) {
+    const existing = ruleSetsByLease.get(ruleSet.lease_id) || [];
+    existing.push(ruleSet);
+    ruleSetsByLease.set(ruleSet.lease_id, existing);
+  }
+
+  const latestRuleSets = [...ruleSetsByLease.values()]
+    .map((setsForLease) =>
+      setsForLease.find((ruleSet) =>
+        ["approved"].includes(normalizeText(ruleSet?.status)) ||
+        ["approved"].includes(normalizeText(ruleSet?.approval_status)) ||
+        ["approved"].includes(normalizeText(ruleSet?.review_status))
+      ) || setsForLease[0]
+    )
+    .filter(Boolean);
+
+  const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
   const { data: rules, error: rulesError } = await supabase
     .from("lease_expense_rules")
     .select("*")
@@ -711,7 +809,7 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
   if (rulesError) {
     if (isMissingExpenseRuleTable(rulesError)) {
       console.warn("[expenseService] lease_expense_rules table missing — treating as no rules.");
-      return { ruleSets, rules: [], categories: [] };
+      return { ruleSets: latestRuleSets, rules: [], categories: [] };
     }
     throw rulesError;
   }
@@ -749,13 +847,13 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 
   const rulesWithRelations = (rules || []).map((rule) => ({
     ...rule,
-    lease_id: ruleSets.find((ruleSet) => ruleSet.id === rule.rule_set_id)?.lease_id || null,
+    lease_id: latestRuleSets.find((ruleSet) => ruleSet.id === rule.rule_set_id)?.lease_id || null,
     ...valuesByRuleId.get(rule.id),
     clauses: clausesByRuleId.get(rule.id) || [],
   }));
 
   return {
-    ruleSets: ruleSets || [],
+    ruleSets: latestRuleSets || [],
     rules: rulesWithRelations,
     categories: safeCategories,
   };
@@ -889,6 +987,7 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
 async function fetchExistingExpenseClassifications(expenseIds = []) {
   if (!supabase || expenseIds.length === 0) return [];
   try {
+    const expenseFilter = expenseIds.join(",");
     return await selectExpenseClassifications({
       columns: [
         "id",
@@ -937,7 +1036,7 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
         "cam_status",
         "next_step",
       ],
-      apply: (query) => query.in("expense_id", expenseIds),
+      apply: (query) => query.or(`expense_id.in.(${expenseFilter}),actual_expense_id.in.(${expenseFilter})`),
     });
   } catch (error) {
     if (isMissingExpenseRuleTable(error)) {
@@ -952,9 +1051,49 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
 export const expenseService = {
   ...baseExpenseService,
 
+  async resolveExpenseLeaseLink(expenseLike = {}, leases = null) {
+    const availableLeases = Array.isArray(leases) ? leases : await baseLeaseService.list();
+    const directLease = expenseLike?.lease_id
+      ? availableLeases.find((lease) => lease.id === expenseLike.lease_id) || null
+      : null;
+
+    if (directLease) {
+      return {
+        lease: directLease,
+        candidates: [directLease],
+        isAmbiguous: false,
+        expense: applyLeaseLinkToExpense(expenseLike, directLease),
+      };
+    }
+
+    const candidates = findMatchingLeasesForExpense(expenseLike, availableLeases);
+    const matchedLease = candidates.length === 1 ? candidates[0] : null;
+    return {
+      lease: matchedLease,
+      candidates,
+      isAmbiguous: candidates.length > 1,
+      expense: matchedLease ? applyLeaseLinkToExpense(expenseLike, matchedLease) : { ...expenseLike },
+    };
+  },
+
+  async create(data) {
+    const { expense } = await this.resolveExpenseLeaseLink(data);
+    return baseExpenseService.create(expense);
+  },
+
+  async update(id, data) {
+    const current = await baseExpenseService.get(id);
+    const merged = { ...current, ...data, id };
+    const { expense } = await this.resolveExpenseLeaseLink(merged);
+    const payload = { ...expense };
+    delete payload.id;
+    return baseExpenseService.update(id, payload);
+  },
+
   async listExpenseClassificationsForExpenses(expenseIds = []) {
     if (!expenseIds.length) return [];
     try {
+      const expenseFilter = expenseIds.join(",");
       return await selectExpenseClassifications({
         columns: [
           "id",
@@ -989,10 +1128,71 @@ export const expenseService = {
           "reviewed_at",
           "finalized_at",
         ],
-        apply: (query) => query.in("expense_id", expenseIds),
+        apply: (query) => query.or(`expense_id.in.(${expenseFilter}),actual_expense_id.in.(${expenseFilter})`),
       });
     } catch (error) {
       console.warn("[expenseService] listExpenseClassificationsForExpenses warning:", error);
+      return [];
+    }
+  },
+
+  async listExpenseClassificationsForScope(scope = {}) {
+    try {
+      const orgId = await getCurrentOrgId();
+      const rows = await selectExpenseClassifications({
+        columns: [
+          "id",
+          "org_id",
+          "classification_key",
+          "expense_id",
+          "actual_expense_id",
+          "lease_expense_rule_id",
+          "recovery_rule_id",
+          "recoverability_result",
+          "recovery_status",
+          "approved_status",
+          "classification_status",
+          "exception_type",
+          "cam_eligible",
+          "recovery_method",
+          "allocation_basis",
+          "recovery_reason",
+          "confidence_score",
+          "amount",
+          "recoverable_amount",
+          "non_recoverable_amount",
+          "conditional_amount",
+          "excluded_amount",
+          "property_id",
+          "building_id",
+          "unit_id",
+          "lease_id",
+          "tenant_id",
+          "category",
+          "subcategory",
+          "service_period_start",
+          "service_period_end",
+          "classified_at",
+          "reviewed_at",
+          "finalized_at",
+          "sent_to_cam",
+          "cam_status",
+          "next_step",
+          "notes",
+          "evidence_text",
+        ],
+        apply: (query) => {
+          let scopedQuery = query;
+          if (orgId && orgId !== "__none__") {
+            scopedQuery = scopedQuery.eq("org_id", orgId);
+          }
+          return scopedQuery.order("classified_at", { ascending: false }).limit(5000);
+        },
+      });
+
+      return rows.filter((row) => classificationMatchesScope(row, scope));
+    } catch (error) {
+      console.warn("[expenseService] listExpenseClassificationsForScope warning:", error);
       return [];
     }
   },
@@ -1890,8 +2090,8 @@ export const expenseService = {
     });
 
     const leaseIds = scopedLeases.map((lease) => lease.id).filter(Boolean);
-    const { ruleSets } = await fetchApprovedRuleArtifacts(leaseIds);
-    const approvedRuleLeaseIds = new Set((ruleSets || []).map((ruleSet) => ruleSet.lease_id));
+    const { rules } = await fetchApprovedRuleArtifacts(leaseIds);
+    const approvedRuleLeaseIds = new Set((rules || []).filter((rule) => approvedRuleForMatching(rule)).map((rule) => rule.lease_id).filter(Boolean));
 
     const actualExpenses = scopedExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
     const needsReviewExpenses = actualExpenses.filter((expense) => normalizeText(expense.approved_status) === "needs_review" || normalizeText(expense.recovery_status) === "needs_review");
@@ -1923,30 +2123,86 @@ export const expenseService = {
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
     const orgLeases = await baseLeaseService.list();
-    const leaseIds = [...new Set(orgLeases.map((lease) => lease.id).filter(Boolean))];
+    const scopedLeases = (orgLeases || []).filter((lease) => leaseMatchesScope(lease, scope));
+    const leaseIds = [...new Set(scopedLeases.map((lease) => lease.id).filter(Boolean))];
     if (leaseIds.length === 0) return [];
 
     const leaseById = new Map((orgLeases || []).map((lease) => [lease.id, lease]));
     const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
-
-    return (ruleEntries || [])
+    const normalizedRules = (ruleEntries || [])
       .flatMap((entry) =>
         (entry.rules || []).map((rule) => ({
           ...rule,
           lease_id: rule.lease_id || entry.leaseId,
           rule_set: entry.ruleSet || null,
         }))
-      )
-      .filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope));
+      );
+
+    let directRules = [];
+    try {
+      const { ruleSets, rules } = await fetchApprovedRuleArtifacts(leaseIds);
+      const ruleSetById = new Map((ruleSets || []).map((ruleSet) => [ruleSet.id, ruleSet]));
+      directRules = (rules || []).map((rule) => ({
+        ...rule,
+        lease_id: rule.lease_id || ruleSetById.get(rule.rule_set_id)?.lease_id || null,
+        rule_set: ruleSetById.get(rule.rule_set_id) || null,
+      }));
+    } catch (error) {
+      console.warn("[expenseService] direct approved rule fallback warning:", error);
+    }
+
+    const mergedById = new Map();
+    for (const rule of [...directRules, ...normalizedRules]) {
+      if (!rule?.id) continue;
+      const existing = mergedById.get(rule.id) || {};
+      mergedById.set(rule.id, { ...existing, ...rule });
+    }
+
+    return [...mergedById.values()].filter((rule) =>
+      isApprovedLeaseRule(rule) &&
+      ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope)
+    );
   },
 
   async loadApprovedActualExpenses(scope = {}) {
-    const allExpenses = await baseExpenseService.list();
-    return (allExpenses || []).filter((expense) =>
-      expenseMatchesScope(expense, scope) &&
+    const [allExpenses, allLeases] = await Promise.all([
+      baseExpenseService.list(),
+      baseLeaseService.list(),
+    ]);
+    const actualExpenses = (allExpenses || []).filter((expense) =>
       normalizeSourceType(expense) !== "lease_import" &&
-      isApprovedExpenseRecord(expense)
+      expenseMatchesScope(expense, scope)
     );
+    const expenseIds = actualExpenses.map((expense) => expense.id).filter(Boolean);
+    const existingClassifications = expenseIds.length > 0
+      ? await fetchExistingExpenseClassifications(expenseIds)
+      : [];
+    const classificationByExpenseId = new Map();
+    for (const classification of existingClassifications) {
+      const expenseId = classification.expense_id || classification.actual_expense_id;
+      if (!expenseId || classificationByExpenseId.has(expenseId)) continue;
+      classificationByExpenseId.set(expenseId, classification);
+    }
+
+    const approvedExpenses = [];
+    for (const expense of actualExpenses) {
+      const classification = classificationByExpenseId.get(expense.id) || null;
+      if (!isApprovedExpenseRecord(expense, classification)) continue;
+      const { expense: linkedExpense } = await this.resolveExpenseLeaseLink({
+        ...expense,
+        approved_status: classification?.approved_status || expense.approved_status || expense.approval_status,
+        recovery_status: classification?.recoverability_result || classification?.recovery_status || expense.recovery_status,
+        recoverability_result: classification?.recoverability_result || classification?.recovery_status || expense.recoverability_result,
+        classification: classification?.recoverability_result || classification?.recovery_status || expense.classification,
+        recovery_reason: classification?.recovery_reason || expense.recovery_reason,
+        rule_source: classification?.rule_source || expense.rule_source,
+        cam_eligible: classification?.cam_eligible || expense.cam_eligible,
+        recovery_method: classification?.recovery_method || expense.recovery_method,
+      }, allLeases);
+      approvedExpenses.push(linkedExpense);
+    }
+
+    return approvedExpenses;
   },
 
   async loadExpenseRecoverabilityScope(scope = {}) {
