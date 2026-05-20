@@ -216,11 +216,23 @@ export default function Expenses() {
 
   const displayedExpenses = useMemo(() => {
     return selectorScopedExpenses.map((expense) => {
+      const matchedLease = resolveDisplayLeaseForExpense(expense, leases);
+      const linkedExpense = matchedLease
+        ? {
+            ...expense,
+            lease_id: expense.lease_id || matchedLease.id || null,
+            tenant_id: expense.tenant_id || matchedLease.tenant_id || null,
+            tenant_name: expense.tenant_name || matchedLease.tenant_name || null,
+            property_id: expense.property_id || matchedLease.property_id || null,
+            building_id: expense.building_id || matchedLease.building_id || null,
+            unit_id: expense.unit_id || matchedLease.unit_id || null,
+          }
+        : expense;
       const classification = classificationByExpenseId.get(expense.id);
-      if (!classification) return expense;
+      if (!classification) return linkedExpense;
 
       const expenseWorkflowUpdatedAt = Date.parse(
-        expense.classification_updated_at || expense.updated_at || ""
+        linkedExpense.classification_updated_at || linkedExpense.updated_at || ""
       );
       const classificationUpdatedAt = Date.parse(
         classification.updated_at ||
@@ -236,54 +248,54 @@ export default function Expenses() {
 
       const effectiveRecovery =
         (preferBaseWorkflow
-          ? (expense.recoverability_result || expense.recovery_status || expense.classification)
+          ? (linkedExpense.recoverability_result || linkedExpense.recovery_status || linkedExpense.classification)
           : (classification.recoverability_result || classification.recovery_status)) ||
-        expense.recovery_status ||
-        expense.classification ||
+        linkedExpense.recovery_status ||
+        linkedExpense.classification ||
         "needs_review";
 
       return {
-        ...expense,
+        ...linkedExpense,
         recovery_status: preferBaseWorkflow
-          ? (expense.recovery_status || expense.recoverability_result || effectiveRecovery)
+          ? (linkedExpense.recovery_status || linkedExpense.recoverability_result || effectiveRecovery)
           : (classification.recovery_status || effectiveRecovery),
         recoverability_result: preferBaseWorkflow
-          ? (expense.recoverability_result || expense.recovery_status || effectiveRecovery)
+          ? (linkedExpense.recoverability_result || linkedExpense.recovery_status || effectiveRecovery)
           : (classification.recoverability_result || effectiveRecovery),
         classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
         approved_status: preferBaseWorkflow
-          ? (expense.approved_status || classification.approved_status)
-          : (classification.approved_status || expense.approved_status),
+          ? (linkedExpense.approved_status || classification.approved_status)
+          : (classification.approved_status || linkedExpense.approved_status),
         rule_source: preferBaseWorkflow
-          ? (expense.rule_source || classification.rule_source)
-          : (classification.rule_source || expense.rule_source),
+          ? (linkedExpense.rule_source || classification.rule_source)
+          : (classification.rule_source || linkedExpense.rule_source),
         classification_status: preferBaseWorkflow
-          ? (expense.classification_status || classification.classification_status)
-          : (classification.classification_status || expense.classification_status),
+          ? (linkedExpense.classification_status || classification.classification_status)
+          : (classification.classification_status || linkedExpense.classification_status),
         confidence_score: preferBaseWorkflow
-          ? (expense.confidence_score ?? classification.confidence_score)
-          : (classification.confidence_score ?? expense.confidence_score),
+          ? (linkedExpense.confidence_score ?? classification.confidence_score)
+          : (classification.confidence_score ?? linkedExpense.confidence_score),
         recovery_reason: preferBaseWorkflow
-          ? (expense.recovery_reason || classification.recovery_reason)
-          : (classification.recovery_reason || expense.recovery_reason),
+          ? (linkedExpense.recovery_reason || classification.recovery_reason)
+          : (classification.recovery_reason || linkedExpense.recovery_reason),
         cam_eligible: preferBaseWorkflow
-          ? (expense.cam_eligible || classification.cam_eligible)
-          : (classification.cam_eligible || expense.cam_eligible),
+          ? (linkedExpense.cam_eligible || classification.cam_eligible)
+          : (classification.cam_eligible || linkedExpense.cam_eligible),
         recovery_method: preferBaseWorkflow
-          ? (expense.recovery_method || classification.recovery_method)
-          : (classification.recovery_method || expense.recovery_method),
+          ? (linkedExpense.recovery_method || classification.recovery_method)
+          : (classification.recovery_method || linkedExpense.recovery_method),
         approved_at: preferBaseWorkflow
-          ? (expense.approved_at || classification.approved_at)
-          : (classification.approved_at || expense.approved_at),
+          ? (linkedExpense.approved_at || classification.approved_at)
+          : (classification.approved_at || linkedExpense.approved_at),
         reviewed_at: preferBaseWorkflow
-          ? (expense.reviewed_at || classification.reviewed_at)
-          : (classification.reviewed_at || expense.reviewed_at),
+          ? (linkedExpense.reviewed_at || classification.reviewed_at)
+          : (classification.reviewed_at || linkedExpense.reviewed_at),
         finalized_at: preferBaseWorkflow
-          ? (expense.finalized_at || classification.finalized_at)
-          : (classification.finalized_at || expense.finalized_at),
+          ? (linkedExpense.finalized_at || classification.finalized_at)
+          : (classification.finalized_at || linkedExpense.finalized_at),
       };
     });
-  }, [classificationByExpenseId, selectorScopedExpenses]);
+  }, [classificationByExpenseId, leases, selectorScopedExpenses]);
 
   const displayedExpenseById = useMemo(
     () => new Map(displayedExpenses.map((expense) => [expense.id, expense])),
