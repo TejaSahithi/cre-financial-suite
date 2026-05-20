@@ -1040,7 +1040,11 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
-                      <TableCell className="text-sm text-slate-700">{sourcePage ?? "Unknown"}</TableCell>
+                      <TableCell className="text-sm text-slate-700 tabular-nums">
+                        {sourcePage != null && sourcePage !== "" && !Number.isNaN(Number(sourcePage)) && Number(sourcePage) > 0
+                          ? `p. ${Number(sourcePage)}`
+                          : "—"}
+                      </TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
                         {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
                       </TableCell>
@@ -1065,7 +1069,14 @@ export default function LeaseExpenseRules() {
                         <Badge className={`text-[10px] ${validation.publishedToCam ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
                           {validation.publishedToCam ? "Published" : "Not Published"}
                         </Badge>
-                        <p className="mt-1 leading-4">{publishSummary}</p>
+                        {!validation.publishedToCam && (
+                          <p
+                            className="mt-1 text-[10px] uppercase tracking-wide text-slate-500"
+                            title={validation.publishBlockers.join(" · ")}
+                          >
+                            {publishSummary}
+                          </p>
+                        )}
                       </TableCell>
                       <TableCell>
                         <DropdownMenu>
@@ -1374,7 +1385,10 @@ export default function LeaseExpenseRules() {
               <div className="space-y-2">
                 <Label>Source Evidence</Label>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <p><span className="font-medium text-slate-900">Source page:</span> {getSourcePage(editingRuleContext.rule) ?? "Unknown"}</p>
+                  <p><span className="font-medium text-slate-900">Source page:</span> {(() => {
+                    const sp = getSourcePage(editingRuleContext.rule);
+                    return sp != null && sp !== "" && Number(sp) > 0 ? `p. ${Number(sp)}` : "—";
+                  })()}</p>
                   <p className="mt-2"><span className="font-medium text-slate-900">Exact source text:</span> {getExactSourceText(editingRuleContext.rule) || "-"}</p>
                 </div>
               </div>

@@ -619,20 +619,22 @@ function getRuleValidation(rule) {
     warnings.push("Exact source text appears inferred or too weak. Confirm the actual lease clause before approval.");
   }
 
+  // Blocker labels are SHORT — they render in a tight column. Verbose
+  // explanations belong in tooltips/help text, not the table cell.
   const approvalBlockers = [];
-  if (!hasValidSourcePage) approvalBlockers.push("Source page is required and must be a positive lease document page number.");
-  if (!hasLeaseSourceText) approvalBlockers.push("Exact source text from the lease document is required before approval.");
-  if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Exact source text is too weak or inferred. Use the actual lease clause before approval.");
+  if (!hasValidSourcePage) approvalBlockers.push("Missing source page");
+  if (!hasLeaseSourceText) approvalBlockers.push("Missing source text");
+  if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Source text too weak");
 
   const publishBlockers = [];
   publishBlockers.push(...approvalBlockers);
-  if (reviewStatus !== "approved") publishBlockers.push("Review status must be approved.");
-  if (approvalStatus !== "approved") publishBlockers.push("Approval status must be approved.");
-  if (!["yes", "conditional"].includes(recoverableFromTenant)) publishBlockers.push("Recoverable must be yes or conditional.");
-  if (!["yes", "conditional"].includes(camEligible)) publishBlockers.push("CAM Eligible must be yes or conditional.");
-  if (includedInBaseRent) publishBlockers.push("Included in rent rules cannot be published to CAM.");
-  if (paymentTreatment === "included_in_base_rent") publishBlockers.push("Payment treatment included_in_base_rent cannot be published to CAM.");
-  if (alreadyPublished) publishBlockers.push("Rule is already published to CAM.");
+  if (reviewStatus !== "approved") publishBlockers.push("Not reviewed");
+  if (approvalStatus !== "approved") publishBlockers.push("Not approved");
+  if (!["yes", "conditional"].includes(recoverableFromTenant)) publishBlockers.push("Not recoverable");
+  if (!["yes", "conditional"].includes(camEligible)) publishBlockers.push("Not CAM eligible");
+  if (includedInBaseRent) publishBlockers.push("Included in rent");
+  if (paymentTreatment === "included_in_base_rent") publishBlockers.push("Included in rent");
+  if (alreadyPublished) publishBlockers.push("Already published");
   publishBlockers.push(...issues);
 
   return {
