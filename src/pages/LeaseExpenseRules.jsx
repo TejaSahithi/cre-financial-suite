@@ -186,6 +186,21 @@ function getRuleValidation(rule) {
   return leaseExpenseRuleService.getRuleValidation(rule);
 }
 
+function buildRuleWorkflowPatch(rule, validation, overrides = {}) {
+  return {
+    included_in_base_rent: validation.includedInBaseRent,
+    operational_responsibility: getOperationalResponsibility(rule),
+    payment_treatment: validation.paymentTreatment,
+    recoverable_from_tenant: validation.recoverableFromTenant,
+    cam_eligible: validation.camEligible,
+    recovery_method: validation.recoveryMethod,
+    allocation_basis: validation.allocationBasis,
+    source_page: validation.sourcePage,
+    exact_source_text: validation.exactSourceText || null,
+    ...overrides,
+  };
+}
+
 function humanizeToken(value) {
   const text = String(value || "").replace(/[_-]+/g, " ").trim();
   if (!text) return "-";
@@ -638,32 +653,59 @@ export default function LeaseExpenseRules() {
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
 
-  const approveRule = async (rule) => {
+  const approveRule = async (rule, lease) => {
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
-    const validation = getRuleValidation(rule);
-    return updateRuleMutation.mutateAsync({
+    const approvalPreview = {
+      ...rule,
+      row_status: "mapped",
+      review_status: "approved",
+      approval_status: "approved",
+      approved_by: userId,
+      approved_at: now,
+      updated_at: now,
+      published_to_cam: false,
+      operational_responsibility: getOperationalResponsibility(rule),
+    };
+    const validation = getRuleValidation(approvalPreview);
+    if (!validation.canApprove) {
+      toast.error(validation.approvalBlockers[0] || "This rule needs real lease evidence before approval.");
+      return;
+    }
+    const approvedRule = await updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: {
+      patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "mapped",
         review_status: "approved",
         approval_status: "approved",
         approved_by: userId,
         approved_at: now,
         updated_at: now,
-        included_in_base_rent: validation.includedInBaseRent,
-        responsibility: getOperationalResponsibility(rule),
-        operational_responsibility: getOperationalResponsibility(rule),
-        payment_treatment: validation.paymentTreatment,
-        recoverable_from_tenant: validation.recoverableFromTenant,
-        cam_eligible: validation.camEligible,
-        recovery_method: validation.recoveryMethod,
-        allocation_basis: validation.allocationBasis,
         is_excluded: false,
         published_to_cam: false,
-      },
-    }).then(() => toast.success("Rule approved"));
+      }),
+    });
+
+    const approvedValidation = getRuleValidation({ ...rule, ...approvedRule });
+    if (lease?.id && approvedValidation.canPublishToCam && !approvedValidation.publishedToCam) {
+      await leaseExpenseRuleService.upsertRuleIntoCamSetup({
+        lease,
+        rule: { ...rule, ...approvedRule },
+        categoriesById: categoryById,
+      });
+      await updateRuleMutation.mutateAsync({
+        ruleId: rule.id,
+        patch: {
+          published_to_cam: true,
+          updated_at: new Date().toISOString(),
+        },
+      });
+      toast.success("Rule approved and published to CAM");
+      return;
+    }
+
+    toast.success("Rule approved");
   };
 
   const rejectRule = async (rule) => {
@@ -671,17 +713,13 @@ export default function LeaseExpenseRules() {
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: {
+      patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "needs_review",
         review_status: "needs_review",
         approval_status: "draft",
         approved_by: null,
         approved_at: null,
         updated_at: now,
-        included_in_base_rent: validation.includedInBaseRent,
-        responsibility: getOperationalResponsibility(rule),
-        operational_responsibility: getOperationalResponsibility(rule),
-        payment_treatment: validation.paymentTreatment,
         recoverable_from_tenant: "no",
         cam_eligible: "no",
         recovery_method: "not_applicable",
@@ -689,7 +727,7 @@ export default function LeaseExpenseRules() {
         is_recoverable: false,
         is_excluded: true,
         published_to_cam: false,
-      },
+      }),
     }).then(() => toast.success("Rule rejected"));
   };
 
@@ -700,16 +738,13 @@ export default function LeaseExpenseRules() {
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: {
+      patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "unmapped",
         review_status: "approved",
         approval_status: "approved",
         approved_by: userId,
         approved_at: now,
         updated_at: now,
-        included_in_base_rent: validation.includedInBaseRent,
-        responsibility: getOperationalResponsibility(rule),
-        operational_responsibility: getOperationalResponsibility(rule),
         payment_treatment: validation.includedInBaseRent ? "included_in_base_rent" : "not_applicable",
         recoverable_from_tenant: "no",
         cam_eligible: "no",
@@ -718,7 +753,7 @@ export default function LeaseExpenseRules() {
         is_excluded: true,
         is_recoverable: false,
         published_to_cam: false,
-      },
+      }),
     }).then(() => toast.success("Rule marked N/A"));
   };
 
@@ -734,22 +769,14 @@ export default function LeaseExpenseRules() {
     });
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: {
+      patch: buildRuleWorkflowPatch(rule, validation, {
         published_to_cam: true,
         review_status: "approved",
         approval_status: "approved",
         approved_by: userId,
         approved_at: now,
         updated_at: now,
-        included_in_base_rent: validation.includedInBaseRent,
-        responsibility: getOperationalResponsibility(rule),
-        operational_responsibility: getOperationalResponsibility(rule),
-        payment_treatment: validation.paymentTreatment,
-        recoverable_from_tenant: validation.recoverableFromTenant,
-        cam_eligible: validation.camEligible,
-        recovery_method: validation.recoveryMethod,
-        allocation_basis: validation.allocationBasis,
-      },
+      }),
     }).then(() => {
       toast.success("Rule published to CAM");
       navigate(createPageUrl("CAMSetup") + `?property=${propertyId}`);
@@ -766,7 +793,6 @@ export default function LeaseExpenseRules() {
         expense_subcategory: editForm.expense_subcategory || null,
         subcategory_name: editForm.expense_subcategory || null,
         included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),
-        responsibility: editForm.responsibility || null,
         operational_responsibility: editForm.responsibility || null,
         payment_treatment: editForm.payment_treatment || "not_applicable",
         recoverable_from_tenant: editForm.recoverable_from_tenant || "no",
@@ -1014,7 +1040,7 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
-                      <TableCell className="text-sm text-slate-700">{sourcePage ?? "-"}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{sourcePage ?? "Unknown"}</TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
                         {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
                       </TableCell>
@@ -1061,7 +1087,7 @@ export default function LeaseExpenseRules() {
                             <DropdownMenuItem
                               onSelect={(event) => {
                                 event.preventDefault();
-                                approveRule(rule);
+                                approveRule(rule, lease);
                               }}
                               className="text-emerald-700 focus:text-emerald-800"
                             >
@@ -1348,7 +1374,7 @@ export default function LeaseExpenseRules() {
               <div className="space-y-2">
                 <Label>Source Evidence</Label>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <p><span className="font-medium text-slate-900">Source page:</span> {getSourcePage(editingRuleContext.rule) || "-"}</p>
+                  <p><span className="font-medium text-slate-900">Source page:</span> {getSourcePage(editingRuleContext.rule) ?? "Unknown"}</p>
                   <p className="mt-2"><span className="font-medium text-slate-900">Exact source text:</span> {getExactSourceText(editingRuleContext.rule) || "-"}</p>
                 </div>
               </div>

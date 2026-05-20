@@ -328,13 +328,26 @@ function deriveRuleReconciliationFrequency(rule) {
 }
 
 function deriveRuleExactSourceText(rule) {
-  return firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.clause_text, rule?.source, rule?.notes);
+  const firstClause = asArray(rule?.clauses)[0];
+  return firstPresent(
+    firstClause?.clause_text,
+    firstClause?.source_text,
+    firstClause?.evidence_text,
+    firstClause?.text,
+    rule?.exact_source_text,
+    rule?.source_clause,
+    rule?.clause_text,
+    rule?.evidence_text,
+    rule?.source_text,
+  );
 }
 
 function deriveRuleSourcePage(rule) {
-  if (Number.isFinite(Number(rule?.source_page))) return Number(rule.source_page);
+  const directPage = Number(rule?.source_page ?? rule?.page_number ?? rule?.evidence_page_number);
+  if (Number.isFinite(directPage) && directPage > 0) return directPage;
   const firstClause = asArray(rule?.clauses)[0];
-  if (Number.isFinite(Number(firstClause?.page_number))) return Number(firstClause.page_number);
+  const clausePage = Number(firstClause?.page_number);
+  if (Number.isFinite(clausePage) && clausePage > 0) return clausePage;
   return null;
 }
 
@@ -492,7 +505,7 @@ function isWeakSourceText(text) {
 }
 
 function hasStrongRuleEvidence(rule) {
-  return Number.isFinite(Number(rule?.source_page)) && !isWeakSourceText(deriveRuleExactSourceText(rule));
+  return Number.isFinite(Number(deriveRuleSourcePage(rule))) && !isWeakSourceText(deriveRuleExactSourceText(rule));
 }
 
 function isRuleResponsibilityKnown(rule) {
@@ -573,6 +586,9 @@ function getRuleValidation(rule) {
   const sourcePage = deriveRuleSourcePage(rule);
   const exactSourceText = deriveRuleExactSourceText(rule);
   const alreadyPublished = Boolean(rule?.published_to_cam);
+  const hasValidSourcePage = Number.isFinite(Number(sourcePage)) && Number(sourcePage) > 0;
+  const hasLeaseSourceText = Boolean(String(exactSourceText || "").trim());
+  const strongSourceText = hasLeaseSourceText && !isWeakSourceText(exactSourceText);
   const issues = [];
   const warnings = [];
 
@@ -594,8 +610,22 @@ function getRuleValidation(rule) {
   if (!["yes", "conditional"].includes(recoverableFromTenant) && allocationBasis) {
     warnings.push("Allocation basis is ignored unless the rule is recoverable and CAM-eligible.");
   }
+  if (!hasValidSourcePage) {
+    warnings.push("Source page is missing. Use the real lease document page number before approval.");
+  }
+  if (!hasLeaseSourceText) {
+    warnings.push("Exact source text is missing. Approval should reference the actual lease clause.");
+  } else if (!strongSourceText) {
+    warnings.push("Exact source text appears inferred or too weak. Confirm the actual lease clause before approval.");
+  }
+
+  const approvalBlockers = [];
+  if (!hasValidSourcePage) approvalBlockers.push("Source page is required and must be a positive lease document page number.");
+  if (!hasLeaseSourceText) approvalBlockers.push("Exact source text from the lease document is required before approval.");
+  if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Exact source text is too weak or inferred. Use the actual lease clause before approval.");
 
   const publishBlockers = [];
+  publishBlockers.push(...approvalBlockers);
   if (reviewStatus !== "approved") publishBlockers.push("Review status must be approved.");
   if (approvalStatus !== "approved") publishBlockers.push("Approval status must be approved.");
   if (!["yes", "conditional"].includes(recoverableFromTenant)) publishBlockers.push("Recoverable must be yes or conditional.");
@@ -616,9 +646,11 @@ function getRuleValidation(rule) {
     approvalStatus,
     sourcePage,
     exactSourceText,
+    approvalBlockers,
     issues,
     warnings,
     publishBlockers,
+    canApprove: approvalBlockers.length === 0,
     canPublishToCam: publishBlockers.length === 0,
     publishedToCam: alreadyPublished,
   };
