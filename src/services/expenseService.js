@@ -987,57 +987,53 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
 async function fetchExistingExpenseClassifications(expenseIds = []) {
   if (!supabase || expenseIds.length === 0) return [];
   try {
-    const expenseFilter = expenseIds.join(",");
-    return await selectExpenseClassifications({
-      columns: [
-        "id",
-        "org_id",
-        "classification_key",
-        "expense_id",
-        "actual_expense_id",
-        "property_id",
-        "building_id",
-        "unit_id",
-        "lease_id",
-        "tenant_id",
-        "rule_set_id",
-        "recovery_rule_id",
-        "lease_expense_rule_id",
-        "recovery_status",
-        "recoverability_result",
-        "recovery_reason",
-        "cam_eligible",
-        "recovery_method",
-        "allocation_method",
-        "allocation_basis",
-        "rule_source",
-        "confidence_score",
-        "evidence_text",
-        "evidence_page_number",
-        "approved_status",
-        "notes",
-        "classified_by",
-        "classified_at",
-        "approved_by",
-        "approved_at",
-        "reviewed_by",
-        "reviewed_at",
-        "finalized_at",
-        "classification_status",
-        "exception_type",
-        "amount",
-        "recoverable_amount",
-        "non_recoverable_amount",
-        "conditional_amount",
-        "excluded_amount",
-        "sent_to_cam",
-        "sent_to_cam_at",
-        "sent_to_cam_by",
-        "cam_status",
-        "next_step",
-      ],
-      apply: (query) => query.or(`expense_id.in.(${expenseFilter}),actual_expense_id.in.(${expenseFilter})`),
-    });
+    return await selectExpenseClassificationsForExpenseIds(expenseIds, [
+      "id",
+      "org_id",
+      "classification_key",
+      "expense_id",
+      "actual_expense_id",
+      "property_id",
+      "building_id",
+      "unit_id",
+      "lease_id",
+      "tenant_id",
+      "rule_set_id",
+      "recovery_rule_id",
+      "lease_expense_rule_id",
+      "recovery_status",
+      "recoverability_result",
+      "recovery_reason",
+      "cam_eligible",
+      "recovery_method",
+      "allocation_method",
+      "allocation_basis",
+      "rule_source",
+      "confidence_score",
+      "evidence_text",
+      "evidence_page_number",
+      "approved_status",
+      "notes",
+      "classified_by",
+      "classified_at",
+      "approved_by",
+      "approved_at",
+      "reviewed_by",
+      "reviewed_at",
+      "finalized_at",
+      "classification_status",
+      "exception_type",
+      "amount",
+      "recoverable_amount",
+      "non_recoverable_amount",
+      "conditional_amount",
+      "excluded_amount",
+      "sent_to_cam",
+      "sent_to_cam_at",
+      "sent_to_cam_by",
+      "cam_status",
+      "next_step",
+    ]);
   } catch (error) {
     if (isMissingExpenseRuleTable(error)) {
       console.warn("[expenseService] expense_classifications table missing — treating as no persisted classifications.");
@@ -1045,6 +1041,40 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
     }
     console.warn("[expenseService] failed to load persisted classifications:", error);
     return [];
+  }
+}
+
+async function selectExpenseClassificationsForExpenseIds(expenseIds = [], columns = []) {
+  if (!supabase || expenseIds.length === 0 || columns.length === 0) return [];
+
+  const cleanExpenseIds = expenseIds.filter(Boolean);
+  const expenseFilter = cleanExpenseIds.join(",");
+
+  try {
+    return await selectExpenseClassifications({
+      columns,
+      apply: (query) => query.or(`expense_id.in.(${expenseFilter}),actual_expense_id.in.(${expenseFilter})`),
+    });
+  } catch (error) {
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !["expense_id", "actual_expense_id"].includes(missingColumn)) {
+      throw error;
+    }
+
+    const fallbackColumn = missingColumn === "expense_id" ? "actual_expense_id" : "expense_id";
+    try {
+      return await selectExpenseClassifications({
+        columns,
+        apply: (query) => query.in(fallbackColumn, cleanExpenseIds),
+      });
+    } catch (fallbackError) {
+      const secondMissing = extractMissingColumn(fallbackError);
+      if (isMissingColumnError(fallbackError) && secondMissing === fallbackColumn) {
+        console.warn("[expenseService] expense_classifications id-link columns missing — treating as no persisted classifications.");
+        return [];
+      }
+      throw fallbackError;
+    }
   }
 }
 
@@ -1093,43 +1123,39 @@ export const expenseService = {
   async listExpenseClassificationsForExpenses(expenseIds = []) {
     if (!expenseIds.length) return [];
     try {
-      const expenseFilter = expenseIds.join(",");
-      return await selectExpenseClassifications({
-        columns: [
-          "id",
-          "classification_key",
-          "expense_id",
-          "actual_expense_id",
-          "lease_expense_rule_id",
-          "linked_expense_rule_id",
-          "recovery_status",
-          "recoverability_result",
-          "approved_status",
-          "rule_source",
-          "classification_status",
-          "exception_type",
-          "confidence_score",
-          "recovery_reason",
-          "cam_eligible",
-          "recovery_method",
-          "amount",
-          "recoverable_amount",
-          "non_recoverable_amount",
-          "conditional_amount",
-          "excluded_amount",
-          "next_step",
-          "sent_to_cam",
-          "sent_to_cam_at",
-          "sent_to_cam_by",
-          "cam_status",
-          "updated_at",
-          "classified_at",
-          "approved_at",
-          "reviewed_at",
-          "finalized_at",
-        ],
-        apply: (query) => query.or(`expense_id.in.(${expenseFilter}),actual_expense_id.in.(${expenseFilter})`),
-      });
+      return await selectExpenseClassificationsForExpenseIds(expenseIds, [
+        "id",
+        "classification_key",
+        "expense_id",
+        "actual_expense_id",
+        "lease_expense_rule_id",
+        "linked_expense_rule_id",
+        "recovery_status",
+        "recoverability_result",
+        "approved_status",
+        "rule_source",
+        "classification_status",
+        "exception_type",
+        "confidence_score",
+        "recovery_reason",
+        "cam_eligible",
+        "recovery_method",
+        "amount",
+        "recoverable_amount",
+        "non_recoverable_amount",
+        "conditional_amount",
+        "excluded_amount",
+        "next_step",
+        "sent_to_cam",
+        "sent_to_cam_at",
+        "sent_to_cam_by",
+        "cam_status",
+        "updated_at",
+        "classified_at",
+        "approved_at",
+        "reviewed_at",
+        "finalized_at",
+      ]);
     } catch (error) {
       console.warn("[expenseService] listExpenseClassificationsForExpenses warning:", error);
       return [];

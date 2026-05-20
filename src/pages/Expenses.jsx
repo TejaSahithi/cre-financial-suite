@@ -59,7 +59,9 @@ function normalizeExpenseDate(value) {
 }
 
 function isDisplayActiveLease(status) {
-  return ["approved", "active", "executed", "budget_ready"].includes(String(status || "").trim().toLowerCase());
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) return true;
+  return ["approved", "active", "executed", "budget_ready", "signed"].includes(normalized);
 }
 
 function leaseOverlapsExpense(expense, lease) {
@@ -118,6 +120,7 @@ export default function Expenses() {
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
   const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: leases = [] } = useOrgQuery("Lease");
+  const { data: tenants = [] } = useOrgQuery("Tenant");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
   const { data: allUnits = [] } = useOrgQuery("Unit");
@@ -214,20 +217,41 @@ export default function Expenses() {
     [selectorScopedClassifications]
   );
 
+  const tenantById = useMemo(
+    () => new Map((tenants || []).map((tenant) => [tenant.id, tenant])),
+    [tenants]
+  );
+
   const displayedExpenses = useMemo(() => {
     return selectorScopedExpenses.map((expense) => {
       const matchedLease = resolveDisplayLeaseForExpense(expense, leases);
+      const directTenant =
+        tenantById.get(expense.tenant_id) ||
+        tenantById.get(matchedLease?.tenant_id) ||
+        null;
       const linkedExpense = matchedLease
         ? {
             ...expense,
             lease_id: expense.lease_id || matchedLease.id || null,
             tenant_id: expense.tenant_id || matchedLease.tenant_id || null,
-            tenant_name: expense.tenant_name || matchedLease.tenant_name || null,
+            tenant_name:
+              expense.tenant_name ||
+              matchedLease.tenant_name ||
+              directTenant?.tenant_name ||
+              directTenant?.name ||
+              null,
             property_id: expense.property_id || matchedLease.property_id || null,
             building_id: expense.building_id || matchedLease.building_id || null,
             unit_id: expense.unit_id || matchedLease.unit_id || null,
           }
-        : expense;
+        : {
+            ...expense,
+            tenant_name:
+              expense.tenant_name ||
+              directTenant?.tenant_name ||
+              directTenant?.name ||
+              null,
+          };
       const classification = classificationByExpenseId.get(expense.id);
       if (!classification) return linkedExpense;
 
@@ -295,7 +319,7 @@ export default function Expenses() {
           : (classification.finalized_at || linkedExpense.finalized_at),
       };
     });
-  }, [classificationByExpenseId, leases, selectorScopedExpenses]);
+  }, [classificationByExpenseId, leases, selectorScopedExpenses, tenantById]);
 
   const displayedExpenseById = useMemo(
     () => new Map(displayedExpenses.map((expense) => [expense.id, expense])),
