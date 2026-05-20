@@ -1707,14 +1707,21 @@ export const expenseService = {
       )
     `);
 
-    // We fetch approved rules
-    query = query.or("review_status.eq.approved,review_status.eq.mapped,approval_status.eq.approved");
-
+    // Fetch all rules first to avoid 400 Bad Request on missing columns
     const { data, error } = await query;
     if (error || !data) return [];
 
-    // Scope inheritance filtering
+    // Scope inheritance and approval filtering
     return data.filter(rule => {
+      // Check if it's approved
+      const isApproved = 
+        rule.review_status === 'approved' || 
+        rule.review_status === 'mapped' || 
+        rule.approval_status === 'approved' || 
+        rule.status === 'approved';
+        
+      if (!isApproved) return false;
+
       const rs = rule.rule_set;
       if (lease_id && rs.lease_id === lease_id) return true;
       if (property_id && rule.property_id === property_id) return true;
@@ -1730,7 +1737,7 @@ export const expenseService = {
 
     let query = supabase.from("expenses").select('*');
 
-    query = query.eq("approved_status", "approved");
+    // We filter dynamically in JS to prevent 400 errors from missing schema columns
 
     if (property_id && property_id !== 'all') query = query.eq("property_id", property_id);
     if (building_id && building_id !== 'all') query = query.eq("building_id", building_id);
@@ -1741,7 +1748,13 @@ export const expenseService = {
 
     const { data, error } = await query;
     if (error || !data) return [];
-    return data;
+    
+    // Filter for approved expenses in memory
+    return data.filter(e => 
+      e.approved_status === 'approved' || 
+      e.status === 'approved' || 
+      e.review_status === 'approved'
+    );
   },
 
   async loadExpenseRecoverabilityScope(scope = {}) {

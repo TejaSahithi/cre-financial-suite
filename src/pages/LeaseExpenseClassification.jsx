@@ -159,9 +159,9 @@ export default function LeaseExpenseClassification() {
               <Badge variant="outline" className="bg-white/10 text-indigo-200 border-indigo-500/30 font-normal hidden sm:inline-flex">Classification Engine</Badge>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/expenses/add")}><Plus className="w-3 h-3 mr-1"/>Add</Button>
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/expenses/import")}><Upload className="w-3 h-3 mr-1"/>Import</Button>
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/lease-expense-rules")}><FileText className="w-3 h-3 mr-1"/>Rules</Button>
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/AddExpense")}><Plus className="w-3 h-3 mr-1"/>Add</Button>
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/BulkImport")}><Upload className="w-3 h-3 mr-1"/>Import</Button>
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/LeaseExpenseRules")}><FileText className="w-3 h-3 mr-1"/>Rules</Button>
             </div>
           </div>
 
@@ -210,8 +210,8 @@ export default function LeaseExpenseClassification() {
                 </div>
               </div>
               <div className="flex gap-2 shrink-0">
-                <Button variant="outline" size="sm" className="bg-white" onClick={() => navigate("/expenses/add")}>Add Expense</Button>
-                <Button variant="outline" size="sm" className="bg-white" onClick={() => navigate("/expenses/import")}>Bulk Import</Button>
+                <Button variant="outline" size="sm" className="bg-white text-slate-800" onClick={() => navigate("/AddExpense")}>Add Expense</Button>
+                <Button variant="outline" size="sm" className="bg-white text-slate-800" onClick={() => navigate("/BulkImport")}>Bulk Import</Button>
               </div>
             </div>
           )}
@@ -225,7 +225,7 @@ export default function LeaseExpenseClassification() {
                   <p className="text-xs text-rose-700/80 mt-1">You have actual expenses, but no approved lease rules. Approve your lease expense rules first to allow matching.</p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="bg-white shrink-0" onClick={() => navigate("/lease-expense-rules")}>Manage Lease Rules</Button>
+              <Button variant="outline" size="sm" className="bg-white text-slate-800 shrink-0" onClick={() => navigate("/LeaseExpenseRules")}>Manage Lease Rules</Button>
             </div>
           )}
 
