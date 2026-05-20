@@ -1501,20 +1501,16 @@ export const expenseService = {
     };
   },
 
-  async finalizeExpenseClassification(expenseId) {
+  async finalizeExpenseClassification(expenseId, recoveryStatus = "recoverable") {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
     return baseExpenseService.update(expenseId, {
-      classification_status: "finalized",
-      approved_status: "approved",
-      reviewed_at: now,
-      reviewed_by: userId,
-      finalized_at: now,
-      approved_at: now,
-      approved_by: userId,
-      exception_type: null,
-      next_step: "Ready for projection",
+      classification_updated_at: now,
+      classification_updated_by: userId,
+      review_status: "approved",
+      recovery_status: recoveryStatus,
+      classification: recoveryStatus,
     });
   },
 

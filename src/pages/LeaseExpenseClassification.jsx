@@ -88,7 +88,7 @@ function isApprovedExpense(e) {
 }
 
 function isApprovedRuleSet(entry) {
-  const st = normalizeStatus(entry?.ruleSet?.status || entry?.ruleSet?.approval_status || entry?.ruleSet?.review_status);
+  const st = String(entry?.ruleSet?.status || entry?.ruleSet?.approval_status || entry?.ruleSet?.review_status || "").toLowerCase();
   return st === "approved";
 }
 
@@ -240,7 +240,7 @@ export default function LeaseExpenseClassification() {
             ? expenseRecoverability(expense)
             : recoverabilityFromRule(matchingRule),
           camEligible: leaseExpenseRuleService.getCamEligibleDecision(matchingRule),
-          status: expense.classification_status || "matched",
+          status: expense.classification_updated_at ? "finalized" : "matched",
         });
       } else {
         if (!usedExpenseIds.has(expense.id)) {
@@ -256,7 +256,7 @@ export default function LeaseExpenseClassification() {
             // Use the expense's own recoverability status — this is set by Actual Expenses page
             recoverability: expenseRecoverability(expense),
             camEligible: "no",
-            status: "unmatched",
+            status: expense.classification_updated_at ? "finalized" : "unmatched",
           });
         }
       }
@@ -328,12 +328,13 @@ export default function LeaseExpenseClassification() {
   // ── mutations ─────────────────────────────────────────────────────────────
   const finalizeMutation = useMutation({
     mutationFn: async (ids) => {
-      const expenseIds = Array.from(ids)
+      const rowsToFinalize = Array.from(ids)
         .map((rowId) => rows.find((r) => r._id === rowId))
-        .filter((row) => row?.expense?.id)
-        .map((row) => row.expense.id);
-      await Promise.all(expenseIds.map((id) => expenseService.finalizeExpenseClassification(id)));
-      return expenseIds.length;
+        .filter((row) => row?.expense?.id);
+      await Promise.all(
+        rowsToFinalize.map((row) => expenseService.finalizeExpenseClassification(row.expense.id, row.recoverability))
+      );
+      return rowsToFinalize.length;
     },
     onSuccess: (count) => {
       toast.success(`Finalized ${count} expense(s)`);
@@ -643,7 +644,9 @@ export default function LeaseExpenseClassification() {
                     ) : (
                       filteredRows.map((row) => {
                         const ruleEditing = amountEditing[row.rule?.id] ?? "";
-                        const tenant = row.expense?.tenant_name || "—";
+                        const expenseEditing = amountEditing[row.expense?.id] ?? "";
+                        const lease = row.expense?.lease_id ? leases.find(l => l.id === row.expense.lease_id) : null;
+                        const tenant = row.expense?.tenant_name || lease?.tenant_name || "—";
                         const vendor = row.expense?.vendor || "—";
                         const ruleAmt = row.rule
                           ? (row.rule.final_value ?? row.rule.manual_value ?? row.rule.extracted_value ?? null)
@@ -666,7 +669,35 @@ export default function LeaseExpenseClassification() {
                             <TableCell className="text-slate-500 text-xs">{tenant}</TableCell>
                             <TableCell className="text-slate-500 text-xs">{vendor}</TableCell>
                             <TableCell className="text-right font-medium text-slate-700 text-sm">
-                              {row.expense ? fmt(row.expense.amount) : <span className="text-slate-300">—</span>}
+                              {row.expense ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  {amountEditing[row.expense.id] !== undefined ? (
+                                    <Input
+                                      autoFocus
+                                      className="h-7 w-24 text-xs text-right font-mono"
+                                      value={expenseEditing}
+                                      placeholder="Enter $"
+                                      onChange={(e) => setAmountEditing((prev) => ({ ...prev, [row.expense.id]: e.target.value }))}
+                                      onBlur={() => {
+                                        const val = Number(String(expenseEditing).replace(/[$,\s]/g, ""));
+                                        if (Number.isFinite(val) && val > 0) {
+                                          expenseService.updateExpenseAmount(row.expense.id, val)
+                                            .then(() => queryClient.invalidateQueries({ queryKey: ["Expense"] }))
+                                            .catch((err) => toast.error(err?.message || "Failed to update amount"));
+                                        }
+                                        setAmountEditing((prev) => { const n = { ...prev }; delete n[row.expense.id]; return n; });
+                                      }}
+                                    />
+                                  ) : (
+                                    <span 
+                                      className="cursor-pointer hover:bg-slate-100 px-2 py-1 rounded"
+                                      onClick={() => setAmountEditing((prev) => ({ ...prev, [row.expense.id]: String(row.expense.amount || "") }))}
+                                    >
+                                      {fmt(row.expense.amount)}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : <span className="text-slate-300">—</span>}
                             </TableCell>
                             <TableCell className="text-sm text-right">
                               {row.rule ? (
@@ -724,12 +755,17 @@ export default function LeaseExpenseClassification() {
                                     <Check className="w-4 h-4 mr-2 text-indigo-600" />
                                     Finalize
                                   </DropdownMenuItem>
-                                  {row.rule && (
+                                  {row.rule ? (
                                     <DropdownMenuItem onClick={() => setAmountEditing({ ...amountEditing, [row.rule.id]: String(ruleAmt || "") })}>
                                       <Edit2 className="w-4 h-4 mr-2 text-slate-500" />
-                                      Edit Amount
+                                      Edit Rule Amount
                                     </DropdownMenuItem>
-                                  )}
+                                  ) : row.expense ? (
+                                    <DropdownMenuItem onClick={() => setAmountEditing({ ...amountEditing, [row.expense.id]: String(row.expense.amount || "") })}>
+                                      <Edit2 className="w-4 h-4 mr-2 text-slate-500" />
+                                      Edit Expense Amount
+                                    </DropdownMenuItem>
+                                  ) : null}
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem className="text-rose-600">
                                     <Trash2 className="w-4 h-4 mr-2" />
