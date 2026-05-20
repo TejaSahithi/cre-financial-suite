@@ -64,18 +64,26 @@ function categoryMatch(expense, rule) {
 }
 
 function isApprovedExpense(e) {
+  // Accept any approval indicator — the Actual Expenses page can set any of these
+  const st = String(e.approved_status || e.status || "").toLowerCase();
+  const rs = String(e.recovery_status || "").toLowerCase();
   return (
-    e.approved_status === "approved" ||
-    e.recovery_status === "approved" ||
-    e.status === "approved"
+    st === "approved" ||
+    rs === "approved" ||
+    rs === "recoverable" ||
+    rs === "non_recoverable" ||
+    rs === "conditional"
+    // Note: "needs_review" is intentionally excluded — only truly reviewed rows flow here
   );
 }
 
 function isApprovedRule(r) {
+  // Accept mapped, approved, or manually_added rules
   return (
     r.review_status === "approved" ||
     r.approval_status === "approved" ||
-    r.row_status === "mapped"
+    r.row_status === "mapped" ||
+    r.row_status === "manually_added"
   );
 }
 
@@ -84,6 +92,14 @@ function recoverabilityFromRule(rule) {
   if (rt === "yes") return "recoverable";
   if (rt === "conditional") return "conditional";
   return "non_recoverable";
+}
+
+function expenseRecoverability(expense) {
+  const rs = String(expense.recoverability_result || expense.recovery_status || expense.classification || "needs_review").toLowerCase();
+  if (rs === "recoverable") return "recoverable";
+  if (["non_recoverable", "excluded"].includes(rs)) return "non_recoverable";
+  if (rs === "conditional") return "conditional";
+  return "needs_review";
 }
 
 // ─── component ─────────────────────────────────────────────────────────────
@@ -96,7 +112,8 @@ export default function LeaseExpenseClassification() {
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit,     setScopeUnit]     = useState("all");
   const [scopeLease,    setScopeLease]    = useState("all");
-  const [scopeYear,     setScopeYear]     = useState(String(new Date().getFullYear()));
+  // Default to "all" years — expenses may span different fiscal years
+  const [scopeYear,     setScopeYear]     = useState("all");
   const [activeTab,     setActiveTab]     = useState("all");
   const [search,        setSearch]        = useState("");
   const [selectedIds,   setSelectedIds]   = useState(new Set());
@@ -132,24 +149,41 @@ export default function LeaseExpenseClassification() {
   const scopedLeaseIds = useMemo(() => scopedLeases.map((l) => l.id), [scopedLeases]);
 
   // ── approved actual expenses ──────────────────────────────────────────────
+  // IMPORTANT: Many real expenses (property-level invoices) do NOT have lease_id set.
+  // We filter by property/building/unit only — not by lease or year.
   const approvedActuals = useMemo(() => {
     return allExpenses.filter((e) => {
+      // Exclude synthetic lease-import rows (these are derived, not real invoices)
       if (e.source_type === "lease_import" || e.source === "lease_import") return false;
+      // Must be approved/reviewed
       if (!isApprovedExpense(e)) return false;
+      // Scope: property > building > unit (skip lease — many expenses have no lease_id)
       if (scopeProperty !== "all" && e.property_id !== scopeProperty) return false;
       if (scopeBuilding !== "all" && e.building_id !== scopeBuilding) return false;
       if (scopeUnit !== "all" && e.unit_id !== scopeUnit) return false;
-      if (scopeLease !== "all" && e.lease_id !== scopeLease) return false;
-      if (scopeYear !== "all" && String(e.fiscal_year) !== scopeYear) return false;
+      // If a specific lease is selected, include expenses for that lease OR with no lease
+      if (scopeLease !== "all" && e.lease_id && e.lease_id !== scopeLease) return false;
+      // Year filter — only apply when explicitly set to a specific year
+      if (scopeYear !== "all" && e.fiscal_year && String(e.fiscal_year) !== scopeYear) return false;
       return true;
     });
   }, [allExpenses, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeYear]);
 
   // ── approved rule sets ────────────────────────────────────────────────────
+  // Load rule sets for ALL leases in scope. If no leases scoped but property selected,
+  // we still load all rules for leases in that property.
+  const allLeaseIds = useMemo(() => leases.map((l) => l.id), [leases]);
+  const ruleLeaseIds = useMemo(() => {
+    // If specific leases are scoped, use those; otherwise use ALL leases in the org
+    // (we filter by property-matched leases or fall back to all if nothing scoped)
+    if (scopedLeaseIds.length > 0) return scopedLeaseIds;
+    return allLeaseIds;
+  }, [scopedLeaseIds, allLeaseIds]);
+
   const { data: ruleSets = [], isLoading: loadingRules } = useQuery({
-    queryKey: ["expense-classification-rule-sets", scopedLeaseIds.join("|")],
-    queryFn: () => leaseExpenseRuleService.loadRuleSets(scopedLeaseIds),
-    enabled: scopedLeaseIds.length > 0,
+    queryKey: ["expense-classification-rule-sets", ruleLeaseIds.slice(0, 50).join("|")],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(ruleLeaseIds.slice(0, 50)),
+    enabled: ruleLeaseIds.length > 0,
   });
 
   const approvedRules = useMemo(() => {
@@ -163,20 +197,25 @@ export default function LeaseExpenseClassification() {
   }, [ruleSets]);
 
   // ── cross-match rows ──────────────────────────────────────────────────────
-  // Each row is either:
-  //   (a) Matched: an actual expense paired with a lease rule of same category
-  //   (b) Unmatched expense: actual expense with no matching rule
-  //   (c) Unmatched rule: lease rule with no actual expense
+  // Matching strategy:
+  //   1. If expense has a lease_id AND a rule exists for that lease with same category → MATCHED
+  //   2. If expense has no lease_id, try matching by category alone against any in-scope rule → MATCHED
+  //   3. If no match → UNMATCHED EXPENSE row
+  //   4. Rules with no matching expense → RULE ONLY row
   const rows = useMemo(() => {
     const result = [];
     const usedRuleIds = new Set();
     const usedExpenseIds = new Set();
 
     for (const expense of approvedActuals) {
+      // Try matching rule: same lease (if lease_id set) OR any in-scope rule with same category
       const matchingRule = approvedRules.find(
         (r) =>
           !usedRuleIds.has(r.id) &&
-          (r._leaseId === expense.lease_id || r.lease_id === expense.lease_id) &&
+          // Either same lease or expense has no lease (property-level)
+          (expense.lease_id
+            ? (r._leaseId === expense.lease_id || r.lease_id === expense.lease_id)
+            : true) &&
           categoryMatch(expense, r)
       );
       if (matchingRule) {
@@ -189,8 +228,10 @@ export default function LeaseExpenseClassification() {
           rule: matchingRule,
           category: expense.category || matchingRule.category_name || "—",
           amount: Number(expense.amount) || 0,
-          ruleAmount: null, // can be overridden by user
-          recoverability: expense.recoverability_result || expense.recovery_status || recoverabilityFromRule(matchingRule),
+          ruleAmount: null,
+          recoverability: expenseRecoverability(expense) !== "needs_review"
+            ? expenseRecoverability(expense)
+            : recoverabilityFromRule(matchingRule),
           camEligible: leaseExpenseRuleService.getCamEligibleDecision(matchingRule),
           status: expense.classification_status || "matched",
         });
@@ -205,7 +246,8 @@ export default function LeaseExpenseClassification() {
             category: expense.category || "—",
             amount: Number(expense.amount) || 0,
             ruleAmount: null,
-            recoverability: expense.recoverability_result || expense.recovery_status || "needs_review",
+            // Use the expense's own recoverability status — this is set by Actual Expenses page
+            recoverability: expenseRecoverability(expense),
             camEligible: "no",
             status: "unmatched",
           });

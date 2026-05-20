@@ -573,19 +573,8 @@ export default function Expenses() {
         onUnitChange={setScopeUnit}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-        <MetricCard label="Total Expenses" value={`$${(totals.all / 1000).toFixed(1)}K`} icon={DollarSign} color="bg-slate-100 text-slate-600" />
-        <MetricCard label="Recoverable" value={`$${(totals.recoverable / 1000).toFixed(1)}K`} icon={TrendingDown} color="bg-emerald-50 text-emerald-600" sub="CAM pool eligible" />
-        <MetricCard label="Non-Recoverable" value={`$${(totals.non_recoverable / 1000).toFixed(1)}K`} icon={Layers} color="bg-red-50 text-red-600" />
-        <MetricCard label="Conditional" value={`$${(totals.conditional / 1000).toFixed(1)}K`} icon={Receipt} color="bg-amber-50 text-amber-600" />
-        <MetricCard label="Prior Year" value={`$${(prevYearTotal / 1000).toFixed(1)}K`} sub={`FY ${prevYear}`} />
-        <MetricCard
-          label="Budgeted"
-          value={`$${(budgetedTotal / 1000).toFixed(1)}K`}
-          sub={`FY ${currentYear}`}
-          trend={budgetedTotal > 0 ? parseFloat((((currentYearExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0) - budgetedTotal) / budgetedTotal) * 100).toFixed(1)) : undefined}
-        />
-      </div>
+
+
 
       <div className="grid lg:grid-cols-2 gap-6">
         <Card className="border-blue-200 bg-blue-50/60">
@@ -671,70 +660,6 @@ export default function Expenses() {
         </Card>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Expense Classification</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value">
-                  {pieData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="flex justify-center gap-4 mt-2">
-              {pieData.map((entry) => (
-                <div key={entry.name} className="flex items-center gap-1.5 text-xs">
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
-                  <span className="text-slate-600">
-                    {entry.name} ${(entry.value / 1000).toFixed(1)}K
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Expenses by Category (Recoverable)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const categoryTotals = {};
-              displayedExpenses
-                .filter((expense) => expense.classification === "recoverable")
-                .forEach((expense) => {
-                  categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + (expense.amount || 0);
-                });
-
-              const barData = Object.entries(categoryTotals)
-                .sort(([, left], [, right]) => right - left)
-                .slice(0, 5)
-                .map(([category, amount]) => ({
-                  name: String(category || "Uncategorized").replace(/_/g, " ").substring(0, 15),
-                  value: amount,
-                }));
-
-              return (
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={barData} layout="vertical" margin={{ left: 10 }}>
-                    <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-                    <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={100} />
-                    <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-                    <Bar dataKey="value" fill="#1a2744" radius={[0, 4, 4, 0]} barSize={16} />
-                  </BarChart>
-                </ResponsiveContainer>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      </div>
 
       <Tabs defaultValue="expenses" className="space-y-4">
         <TabsList>
