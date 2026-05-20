@@ -1501,11 +1501,11 @@ export const expenseService = {
     };
   },
 
-  async finalizeExpenseClassification(classificationId) {
+  async finalizeExpenseClassification(expenseId) {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
-    return updateExpenseClassificationRecord(classificationId, {
+    return baseExpenseService.update(expenseId, {
       classification_status: "finalized",
       approved_status: "approved",
       reviewed_at: now,
@@ -1518,9 +1518,9 @@ export const expenseService = {
     });
   },
 
-  async reopenExpenseClassification(classificationId) {
+  async reopenExpenseClassification(expenseId) {
     const now = new Date().toISOString();
-    return updateExpenseClassificationRecord(classificationId, {
+    return baseExpenseService.update(expenseId, {
       classification_status: "matched",
       finalized_at: null,
       reviewed_at: now,
@@ -1529,16 +1529,16 @@ export const expenseService = {
     });
   },
 
-  async sendExpenseClassificationToReview(classificationId) {
+  async sendExpenseClassificationToReview(expenseId) {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
-    return updateExpenseClassificationRecord(classificationId, {
+    return baseExpenseService.update(expenseId, {
       classification_status: "exception",
       exception_type: "manual_review",
       reviewed_at: now,
       reviewed_by: userId,
-      next_step: "Review exception",
+      next_step: "Resolve exception",
     });
   },
 

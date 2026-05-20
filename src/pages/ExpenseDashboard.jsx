@@ -159,59 +159,33 @@ export default function ExpenseDashboard() {
     [selectorScopedLeases]
   );
 
-  const { data: selectorScopedClassifications = [] } = useQuery({
-    queryKey: ["expense-dashboard-summary-classifications", selectorScopedExpenseIds.join("|")],
-    queryFn: () => expenseService.listExpenseClassificationsForExpenses(selectorScopedExpenseIds),
-    enabled: selectorScopedExpenseIds.length > 0,
-  });
+
+
+  const allLeaseIds = useMemo(() => leases.map((l) => l.id), [leases]);
+  const ruleLeaseIds = useMemo(() => {
+    if (selectorScopedLeaseIds.length > 0) return selectorScopedLeaseIds;
+    return allLeaseIds;
+  }, [selectorScopedLeaseIds, allLeaseIds]);
 
   const { data: selectorScopedRuleSets = [] } = useQuery({
-    queryKey: ["expense-dashboard-summary-rule-sets", selectorScopedLeaseIds.join("|")],
-    queryFn: () => leaseExpenseRuleService.loadRuleSets(selectorScopedLeaseIds),
-    enabled: selectorScopedLeaseIds.length > 0,
+    queryKey: ["expense-dashboard-summary-rule-sets", ruleLeaseIds.slice(0, 50).join("|")],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(ruleLeaseIds.slice(0, 50)),
+    enabled: ruleLeaseIds.length > 0,
   });
-
-  const classificationByExpenseId = useMemo(
-    () => new Map(selectorScopedClassifications.map((classification) => [classification.expense_id, classification])),
-    [selectorScopedClassifications]
-  );
 
   const displayedExpenses = useMemo(
     () =>
       selectorScopedExpenses.map((expense) => {
-        const classification = classificationByExpenseId.get(expense.id);
-        if (!classification) return expense;
-
-        const effectiveRecovery =
-          classification.recoverability_result ||
-          classification.recovery_status ||
-          expense.recovery_status ||
-          expense.classification ||
-          "needs_review";
-
+        const effectiveRecovery = expense.recoverability_result || expense.recovery_status || expense.classification || "needs_review";
         return {
           ...expense,
-          recovery_status: classification.recovery_status || effectiveRecovery,
-          recoverability_result: classification.recoverability_result || effectiveRecovery,
+          recovery_status: effectiveRecovery,
+          recoverability_result: effectiveRecovery,
           classification: effectiveRecovery === "excluded" ? "non_recoverable" : effectiveRecovery,
-          approved_status: classification.approved_status || expense.approved_status,
-          classification_status: classification.classification_status || expense.classification_status,
-          cam_eligible: classification.cam_eligible || expense.cam_eligible,
         };
       }),
-    [classificationByExpenseId, selectorScopedExpenses]
+    [selectorScopedExpenses]
   );
-
-  const uniqueClassificationRows = useMemo(() => {
-    const rowsByKey = new Map();
-    selectorScopedClassifications.forEach((row) => {
-      const key = row.classification_key || row.id || row.expense_id;
-      if (!rowsByKey.has(key)) {
-        rowsByKey.set(key, row);
-      }
-    });
-    return [...rowsByKey.values()];
-  }, [selectorScopedClassifications]);
 
   const approvedActuals = useMemo(
     () => displayedExpenses.filter((expense) => isApproved(expense.approved_status || expense.approval_status || expense.review_status)),
@@ -229,35 +203,37 @@ export default function ExpenseDashboard() {
   );
 
   const summary = useMemo(() => {
-    const recoverableRows = uniqueClassificationRows.filter((row) => normalizeStatus(row.recoverability_result || row.recovery_status) === "recoverable");
-    const nonRecoverableRows = uniqueClassificationRows.filter((row) => normalizeStatus(row.recoverability_result || row.recovery_status) === "non_recoverable");
-    const conditionalRows = uniqueClassificationRows.filter((row) => normalizeStatus(row.recoverability_result || row.recovery_status) === "conditional");
-    const excludedRows = uniqueClassificationRows.filter((row) => normalizeStatus(row.recoverability_result || row.recovery_status) === "excluded");
-    const exceptionRows = uniqueClassificationRows.filter(isExceptionRow);
-    const finalizedRows = uniqueClassificationRows.filter(isFinalizedRow);
-    const camReadyRows = uniqueClassificationRows.filter(isCamReadyRow);
+    // Only count approved expenses for classification breakdown
+    const classifiedRows = approvedActuals;
+    const recoverableRows = classifiedRows.filter((row) => normalizeStatus(row.classification || row.recovery_status) === "recoverable");
+    const nonRecoverableRows = classifiedRows.filter((row) => normalizeStatus(row.classification || row.recovery_status) === "non_recoverable");
+    const conditionalRows = classifiedRows.filter((row) => normalizeStatus(row.classification || row.recovery_status) === "conditional");
+    const excludedRows = classifiedRows.filter((row) => normalizeStatus(row.classification || row.recovery_status) === "excluded");
+    const exceptionRows = classifiedRows.filter(isExceptionRow);
+    const finalizedRows = classifiedRows.filter(isFinalizedRow);
+    const camReadyRows = classifiedRows.filter(isCamReadyRow);
 
     return {
       approvedActualCount: approvedActuals.length,
       approvedActualAmount: approvedActuals.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
       approvedRuleCount: approvedRules.length,
       approvedRuleSetCount: approvedRuleEntries.length,
-      classificationCount: uniqueClassificationRows.length,
+      classificationCount: classifiedRows.length,
       recoverableCount: recoverableRows.length,
-      recoverableAmount: sumBucket(recoverableRows, "recoverable_amount", "recoverable"),
+      recoverableAmount: recoverableRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       nonRecoverableCount: nonRecoverableRows.length,
-      nonRecoverableAmount: sumBucket(nonRecoverableRows, "non_recoverable_amount", "non_recoverable"),
+      nonRecoverableAmount: nonRecoverableRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       conditionalCount: conditionalRows.length,
-      conditionalAmount: sumBucket(conditionalRows, "conditional_amount", "conditional"),
+      conditionalAmount: conditionalRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       excludedCount: excludedRows.length,
-      excludedAmount: sumBucket(excludedRows, "excluded_amount", "excluded"),
+      excludedAmount: excludedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       exceptionCount: exceptionRows.length,
       finalizedCount: finalizedRows.length,
       finalizedAmount: finalizedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       camReadyCount: camReadyRows.length,
-      camReadyAmount: camReadyRows.reduce((sum, row) => sum + Number((row.recoverable_amount ?? row.amount) || 0), 0),
+      camReadyAmount: camReadyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
     };
-  }, [approvedActuals, approvedRuleEntries, approvedRules, uniqueClassificationRows]);
+  }, [approvedActuals, approvedRuleEntries, approvedRules]);
 
   const pieData = [
     { name: "Recoverable", value: summary.recoverableAmount, color: "#10b981" },
