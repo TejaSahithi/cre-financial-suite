@@ -116,6 +116,7 @@ export default function Expenses() {
   const queryClient = useQueryClient();
 
   const { data: expenses = [], isLoading } = useOrgQuery("Expense");
+  const { data: budgets = [] } = useOrgQuery("Budget");
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
