@@ -33,7 +33,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,6 +58,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { supabase } from "@/services/supabaseClient";
 import { createPageUrl } from "@/utils";
@@ -71,6 +88,71 @@ const ROW_STATUS_LABEL = {
   unmapped: "Unmapped",
   missing_value: "Missing Value",
 };
+
+const PAYMENT_TREATMENT_OPTIONS = [
+  "included_in_base_rent",
+  "separately_billed",
+  "tenant_direct_contract",
+  "reimbursable",
+  "not_applicable",
+];
+
+const TRI_STATE_OPTIONS = ["yes", "no", "conditional"];
+
+const RECOVERY_METHOD_OPTIONS = [
+  "not_applicable",
+  "pass_through",
+  "pro_rata_share",
+  "fixed_amount",
+  "capped_amount",
+  "included_in_base_rent",
+];
+
+const ALLOCATION_OPTIONS = [
+  "none",
+  "pro_rata_share",
+  "square_footage",
+  "usage",
+  "fixed",
+  "direct",
+];
+
+function toNullableNumber(value) {
+  if (value === "" || value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toBooleanString(value) {
+  return value ? "yes" : "no";
+}
+
+function fromBooleanString(value) {
+  return value === "yes";
+}
+
+function buildRuleEditForm(rule) {
+  return {
+    category_name: rule?.category_name || rule?.expense_category || "",
+    expense_subcategory: rule?.expense_subcategory || rule?.subcategory_name || "",
+    included_in_base_rent: toBooleanString(Boolean(rule?.included_in_base_rent)),
+    responsibility: rule?.operational_responsibility || rule?.responsibility || "",
+    payment_treatment: rule?.payment_treatment || "not_applicable",
+    recoverable_from_tenant: rule?.recoverable_from_tenant || leaseExpenseRuleService.getRecoverableDecision(rule) || "no",
+    cam_eligible: rule?.cam_eligible || "no",
+    recovery_method: rule?.recovery_method || "not_applicable",
+    allocation_basis: rule?.allocation_basis || "none",
+    cap_type: rule?.cap_type || "",
+    cap_percent: rule?.cap_percent == null ? "" : String(rule.cap_percent),
+    cap_amount: rule?.cap_amount == null ? "" : String(rule.cap_amount),
+    admin_fee_applicable: toBooleanString(Boolean(rule?.admin_fee_applicable)),
+    admin_fee_percent: rule?.admin_fee_percent == null ? "" : String(rule.admin_fee_percent),
+    gross_up_applicable: toBooleanString(Boolean(rule?.gross_up_applicable)),
+    gross_up_percent: rule?.gross_up_percent == null ? "" : String(rule.gross_up_percent),
+    reconciliation_required: toBooleanString(Boolean(rule?.reconciliation_required)),
+    notes: rule?.notes || "",
+  };
+}
 
 function isApprovedRule(rule) {
   return ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase()) && rule?.approval_status === "approved";
@@ -150,6 +232,8 @@ export default function LeaseExpenseRules() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [editingRuleContext, setEditingRuleContext] = useState(null);
+  const [editForm, setEditForm] = useState(null);
 
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
@@ -525,6 +609,16 @@ export default function LeaseExpenseRules() {
     return summary;
   }, [flattenedRows]);
 
+  const openRuleEditor = (context) => {
+    setEditingRuleContext(context);
+    setEditForm(buildRuleEditForm(context.rule));
+  };
+
+  const closeRuleEditor = () => {
+    setEditingRuleContext(null);
+    setEditForm(null);
+  };
+
   const updateRuleMutation = useMutation({
     mutationFn: async ({ ruleId, patch }) => {
       const { data, error } = await supabase
@@ -660,6 +754,39 @@ export default function LeaseExpenseRules() {
       toast.success("Rule published to CAM");
       navigate(createPageUrl("CAMSetup") + `?property=${propertyId}`);
     });
+  };
+
+  const saveRuleEdits = async () => {
+    if (!editingRuleContext?.rule || !editForm) return;
+    await updateRuleMutation.mutateAsync({
+      ruleId: editingRuleContext.rule.id,
+      patch: {
+        category_name: editForm.category_name || null,
+        expense_category: editForm.category_name || null,
+        expense_subcategory: editForm.expense_subcategory || null,
+        subcategory_name: editForm.expense_subcategory || null,
+        included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),
+        responsibility: editForm.responsibility || null,
+        operational_responsibility: editForm.responsibility || null,
+        payment_treatment: editForm.payment_treatment || "not_applicable",
+        recoverable_from_tenant: editForm.recoverable_from_tenant || "no",
+        cam_eligible: editForm.cam_eligible || "no",
+        recovery_method: editForm.recovery_method || "not_applicable",
+        allocation_basis: editForm.allocation_basis === "none" ? null : editForm.allocation_basis,
+        cap_type: editForm.cap_type || null,
+        cap_percent: toNullableNumber(editForm.cap_percent),
+        cap_amount: toNullableNumber(editForm.cap_amount),
+        admin_fee_applicable: fromBooleanString(editForm.admin_fee_applicable),
+        admin_fee_percent: toNullableNumber(editForm.admin_fee_percent),
+        gross_up_applicable: fromBooleanString(editForm.gross_up_applicable),
+        gross_up_percent: toNullableNumber(editForm.gross_up_percent),
+        reconciliation_required: fromBooleanString(editForm.reconciliation_required),
+        notes: editForm.notes || null,
+        updated_at: new Date().toISOString(),
+      },
+    });
+    toast.success("Rule details updated");
+    closeRuleEditor();
   };
 
   const subtitle = getScopeSubtitle(scope, {
@@ -838,7 +965,7 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-sm font-medium text-slate-900">
                         {lease ? (
                           <Link
-                            to={createPageUrl("LeaseExpenseClassification") + `?id=${lease.id}`}
+                            to={createPageUrl("LeaseReview", { id: lease.id })}
                             className="text-blue-600 hover:text-blue-700"
                           >
                             {lease.tenant_name || lease.id.slice(0, 8)}
@@ -984,11 +1111,14 @@ export default function LeaseExpenseRules() {
                                 <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
                                   Edit
                                 </DropdownMenuLabel>
-                                <DropdownMenuItem asChild>
-                                  <Link to={createPageUrl("LeaseExpenseClassification") + `?id=${lease.id}`}>
-                                    <Pencil className="mr-2 h-3.5 w-3.5" />
-                                    Edit rule details
-                                  </Link>
+                                <DropdownMenuItem
+                                  onSelect={(event) => {
+                                    event.preventDefault();
+                                    openRuleEditor({ rule, lease, property, category, ruleSet });
+                                  }}
+                                >
+                                  <Pencil className="mr-2 h-3.5 w-3.5" />
+                                  Edit rule details
                                 </DropdownMenuItem>
                               </>
                             ) : null}
@@ -1021,6 +1151,231 @@ export default function LeaseExpenseRules() {
           </Link>
         </CardContent>
       </Card>
+
+      <Dialog open={!!editingRuleContext} onOpenChange={(open) => { if (!open) closeRuleEditor(); }}>
+        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Rule Details</DialogTitle>
+            <DialogDescription>
+              Update the selected lease expense rule in place. This edits the specific row you clicked from the action menu.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingRuleContext?.rule && editForm ? (
+            <div className="space-y-5">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tenant / Lease</p>
+                  <p className="mt-1 font-medium text-slate-900">{editingRuleContext.lease?.tenant_name || editingRuleContext.lease?.id || "-"}</p>
+                  <p className="text-xs text-slate-500">Rule set v{editingRuleContext.ruleSet?.version || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Property</p>
+                  <p className="mt-1 font-medium text-slate-900">{editingRuleContext.property?.name || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Review Status</p>
+                  <p className="mt-1 font-medium text-slate-900">{humanizeToken(editingRuleContext.rule.review_status || editingRuleContext.rule.row_status || "-")}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Category</Label>
+                  <Input
+                    value={editForm.category_name}
+                    onChange={(event) => setEditForm((current) => ({ ...current, category_name: event.target.value }))}
+                    placeholder="Normalized category"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Subcategory</Label>
+                  <Input
+                    value={editForm.expense_subcategory}
+                    onChange={(event) => setEditForm((current) => ({ ...current, expense_subcategory: event.target.value }))}
+                    placeholder="Normalized subcategory"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Included In Rent</Label>
+                  <Select value={editForm.included_in_base_rent} onValueChange={(value) => setEditForm((current) => ({ ...current, included_in_base_rent: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Yes</SelectItem>
+                      <SelectItem value="no">No</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Responsibility</Label>
+                  <Input
+                    value={editForm.responsibility}
+                    onChange={(event) => setEditForm((current) => ({ ...current, responsibility: event.target.value }))}
+                    placeholder="Operational responsibility"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Payment Treatment</Label>
+                  <Select value={editForm.payment_treatment} onValueChange={(value) => setEditForm((current) => ({ ...current, payment_treatment: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PAYMENT_TREATMENT_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Recoverable From Tenant</Label>
+                  <Select value={editForm.recoverable_from_tenant} onValueChange={(value) => setEditForm((current) => ({ ...current, recoverable_from_tenant: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TRI_STATE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>CAM Eligible</Label>
+                  <Select value={editForm.cam_eligible} onValueChange={(value) => setEditForm((current) => ({ ...current, cam_eligible: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TRI_STATE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Recovery Method</Label>
+                  <Select value={editForm.recovery_method} onValueChange={(value) => setEditForm((current) => ({ ...current, recovery_method: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {RECOVERY_METHOD_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Allocation Basis</Label>
+                  <Select value={editForm.allocation_basis} onValueChange={(value) => setEditForm((current) => ({ ...current, allocation_basis: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {ALLOCATION_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Cap Type</Label>
+                  <Input
+                    value={editForm.cap_type}
+                    onChange={(event) => setEditForm((current) => ({ ...current, cap_type: event.target.value }))}
+                    placeholder="Percent, amount, fixed..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Cap Percent</Label>
+                  <Input
+                    type="number"
+                    value={editForm.cap_percent}
+                    onChange={(event) => setEditForm((current) => ({ ...current, cap_percent: event.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Cap Amount</Label>
+                  <Input
+                    type="number"
+                    value={editForm.cap_amount}
+                    onChange={(event) => setEditForm((current) => ({ ...current, cap_amount: event.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Admin Fee Applies</Label>
+                  <Select value={editForm.admin_fee_applicable} onValueChange={(value) => setEditForm((current) => ({ ...current, admin_fee_applicable: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Yes</SelectItem>
+                      <SelectItem value="no">No</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Admin Fee Percent</Label>
+                  <Input
+                    type="number"
+                    value={editForm.admin_fee_percent}
+                    onChange={(event) => setEditForm((current) => ({ ...current, admin_fee_percent: event.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Gross-Up Applies</Label>
+                  <Select value={editForm.gross_up_applicable} onValueChange={(value) => setEditForm((current) => ({ ...current, gross_up_applicable: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Yes</SelectItem>
+                      <SelectItem value="no">No</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Gross-Up Percent</Label>
+                  <Input
+                    type="number"
+                    value={editForm.gross_up_percent}
+                    onChange={(event) => setEditForm((current) => ({ ...current, gross_up_percent: event.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Reconciliation Required</Label>
+                  <Select value={editForm.reconciliation_required} onValueChange={(value) => setEditForm((current) => ({ ...current, reconciliation_required: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Yes</SelectItem>
+                      <SelectItem value="no">No</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Source Evidence</Label>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <p><span className="font-medium text-slate-900">Source page:</span> {getSourcePage(editingRuleContext.rule) || "-"}</p>
+                  <p className="mt-2"><span className="font-medium text-slate-900">Exact source text:</span> {getExactSourceText(editingRuleContext.rule) || "-"}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Textarea
+                  value={editForm.notes}
+                  onChange={(event) => setEditForm((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="Add rule notes or override context..."
+                  rows={4}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeRuleEditor} disabled={updateRuleMutation.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={saveRuleEdits} disabled={updateRuleMutation.isPending || !editForm} className="bg-blue-600 hover:bg-blue-700">
+              {updateRuleMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save rule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
