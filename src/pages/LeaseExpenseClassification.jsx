@@ -291,6 +291,7 @@ export default function LeaseExpenseClassification() {
       if (activeTab === "needs_review")    return row.recoverability === "needs_review" || row.status === "unmatched";
       if (activeTab === "cam_eligible")    return ["yes", "conditional"].includes(row.camEligible);
       if (activeTab === "rule_only")       return row.status === "rule_only";
+      if (activeTab === "finalized")       return row.status === "finalized";
       return true; // "all"
     }).filter((row) => {
       if (!search) return true;
@@ -322,6 +323,7 @@ export default function LeaseExpenseClassification() {
     needs_review:    rows.filter((r) => r.recoverability === "needs_review" || r.status === "unmatched").length,
     cam_eligible:    rows.filter((r) => ["yes", "conditional"].includes(r.camEligible)).length,
     rule_only:       rows.filter((r) => r.status === "rule_only").length,
+    finalized:       rows.filter((r) => r.status === "finalized").length,
   }), [rows]);
 
   // ── mutations ─────────────────────────────────────────────────────────────
@@ -481,13 +483,6 @@ export default function LeaseExpenseClassification() {
               <option value="all">All Leases</option>
               {leases.map((l) => <option key={l.id} value={l.id}>{l.tenant_name || l.id.slice(0, 8)}</option>)}
             </select>
-            <select
-              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
-              value={scopeYear} onChange={(e) => setScopeYear(e.target.value)}
-            >
-              <option value="all">All Years</option>
-              {yearOptions.map((y) => <option key={y} value={String(y)}>{y}</option>)}
-            </select>
           </div>
         </div>
       </div>
@@ -586,6 +581,7 @@ export default function LeaseExpenseClassification() {
                   { val: "needs_review",    label: `Needs Review (${counts.needs_review})` },
                   { val: "cam_eligible",    label: `CAM Eligible (${counts.cam_eligible})` },
                   { val: "rule_only",       label: `Rules Only (${counts.rule_only})` },
+                  { val: "finalized",       label: `Finalized (${counts.finalized})` },
                 ].map(({ val, label }) => (
                   <TabsTrigger
                     key={val}
@@ -662,7 +658,10 @@ export default function LeaseExpenseClassification() {
                                 onChange={() => toggleRow(row._id)}
                               />
                             </TableCell>
-                            <TableCell className="font-medium text-slate-800 text-sm">
+                            <TableCell className="font-medium text-slate-800 text-sm flex items-center gap-2">
+                              {row.status === "finalized" && (
+                                <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                              )}
                               {String(row.category).replace(/_/g, " ")}
                             </TableCell>
                             <TableCell className="text-slate-500 text-xs">{tenant}</TableCell>
@@ -752,6 +751,12 @@ export default function LeaseExpenseClassification() {
                                       Edit Expense Amount
                                     </DropdownMenuItem>
                                   ) : null}
+                                  {row.expense && (
+                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense", { id: row.expense.id }))}>
+                                      <FileText className="w-4 h-4 mr-2 text-slate-500" />
+                                      Edit Full Expense
+                                    </DropdownMenuItem>
+                                  )}
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem className="text-rose-600">
                                     <Trash2 className="w-4 h-4 mr-2" />

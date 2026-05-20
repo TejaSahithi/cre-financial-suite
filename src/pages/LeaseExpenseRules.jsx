@@ -516,7 +516,8 @@ export default function LeaseExpenseRules() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
     },
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
