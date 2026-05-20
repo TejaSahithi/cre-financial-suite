@@ -110,6 +110,7 @@ export const DEFAULT_LEASE_CAM_CONFIG = {
   allocation_method: "",
   weight_factor: null,
   excluded_expenses: [],
+  cam_rule_lines: [],
   management_fee_pct: null,
   controllable_cap_rate: null,
   non_cumulative_cap_base_year: null,
@@ -151,6 +152,7 @@ export async function saveLeaseConfig(leaseId, values) {
     base_year: values.base_year ? Number(values.base_year) : null,
     excluded_expenses: Array.isArray(values.excluded_expenses) ? values.excluded_expenses : [],
     config_values: {
+      ...(Array.isArray(values.cam_rule_lines) ? { cam_rule_lines: values.cam_rule_lines } : {}),
       cam_applicable: values.cam_applicable !== false,
       cam_cap_type: values.cam_cap_type ?? "none",
       cam_cap_rate: values.cam_cap_rate != null ? Number(values.cam_cap_rate) : null,

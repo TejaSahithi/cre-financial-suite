@@ -1,7 +1,7 @@
 import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
-import { saveLeaseConfig } from "@/services/camConfig";
+import { fetchLeaseConfig, saveLeaseConfig } from "@/services/camConfig";
 
 function asNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -151,11 +151,11 @@ function deriveRuleOperationalResponsibility(rule) {
 }
 
 function deriveRulePaymentTreatment(rule) {
+  if (deriveRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
   const explicit = normalizeText(rule?.payment_treatment);
   if (["included_in_base_rent", "separately_billed", "tenant_direct_contract", "reimbursable", "not_applicable"].includes(explicit)) {
     return explicit;
   }
-  if (deriveRuleIncludedInBaseRent(rule)) return "included_in_base_rent";
   const recoveryMethod = normalizeText(firstPresent(rule?.recovery_method, rule?.billing_treatment));
   if (recoveryMethod === "tenant_direct_contract" || rule?.is_excluded) return "tenant_direct_contract";
   if (isRecoverableLike(rule)) return "reimbursable";
@@ -183,7 +183,11 @@ function deriveRuleResponsibility(rule) {
 
 function deriveRuleCamEligible(rule) {
   const explicit = normalizeTriStateDecision(rule?.cam_eligible);
-  if (explicit) return explicit;
+  if (explicit) {
+    if (deriveRuleIncludedInBaseRent(rule)) return "no";
+    if (deriveRuleRecoverableFromTenant(rule) === "no" && explicit === "yes") return "no";
+    return explicit;
+  }
 
   const categoryKey = normalizeCategoryKey(firstPresent(rule?.normalized_key, rule?.expense_subcategory, rule?.expense_category, rule?.category_name));
   const paymentTreatment = deriveRulePaymentTreatment(rule);
@@ -235,17 +239,40 @@ function deriveRuleBillingTreatment(rule) {
 }
 
 function deriveRuleRecoveryMethod(rule) {
-  return firstPresent(
+  const paymentTreatment = deriveRulePaymentTreatment(rule);
+  const recoverable = deriveRuleRecoverableFromTenant(rule);
+  const camEligible = deriveRuleCamEligible(rule);
+  const explicit = normalizeText(firstPresent(rule?.recovery_method));
+
+  if (deriveRuleIncludedInBaseRent(rule) || paymentTreatment === "included_in_base_rent") {
+    return "included_in_base_rent";
+  }
+  if (paymentTreatment === "tenant_direct_contract") {
+    return "tenant_direct_contract";
+  }
+
+  const derived = firstPresent(
     rule?.recovery_method,
     rule?.base_year ? "base_year" : null,
     rule?.expense_stop_amount ? "expense_stop" : null,
-    rule?.included_in_base_rent || rule?.included_in_rent ? "included_in_rent" : null,
+    rule?.included_in_base_rent || rule?.included_in_rent ? "included_in_base_rent" : null,
     rule?.billing_frequency === "monthly" ? "monthly_reimbursement" : null,
-    deriveRuleRecoverableFromTenant(rule) ? "pass_through" : null,
+    ["yes", "conditional"].includes(deriveRuleRecoverableFromTenant(rule)) ? "pass_through" : null,
   );
+
+  if ((recoverable === "no" || camEligible === "no") && ["pass_through", "pro_rata_share"].includes(explicit || derived)) {
+    return "not_applicable";
+  }
+
+  return derived || "not_applicable";
 }
 
 function deriveRuleAllocationBasis(rule) {
+  const recoverable = deriveRuleRecoverableFromTenant(rule);
+  const camEligible = deriveRuleCamEligible(rule);
+  if (!["yes", "conditional"].includes(recoverable) || !["yes", "conditional"].includes(camEligible)) {
+    return null;
+  }
   return firstPresent(rule?.allocation_basis, rule?.allocation_method, rule?.pro_rata_basis, "pro_rata_share");
 }
 
@@ -302,6 +329,13 @@ function deriveRuleReconciliationFrequency(rule) {
 
 function deriveRuleExactSourceText(rule) {
   return firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.clause_text, rule?.source, rule?.notes);
+}
+
+function deriveRuleSourcePage(rule) {
+  if (Number.isFinite(Number(rule?.source_page))) return Number(rule.source_page);
+  const firstClause = asArray(rule?.clauses)[0];
+  if (Number.isFinite(Number(firstClause?.page_number))) return Number(firstClause.page_number);
+  return null;
 }
 
 function deriveRuleConfidence(rule) {
@@ -505,12 +539,11 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
       : (autoApproved || normalizeText(rule?.row_status) === "manually_added")
         ? normalizeText(rule?.row_status) || "mapped"
         : "needs_review";
-  const canPublishToCam =
-    reviewStatus === "approved" &&
-    ["yes", "conditional"].includes(deriveRuleRecoverableFromTenant(rule)) &&
-    ["yes", "conditional"].includes(deriveRuleCamEligible(rule)) &&
-    deriveRulePaymentTreatment(rule) !== "included_in_base_rent" &&
-    (strongEvidence || approvalStatus === "approved");
+  const canPublishToCam = canPublishRuleToCamByState({
+    ...rule,
+    review_status: reviewStatus,
+    approval_status: approvalStatus,
+  });
 
   return {
     exactSourceText,
@@ -521,6 +554,103 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
     approvalStatus,
     rowStatus,
     publishedToCam: canPublishToCam ? Boolean(rule?.published_to_cam) : false,
+  };
+}
+
+function canPublishRuleToCamByState(rule) {
+  return getRuleValidation(rule).canPublishToCam;
+}
+
+function getRuleValidation(rule) {
+  const includedInBaseRent = deriveRuleIncludedInBaseRent(rule);
+  const paymentTreatment = deriveRulePaymentTreatment(rule);
+  const recoverableFromTenant = deriveRuleRecoverableFromTenant(rule);
+  const camEligible = deriveRuleCamEligible(rule);
+  const recoveryMethod = deriveRuleRecoveryMethod(rule);
+  const allocationBasis = deriveRuleAllocationBasis(rule);
+  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status || deriveRuleReviewStatus(rule));
+  const approvalStatus = normalizeText(rule?.approval_status || deriveRuleApprovalStatus(rule));
+  const sourcePage = deriveRuleSourcePage(rule);
+  const exactSourceText = deriveRuleExactSourceText(rule);
+  const alreadyPublished = Boolean(rule?.published_to_cam);
+  const issues = [];
+  const warnings = [];
+
+  if (includedInBaseRent && paymentTreatment !== "included_in_base_rent") {
+    issues.push("Included in rent rules must use payment treatment included_in_base_rent.");
+  }
+  if ((recoverableFromTenant === "no" || camEligible === "no") && ["pass_through", "pro_rata_share"].includes(normalizeText(recoveryMethod))) {
+    issues.push("Non-recoverable or CAM-ineligible rules cannot use pass_through or pro_rata_share recovery.");
+  }
+  if (recoverableFromTenant === "no" && camEligible === "yes") {
+    issues.push("CAM Eligible cannot be yes when Recoverable is no.");
+  }
+  if (recoverableFromTenant === "no" && camEligible === "conditional") {
+    warnings.push("CAM Eligible is conditional even though Recoverable is no; verify the clause before publishing.");
+  }
+  if (includedInBaseRent && Boolean(rule?.published_to_cam)) {
+    issues.push("Included in rent rules cannot be published to CAM.");
+  }
+  if (!["yes", "conditional"].includes(recoverableFromTenant) && allocationBasis) {
+    warnings.push("Allocation basis is ignored unless the rule is recoverable and CAM-eligible.");
+  }
+
+  const publishBlockers = [];
+  if (reviewStatus !== "approved") publishBlockers.push("Review status must be approved.");
+  if (approvalStatus !== "approved") publishBlockers.push("Approval status must be approved.");
+  if (!["yes", "conditional"].includes(recoverableFromTenant)) publishBlockers.push("Recoverable must be yes or conditional.");
+  if (!["yes", "conditional"].includes(camEligible)) publishBlockers.push("CAM Eligible must be yes or conditional.");
+  if (includedInBaseRent) publishBlockers.push("Included in rent rules cannot be published to CAM.");
+  if (paymentTreatment === "included_in_base_rent") publishBlockers.push("Payment treatment included_in_base_rent cannot be published to CAM.");
+  if (alreadyPublished) publishBlockers.push("Rule is already published to CAM.");
+  publishBlockers.push(...issues);
+
+  return {
+    includedInBaseRent,
+    paymentTreatment,
+    recoverableFromTenant,
+    camEligible,
+    recoveryMethod,
+    allocationBasis,
+    reviewStatus,
+    approvalStatus,
+    sourcePage,
+    exactSourceText,
+    issues,
+    warnings,
+    publishBlockers,
+    canPublishToCam: publishBlockers.length === 0,
+    publishedToCam: alreadyPublished,
+  };
+}
+
+function buildCamRuleLineItem(rule, lease, categoriesById = new Map()) {
+  const category = categoriesById.get(rule?.expense_category_id);
+  const validation = getRuleValidation(rule);
+  return {
+    lease_expense_rule_id: rule.id,
+    rule_key: rule.rule_key || null,
+    category: firstPresent(rule?.expense_category, rule?.category_name, category?.category_name, deriveRuleCategoryName(rule)),
+    subcategory: firstPresent(rule?.expense_subcategory, rule?.subcategory_name, category?.subcategory_name, deriveRuleSubcategoryName(rule)),
+    recovery_method: validation.recoveryMethod,
+    allocation_basis: validation.allocationBasis,
+    cap_amount: asNumber(firstPresent(rule?.cap_amount, rule?.cap_value)),
+    cap_percent: asNumber(rule?.cap_percent),
+    admin_fee_percent: asNumber(rule?.admin_fee_percent),
+    gross_up_percent: asNumber(rule?.gross_up_percent),
+    reconciliation_required: Boolean(rule?.reconciliation_required ?? deriveRuleReconciliationRequired(rule)),
+    lease_id: lease?.id || rule?.lease_id || null,
+    tenant_id: lease?.tenant_id || rule?.tenant_id || null,
+    property_id: lease?.property_id || rule?.property_id || null,
+    building_id: lease?.building_id || rule?.building_id || null,
+    unit_id: lease?.unit_id || rule?.unit_id || null,
+    source_page: validation.sourcePage,
+    exact_source_text: validation.exactSourceText,
+    published_scope: {
+      property_id: lease?.property_id || rule?.property_id || null,
+      building_id: lease?.building_id || rule?.building_id || null,
+      unit_id: lease?.unit_id || rule?.unit_id || null,
+    },
   };
 }
 
@@ -866,10 +996,7 @@ function mapExtractedRulesToCategories(aiRules = [], categories = [], existingRu
 function buildLeaseConfigFromRules(lease, rules = [], categoriesById = new Map()) {
   const approvedRules = rules.filter((rule) => normalizeText(rule?.approval_status) === "approved" && normalizeText(rule?.review_status) === "approved");
   const camPublishedRules = approvedRules.filter((rule) =>
-    ["yes", "conditional"].includes(deriveRuleRecoverableFromTenant(rule)) &&
-    ["yes", "conditional"].includes(deriveRuleCamEligible(rule)) &&
-    deriveRulePaymentTreatment(rule) !== "included_in_base_rent" &&
-    Boolean(rule?.published_to_cam)
+    Boolean(getRuleValidation(rule).publishedToCam)
   );
   const excludedExpenses = approvedRules
     .filter((rule) => rule.is_excluded || deriveRuleRecoverableFromTenant(rule) === "no" || deriveRuleCamEligible(rule) === "no")
@@ -899,6 +1026,7 @@ function buildLeaseConfigFromRules(lease, rules = [], categoriesById = new Map()
     controllable_cap_rate: cappedRule?.is_controllable ? asNumber(cappedRule?.cap_value) : null,
     non_cumulative_cap_base_year: cappedRule?.cap_type === "non_cumulative" ? asNumber(lease?.base_year_amount) : null,
     admin_fee_pct: asNumber(adminRule?.admin_fee_percent ?? lease?.admin_fee_pct),
+    cam_rule_lines: camPublishedRules.map((rule) => buildCamRuleLineItem(rule, lease, categoriesById)),
   };
 }
 
@@ -2521,12 +2649,59 @@ export const leaseExpenseRuleService = {
     return deriveRuleCamEligible(rule);
   },
 
+  getRecoveryMethod(rule) {
+    return deriveRuleRecoveryMethod(rule);
+  },
+
+  getAllocationBasis(rule) {
+    return deriveRuleAllocationBasis(rule);
+  },
+
+  getExactSourceText(rule) {
+    return deriveRuleExactSourceText(rule);
+  },
+
+  getSourcePage(rule) {
+    return deriveRuleSourcePage(rule);
+  },
+
+  getRuleValidation(rule) {
+    return getRuleValidation(rule);
+  },
+
   getBillingTreatment(rule) {
     return deriveRuleBillingTreatment(rule);
   },
 
   canPublishRuleToCam(rule) {
-    return resolveRuleWorkflowState(rule, normalizeText(rule?.approval_status) === "approved" ? "approved" : "draft").publishedToCam;
+    return getRuleValidation(rule).canPublishToCam;
+  },
+
+  async upsertRuleIntoCamSetup({ lease, rule, categoriesById = new Map() } = {}) {
+    if (!lease?.id) throw new Error("Lease is required before publishing a rule to CAM.");
+    if (!rule?.id) throw new Error("Rule is required before publishing to CAM.");
+
+    const validation = getRuleValidation(rule);
+    if (!validation.canPublishToCam) {
+      throw new Error(validation.publishBlockers[0] || "Rule is not eligible for CAM publish.");
+    }
+
+    const { values } = await fetchLeaseConfig(lease.id);
+    const nextLine = buildCamRuleLineItem(rule, lease, categoriesById);
+    const existingLines = Array.isArray(values?.cam_rule_lines) ? values.cam_rule_lines : [];
+    const remainingLines = existingLines.filter((line) => line?.lease_expense_rule_id !== rule.id && line?.rule_key !== rule.rule_key);
+    const nextValues = {
+      ...values,
+      cam_applicable: true,
+      allocation_method: values?.allocation_method || nextLine.allocation_basis || "",
+      cam_rule_lines: [...remainingLines, nextLine],
+    };
+
+    const savedConfig = await saveLeaseConfig(lease.id, nextValues);
+    return {
+      config: savedConfig,
+      camRuleLine: nextLine,
+    };
   },
 
   normalizeRecoveryStatus,
