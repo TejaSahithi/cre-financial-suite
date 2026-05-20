@@ -43,6 +43,10 @@ function isApprovedLeaseRule(rule) {
     ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase());
 }
 
+function isApprovedRuleSource(rule, ruleSet = null) {
+  return isApprovedLeaseRule(rule) || String(ruleSet?.status || "").toLowerCase() === "approved";
+}
+
 function buildFallbackClassificationKey(orgId, expenseId, ruleId = null) {
   if (!expenseId) return null;
   return [orgId || "", expenseId, ruleId || "unmatched"].join(":");
@@ -304,7 +308,7 @@ export default function LeaseExpenseClassification() {
     const byId = new Map();
     scopedRuleSetEntries.forEach((entry) => {
       (entry.rules || []).forEach((rule) => {
-        if (isApprovedLeaseRule(rule)) {
+        if (isApprovedRuleSource(rule, entry.ruleSet)) {
           byId.set(rule.id, rule);
         }
       });
@@ -354,7 +358,7 @@ export default function LeaseExpenseClassification() {
     const rulesByLeaseId = new Map(
       scopedRuleSetEntries.map((entry) => [
         entry.leaseId,
-        (entry.rules || []).filter(isApprovedLeaseRule),
+        (entry.rules || []).filter((rule) => isApprovedRuleSource(rule, entry.ruleSet)),
       ])
     );
     const leases = scopedLeases;
@@ -461,7 +465,7 @@ export default function LeaseExpenseClassification() {
     const rulesByLeaseId = new Map(
       scopedRuleSetEntries.map((entry) => [
         entry.leaseId,
-        (entry.rules || []).filter(isApprovedLeaseRule),
+        (entry.rules || []).filter((rule) => isApprovedRuleSource(rule, entry.ruleSet)),
       ])
     );
 
@@ -769,7 +773,6 @@ export default function LeaseExpenseClassification() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-actual-expenses", id] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-classifications", id] });
       toast.success("Classification updated.");
     },
@@ -779,15 +782,16 @@ export default function LeaseExpenseClassification() {
   });
 
   React.useEffect(() => {
-    if (typeof window === "undefined" || !lease?.id) return;
+    if (typeof window === "undefined") return;
     const duplicateCount = classificationRows.length - new Set(classificationRows.map((row) => row.classificationKey)).size;
     console.group("[LeaseExpenseClassification] diagnostic");
     console.log("scope", {
-      property: lease?.property_id || null,
-      building: lease?.building_id || null,
-      unit: lease?.unit_id || null,
+      property: selectedProperty !== "all" ? selectedProperty : null,
+      building: selectedBuilding !== "all" ? selectedBuilding : null,
+      unit: selectedUnit !== "all" ? selectedUnit : null,
       lease: lease?.id || null,
       tenant: lease?.tenant_id || null,
+      scoped_leases: scopedLeases.length,
       period: approvedActualExpenses.map((expense) => expense.expense_date || expense.date).filter(Boolean),
     });
     console.log("approved_rules_in_scope", approvedRules.length);
@@ -802,7 +806,7 @@ export default function LeaseExpenseClassification() {
     console.log("finalized_count", classificationRows.filter((row) => row.classificationStatus === "finalized").length);
     console.log("sent_to_cam_count", classificationRows.filter((row) => row.sentToCam).length);
     console.groupEnd();
-  }, [approvedActualExpenses, approvedRules, classificationRows, lease, tabCounts]);
+  }, [approvedActualExpenses, approvedRules, classificationRows, lease, scopedLeases.length, selectedBuilding, selectedProperty, selectedUnit, tabCounts]);
 
   const isWorking = isLoadingLease || isLoadingCategories || isLoadingRules || extractRulesMutation.isPending || saveRuleSetMutation.isPending;
 
@@ -827,7 +831,7 @@ export default function LeaseExpenseClassification() {
           <Link to={createPageUrl("BulkImport", { lease_id: id })}>
             <Button variant="outline" size="sm" disabled={isWorking}>Bulk Import</Button>
           </Link>
-          <Link to={createPageUrl("LeaseExpenseRules") + (lease?.property_id ? `?property=${lease.property_id}` : "")}>
+          <Link to={createPageUrl("LeaseExpenseRules") + (selectedProperty !== "all" ? `?property=${selectedProperty}` : lease?.property_id ? `?property=${lease.property_id}` : "")}>
             <Button variant="outline" size="sm" disabled={isWorking}>Manage Lease Rules</Button>
           </Link>
           <Button
@@ -911,13 +915,14 @@ export default function LeaseExpenseClassification() {
         <CardContent className="grid gap-3 p-4 md:grid-cols-3">
           <div className="text-sm text-slate-700">
             <div className="text-[11px] font-semibold uppercase text-slate-500">Scope</div>
-            <div className="mt-1">Property: {lease?.property_name || (lease?.property_id ? `Property ${String(lease.property_id).slice(0, 8)}` : "All Properties")}</div>
-            <div>Building: {lease?.building_id ? `Building ${String(lease.building_id).slice(0, 8)}` : "Lease-level"}</div>
-            <div>Unit: {lease?.unit_id ? `Unit ${String(lease.unit_id).slice(0, 8)}` : "Lease-level"}</div>
+            <div className="mt-1">Property: {propertyById.get(selectedProperty)?.name || (selectedProperty !== "all" ? selectedProperty : "All Properties")}</div>
+            <div>Building: {buildingById.get(selectedBuilding)?.name || (selectedBuilding !== "all" ? selectedBuilding : "All Buildings")}</div>
+            <div>Unit: {unitById.get(selectedUnit)?.unit_number || unitById.get(selectedUnit)?.unit_id_code || (selectedUnit !== "all" ? selectedUnit : "All Units")}</div>
           </div>
           <div className="text-sm text-slate-700">
-            <div className="text-[11px] font-semibold uppercase text-slate-500">Lease</div>
-            <div className="mt-1">Lease: {lease?.tenant_name ? `${lease.tenant_name} lease` : (lease?.id ? `Lease ${String(lease.id).slice(0, 8)}` : "No lease selected")}</div>
+            <div className="text-[11px] font-semibold uppercase text-slate-500">Lease Scope</div>
+            <div className="mt-1">Scoped leases: {scopedLeases.length}</div>
+            <div>Default lease: {lease?.tenant_name ? `${lease.tenant_name} lease` : (lease?.id ? `Lease ${String(lease.id).slice(0, 8)}` : "No lease selected")}</div>
             <div>Tenant: {lease?.tenant_name || "No tenant selected"}</div>
             <div>Fiscal Year: {approvedActualExpenses[0]?.fiscal_year || new Date().getFullYear()}</div>
           </div>
