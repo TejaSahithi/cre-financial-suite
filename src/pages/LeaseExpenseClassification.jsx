@@ -1,360 +1,692 @@
+/**
+ * LeaseExpenseClassification — Expense Recoverability
+ *
+ * This is the bridge between Approved Lease Expense Rules and Approved Actual Expenses.
+ *
+ * Data flow:
+ *   useOrgQuery("Expense") → filter approved actuals (approved_status = "approved")
+ *   leaseExpenseRuleService.loadRuleSets() → filter approved rule sets
+ *   Cross-match by category/lease → build combined rows
+ *   Actions: Finalize, Send to CAM, Send to Budget
+ */
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { expenseService } from "@/services/expenseService";
-import useOrgQuery from "@/hooks/useOrgQuery";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  ArrowRightCircle,
+  Check,
+  CheckCircle,
+  DollarSign,
+  FileText,
+  Info,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Upload,
+} from "lucide-react";
 import { toast } from "sonner";
-import { AlertTriangle, Info, CheckCircle, Upload, Plus, FileText, ArrowRightCircle, Check } from "lucide-react";
+
+import useOrgQuery from "@/hooks/useOrgQuery";
+import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { expenseService } from "@/services/expenseService";
+import { supabase } from "@/services/supabaseClient";
+import { createPageUrl } from "@/utils";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+// ─── helpers ───────────────────────────────────────────────────────────────
+
+function fmt(val) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(val || 0);
+}
+
+function categoryMatch(expense, rule) {
+  const ec = String(expense?.category || expense?.expense_subcategory || "").toLowerCase().replace(/\W+/g, "_").trim();
+  const rc = String(
+    rule?.category_name || rule?.normalized_key || rule?.expense_category || rule?.expense_subcategory || ""
+  ).toLowerCase().replace(/\W+/g, "_").trim();
+  if (!ec || !rc) return false;
+  return ec.includes(rc) || rc.includes(ec) || ec === rc;
+}
+
+function isApprovedExpense(e) {
+  return (
+    e.approved_status === "approved" ||
+    e.recovery_status === "approved" ||
+    e.status === "approved"
+  );
+}
+
+function isApprovedRule(r) {
+  return (
+    r.review_status === "approved" ||
+    r.approval_status === "approved" ||
+    r.row_status === "mapped"
+  );
+}
+
+function recoverabilityFromRule(rule) {
+  const rt = leaseExpenseRuleService.getRecoverableDecision(rule);
+  if (rt === "yes") return "recoverable";
+  if (rt === "conditional") return "conditional";
+  return "non_recoverable";
+}
+
+// ─── component ─────────────────────────────────────────────────────────────
 
 export default function LeaseExpenseClassification() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  // Filters State
-  const [selectedProperty, setSelectedProperty] = useState("all");
-  const [selectedBuilding, setSelectedBuilding] = useState("all");
-  const [selectedUnit, setSelectedUnit] = useState("all");
-  const [selectedLease, setSelectedLease] = useState("all");
-  const [selectedTenant, setSelectedTenant] = useState("all");
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
-  const [activeTab, setActiveTab] = useState("all");
-  const [selectedRows, setSelectedRows] = useState(new Set());
+  const [scopeProperty, setScopeProperty] = useState("all");
+  const [scopeBuilding, setScopeBuilding] = useState("all");
+  const [scopeUnit,     setScopeUnit]     = useState("all");
+  const [scopeLease,    setScopeLease]    = useState("all");
+  const [scopeYear,     setScopeYear]     = useState(String(new Date().getFullYear()));
+  const [activeTab,     setActiveTab]     = useState("all");
+  const [search,        setSearch]        = useState("");
+  const [selectedIds,   setSelectedIds]   = useState(new Set());
+  const [amountEditing, setAmountEditing] = useState({}); // ruleId → amount string
 
-  // Base Data
-  const { data: properties = [] } = useOrgQuery("Property");
-  const { data: buildings = [] } = useOrgQuery("Building");
-  const { data: units = [] } = useOrgQuery("Unit");
-  const { data: leases = [] } = useOrgQuery("Lease");
-  const { data: tenants = [] } = useOrgQuery("Tenant");
+  // ── base data (same pattern as Expenses.jsx / LeaseExpenseRules.jsx) ─────
+  const { data: allExpenses = [], isLoading: loadingExp } = useOrgQuery("Expense");
+  const { data: leases = [], isLoading: loadingLeases }   = useOrgQuery("Lease");
+  const { data: properties = [] }  = useOrgQuery("Property");
+  const { data: buildings  = [] }  = useOrgQuery("Building");
+  const { data: units      = [] }  = useOrgQuery("Unit");
 
-  // Scope construction
-  const scope = useMemo(() => ({
-    property_id: selectedProperty !== "all" ? selectedProperty : null,
-    building_id: selectedBuilding !== "all" ? selectedBuilding : null,
-    unit_id: selectedUnit !== "all" ? selectedUnit : null,
-    lease_id: selectedLease !== "all" ? selectedLease : null,
-    tenant_id: selectedTenant !== "all" ? selectedTenant : null,
-    fiscal_year: selectedYear !== "all" ? selectedYear : null,
-  }), [selectedProperty, selectedBuilding, selectedUnit, selectedLease, selectedTenant, selectedYear]);
+  // Build scope from org data
+  const scope = useMemo(
+    () => buildHierarchyScope({ search: "", portfolios: [], properties, buildings, units }),
+    [properties, buildings, units]
+  );
 
-  // Fetch Workflow Scope Data
-  const { data: scopeData, isLoading, refetch } = useQuery({
-    queryKey: ['expense_recoverability_scope', scope],
-    queryFn: () => expenseService.loadExpenseRecoverabilityScope(scope),
-    enabled: true
-  });
-
-  const { approvedRules = [], approvedActuals = [], existingClassifications = [] } = scopeData || {};
-
-  // Computed Totals
-  const totals = useMemo(() => {
-    let recoverable = 0, nonRecoverable = 0, conditional = 0, excluded = 0;
-    let camEligible = 0, finalized = 0, needsReview = 0;
-
-    existingClassifications.forEach(row => {
-      const amt = Number(row.amount) || 0;
-      if (row.recoverability_result === 'recoverable') recoverable += amt;
-      if (row.recoverability_result === 'non_recoverable') nonRecoverable += amt;
-      if (row.recoverability_result === 'conditional') conditional += amt;
-      if (row.recoverability_result === 'excluded') excluded += amt;
-      if (row.cam_eligible === 'yes' || row.cam_eligible === 'conditional') camEligible += amt;
-      if (row.classification_status === 'finalized') finalized += amt;
-      if (row.classification_status === 'exception' || row.recoverability_result === 'needs_review' || row.classification_status === 'unmatched') {
-        needsReview += amt;
-      }
+  // ── scoped leases ─────────────────────────────────────────────────────────
+  const scopedLeases = useMemo(() => {
+    return leases.filter((l) => {
+      if (!matchesHierarchyScope(l, scope, { propertyKey: "property_id", unitKey: "unit_id" })) return false;
+      if (scopeProperty !== "all" && l.property_id !== scopeProperty) return false;
+      const unit = l.unit_id ? scope.unitById.get(l.unit_id) : null;
+      const buildingId = unit?.building_id || l.building_id || null;
+      if (scopeBuilding !== "all" && buildingId !== scopeBuilding) return false;
+      if (scopeUnit !== "all" && l.unit_id !== scopeUnit) return false;
+      if (scopeLease !== "all" && l.id !== scopeLease) return false;
+      return true;
     });
+  }, [leases, scope, scopeProperty, scopeBuilding, scopeUnit, scopeLease]);
 
-    return { recoverable, nonRecoverable, conditional, excluded, camEligible, finalized, needsReview };
-  }, [existingClassifications]);
+  const scopedLeaseIds = useMemo(() => scopedLeases.map((l) => l.id), [scopedLeases]);
 
-  // Mutations
-  const runClassificationMutation = useMutation({
-    mutationFn: () => expenseService.runExpenseClassification(scope),
-    onSuccess: (res) => {
-      toast.success(`Classification complete. Updated ${res.updated} rows.`);
-      refetch();
-    },
-    onError: (err) => {
-      toast.error(`Failed to run classification: ${err.message}`);
-    }
+  // ── approved actual expenses ──────────────────────────────────────────────
+  const approvedActuals = useMemo(() => {
+    return allExpenses.filter((e) => {
+      if (e.source_type === "lease_import" || e.source === "lease_import") return false;
+      if (!isApprovedExpense(e)) return false;
+      if (scopeProperty !== "all" && e.property_id !== scopeProperty) return false;
+      if (scopeBuilding !== "all" && e.building_id !== scopeBuilding) return false;
+      if (scopeUnit !== "all" && e.unit_id !== scopeUnit) return false;
+      if (scopeLease !== "all" && e.lease_id !== scopeLease) return false;
+      if (scopeYear !== "all" && String(e.fiscal_year) !== scopeYear) return false;
+      return true;
+    });
+  }, [allExpenses, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeYear]);
+
+  // ── approved rule sets ────────────────────────────────────────────────────
+  const { data: ruleSets = [], isLoading: loadingRules } = useQuery({
+    queryKey: ["expense-classification-rule-sets", scopedLeaseIds.join("|")],
+    queryFn: () => leaseExpenseRuleService.loadRuleSets(scopedLeaseIds),
+    enabled: scopedLeaseIds.length > 0,
   });
 
-  const finalizeMutation = useMutation({
-    mutationFn: (ids) => Promise.all(ids.map(id => expenseService.finalizeExpenseClassification(id))),
-    onSuccess: () => {
-      toast.success("Selected rows finalized");
-      setSelectedRows(new Set());
-      refetch();
+  const approvedRules = useMemo(() => {
+    return ruleSets.flatMap((entry) =>
+      (entry.rules || []).filter(isApprovedRule).map((r) => ({
+        ...r,
+        _leaseId: entry.leaseId,
+        _ruleSet: entry.ruleSet,
+      }))
+    );
+  }, [ruleSets]);
+
+  // ── cross-match rows ──────────────────────────────────────────────────────
+  // Each row is either:
+  //   (a) Matched: an actual expense paired with a lease rule of same category
+  //   (b) Unmatched expense: actual expense with no matching rule
+  //   (c) Unmatched rule: lease rule with no actual expense
+  const rows = useMemo(() => {
+    const result = [];
+    const usedRuleIds = new Set();
+    const usedExpenseIds = new Set();
+
+    for (const expense of approvedActuals) {
+      const matchingRule = approvedRules.find(
+        (r) =>
+          !usedRuleIds.has(r.id) &&
+          (r._leaseId === expense.lease_id || r.lease_id === expense.lease_id) &&
+          categoryMatch(expense, r)
+      );
+      if (matchingRule) {
+        usedRuleIds.add(matchingRule.id);
+        usedExpenseIds.add(expense.id);
+        result.push({
+          _id: `exp_${expense.id}__rule_${matchingRule.id}`,
+          matched: true,
+          expense,
+          rule: matchingRule,
+          category: expense.category || matchingRule.category_name || "—",
+          amount: Number(expense.amount) || 0,
+          ruleAmount: null, // can be overridden by user
+          recoverability: expense.recoverability_result || expense.recovery_status || recoverabilityFromRule(matchingRule),
+          camEligible: leaseExpenseRuleService.getCamEligibleDecision(matchingRule),
+          status: expense.classification_status || "matched",
+        });
+      } else {
+        if (!usedExpenseIds.has(expense.id)) {
+          usedExpenseIds.add(expense.id);
+          result.push({
+            _id: `exp_${expense.id}`,
+            matched: false,
+            expense,
+            rule: null,
+            category: expense.category || "—",
+            amount: Number(expense.amount) || 0,
+            ruleAmount: null,
+            recoverability: expense.recoverability_result || expense.recovery_status || "needs_review",
+            camEligible: "no",
+            status: "unmatched",
+          });
+        }
+      }
     }
+
+    // Unmatched rules (no actual expense yet)
+    for (const rule of approvedRules) {
+      if (!usedRuleIds.has(rule.id)) {
+        result.push({
+          _id: `rule_${rule.id}`,
+          matched: false,
+          expense: null,
+          rule,
+          category: rule.category_name || rule.normalized_key || "—",
+          amount: 0,
+          ruleAmount: null,
+          recoverability: recoverabilityFromRule(rule),
+          camEligible: leaseExpenseRuleService.getCamEligibleDecision(rule),
+          status: "rule_only",
+        });
+      }
+    }
+
+    return result;
+  }, [approvedActuals, approvedRules]);
+
+  // ── filter rows for active tab ────────────────────────────────────────────
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (activeTab === "recoverable")     return row.recoverability === "recoverable";
+      if (activeTab === "non_recoverable") return row.recoverability === "non_recoverable";
+      if (activeTab === "conditional")     return row.recoverability === "conditional";
+      if (activeTab === "needs_review")    return row.recoverability === "needs_review" || row.status === "unmatched";
+      if (activeTab === "cam_eligible")    return ["yes", "conditional"].includes(row.camEligible);
+      if (activeTab === "rule_only")       return row.status === "rule_only";
+      return true; // "all"
+    }).filter((row) => {
+      if (!search) return true;
+      const hay = [row.category, row.expense?.vendor, row.expense?.description, row.rule?.category_name]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(search.toLowerCase());
+    });
+  }, [rows, activeTab, search]);
+
+  // ── totals for summary cards ──────────────────────────────────────────────
+  const totals = useMemo(() => {
+    let recoverable = 0, nonRecoverable = 0, conditional = 0, needsReview = 0, camEligible = 0;
+    for (const row of rows) {
+      const amt = row.ruleAmount ?? row.amount;
+      if (row.recoverability === "recoverable")     recoverable += amt;
+      if (row.recoverability === "non_recoverable") nonRecoverable += amt;
+      if (row.recoverability === "conditional")     conditional += amt;
+      if (row.recoverability === "needs_review" || row.status === "unmatched") needsReview += amt;
+      if (["yes", "conditional"].includes(row.camEligible)) camEligible += amt;
+    }
+    return { recoverable, nonRecoverable, conditional, needsReview, camEligible };
+  }, [rows]);
+
+  const counts = useMemo(() => ({
+    all:             rows.length,
+    recoverable:     rows.filter((r) => r.recoverability === "recoverable").length,
+    non_recoverable: rows.filter((r) => r.recoverability === "non_recoverable").length,
+    conditional:     rows.filter((r) => r.recoverability === "conditional").length,
+    needs_review:    rows.filter((r) => r.recoverability === "needs_review" || r.status === "unmatched").length,
+    cam_eligible:    rows.filter((r) => ["yes", "conditional"].includes(r.camEligible)).length,
+    rule_only:       rows.filter((r) => r.status === "rule_only").length,
+  }), [rows]);
+
+  // ── mutations ─────────────────────────────────────────────────────────────
+  const finalizeMutation = useMutation({
+    mutationFn: async (ids) => {
+      const expenseIds = Array.from(ids)
+        .map((rowId) => rows.find((r) => r._id === rowId))
+        .filter((row) => row?.expense?.id)
+        .map((row) => row.expense.id);
+      await Promise.all(expenseIds.map((id) => expenseService.finalizeExpenseClassification(id)));
+      return expenseIds.length;
+    },
+    onSuccess: (count) => {
+      toast.success(`Finalized ${count} expense(s)`);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    },
+    onError: (err) => toast.error(err?.message || "Finalize failed"),
   });
 
   const sendToCamMutation = useMutation({
-    mutationFn: (ids) => Promise.all(ids.map(id => expenseService.sendClassificationToCam(id))),
-    onSuccess: () => {
-      toast.success("Eligible rows sent to CAM");
-      setSelectedRows(new Set());
-      refetch();
-    }
+    mutationFn: async (ids) => {
+      const camRows = Array.from(ids)
+        .map((rowId) => rows.find((r) => r._id === rowId))
+        .filter((row) => ["yes", "conditional"].includes(row?.camEligible) && row?.expense?.id);
+      if (camRows.length === 0) throw new Error("No CAM-eligible rows selected");
+      await Promise.all(
+        camRows.map((row) =>
+          expenseService.reviewExpense(row.expense, {
+            recoveryStatus: "recoverable",
+            approvedStatus: "approved",
+            ruleSource: "cam",
+            reason: "Sent to CAM from Expense Classification",
+          })
+        )
+      );
+      return camRows.length;
+    },
+    onSuccess: (count) => {
+      toast.success(`${count} expense(s) sent to CAM`);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    },
+    onError: (err) => toast.error(err?.message || "Send to CAM failed"),
   });
 
-  // Handlers
+  // update amount for a rule-only row
+  const updateRuleAmountMutation = useMutation({
+    mutationFn: async ({ ruleId, amount }) => {
+      const { error } = await supabase
+        .from("lease_expense_rules")
+        .update({ final_value: amount, manual_value: amount })
+        .eq("id", ruleId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Amount saved");
+      queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
+    },
+    onError: (err) => toast.error(err?.message || "Save failed"),
+  });
+
+  // ── selection helpers ─────────────────────────────────────────────────────
   const toggleRow = (id) => {
-    const next = new Set(selectedRows);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedRows(next);
-  };
-
-  const handleFinalizeSelected = () => {
-    const ids = Array.from(selectedRows);
-    if (!ids.length) return toast.error("Select rows to finalize");
-    finalizeMutation.mutate(ids);
-  };
-
-  const handleSendToCamSelected = () => {
-    const ids = Array.from(selectedRows);
-    if (!ids.length) return toast.error("Select rows to send to CAM");
-    sendToCamMutation.mutate(ids);
-  };
-
-  // Filtered Rows for Tabs
-  const filteredRows = useMemo(() => {
-    return existingClassifications.filter(row => {
-      if (activeTab === 'all') return true;
-      if (activeTab === 'recoverable') return row.recoverability_result === 'recoverable';
-      if (activeTab === 'non_recoverable') return row.recoverability_result === 'non_recoverable';
-      if (activeTab === 'conditional') return row.recoverability_result === 'conditional';
-      if (activeTab === 'excluded') return row.recoverability_result === 'excluded';
-      if (activeTab === 'needs_review') return ['unmatched', 'exception'].includes(row.classification_status) || row.recoverability_result === 'needs_review';
-      if (activeTab === 'finalized') return row.classification_status === 'finalized';
-      if (activeTab === 'sent_to_cam') return row.sent_to_cam === true;
-      return true;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
     });
-  }, [existingClassifications, activeTab]);
+  };
 
-  const currency = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+  const toggleAll = (e) => {
+    if (e.target.checked) setSelectedIds(new Set(filteredRows.map((r) => r._id)));
+    else setSelectedIds(new Set());
+  };
 
-  // Reusable Summary Card
-  const StatCard = ({ title, value, colorClass = "text-slate-800", highlightClass = "border-slate-100" }) => (
-    <Card className={`overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-lg border-t-4 ${highlightClass}`}>
-      <CardContent className="p-5 flex flex-col justify-between h-full bg-white/80 backdrop-blur-sm">
-        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{title}</h3>
-        <p className={`text-2xl font-bold ${colorClass}`}>{value}</p>
-      </CardContent>
-    </Card>
-  );
+  const isLoading = loadingExp || loadingLeases || loadingRules;
+
+  // ── recoverability badge styling ──────────────────────────────────────────
+  function recoverBadge(r) {
+    if (r === "recoverable")     return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    if (r === "non_recoverable") return "bg-rose-50 text-rose-700 border-rose-200";
+    if (r === "conditional")     return "bg-amber-50 text-amber-700 border-amber-200";
+    return "bg-slate-100 text-slate-600 border-slate-200";
+  }
+
+  function camBadge(c) {
+    if (c === "yes")         return "bg-blue-50 text-blue-700";
+    if (c === "conditional") return "bg-sky-50 text-sky-700";
+    return "bg-slate-100 text-slate-400";
+  }
+
+  const currentYear = new Date().getFullYear();
+  const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
 
   return (
-    <div className="flex flex-col h-full bg-slate-50/50 min-h-screen pb-20 font-sans">
-      
-      {/* Sleek Header & Toolbar Area */}
+    <div className="flex flex-col h-full bg-slate-50/50 min-h-screen pb-20">
+
+      {/* ── Header ── */}
       <div className="bg-slate-900 border-b border-slate-800 text-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+        <div className="max-w-screen-xl mx-auto px-6 py-4">
+          {/* Title row */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold tracking-tight">Expense Recoverability</h1>
-              <Badge variant="outline" className="bg-white/10 text-indigo-200 border-indigo-500/30 font-normal hidden sm:inline-flex">Classification Engine</Badge>
+              <h1 className="text-lg font-bold tracking-tight">Expense Recoverability</h1>
+              <Badge variant="outline" className="bg-white/10 text-indigo-200 border-indigo-500/30 font-normal text-xs hidden sm:inline-flex">
+                Classification Engine
+              </Badge>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/AddExpense")}><Plus className="w-3 h-3 mr-1"/>Add</Button>
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/BulkImport")}><Upload className="w-3 h-3 mr-1"/>Import</Button>
-              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/LeaseExpenseRules")}><FileText className="w-3 h-3 mr-1"/>Rules</Button>
+              <Button size="sm" variant="outline" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate(createPageUrl("AddExpense"))}>
+                <Plus className="w-3 h-3 mr-1.5" /> Add Expense
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate(createPageUrl("BulkImport"))}>
+                <Upload className="w-3 h-3 mr-1.5" /> Bulk Import
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate(createPageUrl("LeaseExpenseRules"))}>
+                <FileText className="w-3 h-3 mr-1.5" /> Lease Rules
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate(createPageUrl("ExpenseReview"))}>
+                <CheckCircle className="w-3 h-3 mr-1.5" /> Expense Review
+              </Button>
             </div>
           </div>
 
-          {/* Compact Scope Selector */}
-          <div className="flex flex-wrap items-center gap-2 bg-white/5 p-2 rounded-lg border border-white/10">
-            <span className="text-[10px] uppercase font-semibold text-slate-400 pl-2 mr-1">Scope:</span>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedProperty} onChange={e => setSelectedProperty(e.target.value)}>
+          {/* Compact scope toolbar */}
+          <div className="flex flex-wrap items-center gap-2 bg-white/5 px-3 py-2 rounded-lg border border-white/10 text-xs">
+            <span className="text-slate-400 font-medium uppercase tracking-wider mr-1">Scope:</span>
+            <select
+              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
+              value={scopeProperty} onChange={(e) => setScopeProperty(e.target.value)}
+            >
               <option value="all">All Properties</option>
-              {properties.map(p => <option key={p.id} value={p.id}>{p.property_name}</option>)}
+              {properties.map((p) => <option key={p.id} value={p.id}>{p.property_name || p.name}</option>)}
             </select>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedBuilding} onChange={e => setSelectedBuilding(e.target.value)}>
+            <select
+              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
+              value={scopeBuilding} onChange={(e) => setScopeBuilding(e.target.value)}
+            >
               <option value="all">All Buildings</option>
-              {buildings.filter(b => selectedProperty === 'all' || b.property_id === selectedProperty).map(b => <option key={b.id} value={b.id}>{b.building_name}</option>)}
+              {buildings
+                .filter((b) => scopeProperty === "all" || b.property_id === scopeProperty)
+                .map((b) => <option key={b.id} value={b.id}>{b.building_name || b.name}</option>)}
             </select>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-28 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedUnit} onChange={e => setSelectedUnit(e.target.value)}>
+            <select
+              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
+              value={scopeUnit} onChange={(e) => setScopeUnit(e.target.value)}
+            >
               <option value="all">All Units</option>
-              {units.map(u => <option key={u.id} value={u.id}>{u.unit_number}</option>)}
+              {units.map((u) => <option key={u.id} value={u.id}>{u.unit_number || u.unit_id_code}</option>)}
             </select>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedLease} onChange={e => setSelectedLease(e.target.value)}>
+            <select
+              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
+              value={scopeLease} onChange={(e) => setScopeLease(e.target.value)}
+            >
               <option value="all">All Leases</option>
-              {leases.map(l => <option key={l.id} value={l.id}>{l.tenant_name || l.id}</option>)}
+              {leases.map((l) => <option key={l.id} value={l.id}>{l.tenant_name || l.id.slice(0, 8)}</option>)}
             </select>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedTenant} onChange={e => setSelectedTenant(e.target.value)}>
-              <option value="all">All Tenants</option>
-              {tenants.map(t => <option key={t.id} value={t.id}>{t.tenant_name}</option>)}
-            </select>
-            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-24 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+            <select
+              className="h-7 bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 focus:ring-1 focus:ring-indigo-500 outline-none"
+              value={scopeYear} onChange={(e) => setScopeYear(e.target.value)}
+            >
               <option value="all">All Years</option>
-              <option value="2024">2024</option>
-              <option value="2025">2025</option>
-              <option value="2026">2026</option>
+              {yearOptions.map((y) => <option key={y} value={String(y)}>{y}</option>)}
             </select>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto w-full px-6 mt-6">
-        <div className="space-y-4 mb-8">
-          {approvedActuals.length === 0 && !isLoading && (
-            <div className="bg-amber-50/80 backdrop-blur border border-amber-200 text-amber-900 p-5 rounded-xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
-              <div className="flex items-start md:items-center">
-                <AlertTriangle className="w-5 h-5 mr-3 text-amber-600 shrink-0 mt-0.5 md:mt-0"/> 
-                <div>
-                  <h4 className="font-semibold text-sm">No approved actual expenses found</h4>
-                  <p className="text-xs text-amber-700/80 mt-1">Please add or import expenses and ensure they are approved before running classification for this scope.</p>
-                </div>
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <Button variant="outline" size="sm" className="bg-white text-slate-800" onClick={() => navigate("/AddExpense")}>Add Expense</Button>
-                <Button variant="outline" size="sm" className="bg-white text-slate-800" onClick={() => navigate("/BulkImport")}>Bulk Import</Button>
-              </div>
-            </div>
-          )}
+      <div className="max-w-screen-xl mx-auto w-full px-6 mt-6 space-y-6">
 
-          {approvedActuals.length > 0 && approvedRules.length === 0 && !isLoading && (
-            <div className="bg-rose-50/80 backdrop-blur border border-rose-200 text-rose-900 p-5 rounded-xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
-              <div className="flex items-start md:items-center">
-                <Info className="w-5 h-5 mr-3 text-rose-600 shrink-0 mt-0.5 md:mt-0"/> 
-                <div>
-                  <h4 className="font-semibold text-sm">No approved lease expense rules found</h4>
-                  <p className="text-xs text-rose-700/80 mt-1">You have actual expenses, but no approved lease rules. Approve your lease expense rules first to allow matching.</p>
-                </div>
-              </div>
-              <Button variant="outline" size="sm" className="bg-white text-slate-800 shrink-0" onClick={() => navigate("/LeaseExpenseRules")}>Manage Lease Rules</Button>
+        {/* ── Banners ── */}
+        {!isLoading && approvedActuals.length === 0 && (
+          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl px-5 py-4">
+            <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-amber-600" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">No approved actual expenses in this scope</p>
+              <p className="text-xs mt-1 text-amber-700">Go to Actual Expenses and set <code className="bg-amber-100 px-1 rounded">approved_status = approved</code> before running classification.</p>
             </div>
-          )}
+            <div className="flex gap-2 shrink-0">
+              <Button size="sm" variant="outline" className="bg-white text-amber-900 border-amber-300 h-8 text-xs" onClick={() => navigate(createPageUrl("Expenses"))}>Actual Expenses</Button>
+              <Button size="sm" variant="outline" className="bg-white text-amber-900 border-amber-300 h-8 text-xs" onClick={() => navigate(createPageUrl("AddExpense"))}>Add Expense</Button>
+            </div>
+          </div>
+        )}
 
-          {approvedActuals.length > 0 && approvedRules.length > 0 && existingClassifications.length === 0 && !isLoading && (
-            <div className="bg-indigo-50/80 backdrop-blur border border-indigo-200 text-indigo-900 p-5 rounded-xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ring-1 ring-indigo-500/20">
-              <div className="flex items-start md:items-center">
-                <CheckCircle className="w-5 h-5 mr-3 text-indigo-600 shrink-0 mt-0.5 md:mt-0"/> 
-                <div>
-                  <h4 className="font-semibold text-sm">Ready to Classify</h4>
-                  <p className="text-xs text-indigo-700/80 mt-1">Found {approvedActuals.length} approved expenses and {approvedRules.length} approved rules. Click run below to match them.</p>
-                </div>
-              </div>
-              <Button onClick={() => runClassificationMutation.mutate()} size="sm" className="shrink-0 bg-indigo-600 hover:bg-indigo-700" disabled={runClassificationMutation.isPending}>
-                Run Classification Engine
-              </Button>
+        {!isLoading && approvedActuals.length > 0 && approvedRules.length === 0 && (
+          <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl px-5 py-4">
+            <Info className="w-5 h-5 mt-0.5 shrink-0 text-rose-600" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">No approved lease expense rules found</p>
+              <p className="text-xs mt-1 text-rose-700">You have {approvedActuals.length} approved expense(s) but no approved rules. Approve rules in Lease Expense Rules to enable recoverability matching.</p>
             </div>
-          )}
+            <Button size="sm" variant="outline" className="bg-white text-rose-900 border-rose-300 h-8 text-xs shrink-0" onClick={() => navigate(createPageUrl("LeaseExpenseRules"))}>Lease Rules</Button>
+          </div>
+        )}
+
+        {/* ── Summary Cards ── */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: "Actuals Loaded",    value: approvedActuals.length, unit: "rows", color: "border-t-slate-400" },
+            { label: "Rules Loaded",      value: approvedRules.length,   unit: "rules", color: "border-t-slate-400" },
+            { label: "Recoverable",       value: fmt(totals.recoverable),    color: "border-t-emerald-500" },
+            { label: "Non-Recoverable",   value: fmt(totals.nonRecoverable), color: "border-t-rose-500" },
+            { label: "CAM-Eligible Pool", value: fmt(totals.camEligible),    color: "border-t-blue-500" },
+          ].map((card) => (
+            <Card key={card.label} className={`border-t-4 ${card.color} shadow-sm`}>
+              <CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">{card.label}</p>
+                <p className="text-xl font-bold text-slate-800">{card.value}</p>
+                {card.unit && <p className="text-xs text-slate-400 mt-0.5">{card.unit}</p>}
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
-        {/* Action Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <h2 className="text-xl font-bold text-slate-800">Classification Results</h2>
-          <div className="flex gap-3">
-             <Button variant="default" size="sm" className="bg-indigo-600 hover:bg-indigo-700 shadow-md transition-all hover:shadow-lg" onClick={() => runClassificationMutation.mutate()} disabled={runClassificationMutation.isPending || approvedActuals.length === 0 || approvedRules.length === 0}>
-                Run Classification
-             </Button>
-             <Button variant="outline" size="sm" className="border-indigo-200 text-indigo-700 hover:bg-indigo-50" onClick={handleFinalizeSelected} disabled={selectedRows.size === 0 || finalizeMutation.isPending}>
-               <Check className="w-4 h-4 mr-2"/> Finalize Selected
-             </Button>
-             <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={handleSendToCamSelected} disabled={selectedRows.size === 0 || sendToCamMutation.isPending}>
-               <ArrowRightCircle className="w-4 h-4 mr-2"/> Send Eligible to CAM
-             </Button>
+        {/* ── Action Bar ── */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Input
+              placeholder="Search category, vendor, description..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-72 h-9 text-sm"
+            />
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={selectedIds.size === 0 || finalizeMutation.isPending}
+              onClick={() => finalizeMutation.mutate(selectedIds)}
+              className="h-9 border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-xs"
+            >
+              <Check className="w-3.5 h-3.5 mr-1.5" />
+              Finalize ({selectedIds.size})
+            </Button>
+            <Button
+              size="sm"
+              disabled={selectedIds.size === 0 || sendToCamMutation.isPending}
+              onClick={() => sendToCamMutation.mutate(selectedIds)}
+              className="h-9 bg-blue-600 hover:bg-blue-700 text-xs"
+            >
+              <ArrowRightCircle className="w-3.5 h-3.5 mr-1.5" />
+              Send to CAM ({selectedIds.size})
+            </Button>
           </div>
         </div>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-          <StatCard title="Actuals Loaded" value={approvedActuals.length} colorClass="text-slate-800" highlightClass="border-slate-300" />
-          <StatCard title="Rules Loaded" value={approvedRules.length} colorClass="text-slate-800" highlightClass="border-slate-300" />
-          <StatCard title="Matched" value={existingClassifications.length} colorClass="text-indigo-600" highlightClass="border-indigo-400" />
-          <StatCard title="Recoverable" value={currency(totals.recoverable)} colorClass="text-emerald-600" highlightClass="border-emerald-400" />
-          <StatCard title="Non-Recoverable" value={currency(totals.nonRecoverable)} colorClass="text-rose-600" highlightClass="border-rose-400" />
-          <StatCard title="Conditional" value={currency(totals.conditional)} colorClass="text-amber-600" highlightClass="border-amber-400" />
-          <StatCard title="Excluded" value={currency(totals.excluded)} colorClass="text-slate-600" highlightClass="border-slate-400" />
-          <StatCard title="CAM-Eligible" value={currency(totals.camEligible)} colorClass="text-blue-600" highlightClass="border-blue-400" />
-          <StatCard title="Finalized" value={currency(totals.finalized)} colorClass="text-indigo-600" highlightClass="border-indigo-400" />
-          <StatCard title="Needs Review" value={currency(totals.needsReview)} colorClass="text-rose-600" highlightClass="border-rose-400" />
-        </div>
-
-        {/* Tabs and Table */}
-        <Card className="border-0 shadow-lg shadow-slate-200/50 rounded-xl overflow-hidden bg-white">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <div className="px-6 pt-4 border-b bg-slate-50/80 backdrop-blur">
-              <TabsList className="bg-transparent space-x-2 h-auto pb-4">
-                {['all', 'recoverable', 'non_recoverable', 'conditional', 'excluded', 'needs_review', 'finalized', 'sent_to_cam'].map(tab => (
-                  <TabsTrigger 
-                    key={tab} 
-                    value={tab} 
-                    className="data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm border border-transparent data-[state=active]:border-slate-200 rounded-full px-4 py-1.5 text-xs font-medium capitalize transition-all"
+        {/* ── Tabs + Table ── */}
+        <Card className="border-0 shadow-md rounded-xl overflow-hidden bg-white">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <div className="px-4 pt-3 border-b bg-slate-50">
+              <TabsList className="bg-transparent h-auto pb-3 gap-1 flex-wrap">
+                {[
+                  { val: "all",             label: `All (${counts.all})` },
+                  { val: "recoverable",     label: `Recoverable (${counts.recoverable})` },
+                  { val: "non_recoverable", label: `Non-Recoverable (${counts.non_recoverable})` },
+                  { val: "conditional",     label: `Conditional (${counts.conditional})` },
+                  { val: "needs_review",    label: `Needs Review (${counts.needs_review})` },
+                  { val: "cam_eligible",    label: `CAM Eligible (${counts.cam_eligible})` },
+                  { val: "rule_only",       label: `Rules Only (${counts.rule_only})` },
+                ].map(({ val, label }) => (
+                  <TabsTrigger
+                    key={val}
+                    value={val}
+                    className="data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm border border-transparent data-[state=active]:border-slate-200 rounded-full px-3 py-1 text-xs font-medium"
                   >
-                    {tab.replace(/_/g, ' ')}
+                    {label}
                   </TabsTrigger>
                 ))}
               </TabsList>
             </div>
 
-            <TabsContent value={activeTab} className="m-0 p-0">
-              <div className="overflow-x-auto min-h-[400px]">
-                <table className="w-full text-sm text-left border-collapse">
-                  <thead className="bg-slate-50/80 backdrop-blur text-[11px] text-slate-500 uppercase tracking-wider font-semibold sticky top-0 z-10 shadow-sm border-b">
-                    <tr>
-                      <th className="px-4 py-4 w-12 text-center">
-                        <input type="checkbox" className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer" onChange={e => setSelectedRows(e.target.checked ? new Set(filteredRows.map(r => r.id)) : new Set())} checked={filteredRows.length > 0 && selectedRows.size === filteredRows.length}/>
-                      </th>
-                      <th className="px-4 py-4 min-w-[200px]">Category & Subcategory</th>
-                      <th className="px-4 py-4 text-right">Amount</th>
-                      <th className="px-4 py-4">Recoverability</th>
-                      <th className="px-4 py-4 text-center">CAM Eligible</th>
-                      <th className="px-4 py-4">Status</th>
-                      <th className="px-4 py-4 min-w-[250px]">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
+            <TabsContent value={activeTab} className="m-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-slate-50 sticky top-0">
+                    <TableRow>
+                      <TableHead className="w-10 text-center">
+                        <input
+                          type="checkbox"
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                          checked={filteredRows.length > 0 && selectedIds.size === filteredRows.length}
+                          onChange={toggleAll}
+                        />
+                      </TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Category</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Tenant / Vendor</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-right">Actual Amt</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-right">Rule Amt</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Recoverability</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-center">CAM</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Matched Rule</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {isLoading ? (
-                      <tr><td colSpan={7} className="p-16 text-center text-slate-400">Loading classification data...</td></tr>
+                      <TableRow>
+                        <TableCell colSpan={9} className="py-16 text-center">
+                          <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-300" />
+                          <p className="text-sm text-slate-400 mt-2">Loading expenses and rules…</p>
+                        </TableCell>
+                      </TableRow>
                     ) : filteredRows.length === 0 ? (
-                      <tr><td colSpan={7} className="p-16 text-center text-slate-400">
-                        <div className="flex flex-col items-center justify-center">
-                          <FileText className="w-10 h-10 text-slate-200 mb-3" />
-                          <p>No records found for this view.</p>
-                        </div>
-                      </td></tr>
-                    ) : filteredRows.map(row => (
-                      <tr key={row.id} className="hover:bg-slate-50/80 transition-colors group">
-                        <td className="px-4 py-4 text-center">
-                          <input type="checkbox" className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer opacity-50 group-hover:opacity-100 transition-opacity" checked={selectedRows.has(row.id)} onChange={() => toggleRow(row.id)} />
-                        </td>
-                        <td className="px-4 py-4">
-                          <div className="font-semibold text-slate-800">{row.category?.replace(/_/g, " ")}</div>
-                          <div className="text-xs text-slate-500 mt-0.5">{row.subcategory?.replace(/_/g, " ")}</div>
-                        </td>
-                        <td className="px-4 py-4 font-bold text-slate-700 text-right">{currency(row.amount)}</td>
-                        <td className="px-4 py-4">
-                          <Badge variant="outline" className={`border ${row.recoverability_result === 'recoverable' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : row.recoverability_result === 'non_recoverable' ? 'bg-rose-50 text-rose-700 border-rose-200' : row.recoverability_result === 'conditional' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
-                            {row.recoverability_result?.replace(/_/g, " ")}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                           <span className={`inline-flex items-center justify-center px-2 py-1 rounded text-xs font-medium ${row.cam_eligible === 'yes' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                              {row.cam_eligible}
-                           </span>
-                        </td>
-                        <td className="px-4 py-4">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <Badge variant={row.classification_status === 'finalized' ? 'default' : 'secondary'} className={row.classification_status === 'finalized' ? 'bg-indigo-600 hover:bg-indigo-700' : ''}>{row.classification_status}</Badge>
-                            {row.sent_to_cam && <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">Sent to CAM</Badge>}
-                          </div>
-                        </td>
-                        <td className="px-4 py-4">
-                          <p className="text-[13px] text-slate-600 line-clamp-2" title={row.recovery_reason}>{row.recovery_reason || "No reason provided."}</p>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                      <TableRow>
+                        <TableCell colSpan={9} className="py-16 text-center">
+                          <FileText className="w-10 h-10 mx-auto text-slate-200 mb-3" />
+                          <p className="text-sm text-slate-400">No records in this view.</p>
+                          {approvedActuals.length === 0 && (
+                            <p className="text-xs text-slate-400 mt-1">Approve actual expenses in <button className="underline text-indigo-500" onClick={() => navigate(createPageUrl("Expenses"))}>Actual Expenses</button> first.</p>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredRows.map((row) => {
+                        const ruleEditing = amountEditing[row.rule?.id] ?? "";
+                        const tenant = row.expense?.tenant_name || row.expense?.vendor || "—";
+                        const ruleAmt = row.rule
+                          ? (row.rule.final_value ?? row.rule.manual_value ?? row.rule.extracted_value ?? null)
+                          : null;
+                        return (
+                          <TableRow key={row._id} className="hover:bg-slate-50/70 transition-colors group">
+                            <TableCell className="text-center">
+                              <input
+                                type="checkbox"
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity"
+                                checked={selectedIds.has(row._id)}
+                                onChange={() => toggleRow(row._id)}
+                              />
+                            </TableCell>
+                            <TableCell className="text-sm font-medium text-slate-800">
+                              {String(row.category).replace(/_/g, " ")}
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-600">
+                              {tenant}
+                            </TableCell>
+                            <TableCell className="text-sm text-right font-mono font-semibold text-slate-700">
+                              {row.expense ? fmt(row.expense.amount) : <span className="text-slate-300">—</span>}
+                            </TableCell>
+                            <TableCell className="text-sm text-right">
+                              {row.rule ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <Input
+                                    className="h-7 w-24 text-xs text-right font-mono"
+                                    value={amountEditing[row.rule.id] !== undefined ? ruleEditing : (ruleAmt !== null ? String(ruleAmt) : "")}
+                                    placeholder="Enter $"
+                                    onChange={(e) => setAmountEditing((prev) => ({ ...prev, [row.rule.id]: e.target.value }))}
+                                    onBlur={() => {
+                                      const val = Number(String(ruleEditing).replace(/[$,\s]/g, ""));
+                                      if (Number.isFinite(val) && val > 0) {
+                                        updateRuleAmountMutation.mutate({ ruleId: row.rule.id, amount: val });
+                                      }
+                                      setAmountEditing((prev) => { const n = { ...prev }; delete n[row.rule.id]; return n; });
+                                    }}
+                                  />
+                                </div>
+                              ) : (
+                                <span className="text-slate-300">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={`border text-[10px] uppercase ${recoverBadge(row.recoverability)}`}>
+                                {String(row.recoverability || "—").replace(/_/g, " ")}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <span className={`text-[10px] px-2 py-0.5 rounded font-medium uppercase ${camBadge(row.camEligible)}`}>
+                                {row.camEligible || "no"}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-500 max-w-[200px]">
+                              {row.rule ? (
+                                <div>
+                                  <p className="font-medium text-slate-700 truncate">{row.rule.category_name || row.rule.normalized_key}</p>
+                                  <p className="text-[10px] text-slate-400">{row.rule.recovery_method || row.rule.payment_treatment || "—"}</p>
+                                </div>
+                              ) : (
+                                <span className="text-slate-300">No matched rule</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] uppercase border ${
+                                  row.status === "matched"   ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                  row.status === "rule_only" ? "bg-violet-50 text-violet-700 border-violet-200" :
+                                  row.status === "unmatched" ? "bg-rose-50 text-rose-700 border-rose-200" :
+                                  "bg-slate-50 text-slate-600 border-slate-200"
+                                }`}
+                              >
+                                {row.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
               </div>
             </TabsContent>
           </Tabs>
         </Card>
+
+        {/* ── Downstream Legend ── */}
+        <div className="flex flex-wrap gap-4 text-xs text-slate-500 border-t pt-4">
+          <span className="flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5 text-blue-500" /> <strong>CAM:</strong> Recoverable + CAM-Eligible rows → Send to CAM module</span>
+          <span className="flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5 text-emerald-500" /> <strong>Budget:</strong> Finalized rows flow into Expense Projection → Budget</span>
+          <span className="flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5 text-indigo-500" /> <strong>Review:</strong> Exceptions (unmatched / conditional) → Expense Review queue</span>
+        </div>
 
       </div>
     </div>
