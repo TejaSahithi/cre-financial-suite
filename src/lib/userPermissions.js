@@ -224,6 +224,16 @@ export function hasAccessAtLeast(level, minimumLevel) {
   return (ACCESS_LEVEL_RANK[normalizeAccessLevel(level)] || 0) >= (ACCESS_LEVEL_RANK[normalizeAccessLevel(minimumLevel)] || 0);
 }
 
+/**
+ * WARNING: NEVER use getCurrentPageName() for security-sensitive paths, 
+ * permission validations, or write authorization checks. It relies on the 
+ * client-side browser window pathname (window.location.pathname) which can 
+ * be easily manipulated or contextually bypassed (e.g. from dialogs/overlays 
+ * active on the wrong page). 
+ * 
+ * This function should only be used for generic, non-security UI display 
+ * tasks such as rendering navigation highlights or breadcrumbs.
+ */
 export function getCurrentPageName(pathname = typeof window !== "undefined" ? window.location.pathname : "") {
   const [segment] = String(pathname || "")
     .replace(/^\/+/, "")

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Entity CRUD Service Layer — Production-Ready
  *
  * Features:
@@ -16,7 +16,7 @@ import { supabase } from '@/services/supabaseClient';
 import { normalizeImportedDateFields } from '@/lib/importDates';
 import { getStoredActingOrgId } from '@/lib/actingOrg';
 import { resolveReadableOrgIdForUser, resolveWritableOrgIdForUser } from '@/lib/orgUtils';
-import { assertCanWritePage, canWritePage, getCurrentPageName, isPagePermissionError } from '@/lib/userPermissions';
+import { assertCanWritePage, canWritePage, isPagePermissionError } from '@/lib/userPermissions';
 
 // ─── In-memory store (used when Supabase is unavailable) ───────────────
 const memoryStore = new Map();
@@ -99,6 +99,16 @@ const ENTITY_WRITE_PAGES = {
   GLAccount: ['ChartOfAccounts'],
   Document: ['Documents'],
   Organization: ['OrgSettings'],
+  Reconciliation: ['Reconciliation'],
+  Workflow: ['Workflows'],
+  Stakeholder: ['Stakeholders'],
+  IntegrationConfig: ['Integrations'],
+  Billing: ['Billing'],
+  RentProjection: ['RentProjection'],
+  ExpenseProjection: ['ExpenseProjection'],
+  User: ['UserManagement'],
+  UploadedFile: ['Documents'],
+  ComputationSnapshot: ['CAMCalculation', 'CAMDashboard']
 };
 
 async function assertCurrentUserCanWrite(entityName) {
@@ -109,7 +119,11 @@ async function assertCurrentUserCanWrite(entityName) {
   const user = await me();
   if (!user) return;
 
-  const pageNames = ENTITY_WRITE_PAGES[entityName] || [getCurrentPageName()];
+  const pageNames = ENTITY_WRITE_PAGES[entityName];
+  if (!pageNames || pageNames.length === 0) {
+    throw new Error(`[Security Error] No write page configured for logical entity: ${entityName}`);
+  }
+
   const canWriteAnyMappedPage = pageNames.some((pageName) => canWritePage(user, pageName));
   if (canWriteAnyMappedPage) return;
 
