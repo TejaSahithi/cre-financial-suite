@@ -1,53 +1,36 @@
 import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+dotenv.config();
 
-const supabaseUrl = 'http://127.0.0.1:54321';
-const supabaseKey = 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH';
+const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY);
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+async function test() {
+  console.log("Testing expenses query...");
+  const { data: expenses, error: expError } = await supabase
+    .from('expenses')
+    .select('*')
+    .limit(1);
+    
+  if (expError) console.error("Expenses error:", expError);
+  else console.log("Expenses fetched:", expenses.length, "rows", expenses.length ? Object.keys(expenses[0]) : "");
 
-async function run() {
-  console.log("Logging in...");
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: 'chtsahithi01@gmail.com',
-    password: 'Sahithi@1234'
-  });
+  console.log("Testing lease_expense_rules query...");
+  const { data: rules, error: rulesError } = await supabase
+    .from('lease_expense_rules')
+    .select('*')
+    .limit(1);
 
-  if (error) {
-    console.error("Login Error:", error.message);
-    return;
-  }
+  if (rulesError) console.error("Rules error:", rulesError);
+  else console.log("Rules fetched:", rules.length, "rows", rules.length ? Object.keys(rules[0]) : "");
 
-  console.log("Logged in successfully! User:", data.user.id);
-  
-  if (data.mfa && data.mfa.amr && data.mfa.amr.length === 0) {
-     console.log("MFA required?");
-  }
+  // Now test the specific queries
+  const { data: q1, error: e1 } = await supabase.from('expenses').select('*').or("approved_status.eq.approved,review_status.eq.approved");
+  if (e1) console.error("Query 1 error:", e1);
+  else console.log("Query 1 returned:", q1?.length);
 
-  console.log("Fetching leases...");
-  const { data: leases, error: leasesError } = await supabase.from('leases').select('*').limit(1);
-  if (leasesError) {
-    console.error("Error fetching leases:", leasesError);
-  } else {
-    console.log("Leases fetched:", leases.length);
-  }
-
-  // Simulate Expense Classification queries
-  console.log("Fetching expense categories...");
-  const { data: categories, error: categoriesError } = await supabase.from('expense_categories').select('*').limit(1);
-  if (categoriesError) {
-    console.error("Error fetching expense_categories:", categoriesError.message || categoriesError);
-  } else {
-    console.log("Categories fetched:", categories.length);
-  }
-
-  console.log("Fetching expense classifications...");
-  const { data: classifications, error: classificationsError } = await supabase.from('expense_classifications').select('*').limit(1);
-  if (classificationsError) {
-    console.error("Error fetching expense_classifications:", classificationsError.message || classificationsError);
-  } else {
-    console.log("Classifications fetched:", classifications?.length);
-  }
-
+  const { data: q2, error: e2 } = await supabase.from('lease_expense_rules').select('*').in("review_status", ["approved", "mapped"]).or("approval_status.eq.approved,review_status.eq.approved");
+  if (e2) console.error("Query 2 error:", e2);
+  else console.log("Query 2 returned:", q2?.length);
 }
 
-run().catch(console.error);
+test();
