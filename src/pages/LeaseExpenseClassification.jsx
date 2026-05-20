@@ -21,6 +21,9 @@ import {
   FileText,
   Info,
   Loader2,
+  MoreHorizontal,
+  Edit2,
+  Trash2,
   Plus,
   RefreshCw,
   Upload,
@@ -47,6 +50,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -77,14 +87,9 @@ function isApprovedExpense(e) {
   );
 }
 
-function isApprovedRule(r) {
-  // Accept mapped, approved, or manually_added rules
-  return (
-    r.review_status === "approved" ||
-    r.approval_status === "approved" ||
-    r.row_status === "mapped" ||
-    r.row_status === "manually_added"
-  );
+function isApprovedRuleSet(entry) {
+  const st = normalizeStatus(entry?.ruleSet?.status || entry?.ruleSet?.approval_status || entry?.ruleSet?.review_status);
+  return st === "approved";
 }
 
 function recoverabilityFromRule(rule) {
@@ -187,13 +192,15 @@ export default function LeaseExpenseClassification() {
   });
 
   const approvedRules = useMemo(() => {
-    return ruleSets.flatMap((entry) =>
-      (entry.rules || []).filter(isApprovedRule).map((r) => ({
-        ...r,
-        _leaseId: entry.leaseId,
-        _ruleSet: entry.ruleSet,
-      }))
-    );
+    return ruleSets
+      .filter(isApprovedRuleSet)
+      .flatMap((entry) =>
+        (entry.rules || []).map((r) => ({
+          ...r,
+          _leaseId: entry.leaseId,
+          _ruleSet: entry.ruleSet,
+        }))
+      );
   }, [ruleSets]);
 
   // ── cross-match rows ──────────────────────────────────────────────────────
@@ -605,26 +612,27 @@ export default function LeaseExpenseClassification() {
                         />
                       </TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500">Category</TableHead>
-                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Tenant / Vendor</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Tenant</TableHead>
+                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Vendor</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-right">Actual Amt</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-right">Rule Amt</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500">Recoverability</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-center">CAM</TableHead>
-                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Matched Rule</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500">Status</TableHead>
+                      <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {isLoading ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="py-16 text-center">
+                        <TableCell colSpan={10} className="py-16 text-center">
                           <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-300" />
                           <p className="text-sm text-slate-400 mt-2">Loading expenses and rules…</p>
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="py-16 text-center">
+                        <TableCell colSpan={10} className="py-16 text-center">
                           <FileText className="w-10 h-10 mx-auto text-slate-200 mb-3" />
                           <p className="text-sm text-slate-400">No records in this view.</p>
                           {approvedActuals.length === 0 && (
@@ -635,27 +643,29 @@ export default function LeaseExpenseClassification() {
                     ) : (
                       filteredRows.map((row) => {
                         const ruleEditing = amountEditing[row.rule?.id] ?? "";
-                        const tenant = row.expense?.tenant_name || row.expense?.vendor || "—";
+                        const tenant = row.expense?.tenant_name || "—";
+                        const vendor = row.expense?.vendor || "—";
                         const ruleAmt = row.rule
                           ? (row.rule.final_value ?? row.rule.manual_value ?? row.rule.extracted_value ?? null)
                           : null;
+                        const isSelected = selectedIds.has(row._id);
+
                         return (
-                          <TableRow key={row._id} className="hover:bg-slate-50/70 transition-colors group">
+                          <TableRow key={row._id} className="group hover:bg-indigo-50/30 transition-colors border-b-slate-100">
                             <TableCell className="text-center">
                               <input
                                 type="checkbox"
-                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity"
-                                checked={selectedIds.has(row._id)}
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                                checked={isSelected}
                                 onChange={() => toggleRow(row._id)}
                               />
                             </TableCell>
-                            <TableCell className="text-sm font-medium text-slate-800">
+                            <TableCell className="font-medium text-slate-800 text-sm">
                               {String(row.category).replace(/_/g, " ")}
                             </TableCell>
-                            <TableCell className="text-xs text-slate-600">
-                              {tenant}
-                            </TableCell>
-                            <TableCell className="text-sm text-right font-mono font-semibold text-slate-700">
+                            <TableCell className="text-slate-500 text-xs">{tenant}</TableCell>
+                            <TableCell className="text-slate-500 text-xs">{vendor}</TableCell>
+                            <TableCell className="text-right font-medium text-slate-700 text-sm">
                               {row.expense ? fmt(row.expense.amount) : <span className="text-slate-300">—</span>}
                             </TableCell>
                             <TableCell className="text-sm text-right">
@@ -689,16 +699,6 @@ export default function LeaseExpenseClassification() {
                                 {row.camEligible || "no"}
                               </span>
                             </TableCell>
-                            <TableCell className="text-xs text-slate-500 max-w-[200px]">
-                              {row.rule ? (
-                                <div>
-                                  <p className="font-medium text-slate-700 truncate">{row.rule.category_name || row.rule.normalized_key}</p>
-                                  <p className="text-[10px] text-slate-400">{row.rule.recovery_method || row.rule.payment_treatment || "—"}</p>
-                                </div>
-                              ) : (
-                                <span className="text-slate-300">No matched rule</span>
-                              )}
-                            </TableCell>
                             <TableCell>
                               <Badge
                                 variant="outline"
@@ -711,6 +711,32 @@ export default function LeaseExpenseClassification() {
                               >
                                 {row.status}
                               </Badge>
+                            </TableCell>
+                            <TableCell className="text-right pr-4">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <MoreHorizontal className="w-4 h-4 text-slate-500" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40">
+                                  <DropdownMenuItem onClick={() => finalizeMutation.mutate(new Set([row._id]))} disabled={finalizeMutation.isPending}>
+                                    <Check className="w-4 h-4 mr-2 text-indigo-600" />
+                                    Finalize
+                                  </DropdownMenuItem>
+                                  {row.rule && (
+                                    <DropdownMenuItem onClick={() => setAmountEditing({ ...amountEditing, [row.rule.id]: String(ruleAmt || "") })}>
+                                      <Edit2 className="w-4 h-4 mr-2 text-slate-500" />
+                                      Edit Amount
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem className="text-rose-600">
+                                    <Trash2 className="w-4 h-4 mr-2" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </TableCell>
                           </TableRow>
                         );
