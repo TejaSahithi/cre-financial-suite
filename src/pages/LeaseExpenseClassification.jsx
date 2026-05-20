@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -16,9 +16,12 @@ import {
 import { toast } from "sonner";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
+import useOrgId from "@/hooks/useOrgId";
 import { buildHierarchyScope, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
+import { useAuth } from "@/lib/AuthContext";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { createPageUrl } from "@/utils";
 
 import { Badge } from "@/components/ui/badge";
@@ -111,19 +114,28 @@ function rowTypeLabel(rowType) {
 }
 
 export default function LeaseExpenseClassification() {
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const { orgId: resolvedOrgId } = useOrgId();
+  const preselectedLeaseId = useMemo(
+    () => new URLSearchParams(location.search).get("id") || "all",
+    [location.search]
+  );
 
   const [scopeProperty, setScopeProperty] = useState("all");
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
-  const [scopeLease, setScopeLease] = useState("all");
+  const [scopeLease, setScopeLease] = useState(preselectedLeaseId);
+  const [scopeTenant, setScopeTenant] = useState("all");
   const [scopeYear, setScopeYear] = useState("all");
   const [activeTab, setActiveTab] = useState("all");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease");
+  const { data: tenants = [] } = useOrgQuery("Tenant");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: units = [] } = useOrgQuery("Unit");
@@ -142,30 +154,56 @@ export default function LeaseExpenseClassification() {
       if (scopeBuilding !== "all" && buildingId !== scopeBuilding) return false;
       if (scopeUnit !== "all" && lease.unit_id !== scopeUnit) return false;
       if (scopeLease !== "all" && lease.id !== scopeLease) return false;
+      if (scopeTenant !== "all" && lease.tenant_id !== scopeTenant) return false;
       if (!leaseCoversYear(lease, scopeYear)) return false;
       return true;
     });
-  }, [leases, scope, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeYear]);
+  }, [leases, scope, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
 
   const leaseById = useMemo(() => new Map(leases.map((lease) => [lease.id, lease])), [leases]);
   const propertyById = useMemo(() => new Map(properties.map((property) => [property.id, property])), [properties]);
   const buildingById = useMemo(() => new Map(buildings.map((building) => [building.id, building])), [buildings]);
   const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
 
+  useEffect(() => {
+    if (!preselectedLeaseId || preselectedLeaseId === "all") return;
+    const lease = leases.find((item) => item.id === preselectedLeaseId);
+    if (!lease) return;
+
+    setScopeLease(preselectedLeaseId);
+    if (lease.property_id) setScopeProperty(lease.property_id);
+    if (lease.tenant_id) setScopeTenant(lease.tenant_id);
+    if (lease.unit_id) setScopeUnit(lease.unit_id);
+    if (lease.building_id) {
+      setScopeBuilding(lease.building_id);
+      return;
+    }
+    const leaseUnit = lease.unit_id ? unitById.get(lease.unit_id) ?? null : null;
+    if (leaseUnit?.building_id) {
+      setScopeBuilding(leaseUnit.building_id);
+    }
+  }, [leases, preselectedLeaseId, unitById]);
+
   const scopePayload = useMemo(() => ({
     property_id: scopeProperty,
     building_id: scopeBuilding,
     unit_id: scopeUnit,
     lease_id: scopeLease,
+    tenant_id: scopeTenant,
     fiscal_year: scopeYear,
-  }), [scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeYear]);
+  }), [scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
 
   const {
     data: workspace = { approvedRules: [], approvedActuals: [], existingClassifications: [], summary: {} },
     isLoading: loadingWorkspace,
   } = useQuery({
-    queryKey: ["expense-recoverability-workspace", scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeYear],
+    queryKey: ["expense-recoverability-workspace", scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
     queryFn: () => expenseService.loadExpenseRecoverabilityScope(scopePayload),
+  });
+
+  const { data: diagnostics = null } = useQuery({
+    queryKey: ["expense-recoverability-diagnostics", scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
+    queryFn: () => expenseService.loadExpenseRecoverabilityDiagnostics(scopePayload),
   });
 
   const approvedActuals = workspace.approvedActuals || [];
@@ -464,6 +502,7 @@ export default function LeaseExpenseClassification() {
     onSuccess: () => {
       toast.success("Expense classification refreshed");
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
     onError: (error) => toast.error(error?.message || "Classification run failed"),
@@ -489,6 +528,7 @@ export default function LeaseExpenseClassification() {
       toast.success(`Finalized ${count} classification row${count === 1 ? "" : "s"}`);
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
     onError: (error) => toast.error(error?.message || "Finalize failed"),
@@ -513,6 +553,7 @@ export default function LeaseExpenseClassification() {
       toast.success(`Sent ${count} row${count === 1 ? "" : "s"} to Expense Review`);
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
     onError: (error) => toast.error(error?.message || "Could not send rows to review"),
@@ -533,6 +574,7 @@ export default function LeaseExpenseClassification() {
       toast.success(`Sent ${count} classification row${count === 1 ? "" : "s"} to CAM`);
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
     onError: (error) => toast.error(error?.message || "Could not send rows to CAM"),
@@ -541,6 +583,10 @@ export default function LeaseExpenseClassification() {
   const isLoading = loadingLeases || loadingWorkspace;
   const currentYear = new Date().getFullYear();
   const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
+  const rawCounts = diagnostics?.raw_db_counts || {};
+  const scopedCounts = diagnostics?.counts_after_scope_filters || {};
+  const hiddenCounts = diagnostics?.hidden_by_filter_counts || {};
+  const actingOrgId = getStoredActingOrgId();
 
   const toggleRow = (id) => {
     setSelectedIds((current) => {
@@ -553,6 +599,34 @@ export default function LeaseExpenseClassification() {
   const toggleAll = (checked) => {
     setSelectedIds(checked ? new Set(actionableFilteredIds) : new Set());
   };
+
+  const actualEmptyState = useMemo(() => {
+    if (!diagnostics) return null;
+    if ((rawCounts.total_expenses_for_org || 0) === 0) {
+      return "No actual expenses exist for this org/scope. Add or import expenses.";
+    }
+    if ((rawCounts.total_approved_actual_expenses_for_org || 0) === 0) {
+      return "Actual expenses exist but are not approved. Approve them on Actual Expenses page.";
+    }
+    if (approvedActuals.length === 0) {
+      return "Approved actual expenses exist outside the selected scope or period.";
+    }
+    return null;
+  }, [diagnostics, rawCounts, approvedActuals.length]);
+
+  const ruleEmptyState = useMemo(() => {
+    if (!diagnostics) return null;
+    if ((rawCounts.total_lease_expense_rules_for_org || 0) === 0) {
+      return "No lease expense rules exist. Approve a lease abstract and extract rules.";
+    }
+    if ((rawCounts.total_lease_expense_rules_approved_for_org || 0) === 0) {
+      return "Lease expense rules exist but are not approved. Approve them on Lease Expense Rules page.";
+    }
+    if (approvedRules.length === 0) {
+      return "Approved lease rules exist outside selected scope. Adjust scope.";
+    }
+    return null;
+  }, [diagnostics, rawCounts, approvedRules.length]);
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50/50 pb-20">
@@ -619,6 +693,14 @@ export default function LeaseExpenseClassification() {
                 </option>
               ))}
             </select>
+            <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeTenant} onChange={(event) => setScopeTenant(event.target.value)}>
+              <option value="all">All Tenants</option>
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name || tenant.tenant_name || tenant.id?.slice?.(0, 8) || "Tenant"}
+                </option>
+              ))}
+            </select>
             <select className="h-7 rounded border border-slate-700 bg-slate-800 px-2 text-slate-200 outline-none focus:ring-1 focus:ring-indigo-500" value={scopeYear} onChange={(event) => setScopeYear(event.target.value)}>
               <option value="all">All Years</option>
               {yearOptions.map((year) => (
@@ -632,12 +714,12 @@ export default function LeaseExpenseClassification() {
       </div>
 
       <div className="mx-auto mt-6 w-full max-w-screen-xl space-y-6 px-6">
-        {!isLoading && approvedActuals.length === 0 && (
+        {!isLoading && approvedActuals.length === 0 && actualEmptyState && (
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
             <div className="flex-1">
-              <p className="text-sm font-semibold">No approved actual expenses in this scope</p>
-              <p className="mt-1 text-xs text-amber-700">Approve actual expenses in Actual Expenses before running classification for this period.</p>
+              <p className="text-sm font-semibold">Actual Expense Input</p>
+              <p className="mt-1 text-xs text-amber-700">{actualEmptyState}</p>
             </div>
             <Button size="sm" variant="outline" className="h-8 border-amber-300 bg-white text-xs text-amber-900" onClick={() => navigate(createPageUrl("Expenses"))}>
               Actual Expenses
@@ -645,17 +727,76 @@ export default function LeaseExpenseClassification() {
           </div>
         )}
 
-        {!isLoading && approvedRules.length === 0 && (
+        {!isLoading && approvedRules.length === 0 && ruleEmptyState && (
           <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 text-rose-900">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
             <div className="flex-1">
-              <p className="text-sm font-semibold">No approved lease expense rules in this scope</p>
-              <p className="mt-1 text-xs text-rose-700">Approved actuals can still appear as exceptions, but recoverability matching requires approved lease expense rules.</p>
+              <p className="text-sm font-semibold">Lease Rule Input</p>
+              <p className="mt-1 text-xs text-rose-700">{ruleEmptyState}</p>
             </div>
             <Button size="sm" variant="outline" className="h-8 border-rose-300 bg-white text-xs text-rose-900" onClick={() => navigate(createPageUrl("LeaseExpenseRules"))}>
               Lease Rules
             </Button>
           </div>
+        )}
+
+        {import.meta.env.DEV && diagnostics && (
+          <Card className="border-dashed border-slate-300 bg-slate-50">
+            <CardContent className="space-y-3 p-4 text-xs text-slate-700">
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-semibold uppercase tracking-wider text-slate-500">Recoverability Diagnostics</p>
+                <p className="text-slate-500">Open DevTools for matching `console.table` output.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div><span className="font-semibold">User:</span> {user?.id || diagnostics.current_user_id || "-"}</div>
+                <div><span className="font-semibold">Current Org:</span> {user?.org_id || diagnostics.current_org_id || "-"}</div>
+                <div><span className="font-semibold">Acting Org:</span> {actingOrgId || diagnostics.acting_org_id || "-"}</div>
+                <div><span className="font-semibold">Resolved Org:</span> {resolvedOrgId || diagnostics.resolved_org_id || "-"}</div>
+                <div><span className="font-semibold">Role:</span> {user?._raw_role || user?.role || diagnostics.role || "-"}</div>
+                <div><span className="font-semibold">Property:</span> {scopeProperty}</div>
+                <div><span className="font-semibold">Building:</span> {scopeBuilding}</div>
+                <div><span className="font-semibold">Unit:</span> {scopeUnit}</div>
+                <div><span className="font-semibold">Lease:</span> {scopeLease}</div>
+                <div><span className="font-semibold">Tenant:</span> {scopeTenant}</div>
+                <div><span className="font-semibold">Fiscal Year:</span> {scopeYear}</div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded border bg-white p-3">
+                  <p className="mb-2 font-semibold text-slate-500">Raw DB Counts</p>
+                  <p>Total rules: {rawCounts.total_lease_expense_rules_for_org || 0}</p>
+                  <p>Approved rules: {rawCounts.total_lease_expense_rules_approved_for_org || 0}</p>
+                  <p>Needs review rules: {rawCounts.total_lease_expense_rules_needs_review_for_org || 0}</p>
+                  <p>Rejected / N/A rules: {rawCounts.total_lease_expense_rules_rejected_or_na_for_org || 0}</p>
+                  <p>Total actuals: {rawCounts.total_expenses_for_org || 0}</p>
+                  <p>Approved actuals: {rawCounts.total_approved_actual_expenses_for_org || 0}</p>
+                  <p>Pending actuals: {rawCounts.total_pending_actual_expenses_for_org || 0}</p>
+                  <p>Classification rows: {rawCounts.total_expense_classification_rows_for_org || 0}</p>
+                </div>
+                <div className="rounded border bg-white p-3">
+                  <p className="mb-2 font-semibold text-slate-500">Counts After Scope</p>
+                  <p>Rules by property: {scopedCounts.lease_rules_matching_selected_property || 0}</p>
+                  <p>Rules by building: {scopedCounts.lease_rules_matching_selected_building || 0}</p>
+                  <p>Rules by unit: {scopedCounts.lease_rules_matching_selected_unit || 0}</p>
+                  <p>Rules by lease: {scopedCounts.lease_rules_matching_selected_lease || 0}</p>
+                  <p>Actuals by property: {scopedCounts.actuals_matching_selected_property || 0}</p>
+                  <p>Actuals by building: {scopedCounts.actuals_matching_selected_building || 0}</p>
+                  <p>Actuals by unit: {scopedCounts.actuals_matching_selected_unit || 0}</p>
+                  <p>Actuals by lease: {scopedCounts.actuals_matching_selected_lease || 0}</p>
+                  <p>Actuals by fiscal year: {scopedCounts.actuals_matching_selected_fiscal_year || 0}</p>
+                </div>
+                <div className="rounded border bg-white p-3">
+                  <p className="mb-2 font-semibold text-slate-500">Hidden By Filters</p>
+                  <p>Rules hidden by approval: {hiddenCounts.rules_hidden_by_approval_status || 0}</p>
+                  <p>Rules hidden by scope: {hiddenCounts.rules_hidden_by_property_building_unit_scope || 0}</p>
+                  <p>Rules hidden by lease: {hiddenCounts.rules_hidden_by_lease_id || 0}</p>
+                  <p>Actuals hidden by approval: {hiddenCounts.actuals_hidden_by_approval_status || 0}</p>
+                  <p>Actuals hidden by scope: {hiddenCounts.actuals_hidden_by_property_building_unit_scope || 0}</p>
+                  <p>Actuals hidden by fiscal year: {hiddenCounts.actuals_hidden_by_date_fiscal_year || 0}</p>
+                  <p>Actuals hidden by org: {hiddenCounts.actuals_hidden_by_org_id || 0}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">

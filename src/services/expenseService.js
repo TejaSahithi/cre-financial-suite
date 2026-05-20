@@ -1,6 +1,7 @@
 import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 
 const baseExpenseService = createEntityService("Expense");
 const baseLeaseService = createEntityService("Lease");
@@ -404,9 +405,119 @@ function isApprovedExpenseRecord(expense, classification = null) {
   const approvalStatus = normalizeText(
     classification?.approved_status ||
     expense?.approved_status ||
-    expense?.review_status
+    expense?.approval_status ||
+    expense?.review_status ||
+    expense?.status
   );
   return approvalStatus === "approved";
+}
+
+function isPendingExpenseRecord(expense) {
+  const status = normalizeText(
+    expense?.approved_status ||
+    expense?.approval_status ||
+    expense?.review_status ||
+    expense?.status
+  );
+  return status !== "approved";
+}
+
+function approvedRuleState(rule) {
+  const approval = normalizeText(rule?.approval_status);
+  const review = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  const status = normalizeText(rule?.status);
+  const rowStatus = normalizeText(rule?.row_status);
+
+  if (["rejected"].includes(approval) || ["rejected"].includes(review) || status === "rejected") return "rejected";
+  if (rowStatus === "unmapped") return "na";
+  if ([approval, review, status].includes("approved") || rowStatus === "mapped" || rowStatus === "manually_added") return "approved";
+  if ([approval, review, status].includes("needs_review") || rowStatus === "needs_review" || rowStatus === "uncertain") return "needs_review";
+  return "draft";
+}
+
+function isApprovedLeaseRule(rule) {
+  return approvedRuleState(rule) === "approved";
+}
+
+function expenseMatchesScope(expense, scope = {}) {
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+
+  if (property_id && property_id !== "all" && expense.property_id !== property_id) return false;
+  if (building_id && building_id !== "all" && expense.building_id !== building_id) return false;
+  if (unit_id && unit_id !== "all" && expense.unit_id !== unit_id) return false;
+  if (lease_id && lease_id !== "all" && expense.lease_id !== lease_id) return false;
+  if (tenant_id && tenant_id !== "all" && expense.tenant_id !== tenant_id) return false;
+
+  if (fiscal_year && fiscal_year !== "all") {
+    if (expense.fiscal_year != null && String(expense.fiscal_year) !== String(fiscal_year)) return false;
+
+    const candidateDate =
+      expense.expense_date ||
+      expense.date ||
+      expense.service_period_start ||
+      expense.period ||
+      null;
+
+    if (candidateDate) {
+      const parsedYear = new Date(`${candidateDate}T00:00:00`).getFullYear();
+      if (Number.isFinite(parsedYear) && String(parsedYear) !== String(fiscal_year)) return false;
+    }
+  }
+
+  const status = normalizeText(expense?.status);
+  if (["deleted", "void", "voided", "archived"].includes(status)) return false;
+  return true;
+}
+
+function leaseMatchesScope(lease, scope = {}) {
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+  if (lease_id && lease_id !== "all" && lease.id !== lease_id) return false;
+  if (tenant_id && tenant_id !== "all" && lease.tenant_id !== tenant_id) return false;
+  if (property_id && property_id !== "all" && lease.property_id !== property_id) return false;
+  if (unit_id && unit_id !== "all" && lease.unit_id !== unit_id) return false;
+  if (building_id && building_id !== "all") {
+    const leaseBuildingId = lease.building_id || null;
+    if (leaseBuildingId && leaseBuildingId !== building_id) return false;
+  }
+  if (!leaseOverlapsFiscalYear(lease, fiscal_year && fiscal_year !== "all" ? Number(fiscal_year) : null)) return false;
+  return true;
+}
+
+function ruleMatchesScope(rule, lease, scope = {}) {
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+
+  if (!isApprovedLeaseRule(rule)) return false;
+  if (approvedRuleState(rule) === "na" || approvedRuleState(rule) === "rejected") return false;
+
+  const effectiveLeaseId = rule.lease_id || lease?.id || rule.rule_set?.lease_id || null;
+  const effectiveTenantId = rule.tenant_id || lease?.tenant_id || null;
+  const effectivePropertyId = rule.property_id || lease?.property_id || rule.rule_set?.property_id || null;
+  const effectiveBuildingId = rule.building_id || lease?.building_id || null;
+  const effectiveUnitId = rule.unit_id || lease?.unit_id || null;
+
+  if (lease_id && lease_id !== "all" && effectiveLeaseId !== lease_id) return false;
+  if (tenant_id && tenant_id !== "all" && effectiveTenantId && effectiveTenantId !== tenant_id) return false;
+
+  if (property_id && property_id !== "all") {
+    if (effectivePropertyId !== property_id) return false;
+  }
+
+  if (building_id && building_id !== "all") {
+    if (effectivePropertyId && property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
+    if (effectiveBuildingId && effectiveBuildingId !== building_id) return false;
+  }
+
+  if (unit_id && unit_id !== "all") {
+    if (effectivePropertyId && property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
+    if (effectiveBuildingId && building_id && building_id !== "all" && effectiveBuildingId && effectiveBuildingId !== building_id) return false;
+    if (effectiveUnitId && effectiveUnitId !== unit_id) return false;
+  }
+
+  if (fiscal_year && fiscal_year !== "all" && lease && !leaseOverlapsFiscalYear(lease, Number(fiscal_year))) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildClassificationKey({ orgId, expenseId, leaseExpenseRuleId = null } = {}) {
@@ -1811,87 +1922,28 @@ export const expenseService = {
   },
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
-    const { property_id, building_id, unit_id, lease_id, tenant_id } = scope;
+    const orgLeases = await baseLeaseService.list();
+    const leaseIds = [...new Set(orgLeases.map((lease) => lease.id).filter(Boolean))];
+    if (leaseIds.length === 0) return [];
 
-    let query = supabase.from("lease_expense_rules").select(`
-      *,
-      category:expense_categories!inner (
-        id, category_name, subcategory_name, normalized_key
-      ),
-      rule_set:lease_expense_rule_sets!inner (
-        id, lease_id, property_id, status
+    const leaseById = new Map((orgLeases || []).map((lease) => [lease.id, lease]));
+    const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
+
+    return (ruleEntries || [])
+      .flatMap((entry) =>
+        (entry.rules || []).map((rule) => ({
+          ...rule,
+          lease_id: rule.lease_id || entry.leaseId,
+          rule_set: entry.ruleSet || null,
+        }))
       )
-    `);
-
-    // Fetch all rules first to avoid 400 Bad Request on missing columns
-    const { data, error } = await query;
-    if (error || !data) return [];
-
-    // Scope inheritance and approval filtering
-    return data.filter(rule => {
-      // Check if it's approved
-      const isApproved = 
-        rule.review_status === 'approved' || 
-        rule.review_status === 'mapped' || 
-        rule.approval_status === 'approved' || 
-        rule.status === 'approved';
-        
-      if (!isApproved) return false;
-      if (tenant_id && tenant_id !== "all" && rule.tenant_id && rule.tenant_id !== tenant_id) return false;
-
-      const rs = rule.rule_set;
-      const hasLeaseScope = lease_id && lease_id !== "all";
-      const hasPropertyScope = property_id && property_id !== "all";
-      const hasBuildingScope = building_id && building_id !== "all";
-      const hasUnitScope = unit_id && unit_id !== "all";
-
-      if (!hasLeaseScope && !hasPropertyScope && !hasBuildingScope && !hasUnitScope) return true;
-
-      if (hasLeaseScope) {
-        return rs.lease_id === lease_id;
-      }
-
-      if (hasUnitScope) {
-        if (rule.unit_id === unit_id) return true;
-        if (hasBuildingScope && !rule.unit_id && rule.building_id === building_id) return true;
-        if (hasPropertyScope && !rule.unit_id && !rule.building_id && (rule.property_id === property_id || rs.property_id === property_id)) return true;
-        return false;
-      }
-
-      if (hasBuildingScope) {
-        if (rule.building_id === building_id) return true;
-        if (hasPropertyScope && !rule.building_id && !rule.unit_id && (rule.property_id === property_id || rs.property_id === property_id)) return true;
-        return false;
-      }
-
-      if (lease_id && rs.lease_id === lease_id) return true;
-      if (property_id && rule.property_id === property_id) return true;
-      if (building_id && rule.building_id === building_id) return true;
-      if (unit_id && rule.unit_id === unit_id) return true;
-      if (!rule.building_id && !rule.unit_id && property_id && rs.property_id === property_id) return true;
-      return false;
-    });
+      .filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope));
   },
 
   async loadApprovedActualExpenses(scope = {}) {
-    const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
-
-    let query = supabase.from("expenses").select('*');
-
-    // We filter dynamically in JS to prevent 400 errors from missing schema columns
-
-    if (property_id && property_id !== 'all') query = query.eq("property_id", property_id);
-    if (building_id && building_id !== 'all') query = query.eq("building_id", building_id);
-    if (unit_id && unit_id !== 'all') query = query.eq("unit_id", unit_id);
-    if (lease_id && lease_id !== 'all') query = query.eq("lease_id", lease_id);
-    if (tenant_id && tenant_id !== 'all') query = query.eq("tenant_id", tenant_id);
-    if (fiscal_year && fiscal_year !== 'all') query = query.eq("fiscal_year", fiscal_year);
-
-    const { data, error } = await query;
-    if (error || !data) return [];
-    
-    // Filter for approved expenses in memory
-    return data.filter((expense) =>
+    const allExpenses = await baseExpenseService.list();
+    return (allExpenses || []).filter((expense) =>
+      expenseMatchesScope(expense, scope) &&
       normalizeSourceType(expense) !== "lease_import" &&
       isApprovedExpenseRecord(expense)
     );
@@ -1920,9 +1972,160 @@ export const expenseService = {
     };
   },
 
+  async loadExpenseRecoverabilityDiagnostics(scope = {}) {
+    const orgId = await getCurrentOrgId();
+    const actingOrgId = getStoredActingOrgId();
+    const authResult = await supabase?.auth?.getUser?.();
+    const { me } = await import("@/services/auth");
+    const currentUser = await me().catch(() => null);
+
+    const [allLeases, allExpenses] = await Promise.all([
+      baseLeaseService.list(),
+      baseExpenseService.list(),
+    ]);
+
+    const leaseIds = [...new Set((allLeases || []).map((lease) => lease.id).filter(Boolean))];
+    const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
+    const leaseById = new Map((allLeases || []).map((lease) => [lease.id, lease]));
+    const rawRules = (ruleEntries || []).flatMap((entry) =>
+      (entry.rules || []).map((rule) => ({
+        ...rule,
+        lease_id: rule.lease_id || entry.leaseId,
+        rule_set: entry.ruleSet || null,
+      }))
+    );
+
+    const approvedRulesOrg = rawRules.filter((rule) => isApprovedLeaseRule(rule));
+    const needsReviewRulesOrg = rawRules.filter((rule) => approvedRuleState(rule) === "needs_review");
+    const rejectedOrNaRulesOrg = rawRules.filter((rule) => ["rejected", "na"].includes(approvedRuleState(rule)));
+
+    const approvedActualsOrg = (allExpenses || []).filter((expense) =>
+      normalizeSourceType(expense) !== "lease_import" && isApprovedExpenseRecord(expense)
+    );
+    const pendingActualsOrg = (allExpenses || []).filter((expense) =>
+      normalizeSourceType(expense) !== "lease_import" && isPendingExpenseRecord(expense)
+    );
+
+    let allClassifications = [];
+    try {
+      allClassifications = await selectExpenseClassifications({
+        columns: ["id", "org_id", "expense_id", "actual_expense_id", "lease_expense_rule_id", "classification_key"],
+        apply: (query) => {
+          if (orgId && orgId !== "__none__" && orgId !== null) {
+            return query.eq("org_id", orgId);
+          }
+          return query;
+        },
+      });
+    } catch (error) {
+      console.warn("[expenseService] recoverability diagnostics classification read warning:", error);
+    }
+
+    const rulesMatchingProperty = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, building_id: "all", unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const rulesMatchingBuilding = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const rulesMatchingUnit = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const rulesMatchingLease = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, tenant_id: "all", fiscal_year: "all" }));
+
+    const actualsMatchingProperty = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, building_id: "all", unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const actualsMatchingBuilding = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const actualsMatchingUnit = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
+    const actualsMatchingLease = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, tenant_id: "all", fiscal_year: "all" }));
+    const actualsMatchingFiscalYear = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, property_id: "all", building_id: "all", unit_id: "all", lease_id: "all", tenant_id: "all" }));
+
+    const scopedApprovedRules = approvedRulesOrg.filter((rule) =>
+      ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope)
+    );
+    const scopedApprovedActuals = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, scope));
+
+    const diagnostics = {
+      current_user_id: authResult?.data?.user?.id || currentUser?.id || null,
+      current_org_id: currentUser?.org_id || null,
+      acting_org_id: actingOrgId,
+      resolved_org_id: orgId,
+      role: currentUser?._raw_role || currentUser?.role || null,
+      selected_property_id: scope.property_id || "all",
+      selected_building_id: scope.building_id || "all",
+      selected_unit_id: scope.unit_id || "all",
+      selected_lease_id: scope.lease_id || "all",
+      selected_tenant_id: scope.tenant_id || "all",
+      selected_fiscal_year: scope.fiscal_year || "all",
+      raw_db_counts: {
+        total_lease_expense_rules_for_org: rawRules.length,
+        total_lease_expense_rules_approved_for_org: approvedRulesOrg.length,
+        total_lease_expense_rules_needs_review_for_org: needsReviewRulesOrg.length,
+        total_lease_expense_rules_rejected_or_na_for_org: rejectedOrNaRulesOrg.length,
+        total_expenses_for_org: (allExpenses || []).filter((expense) => normalizeSourceType(expense) !== "lease_import").length,
+        total_approved_actual_expenses_for_org: approvedActualsOrg.length,
+        total_pending_actual_expenses_for_org: pendingActualsOrg.length,
+        total_expense_classification_rows_for_org: allClassifications.length,
+      },
+      counts_after_scope_filters: {
+        lease_rules_matching_selected_property: rulesMatchingProperty.length,
+        lease_rules_matching_selected_building: rulesMatchingBuilding.length,
+        lease_rules_matching_selected_unit: rulesMatchingUnit.length,
+        lease_rules_matching_selected_lease: rulesMatchingLease.length,
+        actuals_matching_selected_property: actualsMatchingProperty.length,
+        actuals_matching_selected_building: actualsMatchingBuilding.length,
+        actuals_matching_selected_unit: actualsMatchingUnit.length,
+        actuals_matching_selected_lease: actualsMatchingLease.length,
+        actuals_matching_selected_fiscal_year: actualsMatchingFiscalYear.length,
+      },
+      hidden_by_filter_counts: {
+        rules_hidden_by_approval_status: rawRules.length - approvedRulesOrg.length,
+        rules_hidden_by_property_building_unit_scope: approvedRulesOrg.length - scopedApprovedRules.length,
+        rules_hidden_by_lease_id: approvedRulesOrg.filter((rule) =>
+          ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, {
+            ...scope,
+            lease_id: "all",
+          })
+        ).length - scopedApprovedRules.length,
+        actuals_hidden_by_approval_status: (allExpenses || []).filter((expense) => normalizeSourceType(expense) !== "lease_import").length - approvedActualsOrg.length,
+        actuals_hidden_by_property_building_unit_scope: approvedActualsOrg.length - scopedApprovedActuals.length,
+        actuals_hidden_by_date_fiscal_year: approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, {
+          ...scope,
+          fiscal_year: "all",
+        })).length - scopedApprovedActuals.length,
+        actuals_hidden_by_org_id: 0,
+      },
+      schema: {
+        lease_rules_table: "lease_expense_rules",
+        lease_rules_approval_columns: ["approval_status", "review_status", "status", "row_status"],
+        lease_rules_scope_columns: ["org_id", "property_id", "building_id", "unit_id", "lease_id", "tenant_id"],
+        actual_expense_table: "expenses",
+        actual_expense_approval_columns: ["approved_status", "approval_status", "review_status", "status"],
+        actual_expense_amount_columns: ["amount"],
+        actual_expense_date_columns: ["expense_date", "date", "service_period_start", "fiscal_year"],
+        classification_table: "expense_classifications",
+        classification_columns: ["classification_key", "actual_expense_id", "lease_expense_rule_id", "recoverability_result"],
+      },
+    };
+
+    console.group("[ExpenseRecoverability] diagnostic trace");
+    console.table([{
+      current_user_id: diagnostics.current_user_id,
+      current_org_id: diagnostics.current_org_id,
+      acting_org_id: diagnostics.acting_org_id,
+      resolved_org_id: diagnostics.resolved_org_id,
+      role: diagnostics.role,
+      selected_property_id: diagnostics.selected_property_id,
+      selected_building_id: diagnostics.selected_building_id,
+      selected_unit_id: diagnostics.selected_unit_id,
+      selected_lease_id: diagnostics.selected_lease_id,
+      selected_tenant_id: diagnostics.selected_tenant_id,
+      selected_fiscal_year: diagnostics.selected_fiscal_year,
+    }]);
+    console.table([diagnostics.raw_db_counts]);
+    console.table([diagnostics.counts_after_scope_filters]);
+    console.table([diagnostics.hidden_by_filter_counts]);
+    console.groupEnd();
+
+    return diagnostics;
+  },
+
   async runExpenseClassification(scope = {}) {
     const { approvedRules, approvedActuals } = await this.loadExpenseRecoverabilityScope(scope);
-    if (approvedRules.length === 0 || approvedActuals.length === 0) return { updated: 0, classified: 0, needsReview: 0 };
+    if (approvedRules.length === 0 && approvedActuals.length === 0) return { updated: 0, classified: 0, needsReview: 0 };
+    if (approvedActuals.length === 0) return { updated: 0, classified: 0, needsReview: 0 };
 
     const rulesByLeaseId = new Map();
     approvedRules.forEach(r => {
