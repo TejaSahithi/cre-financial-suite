@@ -87,9 +87,9 @@ function isApprovedExpense(e) {
   );
 }
 
-function isApprovedRuleSet(entry) {
-  const st = String(entry?.ruleSet?.status || entry?.ruleSet?.approval_status || entry?.ruleSet?.review_status || "").toLowerCase();
-  return st === "approved";
+function isApprovedRule(r) {
+  const st = String(r.review_status || r.approval_status || r.row_status || "").toLowerCase();
+  return st === "approved" || st === "mapped" || st === "manually_added";
 }
 
 function recoverabilityFromRule(rule) {
@@ -193,9 +193,8 @@ export default function LeaseExpenseClassification() {
 
   const approvedRules = useMemo(() => {
     return ruleSets
-      .filter(isApprovedRuleSet)
       .flatMap((entry) =>
-        (entry.rules || []).map((r) => ({
+        (entry.rules || []).filter(isApprovedRule).map((r) => ({
           ...r,
           _leaseId: entry.leaseId,
           _ruleSet: entry.ruleSet,
@@ -619,7 +618,6 @@ export default function LeaseExpenseClassification() {
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-right">Rule Amt</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500">Recoverability</TableHead>
                       <TableHead className="text-[10px] uppercase font-bold text-slate-500 text-center">CAM</TableHead>
-                      <TableHead className="text-[10px] uppercase font-bold text-slate-500">Status</TableHead>
                       <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -646,7 +644,8 @@ export default function LeaseExpenseClassification() {
                         const ruleEditing = amountEditing[row.rule?.id] ?? "";
                         const expenseEditing = amountEditing[row.expense?.id] ?? "";
                         const lease = row.expense?.lease_id ? leases.find(l => l.id === row.expense.lease_id) : null;
-                        const tenant = row.expense?.tenant_name || lease?.tenant_name || "—";
+                        const ruleLease = row.rule?.lease_id ? leases.find(l => l.id === row.rule.lease_id) : null;
+                        const tenant = row.expense?.tenant_name || lease?.tenant_name || ruleLease?.tenant_name || "—";
                         const vendor = row.expense?.vendor || "—";
                         const ruleAmt = row.rule
                           ? (row.rule.final_value ?? row.rule.manual_value ?? row.rule.extracted_value ?? null)
@@ -729,19 +728,6 @@ export default function LeaseExpenseClassification() {
                               <span className={`text-[10px] px-2 py-0.5 rounded font-medium uppercase ${camBadge(row.camEligible)}`}>
                                 {row.camEligible || "no"}
                               </span>
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] uppercase border ${
-                                  row.status === "matched"   ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-                                  row.status === "rule_only" ? "bg-violet-50 text-violet-700 border-violet-200" :
-                                  row.status === "unmatched" ? "bg-rose-50 text-rose-700 border-rose-200" :
-                                  "bg-slate-50 text-slate-600 border-slate-200"
-                                }`}
-                              >
-                                {row.status}
-                              </Badge>
                             </TableCell>
                             <TableCell className="text-right pr-4">
                               <DropdownMenu>

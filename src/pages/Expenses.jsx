@@ -576,7 +576,7 @@ export default function Expenses() {
 
 
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-1 gap-6">
         <Card className="border-blue-200 bg-blue-50/60">
           <CardHeader>
             <CardTitle className="text-base">Lease Rule Extraction</CardTitle>
@@ -612,7 +612,7 @@ export default function Expenses() {
                 </Button>
               </Link>
               <Link to={reviewUrl}>
-                <Button size="sm" className="bg-slate-900 hover:bg-slate-800">
+                <Button size="sm" className="bg-slate-900 hover:bg-slate-800 font-normal">
                   <ClipboardCheck className="mr-2 h-4 w-4" />
                   Expense Review
                 </Button>
@@ -622,39 +622,6 @@ export default function Expenses() {
                   Projection
                 </Button>
               </Link>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={displayedExpenses.length > 0 ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/70"}>
-          <CardHeader>
-            <CardTitle className="text-base">Expense Pipeline Status</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
-            {displayedExpenses.length > 0 ? (
-              <p>
-                {displayedExpenses.length} actual expense row(s) are loaded in this scope.
-              </p>
-            ) : scopedRuleSummary.total > 0 ? (
-              <p>
-                Lease rules are ready, but no actual expense rows have been uploaded yet.
-                CAM and Budget can use approved lease rules, while Actual Expenses stays empty until invoice/import data arrives.
-              </p>
-            ) : selectorScopedLeases.length === 0 ? (
-              <p>
-                No scoped lease records are available yet, so there is nothing to classify or sync into CAM.
-                Finish Lease Review approval first, then upload actual expenses when invoice/import data is available.
-              </p>
-            ) : (
-              <p>
-                No actual expense rows or approved lease rules are visible yet in this scope.
-                Upload expenses, import them in bulk, or complete lease expense classification.
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-white text-slate-700">{displayedExpenses.length} expense rows</Badge>
-              <Badge className="bg-white text-slate-700">{selectorScopedLeases.length} scoped leases</Badge>
-              <Badge className="bg-white text-slate-700">{scopedRuleSummary.approvedRuleSets} approved rule set(s)</Badge>
             </div>
           </CardContent>
         </Card>
@@ -777,6 +744,8 @@ export default function Expenses() {
                     const matchedVendor = vendors.find(
                       (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
                     );
+                    const matchedLease = expense.lease_id ? leases.find(l => l.id === expense.lease_id) : null;
+                    const tenantName = expense.tenant_name || matchedLease?.tenant_name || "—";
 
                     return (
                       <TableRow key={expense.id} className="hover:bg-slate-50">
@@ -793,7 +762,7 @@ export default function Expenses() {
                         <TableCell className="text-xs font-medium text-slate-800">{property?.name || getPropertyName(expense.property_id)}</TableCell>
                         <TableCell className="text-xs text-slate-600">{building?.name || "—"}</TableCell>
                         <TableCell className="text-xs text-slate-600">{unit?.unit_number || unit?.unit_id_code || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-600">{expense.tenant_name || "—"}</TableCell>
+                        <TableCell className="text-xs text-slate-600">{tenantName}</TableCell>
                         <TableCell className="text-xs font-medium capitalize">{expense.category?.replace(/_/g, " ")}</TableCell>
                         <TableCell className="text-xs text-slate-600">{expense.expense_subcategory || "—"}</TableCell>
                         <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || "—"}</TableCell>

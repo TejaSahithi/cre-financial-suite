@@ -722,12 +722,10 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing Frequency</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Reconciliation Required</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Page</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Exact Source Text</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Published To CAM</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -840,7 +838,6 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
-                      <TableCell className="text-sm text-slate-700">{sourcePage ?? "-"}</TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
                         {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
                       </TableCell>
@@ -859,11 +856,6 @@ export default function LeaseExpenseRules() {
                             : needsReviewRule(rule)
                               ? "Needs Review"
                               : ROW_STATUS_LABEL[rule.row_status] || rule.row_status || "-"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={`text-[10px] ${rule.published_to_cam ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
-                          {rule.published_to_cam ? "Published" : "Not Published"}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -925,32 +917,6 @@ export default function LeaseExpenseRules() {
                                     <Pencil className="mr-2 h-3.5 w-3.5" />
                                     Edit rule details
                                   </Link>
-                                </DropdownMenuItem>
-                              </>
-                            ) : null}
-
-                            {lease?.property_id ? (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
-                                  Downstream
-                                </DropdownMenuLabel>
-                                <DropdownMenuItem
-                                  disabled={!leaseExpenseRuleService.canPublishRuleToCam(rule)}
-                                  onSelect={(event) => {
-                                    event.preventDefault();
-                                    if (!leaseExpenseRuleService.canPublishRuleToCam(rule)) return;
-                                    publishRuleToCam(rule, lease.property_id);
-                                  }}
-                                  className="text-blue-700 focus:text-blue-800"
-                                  title={
-                                    leaseExpenseRuleService.canPublishRuleToCam(rule)
-                                      ? "Publish this rule to the CAM engine"
-                                      : "Requires approved + recoverable + cam-eligible + not included in rent"
-                                  }
-                                >
-                                  <Send className="mr-2 h-3.5 w-3.5" />
-                                  Publish to CAM
                                 </DropdownMenuItem>
                               </>
                             ) : null}
