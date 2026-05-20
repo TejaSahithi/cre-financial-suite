@@ -1708,7 +1708,7 @@ export const expenseService = {
     `);
 
     // We fetch approved rules
-    query = query.or("review_status.in.(approved,mapped),approval_status.eq.approved");
+    query = query.or("review_status.eq.approved,review_status.eq.mapped,approval_status.eq.approved");
 
     const { data, error } = await query;
     if (error || !data) return [];
@@ -1730,7 +1730,7 @@ export const expenseService = {
 
     let query = supabase.from("expenses").select('*');
 
-    query = query.or("approved_status.eq.approved,review_status.eq.approved");
+    query = query.eq("approved_status", "approved");
 
     if (property_id && property_id !== 'all') query = query.eq("property_id", property_id);
     if (building_id && building_id !== 'all') query = query.eq("building_id", building_id);

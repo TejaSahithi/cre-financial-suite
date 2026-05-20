@@ -150,79 +150,55 @@ export default function LeaseExpenseClassification() {
   return (
     <div className="flex flex-col h-full bg-slate-50/50 min-h-screen pb-20 font-sans">
       
-      {/* Header Area with Gradient Background */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-8 py-10 shadow-md">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-            <div>
-              <h1 className="text-4xl font-extrabold tracking-tight mb-2">Expense Recoverability</h1>
-              <p className="text-indigo-200 text-sm font-medium max-w-2xl">
-                Match approved actual expenses to approved lease rules and calculate final recoverability. Push finalized expenses downstream to CAM and Budgeting.
-              </p>
+      {/* Sleek Header & Toolbar Area */}
+      <div className="bg-slate-900 border-b border-slate-800 text-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold tracking-tight">Expense Recoverability</h1>
+              <Badge variant="outline" className="bg-white/10 text-indigo-200 border-indigo-500/30 font-normal hidden sm:inline-flex">Classification Engine</Badge>
             </div>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="outline" size="sm" className="bg-white/10 hover:bg-white/20 text-white border-white/20 transition-all" onClick={() => navigate("/expenses/add")}><Plus className="w-4 h-4 mr-2"/>Add Expense</Button>
-              <Button variant="outline" size="sm" className="bg-white/10 hover:bg-white/20 text-white border-white/20 transition-all" onClick={() => navigate("/expenses/import")}><Upload className="w-4 h-4 mr-2"/>Bulk Import</Button>
-              <Button variant="outline" size="sm" className="bg-white/10 hover:bg-white/20 text-white border-white/20 transition-all" onClick={() => navigate("/lease-expense-rules")}><FileText className="w-4 h-4 mr-2"/>Manage Rules</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/expenses/add")}><Plus className="w-3 h-3 mr-1"/>Add</Button>
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/expenses/import")}><Upload className="w-3 h-3 mr-1"/>Import</Button>
+              <Button variant="outline" size="sm" className="h-8 bg-white/5 hover:bg-white/10 text-white border-white/10 text-xs" onClick={() => navigate("/lease-expense-rules")}><FileText className="w-3 h-3 mr-1"/>Rules</Button>
             </div>
+          </div>
+
+          {/* Compact Scope Selector */}
+          <div className="flex flex-wrap items-center gap-2 bg-white/5 p-2 rounded-lg border border-white/10">
+            <span className="text-[10px] uppercase font-semibold text-slate-400 pl-2 mr-1">Scope:</span>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedProperty} onChange={e => setSelectedProperty(e.target.value)}>
+              <option value="all">All Properties</option>
+              {properties.map(p => <option key={p.id} value={p.id}>{p.property_name}</option>)}
+            </select>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedBuilding} onChange={e => setSelectedBuilding(e.target.value)}>
+              <option value="all">All Buildings</option>
+              {buildings.filter(b => selectedProperty === 'all' || b.property_id === selectedProperty).map(b => <option key={b.id} value={b.id}>{b.building_name}</option>)}
+            </select>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-28 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedUnit} onChange={e => setSelectedUnit(e.target.value)}>
+              <option value="all">All Units</option>
+              {units.map(u => <option key={u.id} value={u.id}>{u.unit_number}</option>)}
+            </select>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedLease} onChange={e => setSelectedLease(e.target.value)}>
+              <option value="all">All Leases</option>
+              {leases.map(l => <option key={l.id} value={l.id}>{l.tenant_name || l.id}</option>)}
+            </select>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-32 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedTenant} onChange={e => setSelectedTenant(e.target.value)}>
+              <option value="all">All Tenants</option>
+              {tenants.map(t => <option key={t.id} value={t.id}>{t.tenant_name}</option>)}
+            </select>
+            <select className="h-8 text-xs bg-slate-800 border-slate-700 text-slate-200 rounded px-2 w-24 focus:ring-1 focus:ring-indigo-500 outline-none" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+              <option value="all">All Years</option>
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
+            </select>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto w-full px-8 -mt-6">
-        {/* Scope Selector Card */}
-        <Card className="shadow-xl shadow-indigo-900/5 border-0 rounded-xl bg-white overflow-visible mb-8">
-          <div className="p-6">
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Property</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedProperty} onChange={e => setSelectedProperty(e.target.value)}>
-                  <option value="all">All Properties</option>
-                  {properties.map(p => <option key={p.id} value={p.id}>{p.property_name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Building</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedBuilding} onChange={e => setSelectedBuilding(e.target.value)}>
-                  <option value="all">All Buildings</option>
-                  {buildings.filter(b => selectedProperty === 'all' || b.property_id === selectedProperty).map(b => <option key={b.id} value={b.id}>{b.building_name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Unit</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedUnit} onChange={e => setSelectedUnit(e.target.value)}>
-                  <option value="all">All Units</option>
-                  {units.map(u => <option key={u.id} value={u.id}>{u.unit_number}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Lease</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedLease} onChange={e => setSelectedLease(e.target.value)}>
-                  <option value="all">All Leases</option>
-                  {leases.map(l => <option key={l.id} value={l.id}>{l.tenant_name || l.id}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Tenant</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedTenant} onChange={e => setSelectedTenant(e.target.value)}>
-                  <option value="all">All Tenants</option>
-                  {tenants.map(t => <option key={t.id} value={t.id}>{t.tenant_name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Fiscal Year</label>
-                <select className="w-full text-sm border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-white transition-colors focus:ring-2 focus:ring-indigo-500/20" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
-                  <option value="all">All Years</option>
-                  <option value="2024">2024</option>
-                  <option value="2025">2025</option>
-                  <option value="2026">2026</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Banners */}
+      <div className="max-w-7xl mx-auto w-full px-6 mt-6">
         <div className="space-y-4 mb-8">
           {approvedActuals.length === 0 && !isLoading && (
             <div className="bg-amber-50/80 backdrop-blur border border-amber-200 text-amber-900 p-5 rounded-xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
