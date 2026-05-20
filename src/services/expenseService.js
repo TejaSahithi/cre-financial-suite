@@ -847,16 +847,31 @@ export const expenseService = {
       return await selectExpenseClassifications({
         columns: [
           "id",
+          "classification_key",
           "expense_id",
+          "actual_expense_id",
+          "lease_expense_rule_id",
+          "linked_expense_rule_id",
           "recovery_status",
           "recoverability_result",
           "approved_status",
           "rule_source",
           "classification_status",
+          "exception_type",
           "confidence_score",
           "recovery_reason",
           "cam_eligible",
           "recovery_method",
+          "amount",
+          "recoverable_amount",
+          "non_recoverable_amount",
+          "conditional_amount",
+          "excluded_amount",
+          "next_step",
+          "sent_to_cam",
+          "sent_to_cam_at",
+          "sent_to_cam_by",
+          "cam_status",
           "updated_at",
           "classified_at",
           "approved_at",
@@ -1501,41 +1516,146 @@ export const expenseService = {
     };
   },
 
-  async finalizeExpenseClassification(expenseId, recoveryStatus = "recoverable") {
+  async finalizeExpenseClassification(classificationOrExpenseId, recoveryStatus = "recoverable") {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
-    return baseExpenseService.update(expenseId, {
+
+    let classification =
+      classificationOrExpenseId && typeof classificationOrExpenseId === "object"
+        ? classificationOrExpenseId
+        : null;
+    const expenseId =
+      classification?.expense_id ||
+      classification?.actual_expense_id ||
+      (typeof classificationOrExpenseId === "string" ? classificationOrExpenseId : null);
+
+    if (!expenseId) {
+      throw new Error("Expense classification row not found");
+    }
+
+    let expense = await baseExpenseService.get(expenseId);
+
+    if (!classification?.id) {
+      classification = (await fetchExistingExpenseClassifications([expenseId]))[0] || null;
+    }
+
+    if (!classification?.id && expense) {
+      const relatedLease = expense.lease_id ? await baseLeaseService.get(expense.lease_id) : null;
+      await this.classifyExpenses({
+        expenses: [expense],
+        leases: relatedLease ? [relatedLease] : [],
+      });
+      classification = (await fetchExistingExpenseClassifications([expenseId]))[0] || null;
+      expense = await baseExpenseService.get(expenseId);
+    }
+
+    const updatedExpense = await baseExpenseService.update(expenseId, {
       classification_updated_at: now,
       classification_updated_by: userId,
       review_status: "approved",
+      approved_status: "approved",
       recovery_status: recoveryStatus,
+      recoverability_result: recoveryStatus,
       classification: recoveryStatus,
     });
+
+    if (classification?.id) {
+      const amount = toNumber(classification.amount ?? expense?.amount ?? updatedExpense?.amount);
+      const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
+      await updateExpenseClassificationRecord(classification.id, {
+        recoverability_result: recoveryStatus,
+        recovery_status: recoveryStatus,
+        approved_status: "approved",
+        classification_status: "finalized",
+        exception_type: null,
+        reviewed_at: now,
+        reviewed_by: userId,
+        approved_at: now,
+        approved_by: userId,
+        finalized_at: now,
+        ...amountBuckets,
+        next_step:
+          normalizeText(classification.cam_eligible) === "yes" && recoveryStatus === "recoverable"
+            ? "Send to CAM"
+            : "Ready for projection",
+      });
+    }
+
+    return updatedExpense;
   },
 
-  async reopenExpenseClassification(expenseId) {
+  async reopenExpenseClassification(classificationOrExpenseId) {
     const now = new Date().toISOString();
-    return baseExpenseService.update(expenseId, {
+    const classification =
+      classificationOrExpenseId && typeof classificationOrExpenseId === "object"
+        ? classificationOrExpenseId
+        : null;
+    const expenseId =
+      classification?.expense_id ||
+      classification?.actual_expense_id ||
+      (typeof classificationOrExpenseId === "string" ? classificationOrExpenseId : null);
+
+    if (!expenseId) {
+      throw new Error("Expense classification row not found");
+    }
+
+    const updatedExpense = await baseExpenseService.update(expenseId, {
       classification_status: "matched",
       finalized_at: null,
       reviewed_at: now,
       cam_status: null,
       next_step: "Finalize row",
     });
+
+    if (classification?.id) {
+      await updateExpenseClassificationRecord(classification.id, {
+        classification_status: "matched",
+        finalized_at: null,
+        cam_status: null,
+        next_step: "Finalize row",
+      });
+    }
+
+    return updatedExpense;
   },
 
-  async sendExpenseClassificationToReview(expenseId) {
+  async sendExpenseClassificationToReview(classificationOrExpenseId) {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
-    return baseExpenseService.update(expenseId, {
+    const classification =
+      classificationOrExpenseId && typeof classificationOrExpenseId === "object"
+        ? classificationOrExpenseId
+        : null;
+    const expenseId =
+      classification?.expense_id ||
+      classification?.actual_expense_id ||
+      (typeof classificationOrExpenseId === "string" ? classificationOrExpenseId : null);
+
+    if (!expenseId) {
+      throw new Error("Expense classification row not found");
+    }
+
+    const updatedExpense = await baseExpenseService.update(expenseId, {
       classification_status: "exception",
       exception_type: "manual_review",
       reviewed_at: now,
       reviewed_by: userId,
       next_step: "Resolve exception",
     });
+
+    if (classification?.id) {
+      await updateExpenseClassificationRecord(classification.id, {
+        classification_status: "exception",
+        exception_type: "manual_review",
+        reviewed_at: now,
+        reviewed_by: userId,
+        next_step: "Resolve exception",
+      });
+    }
+
+    return updatedExpense;
   },
 
   async sendClassificationToCam(classificationOrId) {
@@ -1717,8 +1837,33 @@ export const expenseService = {
         rule.status === 'approved';
         
       if (!isApproved) return false;
+      if (tenant_id && tenant_id !== "all" && rule.tenant_id && rule.tenant_id !== tenant_id) return false;
 
       const rs = rule.rule_set;
+      const hasLeaseScope = lease_id && lease_id !== "all";
+      const hasPropertyScope = property_id && property_id !== "all";
+      const hasBuildingScope = building_id && building_id !== "all";
+      const hasUnitScope = unit_id && unit_id !== "all";
+
+      if (!hasLeaseScope && !hasPropertyScope && !hasBuildingScope && !hasUnitScope) return true;
+
+      if (hasLeaseScope) {
+        return rs.lease_id === lease_id;
+      }
+
+      if (hasUnitScope) {
+        if (rule.unit_id === unit_id) return true;
+        if (hasBuildingScope && !rule.unit_id && rule.building_id === building_id) return true;
+        if (hasPropertyScope && !rule.unit_id && !rule.building_id && (rule.property_id === property_id || rs.property_id === property_id)) return true;
+        return false;
+      }
+
+      if (hasBuildingScope) {
+        if (rule.building_id === building_id) return true;
+        if (hasPropertyScope && !rule.building_id && !rule.unit_id && (rule.property_id === property_id || rs.property_id === property_id)) return true;
+        return false;
+      }
+
       if (lease_id && rs.lease_id === lease_id) return true;
       if (property_id && rule.property_id === property_id) return true;
       if (building_id && rule.building_id === building_id) return true;
@@ -1746,10 +1891,9 @@ export const expenseService = {
     if (error || !data) return [];
     
     // Filter for approved expenses in memory
-    return data.filter(e => 
-      e.approved_status === 'approved' || 
-      e.status === 'approved' || 
-      e.review_status === 'approved'
+    return data.filter((expense) =>
+      normalizeSourceType(expense) !== "lease_import" &&
+      isApprovedExpenseRecord(expense)
     );
   },
 
