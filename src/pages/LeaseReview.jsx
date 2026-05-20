@@ -413,7 +413,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lease?.id]);  
 
   // Auto-link: when a lease has no source_file_id, search uploaded_files
   // for a matching upload by tenant_name / property_id / building_id /
@@ -599,7 +599,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lease?.id]);  
 
   // Manual link from the banner picker.
   const handleLinkSourceFile = async (fileId) => {
@@ -751,7 +751,7 @@ export default function LeaseReview() {
     return () => {
       cancelled = true;
     };
-  }, [lease?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lease?.id]);  
 
   // Mark related notifications as read.
   useEffect(() => {
@@ -887,7 +887,7 @@ export default function LeaseReview() {
     console.log("[LeaseReview] auto-running re-extract — source linked but no extracted data yet");
     toast.info("Source file linked. Running extraction in the background…");
     handleReextractLease();
-  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]);  
 
   // --- Early returns -------------------------------------------------------
   if (!leaseId) {

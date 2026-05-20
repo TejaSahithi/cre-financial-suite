@@ -123,7 +123,7 @@ export default function FieldDetailDrawer({
     setEvSourceText(evidence?.sourceText == null ? "" : String(evidence.sourceText));
     setEvConfidence(typeof confidence === "number" ? String(confidence) : "");
     setEvExtractionStatus(evidence?.extractionStatus || inferredExtractionStatus || "");
-  }, [open, field?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, field?.key]);  
 
   // Whether this field needs an override reason to clear the approval gate.
   const hasEvidence = Boolean(
