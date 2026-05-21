@@ -622,9 +622,17 @@ function getRuleValidation(rule) {
   // Blocker labels are SHORT — they render in a tight column. Verbose
   // explanations belong in tooltips/help text, not the table cell.
   const approvalBlockers = [];
-  if (!hasValidSourcePage) approvalBlockers.push("Missing source page");
-  if (!hasLeaseSourceText) approvalBlockers.push("Missing source text");
-  if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Source text too weak");
+  const isManual = rule?.created_from === "manual" || rule?.generation_source === "manual";
+
+  if (isManual) {
+    if (!hasValidSourcePage && !(rule?.notes && String(rule.notes).trim().length > 0)) {
+      approvalBlockers.push("Missing notes for manual override");
+    }
+  } else {
+    if (!hasValidSourcePage) approvalBlockers.push("Missing source page");
+    if (!hasLeaseSourceText) approvalBlockers.push("Missing source text");
+    if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Source text too weak");
+  }
 
   const publishBlockers = [];
   publishBlockers.push(...approvalBlockers);

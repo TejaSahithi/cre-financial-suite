@@ -673,18 +673,26 @@ export default function LeaseExpenseRules() {
       toast.error(validation.approvalBlockers[0] || "This rule needs real lease evidence before approval.");
       return;
     }
+    const isManual = rule?.created_from === "manual" || rule?.generation_source === "manual";
+    const patchOverrides = {
+      row_status: "mapped",
+      review_status: "approved",
+      approval_status: "approved",
+      approved_by: userId,
+      approved_at: now,
+      updated_at: now,
+      is_excluded: false,
+      published_to_cam: false,
+    };
+    if (isManual) {
+      patchOverrides.created_from = "manual";
+      patchOverrides.generation_source = "manual";
+      patchOverrides.exact_source_text = validation.exactSourceText || "manual_review";
+    }
+    
     const approvedRule = await updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      patch: buildRuleWorkflowPatch(rule, validation, {
-        row_status: "mapped",
-        review_status: "approved",
-        approval_status: "approved",
-        approved_by: userId,
-        approved_at: now,
-        updated_at: now,
-        is_excluded: false,
-        published_to_cam: false,
-      }),
+      patch: buildRuleWorkflowPatch(rule, validation, patchOverrides),
     });
 
     const approvedValidation = getRuleValidation({ ...rule, ...approvedRule });
