@@ -1061,7 +1061,7 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
   }
 }
 
-async function selectExpenseClassificationsForExpenseIds(expenseIds = [], columns = []) {
+async function _legacySelectExpenseClassificationsForExpenseIds(expenseIds = [], columns = []) {
   if (!supabase || expenseIds.length === 0 || columns.length === 0) return [];
 
   const cleanExpenseIds = expenseIds.filter(Boolean);
@@ -1093,6 +1093,47 @@ async function selectExpenseClassificationsForExpenseIds(expenseIds = [], column
       throw fallbackError;
     }
   }
+}
+
+async function selectExpenseClassificationsForExpenseIds(expenseIds = [], columns = []) {
+  if (!supabase || expenseIds.length === 0 || columns.length === 0) return [];
+
+  const cleanExpenseIds = expenseIds.filter(Boolean);
+  const mergedRows = new Map();
+  let attemptedAtLeastOneLinkColumn = false;
+
+  for (const linkColumn of ["expense_id", "actual_expense_id"]) {
+    try {
+      const rows = await selectExpenseClassifications({
+        columns,
+        apply: (query) => query.in(linkColumn, cleanExpenseIds),
+      });
+      attemptedAtLeastOneLinkColumn = true;
+
+      for (const row of rows || []) {
+        const dedupeKey =
+          row?.id ||
+          row?.classification_key ||
+          `${row?.expense_id || row?.actual_expense_id || "unknown"}:${row?.lease_expense_rule_id || row?.recovery_rule_id || "no-rule"}`;
+        if (!mergedRows.has(dedupeKey)) {
+          mergedRows.set(dedupeKey, row);
+        }
+      }
+    } catch (error) {
+      const missingColumn = extractMissingColumn(error);
+      if (isMissingColumnError(error) && missingColumn === linkColumn) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!attemptedAtLeastOneLinkColumn) {
+    console.warn("[expenseService] expense_classifications id-link columns missing â€” treating as no persisted classifications.");
+    return [];
+  }
+
+  return [...mergedRows.values()];
 }
 
 export const expenseService = {
@@ -1229,11 +1270,24 @@ export const expenseService = {
           if (orgId && orgId !== "__none__") {
             scopedQuery = scopedQuery.eq("org_id", orgId);
           }
-          return scopedQuery.order("classified_at", { ascending: false }).limit(5000);
+          return scopedQuery.limit(5000);
         },
       });
 
-      return rows.filter((row) => classificationMatchesScope(row, scope));
+      return rows
+        .filter((row) => classificationMatchesScope(row, scope))
+        .sort((left, right) => {
+          const leftTime = Date.parse(
+            left?.classified_at || left?.reviewed_at || left?.finalized_at || left?.updated_at || ""
+          );
+          const rightTime = Date.parse(
+            right?.classified_at || right?.reviewed_at || right?.finalized_at || right?.updated_at || ""
+          );
+          if (!Number.isFinite(leftTime) && !Number.isFinite(rightTime)) return 0;
+          if (!Number.isFinite(leftTime)) return 1;
+          if (!Number.isFinite(rightTime)) return -1;
+          return rightTime - leftTime;
+        });
     } catch (error) {
       console.warn("[expenseService] listExpenseClassificationsForScope warning:", error);
       return [];

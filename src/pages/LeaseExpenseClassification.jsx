@@ -194,8 +194,8 @@ export default function LeaseExpenseClassification() {
     fiscal_year: scopeYear,
   }), [scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
 
-  const orgScopeKey = resolvedOrgId ?? actingOrgId ?? user?.org_id ?? "__none__";
-  const queriesEnabled = resolvedOrgId !== undefined && orgScopeKey !== "__none__";
+  const orgScopeKey = resolvedOrgId ?? actingOrgId ?? user?.org_id ?? "__global__";
+  const queriesEnabled = resolvedOrgId !== undefined;
 
   const {
     data: workspace = { approvedRules: [], approvedActuals: [], existingClassifications: [], summary: {} },

@@ -11,7 +11,6 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
-import { supabase } from "@/services/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -274,46 +273,19 @@ export default function ExpenseReview() {
   // pulls from expense_classifications WHERE classification_status is
   // 'unmatched'/'exception'/'conditional' OR exception_type is non-null.
   // Each row is one decision the reviewer must make.
-  const { data: exceptionRows = [], isLoading: isLoadingExceptions } = useQuery({
-    queryKey: [
-      "expense-review-exceptions",
-      scopedLeaseIds.join("|"),
-      scopeProperty,
-    ],
-    queryFn: async () => {
-      // Scope: any classification whose lease_id is in the scoped lease set
-      // OR (lease_id is null AND property_id matches selected property).
-      const leaseFilter = scopedLeaseIds.length > 0
-        ? `lease_id.in.(${scopedLeaseIds.join(",")})`
-        : null;
-      const propertyFilter = scopeProperty !== "all"
-        ? `and(lease_id.is.null,property_id.eq.${scopeProperty})`
-        : null;
-      const orParts = [leaseFilter, propertyFilter].filter(Boolean);
-      let query = supabase
-        .from("expense_classifications")
-        .select(
-          "id, expense_id, actual_expense_id, lease_id, property_id, building_id, unit_id, " +
-          "lease_expense_rule_id, recovery_rule_id, recoverability_result, recovery_status, " +
-          "cam_eligible, recovery_method, recovery_reason, classification_status, " +
-          "exception_type, confidence_score, evidence_text, category, subcategory, " +
-          "amount, classified_at, reviewed_at, finalized_at, notes",
-        )
-        .or("classification_status.in.(unmatched,exception,conditional),recoverability_result.eq.needs_review,exception_type.not.is.null")
-        .order("classified_at", { ascending: false })
-        .limit(500);
-      if (orParts.length > 0) {
-        query = query.or(orParts.join(","));
-      }
-      const { data, error } = await query;
-      if (error) {
-        console.warn("[ExpenseReview] exceptions query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
-    enabled: scopedLeaseIds.length > 0 || scopeProperty !== "all",
-  });
+  const exceptionRows = useMemo(() => {
+    return scopedClassifications.filter((row) => {
+      const status = String(row?.classification_status || "").toLowerCase();
+      const recoverability = String(row?.recoverability_result || row?.recovery_status || "").toLowerCase();
+      const exceptionType = String(row?.exception_type || "").toLowerCase();
+      return (
+        ["unmatched", "exception", "conditional"].includes(status) ||
+        recoverability === "needs_review" ||
+        (exceptionType && exceptionType !== "none" && exceptionType !== "null")
+      );
+    });
+  }, [scopedClassifications]);
+  const isLoadingExceptions = isLoadingClassifications;
 
   // Join in actual expense details (vendor, date) for each exception so the
   // queue can show "Vendor X, invoice $Y, dated Z" without a separate fetch.
@@ -399,11 +371,7 @@ export default function ExpenseReview() {
         patch.classification_status = "matched";
         patch.exception_type = null;
       }
-      const { error } = await supabase
-        .from("expense_classifications")
-        .update(patch)
-        .eq("id", classificationId);
-      if (error) throw error;
+      await expenseService.updateExpenseClassification(classificationId, patch);
       return { classificationId, action };
     },
     onSuccess: ({ action }) => {
