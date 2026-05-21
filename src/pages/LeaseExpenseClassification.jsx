@@ -365,8 +365,9 @@ export default function LeaseExpenseClassification() {
       row.canSendToCam =
         Boolean(row.actualExpenseId) &&
         row.rowType === "matched_classification" &&
-        ["recoverable", "conditional"].includes(row.recoverabilityResult) &&
-        ["yes", "conditional"].includes(row.camEligible) &&
+        row.classificationStatus === "finalized" &&
+        row.recoverabilityResult === "recoverable" &&
+        row.camEligible === "yes" &&
         row.amount > 0 &&
         !row.sentToCam;
       result.push(row);

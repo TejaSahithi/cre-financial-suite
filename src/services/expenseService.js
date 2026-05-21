@@ -511,10 +511,10 @@ function ruleMatchesScope(rule, lease, scope = {}) {
   if (approvedRuleState(rule) === "na" || approvedRuleState(rule) === "rejected") return false;
 
   const effectiveLeaseId = rule.lease_id || lease?.id || rule.rule_set?.lease_id || null;
-  const effectiveTenantId = lease?.tenant_id || rule.rule_set?.tenant_id || null;
-  const effectivePropertyId = lease?.property_id || rule.rule_set?.property_id || null;
-  const effectiveBuildingId = lease?.building_id || rule.rule_set?.building_id || null;
-  const effectiveUnitId = lease?.unit_id || rule.rule_set?.unit_id || null;
+  const effectiveTenantId = rule.tenant_id || lease?.tenant_id || rule.rule_set?.tenant_id || null;
+  const effectivePropertyId = rule.property_id || lease?.property_id || rule.rule_set?.property_id || null;
+  const effectiveBuildingId = rule.building_id || lease?.building_id || rule.rule_set?.building_id || null;
+  const effectiveUnitId = rule.unit_id || lease?.unit_id || rule.rule_set?.unit_id || null;
 
   const matchesLease = lease_id && lease_id !== "all" && String(effectiveLeaseId) === String(lease_id);
 
@@ -720,11 +720,19 @@ function canSendClassificationToCam({ classification, expense, rule }) {
 // happy path.
 function isMissingExpenseRuleTable(error) {
   if (!error) return false;
+
   const code = String(error.code || "").toUpperCase();
   if (code === "PGRST205" || code === "42P01") return true;
-  const text = String(error.message || error.details || "").toLowerCase();
-  return /lease_expense_rule_sets|lease_expense_rules|lease_expense_values|lease_expense_rule_clauses|expense_categories/.test(text)
-    && /does not exist|could not find/.test(text);
+
+  const text = [error.message, error.details, error.hint]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    /relation .* does not exist/.test(text) ||
+    /table .* does not exist/.test(text)
+  );
 }
 
 function extractMissingColumn(error) {
@@ -2289,40 +2297,37 @@ export const expenseService = {
   },
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
-    const orgLeases = await listWorkflowEntityRows("Lease");
-    const scopedLeases = (orgLeases || []).filter((lease) => leaseMatchesScope(lease, scope));
-    const leaseIds = [...new Set(scopedLeases.map((lease) => lease.id).filter(Boolean))];
-    if (leaseIds.length === 0) return [];
+    const orgId = await getCurrentOrgId({ allowSuperAdminGlobal: true });
 
-    const leaseById = new Map((orgLeases || []).map((lease) => [lease.id, lease]));
-    const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
-    const normalizedRules = (ruleEntries || [])
-      .flatMap((entry) =>
-        (entry.rules || []).map((rule) => ({
-          ...rule,
-          lease_id: rule.lease_id || entry.leaseId,
-          rule_set: entry.ruleSet || null,
-        }))
-      );
+    let query = supabase
+      .from("lease_expense_rules")
+      .select("*")
+      .eq("approval_status", "approved")
+      .in("review_status", ["approved", "reviewed"])
+      .limit(5000);
 
-    let directRules = [];
-    try {
-      const { ruleSets, rules } = await fetchApprovedRuleArtifacts(leaseIds);
-      const ruleSetById = new Map((ruleSets || []).map((ruleSet) => [ruleSet.id, ruleSet]));
-      directRules = (rules || []).map((rule) => ({
-        ...rule,
-        lease_id: rule.lease_id || ruleSetById.get(rule.rule_set_id)?.lease_id || null,
-        rule_set: ruleSetById.get(rule.rule_set_id) || null,
-      }));
-    } catch (error) {
-      console.warn("[expenseService] direct approved rule fallback warning:", error);
+    if (orgId && orgId !== "__none__") {
+      query = query.eq("org_id", orgId);
     }
 
-    const mergedRules = mergeLeaseRuleSources(directRules, normalizedRules);
+    const { data, error } = await query;
 
-    return mergedRules.filter((rule) =>
+    if (error) {
+      console.error("[ExpenseRecoverability] lease_expense_rules direct query failed", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      throw error;
+    }
+
+    const leases = await listWorkflowEntityRows("Lease");
+    const leaseById = new Map((leases || []).map((lease) => [lease.id, lease]));
+
+    return (data || []).filter((rule) =>
       isApprovedLeaseRule(rule) &&
-      ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope)
+      ruleMatchesScope(rule, leaseById.get(rule.lease_id) || null, scope)
     );
   },
 
@@ -2331,36 +2336,17 @@ export const expenseService = {
       listWorkflowEntityRows("Expense"),
       listWorkflowEntityRows("Lease"),
     ]);
-    const actualExpenses = (allExpenses || []).filter((expense) =>
-      normalizeSourceType(expense) !== "lease_import" &&
-      expenseMatchesScope(expense, scope)
-    );
-    const expenseIds = actualExpenses.map((expense) => expense.id).filter(Boolean);
-    const existingClassifications = expenseIds.length > 0
-      ? await fetchExistingExpenseClassifications(expenseIds)
-      : [];
-    const classificationByExpenseId = new Map();
-    for (const classification of existingClassifications) {
-      const expenseId = classification.expense_id || classification.actual_expense_id;
-      if (!expenseId || classificationByExpenseId.has(expenseId)) continue;
-      classificationByExpenseId.set(expenseId, classification);
-    }
 
     const approvedExpenses = [];
-    for (const expense of actualExpenses) {
-      const classification = classificationByExpenseId.get(expense.id) || null;
-      if (!isApprovedExpenseRecord(expense, classification)) continue;
-      const { expense: linkedExpense } = await this.resolveExpenseLeaseLink({
-        ...expense,
-        approved_status: classification?.approved_status || expense.approved_status || expense.approval_status,
-        recovery_status: classification?.recoverability_result || classification?.recovery_status || expense.recovery_status,
-        recoverability_result: classification?.recoverability_result || classification?.recovery_status || expense.recoverability_result,
-        classification: classification?.recoverability_result || classification?.recovery_status || expense.classification,
-        recovery_reason: classification?.recovery_reason || expense.recovery_reason,
-        rule_source: classification?.rule_source || expense.rule_source,
-        cam_eligible: classification?.cam_eligible || expense.cam_eligible,
-        recovery_method: classification?.recovery_method || expense.recovery_method,
-      }, allLeases);
+
+    for (const rawExpense of allExpenses || []) {
+      if (normalizeSourceType(rawExpense) === "lease_import") continue;
+
+      const { expense: linkedExpense } = await this.resolveExpenseLeaseLink(rawExpense, allLeases);
+
+      if (!isApprovedExpenseRecord(linkedExpense)) continue;
+      if (!expenseMatchesScope(linkedExpense, scope)) continue;
+
       approvedExpenses.push(linkedExpense);
     }
 
@@ -2368,15 +2354,27 @@ export const expenseService = {
   },
 
   async loadExpenseRecoverabilityScope(scope = {}) {
-    const [approvedRules, approvedActuals] = await Promise.all([
-      this.loadApprovedLeaseExpenseRules(scope),
-      this.loadApprovedActualExpenses(scope)
-    ]);
+    const safe = async (label, fn, fallback = []) => {
+      try {
+        return await fn();
+      } catch (error) {
+        console.error(`[ExpenseRecoverability] ${label} failed`, {
+          code: error?.code,
+          message: error?.message,
+          details: error?.details,
+          hint: error?.hint,
+          scope,
+          error,
+        });
+        return fallback;
+      }
+    };
 
-    const expenseIds = approvedActuals.map(e => e.id);
-    const existingClassifications = expenseIds.length > 0
-      ? await fetchExistingExpenseClassifications(expenseIds)
-      : [];
+    const [approvedRules, approvedActuals, existingClassifications] = await Promise.all([
+      safe("approved lease rules", () => this.loadApprovedLeaseExpenseRules(scope)),
+      safe("approved actual expenses", () => this.loadApprovedActualExpenses(scope)),
+      safe("classification rows", () => this.listExpenseClassificationsForScope(scope)),
+    ]);
 
     return {
       approvedRules,
@@ -2385,8 +2383,8 @@ export const expenseService = {
       summary: {
         rulesCount: approvedRules.length,
         actualsCount: approvedActuals.length,
-        classificationsCount: existingClassifications.length
-      }
+        classificationsCount: existingClassifications.length,
+      },
     };
   },
 
