@@ -266,41 +266,41 @@ export default function LeaseExpenseClassification() {
 
       const recoverabilityResult = hasMatchedRule
         ? normalizeText(
-            classificationRecord?.recoverability_result ||
-            classificationRecord?.recovery_status ||
-            expense.recoverability_result ||
-            expense.recovery_status ||
-            match?.recoverability_result ||
-            "needs_review"
-          )
+          classificationRecord?.recoverability_result ||
+          classificationRecord?.recovery_status ||
+          expense.recoverability_result ||
+          expense.recovery_status ||
+          match?.recoverability_result ||
+          "needs_review"
+        )
         : "needs_review";
       const classificationStatus = hasMatchedRule
         ? normalizeText(
-            classificationRecord?.classification_status ||
-            (recoverabilityResult === "conditional"
-              ? "conditional"
-              : recoverabilityResult === "excluded" || recoverabilityResult === "non_recoverable"
-                ? "excluded"
-                : "matched")
-          )
+          classificationRecord?.classification_status ||
+          (recoverabilityResult === "conditional"
+            ? "conditional"
+            : recoverabilityResult === "excluded" || recoverabilityResult === "non_recoverable"
+              ? "excluded"
+              : "matched")
+        )
         : "unmatched";
       const exceptionType = hasMatchedRule
         ? classificationRecord?.exception_type || null
         : "no_matching_rule";
       const camEligible = hasMatchedRule
         ? normalizeText(
-            classificationRecord?.cam_eligible ||
-            leaseExpenseRuleService.getCamEligibleDecision(matchedRule) ||
-            "no"
-          )
+          classificationRecord?.cam_eligible ||
+          leaseExpenseRuleService.getCamEligibleDecision(matchedRule) ||
+          "no"
+        )
         : "no";
       const amountBuckets = hasMatchedRule
         ? {
-            recoverable_amount: toNumber(classificationRecord?.recoverable_amount),
-            non_recoverable_amount: toNumber(classificationRecord?.non_recoverable_amount),
-            conditional_amount: toNumber(classificationRecord?.conditional_amount),
-            excluded_amount: toNumber(classificationRecord?.excluded_amount),
-          }
+          recoverable_amount: toNumber(classificationRecord?.recoverable_amount),
+          non_recoverable_amount: toNumber(classificationRecord?.non_recoverable_amount),
+          conditional_amount: toNumber(classificationRecord?.conditional_amount),
+          excluded_amount: toNumber(classificationRecord?.excluded_amount),
+        }
         : buildAmountBuckets(0, "needs_review");
       const lease = matchedLease || (expense.lease_id ? leaseById.get(expense.lease_id) || null : null);
       const property = propertyById.get(expense.property_id || lease?.property_id) || null;
@@ -343,11 +343,11 @@ export default function LeaseExpenseClassification() {
             : "Send to Expense Review"),
         message: hasMatchedRule
           ? (
-              classificationRecord?.recovery_reason ||
-              expense.recovery_reason ||
-              match?.reason ||
-              "Approved actual expense matched to an approved lease expense rule."
-            )
+            classificationRecord?.recovery_reason ||
+            expense.recovery_reason ||
+            match?.reason ||
+            "Approved actual expense matched to an approved lease expense rule."
+          )
           : "No approved lease expense rule matched this actual expense for the selected scope and period.",
       };
 
