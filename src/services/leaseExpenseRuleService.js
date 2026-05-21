@@ -626,12 +626,13 @@ function getRuleValidation(rule) {
 
   if (isManual) {
     if (!hasValidSourcePage && !(rule?.notes && String(rule.notes).trim().length > 0)) {
-      approvalBlockers.push("Missing notes for manual override");
+      warnings.push("Missing notes for manual override");
     }
   } else {
-    if (!hasValidSourcePage) approvalBlockers.push("Missing source page");
-    if (!hasLeaseSourceText) approvalBlockers.push("Missing source text");
-    if (hasLeaseSourceText && !strongSourceText) approvalBlockers.push("Source text too weak");
+    // Make these warnings instead of strict blockers so the user can approve them
+    if (!hasValidSourcePage) warnings.push("Missing source page");
+    if (!hasLeaseSourceText) warnings.push("Missing source text");
+    if (hasLeaseSourceText && !strongSourceText) warnings.push("Source text too weak");
   }
 
   const publishBlockers = [];

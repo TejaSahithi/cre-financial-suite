@@ -945,7 +945,6 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing Frequency</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Reconciliation Required</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Page</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Exact Source Text</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
@@ -1046,11 +1045,6 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>
-                      <TableCell className="text-sm text-slate-700 tabular-nums">
-                        {sourcePage != null && sourcePage !== "" && !Number.isNaN(Number(sourcePage)) && Number(sourcePage) > 0
-                          ? `p. ${Number(sourcePage)}`
-                          : "—"}
-                      </TableCell>
                       <TableCell className="max-w-[260px] text-xs text-slate-600">
                         {sourceText && sourceText !== "-" ? <span className="italic">"{truncate(sourceText)}"</span> : "-"}
                       </TableCell>
