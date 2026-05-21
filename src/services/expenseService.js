@@ -402,8 +402,9 @@ function conditionApplied(rule) {
 }
 
 function isApprovedExpenseRecord(expense, classification = null) {
-  const approval = normalizeText(expense?.approval_status || expense?.review_status);
-  return approval === "approved";
+  const approval = normalizeText(expense?.approval_status);
+  const review = normalizeText(expense?.review_status);
+  return approval === "approved" || review === "approved";
 }
 
 function isPendingExpenseRecord(expense) {
@@ -816,12 +817,21 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 
   const { data: ruleSets, error: ruleSetError } = await supabase
     .from("lease_expense_rule_sets")
-    .select("id, lease_id, status, approval_status, review_status, property_id, version")
+    .select("id, lease_id, status, property_id, version")
     .in("lease_id", leaseIds)
     .not("status", "eq", "archived")
     .order("version", { ascending: false });
 
   if (ruleSetError) {
+    const query = `select("id, lease_id, status, property_id, version")`;
+    console.error("[TASK 1] Exact Supabase error from lease_expense_rule_sets:", {
+      code: ruleSetError?.code,
+      message: ruleSetError?.message,
+      details: ruleSetError?.details,
+      query: query,
+      filters: `in("lease_id", [${leaseIds.join(",")}])`,
+      errorObj: ruleSetError
+    });
     if (isMissingExpenseRuleTable(ruleSetError)) {
       console.warn("[expenseService] lease_expense_rule_sets table missing — treating as no rules.");
       return { ruleSets: [], rules: [], categories: [] };
@@ -840,9 +850,7 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
   const latestRuleSets = [...ruleSetsByLease.values()]
     .map((setsForLease) =>
       setsForLease.find((ruleSet) =>
-        ["approved"].includes(normalizeText(ruleSet?.status)) ||
-        ["approved"].includes(normalizeText(ruleSet?.approval_status)) ||
-        ["approved"].includes(normalizeText(ruleSet?.review_status))
+        ["approved"].includes(normalizeText(ruleSet?.status))
       ) || setsForLease[0]
     )
     .filter(Boolean);
@@ -1076,12 +1084,18 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       "sent_to_cam_by",
     ]);
   } catch (error) {
+    console.error("[TASK 1] Exact Supabase error from expense_classifications:", {
+      code: error?.code,
+      message: error?.message,
+      details: error?.details,
+      filters: `expenseIds: ${expenseIds.join(",")}`,
+      errorObj: error
+    });
     if (isMissingExpenseRuleTable(error)) {
       console.warn("[expenseService] expense_classifications table missing — treating as no persisted classifications.");
       return [];
     }
-    console.warn("[expenseService] failed to load persisted classifications:", error);
-    return [];
+    throw error;
   }
 }
 
@@ -1236,8 +1250,18 @@ export const expenseService = {
         "finalized_at",
       ]);
     } catch (error) {
-      console.warn("[expenseService] listExpenseClassificationsForExpenses warning:", error);
-      return [];
+      console.error("[TASK 1] Exact Supabase error from expense_classifications (listExpenseClassificationsForExpenses):", {
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+        filters: `expenseIds: ${expenseIds.join(",")}`,
+        errorObj: error
+      });
+      if (isMissingExpenseRuleTable(error)) {
+        console.warn("[expenseService] listExpenseClassificationsForExpenses: table missing");
+        return [];
+      }
+      throw error;
     }
   },
 
@@ -1288,6 +1312,21 @@ export const expenseService = {
           if (orgId && orgId !== "__none__") {
             scopedQuery = scopedQuery.eq("org_id", orgId);
           }
+          if (scope.property_id && scope.property_id !== "all") {
+            scopedQuery = scopedQuery.eq("property_id", scope.property_id);
+          }
+          if (scope.building_id && scope.building_id !== "all") {
+            scopedQuery = scopedQuery.eq("building_id", scope.building_id);
+          }
+          if (scope.unit_id && scope.unit_id !== "all") {
+            scopedQuery = scopedQuery.eq("unit_id", scope.unit_id);
+          }
+          if (scope.lease_id && scope.lease_id !== "all") {
+            scopedQuery = scopedQuery.eq("lease_id", scope.lease_id);
+          }
+          if (scope.tenant_id && scope.tenant_id !== "all") {
+            scopedQuery = scopedQuery.eq("tenant_id", scope.tenant_id);
+          }
           return scopedQuery.limit(5000);
         },
       });
@@ -1307,8 +1346,18 @@ export const expenseService = {
           return rightTime - leftTime;
         });
     } catch (error) {
-      console.warn("[expenseService] listExpenseClassificationsForScope warning:", error);
-      return [];
+      console.error("[TASK 1] Exact Supabase error from expense_classifications (listExpenseClassificationsForScope):", {
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+        scope: scope,
+        errorObj: error
+      });
+      if (isMissingExpenseRuleTable(error)) {
+        console.warn("[expenseService] listExpenseClassificationsForScope: table missing");
+        return [];
+      }
+      throw error;
     }
   },
 
@@ -1363,8 +1412,18 @@ export const expenseService = {
         },
       });
     } catch (error) {
-      console.warn("[expenseService] listExpenseClassificationsForLease warning:", error);
-      return [];
+      console.error("[TASK 1] Exact Supabase error from expense_classifications (listExpenseClassificationsForLease):", {
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+        filters: `leaseId: ${leaseId}, propertyId: ${propertyId}`,
+        errorObj: error
+      });
+      if (isMissingExpenseRuleTable(error)) {
+        console.warn("[expenseService] listExpenseClassificationsForLease: table missing");
+        return [];
+      }
+      throw error;
     }
   },
 
