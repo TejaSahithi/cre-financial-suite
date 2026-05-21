@@ -70,6 +70,7 @@ async function resolveAuditContext(entry) {
     userId: entry.userId || entry.user_id || null,
     userEmail: entry.userEmail || entry.user_email || null,
   };
+  if (resolved.orgId === '__none__') resolved.orgId = null;
 
   if (!supabase || (resolved.orgId && resolved.userId && resolved.userEmail)) {
     return resolved;
@@ -129,7 +130,6 @@ export async function logAudit(entry) {
     new_value:     serializeAuditValue(
       entry.newValue ?? entry.new_value ?? entry.details ?? null,
     ),
-    user_id:       context.userId,
     user_email:    context.userEmail,
     user_name:     entry.userName || entry.user_name || null,
     property_id:   entry.propertyId || entry.property_id || null,
