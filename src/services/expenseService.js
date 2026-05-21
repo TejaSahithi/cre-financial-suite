@@ -438,6 +438,23 @@ function isApprovedLeaseRule(rule) {
   return approvedRuleState(rule) === "approved";
 }
 
+function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
+  const mergedById = new Map();
+
+  for (const rule of fallbackRules || []) {
+    if (!rule?.id) continue;
+    mergedById.set(rule.id, { ...rule });
+  }
+
+  for (const rule of primaryRules || []) {
+    if (!rule?.id) continue;
+    const existing = mergedById.get(rule.id) || {};
+    mergedById.set(rule.id, { ...existing, ...rule });
+  }
+
+  return [...mergedById.values()];
+}
+
 function expenseMatchesScope(expense, scope = {}) {
   const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
 
@@ -2177,14 +2194,9 @@ export const expenseService = {
       console.warn("[expenseService] direct approved rule fallback warning:", error);
     }
 
-    const mergedById = new Map();
-    for (const rule of [...directRules, ...normalizedRules]) {
-      if (!rule?.id) continue;
-      const existing = mergedById.get(rule.id) || {};
-      mergedById.set(rule.id, { ...existing, ...rule });
-    }
+    const mergedRules = mergeLeaseRuleSources(directRules, normalizedRules);
 
-    return [...mergedById.values()].filter((rule) =>
+    return mergedRules.filter((rule) =>
       isApprovedLeaseRule(rule) &&
       ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope)
     );
@@ -2269,13 +2281,28 @@ export const expenseService = {
     const leaseIds = [...new Set((allLeases || []).map((lease) => lease.id).filter(Boolean))];
     const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
     const leaseById = new Map((allLeases || []).map((lease) => [lease.id, lease]));
-    const rawRules = (ruleEntries || []).flatMap((entry) =>
+    const normalizedRules = (ruleEntries || []).flatMap((entry) =>
       (entry.rules || []).map((rule) => ({
         ...rule,
         lease_id: rule.lease_id || entry.leaseId,
         rule_set: entry.ruleSet || null,
       }))
     );
+
+    let directRules = [];
+    try {
+      const { ruleSets, rules } = await fetchApprovedRuleArtifacts(leaseIds);
+      const ruleSetById = new Map((ruleSets || []).map((ruleSet) => [ruleSet.id, ruleSet]));
+      directRules = (rules || []).map((rule) => ({
+        ...rule,
+        lease_id: rule.lease_id || ruleSetById.get(rule.rule_set_id)?.lease_id || null,
+        rule_set: ruleSetById.get(rule.rule_set_id) || null,
+      }));
+    } catch (error) {
+      console.warn("[expenseService] diagnostics direct rule fallback warning:", error);
+    }
+
+    const rawRules = mergeLeaseRuleSources(directRules, normalizedRules);
 
     const approvedRulesOrg = rawRules.filter((rule) => isApprovedLeaseRule(rule));
     const needsReviewRulesOrg = rawRules.filter((rule) => approvedRuleState(rule) === "needs_review");
