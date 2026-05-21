@@ -2,6 +2,7 @@ import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
+import { resolveTableName } from "@/types";
 
 const baseExpenseService = createEntityService("Expense");
 const baseLeaseService = createEntityService("Lease");
@@ -779,6 +780,24 @@ async function selectExpenseClassifications({ columns = [], apply = (query) => q
   return [];
 }
 
+async function listWorkflowEntityRows(entityName) {
+  const orgId = await getCurrentOrgId({ allowSuperAdminGlobal: true });
+  if (orgId === "__none__") return [];
+
+  if (!supabase) {
+    return createEntityService(entityName).list();
+  }
+
+  let query = supabase.from(resolveTableName(entityName)).select("*");
+  if (orgId && orgId !== "__none__") {
+    query = query.eq("org_id", orgId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
 async function fetchApprovedRuleArtifacts(leaseIds = []) {
   if (!supabase || leaseIds.length === 0) {
     return { ruleSets: [], rules: [], categories: [] };
@@ -1010,12 +1029,6 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       "classification_key",
       "expense_id",
       "actual_expense_id",
-      "property_id",
-      "building_id",
-      "unit_id",
-      "lease_id",
-      "tenant_id",
-      "rule_set_id",
       "recovery_rule_id",
       "lease_expense_rule_id",
       "recovery_status",
@@ -1023,19 +1036,11 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       "recovery_reason",
       "cam_eligible",
       "recovery_method",
-      "allocation_method",
-      "allocation_basis",
       "rule_source",
       "confidence_score",
-      "evidence_text",
-      "evidence_page_number",
       "approved_status",
-      "notes",
-      "classified_by",
       "classified_at",
-      "approved_by",
       "approved_at",
-      "reviewed_by",
       "reviewed_at",
       "finalized_at",
       "classification_status",
@@ -1140,7 +1145,7 @@ export const expenseService = {
   ...baseExpenseService,
 
   async resolveExpenseLeaseLink(expenseLike = {}, leases = null) {
-    const availableLeases = Array.isArray(leases) ? leases : await baseLeaseService.list();
+    const availableLeases = Array.isArray(leases) ? leases : await listWorkflowEntityRows("Lease");
     const directLease = expenseLike?.lease_id
       ? availableLeases.find((lease) => lease.id === expenseLike.lease_id) || null
       : null;
@@ -2219,7 +2224,7 @@ export const expenseService = {
   },
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
-    const orgLeases = await baseLeaseService.list();
+    const orgLeases = await listWorkflowEntityRows("Lease");
     const scopedLeases = (orgLeases || []).filter((lease) => leaseMatchesScope(lease, scope));
     const leaseIds = [...new Set(scopedLeases.map((lease) => lease.id).filter(Boolean))];
     if (leaseIds.length === 0) return [];
@@ -2258,8 +2263,8 @@ export const expenseService = {
 
   async loadApprovedActualExpenses(scope = {}) {
     const [allExpenses, allLeases] = await Promise.all([
-      baseExpenseService.list(),
-      baseLeaseService.list(),
+      listWorkflowEntityRows("Expense"),
+      listWorkflowEntityRows("Lease"),
     ]);
     const actualExpenses = (allExpenses || []).filter((expense) =>
       normalizeSourceType(expense) !== "lease_import" &&
@@ -2328,8 +2333,8 @@ export const expenseService = {
     const currentUser = await me().catch(() => null);
 
     const [allLeases, allExpenses] = await Promise.all([
-      baseLeaseService.list(),
-      baseExpenseService.list(),
+      listWorkflowEntityRows("Lease"),
+      listWorkflowEntityRows("Expense"),
     ]);
 
     const leaseIds = [...new Set((allLeases || []).map((lease) => lease.id).filter(Boolean))];
@@ -2497,7 +2502,7 @@ export const expenseService = {
       rulesByLeaseId.get(lId).push(r);
     });
 
-    const leases = await baseLeaseService.list();
+    const leases = await listWorkflowEntityRows("Lease");
 
     return await this.classifyExpenses({
       expenses: approvedActuals,

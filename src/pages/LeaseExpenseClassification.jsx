@@ -135,11 +135,11 @@ export default function LeaseExpenseClassification() {
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
 
-  const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease");
-  const { data: tenants = [] } = useOrgQuery("Tenant");
-  const { data: properties = [] } = useOrgQuery("Property");
-  const { data: buildings = [] } = useOrgQuery("Building");
-  const { data: units = [] } = useOrgQuery("Unit");
+  const { data: leases = [], isLoading: loadingLeases } = useOrgQuery("Lease", {}, { allowSuperAdminGlobal: true });
+  const { data: tenants = [] } = useOrgQuery("Tenant", {}, { allowSuperAdminGlobal: true });
+  const { data: properties = [] } = useOrgQuery("Property", {}, { allowSuperAdminGlobal: true });
+  const { data: buildings = [] } = useOrgQuery("Building", {}, { allowSuperAdminGlobal: true });
+  const { data: units = [] } = useOrgQuery("Unit", {}, { allowSuperAdminGlobal: true });
 
   const scope = useMemo(
     () => buildHierarchyScope({ search: "", portfolios: [], properties, buildings, units }),
