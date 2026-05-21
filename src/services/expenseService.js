@@ -402,26 +402,8 @@ function conditionApplied(rule) {
 }
 
 function isApprovedExpenseRecord(expense, classification = null) {
-  // Check explicit approval status fields first
-  const approvalStatus = normalizeText(
-    classification?.approved_status ||
-    expense?.approved_status ||
-    expense?.approval_status ||
-    expense?.review_status
-  );
-  if (approvalStatus === "approved") return true;
-  if (["rejected", "deleted", "void", "voided", "archived"].includes(approvalStatus)) return false;
-
-  // Fall back to the general status field — treat any non-deleted/non-voided expense as valid
-  const status = normalizeText(expense?.status);
-  if (["deleted", "void", "voided", "archived", "rejected"].includes(status)) return false;
-
-  // Expenses with explicit "approved" status are approved
-  if (status === "approved") return true;
-
-  // Expenses without any status gating are considered valid actuals (most imported expenses)
-  // Only exclude if they have been explicitly rejected/voided
-  return true;
+  const approval = normalizeText(expense?.approval_status || expense?.review_status);
+  return approval === "approved";
 }
 
 function isPendingExpenseRecord(expense) {
@@ -448,13 +430,13 @@ function approvedRuleState(rule) {
 }
 
 function isApprovedLeaseRule(rule) {
-  const state = approvedRuleState(rule);
-  if (state === "approved") return true;
-  // Also accept rules where the top-level status field is "approved" (older schema),
-  // or where they have been explicitly marked as mapped but the other fields are blank.
-  const st = normalizeText(rule?.status);
-  if (st === "approved" || st === "mapped") return true;
-  return false;
+  const approval = normalizeText(rule?.approval_status);
+  const review = normalizeText(rule?.review_status);
+  const rowStatus = normalizeText(rule?.row_status);
+
+  if (["rejected", "unmapped", "not_found", "missing_value"].includes(rowStatus)) return false;
+
+  return approval === "approved" && ["approved", "reviewed"].includes(review);
 }
 
 function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
@@ -603,12 +585,19 @@ function findMatchingLeasesForExpense(expense, leases = []) {
     .sort((left, right) => candidateLeaseLinkScore(expense, right) - candidateLeaseLinkScore(expense, left));
 }
 
+function getExpenseTenantId(expense, lease = null, unit = null) {
+  if (expense?.tenant_id) return expense.tenant_id;
+  if (lease?.tenant_id) return lease.tenant_id;
+  if (unit?.tenant_id) return unit.tenant_id;
+  return null;
+}
+
 function applyLeaseLinkToExpense(expense, lease) {
   if (!lease) return { ...expense };
   return {
     ...expense,
     lease_id: expense?.lease_id || lease.id || null,
-    tenant_id: expense?.tenant_id || lease.tenant_id || null,
+    tenant_id: getExpenseTenantId(expense, lease),
     tenant_name: expense?.tenant_name || lease.tenant_name || null,
     property_id: expense?.property_id || lease.property_id || null,
     building_id: expense?.building_id || lease.building_id || null,
@@ -618,11 +607,18 @@ function applyLeaseLinkToExpense(expense, lease) {
 
 function classificationMatchesScope(classification, scope = {}) {
   const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
-  if (property_id && property_id !== "all" && classification.property_id !== property_id) return false;
-  if (building_id && building_id !== "all" && classification.building_id !== building_id) return false;
-  if (unit_id && unit_id !== "all" && classification.unit_id !== unit_id) return false;
-  if (lease_id && lease_id !== "all" && classification.lease_id !== lease_id) return false;
-  if (tenant_id && tenant_id !== "all" && classification.tenant_id !== tenant_id) return false;
+  
+  const cProp = classification.property_id || classification.expense?.property_id || classification.lease?.property_id || null;
+  const cBldg = classification.building_id || classification.expense?.building_id || classification.lease?.building_id || null;
+  const cUnit = classification.unit_id || classification.expense?.unit_id || classification.lease?.unit_id || null;
+  const cLease = classification.lease_id || classification.expense?.lease_id || null;
+  const cTenant = classification.tenant_id || classification.expense?.tenant_id || classification.lease?.tenant_id || null;
+
+  if (property_id && property_id !== "all" && cProp && cProp !== property_id) return false;
+  if (building_id && building_id !== "all" && cBldg && cBldg !== building_id) return false;
+  if (unit_id && unit_id !== "all" && cUnit && cUnit !== unit_id) return false;
+  if (lease_id && lease_id !== "all" && cLease && cLease !== lease_id) return false;
+  if (tenant_id && tenant_id !== "all" && cTenant && cTenant !== tenant_id) return false;
 
   if (fiscal_year && fiscal_year !== "all") {
     const start = normalizeDateCandidate(classification.service_period_start || classification.expense_date || classification.classified_at);
@@ -636,9 +632,10 @@ function classificationMatchesScope(classification, scope = {}) {
   return true;
 }
 
-function buildClassificationKey({ orgId, expenseId, leaseExpenseRuleId = null } = {}) {
-  if (!expenseId) return null;
-  return [orgId || "", expenseId, leaseExpenseRuleId || "unmatched"].join(":");
+function buildClassificationKey({ orgId, expenseId, leaseExpenseRuleId = null, period = null } = {}) {
+  if (expenseId) return [orgId || "", expenseId, leaseExpenseRuleId || "unmatched"].join(":");
+  if (leaseExpenseRuleId) return [orgId || "", "missing_actual", leaseExpenseRuleId, period || ""].join(":");
+  return null;
 }
 
 function buildAmountBuckets(actualAmount, recoverabilityResult) {
@@ -910,12 +907,22 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
 }
 
 async function upsertExpenseClassification(payload) {
-  if (!supabase || !(payload?.expense_id || payload?.actual_expense_id) || !payload?.org_id) return;
+  if (!supabase || !payload?.org_id) return;
+  if (!payload?.expense_id && !payload?.actual_expense_id && !payload?.lease_expense_rule_id) return;
   try {
+    const hasExpense = !!(payload.expense_id || payload.actual_expense_id);
+    const hasRule = !!(payload.lease_expense_rule_id || payload.linked_expense_rule_id || payload.recovery_rule_id);
+    const rowType = payload.row_type || (
+      (hasExpense && hasRule) ? "matched_classification" :
+      (hasExpense && !hasRule) ? "actual_missing_rule" :
+      (!hasExpense && hasRule) ? "rule_missing_actual" : "unknown"
+    );
+
     const nextPayload = {
       ...payload,
-      expense_id: payload.expense_id || payload.actual_expense_id,
-      actual_expense_id: payload.actual_expense_id || payload.expense_id,
+      expense_id: payload.expense_id || payload.actual_expense_id || null,
+      actual_expense_id: payload.actual_expense_id || payload.expense_id || null,
+      row_type: rowType,
     };
     const conflictTargets = nextPayload.classification_key
       ? ["classification_key", "org_id,expense_id"]

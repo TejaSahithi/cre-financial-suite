@@ -168,6 +168,15 @@ export default function AddExpense() {
   const handleSubmit = async (addAnother) => {
     const writableOrgId = await resolveWritableOrgId(orgId);
     const property = form.property_id ? scope.propertyById.get(form.property_id) ?? null : null;
+    
+    // Auto-resolve lease and tenant if possible
+    const matchedLease = scope.scopedLeases?.find(l => 
+      (form.unit_id && l.unit_id === form.unit_id) || 
+      (!form.unit_id && form.building_id && l.building_id === form.building_id && !l.unit_id) ||
+      (!form.unit_id && !form.building_id && form.property_id && l.property_id === form.property_id && !l.building_id)
+    ) || null;
+    const resolvedLeaseId = matchedLease?.id || null;
+    const resolvedTenantId = matchedLease?.tenant_id || null;
 
     if (isEditing) {
       updateMutation.mutate(
@@ -182,8 +191,12 @@ export default function AddExpense() {
             property_id: form.property_id || null,
             building_id: form.building_id || null,
             unit_id: form.unit_id || null,
+            lease_id: resolvedLeaseId,
+            tenant_id: resolvedTenantId,
             source: form.source || "manual",
             fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
+            service_period_start: form.date || null,
+            service_period_end: form.date || null,
           },
         },
         {
@@ -211,8 +224,14 @@ export default function AddExpense() {
         property_id: form.property_id || null,
         building_id: form.building_id || null,
         unit_id: form.unit_id || null,
+        lease_id: resolvedLeaseId,
+        tenant_id: resolvedTenantId,
         source: "manual",
         fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
+        approval_status: "approved",
+        review_status: "approved",
+        service_period_start: form.date || null,
+        service_period_end: form.date || null,
       },
       {
         onSuccess: () => {

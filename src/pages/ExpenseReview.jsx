@@ -183,20 +183,7 @@ export default function ExpenseReview() {
     const grouped = leaseExpenseRuleService.groupRulesByRecoveryStatus(allRules);
     const approvedRuleLeaseIds = new Set(
       allRules
-        .filter((rule) => {
-          const approval = String(rule?.approval_status || "").trim().toLowerCase();
-          const review = String(rule?.review_status || "").trim().toLowerCase();
-          const status = String(rule?.status || "").trim().toLowerCase();
-          const rowStatus = String(rule?.row_status || "").trim().toLowerCase();
-          return (
-            approval === "approved" ||
-            review === "approved" ||
-            review === "reviewed" ||
-            status === "approved" ||
-            rowStatus === "mapped" ||
-            rowStatus === "manually_added"
-          );
-        })
+        .filter((rule) => expenseService.isApprovedLeaseRule(rule))
         .map((rule) => rule.lease_id || rule.rule_set?.lease_id)
         .filter(Boolean)
     );
