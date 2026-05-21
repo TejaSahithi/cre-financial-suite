@@ -119,6 +119,7 @@ export default function LeaseExpenseClassification() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { orgId: resolvedOrgId } = useOrgId();
+  const actingOrgId = getStoredActingOrgId();
   const preselectedLeaseId = useMemo(
     () => new URLSearchParams(location.search).get("id") || "all",
     [location.search]
@@ -193,17 +194,22 @@ export default function LeaseExpenseClassification() {
     fiscal_year: scopeYear,
   }), [scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
 
+  const orgScopeKey = resolvedOrgId ?? actingOrgId ?? user?.org_id ?? "__none__";
+  const queriesEnabled = resolvedOrgId !== undefined && orgScopeKey !== "__none__";
+
   const {
     data: workspace = { approvedRules: [], approvedActuals: [], existingClassifications: [], summary: {} },
     isLoading: loadingWorkspace,
   } = useQuery({
-    queryKey: ["expense-recoverability-workspace", scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
+    queryKey: ["expense-recoverability-workspace", orgScopeKey, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
     queryFn: () => expenseService.loadExpenseRecoverabilityScope(scopePayload),
+    enabled: queriesEnabled,
   });
 
   const { data: diagnostics = null } = useQuery({
-    queryKey: ["expense-recoverability-diagnostics", scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
+    queryKey: ["expense-recoverability-diagnostics", orgScopeKey, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
     queryFn: () => expenseService.loadExpenseRecoverabilityDiagnostics(scopePayload),
+    enabled: import.meta.env.DEV && queriesEnabled,
   });
 
   const approvedActuals = workspace.approvedActuals || [];
@@ -602,7 +608,6 @@ export default function LeaseExpenseClassification() {
   const rawCounts = diagnostics?.raw_db_counts || {};
   const scopedCounts = diagnostics?.counts_after_scope_filters || {};
   const hiddenCounts = diagnostics?.hidden_by_filter_counts || {};
-  const actingOrgId = getStoredActingOrgId();
 
   const toggleRow = (id) => {
     setSelectedIds((current) => {
