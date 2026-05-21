@@ -687,7 +687,7 @@ function buildCamRuleLineItem(rule, lease, categoriesById = new Map()) {
     property_id: lease?.property_id || rule?.property_id || null,
     building_id: lease?.building_id || rule?.building_id || null,
     unit_id: lease?.unit_id || rule?.unit_id || null,
-    source_page: validation.sourcePage,
+    
     exact_source_text: validation.exactSourceText,
     published_scope: {
       property_id: lease?.property_id || rule?.property_id || null,
@@ -746,7 +746,7 @@ function finalizeLeaseExpenseRules(rules = [], ruleSetStatus = "draft") {
       recovery_method: firstPresent(rule?.recovery_method, deriveRuleRecoveryMethod(rule), "manual_review"),
       allocation_basis: firstPresent(rule?.allocation_basis, deriveRuleAllocationBasis(rule)),
       exact_source_text: workflowState.exactSourceText,
-      source_page: Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null,
+      
       confidence: workflowState.confidence ?? deriveRuleConfidence(rule),
       confidence_score: workflowState.confidence ?? deriveRuleConfidence(rule),
       extraction_status: workflowState.extractionStatus,
@@ -1297,7 +1297,7 @@ function buildFallbackRulesFromWorkflow(lease) {
       billing_frequency: normalizeFrequency(rule?.billing_frequency || rule?.frequency),
       reconciliation_required: deriveRuleReconciliationRequired(rule),
       reconciliation_frequency: deriveRuleReconciliationFrequency(rule),
-      source_page: Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null,
+      
       exact_source_text: exactSourceText,
       confidence: confidence,
       confidence_score: confidence,
@@ -2052,7 +2052,7 @@ export const leaseExpenseRuleService = {
         recovery_method: includedInRent ? "included_in_rent" : (recoverable ? "manual_review" : "manual_review"),
         exact_source_text: snippet,
         source_clause: snippet,
-        source_page: null,
+        
         confidence_score: 0.55,
         extraction_status: "inferred",
         status: "needs_review",
@@ -2393,7 +2393,7 @@ export const leaseExpenseRuleService = {
         billing_frequency: normalizeFrequency(rule.billing_frequency || rule.frequency),
         reconciliation_required: deriveRuleReconciliationRequired(rule),
         reconciliation_frequency: deriveRuleReconciliationFrequency(rule),
-        source_page: Number.isFinite(Number(rule?.source_page)) ? Number(rule.source_page) : null,
+        
         exact_source_text: deriveRuleExactSourceText(rule),
         confidence_score: deriveRuleConfidence(rule),
         extraction_status: deriveRuleExtractionStatus(rule),

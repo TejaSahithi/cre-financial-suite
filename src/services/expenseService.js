@@ -460,15 +460,20 @@ function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
 function expenseMatchesScope(expense, scope = {}) {
   const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
 
-  if (property_id && property_id !== "all" && expense.property_id !== property_id) return false;
-  if (building_id && building_id !== "all" && expense.building_id !== building_id) return false;
-  if (unit_id && unit_id !== "all" && expense.unit_id !== unit_id) return false;
-  if (lease_id && lease_id !== "all" && expense.lease_id !== lease_id) return false;
-  if (tenant_id && tenant_id !== "all" && expense.tenant_id !== tenant_id) return false;
+  const matchesLease = lease_id && lease_id !== "all" && String(expense.lease_id) === String(lease_id);
+
+  if (!matchesLease) {
+    if (property_id && property_id !== "all" && expense.property_id !== property_id) return false;
+    if (building_id && building_id !== "all" && expense.building_id !== building_id) return false;
+    if (unit_id && unit_id !== "all" && expense.unit_id !== unit_id) return false;
+    if (lease_id && lease_id !== "all" && expense.lease_id !== lease_id) return false;
+    if (tenant_id && tenant_id !== "all" && expense.tenant_id !== tenant_id) return false;
+  }
+
+  const status = normalizeText(expense?.status);
+  if (["deleted", "void", "voided", "archived"].includes(status)) return false;
 
   if (fiscal_year && fiscal_year !== "all") {
-    if (expense.fiscal_year != null && String(expense.fiscal_year) !== String(fiscal_year)) return false;
-
     const candidateDate =
       expense.expense_date ||
       expense.date ||
@@ -482,8 +487,6 @@ function expenseMatchesScope(expense, scope = {}) {
     }
   }
 
-  const status = normalizeText(expense?.status);
-  if (["deleted", "void", "voided", "archived"].includes(status)) return false;
   return true;
 }
 
@@ -508,27 +511,19 @@ function ruleMatchesScope(rule, lease, scope = {}) {
   if (approvedRuleState(rule) === "na" || approvedRuleState(rule) === "rejected") return false;
 
   const effectiveLeaseId = rule.lease_id || lease?.id || rule.rule_set?.lease_id || null;
-  const effectiveTenantId = rule.tenant_id || lease?.tenant_id || null;
-  const effectivePropertyId = rule.property_id || lease?.property_id || rule.rule_set?.property_id || null;
-  const effectiveBuildingId = rule.building_id || lease?.building_id || null;
-  const effectiveUnitId = rule.unit_id || lease?.unit_id || null;
+  const effectiveTenantId = lease?.tenant_id || rule.rule_set?.tenant_id || null;
+  const effectivePropertyId = lease?.property_id || rule.rule_set?.property_id || null;
+  const effectiveBuildingId = lease?.building_id || rule.rule_set?.building_id || null;
+  const effectiveUnitId = lease?.unit_id || rule.rule_set?.unit_id || null;
 
-  if (lease_id && lease_id !== "all" && effectiveLeaseId !== lease_id) return false;
-  if (tenant_id && tenant_id !== "all" && effectiveTenantId && effectiveTenantId !== tenant_id) return false;
+  const matchesLease = lease_id && lease_id !== "all" && String(effectiveLeaseId) === String(lease_id);
 
-  if (property_id && property_id !== "all") {
-    if (effectivePropertyId !== property_id) return false;
-  }
-
-  if (building_id && building_id !== "all") {
-    if (effectivePropertyId && property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
-    if (effectiveBuildingId && effectiveBuildingId !== building_id) return false;
-  }
-
-  if (unit_id && unit_id !== "all") {
-    if (effectivePropertyId && property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
-    if (effectiveBuildingId && building_id && building_id !== "all" && effectiveBuildingId && effectiveBuildingId !== building_id) return false;
-    if (effectiveUnitId && effectiveUnitId !== unit_id) return false;
+  if (!matchesLease) {
+    if (property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
+    if (building_id && building_id !== "all" && effectiveBuildingId !== building_id) return false;
+    if (unit_id && unit_id !== "all" && effectiveUnitId !== unit_id) return false;
+    if (lease_id && lease_id !== "all" && effectiveLeaseId !== lease_id) return false;
+    if (tenant_id && tenant_id !== "all" && effectiveTenantId !== tenant_id) return false;
   }
 
   if (fiscal_year && fiscal_year !== "all" && lease && !leaseOverlapsFiscalYear(lease, Number(fiscal_year))) {
