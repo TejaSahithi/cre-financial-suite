@@ -312,7 +312,13 @@ export default function AddExpense() {
   const handleCreateVendor = async () => {
     if (!newVendorForm.name) return;
     const writableOrgId = await resolveWritableOrgId(orgId);
-    createVendorMutation.mutate({ ...newVendorForm, org_id: writableOrgId || "", status: "active" });
+    createVendorMutation.mutate({
+      name: newVendorForm.name,
+      email: newVendorForm.contact_email || null,
+      category: newVendorForm.category,
+      org_id: writableOrgId || "",
+      status: "active",
+    });
   };
 
   const isValid = form.date && form.amount && form.category && form.vendor && form.property_id;

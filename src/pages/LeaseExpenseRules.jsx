@@ -788,10 +788,8 @@ export default function LeaseExpenseRules() {
     await updateRuleMutation.mutateAsync({
       ruleId: editingRuleContext.rule.id,
       patch: {
-        category_name: editForm.category_name || null,
         expense_category: editForm.category_name || null,
         expense_subcategory: editForm.expense_subcategory || null,
-        subcategory_name: editForm.expense_subcategory || null,
         included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),
         operational_responsibility: editForm.responsibility || null,
         payment_treatment: editForm.payment_treatment || "not_applicable",
