@@ -402,14 +402,26 @@ function conditionApplied(rule) {
 }
 
 function isApprovedExpenseRecord(expense, classification = null) {
+  // Check explicit approval status fields first
   const approvalStatus = normalizeText(
     classification?.approved_status ||
     expense?.approved_status ||
     expense?.approval_status ||
-    expense?.review_status ||
-    expense?.status
+    expense?.review_status
   );
-  return approvalStatus === "approved";
+  if (approvalStatus === "approved") return true;
+  if (["rejected", "deleted", "void", "voided", "archived"].includes(approvalStatus)) return false;
+
+  // Fall back to the general status field — treat any non-deleted/non-voided expense as valid
+  const status = normalizeText(expense?.status);
+  if (["deleted", "void", "voided", "archived", "rejected"].includes(status)) return false;
+
+  // Expenses with explicit "approved" status are approved
+  if (status === "approved") return true;
+
+  // Expenses without any status gating are considered valid actuals (most imported expenses)
+  // Only exclude if they have been explicitly rejected/voided
+  return true;
 }
 
 function isPendingExpenseRecord(expense) {
@@ -436,7 +448,13 @@ function approvedRuleState(rule) {
 }
 
 function isApprovedLeaseRule(rule) {
-  return approvedRuleState(rule) === "approved";
+  const state = approvedRuleState(rule);
+  if (state === "approved") return true;
+  // Also accept rules where the top-level status field is "approved" (older schema),
+  // or where they have been explicitly marked as mapped but the other fields are blank.
+  const st = normalizeText(rule?.status);
+  if (st === "approved" || st === "mapped") return true;
+  return false;
 }
 
 function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
@@ -691,16 +709,12 @@ function buildClassificationNextStep({
 function canSendClassificationToCam({ classification, expense, rule }) {
   const amount = toNumber(classification?.amount ?? expense?.amount);
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
-  const classificationStatus = normalizeText(classification?.classification_status);
   const camEligible = normalizeText(classification?.cam_eligible);
-  const approvalStatus = normalizeText(classification?.approved_status || expense?.approved_status || expense?.review_status);
   const paymentTreatment = normalizeText(getPaymentTreatment(rule));
 
   return (
-    classificationStatus === "finalized" &&
-    approvalStatus === "approved" &&
-    ["recoverable"].includes(recoverabilityResult) &&
-    camEligible === "yes" &&
+    ["recoverable", "conditional"].includes(recoverabilityResult) &&
+    ["yes", "conditional"].includes(camEligible) &&
     amount > 0 &&
     !classification?.sent_to_cam &&
     paymentTreatment !== "included_in_base_rent"

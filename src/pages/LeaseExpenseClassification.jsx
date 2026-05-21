@@ -360,12 +360,13 @@ export default function LeaseExpenseClassification() {
         (row.rowType === "actual_missing_rule" ||
           row.recoverabilityResult === "needs_review" ||
           ["unmatched", "exception", "conditional"].includes(row.classificationStatus));
+      // CAM: any matched, recoverable (or conditional) row with a CAM-eligible rule
+      // can be sent to CAM — we don't force finalize first so users can act immediately.
       row.canSendToCam =
         Boolean(row.actualExpenseId) &&
-        Boolean(row.classificationRecord?.id) &&
-        row.classificationStatus === "finalized" &&
-        row.recoverabilityResult === "recoverable" &&
-        row.camEligible === "yes" &&
+        row.rowType === "matched_classification" &&
+        ["recoverable", "conditional"].includes(row.recoverabilityResult) &&
+        ["yes", "conditional"].includes(row.camEligible) &&
         row.amount > 0 &&
         !row.sentToCam;
       result.push(row);
@@ -572,7 +573,28 @@ export default function LeaseExpenseClassification() {
         .filter((row) => row?.canSendToCam);
 
       await Promise.all(
-        targetRows.map((row) => expenseService.sendClassificationToCam(row.classificationRecord))
+        targetRows.map(async (row) => {
+          // If a classification record exists, use it; otherwise build a minimal payload
+          const classificationInput = row.classificationRecord || {
+            org_id: row.expense?.org_id,
+            expense_id: row.actualExpenseId,
+            actual_expense_id: row.actualExpenseId,
+            lease_expense_rule_id: row.leaseExpenseRuleId,
+            property_id: row.expense?.property_id || row.property?.id,
+            building_id: row.expense?.building_id || row.building?.id,
+            unit_id: row.expense?.unit_id || row.unit?.id,
+            lease_id: row.lease?.id,
+            tenant_id: row.lease?.tenant_id,
+            category: row.expense?.category,
+            amount: row.amount,
+            recoverability_result: row.recoverabilityResult,
+            recovery_status: row.recoverabilityResult,
+            cam_eligible: row.camEligible,
+            classification_status: row.classificationStatus,
+            sent_to_cam: false,
+          };
+          return expenseService.sendClassificationToCam(classificationInput);
+        })
       );
       return targetRows.length;
     },
