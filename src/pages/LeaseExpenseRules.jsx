@@ -155,15 +155,11 @@ function buildRuleEditForm(rule) {
 }
 
 function isApprovedRule(rule) {
-  return ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase()) && rule?.approval_status === "approved";
+  return ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase());
 }
 
 function needsReviewRule(rule) {
-  return (
-    rule?.review_status === "needs_review" ||
-    rule?.row_status === "needs_review" ||
-    rule?.row_status === "uncertain"
-  );
+  return !isApprovedRule(rule);
 }
 
 function getRecoverableDecision(rule) {
