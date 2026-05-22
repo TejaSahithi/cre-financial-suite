@@ -20,7 +20,8 @@ import {
   Car,
   Zap,
   Wrench,
-  DollarSign
+  DollarSign,
+  Printer
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -207,12 +208,18 @@ export default function LeaseDetail() {
             )}
           </div>
         </div>
-        <Link to={reviewLink}>
-          <Button variant="outline">
-            <Pencil className="mr-1 h-4 w-4" />
-            Open Lease Review
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => window.print()}>
+            <Printer className="mr-1 h-4 w-4" />
+            Print
           </Button>
-        </Link>
+          <Link to={reviewLink}>
+            <Button variant="outline">
+              <Pencil className="mr-1 h-4 w-4" />
+              Open Lease Review
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {!isApproved && (

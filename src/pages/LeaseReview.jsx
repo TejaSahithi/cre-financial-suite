@@ -16,6 +16,7 @@ import {
   Loader2,
   MinusCircle,
   Pencil,
+  Printer,
   RefreshCw,
   Send,
   Undo2,
@@ -2153,6 +2154,10 @@ export default function LeaseReview() {
             onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
           >
             Review Expense Rules
+          </Button>
+          <Button variant="outline" onClick={() => window.print()}>
+            <Printer className="mr-1 h-4 w-4" />
+            Print
           </Button>
           <Button
             className="bg-blue-600 hover:bg-blue-700"
