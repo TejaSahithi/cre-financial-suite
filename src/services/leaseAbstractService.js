@@ -312,7 +312,7 @@ export async function approveLeaseAbstract({
 
   // Sync accepted terms to lease_expense_rules
   try {
-    await syncApprovedAbstractExpenseTermsToRules(lease.id, snapshot, lease.org_id);
+    await syncApprovedAbstractExpenseTermsToRules(lease, snapshot);
   } catch (err) {
     console.error("[leaseAbstractService] syncApprovedAbstractExpenseTermsToRules FAILED:", err);
     throw err;
@@ -321,15 +321,86 @@ export async function approveLeaseAbstract({
   return data;
 }
 
-export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedSnapshot, orgId) {
+export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSnapshot) {
+  const leaseId = lease?.id;
+  const orgId = lease?.org_id;
+
   if (!leaseId || !approvedSnapshot || !orgId) {
     console.warn("[syncApprovedAbstractExpenseTermsToRules] Missing required arguments", { leaseId, orgId, snapshotKeys: Object.keys(approvedSnapshot || {}) });
     return;
   }
 
   console.log("[syncApprovedAbstractExpenseTermsToRules] Starting sync for lease", leaseId);
-  console.log("[syncApprovedAbstractExpenseTermsToRules] Snapshot section keys:", Object.keys(approvedSnapshot));
   
+  // Helper for deep-searching and regex-parsing lease data
+  const deepFindLeaseField = (aliases) => {
+    const searchTargets = [
+      approvedSnapshot?.fields,
+      approvedSnapshot?.unmapped_terms,
+      lease?.extraction_data?.abstract,
+      lease?.extraction_data?.workflow_output?.cam_rules,
+      lease?.extraction_data?.workflow_output?.expense_rules,
+      lease?.extraction_data?.workflow_output?.lease_fields,
+      lease?.extraction_data?.extracted_fields,
+      lease?.extracted_fields
+    ].filter(Boolean);
+
+    const norm = (k) => String(k || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const aliasNorms = aliases.map(norm);
+
+    let foundValue = null;
+    let rawText = null;
+    let sourceKey = aliases[0];
+
+    // 1. Search targets by key aliases
+    for (const target of searchTargets) {
+      if (typeof target !== "object") continue;
+      for (const [k, v] of Object.entries(target)) {
+        if (!v) continue;
+        const kn = norm(k);
+        const labelNorm = norm(v.label || v.title);
+        if (aliasNorms.includes(kn) || aliasNorms.includes(labelNorm)) {
+          foundValue = v.value !== undefined ? v.value : v;
+          rawText = v.exact_source_text || v.source_text || v.raw_value || String(v);
+          sourceKey = k;
+          break;
+        }
+      }
+      if (foundValue !== null) break;
+    }
+
+    // 2. Fallback to full text search across unstructured string values if not found by key
+    if (foundValue === null || foundValue === undefined || foundValue === "") {
+      const allText = JSON.stringify(searchTargets).toLowerCase();
+      for (const alias of aliases) {
+        if (allText.includes(alias.toLowerCase())) {
+          // Found a mention of the alias, let's try to extract numeric value via regex later
+          rawText = allText.substring(Math.max(0, allText.indexOf(alias.toLowerCase()) - 50), allText.indexOf(alias.toLowerCase()) + 100);
+          break;
+        }
+      }
+    }
+
+    // Parse logic
+    if (foundValue !== null && foundValue !== undefined && foundValue !== "") {
+       return { value: foundValue, raw: rawText, key: sourceKey };
+    }
+
+    if (rawText) {
+       // Regex fallback
+       const numMatch = String(rawText).match(/(?:equal to|more than|increase by|:)\s*[$]?\s*([0-9,.]+)\s*(?:%|x|occupied)?/i) || 
+                        String(rawText).match(/[$]?\s*([0-9,.]+)\s*%/i);
+       if (numMatch && numMatch[1]) {
+         return { value: numMatch[1], raw: rawText, key: sourceKey };
+       }
+       if (rawText.includes("yes") || rawText.includes("true") || rawText.includes("required")) {
+         return { value: true, raw: rawText, key: sourceKey };
+       }
+    }
+
+    return null;
+  };
+
   try {
     let { data: ruleSets } = await supabase
       .from("lease_expense_rule_sets")
@@ -357,20 +428,22 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
       ruleSetId = ruleSets[0].id;
     }
 
-    const fields = approvedSnapshot.fields || {};
     const rulesToUpsert = [];
 
-    const addRule = (fieldKey, ruleType, overrides = {}) => {
-      const field = fields[fieldKey];
+    const addRule = (aliases, ruleType, overrides = {}) => {
+      const aliasList = Array.isArray(aliases) ? aliases : [aliases];
+      const field = deepFindLeaseField(aliasList);
+      
       if (!field || field.value === null || field.value === undefined || field.value === "") return;
-      if (!["accepted", "reviewed", "approved", "edited"].includes(String(field.review_status).toLowerCase())) return;
-
+      
+      // We don't mandate 'review_status' since we are deeply scanning AI outputs that may not have statuses
       const num = (v) => {
         const n = Number(String(v).replace(/[$,%\s,]/g, ""));
         return Number.isFinite(n) ? n : null;
       };
 
       const isCam = overrides.cam_eligible === "yes";
+      const fieldKey = field.key || aliasList[0];
       
       rulesToUpsert.push({
         org_id: orgId,
@@ -379,12 +452,12 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
         rule_key: `${leaseId}_${ruleType}_${overrides.expense_category || "general"}_${fieldKey}`,
         rule_type: ruleType,
         source_field_key: fieldKey,
-        review_status: autoApproveAcceptedExpenseRules ? "approved" : "reviewed",
-        approval_status: autoApproveAcceptedExpenseRules ? "approved" : "needs_review",
-        source_page: field.source_page,
-        exact_source_text: field.exact_source_text || field.source_text || null,
-        confidence_score: field.confidence_score || field.confidence || (field.source_text ? 0.8 : 0.5),
-        extraction_status: field.extraction_status || (field.source_text ? "extracted" : "inferred"),
+        review_status: "reviewed", // deep-scanned from approved abstract flow
+        approval_status: "needs_review",
+        source_page: null,
+        exact_source_text: field.raw || null,
+        confidence_score: 0.8,
+        extraction_status: "extracted",
         created_from: "approved_lease_abstract",
         generation_source: "lease_review_acceptance",
         ...(isCam ? {
@@ -393,7 +466,15 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
           recoverable_from_tenant: "yes"
         } : {}),
         ...overrides,
-        // Resolve nested numeric properties if they are functions
+        // Resolve numeric fields from the found value OR the explicit overrides
+        ...(ruleType === "cam_admin_fee" && { admin_fee_percent: num(field.value) }),
+        ...(ruleType === "cam_gross_up" && { gross_up_percent: num(field.value) }),
+        ...(ruleType === "cam_cap" && { cap_percent: num(field.value) }),
+        ...(ruleType === "tenant_share" && { tenant_share_percent: num(field.value) }),
+        ...(ruleType === "cam_estimate" && aliasList.includes("estimated_annual_cam") && { estimated_annual_amount: num(field.value) }),
+        ...(ruleType === "cam_estimate" && aliasList.includes("estimated_monthly_cam") && { estimated_monthly_amount: num(field.value) }),
+        ...(ruleType === "cam_reconciliation" && { reconciliation_required: String(field.value).toLowerCase() === "true" || String(field.value).toLowerCase() === "yes" }),
+        // Apply overrides last if provided directly
         ...(overrides.estimated_annual_amount && { estimated_annual_amount: num(overrides.estimated_annual_amount) }),
         ...(overrides.estimated_monthly_amount && { estimated_monthly_amount: num(overrides.estimated_monthly_amount) }),
         ...(overrides.tenant_share_percent && { tenant_share_percent: num(overrides.tenant_share_percent) }),
@@ -403,35 +484,30 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
       });
       
       const payload = rulesToUpsert[rulesToUpsert.length - 1];
-      console.log(`[syncApprovedAbstractExpenseTermsToRules] Mapped ${fieldKey} -> ${ruleType}`, {
-        raw_value: field.raw_value,
-        normalized_value: field.value,
-        generated_rule_type: ruleType,
-        generated_expense_category: overrides.expense_category || "general",
-        generated_rule_key: payload.rule_key,
-        payload_keys: Object.keys(payload)
+      console.log(`[sync] Mapped ${fieldKey} -> ${ruleType}`, {
+        value: field.value,
+        raw: field.raw,
+        rule_key: payload.rule_key
       });
     };
 
-    addRule("responsibility_taxes", "direct_tenant_responsibility", { expense_category: "real_estate_taxes", operational_responsibility: String(fields["responsibility_taxes"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
-    addRule("property_insurance_responsibility", "direct_tenant_responsibility", { expense_category: "property_insurance", operational_responsibility: String(fields["property_insurance_responsibility"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
-    addRule("responsibility_utilities", "direct_tenant_responsibility", { expense_category: "utilities", operational_responsibility: String(fields["responsibility_utilities"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
-    addRule("responsibility_repairs", "direct_tenant_responsibility", { expense_category: "repairs_maintenance", operational_responsibility: String(fields["responsibility_repairs"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
-    addRule("expense_structure", "expense_recovery", { expense_category: "operating_expenses", cam_eligible: "yes" });
-    addRule("admin_fee_percent", "cam_admin_fee", { admin_fee_percent: fields["admin_fee_percent"]?.value, cam_eligible: "yes" });
-    addRule("gross_up_percent", "cam_gross_up", { gross_up_percent: fields["gross_up_percent"]?.value, cam_eligible: "yes" });
-    addRule("cam_cap_percent", "cam_cap", { cap_percent: fields["cam_cap_percent"]?.value, cap_type: fields["cam_cap_type"]?.value || "cumulative", cam_eligible: "yes" });
-    addRule("base_year", "conditional_recovery", { cam_eligible: "yes", recovery_method: "base_year" }); 
-    addRule("expense_stop", "conditional_recovery", { cam_eligible: "yes", recovery_method: "expense_stop" }); 
-    addRule("tenant_pro_rata_share", "tenant_share", { tenant_share_percent: fields["tenant_pro_rata_share"]?.value, cam_eligible: "yes" });
-    addRule("estimated_annual_cam", "cam_estimate", { estimated_annual_amount: fields["estimated_annual_cam"]?.value, cam_eligible: "yes" });
-    addRule("estimated_monthly_cam", "cam_estimate", { estimated_monthly_amount: fields["estimated_monthly_cam"]?.value, cam_eligible: "yes" });
-    addRule("reconciliation_required", "cam_reconciliation", { cam_eligible: "yes", reconciliation_required: String(fields["reconciliation_required"]?.value).toLowerCase() === "yes" || String(fields["reconciliation_required"]?.value).toLowerCase() === "true" });
-    addRule("reconciliation_frequency", "cam_reconciliation", { cam_eligible: "yes", billing_frequency: fields["reconciliation_frequency"]?.value });
-    addRule("management_fee_basis", "additional_rent", { cam_eligible: "yes" });
-    addRule("late_fee_percent", "additional_rent", { notes: fields["late_fee_percent"]?.value ? `Late fee: ${fields["late_fee_percent"]?.value}%` : null });
-    addRule("default_interest_percent", "additional_rent", { notes: fields["default_interest_percent"]?.value ? `Default interest: ${fields["default_interest_percent"]?.value}%` : null });
-    addRule("holdover_multiplier", "additional_rent", { notes: fields["holdover_multiplier"]?.value ? `Holdover: ${fields["holdover_multiplier"]?.value}x` : null });
+    addRule(["responsibility_taxes"], "direct_tenant_responsibility", { expense_category: "real_estate_taxes" });
+    addRule(["property_insurance_responsibility"], "direct_tenant_responsibility", { expense_category: "property_insurance" });
+    addRule(["responsibility_utilities"], "direct_tenant_responsibility", { expense_category: "utilities" });
+    addRule(["responsibility_repairs"], "direct_tenant_responsibility", { expense_category: "repairs_maintenance" });
+    addRule(["expense_structure"], "expense_recovery", { expense_category: "operating_expenses", cam_eligible: "yes" });
+    addRule(["admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent", "adminFeePercent", "administrative fee", "admin fee"], "cam_admin_fee", { cam_eligible: "yes" });
+    addRule(["gross_up_percent", "gross_up_threshold_percent", "gross_up_threshold", "grossUpPercent", "gross-up", "gross up"], "cam_gross_up", { cam_eligible: "yes" });
+    addRule(["cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent", "controllable cap"], "cam_cap", { cam_eligible: "yes" });
+    addRule(["tenant_share_percent", "tenant_pro_rata_share", "pro_rata_share", "tenant_share", "tenant pro rata share"], "tenant_share", { cam_eligible: "yes" });
+    addRule(["estimated_annual_cam", "cam_estimate_annual", "estimated_annual_amount", "annual_cam_estimate", "estimated annual cam"], "cam_estimate", { cam_eligible: "yes" });
+    addRule(["estimated_monthly_cam", "cam_estimate_monthly", "estimated_monthly_amount", "monthly_cam_estimate", "estimated monthly cam"], "cam_estimate", { cam_eligible: "yes" });
+    addRule(["reconciliation_required", "cam_reconciliation_required", "reconciliation"], "cam_reconciliation", { cam_eligible: "yes" });
+    addRule(["reconciliation_frequency"], "cam_reconciliation", { cam_eligible: "yes" });
+    addRule(["management_fee_basis"], "additional_rent", { cam_eligible: "yes" });
+    addRule(["late_fee_percent"], "additional_rent", { cam_eligible: "yes" });
+    addRule(["default_interest_percent"], "additional_rent", { cam_eligible: "yes" });
+    addRule(["holdover_multiplier"], "additional_rent", { cam_eligible: "yes" });
 
     if (rulesToUpsert.length > 0) {
       console.log(`[syncApprovedAbstractExpenseTermsToRules] Found ${rulesToUpsert.length} rules to upsert.`);
