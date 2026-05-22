@@ -401,24 +401,29 @@ export default function LeaseExpenseClassification() {
         vendor: "-",
         tenantLabel: lease?.tenant_name || "-",
         ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
-        amount: null,
-        financialAmount: 0,
+        amount: c?.amount != null ? Number(c.amount) : null,
+        financialAmount: c?.amount != null ? Number(c.financial_amount || c.amount || 0) : 0,
         recoverabilityResult: normalizeText(c?.recoverability_result || c?.recovery_status || leaseExpenseRuleService.getRecoverableDecision(rule)) === "yes"
           ? "recoverable"
           : normalizeText(leaseExpenseRuleService.getRecoverableDecision(rule)) || "needs_review",
         classificationStatus: c?.classification_status || "coverage_gap",
         exceptionType: c?.exception_type || null,
         camEligible: c?.cam_eligible || leaseExpenseRuleService.getCamEligibleDecision(rule) || "no",
-        recoverableAmount: 0,
-        nonRecoverableAmount: 0,
-        conditionalAmount: 0,
-        excludedAmount: 0,
+        recoverableAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "recoverable" ? Number(c.amount) : 0,
+        nonRecoverableAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "non_recoverable" ? Number(c.amount) : 0,
+        conditionalAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "conditional" ? Number(c.amount) : 0,
+        excludedAmount: c?.amount != null && normalizeText(c?.recoverability_result || leaseExpenseRuleService.getRecoverableDecision(rule)) === "excluded" ? Number(c.amount) : 0,
         sentToCam: Boolean(c?.sent_to_cam),
         nextStep: c?.next_step || "Provide actual expense",
         message: "Approved lease rule exists, but no actual expense found for this period.",
         canFinalize: false,
         canSendToReview: false,
-        canSendToCam: false,
+        canSendToCam: Boolean(
+          c?.amount > 0 &&
+          normalizeText(c?.recoverability_result || c?.recovery_status || leaseExpenseRuleService.getRecoverableDecision(rule)) === "recoverable" &&
+          normalizeText(c?.cam_eligible || leaseExpenseRuleService.getCamEligibleDecision(rule)) === "yes" &&
+          !c?.sent_to_cam
+        ),
       });
     }
 

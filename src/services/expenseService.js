@@ -710,8 +710,8 @@ function canSendClassificationToCam({ classification, expense, rule }) {
   const classificationStatus = normalizeText(classification?.classification_status);
 
   return (
-    rowType === "matched_classification" &&
-    classificationStatus === "finalized" &&
+    (rowType === "matched_classification" || rowType === "rule_missing_actual") &&
+    (classificationStatus === "finalized" || classificationStatus === "coverage_gap") &&
     recoverabilityResult === "recoverable" &&
     camEligible === "yes" &&
     amount > 0 &&
