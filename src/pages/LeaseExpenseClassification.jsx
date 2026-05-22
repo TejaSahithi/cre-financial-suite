@@ -115,7 +115,7 @@ function rowTypeLabel(rowType) {
 
 function getCamDecision(row) {
   if (row.rowType === "rule_missing_actual") {
-    if (row.sentToCam) {
+    if (row.rule?.published_to_cam) {
       return { label: "Published to CAM Setup", why: "The approved lease rule has been published to CAM setup, but no actual dollars have been sent." };
     }
     return { label: "Missing Actual", why: "The lease rule exists, but no actual expense amount has been recorded yet." };
@@ -691,6 +691,18 @@ export default function LeaseExpenseClassification() {
     onError: (error) => toast.error(error?.message || "Could not apply manual override"),
   });
 
+  const publishRuleMutation = useMutation({
+    mutationFn: async (ruleId) => {
+      return expenseService.publishRuleToCamSetup(ruleId);
+    },
+    onSuccess: () => {
+      toast.success("Published rule to CAM setup");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not publish rule"),
+  });
+
   const isLoading = loadingLeases || loadingWorkspace;
   const currentYear = new Date().getFullYear();
   const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
@@ -1160,7 +1172,7 @@ export default function LeaseExpenseClassification() {
                                     </DropdownMenuItem>
                                   )}
                                   {row.rowType === "rule_missing_actual" && (
-                                    <DropdownMenuItem onClick={() => toast.success("Published rule to CAM setup")}>
+                                    <DropdownMenuItem onClick={() => publishRuleMutation.mutate(row.rule?.id)}>
                                       <ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />
                                       Publish Rule to CAM Setup
                                     </DropdownMenuItem>

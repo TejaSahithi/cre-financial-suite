@@ -2122,9 +2122,14 @@ export const expenseService = {
       classification: recoveryStatus,
     });
 
+    let oldStatus = classification?.classification_status || "unknown";
     if (classification?.id) {
       const amount = toNumber(classification.amount ?? expense?.amount ?? updatedExpense?.amount);
       const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
+      const nextStep = normalizeText(classification.cam_eligible) === "yes" && recoveryStatus === "recoverable"
+            ? "Send to CAM"
+            : "Ready for projection";
+
       await updateExpenseClassificationRecord(classification.id, {
         recoverability_result: recoveryStatus,
         recovery_status: recoveryStatus,
@@ -2137,11 +2142,11 @@ export const expenseService = {
         approved_by: userId,
         finalized_at: now,
         ...amountBuckets,
-        next_step:
-          normalizeText(classification.cam_eligible) === "yes" && recoveryStatus === "recoverable"
-            ? "Send to CAM"
-            : "Ready for projection",
+        next_step: nextStep,
       });
+      console.log(`[Diagnostics] Finalized classification ${classification.id}: ${oldStatus} -> finalized`);
+    } else {
+      console.warn(`[Diagnostics] Finalize skipped classification update because no classification.id was found for expense ${expenseId}`);
     }
 
     return updatedExpense;
@@ -2250,7 +2255,7 @@ export const expenseService = {
           }).then((rows) => rows[0] || null);
 
     if (!classification?.id) {
-      throw new Error("Classification row not found");
+      throw new Error("Run Classification before sending to CAM.");
     }
 
     const expenseId = classification.expense_id || classification.actual_expense_id;
@@ -2292,7 +2297,7 @@ export const expenseService = {
       recovery_method: classification.recovery_method || null,
       allocation_basis: classification.allocation_basis || null,
       source: "expense_classification",
-      status: "pending_cam_review",
+      status: "sent",
       sent_to_cam_at: now,
       sent_to_cam_by: userId,
       updated_at: now,
@@ -2306,13 +2311,28 @@ export const expenseService = {
       throw error;
     }
 
-    return updateExpenseClassificationRecord(classification.id, {
+    const result = await updateExpenseClassificationRecord(classification.id, {
       sent_to_cam: true,
       sent_to_cam_at: now,
       sent_to_cam_by: userId,
-      cam_status: "pending_cam_review",
+      cam_status: "sent",
       next_step: "Sent to CAM",
     });
+    console.log(`[Diagnostics] Sent classification ${classification.id} to CAM (sent_to_cam=true)`);
+    return result;
+  },
+
+  async publishRuleToCamSetup(ruleId) {
+    const { error } = await supabase
+      .from("lease_expense_rules")
+      .update({ published_to_cam: true })
+      .eq("id", ruleId);
+    
+    if (error) {
+      throw new Error("Failed to publish rule to CAM setup");
+    }
+    console.log(`[Diagnostics] Published rule ${ruleId} to CAM setup (published_to_cam=true)`);
+    return true;
   },
 
   async getWorkflowSummary({ propertyId = null, buildingId = null, unitId = null, fiscalYear = null } = {}) {
