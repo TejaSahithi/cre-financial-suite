@@ -127,6 +127,8 @@ export default function LeaseDetail() {
     return (key) => resolveLeaseField(lease, key, { mode: "canonical" });
   }, [lease]);
 
+  const snapshot = lease?.abstract_snapshot || {};
+
   if (!leaseId) {
     return (
       <div className="flex h-96 flex-col items-center justify-center p-6">
@@ -188,7 +190,7 @@ export default function LeaseDetail() {
                 {lease.abstract_approved_by ? ` by ${lease.abstract_approved_by}` : ""}
               </Badge>
             )}
-            {!lease?.approved_lease_abstracts?.snapshot_json && isApproved && (
+            {!lease?.abstract_snapshot && isApproved && (
               <Badge className="bg-amber-100 text-amber-800">
                 Legacy approval — no immutable snapshot
               </Badge>
@@ -234,7 +236,7 @@ export default function LeaseDetail() {
           <ul className="text-xs text-blue-800 space-y-1">
             <li><strong>Lease ID:</strong> {lease.id}</li>
             <li><strong>Top-level populated fields:</strong> {Object.keys(lease).filter(k => lease[k] !== null && lease[k] !== "").length}</li>
-            <li><strong>canonical snapshot found:</strong> {!!lease?.approved_lease_abstracts?.snapshot_json ? "yes" : "no"}</li>
+            <li><strong>canonical snapshot found:</strong> {!!lease?.abstract_snapshot ? "yes" : "no"}</li>
             <li><strong>Lease expense rules count:</strong> {counts.rules}</li>
             <li><strong>Rent schedule lines count:</strong> {counts.rent}</li>
             <li><strong>Critical dates count:</strong> {counts.dates}</li>
