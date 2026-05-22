@@ -2488,16 +2488,19 @@ export const leaseExpenseRuleService = {
         // same lease/extraction-version updates the SAME row instead of
         // creating a new one. The migration 20260519101000_lease_expense_
         // rules_rule_key_string.sql adds the matching UNIQUE index.
-        // Add diagnostics for testing
-        const diagnostics = payloadsForUpsert.map(r => ({
-          lease_id: r.lease_id,
-          rule_set_id: r.rule_set_id,
-          rule_key: r.rule_key,
-          operation: 'upsert',
-          generation_source: r.generation_source,
-          created_from: r.created_from
-        }));
-        console.table(diagnostics);
+        console.table(payloadsForUpsert.map(p => ({
+          lease_id: p.lease_id,
+          tenant_id: p.tenant_id,
+          rule_key: p.rule_key,
+          rule_type: p.rule_type,
+          expense_category: p.expense_category,
+          tenant_share_percent: p.tenant_share_percent,
+          estimated_annual_amount: p.estimated_annual_amount,
+          estimated_monthly_amount: p.estimated_monthly_amount,
+          admin_fee_percent: p.admin_fee_percent,
+          gross_up_percent: p.gross_up_percent,
+          cap_percent: p.cap_percent
+        })));
 
         const { data, error: ruleError } = await supabase
           .from("lease_expense_rules")

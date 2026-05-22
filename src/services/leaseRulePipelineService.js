@@ -27,6 +27,7 @@ const asNumber = (val) => {
 // ... Wait, I should fetch the lease first
 export const leaseRulePipelineService = {
   async generateLeaseExpenseRulesForLease({ leaseId, force = false, source = "manual_extract" }) {
+    console.log("[NEW PIPELINE CALLED]", { leaseId, force, source });
     if (!leaseId) throw new Error("leaseId is required");
 
     let diagnostics = {
@@ -166,9 +167,9 @@ export const leaseRulePipelineService = {
 
     // For Summit (force true rerun), clean up bad null rows first
     if (force) {
-      // Cleanup for force run - delete all existing rules for this lease
-      // to ensure no duplicate bad keys remain since rule_key definition changed.
-      await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId);
+      console.log("[NEW PIPELINE DELETE OLD RULES]", { leaseId, force });
+      const { data: deletedData, error: deleteError } = await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId).select("*");
+      console.log("[NEW PIPELINE DELETE RESULT]", { deletedData, deleteError });
     }
 
     // 5. Collect Candidates
