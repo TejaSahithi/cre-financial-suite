@@ -45,6 +45,8 @@ import { createPageUrl, downloadCSV } from "@/utils";
 import { leaseService } from "@/services/leaseService";
 import { supabase } from "@/services/supabaseClient";
 import { isMeaningfulValue } from "@/lib/leaseReviewSchema";
+import { resolveLeaseField } from "@/lib/leaseFieldResolver";
+import useOrgId from "@/hooks/useOrgId";
 
 // Derived lease lifecycle status:
 //   draft       → no review work done (or rejected)
@@ -118,7 +120,34 @@ export default function Leases() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
 
-  const { data: leases = [], isLoading } = useOrgQuery("Lease");
+  const { orgId } = useOrgId();
+  const { data: leases = [], isLoading } = useQuery({
+    queryKey: ["LeasesRich", orgId],
+    enabled: !!orgId && orgId !== "__none__",
+    queryFn: async () => {
+       const { data, error } = await supabase
+         .from("leases")
+         .select(`
+            *,
+            approved_lease_abstracts!left (
+               snapshot_json
+            ),
+            uploaded_files!left (
+               reviewed_output,
+               ui_review_payload
+            )
+         `)
+         .eq("org_id", orgId);
+       
+       if (error) throw error;
+       return data.map(lease => ({
+         ...lease,
+         approved_lease_abstracts: Array.isArray(lease.approved_lease_abstracts) ? lease.approved_lease_abstracts[0] : lease.approved_lease_abstracts,
+         uploaded_files: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files,
+         uploaded_file: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files
+       }));
+    }
+  });
   const { data: units = [] } = useOrgQuery("Unit");
   const { data: buildings = [] } = useOrgQuery("Building");
   const { data: properties = [] } = useOrgQuery("Property");
@@ -224,11 +253,13 @@ export default function Leases() {
     const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
     const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
 
+    const tName = resolveLeaseField(lease, "tenant_name").value || lease.tenant_name;
+    const lType = resolveLeaseField(lease, "lease_type").value || lease.lease_type;
     const matchSearch =
       !search ||
       [
-        lease.tenant_name,
-        lease.lease_type,
+        tName,
+        lType,
         lease.unit_number,
         lease.unit_id_code,
         unit?.unit_number,
@@ -497,26 +528,41 @@ export default function Leases() {
                 const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
                 const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
+                const tenantName = resolveLeaseField(lease, "tenant_name").value || lease.tenant_name || "—";
+                const landlordName = resolveLeaseField(lease, "landlord_name").value || lease.landlord_name || property?.landlord_name || "—";
+                const leaseType = resolveLeaseField(lease, "lease_type").value || lease.lease_type;
+                const startDate = resolveLeaseField(lease, "commencement_date").value || lease.start_date || lease.commencement_date || "—";
+                const endDate = resolveLeaseField(lease, "expiration_date").value || lease.end_date || lease.expiration_date || "—";
+                
+                const rawMonthlyRent = resolveLeaseField(lease, "monthly_rent").value || lease.monthly_rent;
+                const rawAnnualRent = resolveLeaseField(lease, "annual_rent").value || lease.annual_rent;
+                
+                const annualRent = Number(rawAnnualRent || Number(rawMonthlyRent || 0) * 12 || 0);
+                const monthlyRent = Number(rawMonthlyRent || (annualRent ? annualRent / 12 : 0));
+                
+                const unitLabel = lease.unit_number || unit?.unit_number || lease.unit_id_code || unit?.unit_id_code || (lease.unit_id && lease.unit_id.length > 8 ? lease.unit_id.substring(0, 8) : lease.unit_id) || "—";
                 const derivedStatus = deriveLeaseStatus(lease, budgetReadyLeaseIds);
-                const annualRent = Number(lease.annual_rent || Number(lease.monthly_rent || 0) * 12 || 0);
-                const unitLabel =
-                  lease.unit_number ||
-                  unit?.unit_number ||
-                  lease.unit_id_code ||
-                  unit?.unit_id_code ||
-                  (lease.unit_id && lease.unit_id.length > 8 ? lease.unit_id.substring(0, 8) : lease.unit_id) ||
-                  "—";
-
-                const monthlyRent = Number(lease.monthly_rent || (annualRent ? annualRent / 12 : 0));
                 const abstractStatus = String(lease.abstract_status || "").toLowerCase();
-                const abstractBadgeClass =
-                  abstractStatus === "approved"
-                    ? "bg-emerald-100 text-emerald-700"
-                    : abstractStatus === "rejected"
-                    ? "bg-red-100 text-red-700"
-                    : abstractStatus === "pending_review"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-slate-100 text-slate-600";
+                const abstractBadgeClass = abstractStatus === "approved" ? "bg-emerald-100 text-emerald-700" : abstractStatus === "rejected" ? "bg-red-100 text-red-700" : abstractStatus === "pending_review" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600";
+                // Dev diagnostics (only visible in console)
+                if (import.meta.env.DEV) {
+                   const diagnostics = [
+                     { fieldKey: "tenant_name", ...resolveLeaseField(lease, "tenant_name") },
+                     { fieldKey: "landlord_name", ...resolveLeaseField(lease, "landlord_name") },
+                     { fieldKey: "lease_type", ...resolveLeaseField(lease, "lease_type") },
+                     { fieldKey: "commencement_date", ...resolveLeaseField(lease, "commencement_date") },
+                     { fieldKey: "expiration_date", ...resolveLeaseField(lease, "expiration_date") },
+                     { fieldKey: "monthly_rent", ...resolveLeaseField(lease, "monthly_rent") }
+                   ];
+                   console.table(diagnostics.map(d => ({
+                     fieldKey: d.fieldKey,
+                     value: d.value,
+                     sourcePath: d.sourcePath,
+                     confidence: d.confidence,
+                     reviewStatus: d.reviewStatus
+                   })));
+                }
+
                 const propertyScopeQuery = lease.property_id ? `?property=${lease.property_id}` : "";
 
                 return (
@@ -525,23 +571,23 @@ export default function Leases() {
                       <Checkbox
                         checked={selectedLeaseIds.includes(lease.id)}
                         onCheckedChange={() => toggleLeaseSelection(lease.id)}
-                        aria-label={`Select lease ${lease.tenant_name || lease.id}`}
+                        aria-label={`Select lease ${tenantName || lease.id}`}
                       />
                     </TableCell>
-                    <TableCell className="text-sm font-medium text-slate-900">{lease.tenant_name || "—"}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{lease.landlord_name || property?.landlord_name || "—"}</TableCell>
+                    <TableCell className="text-sm font-medium text-slate-900">{tenantName}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{landlordName}</TableCell>
                     <TableCell className="text-sm text-slate-600">{property?.name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{building?.name || "—"}</TableCell>
                     <TableCell className="text-sm text-slate-600">{unitLabel}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-[10px]">
-                        {isMeaningfulValue(lease.lease_type) ? lease.lease_type : "—"}
+                        {isMeaningfulValue(leaseType) ? String(leaseType) : "—"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{lease.start_date || lease.commencement_date || "—"}</TableCell>
+                    <TableCell className="text-sm">{startDate}</TableCell>
                     <TableCell className="text-sm">
                       <span className={daysLeft && daysLeft < 180 ? "text-red-600 font-medium" : ""}>
-                        {lease.end_date || lease.expiration_date || "—"}
+                        {endDate}
                       </span>
                       {daysLeft && daysLeft < 365 && daysLeft > 0 && (
                         <span className="block text-[10px] text-red-500">{daysLeft}d remaining</span>

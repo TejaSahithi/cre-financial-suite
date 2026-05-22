@@ -13,6 +13,9 @@
  * reads `extraction_data` keeps working during the transition.
  */
 import { supabase } from "@/services/supabaseClient";
+import { leaseService } from "./leaseService";
+import { getWorkflowLeaseFields } from "./leaseExpenseRuleService";
+import { resolveLeaseField, resolveLeaseFields } from "@/lib/leaseFieldResolver";
 import {
   readFieldConfidence,
   readFieldEvidence,
@@ -238,35 +241,40 @@ export async function approveLeaseAbstract({
     },
   };
 
-  // Sync the latest reviewed values back to the dedicated lease columns
-  // (landlord_name, lease_type, monthly_rent, commencement_date, etc.) so
-  // downstream consumers — Leases list, dashboard cards, expense engine —
-  // see the approved values without having to dig into extraction_data.
-  // Without this, columns retain whatever was set at upload time (often
-  // null) even though the abstract shows the extracted values.
+  // Use canonical mode to grab the best available values for top-level columns
+  const summaryKeys = [
+    "tenant_name", "landlord_name", "lease_type", "commencement_date", 
+    "expiration_date", "monthly_rent", "annual_rent", "square_footage", 
+    "total_sf", "property_name"
+  ];
+  
+  const resolvedFields = resolveLeaseFields(lease, summaryKeys, { mode: "canonical" });
   const columnSync = {};
-  for (const field of LEASE_REVIEW_FIELDS) {
-    const rawValue = readFieldValue(lease, field.key);
-    if (rawValue === undefined || rawValue === null) continue;
-    let value = rawValue;
-    if (NUMERIC_REVIEW_FIELDS.has(field.key)) {
-      const n = typeof rawValue === "number"
-        ? rawValue
-        : Number(String(rawValue).replace(/[$,%\s,]/g, ""));
+
+  for (const key of summaryKeys) {
+    const resolved = resolvedFields[key];
+    if (!resolved || !resolved.found || resolved.value == null) continue;
+    
+    // Convert to numbers for numeric fields
+    let value = resolved.value;
+    if (NUMERIC_REVIEW_FIELDS.has(key)) {
+      const n = typeof value === "number" ? value : Number(String(value).replace(/[$,%\s,]/g, ""));
       if (!Number.isFinite(n)) continue;
       value = n;
-    } else if (field.type === "boolean") {
-      value = rawValue === true || String(rawValue).toLowerCase() === "true" || String(rawValue).toLowerCase() === "yes";
-    } else if (typeof rawValue === "string") {
-      const trimmed = rawValue.trim();
-      if (!trimmed) continue;
-      value = trimmed;
+    } else if (typeof value === "string") {
+      value = value.trim();
+      if (!value) continue;
     }
-    const columns = resolveFieldColumns(field.key);
-    if (!columns || columns.length === 0) continue;
+
+    const columns = resolveFieldColumns(key);
     for (const column of columns) {
-      // Don't clobber a column we've already set from a higher-priority field.
-      if (columnSync[column] === undefined) columnSync[column] = value;
+      if (columnSync[column] === undefined) {
+         // Do not overwrite existing values unless they are null/empty.
+         // (User requested onlyFillMissing = true, approvedOnly = true, force = false logic here)
+         if (lease[column] == null || lease[column] === "") {
+           columnSync[column] = value;
+         }
+      }
     }
   }
 
@@ -334,74 +342,48 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
   console.log("extraction_data keys", Object.keys(lease?.extraction_data || {}));
   console.log("[syncApprovedAbstractExpenseTermsToRules] Starting sync for lease", leaseId);
   
-  // Helper for deep-searching and regex-parsing lease data
-  const deepFindLeaseField = (aliases) => {
-    const searchTargets = [
-      approvedSnapshot?.fields,
-      approvedSnapshot?.unmapped_terms,
-      lease?.extraction_data?.abstract,
-      lease?.extraction_data?.workflow_output?.cam_rules,
-      lease?.extraction_data?.workflow_output?.expense_rules,
-      lease?.extraction_data?.workflow_output?.lease_fields,
-      lease?.extraction_data?.extracted_fields,
-      lease?.extracted_fields
-    ].filter(Boolean);
+  // Diagnostic table for global resolver
+    const debugKeys = [
+      "admin_fee_percent",
+      "gross_up_percent",
+      "cap_percent",
+      "tenant_share_percent",
+      "estimated_annual_amount",
+      "estimated_monthly_amount",
+      "reconciliation_required"
+    ];
+    
+    console.table(debugKeys.map(dk => {
+      const result = resolveLeaseField(lease, dk, { mode: "canonical" });
+      return {
+        key: dk,
+        found: result?.found || false,
+        value: result?.value || null,
+        raw: result?.rawValue || null,
+        source: result?.sourcePath || null
+      };
+    }));
 
-    const norm = (k) => String(k || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const aliasNorms = aliases.map(norm);
+    const resolveNum = (key) => {
+      const r = resolveLeaseField(lease, key, { mode: "canonical" });
+      if (!r || !r.found || r.value == null) return null;
+      const n = Number(String(r.value).replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    };
+    
+    const resolveBool = (key) => {
+      const r = resolveLeaseField(lease, key, { mode: "canonical" });
+      if (!r || !r.found || r.value == null) return null;
+      return String(r.value).toLowerCase() === "true" || String(r.value).toLowerCase() === "yes";
+    };
 
-    let foundValue = null;
-    let rawText = null;
-    let sourceKey = aliases[0];
-
-    // 1. Search targets by key aliases
-    for (const target of searchTargets) {
-      if (typeof target !== "object") continue;
-      for (const [k, v] of Object.entries(target)) {
-        if (!v) continue;
-        const kn = norm(k);
-        const labelNorm = norm(v.label || v.title);
-        if (aliasNorms.includes(kn) || aliasNorms.includes(labelNorm)) {
-          foundValue = v.value !== undefined ? v.value : v;
-          rawText = v.exact_source_text || v.source_text || v.raw_value || String(v);
-          sourceKey = k;
-          break;
-        }
-      }
-      if (foundValue !== null) break;
-    }
-
-    // 2. Fallback to full text search across unstructured string values if not found by key
-    if (foundValue === null || foundValue === undefined || foundValue === "") {
-      const allText = JSON.stringify(searchTargets).toLowerCase();
-      for (const alias of aliases) {
-        if (allText.includes(alias.toLowerCase())) {
-          // Found a mention of the alias, let's try to extract numeric value via regex later
-          rawText = allText.substring(Math.max(0, allText.indexOf(alias.toLowerCase()) - 50), allText.indexOf(alias.toLowerCase()) + 100);
-          break;
-        }
-      }
-    }
-
-    // Parse logic
-    if (foundValue !== null && foundValue !== undefined && foundValue !== "") {
-       return { value: foundValue, raw: rawText, key: sourceKey };
-    }
-
-    if (rawText) {
-       // Regex fallback
-       const numMatch = String(rawText).match(/(?:equal to|more than|increase by|:)\s*[$]?\s*([0-9,.]+)\s*(?:%|x|occupied)?/i) || 
-                        String(rawText).match(/[$]?\s*([0-9,.]+)\s*%/i);
-       if (numMatch && numMatch[1]) {
-         return { value: numMatch[1], raw: rawText, key: sourceKey };
-       }
-       if (rawText.includes("yes") || rawText.includes("true") || rawText.includes("required")) {
-         return { value: true, raw: rawText, key: sourceKey };
-       }
-    }
-
-    return null;
-  };
+    const adminFeePercent = resolveNum("admin_fee_percent");
+    const grossUpPercent = resolveNum("gross_up_percent");
+    const capPercent = resolveNum("cap_percent");
+    const tenantSharePercent = resolveNum("tenant_share_percent");
+    const estimatedAnnualAmount = resolveNum("estimated_annual_amount");
+    const estimatedMonthlyAmount = resolveNum("estimated_monthly_amount");
+    const reconciliationRequired = resolveBool("reconciliation_required");
 
   try {
     let { data: ruleSets } = await supabase
@@ -430,34 +412,13 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
       ruleSetId = ruleSets[0].id;
     }
 
-    // Diagnostic table for deepFindLeaseField
-    const debugKeys = [
-      { key: "admin_fee_percent", aliases: ["admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent", "adminFeePercent", "administrative fee", "admin fee"] },
-      { key: "gross_up_percent", aliases: ["gross_up_percent", "gross_up_threshold_percent", "gross_up_threshold", "grossUpPercent", "gross-up", "gross up"] },
-      { key: "cap_percent", aliases: ["cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent", "controllable cap"] },
-      { key: "tenant_share_percent", aliases: ["tenant_share_percent", "tenant_pro_rata_share", "pro_rata_share", "tenant_share", "tenant pro rata share"] },
-      { key: "estimated_annual_amount", aliases: ["estimated_annual_cam", "cam_estimate_annual", "estimated_annual_amount", "annual_cam_estimate", "estimated annual cam"] },
-      { key: "estimated_monthly_amount", aliases: ["estimated_monthly_cam", "cam_estimate_monthly", "estimated_monthly_amount", "monthly_cam_estimate", "estimated monthly cam"] },
-      { key: "reconciliation_required", aliases: ["reconciliation_required", "cam_reconciliation_required", "reconciliation"] }
-    ];
-    
-    console.table(debugKeys.map(dk => {
-      const result = deepFindLeaseField(dk.aliases);
-      return {
-        key: dk.key,
-        found: !!result,
-        value: result ? result.value : null,
-        raw: result ? result.raw : null
-      };
-    }));
-
     const rulesToUpsert = [];
 
     const addRule = (aliases, ruleType, overrides = {}) => {
       const aliasList = Array.isArray(aliases) ? aliases : [aliases];
-      const field = deepFindLeaseField(aliasList);
+      const field = resolveLeaseField(lease, aliasList[0], { mode: "canonical" });
       
-      if (!field || field.value === null || field.value === undefined || field.value === "") return;
+      if (!field || !field.found || field.value === null || field.value === undefined || field.value === "") return;
       
       // We don't mandate 'review_status' since we are deeply scanning AI outputs that may not have statuses
       const num = (v) => {
@@ -466,7 +427,7 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
       };
 
       const isCam = overrides.cam_eligible === "yes";
-      const fieldKey = field.key || aliasList[0];
+      const fieldKey = aliasList[0];
       
       rulesToUpsert.push({
         org_id: orgId,
@@ -477,10 +438,10 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         source_field_key: fieldKey,
         review_status: "reviewed", // deep-scanned from approved abstract flow
         approval_status: "needs_review",
-        source_page: null,
-        exact_source_text: field.raw || null,
-        confidence_score: 0.8,
-        extraction_status: "extracted",
+        source_page: field.sourcePage ? Number(field.sourcePage) : null,
+        exact_source_text: field.exactSourceText || field.rawValue || null,
+        confidence_score: field.confidence || 0.8,
+        extraction_status: field.reviewStatus || "extracted",
         created_from: "approved_lease_abstract",
         generation_source: "lease_review_acceptance",
         ...(isCam ? {
@@ -509,7 +470,7 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
       const payload = rulesToUpsert[rulesToUpsert.length - 1];
       console.log(`[sync] Mapped ${fieldKey} -> ${ruleType}`, {
         value: field.value,
-        raw: field.raw,
+        raw: field.rawValue,
         rule_key: payload.rule_key
       });
     };

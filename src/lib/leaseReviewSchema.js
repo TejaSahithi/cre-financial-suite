@@ -570,47 +570,10 @@ export function isMeaningfulValue(value) {
   return !SENTINEL_NOT_FOUND_VALUES.has(trimmed.toLowerCase());
 }
 
-// Pull a stored normalized value for a field, regardless of whether it lives
-// on the lease row directly or inside extraction_data. Treats sentinel
-// "unknown" / "n/a" strings as if they were missing so the UI shows
-// Not Found instead of a fake "Extracted" badge.
 export function readFieldValue(lease, key) {
   if (!lease) return null;
-  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
-  for (const candidate of candidates) {
-    if (isMeaningfulValue(lease[candidate])) return lease[candidate];
-  }
-  const extracted = lease.extracted_fields || {};
-  const extractedEntry = pickCandidateEntry(extracted, candidates);
-  if (isPresent(extractedEntry)) {
-    const v = unwrapFieldValue(extractedEntry);
-    if (isMeaningfulValue(v)) return v;
-  }
-  const fields = lease.extraction_data?.fields || {};
-  const extractionEntry = pickCandidateEntry(fields, candidates);
-  if (isPresent(extractionEntry)) {
-    const v = unwrapFieldValue(extractionEntry);
-    if (isMeaningfulValue(v)) return v;
-  }
-  const workflowFields = getWorkflowLeaseFields(lease);
-  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
-  if (isPresent(workflowEntry)) {
-    const v = unwrapFieldValue(workflowEntry);
-    if (isMeaningfulValue(v)) return v;
-  }
-  for (const candidate of candidates) {
-    const derived = buildDerivedWorkflowEntry(lease, candidate);
-    if (isMeaningfulValue(derived?.value)) return derived.value;
-  }
-  const clauseFallback = findClauseFallbackEntry(lease, key);
-  if (isMeaningfulValue(clauseFallback?.value)) return clauseFallback.value;
-  const snapshotFields = lease?.abstract_snapshot?.fields || {};
-  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
-  if (isPresent(snapshotEntry)) {
-    const v = unwrapFieldValue(snapshotEntry);
-    if (isMeaningfulValue(v)) return v;
-  }
-  return null;
+  const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
+  return resolved?.value ?? null;
 }
 
 // Resolve which lease columns to write for a given review field key. Edits
@@ -620,112 +583,28 @@ export function resolveFieldColumns(key) {
   return FIELD_COLUMN_ALIASES[key] || [key];
 }
 
-// Best-effort lookup for the raw extraction value, source page and source text.
-// Walks multiple shapes the backend may produce, in priority order:
-//   1. extraction_data.field_evidence[key] (current shape from review-approve)
-//   2. extraction_data.evidence[key]       (legacy shape)
-//   3. extraction_data.fields[key]         (current shape)
-//   4. extraction_data.workflow_output.lease_fields[key] (raw workflow output)
-//   5. abstract_snapshot.fields[key]       (post-approval frozen snapshot)
 export function readFieldEvidence(lease, key) {
-  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
-  const evidenceMap = lease?.extraction_data?.field_evidence || lease?.extraction_data?.evidence || {};
-  const fieldsMap = lease?.extraction_data?.fields || {};
-  const workflowFields = getWorkflowLeaseFields(lease);
-  const snapshotFields = lease?.abstract_snapshot?.fields || {};
-  const evidence = pickCandidateEntry(evidenceMap, candidates);
-  const fieldEntry = pickCandidateEntry(fieldsMap, candidates);
-  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
-  const derivedEntry = candidates.map((candidate) => buildDerivedWorkflowEntry(lease, candidate)).find(Boolean) || null;
-  const clauseFallbackEntry = findClauseFallbackEntry(lease, key);
-  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
-
-  const raw =
-    readFromEntry(evidence, "raw_value", "raw", "original_value", "extracted_value")
-    ?? readFromEntry(fieldEntry, "raw_value", "raw", "original_value", "extracted_value")
-    ?? readFromEntry(workflowEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
-    ?? readFromEntry(derivedEntry, "raw_value", "source_clause", "clause_text", "evidence_text")
-    ?? readFromEntry(clauseFallbackEntry, "raw_value", "source_clause", "clause_text", "source_text")
-    ?? readFromEntry(snapshotEntry, "raw_value", "raw", "original_value", "extracted_value");
-  const sourcePage =
-    readFromEntry(evidence, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
-    ?? readFromEntry(fieldEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
-    ?? readFromEntry(workflowEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
-    ?? readFromEntry(derivedEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
-    ?? readFromEntry(clauseFallbackEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage")
-    ?? readFromEntry(snapshotEntry, "source_page", "page", "page_number", "evidence_page_number", "sourcePage");
-  const sourceText =
-    readFromEntry(evidence, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
-    ?? readFromEntry(fieldEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
-    ?? readFromEntry(workflowEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
-    ?? readFromEntry(derivedEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
-    ?? readFromEntry(clauseFallbackEntry, "source_clause", "source_text", "snippet", "exact_source_text", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt")
-    ?? readFromEntry(snapshotEntry, "source_text", "snippet", "exact_source_text", "source_clause", "evidence_text", "clause_text", "matched_text", "text", "value_excerpt");
-  const extractionStatus =
-    readFromEntry(evidence, "extraction_status")
-    ?? readFromEntry(fieldEntry, "extraction_status")
-    ?? readFromEntry(workflowEntry, "extraction_status")
-    ?? readFromEntry(derivedEntry, "extraction_status")
-    ?? readFromEntry(clauseFallbackEntry, "extraction_status")
-    ?? readFromEntry(snapshotEntry, "extraction_status");
+  if (!lease) return { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
+  const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
+  if (!resolved) return { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
+  
   return {
-    rawValue: raw ?? unwrapFieldValue(fieldEntry) ?? unwrapFieldValue(workflowEntry) ?? unwrapFieldValue(clauseFallbackEntry) ?? null,
-    sourcePage: parseStoredNumber(sourcePage) ?? sourcePage ?? null,
-    sourceText: sourceText ?? null,
-    extractionStatus: extractionStatus ?? null,
+    rawValue: resolved.rawValue ?? null,
+    sourcePage: resolved.sourcePage ? Number(resolved.sourcePage) : null,
+    sourceText: resolved.exactSourceText ?? null,
+    extractionStatus: resolved.reviewStatus ?? null,
   };
 }
 
 export function readFieldConfidence(lease, key, fallback = null) {
-  const candidates = FIELD_COLUMN_ALIASES[key] || [key];
-  // If the stored value for this field is a sentinel ("unknown", "n/a",
-  // null, etc.), cap whatever confidence the extractor reported. A 99%
-  // confident "unknown" is meaningless to a reviewer and creates the
-  // contradictory "Missing / 99%" display the user flagged.
-  const hasMeaningfulValue = isMeaningfulValue(readFieldValue(lease, key));
-  const clamp = (score) => (hasMeaningfulValue ? score : (score == null ? null : Math.min(score, 35)));
+  if (!lease) return fallback;
+  const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
+  if (!resolved || resolved.confidence == null) return fallback;
 
-  const scores = lease?.extraction_data?.confidence_scores || {};
-  for (const candidate of candidates) {
-    const score = parseStoredNumber(scores[candidate]);
-    if (score != null) return clamp(normalizeStoredConfidence(score));
-  }
-  const extracted = lease?.extracted_fields || {};
-  const extractedEntry = pickCandidateEntry(extracted, candidates);
-  const extractedConfidence = parseStoredNumber(
-    readFromEntry(extractedEntry, "confidence", "confidence_score", "score"),
-  );
-  if (extractedConfidence != null) return clamp(normalizeStoredConfidence(extractedConfidence));
-  const fields = lease?.extraction_data?.fields || {};
-  const fieldEntry = pickCandidateEntry(fields, candidates);
-  const fieldConfidence = parseStoredNumber(
-    readFromEntry(fieldEntry, "confidence", "confidence_score", "score"),
-  );
-  if (fieldConfidence != null) return clamp(normalizeStoredConfidence(fieldConfidence));
-  const workflowFields = getWorkflowLeaseFields(lease);
-  const workflowEntry = pickCandidateEntry(workflowFields, candidates);
-  const workflowConfidence = parseStoredNumber(
-    readFromEntry(workflowEntry, "confidence_score", "confidence", "score"),
-  );
-  if (workflowConfidence != null) return clamp(normalizeStoredConfidence(workflowConfidence));
-  for (const candidate of candidates) {
-    const score = parseStoredNumber(
-      readFromEntry(buildDerivedWorkflowEntry(lease, candidate), "confidence_score", "confidence", "score"),
-    );
-    if (score != null) return clamp(normalizeStoredConfidence(score));
-  }
-  const clauseFallbackEntry = findClauseFallbackEntry(lease, key);
-  const clauseFallbackConfidence = parseStoredNumber(
-    readFromEntry(clauseFallbackEntry, "confidence", "confidence_score", "score"),
-  );
-  if (clauseFallbackConfidence != null) return clamp(normalizeStoredConfidence(clauseFallbackConfidence));
-  const snapshotFields = lease?.abstract_snapshot?.fields || {};
-  const snapshotEntry = pickCandidateEntry(snapshotFields, candidates);
-  const snapshotConfidence = parseStoredNumber(
-    readFromEntry(snapshotEntry, "confidence", "confidence_score", "score"),
-  );
-  if (snapshotConfidence != null) return clamp(normalizeStoredConfidence(snapshotConfidence));
-  return fallback;
+  const hasMeaningfulValue = isMeaningfulValue(resolved.value);
+  const clamp = (score) => (hasMeaningfulValue ? score : (score == null ? null : Math.min(score, 35)));
+  
+  return clamp(normalizeStoredConfidence(resolved.confidence));
 }
 
 // The extractor stores confidence as 0–1; everything else stores 0–100.

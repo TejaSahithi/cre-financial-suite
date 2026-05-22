@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { leaseService } from "@/services/leaseService";
 import { loadFieldReviewMap } from "@/services/leaseAbstractService";
+import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";
 import {
   LEASE_REVIEW_FIELDS,
@@ -43,10 +44,31 @@ export default function LeaseDetail() {
   const leaseId = urlParams.get("id");
 
   const { data: lease, isLoading } = useQuery({
-    queryKey: ["lease", leaseId],
-    queryFn: () => leaseService.filter({ id: leaseId }),
+    queryKey: ["leaseRich", leaseId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+         .from("leases")
+         .select(`
+            *,
+            approved_lease_abstracts!left (
+               snapshot_json
+            ),
+            uploaded_files!left (
+               reviewed_output,
+               ui_review_payload
+            )
+         `)
+         .eq("id", leaseId)
+         .single();
+      if (error) throw error;
+      return {
+         ...data,
+         approved_lease_abstracts: Array.isArray(data.approved_lease_abstracts) ? data.approved_lease_abstracts[0] : data.approved_lease_abstracts,
+         uploaded_files: Array.isArray(data.uploaded_files) ? data.uploaded_files[0] : data.uploaded_files,
+         uploaded_file: Array.isArray(data.uploaded_files) ? data.uploaded_files[0] : data.uploaded_files
+      };
+    },
     enabled: !!leaseId,
-    select: (data) => data?.[0],
   });
 
   const { data: fieldReviewMap = {} } = useQuery({
@@ -104,41 +126,9 @@ export default function LeaseDetail() {
     enabled: !!leaseId,
   });
 
-  const snapshotData = useMemo(() => {
-    let sourceUsed = "None";
-    let snapshot = null;
-    if (lease?.abstract_snapshot && Object.keys(lease.abstract_snapshot).length) {
-      sourceUsed = "leases.abstract_snapshot";
-      snapshot = lease.abstract_snapshot;
-    } else if (lease?.extraction_data?.abstract && Object.keys(lease.extraction_data.abstract).length) {
-      sourceUsed = "leases.extraction_data.abstract";
-      snapshot = lease.extraction_data.abstract;
-    } else if (lease?.extracted_fields && Object.keys(lease.extracted_fields).length) {
-      sourceUsed = "leases.extracted_fields";
-      snapshot = { fields: lease.extracted_fields };
-    } else if (uploadedFile?.reviewed_output && Object.keys(uploadedFile.reviewed_output).length) {
-      sourceUsed = "uploaded_files.reviewed_output";
-      snapshot = uploadedFile.reviewed_output;
-    }
-    return { snapshot, sourceUsed };
-  }, [lease, uploadedFile]);
-
-  const { snapshot, sourceUsed } = snapshotData;
-
   const getFieldObj = useMemo(() => {
-    return (key) => {
-      if (snapshot?.fields?.[key]) return snapshot.fields[key];
-      if (snapshot?.approved?.[key]) return snapshot.approved[key];
-      if (snapshot?.pending_fields?.[key]) return snapshot.pending_fields[key];
-      if (snapshot?.rejected_fields?.[key]) return snapshot.rejected_fields[key];
-      if (snapshot?.unmapped_terms?.[key]) return snapshot.unmapped_terms[key];
-
-      if (lease?.[key] !== undefined && lease?.[key] !== null && lease?.[key] !== "") {
-        return { value: lease[key], review_status: "approved" }; 
-      }
-      return null;
-    };
-  }, [snapshot, lease]);
+    return (key) => resolveLeaseField(lease, key, { mode: "canonical" });
+  }, [lease]);
 
   if (!leaseId) {
     return (
@@ -201,7 +191,7 @@ export default function LeaseDetail() {
                 {lease.abstract_approved_by ? ` by ${lease.abstract_approved_by}` : ""}
               </Badge>
             )}
-            {!snapshot && isApproved && (
+            {!lease?.approved_lease_abstracts?.snapshot_json && isApproved && (
               <Badge className="bg-amber-100 text-amber-800">
                 Legacy approval — no immutable snapshot
               </Badge>
@@ -246,14 +236,8 @@ export default function LeaseDetail() {
         <CardContent>
           <ul className="text-xs text-blue-800 space-y-1">
             <li><strong>Lease ID:</strong> {lease.id}</li>
-            <li><strong>Canonical snapshot found:</strong> {snapshot ? "yes" : "no"}</li>
-            <li><strong>Snapshot source used:</strong> {sourceUsed}</li>
             <li><strong>Top-level populated fields:</strong> {Object.keys(lease).filter(k => lease[k] !== null && lease[k] !== "").length}</li>
-            <li><strong>Extracted fields count:</strong> {Object.keys(lease.extracted_fields || {}).length}</li>
-            <li><strong>Reviewed output count:</strong> {Object.keys(uploadedFile?.reviewed_output?.fields || {}).length}</li>
-            <li><strong>Unmapped terms count:</strong> {Object.keys(snapshot?.unmapped_terms || {}).length}</li>
-            <li><strong>Pending fields count:</strong> {Object.keys(snapshot?.pending_fields || {}).length}</li>
-            <li><strong>Rejected fields count:</strong> {Object.keys(snapshot?.rejected_fields || {}).length}</li>
+            <li><strong>canonical snapshot found:</strong> {!!lease?.approved_lease_abstracts?.snapshot_json ? "yes" : "no"}</li>
             <li><strong>Lease expense rules count:</strong> {counts.rules}</li>
             <li><strong>Rent schedule lines count:</strong> {counts.rent}</li>
             <li><strong>Critical dates count:</strong> {counts.dates}</li>

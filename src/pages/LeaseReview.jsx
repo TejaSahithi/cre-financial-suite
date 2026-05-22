@@ -76,9 +76,9 @@ import {
   readFieldConfidence,
   isResolvedReview,
   classifyConfidence,
-  resolveFieldColumns,
   hasEvidenceOverride,
 } from "@/lib/leaseReviewSchema";
+import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { supabase } from "@/services/supabaseClient";
@@ -942,6 +942,20 @@ export default function LeaseReview() {
   const requiredReviewedKeys = REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k]));
   const requiredPendingKeys = REQUIRED_FIELD_KEYS.filter((k) => !isResolvedReview(fieldReviews[k]));
   const requiredResolved = requiredPendingKeys.length === 0;
+
+  if (import.meta.env.DEV) {
+    const requiredLogs = REQUIRED_FIELD_KEYS.map(k => {
+      const resolved = resolveLeaseField(lease, k, { mode: "canonical" });
+      return {
+        field: k,
+        status: resolved?.found ? "found" : "missing",
+        sourcePath: resolved?.sourcePath || "none",
+        reason: !resolved?.found ? (readFieldValue(lease, k) ? "stale/placeholder" : "missing entirely") : "N/A"
+      };
+    });
+    console.table(requiredLogs);
+  }
+
   const totalFields = LEASE_REVIEW_FIELDS.length;
   const resolvedCount = LEASE_REVIEW_FIELDS.reduce(
     (acc, f) => acc + (isResolvedReview(fieldReviews[f.key]) ? 1 : 0),
