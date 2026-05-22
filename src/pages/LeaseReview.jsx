@@ -1057,13 +1057,7 @@ export default function LeaseReview() {
       detail: conflicts.map((c) => c.label).join(" • "),
     });
   }
-  if (expenseCamUnreviewed) {
-    approvalBlockers.push({
-      kind: "expense_cam",
-      title: "Expense / CAM rules not approved",
-      detail: `${ruleSetSummary.expense.total} expense rules, ${ruleSetSummary.cam.total} CAM rules awaiting approval`,
-    });
-  }
+  // Removed expenseCamUnreviewed from approvalBlockers per user request.
   if (pendingNoEvidence.length > 0) {
     approvalBlockers.push({
       kind: "pending_no_evidence",
@@ -2241,7 +2235,14 @@ export default function LeaseReview() {
       >
         {approvedRuleSet
           ? "Lease expense rules are approved. Approving the lease abstract will refresh lease-derived charges and CAM readiness."
-          : "Expense/CAM rules have not been approved yet. Review the extracted rules before final abstract approval."}
+          : (
+            <span>
+              Expense/CAM rule review is pending. You may approve the lease abstract now, but downstream recoveries/CAM will remain blocked until rules are approved.{" "}
+              <Link to={createPageUrl("LeaseExpenseRules") + `?lease=${lease.id}`} className="underline font-medium">
+                Review rules on the Lease Expense Rules page
+              </Link>
+            </span>
+          )}
       </div>
 
       {/* Confidence summary — 6 cards */}

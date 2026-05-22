@@ -203,10 +203,10 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: leaseId }))}
+            onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease=${leaseId}`)}
           >
             <ArrowUpRight className="mr-1 h-3.5 w-3.5" />
-            Review {kind === "cam" ? "CAM" : "Expense"} Rules
+            Review {kind === "cam" ? "CAM Rules" : "Lease Expense Rules"}
           </Button>
         </div>
       </CardHeader>

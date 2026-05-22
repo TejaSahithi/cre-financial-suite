@@ -246,7 +246,7 @@ export default function LeaseExpenseRules() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => new URLSearchParams(location.search).get("lease") || "");
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
 
