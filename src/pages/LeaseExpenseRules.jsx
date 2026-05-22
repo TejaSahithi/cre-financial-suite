@@ -456,6 +456,7 @@ export default function LeaseExpenseRules() {
       const lease = backfillCandidates[i];
       const leaseStart = performance.now();
       try {
+        console.log("[Extract Rules clicked]", { leaseId: lease.id, force: true, service: "generateLeaseExpenseRulesForLease" });
         const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
         const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
