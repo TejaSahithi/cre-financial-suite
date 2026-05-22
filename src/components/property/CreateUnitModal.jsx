@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,22 +11,46 @@ import { toast } from "sonner";
 
 export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
   const queryClient = useQueryClient();
+  const firstBuildingId = buildings[0]?.id || "";
+  const buildingById = useMemo(
+    () => new Map((buildings || []).map((building) => [building.id, building])),
+    [buildings]
+  );
   const [form, setForm] = useState({
     unit_id_code: "",
-    building_id: buildings[0]?.id || "",
+    building_id: firstBuildingId,
     floor: "1",
     square_feet: "",
     unit_type: "office",
     occupancy_status: "vacant",
   });
 
+  useEffect(() => {
+    setForm((current) => {
+      const currentBuildingStillExists = current.building_id && buildingById.has(current.building_id);
+      if (currentBuildingStillExists) return current;
+      return {
+        ...current,
+        building_id: firstBuildingId,
+      };
+    });
+  }, [buildingById, firstBuildingId]);
+
   const createMutation = useMutation({
     mutationFn: (data) => UnitService.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bu-units"] });
+      queryClient.invalidateQueries({ queryKey: ["Unit"] });
       toast.success("Unit created successfully.");
       onClose();
-      setForm({ unit_id_code: "", building_id: buildings[0]?.id || "", floor: "1", square_feet: "", unit_type: "office", occupancy_status: "vacant" });
+      setForm({
+        unit_id_code: "",
+        building_id: firstBuildingId,
+        floor: "1",
+        square_feet: "",
+        unit_type: "office",
+        occupancy_status: "vacant",
+      });
     },
     onError: (err) => {
       toast.error(`Failed to create unit: ${err.message}`);
@@ -36,10 +60,22 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!form.unit_id_code || !form.building_id) return;
+    const selectedBuilding = buildingById.get(form.building_id) || null;
+    const propertyId = selectedBuilding?.property_id || null;
+    if (!propertyId) {
+      toast.error("Selected building is missing its property link.");
+      return;
+    }
     createMutation.mutate({
-      ...form,
-      square_feet: parseInt(form.square_feet) || 0,
+      unit_id_code: form.unit_id_code,
+      unit_number: form.unit_id_code,
+      property_id: propertyId,
+      building_id: form.building_id,
+      square_footage: parseInt(form.square_feet, 10) || 0,
       floor: parseInt(form.floor) || 1,
+      unit_type: form.unit_type,
+      occupancy_status: form.occupancy_status,
+      status: form.occupancy_status,
     });
   };
 
@@ -78,7 +114,9 @@ export default function CreateUnitModal({ isOpen, onClose, buildings = [] }) {
               </SelectTrigger>
               <SelectContent>
                 {buildings.map(b => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                  <SelectItem key={b.id} value={b.id}>
+                    {b.name || b.building_name || b.building_id_code || "Building"}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
