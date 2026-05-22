@@ -41,21 +41,50 @@ function dateStr(row: Row, field: string): string | null {
 // ── Lease calculations ───────────────────────────────────────────────────────
 
 function computeLeaseDerived(row: Row): void {
-  const monthlyRent = num(row, "monthly_rent");
-  const annualRent = num(row, "annual_rent");
+  let monthlyRent = num(row, "monthly_rent");
+  let annualRent = num(row, "annual_rent");
   const sqft = num(row, "square_footage");
-  const rentPerSf = num(row, "rent_per_sf");
+  let rentPerSf = num(row, "rent_per_sf");
   const startDate = dateStr(row, "start_date");
   const endDate = dateStr(row, "end_date");
+
+  // Reconcile conflicts if monthly_rent was extracted as a PSF value (suspiciously small)
+  if (monthlyRent !== null && monthlyRent < 300 && sqft !== null && sqft > 0) {
+    if (annualRent !== null && annualRent > 1000) {
+      // Reconcile from annual_rent
+      row.monthly_rent = round2(annualRent / 12);
+      monthlyRent = row.monthly_rent;
+    } else if (annualRent === null) {
+      // Treat the extracted monthly_rent as a monthly PSF rate (e.g. "23 psf is monthly rent")
+      // Total monthly rent = extracted value * sqft
+      const originalPsf = monthlyRent;
+      row.monthly_rent = round2(originalPsf * sqft);
+      monthlyRent = row.monthly_rent;
+    }
+  }
+
+  // Reconcile if both are extracted but they conflict wildly (e.g., one is annual, one is monthly)
+  if (monthlyRent !== null && annualRent !== null) {
+    const expectedMonthly = annualRent / 12;
+    if (Math.abs(monthlyRent - expectedMonthly) > 10) {
+      // Trust the larger value if one is suspiciously small, otherwise trust annual
+      if (monthlyRent < 300 && annualRent > 1000) {
+        row.monthly_rent = round2(expectedMonthly);
+        monthlyRent = row.monthly_rent;
+      }
+    }
+  }
 
   // annual_rent = monthly_rent × 12
   if (monthlyRent !== null && annualRent === null) {
     row.annual_rent = round2(monthlyRent * 12);
+    annualRent = row.annual_rent;
   }
 
   // monthly_rent = annual_rent / 12 (if annual was extracted but monthly wasn't)
   if (monthlyRent === null && annualRent !== null) {
     row.monthly_rent = round2(annualRent / 12);
+    monthlyRent = row.monthly_rent;
   }
 
   // rent_per_sf = annual_rent / square_footage
