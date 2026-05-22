@@ -1670,15 +1670,7 @@ export default function LeaseReview() {
       } catch (persistErr) {
         console.warn("[LeaseReview] generateLeaseExpenseRulesForLease skipped:", persistErr?.message || persistErr);
       }
-      try {
-        approvedExpenseRuleSet = await leaseExpenseRuleService.ensureApprovedRuleSet({ lease: approvedLease });
-        console.log(
-          `[LeaseReview] ensureApprovedRuleSet → ${approvedExpenseRuleSet?.rules?.length || 0} rules in approved set`,
-          { ruleSetId: approvedExpenseRuleSet?.ruleSet?.id || null, status: approvedExpenseRuleSet?.ruleSet?.status },
-        );
-      } catch (ruleErr) {
-        console.warn("[LeaseReview] approved expense rule publish skipped:", ruleErr?.message || ruleErr);
-      }
+
       try {
         await expenseService.syncLeaseDerivedExpenses({ leases: [approvedLease] });
       } catch (syncErr) {
@@ -1981,16 +1973,14 @@ export default function LeaseReview() {
       // user trip to the LeaseExpenseClassification page.
       setReextractStage("extracting_rules");
       try {
-        const { data: categories } = await supabase
-          .from("expense_categories")
-          .select("id, category_name, subcategory_name, normalized_key, expense_classification");
-        const refreshedLease = { ...lease, extraction_data: nextExtraction };
-        await leaseExpenseRuleService.extractDraftRuleSet({
-          lease: refreshedLease,
-          categories: categories || [],
+        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
+        await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+          leaseId: lease.id,
+          source: "extract_draft",
+          force: false
         });
       } catch (ruleErr) {
-        console.warn("[LeaseReview] expense rule extraction skipped:", ruleErr?.message || ruleErr);
+        console.warn("[LeaseReview] draft expense rule extraction skipped:", ruleErr?.message || ruleErr);
       }
 
       toast.success("Lease re-extracted. Latest values, evidence, and expense rules applied.");

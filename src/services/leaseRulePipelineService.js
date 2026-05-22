@@ -167,9 +167,9 @@ export const leaseRulePipelineService = {
 
     // For Summit (force true rerun), clean up bad null rows first
     if (force) {
-      console.log("[NEW PIPELINE DELETE OLD RULES]", { leaseId, force });
+      console.log("[FORCE DELETE OLD RULES]", { leaseId, force });
       const { data: deletedData, error: deleteError } = await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId).select("*");
-      console.log("[NEW PIPELINE DELETE RESULT]", { deletedData, deleteError });
+      console.log("[DELETE RESULT]", { deletedData, deleteError });
     }
 
     // 5. Collect Candidates
@@ -240,12 +240,15 @@ export const leaseRulePipelineService = {
          else if (r.recoverable_from_tenant === "yes") r.rule_type = "nnn_recoverable";
          else r.rule_type = "additional_rent";
       }
+      // Set rule_key explicitly so saveRuleSet uses it instead of regenerating
+      r.rule_key = `${lease.id}_${r.rule_type}_${r.normalized_key}_${r.source_field_key || 'workflow'}`;
+      
       return r;
     }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
 
     // Diagnostics Payload Output
     if (finalRules.length > 0) {
-      console.log(`[leaseRulePipelineService] Final payloads for lease ${leaseId}:`);
+      console.log(`[FINAL PAYLOAD BEFORE SAVE] Lease ${leaseId}:`);
       console.table(finalRules.map(r => ({
         lease_id: lease.id,
         tenant_id: lease.tenant_id,

@@ -2331,6 +2331,7 @@ export const leaseExpenseRuleService = {
     }
     const approvedAtIso = status === "approved" ? now : null;
     const computeRuleKey = (ruleObj) => {
+      if (ruleObj.rule_key) return ruleObj.rule_key;
       const norm = (v) => String(v ?? "").toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
       const category = norm(firstPresent(ruleObj.expense_category, ruleObj.category_name, deriveRuleCategoryName(ruleObj)));
       const subcategory = norm(firstPresent(ruleObj.expense_subcategory, ruleObj.subcategory_name, deriveRuleSubcategoryName(ruleObj)));
@@ -2364,7 +2365,7 @@ export const leaseExpenseRuleService = {
         // these for existing rows.
         org_id: orgId,
         lease_id: lease.id,
-        tenant_id: lease.tenant_id || null,
+        tenant_id: rule.tenant_id || lease.tenant_id || null,
         property_id: lease.property_id || null,
         building_id: lease.building_id || null,
         unit_id: lease.unit_id || null,
@@ -2485,9 +2486,7 @@ export const leaseExpenseRuleService = {
       while (attemptsRemaining > 0) {
         // Conflict target = (rule_set_id, rule_key). This is what makes
         // re-extraction deterministic: clicking Extract twice with the
-        // same lease/extraction-version updates the SAME row instead of
-        // creating a new one. The migration 20260519101000_lease_expense_
-        // rules_rule_key_string.sql adds the matching UNIQUE index.
+        console.log(`[SAVE PAYLOAD BEFORE UPSERT] Lease ${payloadsForUpsert[0]?.lease_id}:`);
         console.table(payloadsForUpsert.map(p => ({
           lease_id: p.lease_id,
           tenant_id: p.tenant_id,
@@ -2509,6 +2508,7 @@ export const leaseExpenseRuleService = {
             ignoreDuplicates: false,
           })
           .select("*");
+        console.log("[UPSERT RESULT]", { data, error: ruleError });
         if (!ruleError) {
           savedRules = data || [];
           break;
