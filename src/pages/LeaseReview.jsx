@@ -1653,25 +1653,22 @@ export default function LeaseReview() {
         console.warn("[LeaseReview] critical dates auto-insert skipped:", datesErr?.message || datesErr);
       }
 
-      // Persist expense rules using the combined ensureLeaseExpenseRules
-      // method. It tries the workflow_output.expense_rules path first
-      // (cheap), and falls back to extractDraftRuleSet (LLM + deterministic
-      // builder) only if workflow_output produced 0 rules. After that we
-      // promote the rule_set to "approved" so CAM/Budget can consume it.
       let approvedExpenseRuleSet = null;
+      // Persist expense rules using the new leaseRulePipelineService
+      // which aggregates workflow + structured + templates + LLM + text fallback
       try {
-        const persisted = await leaseExpenseRuleService.ensureLeaseExpenseRules({
-          lease: approvedLease,
-          status: "draft",
-          createdFrom: "approval",
-          approver: approvalSignedBy || null,
+        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
+        const persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+          leaseId: lease.id,
+          source: "approve_abstract",
+          force: false
         });
         console.log(
-          `[LeaseReview] ensureLeaseExpenseRules → ${persisted?.rules?.length || 0} rules persisted`,
-          { ruleSetId: persisted?.ruleSet?.id || null },
+          `[LeaseReview] generateLeaseExpenseRulesForLease → ${persisted?.persistedRulesCount || 0} rules persisted`,
+          persisted
         );
       } catch (persistErr) {
-        console.warn("[LeaseReview] ensureLeaseExpenseRules skipped:", persistErr?.message || persistErr);
+        console.warn("[LeaseReview] generateLeaseExpenseRulesForLease skipped:", persistErr?.message || persistErr);
       }
       try {
         approvedExpenseRuleSet = await leaseExpenseRuleService.ensureApprovedRuleSet({ lease: approvedLease });

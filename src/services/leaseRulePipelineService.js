@@ -1,0 +1,382 @@
+import { supabase } from "@/services/supabaseClient";
+import leaseExpenseRuleService from "./leaseExpenseRuleService";
+import { resolveLeaseField } from "@/lib/leaseFieldResolver";
+
+const VALID_EVIDENCE = (text) => {
+  if (!text) return false;
+  const lower = String(text).toLowerCase();
+  const invalid = ["manual_review", "tenant_recovery", "tenant_direct", "inferred", "default"];
+  if (invalid.some(word => lower.includes(word))) return false;
+  
+  const unrelated = ["assignment", "notice address", "permitted use", "tenant improvement"];
+  if (unrelated.some(word => lower.includes(word))) return false;
+
+  return true;
+};
+
+const firstPresent = (...args) => args.find(a => a !== null && a !== undefined && a !== "");
+const asNumber = (val) => {
+  const num = Number(val);
+  return isNaN(num) ? null : num;
+};
+
+// ... Wait, I should fetch the lease first
+export const leaseRulePipelineService = {
+  async generateLeaseExpenseRulesForLease({ leaseId, force = false, source = "manual_extract" }) {
+    if (!leaseId) throw new Error("leaseId is required");
+
+    let diagnostics = {
+      leaseId,
+      documentType: "original_lease",
+      sourceFileId: null,
+      sourceTextLength: 0,
+      workflowRulesCount: 0,
+      structuredTermRulesCount: 0,
+      deterministicRulesCount: 0,
+      textFallbackRulesCount: 0,
+      llmRulesCount: 0,
+      mergedRulesCount: 0,
+      persistedRulesCount: 0,
+      weakEvidenceCount: 0,
+      skippedReasons: null
+    };
+
+    // 1. Fetch lease
+    const { data: lease, error: leaseErr } = await supabase
+      .from("leases")
+      .select("*")
+      .eq("id", leaseId)
+      .single();
+
+    if (leaseErr || !lease) {
+      diagnostics.skippedReasons = "Lease not found";
+      return diagnostics;
+    }
+
+    // 2. Resolve Source File ID
+    let fileId = lease.source_file_id || lease.uploaded_file_id || lease.file_id || lease?.extraction_data?.source_file_id;
+    if (!fileId) {
+      const { data: docLink } = await supabase
+        .from("document_links")
+        .select("file_id, uploaded_file_id")
+        .eq("entity_id", leaseId)
+        .eq("entity_type", "lease")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (docLink) fileId = docLink.uploaded_file_id || docLink.file_id;
+    }
+    diagnostics.sourceFileId = fileId;
+
+    // 3. Resolve Text
+    let sourceText = "";
+    let uploadedFile = null;
+    if (fileId) {
+      const { data: file } = await supabase
+        .from("uploaded_files")
+        .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, is_scanned, file_type")
+        .eq("id", fileId)
+        .maybeSingle();
+      uploadedFile = file;
+
+      if (file) {
+        const candidates = [
+          file?.docling_raw?.full_text,
+          file?.docling_raw?.markdown,
+          file?.docling_raw?.text,
+          file?.normalized_output?.raw_text,
+          file?.normalized_output?.text,
+          file?.parsed_data?.full_text,
+          file?.parsed_data?.raw_text,
+          file?.reviewed_output,
+          file?.ui_review_payload,
+          lease?.extraction_data?.workflow_output,
+          lease?.extraction_data?.abstract
+        ];
+
+        for (const c of candidates) {
+          if (c && typeof c === 'string' && c.trim()) {
+            sourceText = c.trim();
+            break;
+          } else if (c && typeof c === 'object') {
+             // If it's an object, stringify to check if it has useful content?
+             // Actually, reviewed_output might be an object. We'll stringify it just in case if it has text inside.
+             const s = JSON.stringify(c);
+             if (s.length > 50) {
+                 sourceText = s;
+                 break;
+             }
+          }
+        }
+
+        // OCR Fallback for Scanned PDF
+        if (!sourceText && (file.is_scanned || String(file.file_type).toLowerCase().includes('pdf') || String(file.file_type).toLowerCase().includes('image'))) {
+          try {
+            console.log("Triggering OCR Vision Fallback...");
+            const { data: ocrData } = await supabase.functions.invoke("ocr-vision-extract", { body: { fileId } });
+            if (ocrData?.text) {
+              sourceText = ocrData.text;
+              await supabase.from("uploaded_files").update({ 
+                parsed_data: { ...(file.parsed_data || {}), full_text: sourceText } 
+              }).eq("id", fileId);
+            }
+          } catch (ocrErr) {
+             console.warn("OCR fallback failed:", ocrErr);
+          }
+        }
+      }
+    }
+    diagnostics.sourceTextLength = sourceText.length;
+
+    // 4. Document Type Detection
+    const leaseNameLower = String(lease.name || lease.lease_name || "").toLowerCase();
+    const isAssignment = leaseNameLower.includes("assignment");
+    const isAmendment = leaseNameLower.includes("amend");
+    if (isAssignment) diagnostics.documentType = "assignment";
+    else if (isAmendment) diagnostics.documentType = "amendment";
+    else if (leaseNameLower.includes("renewal")) diagnostics.documentType = "renewal";
+    else if (leaseNameLower.includes("estoppel")) diagnostics.documentType = "estoppel";
+    else if (leaseNameLower.includes("exhibit")) diagnostics.documentType = "exhibit";
+
+    if (diagnostics.documentType === "assignment") {
+      diagnostics.skippedReasons = "Assignment document -> no full expense rules generated";
+      // Ensure we patch assignment fields (not full rules)
+      // This is usually handled by other resolvers, but we just exit here.
+      return diagnostics;
+    }
+
+    // 5. Collect Candidates
+    const candidates = [];
+
+    // 5.a Workflow Output
+    const workflowRules = Array.isArray(lease?.extraction_data?.workflow_output?.expense_rules) 
+      ? lease.extraction_data.workflow_output.expense_rules : [];
+    diagnostics.workflowRulesCount = workflowRules.length;
+    workflowRules.forEach((r, i) => candidates.push(this.mapWorkflowRule(r, i, lease.id)));
+
+    // 5.b Structured Term Rules (Resolver)
+    const structuredRules = this.buildStructuredRules(lease);
+    diagnostics.structuredTermRulesCount = structuredRules.length;
+    candidates.push(...structuredRules);
+
+    // 5.c Deterministic Templates
+    const templateRules = this.buildTemplateRules(lease);
+    diagnostics.deterministicRulesCount = templateRules.length;
+    candidates.push(...templateRules);
+
+    // 5.d Text Fallback
+    const textRules = sourceText ? leaseExpenseRuleService.buildTextFallbackRules(sourceText) : [];
+    diagnostics.textFallbackRulesCount = textRules.length;
+    textRules.forEach(r => candidates.push({ ...r, source_type: "text_fallback" }));
+
+    // 5.e LLM Extraction
+    let llmRules = [];
+    if (sourceText && force) {
+       try {
+         const { data: llmData } = await supabase.functions.invoke("extract-lease-expense-rules", { body: { text: sourceText } });
+         if (llmData?.rules) llmRules = llmData.rules;
+       } catch (err) {}
+    }
+    diagnostics.llmRulesCount = llmRules.length;
+    llmRules.forEach(r => candidates.push(this.mapLlmRule(r, lease.id)));
+
+    // 6. Merge, Score, Dedupe
+    const merged = this.mergeAndScoreCandidates(candidates);
+    diagnostics.mergedRulesCount = merged.length;
+
+    // 7. Evidence Validation & Save
+    const finalRules = merged.map(r => {
+      let conf = r.confidence_score || r.confidence || 0.8;
+      let valid = VALID_EVIDENCE(r.exact_source_text);
+      if (!valid) {
+        r.exact_source_text = null;
+        r.confidence_score = Math.min(conf, 0.50);
+      }
+      if (r.confidence_score <= 0.55) {
+        r.review_status = "needs_review";
+        r.approval_status = "draft";
+        r.extraction_status = r.exact_source_text ? "weak_evidence" : "inferred";
+        diagnostics.weakEvidenceCount++;
+      }
+      return r;
+    });
+
+    const saved = await leaseExpenseRuleService.saveRuleSet({
+      lease,
+      rules: finalRules,
+      status: "draft",
+      createdFrom: source,
+      categories: []
+    });
+
+    diagnostics.persistedRulesCount = saved?.rules?.length || 0;
+
+    return diagnostics;
+  },
+
+  mapWorkflowRule(rule, index, leaseId) {
+    // Basic mapping, similar to buildFallbackRulesFromWorkflow
+    return {
+      ...rule,
+      lease_id: leaseId,
+      source_type: "workflow_output",
+      confidence_score: rule.confidence || 0.9,
+      expense_category: rule.expense_category || rule.category || `rule_${index}`,
+      normalized_key: String(rule.expense_category || `rule_${index}`).toLowerCase().replace(/\s+/g, '_')
+    };
+  },
+
+  buildStructuredRules(lease) {
+    const rules = [];
+    
+    // Extract base structured terms using field resolver
+    const resolve = (key) => {
+      const res = resolveLeaseField(lease, key, { mode: "canonical" });
+      return res?.value ?? null;
+    };
+
+    const tenantShare = asNumber(resolve("tenant_share_percent") || resolve("pro_rata_share"));
+    const estimatedAnnual = asNumber(resolve("estimated_annual_amount") || resolve("cam_estimate_annual"));
+    const estimatedMonthly = asNumber(resolve("estimated_monthly_amount") || resolve("cam_estimate_monthly"));
+    const adminFee = asNumber(resolve("admin_fee_percent") || resolve("administrative_fee"));
+    const mgmtFee = asNumber(resolve("management_fee_percent") || resolve("management_fee"));
+    const grossUp = asNumber(resolve("gross_up_percent") || resolve("gross_up"));
+    const capPercent = asNumber(resolve("cap_percent") || resolve("expense_cap"));
+    const capType = resolve("cap_type");
+    const reconciliation = resolve("reconciliation_required") || resolve("cam_reconciliation");
+    
+    const baseYear = resolve("base_year") || resolve("expense_base_year");
+    const opExBase = asNumber(resolve("operating_expense_base_amount"));
+    const taxBase = asNumber(resolve("tax_base_amount"));
+    const insBase = asNumber(resolve("insurance_base_amount"));
+
+    // If we have these values, we should append them to all structured rules or create a dummy rule 
+    // that the merger will merge into other rules.
+    // Instead of creating a dummy rule, let's create a generic "structured_terms" rule that has these fields.
+    // When merging, these fields will enrich the other rules.
+    const structuredRule = {
+      expense_category: "structured_terms",
+      normalized_key: "structured_terms",
+      source_type: "structured",
+      confidence_score: 0.95,
+      tenant_share_percent: tenantShare,
+      estimated_annual_amount: estimatedAnnual,
+      estimated_monthly_amount: estimatedMonthly,
+      admin_fee_percent: adminFee,
+      management_fee_percent: mgmtFee,
+      gross_up_percent: grossUp,
+      cap_percent: capPercent,
+      cap_type: capType,
+      reconciliation_required: reconciliation === "yes" || reconciliation === true,
+      base_year: baseYear,
+      base_year_amount: opExBase,
+      tax_base_amount: taxBase,
+      insurance_base_amount: insBase
+    };
+
+    rules.push(structuredRule);
+    return rules;
+  },
+
+  buildTemplateRules(lease) {
+    const rules = [];
+    const leaseType = String(lease.lease_type || lease.abstract_snapshot?.lease_type || "").toLowerCase().trim();
+    if (leaseType.includes("full") || leaseType.includes("gross")) {
+       // A. Full Service
+       rules.push(this.makeTemplateRule("utilities", true, "no", "no"));
+       rules.push(this.makeTemplateRule("janitorial", true, "no", "no"));
+       rules.push(this.makeTemplateRule("property tax", true, "no", "no"));
+       rules.push(this.makeTemplateRule("property insurance", true, "no", "no"));
+       rules.push(this.makeTemplateRule("maintenance", true, "no", "no"));
+       rules.push(this.makeTemplateRule("excess utilities", false, "conditional", "conditional"));
+       rules.push(this.makeTemplateRule("tenant insurance", false, "tenant_direct", "no", "tenant_direct_contract"));
+       rules.push(this.makeTemplateRule("alterations", false, "tenant_direct", "no", "tenant_direct_contract"));
+    } else if (leaseType.includes("nnn") || leaseType.includes("triple") || leaseType.includes("net")) {
+       // B. NNN
+       const nnnItems = ["cam", "taxes", "insurance", "operating expenses", "utilities", "janitorial", "landscaping", "security", "trash", "management", "admin"];
+       nnnItems.forEach(item => {
+          rules.push(this.makeTemplateRule(item, false, "yes", "yes"));
+       });
+    } else if (leaseType.includes("modified") || leaseType.includes("base year")) {
+       // C. Modified Gross
+       const mgItems = ["operating expenses", "taxes", "insurance"];
+       mgItems.forEach(item => {
+          rules.push(this.makeTemplateRule(item, true, "conditional", "conditional")); // Up to base year
+       });
+    }
+    return rules;
+  },
+
+  makeTemplateRule(category, included, recoverable, camEligible, responsibility = "landlord") {
+    return {
+      expense_category: category,
+      normalized_key: category.replace(/\s+/g, "_"),
+      included_in_base_rent: included,
+      recoverable_from_tenant: recoverable,
+      cam_eligible: camEligible,
+      responsibility: responsibility,
+      source_type: "deterministic_template",
+      confidence_score: 0.85
+    };
+  },
+
+  mapLlmRule(rule, leaseId) {
+    return {
+      ...rule,
+      lease_id: leaseId,
+      source_type: "llm_extraction",
+      confidence_score: rule.confidence || 0.7
+    };
+  },
+
+  mergeAndScoreCandidates(candidates) {
+     const mergedMap = new Map();
+     
+     // 1. Find global structured terms
+     const structuredTermsRule = candidates.find(c => c.normalized_key === "structured_terms") || {};
+     
+     // Dedupe by normalized_key
+     for (let c of candidates) {
+        if (!c.normalized_key || c.normalized_key === "structured_terms") continue;
+        
+        // Spread global structured terms onto the rule
+        c = { 
+           ...c,
+           tenant_share_percent: firstPresent(c.tenant_share_percent, structuredTermsRule.tenant_share_percent),
+           estimated_annual_amount: firstPresent(c.estimated_annual_amount, structuredTermsRule.estimated_annual_amount),
+           estimated_monthly_amount: firstPresent(c.estimated_monthly_amount, structuredTermsRule.estimated_monthly_amount),
+           admin_fee_percent: firstPresent(c.admin_fee_percent, structuredTermsRule.admin_fee_percent),
+           management_fee_percent: firstPresent(c.management_fee_percent, structuredTermsRule.management_fee_percent),
+           gross_up_percent: firstPresent(c.gross_up_percent, structuredTermsRule.gross_up_percent),
+           cap_percent: firstPresent(c.cap_percent, structuredTermsRule.cap_percent),
+           cap_type: firstPresent(c.cap_type, structuredTermsRule.cap_type),
+           reconciliation_required: firstPresent(c.reconciliation_required, structuredTermsRule.reconciliation_required),
+           base_year: firstPresent(c.base_year, structuredTermsRule.base_year),
+           base_year_amount: firstPresent(c.base_year_amount, structuredTermsRule.base_year_amount),
+           tax_base_amount: firstPresent(c.tax_base_amount, structuredTermsRule.tax_base_amount),
+           insurance_base_amount: firstPresent(c.insurance_base_amount, structuredTermsRule.insurance_base_amount)
+        };
+
+        const key = c.normalized_key;
+        if (!mergedMap.has(key)) {
+           mergedMap.set(key, c);
+        } else {
+           const existing = mergedMap.get(key);
+           // Merge logic: prefer workflow > llm > template > text_fallback
+           const scoreMap = { workflow_output: 4, structured: 3, llm_extraction: 2, deterministic_template: 1, text_fallback: 0 };
+           const existingScore = scoreMap[existing.source_type] || 0;
+           const newScore = scoreMap[c.source_type] || 0;
+           
+           if (newScore > existingScore) {
+              mergedMap.set(key, { ...existing, ...c, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
+           } else {
+              mergedMap.set(key, { ...c, ...existing, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });
+           }
+        }
+     }
+     
+     return Array.from(mergedMap.values());
+  }
+};
+
+export default leaseRulePipelineService;

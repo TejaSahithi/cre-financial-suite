@@ -1248,6 +1248,11 @@ function buildFallbackRulesFromWorkflow(lease) {
     const exactSourceText = deriveRuleExactSourceText(rule);
     const confidence = deriveRuleConfidence(rule);
 
+    const operationalResponsibility = deriveRuleOperationalResponsibility(rule);
+    const paymentTreatment = deriveRulePaymentTreatment(rule);
+    const camEligible = deriveRuleCamEligible(rule);
+    const billingTreatment = deriveRuleBillingTreatment(rule);
+
     return {
       id: `workflow-rule-${lease.id}-${index}`,
       rule_set_id: `workflow-rule-set-${lease.id}`,
@@ -2322,23 +2327,13 @@ export const leaseExpenseRuleService = {
       console.warn(`[leaseExpenseRuleService] saveRuleSet: ${unmappedCount} rules dropped (no canonical category)`);
     }
     const approvedAtIso = status === "approved" ? now : null;
-    // Deterministic content-derived rule_key — must match the SQL formula
-    // in 20260519101000_lease_expense_rules_rule_key_string.sql exactly so
-    // upsert(onConflict: 'rule_set_id,rule_key') hits existing rows.
     const computeRuleKey = (ruleObj) => {
-      const norm = (v) => String(v ?? "").toLowerCase().trim();
-      const sourceText = String(deriveRuleExactSourceText(ruleObj) || "").trim();
-      const sourceTextHead = sourceText.toLowerCase().slice(0, 80).trim();
-      const sourcePage = Number.isFinite(Number(ruleObj?.source_page)) ? String(Number(ruleObj.source_page)) : "";
-      return [
-        norm(firstPresent(ruleObj.expense_category, ruleObj.category_name, deriveRuleCategoryName(ruleObj))),
-        norm(firstPresent(ruleObj.expense_subcategory, ruleObj.subcategory_name, deriveRuleSubcategoryName(ruleObj))),
-        norm(deriveRulePaymentTreatment(ruleObj)),
-        norm(deriveRuleRecoverableFromTenant(ruleObj)),
-        norm(deriveRuleRecoveryMethod(ruleObj)),
-        sourcePage,
-        sourceTextHead,
-      ].join("|");
+      const norm = (v) => String(v ?? "").toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+      const category = norm(firstPresent(ruleObj.expense_category, ruleObj.category_name, deriveRuleCategoryName(ruleObj)));
+      const subcategory = norm(firstPresent(ruleObj.expense_subcategory, ruleObj.subcategory_name, deriveRuleSubcategoryName(ruleObj)));
+      const type = norm(ruleObj.rule_type);
+      const sourceKey = norm(ruleObj.source_field_key);
+      return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}`;
     };
     const EXTRACTION_VERSION = "v1.2026.05.19";
     const rulePayloads = savableRules.map((rule) => {

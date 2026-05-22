@@ -456,14 +456,13 @@ export default function LeaseExpenseRules() {
       const lease = backfillCandidates[i];
       const leaseStart = performance.now();
       try {
-        const result = await leaseExpenseRuleService.ensureLeaseExpenseRules({
-          lease,
-          categories,
-          status: "draft",
-          createdFrom: "backfill",
-          approver: lease?.signed_by || null,
+        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
+        const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+          leaseId: lease.id,
+          source: "backfill",
+          force: true
         });
-        const count = result?.rules?.length || 0;
+        const count = result?.persistedRulesCount || 0;
         persistedTotal += count;
         perLeaseResults.push({
           lease_id: lease.id.slice(0, 8),
