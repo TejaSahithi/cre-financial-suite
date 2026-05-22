@@ -626,6 +626,25 @@ export default function LeaseExpenseClassification() {
     onError: (error) => toast.error(error?.message || "Could not update amount"),
   });
 
+  const classificationAmountMutation = useMutation({
+    mutationFn: async ({ ruleId, classificationId, amount }) => {
+      if (classificationId) {
+        return expenseService.updateExpenseClassification(classificationId, {
+          amount,
+          financial_amount: amount,
+        });
+      }
+      return expenseService.setCoverageGapAmount(ruleId, amount, currentYear);
+    },
+    onSuccess: () => {
+      toast.success("Coverage gap amount updated");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not update amount"),
+  });
+
   const isLoading = loadingLeases || loadingWorkspace;
   const currentYear = new Date().getFullYear();
   const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
@@ -646,7 +665,7 @@ export default function LeaseExpenseClassification() {
   };
 
   const promptForAmount = (row) => {
-    if (!row?.actualExpenseId) return;
+    if (!row?.actualExpenseId && row?.rowType !== "rule_missing_actual") return;
     const input = window.prompt(
       `Enter amount for ${row.vendor || row.ruleLabel || "this expense"}:`,
       row.amount != null ? String(row.amount) : "",
@@ -660,7 +679,11 @@ export default function LeaseExpenseClassification() {
       return;
     }
 
-    amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
+    if (row.actualExpenseId) {
+      amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
+    } else {
+      classificationAmountMutation.mutate({ ruleId: row.rule.id, classificationId: row.classificationRecord?.id, amount });
+    }
   };
 
   const actualEmptyState = useMemo(() => {
@@ -1070,7 +1093,7 @@ export default function LeaseExpenseClassification() {
                                       Add / Import Expense
                                     </DropdownMenuItem>
                                   )}
-                                  {row.actualExpenseId && (
+                                  {(row.actualExpenseId || row.rowType === "rule_missing_actual") && (
                                     <DropdownMenuItem onClick={() => promptForAmount(row)}>
                                       <FileText className="mr-2 h-4 w-4 text-emerald-600" />
                                       {row.amount ? "Edit Amount" : "Set Amount"}

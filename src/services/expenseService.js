@@ -2010,6 +2010,26 @@ export const expenseService = {
       recovery_reason: reason,
     };
   },
+  async setCoverageGapAmount(ruleId, amount, currentYear) {
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+      throw new Error("Enter a valid amount");
+    }
+    const orgId = await this.getCurrentOrgId();
+    const period = String(currentYear || new Date().getFullYear());
+    const key = buildClassificationKey({ orgId, leaseExpenseRuleId: ruleId, period });
+
+    const payload = {
+      org_id: orgId,
+      lease_expense_rule_id: ruleId,
+      row_type: "rule_missing_actual",
+      classification_status: "coverage_gap",
+      amount: numericAmount,
+      financial_amount: numericAmount,
+      classification_key: key,
+    };
+    return await upsertExpenseClassification(payload);
+  },
 
   async finalizeExpenseClassification(classificationOrExpenseId, recoveryStatus = "recoverable") {
     const authResult = await supabase?.auth?.getUser?.();
