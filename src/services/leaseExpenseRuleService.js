@@ -2249,51 +2249,59 @@ export const leaseExpenseRuleService = {
         .eq("org_id", orgId);
 
       if (updateRuleSetError) throw updateRuleSetError;
-    } else {
       const { data: existingSets } = await supabase
         .from("lease_expense_rule_sets")
-        .select("version")
+        .select("id, version")
         .eq("lease_id", lease.id)
         .order("version", { ascending: false })
         .limit(1);
 
-      currentVersion = Number(existingSets?.[0]?.version || 0) + 1;
-      const { data: createdRuleSet, error: createRuleSetError } = await supabase
-        .from("lease_expense_rule_sets")
-        .insert({
-          org_id: orgId,
-          lease_id: lease.id,
-          property_id: lease.property_id || null,
-          version: currentVersion,
-          status,
-          approved_at: status === "approved" ? now : null,
-          // Stamp the extraction version on every new rule_set so we can
-          // skip re-extraction when nothing has changed (auto-extract gate).
-          extraction_version: "v1.2026.05.19",
-        })
-        .select("*")
-        .single();
+      if (existingSets && existingSets.length > 0) {
+        ruleSetId = existingSets[0].id;
+        currentVersion = existingSets[0].version;
+        // Optionally update the existing rule set status
+        await supabase
+          .from("lease_expense_rule_sets")
+          .update({
+            status,
+            property_id: lease.property_id || null,
+            approved_at: status === "approved" ? now : null,
+          })
+          .eq("id", ruleSetId)
+          .eq("org_id", orgId);
+      } else {
+        currentVersion = 1;
+        const { data: createdRuleSet, error: createRuleSetError } = await supabase
+          .from("lease_expense_rule_sets")
+          .insert({
+            org_id: orgId,
+            lease_id: lease.id,
+            property_id: lease.property_id || null,
+            version: currentVersion,
+            status,
+            approved_at: status === "approved" ? now : null,
+            extraction_version: "v1.2026.05.19",
+          })
+          .select("*")
+          .single();
 
-      if (createRuleSetError) {
-        // The most common cause is RLS: the user's role doesn't satisfy the
-        // INSERT policy on lease_expense_rule_sets. Surface a clear, actionable
-        // error so we don't have to chase generic "42501 row-level security"
-        // messages.
-        const code = String(createRuleSetError.code || "");
-        const message = `${createRuleSetError.message || ""} ${createRuleSetError.details || ""}`;
-        if (code === "42501" || /row-level security/i.test(message)) {
-          const enhanced = new Error(
-            "RLS denied INSERT into lease_expense_rule_sets. " +
-            "Apply migration 20260518130000_fix_lease_expense_rls.sql in Supabase SQL editor — " +
-            "the existing policy requires is_super_admin()/can_write_org_data() which aren't returning true for this user. " +
-            `Underlying error: ${createRuleSetError.message}`,
-          );
-          enhanced.code = createRuleSetError.code;
-          throw enhanced;
+        if (createRuleSetError) {
+          const code = String(createRuleSetError.code || "");
+          const message = `${createRuleSetError.message || ""} ${createRuleSetError.details || ""}`;
+          if (code === "42501" || /row-level security/i.test(message)) {
+            const enhanced = new Error(
+              "RLS denied INSERT into lease_expense_rule_sets. " +
+              "Apply migration 20260518130000_fix_lease_expense_rls.sql in Supabase SQL editor — " +
+              "the existing policy requires is_super_admin()/can_write_org_data() which aren't returning true for this user. " +
+              `Underlying error: ${createRuleSetError.message}`,
+            );
+            enhanced.code = createRuleSetError.code;
+            throw enhanced;
+          }
+          throw createRuleSetError;
         }
-        throw createRuleSetError;
+        ruleSetId = createdRuleSet.id;
       }
-      ruleSetId = createdRuleSet.id;
     }
 
     // Save every rule we have a canonical category text for, even if the
@@ -2432,7 +2440,7 @@ export const leaseExpenseRuleService = {
           const { data: existing } = await supabase
             .from("lease_expense_rules")
             .select("rule_key, review_status, approval_status, approved_by, approved_at, published_to_cam, notes, created_from, generation_source")
-            .eq("rule_set_id", ruleSetId)
+            .eq("lease_id", lease.id)
             .in("rule_key", ruleKeys);
           for (const row of existing || []) {
             preservedByKey.set(row.rule_key, row);
@@ -2482,10 +2490,21 @@ export const leaseExpenseRuleService = {
         // same lease/extraction-version updates the SAME row instead of
         // creating a new one. The migration 20260519101000_lease_expense_
         // rules_rule_key_string.sql adds the matching UNIQUE index.
+        // Add diagnostics for testing
+        const diagnostics = payloadsForUpsert.map(r => ({
+          lease_id: r.lease_id,
+          rule_set_id: r.rule_set_id,
+          rule_key: r.rule_key,
+          operation: 'upsert',
+          generation_source: r.generation_source,
+          created_from: r.created_from
+        }));
+        console.table(diagnostics);
+
         const { data, error: ruleError } = await supabase
           .from("lease_expense_rules")
           .upsert(payloadsForUpsert, {
-            onConflict: "rule_set_id,rule_key",
+            onConflict: "lease_id,rule_key",
             ignoreDuplicates: false,
           })
           .select("*");

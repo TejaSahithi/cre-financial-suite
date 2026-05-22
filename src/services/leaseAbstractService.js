@@ -435,24 +435,26 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
 
     if (rulesToUpsert.length > 0) {
       console.log(`[syncApprovedAbstractExpenseTermsToRules] Found ${rulesToUpsert.length} rules to upsert.`);
-      // Since lease_expense_rules doesn't have a unique constraint on (lease_id, rule_key) in older versions, 
-      // we'll try to update existing ones first, then insert new ones.
-      for (const rule of rulesToUpsert) {
-        const { data: existing } = await supabase
-          .from("lease_expense_rules")
-          .select("id")
-          .eq("lease_id", leaseId)
-          .eq("rule_key", rule.rule_key)
-          .maybeSingle();
+      
+      const diagnostics = rulesToUpsert.map(r => ({
+        lease_id: r.lease_id,
+        rule_set_id: r.rule_set_id,
+        rule_key: r.rule_key,
+        operation: 'upsert',
+        generation_source: r.generation_source,
+        created_from: r.created_from
+      }));
+      console.table(diagnostics);
 
-        if (existing?.id) {
-          const { error } = await supabase.from("lease_expense_rules").update(rule).eq("id", existing.id);
-          if (error) console.error("[sync] Update error:", error);
-        } else {
-          const { error } = await supabase.from("lease_expense_rules").insert(rule);
-          if (error) console.error("[sync] Insert error:", error);
-        }
+      const { error } = await supabase
+        .from("lease_expense_rules")
+        .upsert(rulesToUpsert, { onConflict: "lease_id,rule_key" });
+      
+      if (error) {
+        console.error("[syncApprovedAbstractExpenseTermsToRules] Upsert error:", error);
+        throw error;
       }
+      
       console.log("[syncApprovedAbstractExpenseTermsToRules] Completed sync.");
     } else {
       console.log("[syncApprovedAbstractExpenseTermsToRules] No mapped fields found to upsert.");
