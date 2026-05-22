@@ -2085,6 +2085,7 @@ export const leaseExpenseRuleService = {
     createdFrom = "approval",
     approver = null,
   } = {}) {
+    throw new Error("LEGACY ensureLeaseExpenseRules called after new pipeline");
     const tag = `[ensureLeaseExpenseRules lease=${lease?.id}]`;
     if (!lease?.id) return { ruleSet: null, rules: [] };
 
@@ -2671,6 +2672,7 @@ export const leaseExpenseRuleService = {
   },
 
   async ensureApprovedRuleSet({ lease, categories = null } = {}) {
+    throw new Error("LEGACY ensureApprovedRuleSet called after new pipeline");
     if (!lease?.id) throw new Error("Lease is required to approve expense rules");
 
     const current = await this.loadRuleSet(lease.id);
