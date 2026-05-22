@@ -409,9 +409,9 @@ function isApprovedExpenseRecord(expense, classification = null) {
 
 function isPendingExpenseRecord(expense) {
   const status = normalizeText(
-    expense?.approved_status ||
     expense?.approval_status ||
     expense?.review_status ||
+    expense?.approved_status ||
     expense?.status
   );
   return status !== "approved";
@@ -704,10 +704,14 @@ function canSendClassificationToCam({ classification, expense, rule }) {
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
   const camEligible = normalizeText(classification?.cam_eligible);
   const paymentTreatment = normalizeText(getPaymentTreatment(rule));
+  const rowType = normalizeText(classification?.row_type);
+  const classificationStatus = normalizeText(classification?.classification_status);
 
   return (
-    ["recoverable", "conditional"].includes(recoverabilityResult) &&
-    ["yes", "conditional"].includes(camEligible) &&
+    rowType === "matched_classification" &&
+    classificationStatus === "finalized" &&
+    recoverabilityResult === "recoverable" &&
+    camEligible === "yes" &&
     amount > 0 &&
     !classification?.sent_to_cam &&
     paymentTreatment !== "included_in_base_rent"
@@ -2562,7 +2566,10 @@ export const expenseService = {
 
     return await this.classifyExpenses({
       expenses: approvedActuals,
-      leases: leases
+      leases: leases,
+      approvedRules: approvedRules,
+      rulesByLeaseId: rulesByLeaseId,
+      scope: scope
     });
   },
 };

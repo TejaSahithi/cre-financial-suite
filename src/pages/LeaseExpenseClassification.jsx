@@ -219,6 +219,7 @@ export default function LeaseExpenseClassification() {
   const rows = useMemo(() => {
     const result = [];
     const classificationByExpenseId = new Map();
+    const classificationByRuleId = new Map();
     const approvedRuleById = new Map(approvedRules.map((rule) => [rule.id, rule]));
     const rulesByLeaseId = new Map();
     const usedRuleIds = new Set();
@@ -228,6 +229,9 @@ export default function LeaseExpenseClassification() {
       const expenseId = classification.expense_id || classification.actual_expense_id;
       if (expenseId && !classificationByExpenseId.has(expenseId)) {
         classificationByExpenseId.set(expenseId, classification);
+      }
+      if (classification.row_type === "rule_missing_actual" && classification.lease_expense_rule_id) {
+        classificationByRuleId.set(classification.lease_expense_rule_id, classification);
       }
     }
 
@@ -360,8 +364,7 @@ export default function LeaseExpenseClassification() {
         (row.rowType === "actual_missing_rule" ||
           row.recoverabilityResult === "needs_review" ||
           ["unmatched", "exception", "conditional"].includes(row.classificationStatus));
-      // CAM: any matched, recoverable (or conditional) row with a CAM-eligible rule
-      // can be sent to CAM — we don't force finalize first so users can act immediately.
+      // CAM is allowed only for finalized, recoverable, CAM-eligible matched rows.
       row.canSendToCam =
         Boolean(row.actualExpenseId) &&
         row.rowType === "matched_classification" &&
@@ -380,12 +383,14 @@ export default function LeaseExpenseClassification() {
       const building = buildingById.get(rule.building_id || lease?.building_id) || null;
       const unit = unitById.get(rule.unit_id || lease?.unit_id) || null;
 
+      const c = classificationByRuleId.get(rule.id) || null;
+
       result.push({
-        id: `coverage-gap:${rule.id}`,
+        id: c?.id || `coverage-gap:${rule.id}`,
         rowType: "rule_missing_actual",
         actualExpenseId: null,
         leaseExpenseRuleId: rule.id,
-        classificationRecord: null,
+        classificationRecord: c,
         expense: null,
         rule,
         lease,
@@ -398,22 +403,18 @@ export default function LeaseExpenseClassification() {
         ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
         amount: null,
         financialAmount: 0,
-        recoverabilityResult: normalizeText(leaseExpenseRuleService.getRecoverableDecision(rule)) === "yes"
+        recoverabilityResult: normalizeText(c?.recoverability_result || c?.recovery_status || leaseExpenseRuleService.getRecoverableDecision(rule)) === "yes"
           ? "recoverable"
-          : normalizeText(leaseExpenseRuleService.getRecoverableDecision(rule)) === "conditional"
-            ? "conditional"
-            : normalizeText(rule?.is_excluded) === "true"
-              ? "excluded"
-              : "non_recoverable",
-        classificationStatus: "coverage_gap",
-        exceptionType: null,
-        camEligible: "no",
+          : normalizeText(leaseExpenseRuleService.getRecoverableDecision(rule)) || "needs_review",
+        classificationStatus: c?.classification_status || "coverage_gap",
+        exceptionType: c?.exception_type || null,
+        camEligible: c?.cam_eligible || leaseExpenseRuleService.getCamEligibleDecision(rule) || "no",
         recoverableAmount: 0,
         nonRecoverableAmount: 0,
         conditionalAmount: 0,
         excludedAmount: 0,
-        sentToCam: false,
-        nextStep: "Add/Import Expense",
+        sentToCam: Boolean(c?.sent_to_cam),
+        nextStep: c?.next_step || "Provide actual expense",
         message: "Approved lease rule exists, but no actual expense found for this period.",
         canFinalize: false,
         canSendToReview: false,
