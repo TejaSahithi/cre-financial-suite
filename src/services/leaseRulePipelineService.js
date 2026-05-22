@@ -16,7 +16,11 @@ const VALID_EVIDENCE = (text) => {
 
 const firstPresent = (...args) => args.find(a => a !== null && a !== undefined && a !== "");
 const asNumber = (val) => {
-  const num = Number(val);
+  if (val === null || val === undefined || val === "") return null;
+  if (typeof val === 'number') return val;
+  const str = String(val).replace(/[^0-9.-]/g, '');
+  if (!str) return null;
+  const num = Number(str);
   return isNaN(num) ? null : num;
 };
 
@@ -44,9 +48,22 @@ export const leaseRulePipelineService = {
     // 1. Fetch lease
     const { data: lease, error: leaseErr } = await supabase
       .from("leases")
-      .select("*")
+      .select("*, unit:units(tenant_id)")
       .eq("id", leaseId)
       .single();
+
+    if (leaseErr || !lease) {
+      diagnostics.skippedReasons = "Lease not found";
+      return diagnostics;
+    }
+
+    // Populate tenant_id
+    let tenantId = lease.tenant_id || lease.primary_tenant_id || lease.unit?.tenant_id || null;
+    if (!tenantId && lease.tenant_name) {
+      const { data: t } = await supabase.from("tenants").select("id").ilike("name", lease.tenant_name).maybeSingle();
+      if (t) tenantId = t.id;
+    }
+    lease.tenant_id = tenantId;
 
     if (leaseErr || !lease) {
       diagnostics.skippedReasons = "Lease not found";
@@ -140,9 +157,18 @@ export const leaseRulePipelineService = {
 
     if (diagnostics.documentType === "assignment") {
       diagnostics.skippedReasons = "Assignment document -> no full expense rules generated";
-      // Ensure we patch assignment fields (not full rules)
-      // This is usually handled by other resolvers, but we just exit here.
+      
+      // Delete any full expense rules that were wrongly generated for this assignment
+      await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId);
+      
       return diagnostics;
+    }
+
+    // For Summit (force true rerun), clean up bad null rows first
+    if (force) {
+      // Cleanup for force run - delete all existing rules for this lease
+      // to ensure no duplicate bad keys remain since rule_key definition changed.
+      await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId);
     }
 
     // 5. Collect Candidates
@@ -189,17 +215,55 @@ export const leaseRulePipelineService = {
       let conf = r.confidence_score || r.confidence || 0.8;
       let valid = VALID_EVIDENCE(r.exact_source_text);
       if (!valid) {
+        // If evidence is invalid, force weak evidence and need review
         r.exact_source_text = null;
         r.confidence_score = Math.min(conf, 0.50);
-      }
-      if (r.confidence_score <= 0.55) {
+        r.review_status = "needs_review";
+        r.approval_status = "draft";
+        r.extraction_status = "weak_evidence";
+        diagnostics.weakEvidenceCount++;
+      } else if (r.confidence_score <= 0.55) {
         r.review_status = "needs_review";
         r.approval_status = "draft";
         r.extraction_status = r.exact_source_text ? "weak_evidence" : "inferred";
         diagnostics.weakEvidenceCount++;
       }
+
+      // Generate rule_type if missing
+      if (!r.rule_type) {
+         if (r.is_excluded || r.payment_treatment === "not_applicable") r.rule_type = "excluded";
+         else if (r.payment_treatment === "tenant_direct_contract") r.rule_type = "tenant_direct";
+         else if (r.included_in_base_rent === true || r.included_in_base_rent === "yes") r.rule_type = "full_service_included";
+         else if (r.has_base_year || r.recovery_method === "base_year") r.rule_type = "modified_gross_base_year";
+         else if (r.recoverable_from_tenant === "conditional") r.rule_type = "conditional_recovery";
+         else if (r.recoverable_from_tenant === "yes") r.rule_type = "nnn_recoverable";
+         else r.rule_type = "additional_rent";
+      }
       return r;
-    });
+    }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
+
+    // Diagnostics Payload Output
+    if (finalRules.length > 0) {
+      console.log(`[leaseRulePipelineService] Final payloads for lease ${leaseId}:`);
+      console.table(finalRules.map(r => ({
+        lease_id: lease.id,
+        tenant_id: lease.tenant_id,
+        rule_key: r.normalized_key,
+        rule_type: r.rule_type,
+        expense_category: r.expense_category,
+        source_field_key: r.source_field_key || null,
+        tenant_share_percent: r.tenant_share_percent,
+        estimated_annual_amount: r.estimated_annual_amount,
+        estimated_monthly_amount: r.estimated_monthly_amount,
+        admin_fee_percent: r.admin_fee_percent,
+        gross_up_percent: r.gross_up_percent,
+        cap_percent: r.cap_percent,
+        cap_type: r.cap_type,
+        exact_source_text: r.exact_source_text,
+        review_status: r.review_status,
+        approval_status: r.approval_status
+      })));
+    }
 
     const saved = await leaseExpenseRuleService.saveRuleSet({
       lease,
@@ -308,6 +372,12 @@ export const leaseRulePipelineService = {
   },
 
   makeTemplateRule(category, included, recoverable, camEligible, responsibility = "landlord") {
+    let ruleType = "additional_rent";
+    if (included) ruleType = "full_service_included";
+    else if (recoverable === "yes") ruleType = "nnn_recoverable";
+    else if (recoverable === "conditional") ruleType = "modified_gross_base_year";
+    else if (recoverable === "tenant_direct" || responsibility === "tenant_direct_contract") ruleType = "tenant_direct";
+
     return {
       expense_category: category,
       normalized_key: category.replace(/\s+/g, "_"),
@@ -316,7 +386,8 @@ export const leaseRulePipelineService = {
       cam_eligible: camEligible,
       responsibility: responsibility,
       source_type: "deterministic_template",
-      confidence_score: 0.85
+      confidence_score: 0.85,
+      rule_type: ruleType
     };
   },
 
