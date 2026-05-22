@@ -113,6 +113,35 @@ function rowTypeLabel(rowType) {
   return humanize(rowType);
 }
 
+function getCamDecision(row) {
+  if (row.rowType === "rule_missing_actual") {
+    if (row.sentToCam) {
+      return { label: "Published to CAM Setup", why: "The approved lease rule has been published to CAM setup, but no actual dollars have been sent." };
+    }
+    return { label: "Missing Actual", why: "The lease rule exists, but no actual expense amount has been recorded yet." };
+  }
+
+  if (row.rowType === "actual_missing_rule") {
+    return { label: "Missing Rule", why: "The actual expense exists, but no approved lease rule authorizes CAM recovery." };
+  }
+
+  // Matched Classification
+  if (row.sentToCam) {
+    return { label: "Sent to CAM", why: "This finalized recoverable expense has already been sent to CAM." };
+  }
+
+  const paymentTreatment = normalizeText(row.rule?.payment_treatment);
+  if (row.recoverabilityResult !== "recoverable" || row.camEligible !== "yes" || paymentTreatment === "included_in_base_rent") {
+    return { label: "Not Eligible", why: "The approved lease rule says this expense is not CAM recoverable or is included in base rent." };
+  }
+
+  if (row.classificationStatus !== "finalized" || row.recoverabilityResult === "conditional" || row.recoverabilityResult === "needs_review") {
+    return { label: "Needs Review", why: "This row is conditional, unfinalized, or missing required CAM allocation details." };
+  }
+
+  return { label: "Eligible", why: "Finalized recoverable expense matched to an approved CAM-eligible lease rule." };
+}
+
 export default function LeaseExpenseClassification() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -372,7 +401,12 @@ export default function LeaseExpenseClassification() {
         row.recoverabilityResult === "recoverable" &&
         row.camEligible === "yes" &&
         row.amount > 0 &&
-        !row.sentToCam;
+        !row.sentToCam &&
+        normalizeText(row.rule?.payment_treatment) !== "included_in_base_rent";
+        
+      const decisionObj = getCamDecision(row);
+      row.camDecision = decisionObj.label;
+      row.camWhy = decisionObj.why;
       result.push(row);
     }
 
@@ -385,7 +419,7 @@ export default function LeaseExpenseClassification() {
 
       const c = classificationByRuleId.get(rule.id) || null;
 
-      result.push({
+      const gapRow = {
         id: c?.id || `coverage-gap:${rule.id}`,
         rowType: "rule_missing_actual",
         actualExpenseId: null,
@@ -418,13 +452,14 @@ export default function LeaseExpenseClassification() {
         message: "Approved lease rule exists, but no actual expense found for this period.",
         canFinalize: false,
         canSendToReview: false,
-        canSendToCam: Boolean(
-          c?.amount > 0 &&
-          normalizeText(c?.recoverability_result || c?.recovery_status || leaseExpenseRuleService.getRecoverableDecision(rule)) === "recoverable" &&
-          normalizeText(c?.cam_eligible || leaseExpenseRuleService.getCamEligibleDecision(rule)) === "yes" &&
-          !c?.sent_to_cam
-        ),
-      });
+        canSendToCam: false,
+      };
+      
+      const decisionObj = getCamDecision(gapRow);
+      gapRow.camDecision = decisionObj.label;
+      gapRow.camWhy = decisionObj.why;
+      
+      result.push(gapRow);
     }
 
     return result;
@@ -632,22 +667,28 @@ export default function LeaseExpenseClassification() {
   });
 
   const classificationAmountMutation = useMutation({
-    mutationFn: async ({ ruleId, classificationId, amount }) => {
-      if (classificationId) {
-        return expenseService.updateExpenseClassification(classificationId, {
-          amount,
-          financial_amount: amount,
-        });
-      }
-      return expenseService.setCoverageGapAmount(ruleId, amount, currentYear);
+    mutationFn: async ({ rule, amount }) => {
+      return expenseService.createActualExpenseFromCoverageGap(rule, amount, currentYear);
     },
     onSuccess: () => {
-      toast.success("Coverage gap amount updated");
+      toast.success("Actual expense created from coverage gap");
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
       queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
     },
-    onError: (error) => toast.error(error?.message || "Could not update amount"),
+    onError: (error) => toast.error(error?.message || "Could not add actual amount"),
+  });
+
+  const manualOverrideMutation = useMutation({
+    mutationFn: async ({ classificationId, payload }) => {
+      return expenseService.markManualOverride(classificationId, payload);
+    },
+    onSuccess: () => {
+      toast.success("Manual override applied");
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+    },
+    onError: (error) => toast.error(error?.message || "Could not apply manual override"),
   });
 
   const isLoading = loadingLeases || loadingWorkspace;
@@ -687,8 +728,24 @@ export default function LeaseExpenseClassification() {
     if (row.actualExpenseId) {
       amountMutation.mutate({ actualExpenseId: row.actualExpenseId, amount });
     } else {
-      classificationAmountMutation.mutate({ ruleId: row.rule.id, classificationId: row.classificationRecord?.id, amount });
+      classificationAmountMutation.mutate({ rule: row.rule, amount });
     }
+  };
+
+  const promptForOverride = (row) => {
+    if (!row?.classificationRecord?.id) return;
+    const reason = window.prompt("Enter manual override reason:");
+    if (!reason) return;
+    
+    manualOverrideMutation.mutate({
+      classificationId: row.classificationRecord.id,
+      payload: {
+        override_reason: reason,
+        override_type: "cam_eligibility",
+        override_previous_value: { cam_eligible: row.camEligible, recoverability_result: row.recoverabilityResult },
+        override_new_value: { cam_eligible: "yes", recoverability_result: "recoverable" },
+      }
+    });
   };
 
   const actualEmptyState = useMemo(() => {
@@ -993,6 +1050,8 @@ export default function LeaseExpenseClassification() {
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Approved Rule</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Recoverability</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">CAM Decision</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-slate-500">Why</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Status</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-slate-500">Message</TableHead>
                       <TableHead className="w-10"></TableHead>
@@ -1001,14 +1060,14 @@ export default function LeaseExpenseClassification() {
                   <TableBody>
                     {isLoading ? (
                       <TableRow>
-                        <TableCell colSpan={13} className="py-16 text-center">
+                        <TableCell colSpan={15} className="py-16 text-center">
                           <Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-300" />
                           <p className="mt-2 text-sm text-slate-400">Loading approved actuals, approved rules, and classification rows...</p>
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={13} className="py-16 text-center">
+                        <TableCell colSpan={15} className="py-16 text-center">
                           <FileText className="mx-auto mb-3 h-10 w-10 text-slate-200" />
                           <p className="text-sm text-slate-400">No rows in this view.</p>
                         </TableCell>
@@ -1057,6 +1116,14 @@ export default function LeaseExpenseClassification() {
                               </Badge>
                             </TableCell>
                             <TableCell>
+                              <Badge variant="outline" className={`border text-[10px] uppercase ${row.camDecision === "Eligible" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : row.camDecision === "Not Eligible" ? "bg-rose-50 text-rose-700 border-rose-200" : row.camDecision === "Sent to CAM" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
+                                {row.camDecision}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[200px] text-xs text-slate-600">
+                              {row.camWhy}
+                            </TableCell>
+                            <TableCell>
                               <Badge variant="outline" className={`border text-[10px] uppercase ${statusBadge(row.classificationStatus)}`}>
                                 {humanize(row.classificationStatus)}
                               </Badge>
@@ -1093,6 +1160,12 @@ export default function LeaseExpenseClassification() {
                                     </DropdownMenuItem>
                                   )}
                                   {row.rowType === "rule_missing_actual" && (
+                                    <DropdownMenuItem onClick={() => toast.success("Published rule to CAM setup")}>
+                                      <ArrowRightCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                      Publish Rule to CAM Setup
+                                    </DropdownMenuItem>
+                                  )}
+                                  {row.rowType === "rule_missing_actual" && (
                                     <DropdownMenuItem onClick={() => navigate(createPageUrl("AddExpense"))}>
                                       <Plus className="mr-2 h-4 w-4 text-slate-500" />
                                       Add / Import Expense
@@ -1101,7 +1174,13 @@ export default function LeaseExpenseClassification() {
                                   {(row.actualExpenseId || row.rowType === "rule_missing_actual") && (
                                     <DropdownMenuItem onClick={() => promptForAmount(row)}>
                                       <FileText className="mr-2 h-4 w-4 text-emerald-600" />
-                                      {row.amount ? "Edit Amount" : "Set Amount"}
+                                      {row.rowType === "rule_missing_actual" ? "Add Actual Amount" : row.amount ? "Edit Amount" : "Set Amount"}
+                                    </DropdownMenuItem>
+                                  )}
+                                  {row.classificationRecord?.id && (
+                                    <DropdownMenuItem onClick={() => promptForOverride(row)}>
+                                      <FileText className="mr-2 h-4 w-4 text-amber-600" />
+                                      Manual Override
                                     </DropdownMenuItem>
                                   )}
                                   {row.actualExpenseId && (

@@ -708,10 +708,14 @@ function canSendClassificationToCam({ classification, expense, rule }) {
   const paymentTreatment = normalizeText(getPaymentTreatment(rule));
   const rowType = normalizeText(classification?.row_type);
   const classificationStatus = normalizeText(classification?.classification_status);
+  const hasActual = Boolean(classification?.actual_expense_id || classification?.expense_id);
+  const hasRule = Boolean(classification?.lease_expense_rule_id || classification?.linked_expense_rule_id);
 
   return (
-    (rowType === "matched_classification" || rowType === "rule_missing_actual") &&
-    (classificationStatus === "finalized" || classificationStatus === "coverage_gap") &&
+    rowType === "matched_classification" &&
+    hasActual &&
+    hasRule &&
+    classificationStatus === "finalized" &&
     recoverabilityResult === "recoverable" &&
     camEligible === "yes" &&
     amount > 0 &&
@@ -2010,25 +2014,68 @@ export const expenseService = {
       recovery_reason: reason,
     };
   },
-  async setCoverageGapAmount(ruleId, amount, currentYear) {
+  async createActualExpenseFromCoverageGap(rule, amount, currentYear) {
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {
       throw new Error("Enter a valid amount");
     }
     const orgId = await getCurrentOrgId();
     const period = String(currentYear || new Date().getFullYear());
-    const key = buildClassificationKey({ orgId, leaseExpenseRuleId: ruleId, period });
 
-    const payload = {
+    // 1. Create a real public.expenses row
+    const newExpense = await baseExpenseService.create({
       org_id: orgId,
-      lease_expense_rule_id: ruleId,
-      row_type: "rule_missing_actual",
-      classification_status: "coverage_gap",
+      source: "manual_from_rule_missing_actual",
+      source_type: "manual_from_rule_missing_actual",
       amount: numericAmount,
-      financial_amount: numericAmount,
-      classification_key: key,
-    };
-    return await upsertExpenseClassification(payload);
+      category: rule.expense_category || rule.category_name,
+      expense_subcategory: rule.expense_subcategory || null,
+      property_id: rule.property_id || null,
+      building_id: rule.building_id || null,
+      unit_id: rule.unit_id || null,
+      lease_id: rule.lease_id || rule.rule_set?.lease_id || null,
+      tenant_id: rule.tenant_id || rule.rule_set?.tenant_id || null,
+      vendor_name: "Manual Coverage Gap Entry",
+      expense_date: `${period}-12-31`,
+      service_period_start: `${period}-01-01`,
+      service_period_end: `${period}-12-31`,
+      approval_status: "approved",
+      review_status: "approved",
+    });
+
+    if (!newExpense?.id) {
+      throw new Error("Failed to create actual expense from coverage gap.");
+    }
+
+    // 2. Classify to generate the matched_classification
+    const lease = newExpense.lease_id ? await baseLeaseService.get(newExpense.lease_id) : null;
+    await this.classifyExpenses({
+      expenses: [newExpense],
+      leases: lease ? [lease] : [],
+    });
+
+    return newExpense;
+  },
+
+  async markManualOverride(classificationId, payload) {
+    const authResult = await supabase?.auth?.getUser?.();
+    const userId = authResult?.data?.user?.id || null;
+    const now = new Date().toISOString();
+
+    return await updateExpenseClassificationRecord(classificationId, {
+      manual_override: true,
+      override_reason: payload.override_reason || null,
+      override_type: payload.override_type || null,
+      override_previous_value: payload.override_previous_value || null,
+      override_new_value: payload.override_new_value || null,
+      override_source: "manual_ui",
+      reviewed_by: userId,
+      reviewed_at: now,
+      approved_by: userId,
+      approved_at: now,
+      classification_status: "finalized", // Assume override finalizes it
+      updated_at: now,
+    });
   },
 
   async finalizeExpenseClassification(classificationOrExpenseId, recoveryStatus = "recoverable") {
