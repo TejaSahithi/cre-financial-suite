@@ -939,6 +939,8 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Cap</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Admin Fee</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Gross-Up</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant Share</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Est. Amount</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Billing Frequency</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Reconciliation Required</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Exact Source Text</TableHead>
@@ -1007,7 +1009,7 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
                       <TableCell className="text-sm">
                         <div className="font-medium text-slate-900">
-                          {rule.category_name || rule.expense_category || category?.category_name || "-"}
+                          {rule.category_name || rule.expense_category || category?.category_name || humanizeToken(rule.rule_type) || "-"}
                         </div>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">
@@ -1037,7 +1039,16 @@ export default function LeaseExpenseRules() {
                         {rule.admin_fee_applicable ? (rule.admin_fee_percent ? `${rule.admin_fee_percent}%` : "Yes") : "-"}
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">
-                        {rule.gross_up_applicable ? (rule.gross_up_percent ? `${rule.gross_up_percent}%` : "Yes") : "-"}
+                        {rule.gross_up_applicable ? (rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "Yes") : rule.gross_up_percent != null ? `${rule.gross_up_percent}%` : "-"}
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-700">
+                        {rule.tenant_share_percent != null ? `${rule.tenant_share_percent}%` : "-"}
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-700">
+                        {[
+                          rule.estimated_annual_amount != null ? `$${Number(rule.estimated_annual_amount).toLocaleString()}/yr` : null,
+                          rule.estimated_monthly_amount != null ? `$${Number(rule.estimated_monthly_amount).toLocaleString()}/mo` : null
+                        ].filter(Boolean).join(" · ") || "-"}
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.billing_frequency || rule.frequency || "-"}</TableCell>
                       <TableCell className="text-sm text-slate-700">{rule.reconciliation_required ? "Yes" : "No"}</TableCell>

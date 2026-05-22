@@ -798,17 +798,32 @@ export default function LeaseReview() {
       if (!ruleSet) return EMPTY;
       const { data: rules, error: rulesErr } = await supabase
         .from("lease_expense_rules")
-        .select("id, row_status, mentioned_in_lease, is_recoverable, expense_category_id, gross_up_applicable, is_subject_to_cap, cap_type, admin_fee_applicable")
+        .select("id, row_status, review_status, approval_status, expense_category, cam_eligible, rule_type, admin_fee_percent, gross_up_percent, cap_percent, cap_amount, estimated_annual_amount, estimated_monthly_amount, tenant_share_percent, reconciliation_required")
         .eq("rule_set_id", ruleSet.id);
       if (rulesErr && (rulesErr.code === "PGRST205" || rulesErr.code === "42P01")) {
         return { ruleSet, expense: { total: 0, approved: 0 }, cam: { total: 0, approved: 0 }, tableMissing: true };
       }
-      const approvedSet = ruleSet.status === "approved";
+      
       const totals = (rules || []).reduce(
         (acc, r) => {
-          const status = String(r.row_status || "").toLowerCase();
-          const isCam = Boolean(r.gross_up_applicable || r.is_subject_to_cap || r.cap_type || r.admin_fee_applicable);
-          const isApproved = approvedSet && ["confirmed", "approved", "accepted"].includes(status);
+          const expenseCat = String(r.expense_category || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+          const isCam = Boolean(
+            ["cam", "operating_expenses", "common_area_maintenance"].includes(expenseCat) ||
+            String(r.cam_eligible).toLowerCase() === "yes" ||
+            String(r.rule_type || "").startsWith("cam_") ||
+            r.admin_fee_percent != null ||
+            r.gross_up_percent != null ||
+            r.cap_percent != null ||
+            r.cap_amount != null ||
+            r.estimated_annual_amount != null ||
+            r.estimated_monthly_amount != null ||
+            r.tenant_share_percent != null ||
+            r.reconciliation_required === true
+          );
+
+          const isApproved = String(r.approval_status || r.row_status).toLowerCase() === "approved" &&
+            ["approved", "reviewed"].includes(String(r.review_status || r.row_status).toLowerCase());
+
           if (isCam) {
             acc.cam.total += 1;
             if (isApproved) acc.cam.approved += 1;
@@ -2350,19 +2365,19 @@ export default function LeaseReview() {
             <CardContent className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <SummaryStat
-                  label="Expense rules extracted"
+                  label="Lease Expense Terms Found"
                   value={String(ruleSetSummary?.expense?.total ?? 0)}
                 />
                 <SummaryStat
-                  label="Expense rules approved"
+                  label="Lease Expense Terms Approved"
                   value={String(ruleSetSummary?.expense?.approved ?? 0)}
                 />
                 <SummaryStat
-                  label="CAM rules extracted"
+                  label="CAM Terms Found"
                   value={String(ruleSetSummary?.cam?.total ?? 0)}
                 />
                 <SummaryStat
-                  label="CAM rules approved"
+                  label="CAM Terms Approved"
                   value={String(ruleSetSummary?.cam?.approved ?? 0)}
                 />
               </div>

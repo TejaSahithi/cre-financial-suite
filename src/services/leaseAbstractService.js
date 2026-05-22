@@ -30,6 +30,8 @@ export const ABSTRACT_STATUS = {
   SUPERSEDED: "superseded",
 };
 
+const autoApproveAcceptedExpenseRules = false;
+
 function extractMissingColumn(err) {
   const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(" ");
   if (!message) return null;
@@ -308,7 +310,119 @@ export async function approveLeaseAbstract({
     console.warn("[leaseAbstractService] persistFieldReviews skipped:", err?.message || err);
   });
 
+  // Sync accepted terms to lease_expense_rules
+  await syncApprovedAbstractExpenseTermsToRules(lease.id, snapshot, lease.org_id).catch((err) => {
+    console.warn("[leaseAbstractService] syncApprovedAbstractExpenseTermsToRules skipped:", err?.message || err);
+  });
+
   return data;
+}
+
+export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedSnapshot, orgId) {
+  if (!leaseId || !approvedSnapshot || !orgId) return;
+
+  try {
+    let { data: ruleSets } = await supabase
+      .from("lease_expense_rule_sets")
+      .select("id, status")
+      .eq("lease_id", leaseId)
+      .neq("status", "archived")
+      .order("version", { ascending: false })
+      .limit(1);
+
+    let ruleSetId;
+    if (!ruleSets || ruleSets.length === 0) {
+      const { data: newRuleSet } = await supabase
+        .from("lease_expense_rule_sets")
+        .insert({
+          lease_id: leaseId,
+          org_id: orgId,
+          status: "draft",
+          version: 1,
+        })
+        .select("id")
+        .single();
+      if (!newRuleSet) return;
+      ruleSetId = newRuleSet.id;
+    } else {
+      ruleSetId = ruleSets[0].id;
+    }
+
+    const fields = approvedSnapshot.fields || {};
+    const rulesToUpsert = [];
+
+    const addRule = (fieldKey, ruleType, overrides = {}) => {
+      const field = fields[fieldKey];
+      if (!field || field.value === null || field.value === undefined || field.value === "") return;
+      if (!["accepted", "reviewed", "approved", "edited"].includes(String(field.review_status).toLowerCase())) return;
+
+      const num = (v) => {
+        const n = Number(String(v).replace(/[$,%\s,]/g, ""));
+        return Number.isFinite(n) ? n : null;
+      };
+
+      rulesToUpsert.push({
+        org_id: orgId,
+        lease_id: leaseId,
+        rule_set_id: ruleSetId,
+        rule_key: `abstract_sync_${fieldKey}`,
+        rule_type: ruleType,
+        source_field_key: fieldKey,
+        review_status: autoApproveAcceptedExpenseRules ? "approved" : "reviewed",
+        approval_status: autoApproveAcceptedExpenseRules ? "approved" : "needs_review",
+        source_page: field.source_page,
+        exact_source_text: field.exact_source_text || field.source_text || null,
+        confidence_score: field.confidence_score || field.confidence || null,
+        created_from: "approved_lease_abstract",
+        generation_source: "lease_review_acceptance",
+        ...overrides,
+        // Resolve nested numeric properties if they are functions
+        ...(overrides.estimated_annual_amount && { estimated_annual_amount: num(overrides.estimated_annual_amount) }),
+        ...(overrides.estimated_monthly_amount && { estimated_monthly_amount: num(overrides.estimated_monthly_amount) }),
+        ...(overrides.tenant_share_percent && { tenant_share_percent: num(overrides.tenant_share_percent) }),
+        ...(overrides.admin_fee_percent && { admin_fee_percent: num(overrides.admin_fee_percent) }),
+        ...(overrides.gross_up_percent && { gross_up_percent: num(overrides.gross_up_percent) }),
+        ...(overrides.cap_percent && { cap_percent: num(overrides.cap_percent) }),
+      });
+    };
+
+    addRule("responsibility_taxes", "taxes", { expense_category: "real_estate_taxes", responsibility: fields["responsibility_taxes"]?.value });
+    addRule("property_insurance_responsibility", "insurance", { expense_category: "property_insurance", responsibility: fields["property_insurance_responsibility"]?.value });
+    addRule("responsibility_utilities", "utilities", { expense_category: "utilities", responsibility: fields["responsibility_utilities"]?.value });
+    addRule("responsibility_repairs", "repairs_maintenance", { expense_category: "repairs_maintenance", responsibility: fields["responsibility_repairs"]?.value });
+    addRule("expense_structure", "operating_expenses", { expense_category: "operating_expenses", cam_eligible: "yes" });
+    addRule("admin_fee_percent", "cam_admin_fee", { admin_fee_percent: fields["admin_fee_percent"]?.value, cam_eligible: "yes" });
+    addRule("gross_up_percent", "cam_gross_up", { gross_up_percent: fields["gross_up_percent"]?.value, cam_eligible: "yes" });
+    addRule("cam_cap_percent", "cam_cap", { cap_percent: fields["cam_cap_percent"]?.value, cam_eligible: "yes" });
+    addRule("base_year", "base_year", { cam_eligible: "yes", recovery_method: "base_year" }); 
+    addRule("expense_stop", "expense_stop", { cam_eligible: "yes", recovery_method: "expense_stop" }); 
+    addRule("tenant_pro_rata_share", "tenant_share", { tenant_share_percent: fields["tenant_pro_rata_share"]?.value, cam_eligible: "yes" });
+    addRule("estimated_annual_cam", "cam_estimate_annual", { estimated_annual_amount: fields["estimated_annual_cam"]?.value, cam_eligible: "yes" });
+    addRule("estimated_monthly_cam", "cam_estimate_monthly", { estimated_monthly_amount: fields["estimated_monthly_cam"]?.value, cam_eligible: "yes" });
+    addRule("reconciliation_required", "reconciliation", { cam_eligible: "yes", recovery_method: String(fields["reconciliation_required"]?.value).toLowerCase() === "yes" || String(fields["reconciliation_required"]?.value).toLowerCase() === "true" ? "reconciliation" : "none" });
+    addRule("management_fee_basis", "management_fee", { cam_eligible: "yes" });
+
+    if (rulesToUpsert.length > 0) {
+      // Since lease_expense_rules doesn't have a unique constraint on (lease_id, rule_key) in older versions, 
+      // we'll try to update existing ones first, then insert new ones.
+      for (const rule of rulesToUpsert) {
+        const { data: existing } = await supabase
+          .from("lease_expense_rules")
+          .select("id")
+          .eq("lease_id", leaseId)
+          .eq("rule_key", rule.rule_key)
+          .maybeSingle();
+
+        if (existing?.id) {
+          await supabase.from("lease_expense_rules").update(rule).eq("id", existing.id);
+        } else {
+          await supabase.from("lease_expense_rules").insert(rule);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[leaseAbstractService] Error syncing rules:", err);
+  }
 }
 
 /**
