@@ -89,6 +89,7 @@ import {
 } from "@/services/leaseAbstractService";
 import { logAudit } from "@/services/audit";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
 import {
@@ -1657,7 +1658,6 @@ export default function LeaseReview() {
       // Persist expense rules using the new leaseRulePipelineService
       // which aggregates workflow + structured + templates + LLM + text fallback
       try {
-        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
         const persisted = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
           source: "approve_abstract",
@@ -1973,7 +1973,6 @@ export default function LeaseReview() {
       // user trip to the LeaseExpenseClassification page.
       setReextractStage("extracting_rules");
       try {
-        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
         await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
           source: "extract_draft",

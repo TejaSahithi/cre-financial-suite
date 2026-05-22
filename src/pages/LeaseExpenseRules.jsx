@@ -68,6 +68,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { supabase } from "@/services/supabaseClient";
 import { createPageUrl } from "@/utils";
 
@@ -457,7 +458,6 @@ export default function LeaseExpenseRules() {
       const leaseStart = performance.now();
       try {
         console.log("[Extract Rules clicked]", { leaseId: lease.id, force: true, service: "generateLeaseExpenseRulesForLease" });
-        const { leaseRulePipelineService } = await import("@/services/leaseRulePipelineService");
         const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
           source: "manual_extract",
