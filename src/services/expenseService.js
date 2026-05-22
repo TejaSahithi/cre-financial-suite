@@ -2015,7 +2015,7 @@ export const expenseService = {
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {
       throw new Error("Enter a valid amount");
     }
-    const orgId = await this.getCurrentOrgId();
+    const orgId = await getCurrentOrgId();
     const period = String(currentYear || new Date().getFullYear());
     const key = buildClassificationKey({ orgId, leaseExpenseRuleId: ruleId, period });
 
