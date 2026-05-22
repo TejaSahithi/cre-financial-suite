@@ -129,6 +129,30 @@ export default function LeaseDetail() {
 
   const snapshot = lease?.abstract_snapshot || {};
 
+  const handleOpenDocument = async (e, url) => {
+    e.preventDefault();
+    if (!url) return;
+    
+    // Check if it's a Supabase storage signed URL
+    const match = url.match(/object\/sign\/([^\/]+)\/(.+?)(?:\?|$)/);
+    if (match) {
+      const bucket = match[1];
+      const path = match[2];
+      try {
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60);
+        if (!error && data?.signedUrl) {
+          window.open(data.signedUrl, '_blank');
+          return;
+        }
+      } catch (err) {
+        console.warn("[LeaseDetail] Failed to refresh signed URL", err);
+      }
+    }
+    
+    // Fallback: open original url
+    window.open(url, '_blank');
+  };
+
   if (!leaseId) {
     return (
       <div className="flex h-96 flex-col items-center justify-center p-6">
@@ -424,14 +448,12 @@ export default function LeaseDetail() {
                   </p>
                 </div>
                 {doc.document_url && (
-                  <a
-                    href={doc.document_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    onClick={(e) => handleOpenDocument(e, doc.document_url)}
                     className="text-xs text-blue-600 hover:text-blue-700"
                   >
                     Open
-                  </a>
+                  </button>
                 )}
               </div>
             ))
