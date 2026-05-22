@@ -161,6 +161,19 @@ const FIELD_COLUMN_ALIASES = {
   start_date:        ["commencement_date", "start_date"],
   end_date:          ["expiration_date", "end_date"],
   landlord_name:     ["landlord_name", "lessor_name", "owner_name", "landlord", "lessor", "owner"],
+  property_name:     ["property_name", "premises.property_name", "building_name"],
+  suite_number:      ["suite_number", "unit_number", "suite", "premises.suite"],
+  floor:             ["floor", "premises.floor"],
+  lease_date:        ["lease_execution_date", "lease_date", "dates.lease_execution_date"],
+  initial_term:      ["initial_term", "term_months", "lease_term_months"],
+  tenant_pro_rata_share: ["tenant_share", "pro_rata_share", "tenant_pro_rata_share"],
+  general_liability_min: ["commercial_general_liability_per_occurrence", "general_liability_min"],
+  general_aggregate: ["commercial_general_liability_aggregate", "general_aggregate"],
+  estimated_annual_cam: ["estimated_annual_cam", "cam_estimate_annual"],
+  estimated_monthly_cam: ["estimated_monthly_cam", "cam_estimate_monthly"],
+  admin_fee_percent: ["admin_fee_percent"],
+  gross_up_percent:  ["gross_up_percent"],
+  cam_cap_percent:   ["cam_cap_percent"],
   square_footage:    ["square_footage", "total_sf", "rentable_area_sqft", "tenant_rsf"],
   total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
   premises_address:  ["premises_address", "property_address", "premises_location"],
@@ -188,7 +201,6 @@ const FIELD_COLUMN_ALIASES = {
   responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
   property_insurance_responsibility: ["property_insurance_responsibility", "insurance_responsibility"],
   tenant_insurance_required: ["tenant_insurance_required", "tenant_insurance", "tenant_property_insurance_required", "commercial_general_liability_required", "insurance_required"],
-  general_liability_min: ["general_liability_min", "general_liability_amount", "commercial_general_liability_amount", "commercial_general_liability_limit", "liability_insurance_amount"],
   waiver_of_subrogation: ["waiver_of_subrogation", "waiver_subrogation_required"],
   additional_insureds_required: ["additional_insureds_required", "additional_insured_required", "additional_insured"],
   renewal_type: ["renewal_type", "renewal_option_type"],
@@ -217,7 +229,13 @@ const FIELD_CLAUSE_FALLBACKS = {
   general_liability_min: {
     clauseTypes: ["insurance"],
     keywordPatterns: [/\$?[\d,]+(?:\.\d{2})?\s*(?:each occurrence|per occurrence|aggregate)/i],
-    structuredKeys: ["liability_limit_each_occurrence", "liability_limit_aggregate"],
+    structuredKeys: ["commercial_general_liability_per_occurrence", "liability_limit_each_occurrence"],
+    valueParser: "currency",
+  },
+  general_aggregate: {
+    clauseTypes: ["insurance"],
+    keywordPatterns: [/\$?[\d,]+(?:\.\d{2})?\s*(?:aggregate)/i],
+    structuredKeys: ["commercial_general_liability_aggregate", "liability_limit_aggregate"],
     valueParser: "currency",
   },
 };
@@ -387,10 +405,15 @@ function parseClauseValueFromConfig(clause, config) {
   }
 
   if (config.valueParser === "currency") {
+    // Some text may be "Commercial General Liability: $1,000,000 per occurrence"
+    // We want to extract the first monetary amount
+    const match = clauseText.match(/\$\s*([\d,]+(?:\.\d{2})?)/);
+    if (match?.[1]) {
+      return parseStoredNumber(match[1]);
+    }
     const direct = parseStoredNumber(clauseText);
     if (direct != null) return direct;
-    const match = clauseText.match(/\$?\s*([\d,]+(?:\.\d{2})?)/);
-    return match?.[1] ? parseStoredNumber(match[1]) : null;
+    return null;
   }
 
   if (config.useClauseTextAsValue) {
@@ -818,4 +841,19 @@ export function readFieldReview(lease, key) {
 export function isResolvedReview(review) {
   if (!review) return false;
   return RESOLVED_REVIEW_STATUSES.has(review.status);
+}
+
+export function normalizeClauseType(type) {
+  const t = String(type || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (t.includes("rent") && t.includes("escalation")) return "rent_clause";
+  if (t.includes("securitydeposit")) return "security_deposit";
+  if (t.includes("operatingexpense") || t.includes("expenserecovery")) return "operating_expense_recovery";
+  if (t.includes("cam") || t.includes("recoveries")) return "cam_recoveries";
+  if (t.includes("indemnification") || t.includes("indemnity")) return "indemnification";
+  if (t.includes("insurance")) return "insurance_requirements";
+  if (t.includes("use") || t.includes("permitted")) return "use_permitted_use";
+  if (t.includes("assignment") || t.includes("subletting") || t.includes("sublease")) return "assignment_subletting";
+  if (t.includes("default") || t.includes("remedies")) return "defaults_remedies";
+  if (t.includes("notices")) return "notices";
+  return type; // return original if no mapping found
 }

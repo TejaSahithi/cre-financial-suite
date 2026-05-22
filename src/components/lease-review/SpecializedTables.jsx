@@ -16,6 +16,7 @@ import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { createPageUrl } from "@/utils";
 import { ArrowUpRight, Loader2 } from "lucide-react";
+import { normalizeClauseType } from "@/lib/leaseReviewSchema";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -323,14 +324,14 @@ export function CamRulesTable({ leaseId }) {
 // checklist so reviewers see what _should_ be captured even when extraction
 // didn't return a value.
 const STANDARD_CLAUSE_TYPES = [
-  { key: "use_clause", label: "Use / Permitted Use" },
+  { key: "use_permitted_use", label: "Use / Permitted Use" },
   { key: "rent_clause", label: "Rent & Escalation" },
   { key: "security_deposit", label: "Security Deposit" },
-  { key: "expense_recovery", label: "Operating Expense Recovery" },
-  { key: "cam_clause", label: "CAM / Recoveries" },
-  { key: "insurance", label: "Insurance Requirements" },
+  { key: "operating_expense_recovery", label: "Operating Expense Recovery" },
+  { key: "cam_recoveries", label: "CAM / Recoveries" },
+  { key: "insurance_requirements", label: "Insurance Requirements" },
   { key: "indemnification", label: "Indemnification" },
-  { key: "default_remedies", label: "Default & Remedies" },
+  { key: "defaults_remedies", label: "Default & Remedies" },
   { key: "late_fees", label: "Late Fees" },
   { key: "renewal_option", label: "Renewal Option" },
   { key: "termination", label: "Termination / Early Out" },
@@ -390,7 +391,7 @@ export function ClauseRecordsTable({ lease }) {
   const checklist = useMemo(() => {
     const byType = new Map();
     for (const clause of allClauses) {
-      const key = String(clause.clause_type || "unknown").toLowerCase();
+      const key = normalizeClauseType(clause.clause_type);
       if (!byType.has(key)) byType.set(key, []);
       byType.get(key).push(clause);
     }

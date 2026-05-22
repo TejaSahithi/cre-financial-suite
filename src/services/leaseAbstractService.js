@@ -136,28 +136,70 @@ export async function persistFieldReviews({ lease, fieldReviews, reviewer }) {
  * abstract is approved (one snapshot per version).
  */
 export function buildAbstractSnapshot({ lease, fieldReviews, version, approver }) {
-  const fields = {};
-  for (const field of LEASE_REVIEW_FIELDS) {
-    const value = readFieldValue(lease, field.key);
-    const { rawValue, sourcePage, sourceText } = readFieldEvidence(lease, field.key);
-    const confidence = readFieldConfidence(lease, field.key);
-    const review = fieldReviews?.[field.key] || null;
-    fields[field.key] = {
+  const approved = {};
+  const pending_fields = {};
+  const rejected_fields = {};
+  const unmapped_terms = {};
+  const allFields = {};
+
+  const allKeys = new Set([
+    ...LEASE_REVIEW_FIELDS.map(f => f.key),
+    ...Object.keys(fieldReviews || {}),
+    ...Object.keys(lease?.extraction_data?.fields || {}),
+    ...Object.keys(lease?.extraction_data?.workflow_output?.lease_fields || {}),
+    ...Object.keys(lease?.extracted_fields || {})
+  ]);
+
+  const knownKeys = new Set(LEASE_REVIEW_FIELDS.map(f => f.key));
+
+  for (const key of allKeys) {
+    const value = readFieldValue(lease, key);
+    const { rawValue, sourcePage, sourceText, extractionStatus } = readFieldEvidence(lease, key);
+    const confidence = readFieldConfidence(lease, key);
+    const review = fieldReviews?.[key] || null;
+    const review_status = review?.status || "pending";
+    const fieldDef = LEASE_REVIEW_FIELDS.find(f => f.key === key);
+
+    const entry = {
       value: value ?? null,
       raw_value: rawValue ?? null,
       source_page: sourcePage ?? null,
       source_text: sourceText ?? null,
+      exact_source_text: sourceText ?? null,
+      confidence_score: typeof confidence === "number" ? confidence : null,
       confidence: typeof confidence === "number" ? confidence : null,
-      review_status: review?.status || "pending",
+      extraction_status: extractionStatus ?? null,
+      review_status: review_status,
       reviewed_at: review?.reviewed_at || null,
       reviewer: review?.reviewer || null,
+      section_key: fieldDef?.tab || null,
+      field_key: key,
     };
+
+    allFields[key] = entry;
+
+    if (["accepted", "edited", "approved", "reviewed"].includes(review_status)) {
+      approved[key] = entry;
+    } else if (review_status === "rejected") {
+      rejected_fields[key] = entry;
+    } else {
+      if (knownKeys.has(key)) {
+        pending_fields[key] = entry;
+      } else {
+        unmapped_terms[key] = entry;
+      }
+    }
   }
+
   return {
     version,
     approved_at: new Date().toISOString(),
     approved_by: approver || null,
-    fields,
+    fields: allFields,
+    approved,
+    pending_fields,
+    rejected_fields,
+    unmapped_terms,
   };
 }
 
@@ -239,9 +281,22 @@ export async function approveLeaseAbstract({
     abstract_approved_by: approvedBy,
     abstract_snapshot: snapshot,
     extraction_data: nextExtraction,
+    extracted_fields: snapshot.fields,
   };
 
   const data = await updateLeaseStripMissing(lease.id, update);
+
+  // Update uploaded_files.reviewed_output if source_file_id exists
+  if (lease.source_file_id) {
+    try {
+      await supabase
+        .from("uploaded_files")
+        .update({ reviewed_output: snapshot })
+        .eq("id", lease.source_file_id);
+    } catch (err) {
+      console.warn("[leaseAbstractService] failed to update uploaded_files.reviewed_output:", err);
+    }
+  }
 
   // Persist per-field reviews so the audit trail is queryable. If the
   // dedicated table doesn't exist yet (older schema), don't block approval.
