@@ -3,10 +3,13 @@ import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { fetchLeaseConfig, saveLeaseConfig } from "@/services/camConfig";
 
-function asNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function asNumber(val) {
+  if (val === null || val === undefined || val === "") return null;
+  if (typeof val === 'number') return val;
+  const str = String(val).replace(/[^0-9.-]/g, '');
+  if (!str) return null;
+  const num = Number(str);
+  return isNaN(num) ? null : num;
 }
 
 function asArray(value) {
