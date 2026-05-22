@@ -14,7 +14,6 @@
  */
 import { supabase } from "@/services/supabaseClient";
 import { leaseService } from "./leaseService";
-import { getWorkflowLeaseFields } from "./leaseExpenseRuleService";
 import { resolveLeaseField, resolveLeaseFields } from "@/lib/leaseFieldResolver";
 import {
   readFieldConfidence,

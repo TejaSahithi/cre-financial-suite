@@ -19,9 +19,6 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
   
   let query = supabase.from("leases").select(`
     *,
-    approved_lease_abstracts!left (
-       snapshot_json
-    ),
     uploaded_files!left (
        reviewed_output,
        ui_review_payload
@@ -40,7 +37,6 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
 
   const leases = rawData.map(lease => ({
     ...lease,
-    approved_lease_abstracts: Array.isArray(lease.approved_lease_abstracts) ? lease.approved_lease_abstracts[0] : lease.approved_lease_abstracts,
     uploaded_files: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files,
     uploaded_file: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files
   }));

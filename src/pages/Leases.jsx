@@ -129,10 +129,7 @@ export default function Leases() {
          .from("leases")
          .select(`
             *,
-            approved_lease_abstracts!left (
-               snapshot_json
-            ),
-            uploaded_files!left (
+            uploaded_files (
                reviewed_output,
                ui_review_payload
             )
@@ -142,7 +139,6 @@ export default function Leases() {
        if (error) throw error;
        return data.map(lease => ({
          ...lease,
-         approved_lease_abstracts: Array.isArray(lease.approved_lease_abstracts) ? lease.approved_lease_abstracts[0] : lease.approved_lease_abstracts,
          uploaded_files: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files,
          uploaded_file: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files
        }));
