@@ -47,22 +47,22 @@ export default function LeaseDetail() {
     queryKey: ["leaseRich", leaseId],
     queryFn: async () => {
       const { data, error } = await supabase
-         .from("leases")
-         .select("*")
-         .eq("id", leaseId)
-         .single();
+        .from("leases")
+        .select("*")
+        .eq("id", leaseId)
+        .single();
       if (error) throw error;
-      
+
       let fileMap = {};
       if (data.source_file_id) {
-         const { data: file } = await supabase.from("uploaded_files").select("reviewed_output, ui_review_payload").eq("id", data.source_file_id).single();
-         if (file) fileMap = file;
+        const { data: file } = await supabase.from("uploaded_files").select("reviewed_output, ui_review_payload").eq("id", data.source_file_id).single();
+        if (file) fileMap = file;
       }
-      
+
       return {
-         ...data,
-         uploaded_files: fileMap,
-         uploaded_file: fileMap
+        ...data,
+        uploaded_files: fileMap,
+        uploaded_file: fileMap
       };
     },
     enabled: !!leaseId,
@@ -132,7 +132,7 @@ export default function LeaseDetail() {
   const handleOpenDocument = async (e, url) => {
     e.preventDefault();
     if (!url) return;
-    
+
     // Check if it's a Supabase storage signed URL
     const match = url.match(/object\/sign\/([^\/]+)\/(.+?)(?:\?|$)/);
     if (match) {
@@ -148,7 +148,7 @@ export default function LeaseDetail() {
         console.warn("[LeaseDetail] Failed to refresh signed URL", err);
       }
     }
-    
+
     // Fallback: open original url
     window.open(url, '_blank');
   };
@@ -496,7 +496,7 @@ function DetailGrid({ items }) {
         else if (status === "rejected") statusStyle = "bg-red-100 text-red-700";
         else if (status === "pending" || status === "needs review") statusStyle = "bg-amber-100 text-amber-800";
         else if (status === "not found") statusStyle = "bg-slate-100 text-slate-400";
-        
+
         return (
           <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
             <div className="flex justify-between items-start gap-2">
