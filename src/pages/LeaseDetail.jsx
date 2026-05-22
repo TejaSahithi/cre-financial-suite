@@ -48,20 +48,21 @@ export default function LeaseDetail() {
     queryFn: async () => {
       const { data, error } = await supabase
          .from("leases")
-         .select(`
-            *,
-            uploaded_files (
-               reviewed_output,
-               ui_review_payload
-            )
-         `)
+         .select("*")
          .eq("id", leaseId)
          .single();
       if (error) throw error;
+      
+      let fileMap = {};
+      if (data.source_file_id) {
+         const { data: file } = await supabase.from("uploaded_files").select("reviewed_output, ui_review_payload").eq("id", data.source_file_id).single();
+         if (file) fileMap = file;
+      }
+      
       return {
          ...data,
-         uploaded_files: Array.isArray(data.uploaded_files) ? data.uploaded_files[0] : data.uploaded_files,
-         uploaded_file: Array.isArray(data.uploaded_files) ? data.uploaded_files[0] : data.uploaded_files
+         uploaded_files: fileMap,
+         uploaded_file: fileMap
       };
     },
     enabled: !!leaseId,

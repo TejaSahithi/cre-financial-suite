@@ -127,20 +127,27 @@ export default function Leases() {
     queryFn: async () => {
        const { data, error } = await supabase
          .from("leases")
-         .select(`
-            *,
-            uploaded_files (
-               reviewed_output,
-               ui_review_payload
-            )
-         `)
+         .select("*")
          .eq("org_id", orgId);
        
        if (error) throw error;
+       
+       const sourceFileIds = [...new Set(data.map(l => l.source_file_id).filter(Boolean))];
+       const fileMap = {};
+       if (sourceFileIds.length > 0) {
+           const { data: files } = await supabase
+             .from("uploaded_files")
+             .select("id, reviewed_output, ui_review_payload")
+             .in("id", sourceFileIds);
+           if (files) {
+               for (const f of files) fileMap[f.id] = f;
+           }
+       }
+
        return data.map(lease => ({
          ...lease,
-         uploaded_files: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files,
-         uploaded_file: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files
+         uploaded_file: fileMap[lease.source_file_id] || null,
+         uploaded_files: fileMap[lease.source_file_id] || null
        }));
     }
   });

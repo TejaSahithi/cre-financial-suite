@@ -17,13 +17,7 @@ export const leaseService = createEntityService('Lease');
 export async function backfillLeaseSummaryFields({ dryRun = true, force = false, approvedOnly = true } = {}) {
   console.log(`[backfillLeaseSummaryFields] Starting backfill... dryRun=${dryRun}, force=${force}, approvedOnly=${approvedOnly}`);
   
-  let query = supabase.from("leases").select(`
-    *,
-    uploaded_files!left (
-       reviewed_output,
-       ui_review_payload
-    )
-  `);
+  let query = supabase.from("leases").select("*");
 
   if (approvedOnly) {
     query = query.eq("abstract_status", "approved");
@@ -34,11 +28,23 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
     console.error("[backfillLeaseSummaryFields] Failed to fetch leases:", error);
     throw error;
   }
+  
+  const sourceFileIds = [...new Set(rawData.map(l => l.source_file_id).filter(Boolean))];
+  const fileMap = {};
+  if (sourceFileIds.length > 0) {
+      const { data: files } = await supabase
+        .from("uploaded_files")
+        .select("id, reviewed_output, ui_review_payload")
+        .in("id", sourceFileIds);
+      if (files) {
+          for (const f of files) fileMap[f.id] = f;
+      }
+  }
 
   const leases = rawData.map(lease => ({
     ...lease,
-    uploaded_files: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files,
-    uploaded_file: Array.isArray(lease.uploaded_files) ? lease.uploaded_files[0] : lease.uploaded_files
+    uploaded_files: fileMap[lease.source_file_id] || null,
+    uploaded_file: fileMap[lease.source_file_id] || null
   }));
 
   const summaryKeys = [
