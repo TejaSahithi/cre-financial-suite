@@ -330,6 +330,8 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
     return;
   }
 
+  console.log("[syncApprovedAbstractExpenseTermsToRules] CALLED", { leaseId });
+  console.log("extraction_data keys", Object.keys(lease?.extraction_data || {}));
   console.log("[syncApprovedAbstractExpenseTermsToRules] Starting sync for lease", leaseId);
   
   // Helper for deep-searching and regex-parsing lease data
@@ -428,6 +430,27 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
       ruleSetId = ruleSets[0].id;
     }
 
+    // Diagnostic table for deepFindLeaseField
+    const debugKeys = [
+      { key: "admin_fee_percent", aliases: ["admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent", "adminFeePercent", "administrative fee", "admin fee"] },
+      { key: "gross_up_percent", aliases: ["gross_up_percent", "gross_up_threshold_percent", "gross_up_threshold", "grossUpPercent", "gross-up", "gross up"] },
+      { key: "cap_percent", aliases: ["cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent", "controllable cap"] },
+      { key: "tenant_share_percent", aliases: ["tenant_share_percent", "tenant_pro_rata_share", "pro_rata_share", "tenant_share", "tenant pro rata share"] },
+      { key: "estimated_annual_amount", aliases: ["estimated_annual_cam", "cam_estimate_annual", "estimated_annual_amount", "annual_cam_estimate", "estimated annual cam"] },
+      { key: "estimated_monthly_amount", aliases: ["estimated_monthly_cam", "cam_estimate_monthly", "estimated_monthly_amount", "monthly_cam_estimate", "estimated monthly cam"] },
+      { key: "reconciliation_required", aliases: ["reconciliation_required", "cam_reconciliation_required", "reconciliation"] }
+    ];
+    
+    console.table(debugKeys.map(dk => {
+      const result = deepFindLeaseField(dk.aliases);
+      return {
+        key: dk.key,
+        found: !!result,
+        value: result ? result.value : null,
+        raw: result ? result.raw : null
+      };
+    }));
+
     const rulesToUpsert = [];
 
     const addRule = (aliases, ruleType, overrides = {}) => {
@@ -509,23 +532,31 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
     addRule(["default_interest_percent"], "additional_rent", { cam_eligible: "yes" });
     addRule(["holdover_multiplier"], "additional_rent", { cam_eligible: "yes" });
 
+    console.log("structured payload count", rulesToUpsert.length);
+
     if (rulesToUpsert.length > 0) {
       console.log(`[syncApprovedAbstractExpenseTermsToRules] Found ${rulesToUpsert.length} rules to upsert.`);
       
-      const diagnostics = rulesToUpsert.map(r => ({
-        lease_id: r.lease_id,
-        rule_set_id: r.rule_set_id,
-        rule_key: r.rule_key,
-        operation: 'upsert',
-        generation_source: r.generation_source,
-        created_from: r.created_from
-      }));
-      console.table(diagnostics);
+      console.table(rulesToUpsert.map(p => ({
+        rule_key: p.rule_key,
+        rule_type: p.rule_type,
+        source_field_key: p.source_field_key,
+        admin_fee_percent: p.admin_fee_percent,
+        gross_up_percent: p.gross_up_percent,
+        cap_percent: p.cap_percent,
+        tenant_share_percent: p.tenant_share_percent,
+        estimated_annual_amount: p.estimated_annual_amount,
+        estimated_monthly_amount: p.estimated_monthly_amount,
+        reconciliation_required: p.reconciliation_required
+      })));
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("lease_expense_rules")
-        .upsert(rulesToUpsert, { onConflict: "lease_id,rule_key" });
+        .upsert(rulesToUpsert, { onConflict: "lease_id,rule_key" })
+        .select("*");
       
+      console.log("structured upsert result", { data, error });
+
       if (error) {
         console.error("[syncApprovedAbstractExpenseTermsToRules] Upsert error:", error);
         throw error;
