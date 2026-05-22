@@ -2344,6 +2344,11 @@ export const leaseExpenseRuleService = {
       const payload = {
         rule_set_id: ruleSetId,
         rule_key: ruleKey,
+        rule_type: rule.rule_type || null,
+        source_field_key: rule.source_field_key || null,
+        tenant_share_percent: asNumber(rule.tenant_share_percent),
+        estimated_annual_amount: asNumber(rule.estimated_annual_amount),
+        estimated_monthly_amount: asNumber(rule.estimated_monthly_amount),
         extraction_version: rule.extraction_version || EXTRACTION_VERSION,
         source_hash: exactSourceText ? String(exactSourceText).toLowerCase().slice(0, 80) : null,
         generation_source: rule.generation_source || createdFrom || "workflow",
@@ -2426,7 +2431,7 @@ export const leaseExpenseRuleService = {
         if (ruleKeys.length > 0) {
           const { data: existing } = await supabase
             .from("lease_expense_rules")
-            .select("rule_key, review_status, approval_status, approved_by, approved_at, published_to_cam, notes")
+            .select("rule_key, review_status, approval_status, approved_by, approved_at, published_to_cam, notes, created_from, generation_source")
             .eq("rule_set_id", ruleSetId)
             .in("rule_key", ruleKeys);
           for (const row of existing || []) {
@@ -2442,7 +2447,8 @@ export const leaseExpenseRuleService = {
       for (const payload of rulePayloads) {
         const existing = preservedByKey.get(payload.rule_key);
         if (!existing) continue;
-        if (existing.review_status === "approved" || existing.approval_status === "approved") {
+        const isFromAbstractSync = existing.created_from === "approved_lease_abstract" || existing.generation_source === "lease_review_acceptance";
+        if ((existing.review_status === "approved" || existing.approval_status === "approved") && !isFromAbstractSync) {
           preservedApprovedCount += 1;
           payload.review_status = existing.review_status || payload.review_status;
           payload.approval_status = existing.approval_status || payload.approval_status;

@@ -311,16 +311,25 @@ export async function approveLeaseAbstract({
   });
 
   // Sync accepted terms to lease_expense_rules
-  await syncApprovedAbstractExpenseTermsToRules(lease.id, snapshot, lease.org_id).catch((err) => {
-    console.warn("[leaseAbstractService] syncApprovedAbstractExpenseTermsToRules skipped:", err?.message || err);
-  });
+  try {
+    await syncApprovedAbstractExpenseTermsToRules(lease.id, snapshot, lease.org_id);
+  } catch (err) {
+    console.error("[leaseAbstractService] syncApprovedAbstractExpenseTermsToRules FAILED:", err);
+    throw err;
+  }
 
   return data;
 }
 
 export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedSnapshot, orgId) {
-  if (!leaseId || !approvedSnapshot || !orgId) return;
+  if (!leaseId || !approvedSnapshot || !orgId) {
+    console.warn("[syncApprovedAbstractExpenseTermsToRules] Missing required arguments", { leaseId, orgId, snapshotKeys: Object.keys(approvedSnapshot || {}) });
+    return;
+  }
 
+  console.log("[syncApprovedAbstractExpenseTermsToRules] Starting sync for lease", leaseId);
+  console.log("[syncApprovedAbstractExpenseTermsToRules] Snapshot section keys:", Object.keys(approvedSnapshot));
+  
   try {
     let { data: ruleSets } = await supabase
       .from("lease_expense_rule_sets")
@@ -392,6 +401,16 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
         ...(overrides.gross_up_percent && { gross_up_percent: num(overrides.gross_up_percent) }),
         ...(overrides.cap_percent && { cap_percent: num(overrides.cap_percent) }),
       });
+      
+      const payload = rulesToUpsert[rulesToUpsert.length - 1];
+      console.log(`[syncApprovedAbstractExpenseTermsToRules] Mapped ${fieldKey} -> ${ruleType}`, {
+        raw_value: field.raw_value,
+        normalized_value: field.value,
+        generated_rule_type: ruleType,
+        generated_expense_category: overrides.expense_category || "general",
+        generated_rule_key: payload.rule_key,
+        payload_keys: Object.keys(payload)
+      });
     };
 
     addRule("responsibility_taxes", "direct_tenant_responsibility", { expense_category: "real_estate_taxes", operational_responsibility: String(fields["responsibility_taxes"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
@@ -415,6 +434,7 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
     addRule("holdover_multiplier", "additional_rent", { notes: fields["holdover_multiplier"]?.value ? `Holdover: ${fields["holdover_multiplier"]?.value}x` : null });
 
     if (rulesToUpsert.length > 0) {
+      console.log(`[syncApprovedAbstractExpenseTermsToRules] Found ${rulesToUpsert.length} rules to upsert.`);
       // Since lease_expense_rules doesn't have a unique constraint on (lease_id, rule_key) in older versions, 
       // we'll try to update existing ones first, then insert new ones.
       for (const rule of rulesToUpsert) {
@@ -426,14 +446,20 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
           .maybeSingle();
 
         if (existing?.id) {
-          await supabase.from("lease_expense_rules").update(rule).eq("id", existing.id);
+          const { error } = await supabase.from("lease_expense_rules").update(rule).eq("id", existing.id);
+          if (error) console.error("[sync] Update error:", error);
         } else {
-          await supabase.from("lease_expense_rules").insert(rule);
+          const { error } = await supabase.from("lease_expense_rules").insert(rule);
+          if (error) console.error("[sync] Insert error:", error);
         }
       }
+      console.log("[syncApprovedAbstractExpenseTermsToRules] Completed sync.");
+    } else {
+      console.log("[syncApprovedAbstractExpenseTermsToRules] No mapped fields found to upsert.");
     }
   } catch (err) {
-    console.warn("[leaseAbstractService] Error syncing rules:", err);
+    console.error("[leaseAbstractService] Error syncing rules:", err);
+    throw err;
   }
 }
 
