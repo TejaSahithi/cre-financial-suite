@@ -361,20 +361,28 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
         return Number.isFinite(n) ? n : null;
       };
 
+      const isCam = overrides.cam_eligible === "yes";
+      
       rulesToUpsert.push({
         org_id: orgId,
         lease_id: leaseId,
         rule_set_id: ruleSetId,
-        rule_key: `abstract_sync_${fieldKey}`,
+        rule_key: `${leaseId}_${ruleType}_${overrides.expense_category || "general"}_${fieldKey}`,
         rule_type: ruleType,
         source_field_key: fieldKey,
         review_status: autoApproveAcceptedExpenseRules ? "approved" : "reviewed",
         approval_status: autoApproveAcceptedExpenseRules ? "approved" : "needs_review",
         source_page: field.source_page,
         exact_source_text: field.exact_source_text || field.source_text || null,
-        confidence_score: field.confidence_score || field.confidence || null,
+        confidence_score: field.confidence_score || field.confidence || (field.source_text ? 0.8 : 0.5),
+        extraction_status: field.extraction_status || (field.source_text ? "extracted" : "inferred"),
         created_from: "approved_lease_abstract",
         generation_source: "lease_review_acceptance",
+        ...(isCam ? {
+          operational_responsibility: "landlord",
+          payment_treatment: "pass_through",
+          recoverable_from_tenant: "yes"
+        } : {}),
         ...overrides,
         // Resolve nested numeric properties if they are functions
         ...(overrides.estimated_annual_amount && { estimated_annual_amount: num(overrides.estimated_annual_amount) }),
@@ -386,21 +394,25 @@ export async function syncApprovedAbstractExpenseTermsToRules(leaseId, approvedS
       });
     };
 
-    addRule("responsibility_taxes", "taxes", { expense_category: "real_estate_taxes", responsibility: fields["responsibility_taxes"]?.value });
-    addRule("property_insurance_responsibility", "insurance", { expense_category: "property_insurance", responsibility: fields["property_insurance_responsibility"]?.value });
-    addRule("responsibility_utilities", "utilities", { expense_category: "utilities", responsibility: fields["responsibility_utilities"]?.value });
-    addRule("responsibility_repairs", "repairs_maintenance", { expense_category: "repairs_maintenance", responsibility: fields["responsibility_repairs"]?.value });
-    addRule("expense_structure", "operating_expenses", { expense_category: "operating_expenses", cam_eligible: "yes" });
+    addRule("responsibility_taxes", "direct_tenant_responsibility", { expense_category: "real_estate_taxes", operational_responsibility: String(fields["responsibility_taxes"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
+    addRule("property_insurance_responsibility", "direct_tenant_responsibility", { expense_category: "property_insurance", operational_responsibility: String(fields["property_insurance_responsibility"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
+    addRule("responsibility_utilities", "direct_tenant_responsibility", { expense_category: "utilities", operational_responsibility: String(fields["responsibility_utilities"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
+    addRule("responsibility_repairs", "direct_tenant_responsibility", { expense_category: "repairs_maintenance", operational_responsibility: String(fields["responsibility_repairs"]?.value).toLowerCase() === "tenant" ? "tenant" : "landlord", recoverable_from_tenant: "yes", payment_treatment: "additional_rent" });
+    addRule("expense_structure", "expense_recovery", { expense_category: "operating_expenses", cam_eligible: "yes" });
     addRule("admin_fee_percent", "cam_admin_fee", { admin_fee_percent: fields["admin_fee_percent"]?.value, cam_eligible: "yes" });
     addRule("gross_up_percent", "cam_gross_up", { gross_up_percent: fields["gross_up_percent"]?.value, cam_eligible: "yes" });
-    addRule("cam_cap_percent", "cam_cap", { cap_percent: fields["cam_cap_percent"]?.value, cam_eligible: "yes" });
-    addRule("base_year", "base_year", { cam_eligible: "yes", recovery_method: "base_year" }); 
-    addRule("expense_stop", "expense_stop", { cam_eligible: "yes", recovery_method: "expense_stop" }); 
+    addRule("cam_cap_percent", "cam_cap", { cap_percent: fields["cam_cap_percent"]?.value, cap_type: fields["cam_cap_type"]?.value || "cumulative", cam_eligible: "yes" });
+    addRule("base_year", "conditional_recovery", { cam_eligible: "yes", recovery_method: "base_year" }); 
+    addRule("expense_stop", "conditional_recovery", { cam_eligible: "yes", recovery_method: "expense_stop" }); 
     addRule("tenant_pro_rata_share", "tenant_share", { tenant_share_percent: fields["tenant_pro_rata_share"]?.value, cam_eligible: "yes" });
-    addRule("estimated_annual_cam", "cam_estimate_annual", { estimated_annual_amount: fields["estimated_annual_cam"]?.value, cam_eligible: "yes" });
-    addRule("estimated_monthly_cam", "cam_estimate_monthly", { estimated_monthly_amount: fields["estimated_monthly_cam"]?.value, cam_eligible: "yes" });
-    addRule("reconciliation_required", "reconciliation", { cam_eligible: "yes", recovery_method: String(fields["reconciliation_required"]?.value).toLowerCase() === "yes" || String(fields["reconciliation_required"]?.value).toLowerCase() === "true" ? "reconciliation" : "none" });
-    addRule("management_fee_basis", "management_fee", { cam_eligible: "yes" });
+    addRule("estimated_annual_cam", "cam_estimate", { estimated_annual_amount: fields["estimated_annual_cam"]?.value, cam_eligible: "yes" });
+    addRule("estimated_monthly_cam", "cam_estimate", { estimated_monthly_amount: fields["estimated_monthly_cam"]?.value, cam_eligible: "yes" });
+    addRule("reconciliation_required", "cam_reconciliation", { cam_eligible: "yes", reconciliation_required: String(fields["reconciliation_required"]?.value).toLowerCase() === "yes" || String(fields["reconciliation_required"]?.value).toLowerCase() === "true" });
+    addRule("reconciliation_frequency", "cam_reconciliation", { cam_eligible: "yes", billing_frequency: fields["reconciliation_frequency"]?.value });
+    addRule("management_fee_basis", "additional_rent", { cam_eligible: "yes" });
+    addRule("late_fee_percent", "additional_rent", { notes: fields["late_fee_percent"]?.value ? `Late fee: ${fields["late_fee_percent"]?.value}%` : null });
+    addRule("default_interest_percent", "additional_rent", { notes: fields["default_interest_percent"]?.value ? `Default interest: ${fields["default_interest_percent"]?.value}%` : null });
+    addRule("holdover_multiplier", "additional_rent", { notes: fields["holdover_multiplier"]?.value ? `Holdover: ${fields["holdover_multiplier"]?.value}x` : null });
 
     if (rulesToUpsert.length > 0) {
       // Since lease_expense_rules doesn't have a unique constraint on (lease_id, rule_key) in older versions, 

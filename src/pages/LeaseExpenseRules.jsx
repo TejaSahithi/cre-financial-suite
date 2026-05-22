@@ -927,6 +927,7 @@ export default function LeaseExpenseRules() {
               <TableRow className="bg-slate-50">
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Tenant</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Property</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Rule Type</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Category</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Subcategory</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Included In Rent</TableHead>
@@ -947,6 +948,8 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Confidence</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Approval Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Field Key</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Published to CAM</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
@@ -954,13 +957,13 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={23} className="py-12 text-center">
+                  <TableCell colSpan={26} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={23} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={26} className="py-12 text-center text-sm text-slate-400">
                     No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
                   </TableCell>
                 </TableRow>
@@ -973,13 +976,13 @@ export default function LeaseExpenseRules() {
                   const responsibility = getOperationalResponsibility(rule);
                   const recoveryMethod = validation.recoveryMethod;
                   const allocationBasis = validation.allocationBasis;
-                  const capDisplay = rule.is_subject_to_cap
+                  const capDisplay = rule.is_subject_to_cap || rule.cap_percent != null || rule.cap_type || rule.cap_amount != null
                     ? [
                         rule.cap_type || "",
                         rule.cap_percent != null ? `${rule.cap_percent}%` : null,
                         rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : null,
                         rule.cap_value != null && rule.cap_amount == null ? String(rule.cap_value) : null,
-                      ].filter(Boolean).join(" ")
+                      ].filter(Boolean).join(" ") || "-"
                     : "-";
                   const sourcePage = getSourcePage(rule);
                   const sourceText = getExactSourceText(rule) || "-";
@@ -1008,8 +1011,13 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
                       <TableCell className="text-sm">
+                        <Badge className="bg-slate-100 text-slate-700 text-[10px]">
+                          {humanizeToken(rule.rule_type) || "General"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">
                         <div className="font-medium text-slate-900">
-                          {rule.category_name || rule.expense_category || category?.category_name || humanizeToken(rule.rule_type) || "-"}
+                          {rule.category_name || rule.expense_category || category?.category_name || "-"}
                         </div>
                       </TableCell>
                       <TableCell className="text-sm text-slate-700">
@@ -1059,18 +1067,24 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-xs text-slate-700">{rule.extraction_status || "-"}</TableCell>
                       <TableCell>
                         <Badge className={`text-[10px] ${
-                          isApprovedRule(rule)
+                          String(rule.review_status).toLowerCase() === "reviewed" || String(rule.review_status).toLowerCase() === "approved"
                             ? "bg-emerald-100 text-emerald-700"
-                            : needsReviewRule(rule)
-                              ? "bg-amber-100 text-amber-800"
-                              : ROW_STATUS_STYLE[rule.row_status] || "bg-slate-100 text-slate-700"
+                            : "bg-amber-100 text-amber-800"
                         }`}>
-                          {isApprovedRule(rule)
-                            ? "Approved"
-                            : needsReviewRule(rule)
-                              ? "Needs Review"
-                              : ROW_STATUS_LABEL[rule.row_status] || rule.row_status || "-"}
+                          {humanizeToken(rule.review_status || "Pending")}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${
+                          String(rule.approval_status || rule.row_status).toLowerCase() === "approved"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-amber-100 text-amber-800"
+                        }`}>
+                          {humanizeToken(rule.approval_status || rule.row_status || "Needs Review")}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500 font-mono">
+                        {rule.source_field_key || "-"}
                       </TableCell>
                       <TableCell className="max-w-[180px] text-xs text-slate-600">
                         <Badge className={`text-[10px] ${validation.publishedToCam ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
