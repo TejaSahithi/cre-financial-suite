@@ -1,42 +1,32 @@
 import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
+import fs from 'fs';
 
-dotenv.config({ path: '.env.local' });
-dotenv.config({ path: '.env' });
+const env = fs.readFileSync('.env', 'utf-8').split('\n').reduce((acc, line) => {
+  const [key, val] = line.split('=');
+  if (key && val) acc[key.trim()] = val.trim();
+  return acc;
+}, {});
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabaseUrl = env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function test() {
-  const leaseId = "310ab875-f516-4a2b-94d9-686cf4b87d90";
-  const { data: lease, error } = await supabase.from('leases').select('*').eq('id', leaseId).single();
+async function main() {
+  const { data, error } = await supabase.from('approved_lease_abstracts').select('id, extraction_data').eq('id', '310ab875-f516-4a2b-94d9-686cf4b87d90').single();
   if (error) {
     console.error(error);
     return;
   }
+  console.log(JSON.stringify(Object.keys(data.extraction_data || {}), null, 2));
   
-  console.log("Lease Name:", lease.lease_name || lease.name);
-  console.log("Lease Type:", lease.lease_type);
-  console.log("Has Extraction Data:", !!lease.extraction_data);
-  console.log("Workflow Rules Count:", lease.extraction_data?.workflow_output?.expense_rules?.length);
-  console.log("Expenses Count:", lease.extraction_data?.expenses?.length);
-  console.log("Rules Count:", lease.extraction_data?.rules?.length);
-  
-  const fileId = lease.extraction_data?.source_file_id || lease.uploaded_file_id || lease.file_id;
-  console.log("Source File ID:", fileId);
-  
-  if (fileId) {
-    const { data: file } = await supabase.from('uploaded_files').select('reviewed_output, parsed_data, docling_raw').eq('id', fileId).single();
-    if (file) {
-      console.log("Has File Reviewed Output:", !!file.reviewed_output);
-      console.log("Has File Parsed Full Text:", !!file.parsed_data?.full_text);
-      console.log("Has File Docling Text:", !!file.docling_raw?.full_text);
-    } else {
-      console.log("File not found in uploaded_files");
-    }
+  if (data.extraction_data.fields) {
+    console.log("FIELDS:", Object.keys(data.extraction_data.fields));
+  }
+  if (data.extraction_data.expenses) {
+    console.log("EXPENSES:", data.extraction_data.expenses.length);
+  } else {
+    console.log("NO EXPENSES ARRAY");
   }
 }
-
-test();
+main();

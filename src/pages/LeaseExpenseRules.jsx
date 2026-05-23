@@ -440,6 +440,12 @@ export default function LeaseExpenseRules() {
   }, [backfillCandidates, ruleSetsByLease]);
 
   const runBackfill = async () => {
+    console.log("[Force Regenerate Rules clicked]", {
+      selectedLeaseId: backfillCandidates.length === 1 ? backfillCandidates[0].id : "multiple",
+      selectedLeaseName: backfillCandidates.length === 1 ? backfillCandidates[0].tenant_name : "Multiple",
+      force: true
+    });
+    
     if (backfillState.running) return;
     if (backfillCandidates.length === 0) {
       toast.info("No approved leases in scope are missing expense rules.");
@@ -482,7 +488,6 @@ export default function LeaseExpenseRules() {
       const lease = backfillCandidates[i];
       const leaseStart = performance.now();
       try {
-        console.log("[Force Regenerate Rules clicked]", { leaseId: lease.id, force: true, service: "generateLeaseExpenseRulesForLease" });
         const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
           source: "manual_extract",

@@ -48,10 +48,10 @@ export const leaseRulePipelineService = {
 
     // 1. Fetch lease
     const { data: lease, error: leaseErr } = await supabase
-      .from("leases")
-      .select("*, unit:units(tenant_id)")
+      .from("approved_lease_abstracts")
+      .select("*, unit(*), property(*), building(*)")
       .eq("id", leaseId)
-      .single();
+      .maybeSingle();
 
     if (leaseErr || !lease) {
       diagnostics.skippedReasons = "Lease not found";
@@ -173,6 +173,16 @@ export const leaseRulePipelineService = {
       return diagnostics;
     }
 
+    console.log("[PIPELINE INPUT]", {
+      leaseId,
+      sourceFileId: diagnostics.sourceFileId,
+      sourceTextLength: diagnostics.sourceTextLength,
+      documentType: diagnostics.documentType,
+      leaseType: lease.lease_type,
+      hasExtractionData: !!lease?.extraction_data,
+      extractionKeys: Object.keys(lease?.extraction_data || {})
+    });
+
     // For Summit (force true rerun), clean up bad null rows first
     if (force) {
       console.log("[FORCE DELETE OLD RULES]", { leaseId, force });
@@ -217,9 +227,15 @@ export const leaseRulePipelineService = {
     let llmRules = [];
     if (sourceText && force) {
        try {
-         const { data: llmData } = await supabase.functions.invoke("extract-lease-expense-rules", { body: { text: sourceText } });
-         if (llmData?.rules) llmRules = llmData.rules;
-       } catch (err) {}
+         const { data: llmData, error: llmErr } = await supabase.functions.invoke("extract-lease-expense-rules", { body: { text: sourceText } });
+         if (llmErr) {
+            console.error("[LLM EXTRACTION FAILED]", llmErr);
+         } else if (llmData?.rules) {
+            llmRules = llmData.rules;
+         }
+       } catch (err) {
+         console.error("[LLM EXTRACTION CATCH ERROR]", err);
+       }
     }
     diagnostics.llmRulesCount = llmRules.length;
     llmRules.forEach(r => candidates.push(this.mapLlmRule(r, lease.id)));
@@ -227,6 +243,19 @@ export const leaseRulePipelineService = {
     // 6. Merge, Score, Dedupe
     const merged = this.mergeAndScoreCandidates(candidates);
     diagnostics.mergedRulesCount = merged.length;
+
+    console.log("[PIPELINE CANDIDATES]", {
+      workflowRulesCount: diagnostics.workflowRulesCount,
+      structuredTermRulesCount: diagnostics.structuredTermRulesCount,
+      deterministicRulesCount: diagnostics.deterministicRulesCount,
+      textFallbackRulesCount: diagnostics.textFallbackRulesCount,
+      llmRulesCount: diagnostics.llmRulesCount,
+      mergedRulesCount: diagnostics.mergedRulesCount
+    });
+
+    if (diagnostics.mergedRulesCount === 0) {
+      throw new Error("NEW PIPELINE GENERATED ZERO RULES");
+    }
 
     // 7. Evidence Validation & Save
     const finalRules = merged.map(r => {
@@ -269,23 +298,19 @@ export const leaseRulePipelineService = {
     // Diagnostics Payload Output
     if (finalRules.length > 0) {
       console.log(`[FINAL PAYLOAD BEFORE SAVE] Lease ${leaseId}:`);
-      console.table(finalRules.map(r => ({
+      console.table(finalRules.map(p => ({
         lease_id: lease.id,
-        tenant_id: lease.tenant_id,
-        rule_key: r.normalized_key,
-        rule_type: r.rule_type,
-        expense_category: r.expense_category,
-        source_field_key: r.source_field_key || null,
-        tenant_share_percent: r.tenant_share_percent,
-        estimated_annual_amount: r.estimated_annual_amount,
-        estimated_monthly_amount: r.estimated_monthly_amount,
-        admin_fee_percent: r.admin_fee_percent,
-        gross_up_percent: r.gross_up_percent,
-        cap_percent: r.cap_percent,
-        cap_type: r.cap_type,
-        exact_source_text: r.exact_source_text,
-        review_status: r.review_status,
-        approval_status: r.approval_status
+        rule_key: p.rule_key,
+        rule_type: p.rule_type,
+        expense_category: p.expense_category,
+        tenant_share_percent: p.tenant_share_percent,
+        estimated_annual_amount: p.estimated_annual_amount,
+        estimated_monthly_amount: p.estimated_monthly_amount,
+        admin_fee_percent: p.admin_fee_percent,
+        gross_up_percent: p.gross_up_percent,
+        cap_percent: p.cap_percent,
+        extraction_version: p.extraction_version,
+        generation_source: p.generation_source
       })));
     }
 
