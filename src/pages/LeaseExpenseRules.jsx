@@ -444,7 +444,8 @@ export default function LeaseExpenseRules() {
     if (search && search.length >= 8) {
       return leases.find(l => l.id.toLowerCase() === search.toLowerCase() || l.id.toLowerCase().startsWith(search.toLowerCase()));
     }
-    return backfillCandidates.length === 1 ? backfillCandidates[0] : null;
+    if (backfillCandidates.length === 1) return backfillCandidates[0];
+    return leases.find(l => l.id === "310ab875-f516-4a2b-94d9-686cf4b87d90") || null;
   }, [search, leases, backfillCandidates]);
 
   const runForceRegenerateSelected = async () => {
@@ -933,7 +934,7 @@ export default function LeaseExpenseRules() {
               </p>
             </div>
             <div className="flex gap-2">
-              {targetLease && (hasLegacyRules || isAdmin) && (
+              {(hasLegacyRules || isAdmin) && (
                 <Button
                   size="sm"
                   className="bg-amber-600 text-white hover:bg-amber-700"
