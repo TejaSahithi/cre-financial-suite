@@ -170,6 +170,8 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.workflow_output.expense_rules", data: lease?.extraction_data?.workflow_output?.expense_rules },
       { path: "lease.extraction_data.workflow_output.cam_rules", data: lease?.extraction_data?.workflow_output?.cam_rules },
       { path: "lease.extraction_data.workflow_output.lease_clauses", data: lease?.extraction_data?.workflow_output?.lease_clauses },
+      { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
+      { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
       { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload }
@@ -184,6 +186,8 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.workflow_output.expense_rules", data: lease?.extraction_data?.workflow_output?.expense_rules },
       { path: "lease.extraction_data.workflow_output.cam_rules", data: lease?.extraction_data?.workflow_output?.cam_rules },
       { path: "lease.extraction_data.workflow_output.lease_clauses", data: lease?.extraction_data?.workflow_output?.lease_clauses },
+      { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
+      { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
       { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload },
