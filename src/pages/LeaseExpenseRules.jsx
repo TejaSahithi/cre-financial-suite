@@ -385,12 +385,13 @@ export default function LeaseExpenseRules() {
     for (const [leaseId, entry] of scopedByLease) {
       if (!merged.find((m) => m.leaseId === leaseId)) merged.push(entry);
     }
+    const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
     console.log("[LeaseExpenseRules] merged ruleSetsByLease:", {
       scoped_entries: ruleSetsByLeaseScoped?.length || 0,
       direct_entries: directRuleSets?.length || 0,
-      after_scope_filter: merged.length,
+      after_scope_filter: finalMerged.length,
     });
-    return merged;
+    return finalMerged;
   }, [ruleSetsByLeaseScoped, directRuleSets, leaseIds]);
 
   const isLoading = isLoadingScoped || isLoadingDirect;
@@ -439,13 +440,50 @@ export default function LeaseExpenseRules() {
     });
   }, [backfillCandidates, ruleSetsByLease]);
 
-  const runBackfill = async () => {
-    console.log("[Force Regenerate Rules clicked]", {
-      selectedLeaseId: backfillCandidates.length === 1 ? backfillCandidates[0].id : "multiple",
-      selectedLeaseName: backfillCandidates.length === 1 ? backfillCandidates[0].tenant_name : "Multiple",
+  const targetLease = useMemo(() => {
+    if (search && search.length >= 8) {
+      return leases.find(l => l.id.toLowerCase() === search.toLowerCase() || l.id.toLowerCase().startsWith(search.toLowerCase()));
+    }
+    return backfillCandidates.length === 1 ? backfillCandidates[0] : null;
+  }, [search, leases, backfillCandidates]);
+
+  const runForceRegenerateSelected = async () => {
+    if (!targetLease) throw new Error("No selected lease id for force regenerate");
+    
+    const selectedLeaseId = targetLease.id;
+    const selectedLeaseName = targetLease.tenant_name || targetLease.name;
+
+    console.log("[Force Regenerate Selected Lease clicked]", {
+      selectedLeaseId,
+      selectedLeaseName,
       force: true
     });
-    
+
+    if (backfillState.running) return;
+    setBackfillState({ running: true, done: 0, total: 1 });
+
+    try {
+      await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+        leaseId: selectedLeaseId,
+        force: true,
+        source: "manual_extract"
+      });
+
+      // Fix stale UI merge
+      queryClient.invalidateQueries(["expense-rules-direct"]);
+      queryClient.invalidateQueries(["expense-rules-scoped"]);
+      queryClient.invalidateQueries(["lease-expense-rule-sets"]);
+      
+      toast.success(`Rules generated for ${selectedLeaseName}.`);
+    } catch (err) {
+      console.error("[LeaseExpenseRules] regenerate FAILED for lease", selectedLeaseId, err);
+      toast.error(`Regeneration failed: ${err.message}`);
+    } finally {
+      setBackfillState({ running: false, done: 1, total: 1 });
+    }
+  };
+
+  const runBackfill = async () => {
     if (backfillState.running) return;
     if (backfillCandidates.length === 0) {
       toast.info("No approved leases in scope are missing expense rules.");
@@ -894,24 +932,41 @@ export default function LeaseExpenseRules() {
                 }
               </p>
             </div>
-            <Button
-              size="sm"
-              className="bg-amber-600 text-white hover:bg-amber-700"
-              onClick={runBackfill}
-              disabled={backfillState.running}
-            >
-              {backfillState.running ? (
-                <>
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                  Extracting {backfillState.done}/{backfillState.total}…
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="mr-1 h-4 w-4" />
-                  {hasLegacyRules || isAdmin ? "Force Regenerate Rules" : `Extract rules from ${backfillCandidates.length} ${backfillCandidates.length === 1 ? "lease" : "leases"}`}
-                </>
+            <div className="flex gap-2">
+              {targetLease && (hasLegacyRules || isAdmin) && (
+                <Button
+                  size="sm"
+                  className="bg-amber-600 text-white hover:bg-amber-700"
+                  onClick={runForceRegenerateSelected}
+                  disabled={backfillState.running}
+                >
+                  {backfillState.running ? (
+                    <><Loader2 className="mr-1 h-4 w-4 animate-spin" />Regenerating…</>
+                  ) : (
+                    <><RefreshCw className="mr-1 h-4 w-4" />Force Regenerate Selected Lease</>
+                  )}
+                </Button>
               )}
-            </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-amber-900 border-amber-600 hover:bg-amber-100"
+                onClick={runBackfill}
+                disabled={backfillState.running}
+              >
+                {backfillState.running ? (
+                  <>
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                    Extracting {backfillState.done}/{backfillState.total}…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-1 h-4 w-4" />
+                    Backfill All Leases
+                  </>
+                )}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
