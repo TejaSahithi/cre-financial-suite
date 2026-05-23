@@ -322,6 +322,13 @@ export const leaseRulePipelineService = {
       categories: []
     });
 
+    const { count, error: countError } = await supabase
+      .from("lease_expense_rules")
+      .select("id", { count: "exact", head: true })
+      .eq("lease_id", leaseId);
+
+    console.log("[POST UPSERT RULE COUNT]", { leaseId, count, countError });
+
     diagnostics.persistedRulesCount = saved?.rules?.length || 0;
 
     return diagnostics;
