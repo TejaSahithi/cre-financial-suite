@@ -53,9 +53,30 @@ export const leaseRulePipelineService = {
       .eq("id", leaseId)
       .maybeSingle();
 
-    if (leaseErr || !lease) {
+    if (leaseErr) {
+      console.error("[PIPELINE ERROR] Lease fetch failed:", leaseErr);
+      throw leaseErr;
+    }
+    if (!lease) {
       diagnostics.skippedReasons = "Lease not found";
       return diagnostics;
+    }
+
+    // 2. Side-load related rows separately only if IDs exist
+    if (lease.unit_id) {
+      const { data: unit, error: unitErr } = await supabase.from("units").select("*").eq("id", lease.unit_id).maybeSingle();
+      if (unitErr) console.warn("[PIPELINE SIDELOAD WARNING] unit fetch failed:", unitErr);
+      lease.unit = unit || null;
+    }
+    if (lease.property_id) {
+      const { data: property, error: propErr } = await supabase.from("properties").select("*").eq("id", lease.property_id).maybeSingle();
+      if (propErr) console.warn("[PIPELINE SIDELOAD WARNING] property fetch failed:", propErr);
+      lease.property = property || null;
+    }
+    if (lease.building_id) {
+      const { data: building, error: buildErr } = await supabase.from("buildings").select("*").eq("id", lease.building_id).maybeSingle();
+      if (buildErr) console.warn("[PIPELINE SIDELOAD WARNING] building fetch failed:", buildErr);
+      lease.building = building || null;
     }
 
     // Populate tenant_id and org_id
