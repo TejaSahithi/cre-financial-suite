@@ -247,7 +247,7 @@ export default function LeaseExpenseRules() {
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
 
-  const { data: leases = [] } = useOrgQuery("Lease");
+  const { data: leases = [], isAdmin } = useOrgQuery("Lease");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -400,19 +400,44 @@ export default function LeaseExpenseRules() {
   // or when re-approval is impractical. Iterates serially with progress so
   // we don't hammer the LLM with parallel requests.
   const [backfillState, setBackfillState] = useState({ running: false, done: 0, total: 0 });
+  const isLegacyRuleSet = (rules) => {
+    if (!rules || rules.length === 0) return false;
+    return rules.some(r => {
+      if (!r.rule_type) return true;
+      if (r.rule_key?.includes("||")) return true;
+      if (["nnn_recoverable", "modified_gross"].includes(r.rule_type) && r.tenant_share_percent == null) return true;
+      if (r.extraction_version && r.extraction_version < "v1.2026.05.19") return true;
+      if (r.generation_source === "legacy" || r.generation_source === "ensureApprovedRuleSet") return true;
+      return false;
+    });
+  };
+
   const backfillCandidates = useMemo(() => {
-    const ruleCountByLease = new Map();
+    const rulesByLease = new Map();
     for (const entry of ruleSetsByLease) {
-      ruleCountByLease.set(entry.leaseId, entry.rules?.length || 0);
+      rulesByLease.set(entry.leaseId, entry.rules || []);
     }
     return selectorFilteredLeases.filter((lease) => {
       const isApproved =
         String(lease?.abstract_status || "").toLowerCase() === "approved" ||
         String(lease?.status || "").toLowerCase() === "approved";
       if (!isApproved) return false;
-      return (ruleCountByLease.get(lease.id) || 0) === 0;
+      
+      const rules = rulesByLease.get(lease.id) || [];
+      if (rules.length === 0) return true;
+      if (isLegacyRuleSet(rules)) return true;
+      if (isAdmin) return true;
+      
+      return false;
     });
-  }, [ruleSetsByLease, selectorFilteredLeases]);
+  }, [ruleSetsByLease, selectorFilteredLeases, isAdmin]);
+
+  const hasLegacyRules = useMemo(() => {
+    return backfillCandidates.some(lease => {
+      const rules = ruleSetsByLease.find(rs => rs.leaseId === lease.id)?.rules || [];
+      return rules.length > 0 && isLegacyRuleSet(rules);
+    });
+  }, [backfillCandidates, ruleSetsByLease]);
 
   const runBackfill = async () => {
     if (backfillState.running) return;
@@ -457,7 +482,7 @@ export default function LeaseExpenseRules() {
       const lease = backfillCandidates[i];
       const leaseStart = performance.now();
       try {
-        console.log("[Extract Rules clicked]", { leaseId: lease.id, force: true, service: "generateLeaseExpenseRulesForLease" });
+        console.log("[Force Regenerate Rules clicked]", { leaseId: lease.id, force: true, service: "generateLeaseExpenseRulesForLease" });
         const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
           leaseId: lease.id,
           source: "manual_extract",
@@ -848,14 +873,20 @@ export default function LeaseExpenseRules() {
       </Card>
 
       {backfillCandidates.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50">
+        <Card className="border-amber-200 bg-amber-50 mb-6">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-900">
             <div>
-              <p className="font-medium">
-                {backfillCandidates.length} approved {backfillCandidates.length === 1 ? "lease has" : "leases have"} no expense rules yet
+              <p className="font-medium text-amber-900">
+                {hasLegacyRules 
+                  ? "Legacy rule output detected." 
+                  : `${backfillCandidates.length} approved ${backfillCandidates.length === 1 ? "lease is" : "leases are"} ready for rule extraction`
+                }
               </p>
-              <p className="text-xs">
-                Click below to extract rules from the lease document for each one. Uses the workflow output where available, otherwise re-runs extraction. Doesn't re-approve the abstract.
+              <p className="text-xs text-amber-800">
+                {hasLegacyRules 
+                  ? "Regenerate rules to use the new pipeline. This will replace the existing legacy rows." 
+                  : "Click below to extract rules from the lease document for each one. Uses the workflow output where available."
+                }
               </p>
             </div>
             <Button
@@ -872,7 +903,7 @@ export default function LeaseExpenseRules() {
               ) : (
                 <>
                   <RefreshCw className="mr-1 h-4 w-4" />
-                  Extract rules from {backfillCandidates.length} approved {backfillCandidates.length === 1 ? "lease" : "leases"}
+                  {hasLegacyRules || isAdmin ? "Force Regenerate Rules" : `Extract rules from ${backfillCandidates.length} ${backfillCandidates.length === 1 ? "lease" : "leases"}`}
                 </>
               )}
             </Button>
