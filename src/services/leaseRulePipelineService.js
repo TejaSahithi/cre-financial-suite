@@ -178,6 +178,9 @@ export const leaseRulePipelineService = {
       console.log("[FORCE DELETE OLD RULES]", { leaseId, force });
       const { data: deletedData, error: deleteError } = await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId).select("*");
       console.log("[DELETE RESULT]", { deletedData, deleteError });
+      
+      const { count: postDeleteCount, error: countError } = await supabase.from("lease_expense_rules").select("*", { count: "exact", head: true }).eq("lease_id", leaseId);
+      console.log("[POST DELETE RULE COUNT]", { postDeleteCount, countError });
     }
 
     // 5. Collect Candidates
@@ -257,6 +260,9 @@ export const leaseRulePipelineService = {
       // Set rule_key explicitly so saveRuleSet uses it instead of regenerating
       r.rule_key = `${lease.id}_${r.rule_type}_${r.normalized_key}_${r.source_field_key || 'workflow'}`;
       
+      r.extraction_version = "lease_rule_pipeline_v2";
+      r.generation_source = "lease_rule_pipeline_v2";
+
       return r;
     }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
 
