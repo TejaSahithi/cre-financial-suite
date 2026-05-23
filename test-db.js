@@ -8,12 +8,17 @@ const env = fs.readFileSync('.env', 'utf-8').split('\n').reduce((acc, line) => {
 }, {});
 
 const supabaseUrl = env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function main() {
-  const { data, error } = await supabase.from('leases').select('*, unit:units!leases_unit_id_fkey(*), property:properties!leases_property_id_fkey(*), building:buildings!leases_building_id_fkey(*)').eq('id', '310ab875-f516-4a2b-94d9-686cf4b87d90').single();
+  const { data, error } = await supabase.from('leases').select('*, unit:units!leases_unit_id_fkey(*), property:properties(*), building:buildings(*)').eq('id', '310ab875-f516-4a2b-94d9-686cf4b87d90').single();
+  if (error) {
+    console.error("ERROR FROM SUPABASE:", error);
+  } else {
+    console.log("SUCCESS");
+  }
   if (error) {
     console.error(error);
     return;
