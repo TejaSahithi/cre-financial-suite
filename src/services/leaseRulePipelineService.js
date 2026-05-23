@@ -48,7 +48,7 @@ export const leaseRulePipelineService = {
 
     // 1. Fetch lease
     const { data: lease, error: leaseErr } = await supabase
-      .from("approved_lease_abstracts")
+      .from("leases")
       .select("*, unit(*), property(*), building(*)")
       .eq("id", leaseId)
       .maybeSingle();
