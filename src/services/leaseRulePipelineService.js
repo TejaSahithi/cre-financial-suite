@@ -209,12 +209,12 @@ export const leaseRulePipelineService = {
     workflowRules.forEach((r, i) => candidates.push(this.mapWorkflowRule(r, i, lease.id)));
 
     // 5.b Structured Term Rules (Resolver)
-    const structuredRules = this.buildStructuredRules(lease);
+    const structuredRules = this.buildStructuredRules(lease, sourceText);
     diagnostics.structuredTermRulesCount = structuredRules.length;
     candidates.push(...structuredRules);
 
     // 5.c Deterministic Templates
-    const templateRules = this.buildTemplateRules(lease);
+    const templateRules = this.buildTemplateRules(lease, sourceText);
     diagnostics.deterministicRulesCount = templateRules.length;
     candidates.push(...templateRules);
 
@@ -339,7 +339,7 @@ export const leaseRulePipelineService = {
     };
   },
 
-  buildStructuredRules(lease) {
+  buildStructuredRules(lease, sourceText = "") {
     const rules = [];
     
     // Extract base structured terms using field resolver
@@ -348,13 +348,35 @@ export const leaseRulePipelineService = {
       return res?.value ?? null;
     };
 
-    const tenantShare = asNumber(resolve("tenant_share_percent") || resolve("pro_rata_share"));
-    const estimatedAnnual = asNumber(resolve("estimated_annual_amount") || resolve("cam_estimate_annual"));
-    const estimatedMonthly = asNumber(resolve("estimated_monthly_amount") || resolve("cam_estimate_monthly"));
-    const adminFee = asNumber(resolve("admin_fee_percent") || resolve("administrative_fee"));
-    const mgmtFee = asNumber(resolve("management_fee_percent") || resolve("management_fee"));
-    const grossUp = asNumber(resolve("gross_up_percent") || resolve("gross_up"));
-    const capPercent = asNumber(resolve("cap_percent") || resolve("expense_cap"));
+    const textMatcher = (regex, processor = asNumber) => {
+      const match = typeof sourceText === 'string' ? sourceText.match(regex) : null;
+      return match ? processor(match[1]) : null;
+    };
+
+    const tenantShare = asNumber(resolve("tenant_share_percent") || resolve("pro_rata_share")) 
+      || textMatcher(/tenant'?s\s+pro\s*rata\s+share\s+(?:shall\s+be\s+)?([0-9.]+)\s*%/i)
+      || textMatcher(/([0-9.]+)\s*%\s*(?:of|as)\s*(?:tenant'?s)?\s*pro\s*rata\s+share/i);
+      
+    const estimatedAnnual = asNumber(resolve("estimated_annual_amount") || resolve("cam_estimate_annual"))
+      || textMatcher(/estimated?\s+annual\s+(?:amount|cam|expenses?)[\s:]+\$?([0-9,.]+)/i, (val) => asNumber(val.replace(/,/g, '')));
+      
+    const estimatedMonthly = asNumber(resolve("estimated_monthly_amount") || resolve("cam_estimate_monthly"))
+      || textMatcher(/estimated?\s+monthly\s+(?:amount|cam|expenses?)[\s:]+\$?([0-9,.]+)/i, (val) => asNumber(val.replace(/,/g, '')))
+      || (estimatedAnnual ? parseFloat((estimatedAnnual / 12).toFixed(2)) : null);
+      
+    const adminFee = asNumber(resolve("admin_fee_percent") || resolve("administrative_fee"))
+      || textMatcher(/administrative\s+fee\s+(?:equal\s+to\s+|of\s+)?([0-9.]+)\s*%/i);
+      
+    const mgmtFee = asNumber(resolve("management_fee_percent") || resolve("management_fee"))
+      || textMatcher(/management\s+fee\s+(?:equal\s+to\s+|of\s+)?([0-9.]+)\s*%/i);
+      
+    const grossUp = asNumber(resolve("gross_up_percent") || resolve("gross_up"))
+      || textMatcher(/gross[- ]up\s+(?:to\s+)?([0-9.]+)\s*%/i);
+      
+    const capPercent = asNumber(resolve("cap_percent") || resolve("expense_cap"))
+      || textMatcher(/shall\s+not\s+increase\s+by\s+more\s+than\s+([0-9.]+)\s*%/i)
+      || textMatcher(/cap(?:ped)?\s+at\s+([0-9.]+)\s*%/i);
+      
     const capType = resolve("cap_type");
     const reconciliation = resolve("reconciliation_required") || resolve("cam_reconciliation");
     
@@ -394,9 +416,18 @@ export const leaseRulePipelineService = {
     return rules;
   },
 
-  buildTemplateRules(lease) {
+  buildTemplateRules(lease, sourceText = "") {
     const rules = [];
     const leaseType = String(lease.lease_type || lease.abstract_snapshot?.lease_type || "").toLowerCase().trim();
+    
+    const leaseText = JSON.stringify(lease.extraction_data || {}) + " " + sourceText;
+    const textLower = leaseText.toLowerCase();
+    
+    const isNnn = leaseType.includes("nnn") || leaseType.includes("triple") || leaseType.includes("net")
+      || textLower.includes("triple net") || textLower.includes("nnn") 
+      || textLower.includes("tenant's pro rata share") || textLower.includes("recoverable common area maintenance")
+      || textLower.includes("cam reimbursements") || textLower.includes("tax reimbursements") || textLower.includes("insurance reimbursements");
+
     if (leaseType.includes("full") || leaseType.includes("gross")) {
        // A. Full Service
        rules.push(this.makeTemplateRule("utilities", true, "no", "no"));
@@ -407,9 +438,14 @@ export const leaseRulePipelineService = {
        rules.push(this.makeTemplateRule("excess utilities", false, "conditional", "conditional"));
        rules.push(this.makeTemplateRule("tenant insurance", false, "tenant_direct", "no", "tenant_direct_contract"));
        rules.push(this.makeTemplateRule("alterations", false, "tenant_direct", "no", "tenant_direct_contract"));
-    } else if (leaseType.includes("nnn") || leaseType.includes("triple") || leaseType.includes("net")) {
+    } else if (isNnn) {
        // B. NNN
-       const nnnItems = ["cam", "taxes", "insurance", "operating expenses", "utilities", "janitorial", "landscaping", "security", "trash", "management", "admin"];
+       const nnnItems = [
+         "Common Area Maintenance", "Operating Expenses", "Real Estate Taxes", "Property Insurance",
+         "Utilities", "Repairs & Maintenance", "Management Fees", "Administrative Fees", "Trash Removal",
+         "Janitorial", "Security", "Landscaping", "Snow Removal", "Tenant Caused Damage",
+         "Legal / Enforcement Fees", "Late Fees", "Interest", "Separately Metered Charges", "Tenant Insurance"
+       ];
        nnnItems.forEach(item => {
           rules.push(this.makeTemplateRule(item, false, "yes", "yes"));
        });
