@@ -49,7 +49,7 @@ export const leaseRulePipelineService = {
     // 1. Fetch lease
     const { data: lease, error: leaseErr } = await supabase
       .from("leases")
-      .select("*, unit:units!leases_unit_id_fkey(*), property:properties(*), building:buildings(*)")
+      .select("*")
       .eq("id", leaseId)
       .maybeSingle();
 
