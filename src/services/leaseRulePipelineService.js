@@ -102,14 +102,17 @@ export const leaseRulePipelineService = {
           file?.docling_raw?.full_text,
           file?.docling_raw?.markdown,
           file?.docling_raw?.text,
+          file?.docling_raw?.body,
           file?.normalized_output?.raw_text,
           file?.normalized_output?.text,
           file?.parsed_data?.full_text,
           file?.parsed_data?.raw_text,
+          file?.parsed_data?.text,
           file?.reviewed_output,
           file?.ui_review_payload,
           lease?.extraction_data?.workflow_output,
-          lease?.extraction_data?.abstract
+          lease?.extraction_data?.abstract,
+          lease?.extracted_text
         ];
 
         for (const c of candidates) {
@@ -144,7 +147,12 @@ export const leaseRulePipelineService = {
         }
       }
     }
-    diagnostics.sourceTextLength = sourceText.length;
+    
+    if (!sourceText && lease?.extracted_text) {
+      sourceText = lease.extracted_text;
+    }
+    
+    diagnostics.sourceTextLength = sourceText?.length || 0;
 
     // 4. Document Type Detection
     const leaseNameLower = String(lease.name || lease.lease_name || "").toLowerCase();
@@ -176,8 +184,14 @@ export const leaseRulePipelineService = {
     const candidates = [];
 
     // 5.a Workflow Output
-    const workflowRules = Array.isArray(lease?.extraction_data?.workflow_output?.expense_rules) 
-      ? lease.extraction_data.workflow_output.expense_rules : [];
+    let workflowRules = [];
+    if (Array.isArray(lease?.extraction_data?.workflow_output?.expense_rules)) {
+      workflowRules = lease.extraction_data.workflow_output.expense_rules;
+    } else if (Array.isArray(lease?.extraction_data?.expenses)) {
+      workflowRules = lease.extraction_data.expenses;
+    } else if (Array.isArray(lease?.extraction_data?.rules)) {
+      workflowRules = lease.extraction_data.rules;
+    }
     diagnostics.workflowRulesCount = workflowRules.length;
     workflowRules.forEach((r, i) => candidates.push(this.mapWorkflowRule(r, i, lease.id)));
 
