@@ -2258,6 +2258,7 @@ export const leaseExpenseRuleService = {
         .eq("org_id", orgId);
 
       if (updateRuleSetError) throw updateRuleSetError;
+    } else {
       const { data: existingSets } = await supabase
         .from("lease_expense_rule_sets")
         .select("id, version")

@@ -58,13 +58,14 @@ export const leaseRulePipelineService = {
       return diagnostics;
     }
 
-    // Populate tenant_id
+    // Populate tenant_id and org_id
     let tenantId = lease.tenant_id || lease.primary_tenant_id || lease.unit?.tenant_id || null;
     if (!tenantId && lease.tenant_name) {
       const { data: t } = await supabase.from("tenants").select("id").ilike("name", lease.tenant_name).maybeSingle();
       if (t) tenantId = t.id;
     }
     lease.tenant_id = tenantId;
+    lease.org_id = lease.org_id || lease.property?.org_id || lease.building?.org_id || null;
 
     if (leaseErr || !lease) {
       diagnostics.skippedReasons = "Lease not found";
