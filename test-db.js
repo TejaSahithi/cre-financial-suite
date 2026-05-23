@@ -13,7 +13,7 @@ const supabaseKey = env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function main() {
-  const { data, error } = await supabase.from('approved_lease_abstracts').select('id, extraction_data').eq('id', '310ab875-f516-4a2b-94d9-686cf4b87d90').single();
+  const { data, error } = await supabase.from('leases').select('*, unit:units!leases_unit_id_fkey(*), property:properties!leases_property_id_fkey(*), building:buildings!leases_building_id_fkey(*)').eq('id', '310ab875-f516-4a2b-94d9-686cf4b87d90').single();
   if (error) {
     console.error(error);
     return;
