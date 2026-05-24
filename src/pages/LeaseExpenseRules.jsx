@@ -17,6 +17,7 @@ import {
   MoreVertical,
   Pencil,
   Receipt,
+  RefreshCw,
   Send,
   X,
 } from "lucide-react";
@@ -397,11 +398,88 @@ export default function LeaseExpenseRules() {
 
 
 
+  const [regenerateState, setRegenerateState] = useState({ running: false });
+
+  const isUuid = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  const isLegacyOrUnsavedRuleSet = (rules) => {
+    if (!rules || rules.length === 0) return false;
+    return rules.some(r =>
+      !isUuid(r.id) ||
+      String(r.id).startsWith("workflow-rule-") ||
+      !r.rule_type ||
+      r.rule_key?.includes("||") ||
+      r.extraction_version !== "lease_rule_pipeline_v2"
+    );
+  };
+
   const leaseById = useMemo(() => {
     const map = new Map();
     for (const lease of leases) map.set(lease.id, lease);
     return map;
   }, [leases]);
+
+  const staleLeases = useMemo(() => {
+    const rulesByLease = new Map();
+    for (const entry of ruleSetsByLease) {
+      rulesByLease.set(entry.leaseId, entry.rules || []);
+    }
+    return selectorFilteredLeases.filter((lease) => {
+      const isApproved = ["approved", "executed", "budget_ready"].includes(
+        String(lease?.abstract_status || lease?.status).toLowerCase()
+      );
+      if (!isApproved) return false;
+      
+      const rules = rulesByLease.get(lease.id) || [];
+      if (rules.length > 0 && isLegacyOrUnsavedRuleSet(rules)) return true;
+      if (isAdmin && rules.length === 0) return true;
+      
+      return false;
+    });
+  }, [ruleSetsByLease, selectorFilteredLeases, isAdmin]);
+
+  const hasLegacyRules = useMemo(() => {
+    return staleLeases.some(lease => {
+      const rules = ruleSetsByLease.find(rs => rs.leaseId === lease.id)?.rules || [];
+      return rules.length > 0 && isLegacyOrUnsavedRuleSet(rules);
+    });
+  }, [staleLeases, ruleSetsByLease]);
+
+  const targetLease = useMemo(() => {
+    if (search && search.length >= 8) {
+      return leases.find(l => l.id.toLowerCase() === search.toLowerCase() || l.id.toLowerCase().startsWith(search.toLowerCase()));
+    }
+    if (staleLeases.length === 1) return staleLeases[0];
+    return leases.find(l => l.id === "310ab875-f516-4a2b-94d9-686cf4b87d90") || null;
+  }, [search, leases, staleLeases]);
+
+  const runForceRegenerateSelected = async () => {
+    if (!targetLease) throw new Error("No selected lease id for force regenerate");
+    
+    const selectedLeaseId = targetLease.id;
+    const selectedLeaseName = targetLease.tenant_name || targetLease.name;
+
+    if (regenerateState.running) return;
+    setRegenerateState({ running: true });
+
+    try {
+      await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+        leaseId: selectedLeaseId,
+        force: true,
+        source: "manual_extract"
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+      
+      toast.success(`Rules generated for ${selectedLeaseName}.`);
+    } catch (err) {
+      console.error("[LeaseExpenseRules] regenerate FAILED for lease", selectedLeaseId, err);
+      toast.error(`Regeneration failed: ${err.message}`);
+    } finally {
+      setRegenerateState({ running: false });
+    }
+  };
 
   const categoryById = useMemo(() => {
     const map = new Map();
@@ -523,40 +601,14 @@ export default function LeaseExpenseRules() {
   };
 
   const updateRuleMutation = useMutation({
-    mutationFn: async ({ ruleId, ruleKey, lease, patch }) => {
-      let targetRuleId = ruleId;
-
-      if (String(ruleId).startsWith("workflow-rule-") || String(ruleId).startsWith("llm-")) {
-        if (!lease?.id) throw new Error("Missing lease context to persist rule.");
-        toast.info("Extracting rules from lease document...");
-        
-        await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-          leaseId: lease.id,
-          source: "auto_on_interaction",
-          force: true
-        });
-
-        const { data: newRules, error: fetchErr } = await supabase
-          .from("lease_expense_rules")
-          .select("id, rule_key")
-          .eq("lease_id", lease.id);
-          
-        if (fetchErr) throw fetchErr;
-
-        const match = newRules?.find(r => r.rule_key === ruleKey) || newRules?.[0];
-        if (!match) {
-          throw new Error("Could not locate the rule after extraction.");
-        }
-        targetRuleId = match.id;
-        
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+    mutationFn: async ({ ruleId, patch }) => {
+      if (!isUuid(ruleId) || String(ruleId).startsWith("workflow-rule-")) {
+        throw new Error("Cannot approve unsaved rule. Regenerate rules first.");
       }
-
       const { data, error } = await supabase
         .from("lease_expense_rules")
         .update(patch)
-        .eq("id", targetRuleId)
+        .eq("id", ruleId)
         .select()
         .single();
       if (error) throw error;
@@ -571,6 +623,11 @@ export default function LeaseExpenseRules() {
   });
 
   const approveRule = async (rule, lease) => {
+    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Regenerate rules first.");
+      return;
+    }
+
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
@@ -606,13 +663,28 @@ export default function LeaseExpenseRules() {
       patchOverrides.generation_source = "manual";
       patchOverrides.exact_source_text = validation.exactSourceText || "manual_review";
     }
-    
-    const approvedRule = await updateRuleMutation.mutateAsync({
-      ruleId: rule.id,
-      ruleKey: rule.rule_key,
-      lease,
-      patch: buildRuleWorkflowPatch(rule, validation, patchOverrides),
+
+    console.log("[Approve Rule clicked]", rule.id);
+    console.log("[Approve Rule update payload]", {
+      review_status: "approved",
+      approval_status: "approved",
+      approved_by: userId,
+      approved_at: now,
+      updated_at: now
     });
+
+    const patch = buildRuleWorkflowPatch(rule, validation, patchOverrides);
+    
+    let approvedRule;
+    try {
+      approvedRule = await updateRuleMutation.mutateAsync({
+        ruleId: rule.id,
+        patch,
+      });
+      console.log("[Approve Rule update result]", approvedRule);
+    } catch (err) {
+      return;
+    }
 
     const approvedValidation = getRuleValidation({ ...rule, ...approvedRule });
     if (lease?.id && approvedValidation.canPublishToCam && !approvedValidation.publishedToCam) {
@@ -623,8 +695,6 @@ export default function LeaseExpenseRules() {
       });
       await updateRuleMutation.mutateAsync({
         ruleId: approvedRule.id,
-        ruleKey: rule.rule_key,
-        lease,
         patch: {
           published_to_cam: true,
           updated_at: new Date().toISOString(),
@@ -638,12 +708,14 @@ export default function LeaseExpenseRules() {
   };
 
   const rejectRule = async (rule, lease) => {
+    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Regenerate rules first.");
+      return;
+    }
     const now = new Date().toISOString();
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      ruleKey: rule.rule_key,
-      lease,
       patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "needs_review",
         review_status: "needs_review",
@@ -663,14 +735,16 @@ export default function LeaseExpenseRules() {
   };
 
   const markNARule = async (rule, lease) => {
+    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Regenerate rules first.");
+      return;
+    }
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
-      ruleKey: rule.rule_key,
-      lease,
       patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "unmapped",
         review_status: "approved",
@@ -776,6 +850,37 @@ export default function LeaseExpenseRules() {
           </div>
         </CardContent>
       </Card>
+
+      {staleLeases.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50 mb-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-900">
+            <div>
+              <p className="font-medium text-amber-900">
+                Legacy or unsaved rule output detected.
+              </p>
+              <p className="text-xs text-amber-800">
+                Regenerate rules before approval.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {(hasLegacyRules || isAdmin) && (
+                <Button
+                  size="sm"
+                  className="bg-amber-600 text-white hover:bg-amber-700"
+                  onClick={runForceRegenerateSelected}
+                  disabled={regenerateState.running}
+                >
+                  {regenerateState.running ? (
+                    <><Loader2 className="mr-1 h-4 w-4 animate-spin" />Regenerating…</>
+                  ) : (
+                    <><RefreshCw className="mr-1 h-4 w-4" />Regenerate Rules</>
+                  )}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
 
 
