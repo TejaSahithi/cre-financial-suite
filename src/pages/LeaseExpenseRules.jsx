@@ -523,12 +523,40 @@ export default function LeaseExpenseRules() {
   };
 
   const updateRuleMutation = useMutation({
-    mutationFn: async ({ ruleId, patch }) => {
+    mutationFn: async ({ ruleId, ruleKey, lease, patch }) => {
+      let targetRuleId = ruleId;
+
+      if (String(ruleId).startsWith("workflow-rule-") || String(ruleId).startsWith("llm-")) {
+        if (!lease?.id) throw new Error("Missing lease context to persist rule.");
+        toast.info("Extracting rules from lease document...");
+        
+        await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
+          leaseId: lease.id,
+          source: "auto_on_interaction",
+          force: true
+        });
+
+        const { data: newRules, error: fetchErr } = await supabase
+          .from("lease_expense_rules")
+          .select("id, rule_key")
+          .eq("lease_id", lease.id);
+          
+        if (fetchErr) throw fetchErr;
+
+        const match = newRules?.find(r => r.rule_key === ruleKey) || newRules?.[0];
+        if (!match) {
+          throw new Error("Could not locate the rule after extraction.");
+        }
+        targetRuleId = match.id;
+        
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+      }
 
       const { data, error } = await supabase
         .from("lease_expense_rules")
         .update(patch)
-        .eq("id", ruleId)
+        .eq("id", targetRuleId)
         .select()
         .single();
       if (error) throw error;
@@ -581,6 +609,8 @@ export default function LeaseExpenseRules() {
     
     const approvedRule = await updateRuleMutation.mutateAsync({
       ruleId: rule.id,
+      ruleKey: rule.rule_key,
+      lease,
       patch: buildRuleWorkflowPatch(rule, validation, patchOverrides),
     });
 
@@ -592,7 +622,9 @@ export default function LeaseExpenseRules() {
         categoriesById: categoryById,
       });
       await updateRuleMutation.mutateAsync({
-        ruleId: rule.id,
+        ruleId: approvedRule.id,
+        ruleKey: rule.rule_key,
+        lease,
         patch: {
           published_to_cam: true,
           updated_at: new Date().toISOString(),
@@ -605,11 +637,13 @@ export default function LeaseExpenseRules() {
     toast.success("Rule approved");
   };
 
-  const rejectRule = async (rule) => {
+  const rejectRule = async (rule, lease) => {
     const now = new Date().toISOString();
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
+      ruleKey: rule.rule_key,
+      lease,
       patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "needs_review",
         review_status: "needs_review",
@@ -628,13 +662,15 @@ export default function LeaseExpenseRules() {
     }).then(() => toast.success("Rule rejected"));
   };
 
-  const markNARule = async (rule) => {
+  const markNARule = async (rule, lease) => {
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
     const validation = getRuleValidation(rule);
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
+      ruleKey: rule.rule_key,
+      lease,
       patch: buildRuleWorkflowPatch(rule, validation, {
         row_status: "unmapped",
         review_status: "approved",
@@ -992,7 +1028,7 @@ export default function LeaseExpenseRules() {
                             <DropdownMenuItem
                               onSelect={(event) => {
                                 event.preventDefault();
-                                rejectRule(rule);
+                                rejectRule(rule, lease);
                               }}
                               className="text-red-700 focus:text-red-800"
                             >
@@ -1002,7 +1038,7 @@ export default function LeaseExpenseRules() {
                             <DropdownMenuItem
                               onSelect={(event) => {
                                 event.preventDefault();
-                                markNARule(rule);
+                                markNARule(rule, lease);
                               }}
                               className="text-slate-700"
                             >
