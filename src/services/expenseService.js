@@ -1192,6 +1192,7 @@ async function selectExpenseClassificationsForExpenseIds(expenseIds = [], column
 
 export const expenseService = {
   ...baseExpenseService,
+  isApprovedLeaseRule,
 
   async resolveExpenseLeaseLink(expenseLike = {}, leases = null) {
     const availableLeases = Array.isArray(leases) ? leases : await listWorkflowEntityRows("Lease");
