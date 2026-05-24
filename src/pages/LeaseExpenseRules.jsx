@@ -4,7 +4,7 @@
  * LeaseExpenseClassification; this page is the cross-lease audit and
  * approval surface backed by the existing rule-set tables.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
