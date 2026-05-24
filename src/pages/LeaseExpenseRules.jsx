@@ -365,26 +365,35 @@ export default function LeaseExpenseRules() {
   // direct entry. This makes the page survive any breakage in the scoped
   // pipeline while keeping the normalized fields when they work.
   const ruleSetsByLease = useMemo(() => {
-    const scopedByLease = new Map(
-      (ruleSetsByLeaseScoped || []).map((e) => [e.leaseId, e]),
+    const directByLease = new Map(
+      (directRuleSets || []).map((e) => [e.leaseId, e])
     );
     const merged = [];
     const scopeIdSet = new Set(leaseIds);
+    
+    // 1. Direct DB rows are the source of truth for actionable rules
     for (const entry of directRuleSets) {
-      // Skip leases outside the scope selector
       if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
-      const scoped = scopedByLease.get(entry.leaseId);
-      if (scoped && (scoped.rules?.length || 0) > 0) {
-        merged.push(scoped);
-      } else {
-        merged.push(entry);
+      merged.push(entry);
+    }
+
+    // 2. Fallback display for leases with zero persisted rows
+    for (const entry of ruleSetsByLeaseScoped || []) {
+      if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
+      if (!directByLease.has(entry.leaseId) || directByLease.get(entry.leaseId).rules?.length === 0) {
+        const fallbackEntry = {
+          ...entry,
+          rules: (entry.rules || []).map(r => ({ ...r, _is_fallback: true }))
+        };
+        const existingIndex = merged.findIndex(m => m.leaseId === entry.leaseId);
+        if (existingIndex >= 0) {
+          merged[existingIndex] = fallbackEntry;
+        } else {
+          merged.push(fallbackEntry);
+        }
       }
     }
-    // Also include scoped entries for leases not in directRuleSets (shouldn't
-    // happen, but defensive).
-    for (const [leaseId, entry] of scopedByLease) {
-      if (!merged.find((m) => m.leaseId === leaseId)) merged.push(entry);
-    }
+
     const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
     console.log("[LeaseExpenseRules] merged ruleSetsByLease:", {
       scoped_entries: ruleSetsByLeaseScoped?.length || 0,
@@ -404,13 +413,7 @@ export default function LeaseExpenseRules() {
 
   const isLegacyOrUnsavedRuleSet = (rules) => {
     if (!rules || rules.length === 0) return false;
-    return rules.some(r =>
-      !isUuid(r.id) ||
-      String(r.id).startsWith("workflow-rule-") ||
-      !r.rule_type ||
-      r.rule_key?.includes("||") ||
-      r.extraction_version !== "lease_rule_pipeline_v2"
-    );
+    return rules.some(r => r._is_fallback || !isUuid(r.id) || String(r.id).startsWith("workflow-rule-"));
   };
 
   const leaseById = useMemo(() => {
@@ -623,8 +626,8 @@ export default function LeaseExpenseRules() {
   });
 
   const approveRule = async (rule, lease) => {
-    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
-      toast.error("This rule is not persisted yet. Regenerate rules first.");
+    if (rule._is_fallback || !isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Please wait for abstract approval or contact support.");
       return;
     }
 
@@ -708,8 +711,8 @@ export default function LeaseExpenseRules() {
   };
 
   const rejectRule = async (rule, lease) => {
-    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
-      toast.error("This rule is not persisted yet. Regenerate rules first.");
+    if (rule._is_fallback || !isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Please wait for abstract approval or contact support.");
       return;
     }
     const now = new Date().toISOString();
@@ -735,8 +738,8 @@ export default function LeaseExpenseRules() {
   };
 
   const markNARule = async (rule, lease) => {
-    if (!isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
-      toast.error("This rule is not persisted yet. Regenerate rules first.");
+    if (rule._is_fallback || !isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Please wait for abstract approval or contact support.");
       return;
     }
     const authResult = await supabase.auth.getUser();
@@ -765,7 +768,10 @@ export default function LeaseExpenseRules() {
   };
 
   const publishRuleToCam = async (rule, lease, propertyId) => {
-
+    if (rule._is_fallback || !isUuid(rule.id) || String(rule.id).startsWith("workflow-rule-")) {
+      toast.error("This rule is not persisted yet. Please wait for abstract approval or contact support.");
+      return;
+    }
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
@@ -851,7 +857,7 @@ export default function LeaseExpenseRules() {
         </CardContent>
       </Card>
 
-      {staleLeases.length > 0 && (
+      {isAdmin && staleLeases.length > 0 && (
         <Card className="border-amber-200 bg-amber-50 mb-6">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-900">
             <div>
@@ -1012,6 +1018,11 @@ export default function LeaseExpenseRules() {
                         <p className="text-[10px] text-slate-400">
                           Rule set v{ruleSet?.version} - {ruleSet?.status}
                         </p>
+                        {rule._is_fallback && (
+                          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
+                            Not persisted
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">{property?.name || "-"}</TableCell>
                       <TableCell className="text-sm">
