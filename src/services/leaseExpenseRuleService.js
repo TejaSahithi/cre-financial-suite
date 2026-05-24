@@ -2373,7 +2373,7 @@ export const leaseExpenseRuleService = {
         unit_id: lease.unit_id || null,
         approved_lease_abstract_id: lease.approved_lease_abstract_id || lease.abstract_snapshot?.id || null,
         created_from: createdFrom,
-        approved_by: deriveRuleReviewStatus(rule) === "approved" ? (approver || lease.signed_by || null) : null,
+        approved_by: deriveRuleReviewStatus(rule) === "approved" ? (isUuid(approver) ? approver : null) : null,
         approved_at: deriveRuleReviewStatus(rule) === "approved" ? approvedAtIso : null,
         expense_category: firstPresent(rule.expense_category, rule.category_name, deriveRuleCategoryName(rule)),
         expense_subcategory: firstPresent(rule.expense_subcategory, rule.subcategory_name, deriveRuleSubcategoryName(rule)),

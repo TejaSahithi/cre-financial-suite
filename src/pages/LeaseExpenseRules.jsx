@@ -651,6 +651,8 @@ export default function LeaseExpenseRules() {
       return;
     }
     const isManual = rule?.created_from === "manual" || rule?.generation_source === "manual";
+    console.log("[Approve Rule clicked]", rule.id);
+
     const patchOverrides = {
       row_status: "mapped",
       review_status: "approved",
@@ -667,16 +669,8 @@ export default function LeaseExpenseRules() {
       patchOverrides.exact_source_text = validation.exactSourceText || "manual_review";
     }
 
-    console.log("[Approve Rule clicked]", rule.id);
-    console.log("[Approve Rule update payload]", {
-      review_status: "approved",
-      approval_status: "approved",
-      approved_by: userId,
-      approved_at: now,
-      updated_at: now
-    });
-
     const patch = buildRuleWorkflowPatch(rule, validation, patchOverrides);
+    console.log("[Approve Rule update payload]", patch);
     
     let approvedRule;
     try {
