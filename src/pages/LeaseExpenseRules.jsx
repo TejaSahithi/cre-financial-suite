@@ -701,6 +701,9 @@ export default function LeaseExpenseRules() {
 
   const updateRuleMutation = useMutation({
     mutationFn: async ({ ruleId, patch }) => {
+      if (String(ruleId).startsWith("workflow-rule-") || String(ruleId).startsWith("llm-")) {
+        throw new Error("This is a legacy rule. Please click 'Force Regenerate Selected Lease' before reviewing or editing.");
+      }
       const { data, error } = await supabase
         .from("lease_expense_rules")
         .update(patch)
@@ -831,6 +834,10 @@ export default function LeaseExpenseRules() {
   };
 
   const publishRuleToCam = async (rule, lease, propertyId) => {
+    if (String(rule.id).startsWith("workflow-rule-") || String(rule.id).startsWith("llm-")) {
+      toast.error("This is a legacy rule. Please click 'Force Regenerate Selected Lease' before publishing to CAM.");
+      return;
+    }
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
