@@ -365,6 +365,7 @@ export default function LeaseExpenseRules() {
     }
 
     const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
+    console.log("[LeaseExpenseRules] all leases in scope:", leases.map(l => ({ id: l.id, name: l.tenant_name || l.name, abstract_status: l.abstract_status })));
     console.log("[LeaseExpenseRules] merged ruleSetsByLease:", {
       direct_entries: directRuleSets?.length || 0,
       after_scope_filter: finalMerged.length,

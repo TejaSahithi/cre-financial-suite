@@ -186,14 +186,7 @@ export const leaseRulePipelineService = {
     else if (leaseNameLower.includes("estoppel")) diagnostics.documentType = "estoppel";
     else if (leaseNameLower.includes("exhibit")) diagnostics.documentType = "exhibit";
 
-    if (diagnostics.documentType === "assignment") {
-      diagnostics.skippedReasons = "Assignment document -> no full expense rules generated";
-      
-      // Delete any full expense rules that were wrongly generated for this assignment
-      await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId);
-      
-      return diagnostics;
-    }
+
 
     console.log("[PIPELINE INPUT]", {
       leaseId,
