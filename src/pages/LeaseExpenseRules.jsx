@@ -17,7 +17,6 @@ import {
   MoreVertical,
   Pencil,
   Receipt,
-  RefreshCw,
   Send,
   X,
 } from "lucide-react";
@@ -396,183 +395,7 @@ export default function LeaseExpenseRules() {
 
   const isLoading = isLoadingScoped || isLoadingDirect;
 
-  // ── Backfill: extract rules for already-approved leases that have none.
-  // Used when leases were approved before the persistence flow was wired,
-  // or when re-approval is impractical. Iterates serially with progress so
-  // we don't hammer the LLM with parallel requests.
-  const [backfillState, setBackfillState] = useState({ running: false, done: 0, total: 0 });
-  const isLegacyRuleSet = (rules) => {
-    if (!rules || rules.length === 0) return false;
-    return rules.some(r => {
-      if (!r.rule_type) return true;
-      if (r.rule_key?.includes("||")) return true;
-      if (["nnn_recoverable", "modified_gross"].includes(r.rule_type) && r.tenant_share_percent == null) return true;
-      if (r.extraction_version && r.extraction_version < "v1.2026.05.19") return true;
-      if (r.generation_source === "legacy" || r.generation_source === "ensureApprovedRuleSet") return true;
-      return false;
-    });
-  };
 
-  const backfillCandidates = useMemo(() => {
-    const rulesByLease = new Map();
-    for (const entry of ruleSetsByLease) {
-      rulesByLease.set(entry.leaseId, entry.rules || []);
-    }
-    return selectorFilteredLeases.filter((lease) => {
-      const isApproved =
-        String(lease?.abstract_status || "").toLowerCase() === "approved" ||
-        String(lease?.status || "").toLowerCase() === "approved";
-      if (!isApproved) return false;
-      
-      const rules = rulesByLease.get(lease.id) || [];
-      if (rules.length === 0) return true;
-      if (isLegacyRuleSet(rules)) return true;
-      if (isAdmin) return true;
-      
-      return false;
-    });
-  }, [ruleSetsByLease, selectorFilteredLeases, isAdmin]);
-
-  const hasLegacyRules = useMemo(() => {
-    return backfillCandidates.some(lease => {
-      const rules = ruleSetsByLease.find(rs => rs.leaseId === lease.id)?.rules || [];
-      return rules.length > 0 && isLegacyRuleSet(rules);
-    });
-  }, [backfillCandidates, ruleSetsByLease]);
-
-  const targetLease = useMemo(() => {
-    if (search && search.length >= 8) {
-      return leases.find(l => l.id.toLowerCase() === search.toLowerCase() || l.id.toLowerCase().startsWith(search.toLowerCase()));
-    }
-    if (backfillCandidates.length === 1) return backfillCandidates[0];
-    return leases.find(l => l.id === "310ab875-f516-4a2b-94d9-686cf4b87d90") || null;
-  }, [search, leases, backfillCandidates]);
-
-  const runForceRegenerateSelected = async () => {
-    if (!targetLease) throw new Error("No selected lease id for force regenerate");
-    
-    const selectedLeaseId = targetLease.id;
-    const selectedLeaseName = targetLease.tenant_name || targetLease.name;
-
-    console.log("[Force Regenerate Selected Lease clicked]", {
-      selectedLeaseId,
-      selectedLeaseName,
-      force: true
-    });
-
-    if (backfillState.running) return;
-    setBackfillState({ running: true, done: 0, total: 1 });
-
-    try {
-      await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-        leaseId: selectedLeaseId,
-        force: true,
-        source: "manual_extract"
-      });
-
-      // Fix stale UI merge
-      queryClient.invalidateQueries(["expense-rules-direct"]);
-      queryClient.invalidateQueries(["expense-rules-scoped"]);
-      queryClient.invalidateQueries(["lease-expense-rule-sets"]);
-      
-      toast.success(`Rules generated for ${selectedLeaseName}.`);
-    } catch (err) {
-      console.error("[LeaseExpenseRules] regenerate FAILED for lease", selectedLeaseId, err);
-      toast.error(`Regeneration failed: ${err.message}`);
-    } finally {
-      setBackfillState({ running: false, done: 1, total: 1 });
-    }
-  };
-
-  const runBackfill = async () => {
-    if (backfillState.running) return;
-    if (backfillCandidates.length === 0) {
-      toast.info("No approved leases in scope are missing expense rules.");
-      return;
-    }
-    setBackfillState({ running: true, done: 0, total: backfillCandidates.length });
-
-    // Pre-flight diagnostic: dump the pipeline state for EVERY candidate so
-    // we know exactly where rules come from (workflow / extract / text) and
-    // why any lease produces zero. This is the table the spec asked for.
-    console.group(`[LeaseExpenseRules] backfill diagnostic for ${backfillCandidates.length} approved lease(s)`);
-    const preDiagnostics = [];
-    for (const lease of backfillCandidates) {
-      const d = await leaseExpenseRuleService.diagnoseExpenseRulePipeline(lease);
-      preDiagnostics.push(d);
-    }
-    console.table(preDiagnostics.map((d) => ({
-      lease_id: d.lease_id?.slice(0, 8),
-      tenant: d.tenant_name || "—",
-      approved_abstract_id: d.approved_lease_abstract_id?.slice(0, 8) || "—",
-      property_id: d.property_id?.slice(0, 8) || "—",
-      building_id: d.building_id?.slice(0, 8) || "—",
-      unit_id: d.unit_id?.slice(0, 8) || "—",
-      abstract_status: d.abstract_status,
-      has_workflow_output: d.has_workflow_output,
-      expense_rules_in_payload: d.expense_rules_count,
-      clauses: d.clause_records_count,
-      source_file_id: d.source_file_id?.slice(0, 8) || "—",
-      source_text_chars: d.source_text_length,
-      source_text_field: d.source_text_field || "—",
-      existing_rule_sets: d.existing_rule_sets_count,
-      existing_rules: d.existing_rules_count,
-    })));
-    console.log("Full diagnostic objects:", preDiagnostics);
-    console.groupEnd();
-
-    let persistedTotal = 0;
-    const perLeaseResults = [];
-    for (let i = 0; i < backfillCandidates.length; i += 1) {
-      const lease = backfillCandidates[i];
-      const leaseStart = performance.now();
-      try {
-        const result = await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-          leaseId: lease.id,
-          source: "manual_extract",
-          force: true
-        });
-        const count = result?.persistedRulesCount || 0;
-        persistedTotal += count;
-        perLeaseResults.push({
-          lease_id: lease.id.slice(0, 8),
-          tenant: lease.tenant_name || "—",
-          rules_persisted: count,
-          rule_set_id: result?.ruleSet?.id?.slice(0, 8) || "—",
-          rule_set_status: result?.ruleSet?.status || "—",
-          ms: Math.round(performance.now() - leaseStart),
-        });
-      } catch (err) {
-        console.error(`[LeaseExpenseRules] backfill FAILED for lease ${lease.id} (${lease.tenant_name}):`, err);
-        perLeaseResults.push({
-          lease_id: lease.id.slice(0, 8),
-          tenant: lease.tenant_name || "—",
-          rules_persisted: 0,
-          error: err?.message || String(err),
-          ms: Math.round(performance.now() - leaseStart),
-        });
-      }
-      setBackfillState((prev) => ({ ...prev, done: i + 1 }));
-    }
-    setBackfillState({ running: false, done: 0, total: 0 });
-
-    // Post-flight summary the spec asked for.
-    console.group(`[LeaseExpenseRules] backfill summary`);
-    console.table(perLeaseResults);
-    console.log("Totals:", {
-      approved_leases_found: backfillCandidates.length,
-      leases_with_workflow_output: preDiagnostics.filter((d) => d.has_workflow_output).length,
-      leases_with_expense_rules_in_payload: preDiagnostics.filter((d) => d.expense_rules_count > 0).length,
-      leases_with_source_text: preDiagnostics.filter((d) => d.source_text_length > 0).length,
-      rules_persisted_total: persistedTotal,
-      leases_with_zero_rules: perLeaseResults.filter((r) => r.rules_persisted === 0).length,
-    });
-    console.groupEnd();
-
-    toast.success(`Backfill complete — ${persistedTotal} rules across ${backfillCandidates.length} leases. Open DevTools console for diagnostic table.`);
-    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
-  };
 
   const leaseById = useMemo(() => {
     const map = new Map();
@@ -701,9 +524,7 @@ export default function LeaseExpenseRules() {
 
   const updateRuleMutation = useMutation({
     mutationFn: async ({ ruleId, patch }) => {
-      if (String(ruleId).startsWith("workflow-rule-") || String(ruleId).startsWith("llm-")) {
-        throw new Error("This is a legacy rule. Please click 'Force Regenerate Selected Lease' before reviewing or editing.");
-      }
+
       const { data, error } = await supabase
         .from("lease_expense_rules")
         .update(patch)
@@ -834,10 +655,7 @@ export default function LeaseExpenseRules() {
   };
 
   const publishRuleToCam = async (rule, lease, propertyId) => {
-    if (String(rule.id).startsWith("workflow-rule-") || String(rule.id).startsWith("llm-")) {
-      toast.error("This is a legacy rule. Please click 'Force Regenerate Selected Lease' before publishing to CAM.");
-      return;
-    }
+
     const authResult = await supabase.auth.getUser();
     const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
@@ -923,61 +741,7 @@ export default function LeaseExpenseRules() {
         </CardContent>
       </Card>
 
-      {backfillCandidates.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50 mb-6">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-900">
-            <div>
-              <p className="font-medium text-amber-900">
-                {hasLegacyRules 
-                  ? "Legacy rule output detected." 
-                  : `${backfillCandidates.length} approved ${backfillCandidates.length === 1 ? "lease is" : "leases are"} ready for rule extraction`
-                }
-              </p>
-              <p className="text-xs text-amber-800">
-                {hasLegacyRules 
-                  ? "Regenerate rules to use the new pipeline. This will replace the existing legacy rows." 
-                  : "Click below to extract rules from the lease document for each one. Uses the workflow output where available."
-                }
-              </p>
-            </div>
-            <div className="flex gap-2">
-              {(hasLegacyRules || isAdmin) && (
-                <Button
-                  size="sm"
-                  className="bg-amber-600 text-white hover:bg-amber-700"
-                  onClick={runForceRegenerateSelected}
-                  disabled={backfillState.running}
-                >
-                  {backfillState.running ? (
-                    <><Loader2 className="mr-1 h-4 w-4 animate-spin" />Regenerating…</>
-                  ) : (
-                    <><RefreshCw className="mr-1 h-4 w-4" />Force Regenerate Selected Lease</>
-                  )}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-amber-900 border-amber-600 hover:bg-amber-100"
-                onClick={runBackfill}
-                disabled={backfillState.running}
-              >
-                {backfillState.running ? (
-                  <>
-                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                    Extracting {backfillState.done}/{backfillState.total}…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-1 h-4 w-4" />
-                    Backfill All Leases
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
 
       <ScopeSelector
         properties={scope.scopedProperties}
