@@ -825,7 +825,7 @@ function isMissingExpenseRuleTable(error) {
   if (!error) return false;
 
   const code = String(error.code || "").toUpperCase();
-  if (code === "PGRST205" || code === "42P01") return true;
+  if (code === "PGRST205" || code === "42P01" || code === "404") return true;
 
   const text = [error.message, error.details, error.hint]
     .filter(Boolean)
@@ -834,7 +834,8 @@ function isMissingExpenseRuleTable(error) {
 
   return (
     /relation .* does not exist/.test(text) ||
-    /table .* does not exist/.test(text)
+    /table .* does not exist/.test(text) ||
+    text.includes("could not find the table")
   );
 }
 
@@ -1324,7 +1325,9 @@ async function upsertExpenseClassification(payload) {
       row_type: rowType,
     });
     const baselinePayload = pickColumns(nextPayload, BASELINE_EXPENSE_CLASSIFICATION_COLUMNS);
-    const conflictTargets = ["org_id,expense_id"];
+    const conflictTargets = hasExpense
+      ? ["org_id,expense_id", "classification_key"]
+      : ["classification_key"];
 
     for (const onConflict of conflictTargets) {
       const attemptPayload = { ...baselinePayload };
@@ -1406,6 +1409,10 @@ async function upsertCamExpenseInput(payload = {}, { onConflict = "classificatio
   while (Object.keys(attemptPayload).length > 0) {
     const { data, error } = await tryUpsert();
     if (!error) return data;
+    if (isMissingExpenseRuleTable(error)) {
+      console.warn("[expenseService] cam_expense_inputs table missing; saved classification without CAM input row.");
+      return null;
+    }
 
     const conflictError = String(error?.message || error?.details || "").toLowerCase();
     if (
@@ -1430,7 +1437,11 @@ async function upsertCamExpenseInput(payload = {}, { onConflict = "classificatio
         .select("id")
         .eq("classification_result_id", attemptPayload.classification_result_id)
         .limit(1)
-        .then(({ data }) => data?.[0]?.id || null)
+        .then(({ data, error }) => {
+          if (error && isMissingExpenseRuleTable(error)) return null;
+          if (error) throw error;
+          return data?.[0]?.id || null;
+        })
       : attemptPayload.lease_expense_rule_id
         ? await supabase
           .from("cam_expense_inputs")
@@ -1438,7 +1449,11 @@ async function upsertCamExpenseInput(payload = {}, { onConflict = "classificatio
           .eq("lease_expense_rule_id", attemptPayload.lease_expense_rule_id)
           .eq("source", attemptPayload.source || "lease_rule_amount")
           .limit(1)
-          .then(({ data }) => data?.[0]?.id || null)
+          .then(({ data, error }) => {
+            if (error && isMissingExpenseRuleTable(error)) return null;
+            if (error) throw error;
+            return data?.[0]?.id || null;
+          })
         : null;
 
   if (existingId) {
@@ -1450,6 +1465,7 @@ async function upsertCamExpenseInput(payload = {}, { onConflict = "classificatio
         .select("*")
         .maybeSingle();
       if (!error) return data;
+      if (isMissingExpenseRuleTable(error)) return null;
       const missingColumn = extractMissingColumn(error);
       if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
         throw error;
@@ -1466,6 +1482,7 @@ async function upsertCamExpenseInput(payload = {}, { onConflict = "classificatio
       .select("*")
       .maybeSingle();
     if (!error) return data;
+    if (isMissingExpenseRuleTable(error)) return null;
     const missingColumn = extractMissingColumn(error);
     if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
       throw error;
@@ -2643,8 +2660,6 @@ export const expenseService = {
     const classificationPayload = {
       org_id: rule.org_id || orgId,
       classification_key: classificationKey,
-      actual_expense_id: null,
-      expense_id: null,
       lease_expense_rule_id: rule.id,
       linked_expense_rule_id: rule.id,
       recovery_rule_id: rule.id,
@@ -2685,7 +2700,11 @@ export const expenseService = {
 
     const classification = existingClassification?.id
       ? await updateExpenseClassificationRecord(existingClassification.id, classificationPayload)
-      : await upsertExpenseClassification(classificationPayload);
+      : await upsertExpenseClassification({
+        ...classificationPayload,
+        actual_expense_id: null,
+        expense_id: null,
+      });
 
     try {
       const { error } = await supabase
@@ -2701,7 +2720,7 @@ export const expenseService = {
       console.warn("[expenseService] lease rule amount persistence warning:", error);
     }
 
-    return upsertCamExpenseInput({
+    const camInput = await upsertCamExpenseInput({
       org_id: rule.org_id || orgId,
       property_id: rule.property_id || rule.rule_set?.property_id || null,
       building_id: rule.building_id || rule.rule_set?.building_id || null,
@@ -2728,6 +2747,8 @@ export const expenseService = {
     }, {
       onConflict: "lease_expense_rule_id,fiscal_year",
     });
+
+    return camInput || classification || { lease_expense_rule_id: rule.id, amount: numericAmount };
   },
 
   async createActualExpenseFromCoverageGap(rule, amount, currentYear) {
