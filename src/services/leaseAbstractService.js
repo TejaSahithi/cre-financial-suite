@@ -519,6 +519,37 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         return Number.isFinite(n) ? n : null;
       };
 
+      const workflowCategoryToFieldKey = {
+        "real_estate_taxes": "responsibility_taxes",
+        "property_insurance": "responsibility_insurance",
+        "utilities": "responsibility_utilities",
+        "electricity": "responsibility_utilities",
+        "water": "responsibility_utilities",
+        "sewer": "responsibility_utilities",
+        "gas": "responsibility_utilities",
+        "hvac": "responsibility_utilities",
+        "interior_repairs": "responsibility_repairs",
+        "exterior_repairs": "responsibility_repairs",
+        "roof_structure": "responsibility_repairs",
+        "foundation_structure": "responsibility_repairs",
+        "capital_expenditures": "responsibility_repairs",
+        "janitorial": "responsibility_repairs",
+        "trash_removal": "responsibility_repairs",
+        "landscaping": "responsibility_repairs",
+        "snow_removal": "responsibility_repairs",
+      };
+
+      const normalizedCat = String(expenseCategory).toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      let mappedFieldKey = workflowCategoryToFieldKey[normalizedCat] || null;
+      
+      let ruleApprovalStatus = "needs_review";
+      if (mappedFieldKey) {
+        const review = fieldReviews[mappedFieldKey];
+        if (review?.status === "accepted" || review?.status === "edited") {
+          ruleApprovalStatus = "approved";
+        }
+      }
+
       rulesToUpsert.push({
         org_id: orgId,
         lease_id: leaseId,
@@ -526,10 +557,8 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         rule_key: `${leaseId}_workflow_${expenseCategory}_${index}`,
         rule_type: ruleType,
         expense_category: expenseCategory,
-        // Workflow rules are unstructured and not individually accepted in the main Lease Review tab,
-        // so they default to needs_review to allow the user to explicitly approve them on the Rules tab.
-        review_status: "needs_review",
-        approval_status: "needs_review",
+        review_status: ruleApprovalStatus,
+        approval_status: ruleApprovalStatus,
         source_page: rule.source_page || null,
         exact_source_text: rule.exact_source_text || rule.source_text || rule.raw_value || null,
         confidence_score: rule.confidence_score || rule.confidence || 0.8,
