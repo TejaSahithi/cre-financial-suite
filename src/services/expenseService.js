@@ -2902,23 +2902,31 @@ export const expenseService = {
       throw new Error("Expense classification row not found");
     }
 
-    const updatedExpense = await baseExpenseService.update(expenseId, {
-      classification_status: "exception",
-      exception_type: "manual_review",
-      reviewed_at: now,
-      reviewed_by: userId,
-      next_step: "Resolve exception",
-    });
-
     if (classification?.id) {
       await updateExpenseClassificationRecord(classification.id, {
         classification_status: "exception",
+        recoverability_result: classification.recoverability_result || classification.recovery_status || "needs_review",
+        recovery_status: classification.recovery_status || classification.recoverability_result || "needs_review",
+        approved_status: classification.approved_status || "needs_review",
+        cam_status: classification.cam_status || "needs_review",
+        cam_source: classification.cam_source || "none",
         exception_type: "manual_review",
         reviewed_at: now,
         reviewed_by: userId,
         next_step: "Resolve exception",
       });
     }
+
+    const updatedExpense = await persistExpenseWorkflowPatch(expenseId, {
+      recovery_status: classification?.recovery_status || classification?.recoverability_result || "needs_review",
+      recoverability_result: classification?.recoverability_result || classification?.recovery_status || "needs_review",
+      review_status: "needs_review",
+      approved_status: "needs_review",
+      exception_type: "manual_review",
+      reviewed_at: now,
+      reviewed_by: userId,
+      next_step: "Resolve exception",
+    });
 
     return updatedExpense;
   },

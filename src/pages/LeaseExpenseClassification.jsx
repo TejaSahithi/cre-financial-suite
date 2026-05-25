@@ -177,7 +177,7 @@ function getCamDecision(row) {
   if (
     row.recoverabilityResult === "non_recoverable" ||
     row.recoverabilityResult === "excluded" ||
-    row.camEligible === "no" ||
+    (Boolean(row.rule) && row.camEligible === "no") ||
     paymentTreatment === "included_in_base_rent" ||
     paymentTreatment === "tenant_direct_contract" ||
     row.rule?.is_excluded
@@ -194,9 +194,10 @@ function getCamDecision(row) {
 
 function hasExplicitCamExclusion(row) {
   const paymentTreatment = normalizeText(row?.rule?.payment_treatment);
+  const hasRule = Boolean(row?.rule || row?.leaseExpenseRuleId);
   return row?.recoverabilityResult === "non_recoverable" ||
     row?.recoverabilityResult === "excluded" ||
-    row?.camEligible === "no" ||
+    (hasRule && row?.camEligible === "no") ||
     Boolean(row?.rule?.included_in_base_rent) ||
     paymentTreatment === "included_in_base_rent" ||
     paymentTreatment === "tenant_direct_contract" ||
@@ -726,8 +727,12 @@ export default function LeaseExpenseClassification() {
 
       await Promise.all(
         targetRows.map(async (row) => {
-          // If a classification record exists, use it; otherwise build a minimal payload
-          const classificationInput = row.classificationRecord || {
+          const manualCamEligible =
+            row.rowType === "actual_missing_rule" && !row.rule && row.camEligible === "no"
+              ? "needs_review"
+              : row.camEligible;
+          const classificationInput = {
+            ...(row.classificationRecord || {}),
             org_id: row.expense?.org_id,
             expense_id: row.actualExpenseId,
             actual_expense_id: row.actualExpenseId,
@@ -741,12 +746,12 @@ export default function LeaseExpenseClassification() {
             amount: row.amount,
             recoverability_result: row.recoverabilityResult,
             recovery_status: row.recoverabilityResult,
-            cam_eligible: row.camEligible,
+            cam_eligible: manualCamEligible,
             cam_status: row.camStatus || "needs_review",
             cam_source: "none",
             cam_input_type: "actual_expense",
             classification_status: row.classificationStatus,
-            sent_to_cam: false,
+            sent_to_cam: row.sentToCam,
           };
           return expenseService.sendClassificationToCam(classificationInput, { reason: manualReason });
         })
