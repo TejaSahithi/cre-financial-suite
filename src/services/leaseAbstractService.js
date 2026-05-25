@@ -413,9 +413,12 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
 
     const rulesToUpsert = [];
 
+    const fieldReviews = extractionData?.field_reviews || {};
+
     const addRule = (aliases, ruleType, overrides = {}) => {
       const aliasList = Array.isArray(aliases) ? aliases : [aliases];
-      const field = resolveLeaseField(lease, aliasList[0], { mode: "canonical" });
+      const fieldKey = aliasList[0];
+      const field = resolveLeaseField(lease, fieldKey, { mode: "canonical" });
       
       if (!field || !field.found || field.value === null || field.value === undefined || field.value === "") return;
       
@@ -425,8 +428,12 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         return Number.isFinite(n) ? n : null;
       };
 
+      const review = fieldReviews[fieldKey];
+      // Only auto-approve if the specific field was accepted/edited in the Lease Review UI
+      const isAccepted = review?.status === "accepted" || review?.status === "edited";
+      const ruleApprovalStatus = isAccepted ? "approved" : "needs_review";
+
       const isCam = overrides.cam_eligible === "yes";
-      const fieldKey = aliasList[0];
       
       rulesToUpsert.push({
         org_id: orgId,
@@ -435,8 +442,8 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         rule_key: `${leaseId}_${ruleType}_${overrides.expense_category || "general"}_${fieldKey}`,
         rule_type: ruleType,
         source_field_key: fieldKey,
-        review_status: "approved",
-        approval_status: "approved",
+        review_status: ruleApprovalStatus,
+        approval_status: ruleApprovalStatus,
         source_page: field.sourcePage ? Number(field.sourcePage) : null,
         exact_source_text: field.exactSourceText || field.rawValue || null,
         confidence_score: field.confidence || 0.8,
@@ -519,8 +526,10 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
         rule_key: `${leaseId}_workflow_${expenseCategory}_${index}`,
         rule_type: ruleType,
         expense_category: expenseCategory,
-        review_status: "approved",
-        approval_status: "approved",
+        // Workflow rules are unstructured and not individually accepted in the main Lease Review tab,
+        // so they default to needs_review to allow the user to explicitly approve them on the Rules tab.
+        review_status: "needs_review",
+        approval_status: "needs_review",
         source_page: rule.source_page || null,
         exact_source_text: rule.exact_source_text || rule.source_text || rule.raw_value || null,
         confidence_score: rule.confidence_score || rule.confidence || 0.8,
