@@ -475,23 +475,6 @@ function isApprovedLeaseRule(rule) {
   return false;
 }
 
-function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
-  const mergedById = new Map();
-
-  for (const rule of fallbackRules || []) {
-    if (!rule?.id) continue;
-    mergedById.set(rule.id, { ...rule });
-  }
-
-  for (const rule of primaryRules || []) {
-    if (!rule?.id) continue;
-    const existing = mergedById.get(rule.id) || {};
-    mergedById.set(rule.id, { ...existing, ...rule });
-  }
-
-  return [...mergedById.values()];
-}
-
 function expenseMatchesScope(expense, scope = {}) {
   const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
 
@@ -954,6 +937,120 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
     ruleSets: latestRuleSets || [],
     rules: rulesWithRelations,
     categories: safeCategories,
+  };
+}
+
+async function fetchRuleSetScopeRows(ruleSetIds = []) {
+  if (!supabase || ruleSetIds.length === 0) return [];
+  try {
+    const { data, error } = await supabase
+      .from("lease_expense_rule_sets")
+      .select("id, lease_id, property_id, building_id, unit_id, tenant_id")
+      .in("id", ruleSetIds);
+
+    if (error) {
+      if (isMissingExpenseRuleTable(error)) {
+        console.warn("[expenseService] lease_expense_rule_sets scope lookup missing — continuing without rule_set scope hydration.");
+        return [];
+      }
+      throw error;
+    }
+
+    return data || [];
+  } catch (error) {
+    if (isMissingExpenseRuleTable(error)) {
+      console.warn("[expenseService] lease_expense_rule_sets scope lookup missing — continuing without rule_set scope hydration.");
+      return [];
+    }
+    throw error;
+  }
+}
+
+function hydrateClassificationRule(rule, { leaseById = new Map(), unitById = new Map(), ruleSetById = new Map() } = {}) {
+  const ruleSet = ruleSetById.get(rule.rule_set_id) || null;
+  const effectiveLeaseId = rule.lease_id || ruleSet?.lease_id || null;
+  const lease = effectiveLeaseId ? leaseById.get(effectiveLeaseId) || null : null;
+  const effectiveUnitId = rule.unit_id || lease?.unit_id || ruleSet?.unit_id || null;
+  const unit = effectiveUnitId ? unitById.get(effectiveUnitId) || null : null;
+
+  return {
+    ...rule,
+    lease_id: effectiveLeaseId,
+    property_id: rule.property_id || lease?.property_id || ruleSet?.property_id || null,
+    building_id: rule.building_id || lease?.building_id || unit?.building_id || ruleSet?.building_id || null,
+    unit_id: effectiveUnitId,
+    tenant_id: rule.tenant_id || lease?.tenant_id || ruleSet?.tenant_id || null,
+    rule_set: rule.rule_set || ruleSet,
+  };
+}
+
+function summarizeApprovedRulesBy(rules = [], key) {
+  const counts = {};
+  for (const rule of rules) {
+    const value = rule?.[key];
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+  }
+  return counts;
+}
+
+async function fetchApprovedClassificationRules(scope = {}) {
+  const normalizedScope = normalizeRecoverabilityScope(scope);
+  const orgId = await getCurrentOrgId({ allowSuperAdminGlobal: true });
+  if (!supabase || orgId === "__none__") {
+    return {
+      scope: normalizedScope,
+      approvedRules: [],
+      allApprovedRules: [],
+      leaseById: new Map(),
+    };
+  }
+
+  let query = supabase
+    .from("lease_expense_rules")
+    .select("*")
+    .eq("approval_status", "approved")
+    .eq("review_status", "approved")
+    .limit(5000);
+
+  if (orgId && orgId !== "__none__") {
+    query = query.eq("org_id", orgId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("[ExpenseRecoverability] lease_expense_rules direct query failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    throw error;
+  }
+
+  const [leases, units, ruleSetRows] = await Promise.all([
+    listWorkflowEntityRows("Lease"),
+    listWorkflowEntityRows("Unit").catch(() => []),
+    fetchRuleSetScopeRows([...new Set((data || []).map((rule) => rule.rule_set_id).filter(Boolean))]),
+  ]);
+
+  const leaseById = new Map((leases || []).map((lease) => [lease.id, lease]));
+  const unitById = new Map((units || []).map((unit) => [unit.id, unit]));
+  const ruleSetById = new Map((ruleSetRows || []).map((ruleSet) => [ruleSet.id, ruleSet]));
+
+  const allApprovedRules = (data || [])
+    .filter((rule) => isStrictlyApprovedLeaseRule(rule))
+    .map((rule) => hydrateClassificationRule(rule, { leaseById, unitById, ruleSetById }));
+
+  const approvedRules = allApprovedRules.filter((rule) =>
+    ruleMatchesScope(rule, leaseById.get(rule.lease_id) || null, normalizedScope)
+  );
+
+  return {
+    scope: normalizedScope,
+    approvedRules,
+    allApprovedRules,
+    leaseById,
   };
 }
 
@@ -2421,45 +2518,19 @@ export const expenseService = {
   },
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
-    const orgId = await getCurrentOrgId({ allowSuperAdminGlobal: true });
-
-    let query = supabase
-      .from("lease_expense_rules")
-      .select("*")
-      // Include approved AND needs_review/draft rules that have a valid lease_id
-      // (rules created before auto-approval logic was added may still be in draft)
-      .not("approval_status", "eq", "rejected")
-      .not("approval_status", "is", null)
-      .not("lease_id", "is", null)
-      .limit(5000);
-
-
-    if (orgId && orgId !== "__none__") {
-      query = query.eq("org_id", orgId);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error("[ExpenseRecoverability] lease_expense_rules direct query failed", {
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-      });
-      throw error;
-    }
-
-    const leases = await listWorkflowEntityRows("Lease");
-    const leaseById = new Map((leases || []).map((lease) => [lease.id, lease]));
-
-    return (data || []).filter((rule) =>
-      isApprovedLeaseRule(rule) &&
-      ruleMatchesScope(rule, leaseById.get(rule.lease_id) || null, scope)
-    );
+    const { scope: normalizedScope, approvedRules } = await fetchApprovedClassificationRules(scope);
+    console.log("[Classification approvedRules]", {
+      scope: normalizedScope,
+      approvedRulesCount: approvedRules.length,
+      sampleRuleIds: approvedRules.slice(0, 10).map((rule) => rule.id),
+      rulesByLease: summarizeApprovedRulesBy(approvedRules, "lease_id"),
+      rulesByTenant: summarizeApprovedRulesBy(approvedRules, "tenant_id"),
+    });
+    return approvedRules;
   },
 
   async loadApprovedActualExpenses(scope = {}) {
+    const normalizedScope = normalizeRecoverabilityScope(scope);
     const [allExpenses, allLeases] = await Promise.all([
       listWorkflowEntityRows("Expense"),
       listWorkflowEntityRows("Lease"),
@@ -2473,7 +2544,7 @@ export const expenseService = {
       const { expense: linkedExpense } = await this.resolveExpenseLeaseLink(rawExpense, allLeases);
 
       if (!isApprovedExpenseRecord(linkedExpense)) continue;
-      if (!expenseMatchesScope(linkedExpense, scope)) continue;
+      if (!expenseMatchesScope(linkedExpense, normalizedScope)) continue;
 
       approvedExpenses.push(linkedExpense);
     }
@@ -2482,6 +2553,7 @@ export const expenseService = {
   },
 
   async loadExpenseRecoverabilityScope(scope = {}) {
+    const normalizedScope = normalizeRecoverabilityScope(scope);
     const safe = async (label, fn, fallback = []) => {
       try {
         return await fn();
@@ -2491,7 +2563,7 @@ export const expenseService = {
           message: error?.message,
           details: error?.details,
           hint: error?.hint,
-          scope,
+          scope: normalizedScope,
           error,
         });
         return fallback;
@@ -2499,9 +2571,9 @@ export const expenseService = {
     };
 
     const [approvedRules, approvedActuals, existingClassifications] = await Promise.all([
-      safe("approved lease rules", () => this.loadApprovedLeaseExpenseRules(scope)),
-      safe("approved actual expenses", () => this.loadApprovedActualExpenses(scope)),
-      safe("classification rows", () => this.listExpenseClassificationsForScope(scope)),
+      safe("approved lease rules", () => this.loadApprovedLeaseExpenseRules(normalizedScope)),
+      safe("approved actual expenses", () => this.loadApprovedActualExpenses(normalizedScope)),
+      safe("classification rows", () => this.listExpenseClassificationsForScope(normalizedScope)),
     ]);
 
     return {
@@ -2517,6 +2589,7 @@ export const expenseService = {
   },
 
   async loadExpenseRecoverabilityDiagnostics(scope = {}) {
+    const normalizedScope = normalizeRecoverabilityScope(scope);
     const orgId = await getCurrentOrgId();
     const actingOrgId = getStoredActingOrgId();
     const authResult = await supabase?.auth?.getUser?.();
@@ -2528,41 +2601,11 @@ export const expenseService = {
       listWorkflowEntityRows("Expense"),
     ]);
 
-    const leaseIds = [...new Set((allLeases || []).map((lease) => lease.id).filter(Boolean))];
-    const ruleEntries = await leaseExpenseRuleService.loadRuleSets(leaseIds);
     const leaseById = new Map((allLeases || []).map((lease) => [lease.id, lease]));
-    const normalizedRules = (ruleEntries || []).flatMap((entry) =>
-      (entry.rules || []).map((rule) => ({
-        ...rule,
-        lease_id: rule.lease_id || entry.leaseId,
-        rule_set: entry.ruleSet || null,
-      }))
-    );
-
-    let directRules = [];
-    try {
-      const { ruleSets, rules } = await fetchApprovedRuleArtifacts(leaseIds);
-      const ruleSetById = new Map((ruleSets || []).map((ruleSet) => [ruleSet.id, ruleSet]));
-      directRules = (rules || []).map((rule) => ({
-        ...rule,
-        lease_id: rule.lease_id || ruleSetById.get(rule.rule_set_id)?.lease_id || null,
-        rule_set: ruleSetById.get(rule.rule_set_id) || null,
-      }));
-    } catch (error) {
-      console.warn("[expenseService] diagnostics direct rule fallback warning:", error);
-    }
-
-    const rawRules = mergeLeaseRuleSources(directRules, normalizedRules);
-
-    const approvedRulesOrg = rawRules.filter((rule) => isApprovedLeaseRule(rule));
-    const needsReviewRulesOrg = rawRules.filter((rule) => approvedRuleState(rule) === "needs_review");
-    const rejectedOrNaRulesOrg = rawRules.filter((rule) => ["rejected", "na"].includes(approvedRuleState(rule)));
+    const { allApprovedRules: approvedRulesOrg } = await fetchApprovedClassificationRules({});
 
     const approvedActualsOrg = (allExpenses || []).filter((expense) =>
       normalizeSourceType(expense) !== "lease_import" && isApprovedExpenseRecord(expense)
-    );
-    const pendingActualsOrg = (allExpenses || []).filter((expense) =>
-      normalizeSourceType(expense) !== "lease_import" && isPendingExpenseRecord(expense)
     );
 
     let allClassifications = [];
@@ -2580,19 +2623,19 @@ export const expenseService = {
       console.warn("[expenseService] recoverability diagnostics classification read warning:", error);
     }
 
-    const rulesMatchingProperty = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, building_id: "all", unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const rulesMatchingBuilding = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const rulesMatchingUnit = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const rulesMatchingLease = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...scope, tenant_id: "all", fiscal_year: "all" }));
+    const rulesMatchingProperty = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...normalizedScope, building_id: null, unit_id: null, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const rulesMatchingBuilding = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...normalizedScope, unit_id: null, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const rulesMatchingUnit = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...normalizedScope, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const rulesMatchingLease = approvedRulesOrg.filter((rule) => ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, { ...normalizedScope, tenant_id: null, fiscal_year: null }));
 
-    const actualsMatchingProperty = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, building_id: "all", unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const actualsMatchingBuilding = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, unit_id: "all", lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const actualsMatchingUnit = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, lease_id: "all", tenant_id: "all", fiscal_year: "all" }));
-    const actualsMatchingLease = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...scope, tenant_id: "all", fiscal_year: "all" }));
+    const actualsMatchingProperty = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...normalizedScope, building_id: null, unit_id: null, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const actualsMatchingBuilding = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...normalizedScope, unit_id: null, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const actualsMatchingUnit = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...normalizedScope, lease_id: null, tenant_id: null, fiscal_year: null }));
+    const actualsMatchingLease = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, { ...normalizedScope, tenant_id: null, fiscal_year: null }));
     const scopedApprovedRules = approvedRulesOrg.filter((rule) =>
-      ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, scope)
+      ruleMatchesScope(rule, leaseById.get(rule.lease_id || rule.rule_set?.lease_id) || null, normalizedScope)
     );
-    const scopedApprovedActuals = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, scope));
+    const scopedApprovedActuals = approvedActualsOrg.filter((expense) => expenseMatchesScope(expense, normalizedScope));
 
     const first10ApprovedExpenses = scopedApprovedActuals.slice(0, 10).map(e => ({
       id: e.id,
@@ -2626,19 +2669,27 @@ export const expenseService = {
       current_user_id: authResult?.data?.user?.id || currentUser?.id || null,
       org_id: currentUser?.org_id || null,
       acting_org_id: actingOrgId,
-      selected_scope: scope,
+      selected_scope: normalizedScope,
       raw_expenses_count_for_org: (allExpenses || []).length,
       approved_expenses_count_before_scope: approvedActualsOrg.length,
       approved_expenses_count_after_scope: scopedApprovedActuals.length,
       first_10_approved_expenses: first10ApprovedExpenses,
-      raw_lease_expense_rules_count_for_org: rawRules.length,
+      raw_lease_expense_rules_count_for_org: approvedRulesOrg.length,
       approved_lease_rules_count_before_scope: approvedRulesOrg.length,
       approved_lease_rules_count_after_scope: scopedApprovedRules.length,
       first_10_approved_rules: first10ApprovedRules,
+      rules_matching_property_count: rulesMatchingProperty.length,
+      rules_matching_building_count: rulesMatchingBuilding.length,
+      rules_matching_unit_count: rulesMatchingUnit.length,
+      rules_matching_lease_count: rulesMatchingLease.length,
+      actuals_matching_property_count: actualsMatchingProperty.length,
+      actuals_matching_building_count: actualsMatchingBuilding.length,
+      actuals_matching_unit_count: actualsMatchingUnit.length,
+      actuals_matching_lease_count: actualsMatchingLease.length,
       expense_classifications_count_for_org: allClassifications.length,
       finalized_classifications_count: allClassifications.filter(c => c.classification_status === "finalized").length,
-      excluded_expenses_with_reason: approvedActualsOrg.filter(e => !expenseMatchesScope(e, scope)).map(e => ({ id: e.id, reason: "out of scope" })),
-      excluded_rules_with_reason: approvedRulesOrg.filter(r => !ruleMatchesScope(r, leaseById.get(r.lease_id || r.rule_set?.lease_id) || null, scope)).map(r => ({ id: r.id, reason: "out of scope" }))
+      excluded_expenses_with_reason: approvedActualsOrg.filter(e => !expenseMatchesScope(e, normalizedScope)).map(e => ({ id: e.id, reason: "out of scope" })),
+      excluded_rules_with_reason: approvedRulesOrg.filter(r => !ruleMatchesScope(r, leaseById.get(r.lease_id || r.rule_set?.lease_id) || null, normalizedScope)).map(r => ({ id: r.id, reason: "out of scope" }))
     };
 
     console.group("[ExpenseRecoverability] diagnostic trace");
