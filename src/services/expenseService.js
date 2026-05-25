@@ -419,6 +419,32 @@ function isPendingExpenseRecord(expense) {
   return status !== "approved";
 }
 
+function normalizeScopeValue(value) {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized || normalized === "all" || normalized === "null" || normalized === "undefined") {
+    return null;
+  }
+  return value;
+}
+
+function normalizeRecoverabilityScope(scope = {}) {
+  return {
+    property_id: normalizeScopeValue(scope.property_id),
+    building_id: normalizeScopeValue(scope.building_id),
+    unit_id: normalizeScopeValue(scope.unit_id),
+    lease_id: normalizeScopeValue(scope.lease_id),
+    tenant_id: normalizeScopeValue(scope.tenant_id),
+    fiscal_year: normalizeScopeValue(scope.fiscal_year),
+  };
+}
+
+function isStrictlyApprovedLeaseRule(rule) {
+  const approval = normalizeText(rule?.approval_status || rule?.approved_status);
+  const review = normalizeText(rule?.review_status);
+  return approval === "approved" && review === "approved";
+}
+
 function approvedRuleState(rule) {
   const approval = normalizeText(rule?.approval_status);
   const review = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
@@ -467,22 +493,22 @@ function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
 }
 
 function expenseMatchesScope(expense, scope = {}) {
-  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
 
-  const matchesLease = lease_id && lease_id !== "all" && String(expense.lease_id) === String(lease_id);
+  const matchesLease = lease_id && String(expense.lease_id) === String(lease_id);
 
   if (!matchesLease) {
-    if (property_id && property_id !== "all" && expense.property_id !== property_id) return false;
-    if (building_id && building_id !== "all" && expense.building_id !== building_id) return false;
-    if (unit_id && unit_id !== "all" && expense.unit_id !== unit_id) return false;
-    if (lease_id && lease_id !== "all" && expense.lease_id !== lease_id) return false;
-    if (tenant_id && tenant_id !== "all" && expense.tenant_id !== tenant_id) return false;
+    if (property_id && expense.property_id !== property_id) return false;
+    if (building_id && expense.building_id !== building_id) return false;
+    if (unit_id && expense.unit_id !== unit_id) return false;
+    if (lease_id && expense.lease_id !== lease_id) return false;
+    if (tenant_id && expense.tenant_id !== tenant_id) return false;
   }
 
   const status = normalizeText(expense?.status);
   if (["deleted", "void", "voided", "archived"].includes(status)) return false;
 
-  if (fiscal_year && fiscal_year !== "all") {
+  if (fiscal_year) {
     const candidateDate =
       expense.expense_date ||
       expense.date ||
@@ -500,21 +526,21 @@ function expenseMatchesScope(expense, scope = {}) {
 }
 
 function leaseMatchesScope(lease, scope = {}) {
-  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
-  if (lease_id && lease_id !== "all" && lease.id !== lease_id) return false;
-  if (tenant_id && tenant_id !== "all" && lease.tenant_id !== tenant_id) return false;
-  if (property_id && property_id !== "all" && lease.property_id !== property_id) return false;
-  if (unit_id && unit_id !== "all" && lease.unit_id !== unit_id) return false;
-  if (building_id && building_id !== "all") {
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
+  if (lease_id && lease.id !== lease_id) return false;
+  if (tenant_id && lease.tenant_id !== tenant_id) return false;
+  if (property_id && lease.property_id !== property_id) return false;
+  if (unit_id && lease.unit_id !== unit_id) return false;
+  if (building_id) {
     const leaseBuildingId = lease.building_id || null;
     if (leaseBuildingId && leaseBuildingId !== building_id) return false;
   }
-  if (!leaseOverlapsFiscalYear(lease, fiscal_year && fiscal_year !== "all" ? Number(fiscal_year) : null)) return false;
+  if (!leaseOverlapsFiscalYear(lease, fiscal_year ? Number(fiscal_year) : null)) return false;
   return true;
 }
 
 function ruleMatchesScope(rule, lease, scope = {}) {
-  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
 
   if (!isApprovedLeaseRule(rule)) return false;
   if (approvedRuleState(rule) === "na" || approvedRuleState(rule) === "rejected") return false;
@@ -525,17 +551,17 @@ function ruleMatchesScope(rule, lease, scope = {}) {
   const effectiveBuildingId = rule.building_id || lease?.building_id || rule.rule_set?.building_id || null;
   const effectiveUnitId = rule.unit_id || lease?.unit_id || rule.rule_set?.unit_id || null;
 
-  const matchesLease = lease_id && lease_id !== "all" && String(effectiveLeaseId) === String(lease_id);
+  const matchesLease = lease_id && String(effectiveLeaseId) === String(lease_id);
 
   if (!matchesLease) {
-    if (property_id && property_id !== "all" && effectivePropertyId !== property_id) return false;
-    if (building_id && building_id !== "all" && effectiveBuildingId !== building_id) return false;
-    if (unit_id && unit_id !== "all" && effectiveUnitId !== unit_id) return false;
-    if (lease_id && lease_id !== "all" && effectiveLeaseId !== lease_id) return false;
-    if (tenant_id && tenant_id !== "all" && effectiveTenantId !== tenant_id) return false;
+    if (property_id && effectivePropertyId !== property_id) return false;
+    if (building_id && effectiveBuildingId !== building_id) return false;
+    if (unit_id && effectiveUnitId !== unit_id) return false;
+    if (lease_id && effectiveLeaseId !== lease_id) return false;
+    if (tenant_id && effectiveTenantId !== tenant_id) return false;
   }
 
-  if (fiscal_year && fiscal_year !== "all" && lease && !leaseOverlapsFiscalYear(lease, Number(fiscal_year))) {
+  if (fiscal_year && lease && !leaseOverlapsFiscalYear(lease, Number(fiscal_year))) {
     return false;
   }
 
@@ -611,7 +637,7 @@ function applyLeaseLinkToExpense(expense, lease) {
 }
 
 function classificationMatchesScope(classification, scope = {}) {
-  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = scope;
+  const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
   
   const cProp = classification.property_id || classification.expense?.property_id || classification.lease?.property_id || null;
   const cBldg = classification.building_id || classification.expense?.building_id || classification.lease?.building_id || null;
@@ -619,13 +645,13 @@ function classificationMatchesScope(classification, scope = {}) {
   const cLease = classification.lease_id || classification.expense?.lease_id || null;
   const cTenant = classification.tenant_id || classification.expense?.tenant_id || classification.lease?.tenant_id || null;
 
-  if (property_id && property_id !== "all" && cProp && cProp !== property_id) return false;
-  if (building_id && building_id !== "all" && cBldg && cBldg !== building_id) return false;
-  if (unit_id && unit_id !== "all" && cUnit && cUnit !== unit_id) return false;
-  if (lease_id && lease_id !== "all" && cLease && cLease !== lease_id) return false;
-  if (tenant_id && tenant_id !== "all" && cTenant && cTenant !== tenant_id) return false;
+  if (property_id && cProp && cProp !== property_id) return false;
+  if (building_id && cBldg && cBldg !== building_id) return false;
+  if (unit_id && cUnit && cUnit !== unit_id) return false;
+  if (lease_id && cLease && cLease !== lease_id) return false;
+  if (tenant_id && cTenant && cTenant !== tenant_id) return false;
 
-  if (fiscal_year && fiscal_year !== "all") {
+  if (fiscal_year) {
     const start = normalizeDateCandidate(classification.service_period_start || classification.expense_date || classification.classified_at);
     const end = normalizeDateCandidate(classification.service_period_end || classification.service_period_start || classification.expense_date || classification.classified_at);
     const yearStart = new Date(Number(fiscal_year), 0, 1);
