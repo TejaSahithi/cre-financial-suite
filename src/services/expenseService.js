@@ -2522,7 +2522,16 @@ export const expenseService = {
     console.log("[Classification approvedRules]", {
       scope: normalizedScope,
       approvedRulesCount: approvedRules.length,
-      sampleRuleIds: approvedRules.slice(0, 10).map((rule) => rule.id),
+      sampleRules: approvedRules.slice(0, 10).map((rule) => ({
+        id: rule.id,
+        review_status: rule.review_status,
+        approval_status: rule.approval_status,
+        lease_id: rule.lease_id,
+        tenant_id: rule.tenant_id,
+        property_id: rule.property_id,
+        building_id: rule.building_id,
+        unit_id: rule.unit_id,
+      })),
       rulesByLease: summarizeApprovedRulesBy(approvedRules, "lease_id"),
       rulesByTenant: summarizeApprovedRulesBy(approvedRules, "tenant_id"),
     });

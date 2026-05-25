@@ -195,6 +195,17 @@ function buildRuleWorkflowPatch(rule, validation, overrides = {}) {
   };
 }
 
+function buildRuleHierarchyPatch(lease) {
+  return {
+    org_id: lease?.org_id || null,
+    lease_id: lease?.id || null,
+    property_id: lease?.property_id || null,
+    building_id: lease?.building_id || null,
+    unit_id: lease?.unit_id || null,
+    tenant_id: lease?.tenant_id || null,
+  };
+}
+
 function humanizeToken(value) {
   const text = String(value || "").replace(/[_-]+/g, " ").trim();
   if (!text) return "-";
@@ -582,6 +593,8 @@ export default function LeaseExpenseRules() {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
       queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
     },
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
@@ -664,6 +677,7 @@ export default function LeaseExpenseRules() {
     console.log("[Approve Rule clicked]", rule.id);
 
     const patch = {
+      ...buildRuleHierarchyPatch(lease),
       review_status: "approved",
       approval_status: "approved",
       approved_by: userId,
@@ -698,6 +712,7 @@ export default function LeaseExpenseRules() {
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: buildRuleWorkflowPatch(rule, validation, {
+        ...buildRuleHierarchyPatch(lease),
         row_status: "needs_review",
         review_status: "needs_review",
         approval_status: "draft",
@@ -728,6 +743,7 @@ export default function LeaseExpenseRules() {
     return updateRuleMutation.mutateAsync({
       ruleId: rule.id,
       patch: buildRuleWorkflowPatch(rule, validation, {
+        ...buildRuleHierarchyPatch(lease),
         row_status: "unmapped",
         review_status: "approved",
         approval_status: "approved",
@@ -750,6 +766,7 @@ export default function LeaseExpenseRules() {
     await updateRuleMutation.mutateAsync({
       ruleId: editingRuleContext.rule.id,
       patch: {
+        ...buildRuleHierarchyPatch(editingRuleContext.lease),
         expense_category: editForm.category_name || null,
         expense_subcategory: editForm.expense_subcategory || null,
         included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),

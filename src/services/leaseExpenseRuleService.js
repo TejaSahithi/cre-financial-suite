@@ -312,8 +312,9 @@ function deriveRuleReviewStatus(rule) {
 }
 
 function deriveRuleApprovalStatus(rule, ruleSetStatus = "draft") {
-  if (rule?.approval_status) return rule.approval_status;
-  if (deriveRuleReviewStatus(rule) !== "approved") return "draft";
+  const explicitApprovalStatus = normalizeText(rule?.approval_status);
+  if (deriveRuleReviewStatus(rule) === "approved") return "approved";
+  if (explicitApprovalStatus) return rule.approval_status;
   return ruleSetStatus === "approved" ? "approved" : "draft";
 }
 
@@ -548,7 +549,10 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
   const extractionStatus = explicitExtractionStatus || (strongEvidence ? "extracted" : "inferred");
   const explicitReviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
   const reviewStatus = explicitReviewStatus || (autoApproved ? "approved" : "needs_review");
-  const approvalStatus = normalizeText(rule?.approval_status) || (autoApproved && ruleSetStatus === "approved" ? "approved" : "draft");
+  const approvalStatus =
+    reviewStatus === "approved"
+      ? "approved"
+      : (normalizeText(rule?.approval_status) || (autoApproved && ruleSetStatus === "approved" ? "approved" : "draft"));
   const rowStatus =
     extractionStatus === "not_found"
       ? "not_mentioned"
@@ -2428,12 +2432,14 @@ export const leaseExpenseRuleService = {
         const existing = preservedByKey.get(payload.rule_key);
         if (!existing) continue;
         const isFromAbstractSync = existing.created_from === "approved_lease_abstract" || existing.generation_source === "lease_review_acceptance";
-        if ((existing.review_status === "approved" || existing.approval_status === "approved") && !isFromAbstractSync) {
+        const existingReviewStatus = normalizeText(existing.review_status) === "reviewed" ? "approved" : normalizeText(existing.review_status);
+        const shouldPreserveApproved = (existingReviewStatus === "approved" || normalizeText(existing.approval_status) === "approved");
+        if (shouldPreserveApproved && !isFromAbstractSync) {
           preservedApprovedCount += 1;
-          payload.review_status = existing.review_status || payload.review_status;
-          payload.approval_status = existing.approval_status || payload.approval_status;
+          payload.review_status = existingReviewStatus || payload.review_status;
+          payload.approval_status = "approved";
           payload.approved_by = existing.approved_by ?? payload.approved_by;
-          payload.approved_at = existing.approved_at ?? payload.approved_at;
+          payload.approved_at = existing.approved_at ?? payload.approved_at ?? approvedAtIso ?? now;
           payload.published_to_cam = existing.published_to_cam ?? payload.published_to_cam;
           // Keep human-edited notes too if they exist
           if (existing.notes && !payload.notes) payload.notes = existing.notes;
