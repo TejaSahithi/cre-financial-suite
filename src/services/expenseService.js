@@ -704,8 +704,10 @@ function buildClassificationNextStep({
   recoverabilityResult,
   sentToCam,
   camEligible,
+  camStatus,
 } = {}) {
   if (sentToCam) return "Sent to CAM";
+  if (normalizeText(camStatus) === "cam_ready") return "CAM Ready";
   if (classificationStatus === "finalized" && camEligible === "yes" && recoverabilityResult === "recoverable") {
     return "Send to CAM";
   }
@@ -721,6 +723,7 @@ function isClassificationSentToCam(classification = {}) {
   return Boolean(
     classification?.sent_to_cam ||
     normalizeText(classification?.cam_status) === "sent" ||
+    normalizeText(classification?.cam_status) === "cam_ready" ||
     classification?.sent_to_cam_at ||
     normalizeText(classification?.next_step) === "sent to cam"
   );
@@ -754,23 +757,63 @@ function preferExpenseClassificationRecord(current, candidate) {
   return candidateTime >= currentTime ? candidate : current;
 }
 
-function canSendClassificationToCam({ classification, expense, rule }) {
+function hasExplicitCamExclusion({ classification = {}, expense = {}, rule = null } = {}) {
+  const recoverability = normalizeText(
+    rule
+      ? leaseExpenseRuleService.getRecoverableDecision(rule)
+      : classification?.recoverability_result ||
+        classification?.recovery_status ||
+        expense?.recoverability_result ||
+        expense?.recovery_status
+  );
+  const camEligible = normalizeText(
+    rule
+      ? leaseExpenseRuleService.getCamEligibleDecision(rule)
+      : classification?.cam_eligible ||
+        expense?.cam_eligible
+  );
+  const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
+
+  return recoverability === "no" ||
+    recoverability === "non_recoverable" ||
+    recoverability === "excluded" ||
+    (Boolean(rule) && camEligible === "no") ||
+    Boolean(rule?.included_in_base_rent) ||
+    paymentTreatment === "included_in_base_rent" ||
+    paymentTreatment === "tenant_direct_contract" ||
+    Boolean(rule?.is_excluded) ||
+    Boolean(classification?.exclusion_applied);
+}
+
+function canSendClassificationToCam({ classification, expense, rule, manualReason = "" }) {
   const amount = toNumber(classification?.amount ?? expense?.amount);
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
   const camEligible = normalizeText(classification?.cam_eligible);
   const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
   const hasActual = Boolean(classification?.actual_expense_id || classification?.expense_id);
   const hasRule = Boolean(classification?.lease_expense_rule_id || classification?.linked_expense_rule_id);
+  const hasManualReason = Boolean(String(manualReason || "").trim());
+  const explicitExclusion = hasExplicitCamExclusion({ classification, expense, rule });
 
-  return (
+  const automaticActualPath =
     hasActual &&
     hasRule &&
     recoverabilityResult === "recoverable" &&
     camEligible === "yes" &&
+    rule?.published_to_cam === true &&
     amount > 0 &&
     !isClassificationSentToCam(classification) &&
-    paymentTreatment !== "included_in_base_rent"
-  );
+    paymentTreatment !== "included_in_base_rent" &&
+    paymentTreatment !== "tenant_direct_contract";
+
+  const manualActualPath =
+    hasActual &&
+    hasManualReason &&
+    amount > 0 &&
+    !isClassificationSentToCam(classification) &&
+    !explicitExclusion;
+
+  return automaticActualPath || manualActualPath;
 }
 
 
@@ -857,6 +900,7 @@ const EXPENSE_CLASSIFICATION_UUID_COLUMNS = new Set([
   "approved_by",
   "reviewed_by",
   "sent_to_cam_by",
+  "manual_cam_reviewed_by",
   "cam_pool_id",
 ]);
 
@@ -889,6 +933,52 @@ const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
   "created_at",
   "updated_at",
 ]);
+
+const EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS = [
+  "classification_key",
+  "actual_expense_id",
+  "lease_expense_rule_id",
+  "linked_expense_rule_id",
+  "recoverability_result",
+  "recovery_reason",
+  "cam_eligible",
+  "recovery_method",
+  "cam_pool_id",
+  "category",
+  "subcategory",
+  "amount",
+  "service_period_start",
+  "service_period_end",
+  "classification_status",
+  "exception_type",
+  "reviewed_by",
+  "reviewed_at",
+  "finalized_at",
+  "recoverable_amount",
+  "non_recoverable_amount",
+  "conditional_amount",
+  "excluded_amount",
+  "sent_to_cam",
+  "sent_to_cam_at",
+  "sent_to_cam_by",
+  "allocation_basis",
+  "next_step",
+  "row_type",
+];
+
+const CAM_WORKFLOW_COLUMNS = [
+  "cam_status",
+  "cam_source",
+  "cam_input_type",
+  "manual_cam_reviewed",
+  "manual_cam_reason",
+  "manual_cam_reviewed_by",
+  "manual_cam_reviewed_at",
+];
+
+for (const column of [...EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS, ...CAM_WORKFLOW_COLUMNS]) {
+  BASELINE_EXPENSE_CLASSIFICATION_COLUMNS.add(column);
+}
 
 function normalizeExpenseClassificationPayload(payload = {}) {
   const normalized = compactDefined(payload);
@@ -1300,6 +1390,91 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
   return null;
 }
 
+async function upsertCamExpenseInput(payload = {}, { onConflict = "classification_result_id" } = {}) {
+  if (!supabase) return null;
+  let attemptPayload = compactDefined(payload);
+
+  const tryUpsert = async () => {
+    const { data, error } = await supabase
+      .from("cam_expense_inputs")
+      .upsert(attemptPayload, { onConflict })
+      .select("*")
+      .maybeSingle();
+    return { data, error };
+  };
+
+  while (Object.keys(attemptPayload).length > 0) {
+    const { data, error } = await tryUpsert();
+    if (!error) return data;
+
+    const conflictError = String(error?.message || error?.details || "").toLowerCase();
+    if (
+      error?.code === "42P10" ||
+      conflictError.includes("no unique") ||
+      conflictError.includes("no constraint")
+    ) {
+      break;
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
+      throw error;
+    }
+    delete attemptPayload[missingColumn];
+  }
+
+  const existingId =
+    attemptPayload.classification_result_id
+      ? await supabase
+        .from("cam_expense_inputs")
+        .select("id")
+        .eq("classification_result_id", attemptPayload.classification_result_id)
+        .limit(1)
+        .then(({ data }) => data?.[0]?.id || null)
+      : attemptPayload.lease_expense_rule_id
+        ? await supabase
+          .from("cam_expense_inputs")
+          .select("id")
+          .eq("lease_expense_rule_id", attemptPayload.lease_expense_rule_id)
+          .eq("source", attemptPayload.source || "lease_rule_amount")
+          .limit(1)
+          .then(({ data }) => data?.[0]?.id || null)
+        : null;
+
+  if (existingId) {
+    while (Object.keys(attemptPayload).length > 0) {
+      const { data, error } = await supabase
+        .from("cam_expense_inputs")
+        .update(attemptPayload)
+        .eq("id", existingId)
+        .select("*")
+        .maybeSingle();
+      if (!error) return data;
+      const missingColumn = extractMissingColumn(error);
+      if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
+        throw error;
+      }
+      delete attemptPayload[missingColumn];
+    }
+    return null;
+  }
+
+  while (Object.keys(attemptPayload).length > 0) {
+    const { data, error } = await supabase
+      .from("cam_expense_inputs")
+      .insert(attemptPayload)
+      .select("*")
+      .maybeSingle();
+    if (!error) return data;
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
+      throw error;
+    }
+    delete attemptPayload[missingColumn];
+  }
+  return null;
+}
+
 async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
   if (!supabase || !expenseId) {
     throw new Error("Expense record not found");
@@ -1422,6 +1597,12 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       "sent_to_cam_at",
       "sent_to_cam_by",
       "cam_status",
+      "cam_source",
+      "cam_input_type",
+      "manual_cam_reviewed",
+      "manual_cam_reason",
+      "manual_cam_reviewed_by",
+      "manual_cam_reviewed_at",
       "next_step",
       "classified_at",
       "finalized_at",
@@ -1599,6 +1780,12 @@ export const expenseService = {
         "sent_to_cam_at",
         "sent_to_cam_by",
         "cam_status",
+        "cam_source",
+        "cam_input_type",
+        "manual_cam_reviewed",
+        "manual_cam_reason",
+        "manual_cam_reviewed_by",
+        "manual_cam_reviewed_at",
         "next_step",
         "classified_at",
         "finalized_at",
@@ -1659,6 +1846,12 @@ export const expenseService = {
           "sent_to_cam_at",
           "sent_to_cam_by",
           "cam_status",
+          "cam_source",
+          "cam_input_type",
+          "manual_cam_reviewed",
+          "manual_cam_reason",
+          "manual_cam_reviewed_by",
+          "manual_cam_reviewed_at",
           "next_step",
           "classified_at",
           "finalized_at",
@@ -1757,6 +1950,12 @@ export const expenseService = {
           "sent_to_cam_at",
           "sent_to_cam_by",
           "cam_status",
+          "cam_source",
+          "cam_input_type",
+          "manual_cam_reviewed",
+          "manual_cam_reason",
+          "manual_cam_reviewed_by",
+          "manual_cam_reviewed_at",
           "next_step",
           "classified_at",
           "finalized_at",
@@ -2155,8 +2354,8 @@ export const expenseService = {
           : "needs_review";
       let linkedExpenseRuleId = match.linked_expense_rule_id;
       let camEligible = matchedRule
-        ? (matchedRule.published_to_cam ? match.cam_eligible : "no")
-        : "conditional";
+        ? match.cam_eligible
+        : "needs_review";
       let recoveryMethod = match.recovery_method || null;
       let recoveryReason = match.reason;
       let ruleSource = matchedRule ? "lease" : (expense.rule_source || "default");
@@ -2222,11 +2421,33 @@ export const expenseService = {
       });
       const amount = Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : 0;
       const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
+      const explicitExclusion = hasExplicitCamExclusion({
+        classification: existingClassification || {},
+        expense,
+        rule: matchedRule,
+      });
+      const isAutomaticCamReady =
+        Boolean(matchedRule) &&
+        recoveryStatus === "recoverable" &&
+        camEligible === "yes" &&
+        matchedRule?.published_to_cam === true &&
+        amount > 0 &&
+        !explicitExclusion;
+      const nextCamStatus = isAutomaticCamReady
+        ? "cam_ready"
+        : explicitExclusion
+          ? "excluded"
+          : "needs_review";
+      const nextCamSource = isAutomaticCamReady ? "lease_rule" : "none";
 
       const updatePayload = {
         classification: recoveryStatus === "excluded" ? "non_recoverable" : recoveryStatus,
         recovery_status: recoveryStatus,
         recoverability_result: recoveryStatus,
+        cam_eligible: isAutomaticCamReady ? "yes" : (explicitExclusion ? "no" : camEligible),
+        cam_status: nextCamStatus,
+        cam_source: nextCamSource,
+        cam_input_type: "actual_expense",
         approved_status: approvedStatus,
         review_status: approvedStatus === "approved" ? "approved" : "needs_review",
         rule_source: ruleSource,
@@ -2308,7 +2529,11 @@ export const expenseService = {
         service_period_end: expense.service_period_end || expense.date || null,
         recovery_status: recoveryStatus,
         recoverability_result: recoveryStatus,
-        cam_eligible: camEligible,
+        cam_eligible: isAutomaticCamReady ? "yes" : (explicitExclusion ? "no" : camEligible),
+        cam_status: nextCamStatus,
+        cam_source: nextCamSource,
+        cam_input_type: "actual_expense",
+        manual_cam_reviewed: Boolean(existingClassification?.manual_cam_reviewed),
         recovery_method: recoveryMethod,
         recovery_reason: plainReason,
         cam_pool_id: updatePayload.cam_pool_id,
@@ -2328,15 +2553,16 @@ export const expenseService = {
         finalized_at: classificationStatus === "finalized" ? new Date().toISOString() : null,
         reviewed_by: existingClassification?.reviewed_by || null,
         ...amountBuckets,
-        sent_to_cam: existingClassification?.sent_to_cam || false,
+        sent_to_cam: isAutomaticCamReady || existingClassification?.sent_to_cam || false,
         sent_to_cam_at: existingClassification?.sent_to_cam_at || null,
         sent_to_cam_by: existingClassification?.sent_to_cam_by || null,
-        cam_status: existingClassification?.cam_status || null,
+        manual_cam_reason: existingClassification?.manual_cam_reason || null,
         next_step: buildClassificationNextStep({
           classificationStatus,
           recoverabilityResult: recoveryStatus,
-          sentToCam: existingClassification?.sent_to_cam || false,
-          camEligible,
+          sentToCam: isAutomaticCamReady || existingClassification?.sent_to_cam || false,
+          camEligible: isAutomaticCamReady ? "yes" : camEligible,
+          camStatus: nextCamStatus,
         }),
         notes: matchedRule?.notes || plainReason || null,
         classified_at: new Date().toISOString(),
@@ -2363,47 +2589,133 @@ export const expenseService = {
       recovery_reason: reason,
     };
   },
-  async createActualExpenseFromCoverageGap(rule, amount, currentYear) {
+
+  async createLeaseRuleAmountCamInput(rule, amount, currentYear) {
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {
       throw new Error("Enter a valid amount");
     }
-    const orgId = await getCurrentOrgId();
-    const period = String(currentYear || new Date().getFullYear());
-
-    // 1. Create a real public.expenses row
-    const newExpense = await baseExpenseService.create({
-      org_id: orgId,
-      source: "manual_from_rule_missing_actual",
-      source_type: "manual_from_rule_missing_actual",
-      amount: numericAmount,
-      category: rule.expense_category || rule.category_name,
-      expense_subcategory: rule.expense_subcategory || null,
-      property_id: rule.property_id || null,
-      building_id: rule.building_id || null,
-      unit_id: rule.unit_id || null,
-      lease_id: rule.lease_id || rule.rule_set?.lease_id || null,
-      tenant_id: rule.tenant_id || rule.rule_set?.tenant_id || null,
-      vendor_name: "Manual Coverage Gap Entry",
-      expense_date: `${period}-12-31`,
-      service_period_start: `${period}-01-01`,
-      service_period_end: `${period}-12-31`,
-      approval_status: "approved",
-      review_status: "approved",
-    });
-
-    if (!newExpense?.id) {
-      throw new Error("Failed to create actual expense from coverage gap.");
+    if (!rule?.id) {
+      throw new Error("Lease expense rule not found");
+    }
+    if (!leaseExpenseRuleService.isRuleCamPublishable(rule) || rule.published_to_cam !== true) {
+      throw new Error("Only approved, published, CAM-eligible lease rules can receive a CAM rule amount.");
     }
 
-    // 2. Classify to generate the matched_classification
-    const lease = newExpense.lease_id ? await baseLeaseService.get(newExpense.lease_id) : null;
-    await this.classifyExpenses({
-      expenses: [newExpense],
-      leases: lease ? [lease] : [],
+    const orgId = await getCurrentOrgId();
+    const fiscalYear = Number(currentYear || new Date().getFullYear());
+    const now = new Date().toISOString();
+    const authResult = await supabase?.auth?.getUser?.();
+    const userId = authResult?.data?.user?.id || null;
+    const leaseId = rule.lease_id || rule.rule_set?.lease_id || null;
+    const tenantId = rule.tenant_id || rule.rule_set?.tenant_id || null;
+    const classificationKey = buildClassificationKey({
+      orgId: rule.org_id || orgId,
+      expenseId: `rule_amount:${rule.id}:${fiscalYear}`,
+      leaseExpenseRuleId: rule.id,
     });
+    const amountBuckets = buildAmountBuckets(numericAmount, "recoverable");
 
-    return newExpense;
+    const existingClassifications = await selectExpenseClassifications({
+      columns: ["id", "lease_expense_rule_id", "row_type"],
+      apply: (query) => query
+        .eq("lease_expense_rule_id", rule.id)
+        .eq("row_type", "rule_missing_actual")
+        .limit(1),
+    });
+    const existingClassification = existingClassifications?.[0] || null;
+    const classificationPayload = {
+      org_id: rule.org_id || orgId,
+      classification_key: classificationKey,
+      actual_expense_id: null,
+      expense_id: null,
+      lease_expense_rule_id: rule.id,
+      linked_expense_rule_id: rule.id,
+      recovery_rule_id: rule.id,
+      property_id: rule.property_id || rule.rule_set?.property_id || null,
+      building_id: rule.building_id || rule.rule_set?.building_id || null,
+      unit_id: rule.unit_id || rule.rule_set?.unit_id || null,
+      lease_id: leaseId,
+      tenant_id: tenantId,
+      category: rule.expense_category || rule.category_name || null,
+      subcategory: rule.expense_subcategory || null,
+      amount: numericAmount,
+      service_period_start: `${fiscalYear}-01-01`,
+      service_period_end: `${fiscalYear}-12-31`,
+      recoverability_result: "recoverable",
+      recovery_status: "recoverable",
+      cam_eligible: "yes",
+      cam_status: "cam_ready",
+      cam_source: "lease_rule_amount",
+      cam_input_type: "lease_rule_amount",
+      manual_cam_reviewed: true,
+      manual_cam_reason: "CAM rule amount entered by reviewer",
+      manual_cam_reviewed_by: userId,
+      manual_cam_reviewed_at: now,
+      classification_status: "finalized",
+      approved_status: "approved",
+      row_type: "rule_missing_actual",
+      sent_to_cam: true,
+      sent_to_cam_at: now,
+      sent_to_cam_by: userId,
+      finalized_at: now,
+      reviewed_at: now,
+      reviewed_by: userId,
+      ...amountBuckets,
+      next_step: "CAM Ready",
+      updated_at: now,
+      classified_at: now,
+    };
+
+    const classification = existingClassification?.id
+      ? await updateExpenseClassificationRecord(existingClassification.id, classificationPayload)
+      : await upsertExpenseClassification(classificationPayload);
+
+    try {
+      const { error } = await supabase
+        .from("lease_expense_rules")
+        .update({
+          estimated_annual_amount: numericAmount,
+          estimated_monthly_amount: numericAmount / 12,
+          updated_at: now,
+        })
+        .eq("id", rule.id);
+      if (error) throw error;
+    } catch (error) {
+      console.warn("[expenseService] lease rule amount persistence warning:", error);
+    }
+
+    return upsertCamExpenseInput({
+      org_id: rule.org_id || orgId,
+      property_id: rule.property_id || rule.rule_set?.property_id || null,
+      building_id: rule.building_id || rule.rule_set?.building_id || null,
+      unit_id: rule.unit_id || rule.rule_set?.unit_id || null,
+      lease_id: leaseId,
+      tenant_id: tenantId,
+      actual_expense_id: null,
+      classification_result_id: classification?.id || null,
+      lease_expense_rule_id: rule.id,
+      category: rule.expense_category || rule.category_name || null,
+      amount: numericAmount,
+      recovery_method: rule.recovery_method || null,
+      allocation_basis: rule.allocation_basis || rule.recovery_method || null,
+      source: "lease_rule_amount",
+      status: "cam_ready",
+      cam_source: "lease_rule_amount",
+      cam_input_type: "lease_rule_amount",
+      manual_cam_reviewed: true,
+      manual_cam_reason: "CAM rule amount entered by reviewer",
+      fiscal_year: fiscalYear,
+      sent_to_cam_at: now,
+      sent_to_cam_by: userId,
+      updated_at: now,
+    }, {
+      onConflict: "lease_expense_rule_id,fiscal_year",
+    });
+  },
+
+  async createActualExpenseFromCoverageGap(rule, amount, currentYear) {
+    return this.createLeaseRuleAmountCamInput(rule, amount, currentYear);
   },
 
   async markManualOverride(classificationId, payload) {
@@ -2574,8 +2886,8 @@ export const expenseService = {
     return updatedExpense;
   },
 
-  async sendClassificationToCam(classificationOrId) {
-    const classification =
+  async sendClassificationToCam(classificationOrId, { reason = "" } = {}) {
+    let classification =
       classificationOrId && typeof classificationOrId === "object"
         ? classificationOrId
         : await selectExpenseClassifications({
@@ -2599,9 +2911,28 @@ export const expenseService = {
             "cam_eligible",
             "recovery_method",
             "sent_to_cam",
-          ],
+            "cam_status",
+            "cam_source",
+            "cam_input_type",
+            "manual_cam_reviewed",
+            ],
           apply: (query) => query.eq("id", classificationOrId).limit(1),
         }).then((rows) => rows[0] || null);
+
+    if (!classification?.id && classification && typeof classification === "object") {
+      classification = await upsertExpenseClassification({
+        ...classification,
+        recovery_status: classification.recovery_status || classification.recoverability_result || "needs_review",
+        recoverability_result: classification.recoverability_result || classification.recovery_status || "needs_review",
+        classification_status: classification.classification_status || "unmatched",
+        approved_status: classification.approved_status || "needs_review",
+        cam_eligible: classification.cam_eligible || "needs_review",
+        cam_status: classification.cam_status || "needs_review",
+        cam_source: classification.cam_source || "none",
+        cam_input_type: "actual_expense",
+        next_step: classification.next_step || "Review exception",
+      });
+    }
 
     if (!classification?.id) {
       throw new Error("Run Classification before sending to CAM.");
@@ -2625,12 +2956,22 @@ export const expenseService = {
     }
 
     const rule = ruleResult?.data || null;
-    if (!canSendClassificationToCam({ classification, expense, rule })) {
-      throw new Error("Only finalized, CAM-eligible, approved recoverable rows can be sent to CAM.");
+    const isAutomatic =
+      Boolean(rule) &&
+      classification.recoverability_result === "recoverable" &&
+      classification.cam_eligible === "yes" &&
+      rule.published_to_cam === true;
+    const manualReason = String(reason || classification.manual_cam_reason || "").trim();
+    if (!isAutomatic && !manualReason) {
+      throw new Error("Enter a reason before manually sending an unmatched or needs-review actual expense to CAM.");
+    }
+    if (!canSendClassificationToCam({ classification, expense, rule, manualReason })) {
+      throw new Error("Only CAM-ready actual expense rows can be sent to CAM.");
     }
 
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
+    const camSource = isAutomatic ? "lease_rule" : "manual_review";
     const inputPayload = {
       org_id: classification.org_id || expense?.org_id || null,
       property_id: classification.property_id || expense?.property_id || null,
@@ -2645,29 +2986,34 @@ export const expenseService = {
       amount: toNumber(classification.amount ?? expense?.amount),
       recovery_method: classification.recovery_method || null,
       allocation_basis: classification.allocation_basis || null,
-      source: "expense_classification",
-      status: "sent",
+      source: camSource,
+      status: "cam_ready",
+      cam_source: camSource,
+      cam_input_type: "actual_expense",
+      manual_cam_reviewed: !isAutomatic,
+      manual_cam_reason: manualReason || null,
       sent_to_cam_at: now,
       sent_to_cam_by: userId,
       updated_at: now,
     };
 
-    const { error } = await supabase
-      .from("cam_expense_inputs")
-      .upsert(inputPayload, { onConflict: "classification_result_id" });
-
-    if (error) {
-      throw error;
-    }
+    await upsertCamExpenseInput(inputPayload, { onConflict: "classification_result_id" });
 
     const result = await updateExpenseClassificationRecord(classification.id, {
       sent_to_cam: true,
       sent_to_cam_at: now,
       sent_to_cam_by: userId,
-      cam_status: "sent",
-      next_step: "Sent to CAM",
+      cam_status: "cam_ready",
+      cam_eligible: "yes",
+      cam_source: camSource,
+      cam_input_type: "actual_expense",
+      manual_cam_reviewed: !isAutomatic,
+      manual_cam_reason: manualReason || null,
+      manual_cam_reviewed_by: !isAutomatic ? userId : null,
+      manual_cam_reviewed_at: !isAutomatic ? now : null,
+      next_step: "CAM Ready",
     });
-    console.log(`[Diagnostics] Sent classification ${classification.id} to CAM (sent_to_cam=true)`);
+    console.log(`[Diagnostics] Marked classification ${classification.id} CAM ready`);
     return result;
   },
 

@@ -188,6 +188,39 @@ async function fetchExpenses(supabaseAdmin: any, orgId: string, propertyId: stri
   return data ?? [];
 }
 
+async function fetchCamReadyClassifications(supabaseAdmin: any, orgId: string, propertyId: string, fiscalYear: number) {
+  const { data, error } = await supabaseAdmin
+    .from("expense_classifications")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("cam_status", "cam_ready")
+    .eq("cam_eligible", "yes");
+
+  if (error) {
+    console.warn("[compute-cam] expense_classifications CAM-ready fetch warning:", error.message);
+    return [];
+  }
+
+  return (data ?? []).filter((row: any) => rowMatchesFiscalYear(row, fiscalYear));
+}
+
+async function fetchCamReadyInputs(supabaseAdmin: any, orgId: string, propertyId: string, fiscalYear: number) {
+  const { data, error } = await supabaseAdmin
+    .from("cam_expense_inputs")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("status", "cam_ready");
+
+  if (error) {
+    console.warn("[compute-cam] cam_expense_inputs fetch warning:", error.message);
+    return [];
+  }
+
+  return (data ?? []).filter((row: any) => rowMatchesFiscalYear(row, fiscalYear));
+}
+
 async function fetchLeases(supabaseAdmin: any, orgId: string, propertyId: string) {
   const { data, error } = await supabaseAdmin
     .from("leases")
@@ -197,6 +230,127 @@ async function fetchLeases(supabaseAdmin: any, orgId: string, propertyId: string
 
   if (error) throw new Error(`Failed to fetch leases: ${error.message}`);
   return data ?? [];
+}
+
+function rowMatchesFiscalYear(row: any, fiscalYear: number) {
+  if (!fiscalYear) return true;
+  if (Number(row?.fiscal_year) === fiscalYear) return true;
+  if (row?.fiscal_year && Number(row.fiscal_year) !== fiscalYear) return false;
+
+  const dateValue =
+    row?.service_period_start ||
+    row?.service_period_end ||
+    row?.expense_date ||
+    row?.date ||
+    row?.sent_to_cam_at;
+  if (!dateValue) return true;
+  const year = new Date(dateValue).getUTCFullYear();
+  return !Number.isFinite(year) || year === fiscalYear;
+}
+
+function camReadyRowMatchesScope(row: any, units: any[], leases: any[], scopeLevel: ScopeLevel, scopeId: string, propertyId: string) {
+  if (row?.property_id && row.property_id !== propertyId) return false;
+  if (scopeLevel === "property") return true;
+  if (scopeLevel === "building") {
+    if (row?.building_id === scopeId) return true;
+    if (row?.unit_id && units.some((unit) => unit.id === row.unit_id && unit.building_id === scopeId)) return true;
+    if (row?.lease_id) {
+      return leases.some((lease) =>
+        lease.id === row.lease_id &&
+        (lease.building_id === scopeId || units.some((unit) => unit.id === lease.unit_id && unit.building_id === scopeId))
+      );
+    }
+    return false;
+  }
+  if (row?.unit_id === scopeId) return true;
+  if (row?.lease_id) {
+    return leases.some((lease) => lease.id === row.lease_id && lease.unit_id === scopeId);
+  }
+  return false;
+}
+
+function camReadyExpenseFromRow(row: any, sourceLabel: string) {
+  const camInputType = normalizeText(row?.cam_input_type || row?.source || sourceLabel);
+  const allocationBasis = normalizeText(row?.allocation_basis || row?.allocation_method || row?.recovery_method);
+  const isDirectAllocation =
+    camInputType === "lease_rule_amount" ||
+    allocationBasis === "direct" ||
+    allocationBasis === "direct_allocation" ||
+    allocationBasis === "tenant_specific";
+  const classification =
+    normalizeText(row?.recoverability_result || row?.recovery_status || row?.classification) === "recoverable" ||
+    normalizeText(row?.cam_eligible) === "yes"
+      ? "recoverable"
+      : "needs_review";
+
+  return {
+    id: String(row?.id || row?.classification_result_id || row?.actual_expense_id || row?.lease_expense_rule_id),
+    property_id: row?.property_id,
+    building_id: row?.building_id ?? null,
+    unit_id: row?.unit_id ?? null,
+    lease_id: isDirectAllocation ? row?.lease_id ?? null : null,
+    tenant_id: row?.tenant_id ?? null,
+    fiscal_year: row?.fiscal_year ? Number(row.fiscal_year) : null,
+    date: row?.service_period_start || row?.sent_to_cam_at || null,
+    category: row?.category,
+    amount: asNumber(row?.amount),
+    classification,
+    allocation_type: isDirectAllocation ? "direct" : null,
+    allocation_meta: {
+      cam_source: row?.cam_source || row?.source || sourceLabel,
+      cam_input_type: camInputType,
+      classification_result_id: row?.classification_result_id || row?.id || null,
+      lease_expense_rule_id: row?.lease_expense_rule_id || null,
+    },
+  };
+}
+
+function buildCamReadyExpenses({
+  classifications,
+  inputs,
+  units,
+  leases,
+  scopeLevel,
+  scopeId,
+  propertyId,
+}: {
+  classifications: any[];
+  inputs: any[];
+  units: any[];
+  leases: any[];
+  scopeLevel: ScopeLevel;
+  scopeId: string;
+  propertyId: string;
+}) {
+  const rows: any[] = [];
+  const seen = new Set<string>();
+
+  const addRow = (row: any, sourceLabel: string) => {
+    const camStatus = normalizeText(row?.cam_status || row?.status);
+    const camEligible = normalizeDecision(row?.cam_eligible || "yes");
+    const inputType = normalizeText(row?.cam_input_type || row?.source || sourceLabel);
+    if (camStatus !== "cam_ready" && normalizeText(row?.status) !== "cam_ready") return;
+    if (camEligible !== "yes") return;
+    if (!["actual_expense", "manual_review", "lease_rule", "lease_rule_amount"].includes(inputType)) return;
+    if (!camReadyRowMatchesScope(row, units, leases, scopeLevel, scopeId, propertyId)) return;
+
+    const dedupeKey =
+      row?.classification_result_id
+        ? `classification:${row.classification_result_id}`
+        : row?.actual_expense_id
+          ? `actual:${row.actual_expense_id}`
+          : row?.lease_expense_rule_id && inputType === "lease_rule_amount"
+            ? `rule_amount:${row.lease_expense_rule_id}:${row.fiscal_year || ""}`
+            : `row:${row.id}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    rows.push(camReadyExpenseFromRow(row, sourceLabel));
+  };
+
+  for (const input of inputs) addRow(input, normalizeText(input?.source || "cam_expense_input"));
+  for (const classification of classifications) addRow(classification, normalizeText(classification?.cam_source || "expense_classification"));
+
+  return rows.filter((row) => row.amount > 0 && row.category);
 }
 
 async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: string, leaseIds: string[]) {
@@ -371,9 +525,11 @@ Deno.serve(async (req: Request) => {
     await assertPropertyAccess(req, propertyId);
 
     const { property, buildings, units } = await fetchPropertyContext(supabaseAdmin, orgId, propertyId);
-    const [expenses, leases] = await Promise.all([
+    const [expenses, leases, camReadyClassifications, camReadyInputs] = await Promise.all([
       fetchExpenses(supabaseAdmin, orgId, propertyId, fiscalYear),
       fetchLeases(supabaseAdmin, orgId, propertyId),
+      fetchCamReadyClassifications(supabaseAdmin, orgId, propertyId, fiscalYear),
+      fetchCamReadyInputs(supabaseAdmin, orgId, propertyId, fiscalYear),
     ]);
 
     const leaseIds = leases.map((lease: any) => lease.id);
@@ -410,32 +566,6 @@ Deno.serve(async (req: Request) => {
       throw new Error("Lease expense/CAM rules must be approved before CAM calculation");
     }
 
-    const actualExpenses = expenses.filter((expense: any) => {
-      const sourceType = String(expense.source_type || expense.source || "").toLowerCase();
-      return sourceType !== "lease_import" && normalizeText(expense.approved_status) === "approved";
-    });
-
-    if (actualExpenses.length === 0) {
-      throw new Error("No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation.");
-    }
-
-    const reviewBlockingExpenses = actualExpenses.filter((expense: any) => {
-      const recoveryStatus = normalizeText(expense.recoverability_result || expense.recovery_status || expense.classification);
-      const approvedStatus = normalizeText(expense.approved_status);
-      const camEligible = normalizeDecision(expense.cam_eligible);
-      return (
-        recoveryStatus === "needs_review" ||
-        recoveryStatus === "conditional" ||
-        approvedStatus === "needs_review" ||
-        camEligible === "no" ||
-        !expense.category
-      );
-    });
-
-    if (reviewBlockingExpenses.length > 0) {
-      throw new Error(`Expense review must be approved before CAM calculation. ${reviewBlockingExpenses.length} expense(s) still need review.`);
-    }
-
     // Filter recoverable expenses. Per spec: "conditional expenses block
     // CAM until reviewed" — so 'conditional' is rejected upstream (the
     // reviewBlockingExpenses throw above). Anything reaching this filter
@@ -444,11 +574,14 @@ Deno.serve(async (req: Request) => {
     // earlier guard already rejected them. Previous code included
     // "conditional" on both axes, but the upstream throw made it dead
     // code that mis-represented the contract.
-    const recoverableExpenses = actualExpenses.filter((expense: any) => {
-      const cls = normalizeText(expense.recoverability_result || expense.classification);
-      const camEligible = normalizeDecision(expense.cam_eligible);
-      return (cls === "recoverable" || cls === "cam" || cls === "nnn" || cls === "") &&
-        camEligible === "yes";
+    const recoverableExpenses = buildCamReadyExpenses({
+      classifications: camReadyClassifications,
+      inputs: camReadyInputs,
+      units,
+      leases,
+      scopeLevel,
+      scopeId,
+      propertyId,
     });
 
     const activeScopedLeases = leases.filter((lease: any) =>
@@ -591,17 +724,21 @@ Deno.serve(async (req: Request) => {
       override_values: body?.override_values ?? null,
       _compute: {
         page_scope: ["CAMCalculation", "CAMDashboard"],
-        source_tables: ["properties", "buildings", "units", "expenses", "leases", "property_config", "lease_config", "lease_expense_rule_sets", "computation_snapshots"],
+        source_tables: ["properties", "buildings", "units", "expenses", "expense_classifications", "cam_expense_inputs", "leases", "property_config", "lease_config", "lease_expense_rule_sets", "computation_snapshots"],
         source_row_ids: {
           buildings: buildings.map((building: any) => building.id).sort(),
           units: units.map((unit: any) => unit.id).sort(),
           expenses: expenses.map((expense: any) => expense.id).sort(),
+          expense_classifications: camReadyClassifications.map((row: any) => row.id).sort(),
+          cam_expense_inputs: camReadyInputs.map((row: any) => row.id).sort(),
           leases: leases.map((lease: any) => lease.id).sort(),
         },
         source_counts: {
           buildings: buildings.length,
           units: units.length,
           expenses: expenses.length,
+          expense_classifications: camReadyClassifications.length,
+          cam_expense_inputs: camReadyInputs.length,
           leases: leases.length,
         },
         source_snapshot_ids: {

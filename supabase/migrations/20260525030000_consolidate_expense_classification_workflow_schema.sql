@@ -43,6 +43,12 @@ ALTER TABLE public.expense_classifications
   ADD COLUMN IF NOT EXISTS sent_to_cam_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS sent_to_cam_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS cam_status TEXT,
+  ADD COLUMN IF NOT EXISTS cam_source TEXT,
+  ADD COLUMN IF NOT EXISTS cam_input_type TEXT,
+  ADD COLUMN IF NOT EXISTS manual_cam_reviewed BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS manual_cam_reason TEXT,
+  ADD COLUMN IF NOT EXISTS manual_cam_reviewed_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manual_cam_reviewed_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS allocation_basis TEXT,
   ADD COLUMN IF NOT EXISTS next_step TEXT,
   ADD COLUMN IF NOT EXISTS row_type TEXT;
@@ -85,3 +91,16 @@ CREATE INDEX IF NOT EXISTS idx_expense_classifications_scope_status
 
 CREATE INDEX IF NOT EXISTS idx_expense_classifications_cam_status
   ON public.expense_classifications(sent_to_cam, cam_status);
+
+ALTER TABLE public.cam_expense_inputs
+  ADD COLUMN IF NOT EXISTS cam_source TEXT,
+  ADD COLUMN IF NOT EXISTS cam_input_type TEXT,
+  ADD COLUMN IF NOT EXISTS manual_cam_reviewed BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS manual_cam_reason TEXT,
+  ADD COLUMN IF NOT EXISTS fiscal_year INTEGER;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cam_expense_inputs_rule_amount
+  ON public.cam_expense_inputs(lease_expense_rule_id, fiscal_year)
+  WHERE lease_expense_rule_id IS NOT NULL
+    AND fiscal_year IS NOT NULL
+    AND cam_input_type = 'lease_rule_amount';
