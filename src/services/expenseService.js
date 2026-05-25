@@ -659,7 +659,7 @@ function buildPlainEnglishReason({ expense, rule, recoverabilityResult, fallback
     return `This ${expenseLabel} expense needs review because no approved lease rule matched this category.`;
   }
 
-  const paymentTreatment = normalizeText(getPaymentTreatment(rule));
+  const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
   if (paymentTreatment === "included_in_base_rent") {
     return `This ${expenseLabel} expense is non-recoverable because the approved lease rule says it is included in base rent.`;
   }
@@ -705,7 +705,7 @@ function canSendClassificationToCam({ classification, expense, rule }) {
   const amount = toNumber(classification?.amount ?? expense?.amount);
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
   const camEligible = normalizeText(classification?.cam_eligible);
-  const paymentTreatment = normalizeText(getPaymentTreatment(rule));
+  const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
   const rowType = normalizeText(classification?.row_type);
   const classificationStatus = normalizeText(classification?.classification_status);
   const hasActual = Boolean(classification?.actual_expense_id || classification?.expense_id);
