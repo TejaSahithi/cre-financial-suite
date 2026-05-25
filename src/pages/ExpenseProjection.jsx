@@ -22,23 +22,20 @@ function normalizeProjectionText(value) {
 }
 
 function classificationExpenseId(row) {
-  return row?.expense_id || row?.actual_expense_id || null;
+  return row?.actual_expense_id || row?.expense_id || null;
 }
 
-function classificationDate(row, expense = null) {
+function classificationDate(row) {
   return (
     row?.service_period_start ||
     row?.service_period_end ||
-    expense?.expense_date ||
-    expense?.date ||
-    expense?.service_period_start ||
     row?.finalized_at ||
     row?.classified_at ||
     null
   );
 }
 
-function normalizedClassificationAmount(row, expense = null) {
+function normalizedClassificationAmount(row) {
   const directAmount = Number(row?.amount);
   if (Number.isFinite(directAmount) && directAmount > 0) return directAmount;
 
@@ -49,8 +46,7 @@ function normalizedClassificationAmount(row, expense = null) {
     Number(row?.excluded_amount || 0);
   if (bucketAmount > 0) return bucketAmount;
 
-  const expenseAmount = Number(expense?.amount);
-  return Number.isFinite(expenseAmount) ? expenseAmount : 0;
+  return 0;
 }
 
 export default function ExpenseProjection() {
@@ -65,14 +61,6 @@ export default function ExpenseProjection() {
   const { data: properties = [] } = useQuery({
     queryKey: ["properties-exp-proj"],
     queryFn: () => propertyService.list(),
-  });
-
-  const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
-    queryKey: ["expenses-proj", selectedProperty],
-    queryFn: () =>
-      selectedPropertyId
-        ? expenseService.filter({ property_id: selectedPropertyId })
-        : expenseService.list(),
   });
 
   const { data: budgets = [] } = useQuery({
@@ -93,41 +81,36 @@ export default function ExpenseProjection() {
     },
   });
 
-  const expenseById = useMemo(() => new Map(expenses.map((expense) => [expense.id, expense])), [expenses]);
-
   const expensesForProjection = useMemo(() => {
     return finalizedClassifications.map((classification) => {
-      const expense = expenseById.get(classificationExpenseId(classification)) || null;
-      const dateValue = classificationDate(classification, expense);
+      const dateValue = classificationDate(classification);
       const parsedDate = dateValue
         ? new Date(String(dateValue).length === 10 ? `${dateValue}T00:00:00` : dateValue)
         : null;
       const fiscalYear =
         parsedDate && !Number.isNaN(parsedDate.getTime())
           ? parsedDate.getFullYear()
-          : Number(expense?.fiscal_year) || currentYear;
+          : currentYear;
       const month =
         parsedDate && !Number.isNaN(parsedDate.getTime())
           ? parsedDate.getMonth() + 1
-          : Number(expense?.month) || null;
+          : null;
 
       return {
-        ...expense,
         ...classification,
         id: classification.id,
         expense_id: classificationExpenseId(classification),
-        amount: normalizedClassificationAmount(classification, expense),
-        category: classification.category || expense?.category || "other",
+        amount: normalizedClassificationAmount(classification),
+        category: classification.category || "other",
         recoverability:
           classification.recoverability_result ||
           classification.recovery_status ||
-          expense?.classification ||
           null,
         fiscal_year: fiscalYear,
         month,
       };
     });
-  }, [currentYear, expenseById, finalizedClassifications]);
+  }, [currentYear, finalizedClassifications]);
 
   const hasFinalizedData = expensesForProjection.length > 0;
   const currentBudget = budgets.find((budget) => budget.budget_year === currentYear);
@@ -415,7 +398,7 @@ export default function ExpenseProjection() {
           <CardTitle className="text-base">Category Comparison - Current Year, Prior Year, Budget, and Projection</CardTitle>
         </CardHeader>
         <CardContent>
-          {isLoadingExpenses ? (
+          {isLoadingClassifications ? (
             <div className="py-12 flex justify-center">
               <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
             </div>

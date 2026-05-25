@@ -20,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createPageUrl } from "@/utils";
 
 function normalizeBucket(expense) {
-  const status = String(expense?.recovery_status || expense?.classification || "needs_review").toLowerCase();
+  const status = String(expense?.recoverability_result || expense?.recovery_status || expense?.classification || "needs_review").toLowerCase();
   if (status === "recoverable") return "recoverable";
   if (["non_recoverable", "excluded"].includes(status)) return status;
   if (status === "conditional") return "conditional";
@@ -29,6 +29,40 @@ function normalizeBucket(expense) {
 
 function toAmount(expense) {
   return Number(expense?.amount || 0);
+}
+
+function amountBuckets(amount, recoveryStatus) {
+  const numericAmount = Number(amount) || 0;
+  return {
+    recoverable_amount: recoveryStatus === "recoverable" ? numericAmount : 0,
+    non_recoverable_amount: recoveryStatus === "non_recoverable" ? numericAmount : 0,
+    conditional_amount: recoveryStatus === "conditional" ? numericAmount : 0,
+    excluded_amount: recoveryStatus === "excluded" ? numericAmount : 0,
+  };
+}
+
+function buildClassificationReviewPatch(row, { recoveryStatus, approvedStatus }) {
+  const now = new Date().toISOString();
+  const nextStatus =
+    approvedStatus === "approved"
+      ? (["recoverable", "non_recoverable", "excluded"].includes(recoveryStatus) ? "finalized" : "conditional")
+      : recoveryStatus === "conditional"
+        ? "conditional"
+        : ["non_recoverable", "excluded"].includes(recoveryStatus)
+          ? "excluded"
+          : "matched";
+
+  return {
+    recoverability_result: recoveryStatus,
+    recovery_status: recoveryStatus,
+    approved_status: approvedStatus,
+    classification_status: nextStatus,
+    exception_type: ["finalized", "excluded"].includes(nextStatus) ? null : row?.exception_type || null,
+    reviewed_at: now,
+    finalized_at: nextStatus === "finalized" || nextStatus === "excluded" ? now : null,
+    ...amountBuckets(row?.amount, recoveryStatus),
+    next_step: nextStatus === "finalized" || nextStatus === "excluded" ? "Ready for projection" : "Finalize row",
+  };
 }
 
 function getRecoveryTone(bucket) {
@@ -47,7 +81,6 @@ export default function ExpenseReview() {
   const [scopeBuilding, setScopeBuilding] = useState("all");
   const [scopeUnit, setScopeUnit] = useState("all");
 
-  const { data: expenses = [], isLoading: isLoadingExpenses } = useOrgQuery("Expense");
   const { data: leases = [] } = useOrgQuery("Lease");
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: allBuildings = [] } = useOrgQuery("Building");
@@ -127,41 +160,33 @@ export default function ExpenseReview() {
     queryFn: () => expenseService.listExpenseClassificationsForScope(classificationScope),
   });
 
-  const expenseById = useMemo(() => {
-    const map = new Map();
-    for (const e of expenses) map.set(e.id, e);
-    return map;
-  }, [expenses]);
-
   const reviewRows = useMemo(() => {
     return scopedClassifications
       .filter((row) => row.actual_expense_id || row.expense_id)
       .map((row) => {
         const expenseId = row.actual_expense_id || row.expense_id;
-        const expense = expenseById.get(expenseId) || null;
         return {
-          ...expense,
           ...row,
-          id: row.id || expenseId,
+          id: row.id,
           expense_id: expenseId,
           actual_expense_id: expenseId,
-          amount: Number(row.amount ?? expense?.amount ?? 0),
-          category: row.category || expense?.category || null,
-          expense_subcategory: row.subcategory || expense?.expense_subcategory || expense?.subcategory || null,
-          tenant_name: expense?.tenant_name || expense?.tenant || null,
-          vendor_name: expense?.vendor_name || expense?.vendor || null,
-          vendor: expense?.vendor || expense?.vendor_name || null,
-          lease_id: row.lease_id || expense?.lease_id || null,
-          property_id: row.property_id || expense?.property_id || null,
-          building_id: row.building_id || expense?.building_id || null,
-          unit_id: row.unit_id || expense?.unit_id || null,
-          recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || expense?.recovery_rule_id || null,
-          evidence_text: row.evidence_text || expense?.evidence_text || row.recovery_reason || null,
-          classification: row.recoverability_result || row.recovery_status || expense?.classification,
-          recovery_status: row.recoverability_result || row.recovery_status || expense?.recovery_status,
+          amount: Number(row.amount ?? 0),
+          category: row.category || null,
+          expense_subcategory: row.subcategory || null,
+          tenant_name: row.tenant_name || null,
+          vendor_name: row.vendor_name || null,
+          vendor: row.vendor || null,
+          lease_id: row.lease_id || null,
+          property_id: row.property_id || null,
+          building_id: row.building_id || null,
+          unit_id: row.unit_id || null,
+          recovery_rule_id: row.lease_expense_rule_id || row.recovery_rule_id || null,
+          evidence_text: row.evidence_text || row.recovery_reason || row.notes || null,
+          classification: row.recoverability_result || row.recovery_status,
+          recovery_status: row.recoverability_result || row.recovery_status,
         };
       });
-  }, [scopedClassifications, expenseById]);
+  }, [scopedClassifications]);
 
   const actualExpenses = reviewRows.filter((expense) => Boolean(expense.actual_expense_id));
   const bucketedExpenses = useMemo(() => {
@@ -233,13 +258,12 @@ export default function ExpenseReview() {
   }, [bucketedExpenses, search]);
 
   const reviewMutation = useMutation({
-    mutationFn: async ({ expenseId, recoveryStatus, approvedStatus }) => {
-      return expenseService.reviewExpense(expenseId, {
-        recoveryStatus,
-        approvedStatus,
-        ruleSource: "manual",
-        reason: "Manual review update from Expense Review",
-      });
+    mutationFn: async ({ classificationId, recoveryStatus, approvedStatus }) => {
+      const row = reviewRows.find((item) => item.id === classificationId);
+      return expenseService.updateExpenseClassification(
+        classificationId,
+        buildClassificationReviewPatch(row, { recoveryStatus, approvedStatus })
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
@@ -279,19 +303,18 @@ export default function ExpenseReview() {
   const enrichedExceptions = useMemo(() => {
     return exceptionRows.map((row) => {
       const expenseId = row.expense_id || row.actual_expense_id;
-      const expense = expenseId ? expenseById.get(expenseId) : null;
       return {
         ...row,
         expense_id: expenseId,
-        expense_vendor: expense?.vendor || null,
-        expense_date: expense?.date || null,
-        expense_amount: expense?.amount ?? row.amount,
-        expense_category: expense?.category || row.category,
-        expense_description: expense?.description,
-        expense_invoice_number: expense?.invoice_number,
+        expense_vendor: row.vendor || row.vendor_name || null,
+        expense_date: row.service_period_start || row.service_period_end || row.classified_at || null,
+        expense_amount: row.amount,
+        expense_category: row.category,
+        expense_description: row.description || row.recovery_reason || row.notes,
+        expense_invoice_number: row.invoice_number,
       };
     });
-  }, [exceptionRows, expenseById]);
+  }, [exceptionRows]);
 
   const exceptionCounts = useMemo(() => ({
     unmatched: enrichedExceptions.filter((e) => e.classification_status === "unmatched").length,
@@ -304,25 +327,36 @@ export default function ExpenseReview() {
   const exceptionMutation = useMutation({
     mutationFn: async ({ classificationId, action }) => {
       if (action === "approve") {
-        await expenseService.finalizeExpenseClassification(classificationId);
+        const row = scopedClassifications.find((item) => item.id === classificationId);
+        await expenseService.updateExpenseClassification(
+          classificationId,
+          buildClassificationReviewPatch(row, {
+            recoveryStatus: row?.recoverability_result || row?.recovery_status || "recoverable",
+            approvedStatus: "approved",
+          })
+        );
         return { classificationId, action };
       }
       if (action === "reject") {
+        const row = scopedClassifications.find((item) => item.id === classificationId);
         await expenseService.updateExpenseClassification(classificationId, {
           classification_status: "excluded",
           recoverability_result: "excluded",
           recovery_status: "excluded",
           exception_type: null,
+          ...amountBuckets(row?.amount, "excluded"),
           next_step: "Ready for projection",
         });
         return { classificationId, action };
       }
       if (action === "mark_na") {
+        const row = scopedClassifications.find((item) => item.id === classificationId);
         await expenseService.updateExpenseClassification(classificationId, {
           classification_status: "excluded",
           recoverability_result: "non_recoverable",
           recovery_status: "non_recoverable",
           exception_type: null,
+          ...amountBuckets(row?.amount, "non_recoverable"),
           next_step: "Ready for projection",
         });
         return { classificationId, action };
@@ -367,6 +401,9 @@ export default function ExpenseReview() {
       }[action] || "Updated";
       toast.success(`${label}.`);
       queryClient.invalidateQueries({ queryKey: ["expense-review-exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-review-classifications"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-projection-finalized"] });
     },
     onError: (err) => {
       toast.error(err?.message || "Could not update classification");
@@ -393,7 +430,7 @@ export default function ExpenseReview() {
     ? createPageUrl("LeaseExpenseClassification", { id: scopedLeaseIds[0] })
     : createPageUrl("LeaseExpenseClassification");
 
-  const isLoading = isLoadingExpenses || isLoadingRuleSets || isLoadingClassifications;
+  const isLoading = isLoadingRuleSets || isLoadingClassifications;
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -468,7 +505,7 @@ export default function ExpenseReview() {
           <CardContent className="space-y-3 text-sm text-slate-700">
             {actualExpenses.length === 0 ? (
               <div className="rounded-lg border border-amber-200 bg-white px-4 py-3 text-amber-800">
-                No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation.
+                No classified actual expense rows found. Run Expense Classification after adding or importing expenses.
               </div>
             ) : (
               <div className="rounded-lg border border-emerald-200 bg-white px-4 py-3 text-emerald-800">
@@ -772,7 +809,7 @@ function ExpenseBucketTable({ expenses, scope, isLoading, mutation }) {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => mutation.mutate({ expenseId: expense.id, recoveryStatus: reviewStatus, approvedStatus: "approved" })}
+                        onClick={() => mutation.mutate({ classificationId: expense.id, recoveryStatus: reviewStatus, approvedStatus: "approved" })}
                       >
                         <CheckCircle2 className="mr-1 h-4 w-4" />
                         Approve
@@ -780,21 +817,21 @@ function ExpenseBucketTable({ expenses, scope, isLoading, mutation }) {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => mutation.mutate({ expenseId: expense.id, recoveryStatus: "recoverable", approvedStatus: "needs_review" })}
+                        onClick={() => mutation.mutate({ classificationId: expense.id, recoveryStatus: "recoverable", approvedStatus: "needs_review" })}
                       >
                         Mark Recoverable
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => mutation.mutate({ expenseId: expense.id, recoveryStatus: "non_recoverable", approvedStatus: "needs_review" })}
+                        onClick={() => mutation.mutate({ classificationId: expense.id, recoveryStatus: "non_recoverable", approvedStatus: "needs_review" })}
                       >
                         Mark Non-Recoverable
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => mutation.mutate({ expenseId: expense.id, recoveryStatus: "conditional", approvedStatus: "needs_review" })}
+                        onClick={() => mutation.mutate({ classificationId: expense.id, recoveryStatus: "conditional", approvedStatus: "needs_review" })}
                       >
                         <ShieldAlert className="mr-1 h-4 w-4" />
                         Mark Conditional
@@ -809,7 +846,7 @@ function ExpenseBucketTable({ expenses, scope, isLoading, mutation }) {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => mutation.mutate({ expenseId: expense.id, recoveryStatus: reviewStatus, approvedStatus: "rejected" })}
+                        onClick={() => mutation.mutate({ classificationId: expense.id, recoveryStatus: reviewStatus, approvedStatus: "rejected" })}
                       >
                         Reject
                       </Button>
