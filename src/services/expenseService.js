@@ -1013,10 +1013,6 @@ async function fetchApprovedClassificationRules(scope = {}) {
     .eq("review_status", "approved")
     .limit(5000);
 
-  if (orgId && orgId !== "__none__") {
-    query = query.eq("org_id", orgId);
-  }
-
   const { data, error } = await query;
   if (error) {
     console.error("[ExpenseRecoverability] lease_expense_rules direct query failed", {
@@ -1037,20 +1033,46 @@ async function fetchApprovedClassificationRules(scope = {}) {
   const leaseById = new Map((leases || []).map((lease) => [lease.id, lease]));
   const unitById = new Map((units || []).map((unit) => [unit.id, unit]));
   const ruleSetById = new Map((ruleSetRows || []).map((ruleSet) => [ruleSet.id, ruleSet]));
+  const accessibleLeaseIds = new Set((leases || []).map((lease) => lease.id).filter(Boolean));
+  const accessiblePropertyIds = new Set((leases || []).map((lease) => lease.property_id).filter(Boolean));
+  const accessibleTenantIds = new Set((leases || []).map((lease) => lease.tenant_id).filter(Boolean));
 
   const allApprovedRules = (data || [])
     .filter((rule) => isStrictlyApprovedLeaseRule(rule))
     .map((rule) => hydrateClassificationRule(rule, { leaseById, unitById, ruleSetById }));
 
-  const approvedRules = allApprovedRules.filter((rule) =>
+  const accessibleApprovedRules = allApprovedRules.filter((rule) => {
+    const effectiveLeaseId = rule.lease_id || rule.rule_set?.lease_id || null;
+    if (effectiveLeaseId && accessibleLeaseIds.has(effectiveLeaseId)) return true;
+    if (orgId && rule.org_id && String(rule.org_id) === String(orgId)) return true;
+    if (rule.property_id && accessiblePropertyIds.has(rule.property_id)) return true;
+    if (rule.tenant_id && accessibleTenantIds.has(rule.tenant_id)) return true;
+    return false;
+  });
+
+  const approvedRules = accessibleApprovedRules.filter((rule) =>
     ruleMatchesScope(rule, leaseById.get(rule.lease_id) || null, normalizedScope)
   );
+
+  const draftButReviewedRules = (data || [])
+    .filter((rule) => normalizeText(rule?.review_status) === "approved" && normalizeText(rule?.approval_status) !== "approved")
+    .map((rule) => hydrateClassificationRule(rule, { leaseById, unitById, ruleSetById }))
+    .filter((rule) => {
+      const effectiveLeaseId = rule.lease_id || rule.rule_set?.lease_id || null;
+      return Boolean(effectiveLeaseId && accessibleLeaseIds.has(effectiveLeaseId));
+    });
 
   return {
     scope: normalizedScope,
     approvedRules,
-    allApprovedRules,
+    allApprovedRules: accessibleApprovedRules,
     leaseById,
+    diagnostics: {
+      rawApprovedRuleCount: allApprovedRules.length,
+      accessibleApprovedRuleCount: accessibleApprovedRules.length,
+      reviewedButDraftCount: draftButReviewedRules.length,
+      reviewedButDraftRuleIds: draftButReviewedRules.slice(0, 10).map((rule) => rule.id),
+    },
   };
 }
 
@@ -2518,10 +2540,18 @@ export const expenseService = {
   },
 
   async loadApprovedLeaseExpenseRules(scope = {}) {
-    const { scope: normalizedScope, approvedRules } = await fetchApprovedClassificationRules(scope);
+    const {
+      scope: normalizedScope,
+      approvedRules,
+      diagnostics,
+    } = await fetchApprovedClassificationRules(scope);
     console.log("[Classification approvedRules]", {
       scope: normalizedScope,
       approvedRulesCount: approvedRules.length,
+      rawApprovedRuleCount: diagnostics?.rawApprovedRuleCount || 0,
+      accessibleApprovedRuleCount: diagnostics?.accessibleApprovedRuleCount || 0,
+      reviewedButDraftCount: diagnostics?.reviewedButDraftCount || 0,
+      reviewedButDraftRuleIds: diagnostics?.reviewedButDraftRuleIds || [],
       sampleRules: approvedRules.slice(0, 10).map((rule) => ({
         id: rule.id,
         review_status: rule.review_status,
