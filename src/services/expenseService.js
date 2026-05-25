@@ -621,7 +621,7 @@ function applyLeaseLinkToExpense(expense, lease) {
 
 function classificationMatchesScope(classification, scope = {}) {
   const { property_id, building_id, unit_id, lease_id, tenant_id, fiscal_year } = normalizeRecoverabilityScope(scope);
-  
+
   const cProp = classification.property_id || classification.expense?.property_id || classification.lease?.property_id || null;
   const cBldg = classification.building_id || classification.expense?.building_id || classification.lease?.building_id || null;
   const cUnit = classification.unit_id || classification.expense?.unit_id || classification.lease?.unit_id || null;
@@ -1135,8 +1135,8 @@ async function upsertExpenseClassification(payload) {
     const hasRule = !!(payload.lease_expense_rule_id || payload.linked_expense_rule_id || payload.recovery_rule_id);
     const rowType = payload.row_type || (
       (hasExpense && hasRule) ? "matched_classification" :
-      (hasExpense && !hasRule) ? "actual_missing_rule" :
-      (!hasExpense && hasRule) ? "rule_missing_actual" : "unknown"
+        (hasExpense && !hasRule) ? "actual_missing_rule" :
+          (!hasExpense && hasRule) ? "rule_missing_actual" : "unknown"
     );
 
     const nextPayload = {
@@ -1830,10 +1830,10 @@ export const expenseService = {
       classification_status:
         effectiveApprovedStatus === "approved"
           ? (effectiveRecoveryStatus === "recoverable"
-              ? "finalized"
-              : effectiveRecoveryStatus === "conditional"
-                ? "conditional"
-                : "excluded")
+            ? "finalized"
+            : effectiveRecoveryStatus === "conditional"
+              ? "conditional"
+              : "excluded")
           : effectiveRecoveryStatus === "needs_review"
             ? "exception"
             : effectiveRecoveryStatus === "conditional"
@@ -1853,10 +1853,10 @@ export const expenseService = {
         classificationStatus:
           effectiveApprovedStatus === "approved"
             ? (effectiveRecoveryStatus === "recoverable"
-                ? "finalized"
-                : effectiveRecoveryStatus === "conditional"
-                  ? "conditional"
-                  : "excluded")
+              ? "finalized"
+              : effectiveRecoveryStatus === "conditional"
+                ? "conditional"
+                : "excluded")
             : effectiveRecoveryStatus === "needs_review"
               ? "exception"
               : effectiveRecoveryStatus === "conditional"
@@ -1897,11 +1897,11 @@ export const expenseService = {
     const candidateLeases = expenseLeaseId
       ? (leases || []).filter((lease) => lease?.id === expenseLeaseId)
       : (leases || []).filter((lease) => {
-          if (actualExpense?.property_id && lease?.property_id !== actualExpense.property_id) return false;
-          if (actualExpense?.building_id && lease?.building_id && lease.building_id !== actualExpense.building_id) return false;
-          if (actualExpense?.unit_id && lease?.unit_id && lease.unit_id !== actualExpense.unit_id) return false;
-          return servicePeriodOverlaps(actualExpense, lease);
-        });
+        if (actualExpense?.property_id && lease?.property_id !== actualExpense.property_id) return false;
+        if (actualExpense?.building_id && lease?.building_id && lease.building_id !== actualExpense.building_id) return false;
+        if (actualExpense?.unit_id && lease?.unit_id && lease.unit_id !== actualExpense.unit_id) return false;
+        return servicePeriodOverlaps(actualExpense, lease);
+      });
 
     let matchedRule = null;
     let matchedLease = null;
@@ -2025,8 +2025,8 @@ export const expenseService = {
         : (existingClassification?.confidence_score ?? 0);
       let approvedStatus =
         matchedRule &&
-        !isConditional &&
-        recoveryStatus !== "needs_review"
+          !isConditional &&
+          recoveryStatus !== "needs_review"
           ? "approved"
           : "needs_review";
       let linkedExpenseRuleId = match.linked_expense_rule_id;
@@ -2352,8 +2352,8 @@ export const expenseService = {
       const amount = toNumber(classification.amount ?? expense?.amount ?? updatedExpense?.amount);
       const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
       const nextStep = normalizeText(classification.cam_eligible) === "yes" && recoveryStatus === "recoverable"
-            ? "Send to CAM"
-            : "Ready for projection";
+        ? "Send to CAM"
+        : "Ready for projection";
 
       await updateExpenseClassificationRecord(classification.id, {
         recoverability_result: recoveryStatus,
@@ -2455,29 +2455,29 @@ export const expenseService = {
       classificationOrId && typeof classificationOrId === "object"
         ? classificationOrId
         : await selectExpenseClassifications({
-            columns: [
-              "id",
-              "org_id",
-              "expense_id",
-              "actual_expense_id",
-              "lease_expense_rule_id",
-              "property_id",
-              "building_id",
-              "unit_id",
-              "lease_id",
-              "tenant_id",
-              "category",
-              "amount",
-              "recoverability_result",
-              "recovery_status",
-              "classification_status",
-              "approved_status",
-              "cam_eligible",
-              "recovery_method",
-              "sent_to_cam",
-            ],
-            apply: (query) => query.eq("id", classificationOrId).limit(1),
-          }).then((rows) => rows[0] || null);
+          columns: [
+            "id",
+            "org_id",
+            "expense_id",
+            "actual_expense_id",
+            "lease_expense_rule_id",
+            "property_id",
+            "building_id",
+            "unit_id",
+            "lease_id",
+            "tenant_id",
+            "category",
+            "amount",
+            "recoverability_result",
+            "recovery_status",
+            "classification_status",
+            "approved_status",
+            "cam_eligible",
+            "recovery_method",
+            "sent_to_cam",
+          ],
+          apply: (query) => query.eq("id", classificationOrId).limit(1),
+        }).then((rows) => rows[0] || null);
 
     if (!classification?.id) {
       throw new Error("Run Classification before sending to CAM.");
@@ -2552,7 +2552,7 @@ export const expenseService = {
       .from("lease_expense_rules")
       .update({ published_to_cam: true })
       .eq("id", ruleId);
-    
+
     if (error) {
       throw new Error("Failed to publish rule to CAM setup");
     }
