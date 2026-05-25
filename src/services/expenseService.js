@@ -762,15 +762,15 @@ function hasExplicitCamExclusion({ classification = {}, expense = {}, rule = nul
     rule
       ? leaseExpenseRuleService.getRecoverableDecision(rule)
       : classification?.recoverability_result ||
-        classification?.recovery_status ||
-        expense?.recoverability_result ||
-        expense?.recovery_status
+      classification?.recovery_status ||
+      expense?.recoverability_result ||
+      expense?.recovery_status
   );
   const camEligible = normalizeText(
     rule
       ? leaseExpenseRuleService.getCamEligibleDecision(rule)
       : classification?.cam_eligible ||
-        expense?.cam_eligible
+      expense?.cam_eligible
   );
   const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
 
@@ -2985,7 +2985,7 @@ export const expenseService = {
             "cam_source",
             "cam_input_type",
             "manual_cam_reviewed",
-            ],
+          ],
           apply: (query) => query.eq("id", classificationOrId).limit(1),
         }).then((rows) => rows[0] || null);
 
