@@ -829,30 +829,19 @@ function isSchemaCompatibilityError(error) {
 async function selectExpenseClassifications({ columns = [], apply = (query) => query } = {}) {
   if (!supabase || columns.length === 0) return [];
 
-  const remainingColumns = [...columns];
+  let query = supabase.from("expense_classifications").select("*");
+  query = apply(query);
 
-  while (remainingColumns.length > 0) {
-    let query = supabase.from("expense_classifications").select(remainingColumns.join(", "));
-    query = apply(query);
-
-    const { data, error } = await query;
-    if (!error) {
-      return data || [];
-    }
-
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn) {
-      throw error;
-    }
-
-    const index = remainingColumns.indexOf(missingColumn);
-    if (index === -1) {
-      throw error;
-    }
-    remainingColumns.splice(index, 1);
+  const { data, error } = await query;
+  if (error) {
+    throw error;
   }
 
-  return [];
+  return (data || []).map((row) =>
+    Object.fromEntries(
+      columns.map((column) => [column, row?.[column]])
+    )
+  );
 }
 
 async function listWorkflowEntityRows(entityName) {
@@ -1023,43 +1012,27 @@ function hydrateClassificationRule(rule, { leaseById = new Map(), unitById = new
 
 async function fetchRuleSetScopeRowsCompat(ruleSetIds = []) {
   if (!supabase || ruleSetIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("lease_expense_rule_sets")
+    .select("*")
+    .in("id", ruleSetIds);
 
-  const remainingColumns = ["id", "lease_id", "property_id", "building_id", "unit_id", "tenant_id"];
-  const droppedColumns = [];
-
-  while (remainingColumns.length > 0) {
-    const { data, error } = await supabase
-      .from("lease_expense_rule_sets")
-      .select(remainingColumns.join(", "))
-      .in("id", ruleSetIds);
-
-    if (!error) {
-      if (droppedColumns.length > 0) {
-        console.warn("[expenseService] lease_expense_rule_sets scope lookup degraded due to missing columns:", droppedColumns);
-      }
-      return data || [];
-    }
-
+  if (error) {
     if (isMissingExpenseRuleTable(error)) {
       console.warn("[expenseService] lease_expense_rule_sets scope lookup missing — continuing without rule_set scope hydration.");
       return [];
     }
-
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn) {
-      throw error;
-    }
-
-    const index = remainingColumns.indexOf(missingColumn);
-    if (index === -1) {
-      throw error;
-    }
-
-    droppedColumns.push(missingColumn);
-    remainingColumns.splice(index, 1);
+    throw error;
   }
 
-  return [];
+  return (data || []).map((row) => ({
+    id: row.id,
+    lease_id: row.lease_id,
+    property_id: row.property_id ?? null,
+    building_id: row.building_id ?? null,
+    unit_id: row.unit_id ?? null,
+    tenant_id: row.tenant_id ?? null,
+  }));
 }
 
 function summarizeApprovedRulesBy(rules = [], key) {
