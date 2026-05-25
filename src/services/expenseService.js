@@ -2400,9 +2400,13 @@ export const expenseService = {
     let query = supabase
       .from("lease_expense_rules")
       .select("*")
-      .eq("approval_status", "approved")
-      .in("review_status", ["approved", "reviewed"])
+      // Include approved AND needs_review/draft rules that have a valid lease_id
+      // (rules created before auto-approval logic was added may still be in draft)
+      .not("approval_status", "eq", "rejected")
+      .not("approval_status", "is", null)
+      .not("lease_id", "is", null)
       .limit(5000);
+
 
     if (orgId && orgId !== "__none__") {
       query = query.eq("org_id", orgId);
