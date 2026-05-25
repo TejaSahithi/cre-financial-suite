@@ -367,6 +367,8 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
   }
 
   let leaseConfigMap: Record<string, Record<string, unknown>> = {};
+  const appliedRuleSetIds: string[] = [];
+  const appliedRuleIds: string[] = [];
   if (leaseIds.length) {
     const { data: leaseConfigs, error: leaseConfigError } = await supabaseAdmin
       .from("lease_config")
@@ -408,6 +410,10 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
 
       // Merge into leaseConfigMap
       for (const [leaseId, rs] of latestRulesByLease.entries()) {
+        if (rs?.id) appliedRuleSetIds.push(String(rs.id));
+        for (const rule of rs?.lease_expense_rules || []) {
+          if (rule?.id) appliedRuleIds.push(String(rule.id));
+        }
         const config = leaseConfigMap[leaseId] || { lease_id: leaseId, config_values: {} };
         const configValues = (config.config_values as Record<string, any>) || {};
         
@@ -453,7 +459,12 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
     }
   }
 
-  return { propertyConfig: propertyConfig ?? null, leaseConfigMap };
+  return {
+    propertyConfig: propertyConfig ?? null,
+    leaseConfigMap,
+    appliedRuleSetIds: Array.from(new Set(appliedRuleSetIds)).sort(),
+    appliedRuleIds: Array.from(new Set(appliedRuleIds)).sort(),
+  };
 }
 
 function collectHistoricalYears(
@@ -533,7 +544,7 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const leaseIds = leases.map((lease: any) => lease.id);
-    const { propertyConfig, leaseConfigMap } = await fetchConfigs(
+    const { propertyConfig, leaseConfigMap, appliedRuleSetIds, appliedRuleIds } = await fetchConfigs(
       supabaseAdmin,
       orgId,
       propertyId,
@@ -732,6 +743,8 @@ Deno.serve(async (req: Request) => {
           expense_classifications: camReadyClassifications.map((row: any) => row.id).sort(),
           cam_expense_inputs: camReadyInputs.map((row: any) => row.id).sort(),
           leases: leases.map((lease: any) => lease.id).sort(),
+          lease_expense_rule_sets: appliedRuleSetIds,
+          lease_expense_rules: appliedRuleIds,
         },
         source_counts: {
           buildings: buildings.length,
@@ -740,6 +753,8 @@ Deno.serve(async (req: Request) => {
           expense_classifications: camReadyClassifications.length,
           cam_expense_inputs: camReadyInputs.length,
           leases: leases.length,
+          lease_expense_rule_sets: appliedRuleSetIds.length,
+          lease_expense_rules: appliedRuleIds.length,
         },
         source_snapshot_ids: {
           budget: budgetSnapshot?.[0]?.id ?? null,

@@ -67,6 +67,7 @@ import {
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { supabase } from "@/services/supabaseClient";
+import { logAudit } from "@/services/audit";
 import { createPageUrl } from "@/utils";
 
 const ROW_STATUS_STYLE = {
@@ -694,6 +695,21 @@ export default function LeaseExpenseRules() {
       return;
     }
 
+    try {
+      await logAudit({
+        entityType: "LeaseExpenseRule",
+        entityId: rule.id,
+        action: "approve_rule",
+        orgId: lease?.org_id || rule?.org_id || null,
+        userId,
+        fieldChanged: "review_status",
+        oldValue: rule.review_status || null,
+        newValue: "approved",
+      });
+    } catch (auditErr) {
+      console.warn("[approveRule] audit log failed:", auditErr?.message || auditErr);
+    }
+
     toast.success("Rule approved");
   };
 
@@ -724,7 +740,22 @@ export default function LeaseExpenseRules() {
         is_recoverable: false,
         is_excluded: true,
       }),
-    }).then(() => toast.success("Rule rejected"));
+    }).then(async () => {
+      try {
+        await logAudit({
+          entityType: "LeaseExpenseRule",
+          entityId: rule.id,
+          action: "reject_rule",
+          orgId: lease?.org_id || rule?.org_id || null,
+          fieldChanged: "review_status",
+          oldValue: rule.review_status || null,
+          newValue: "rejected",
+        });
+      } catch (auditErr) {
+        console.warn("[rejectRule] audit log failed:", auditErr?.message || auditErr);
+      }
+      toast.success("Rule rejected");
+    });
   };
 
   const markNARule = async (rawRule, lease) => {

@@ -6,6 +6,7 @@ import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
 import { budgetService } from "@/services/budgetService";
 import { supabase } from "@/services/supabaseClient";
+import { logAudit } from "@/services/audit";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { useAuth } from "@/lib/AuthContext";
@@ -130,8 +131,25 @@ export default function CreateBudget() {
     // Route through budgetService (guarded wrapper) so locked budgets are
     // rejected with a clear user-facing error instead of silently writing.
     mutationFn: ({ id, ...data }) => budgetService.update(id, data),
-    onSuccess: async () => {
+    onSuccess: async (updated, variables) => {
       await invalidateBudgetCaches(queryClient);
+      const nextStatus = String(variables?.status || "").toLowerCase();
+      if (["approved", "locked", "rejected", "archived"].includes(nextStatus)) {
+        try {
+          const prevStatus = budgets.find((b) => b.id === variables.id)?.status || null;
+          await logAudit({
+            entityType: "Budget",
+            entityId: variables.id,
+            action: `budget_${nextStatus}`,
+            orgId: updated?.org_id || null,
+            fieldChanged: "status",
+            oldValue: prevStatus,
+            newValue: nextStatus,
+          });
+        } catch (auditErr) {
+          console.warn("[CreateBudget] audit log failed:", auditErr?.message || auditErr);
+        }
+      }
     },
     onError: (error) => {
       toast.error(error?.message || "Failed to update budget workflow");
