@@ -1,7 +1,7 @@
 import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
-import { fetchLeaseConfig, saveLeaseConfig } from "@/services/camConfig";
+import { saveLeaseConfig } from "@/services/camConfig";
 
 function asNumber(val) {
   if (val === null || val === undefined || val === "") return null;
@@ -2714,37 +2714,6 @@ export const leaseExpenseRuleService = {
 
   getBillingTreatment(rule) {
     return deriveRuleBillingTreatment(rule);
-  },
-
-  canPublishRuleToCam(rule) {
-    return getRuleValidation(rule).canPublishToCam;
-  },
-
-  async upsertRuleIntoCamSetup({ lease, rule, categoriesById = new Map() } = {}) {
-    if (!lease?.id) throw new Error("Lease is required before publishing a rule to CAM.");
-    if (!rule?.id) throw new Error("Rule is required before publishing to CAM.");
-
-    const validation = getRuleValidation(rule);
-    if (!validation.canPublishToCam) {
-      throw new Error(validation.publishBlockers[0] || "Rule is not eligible for CAM publish.");
-    }
-
-    const { values } = await fetchLeaseConfig(lease.id);
-    const nextLine = buildCamRuleLineItem(rule, lease, categoriesById);
-    const existingLines = Array.isArray(values?.cam_rule_lines) ? values.cam_rule_lines : [];
-    const remainingLines = existingLines.filter((line) => line?.lease_expense_rule_id !== rule.id && line?.rule_key !== rule.rule_key);
-    const nextValues = {
-      ...values,
-      cam_applicable: true,
-      allocation_method: values?.allocation_method || nextLine.allocation_basis || "",
-      cam_rule_lines: [...remainingLines, nextLine],
-    };
-
-    const savedConfig = await saveLeaseConfig(lease.id, nextValues);
-    return {
-      config: savedConfig,
-      camRuleLine: nextLine,
-    };
   },
 
   normalizeRecoveryStatus,

@@ -5,20 +5,17 @@
  * approval surface backed by the existing rule-set tables.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
-  Calculator,
   Check,
   Loader2,
   MinusCircle,
   MoreVertical,
   Pencil,
   Receipt,
-  RefreshCw,
-  Send,
   X,
 } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
@@ -240,7 +237,6 @@ function pickPreferredRuleSet(ruleSets = []) {
 
 export default function LeaseExpenseRules() {
   const location = useLocation();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState(() => new URLSearchParams(location.search).get("lease") || "");
@@ -654,40 +650,26 @@ export default function LeaseExpenseRules() {
     const now = new Date().toISOString();
     const approvalPreview = {
       ...rule,
-      row_status: "mapped",
       review_status: "approved",
       approval_status: "approved",
       approved_by: userId,
       approved_at: now,
       updated_at: now,
-      published_to_cam: false,
-      operational_responsibility: getOperationalResponsibility(rule),
     };
     const validation = getRuleValidation(approvalPreview);
     if (!validation.canApprove) {
       toast.error(validation.approvalBlockers[0] || "This rule needs real lease evidence before approval.");
       return;
     }
-    const isManual = rule?.created_from === "manual" || rule?.generation_source === "manual";
     console.log("[Approve Rule clicked]", rule.id);
 
-    const patchOverrides = {
-      row_status: "mapped",
+    const patch = {
       review_status: "approved",
       approval_status: "approved",
       approved_by: userId,
       approved_at: now,
       updated_at: now,
-      is_excluded: false,
-      published_to_cam: false,
     };
-    if (isManual) {
-      patchOverrides.created_from = "manual";
-      patchOverrides.generation_source = "manual";
-      patchOverrides.exact_source_text = validation.exactSourceText || "manual_review";
-    }
-
-    const patch = buildRuleWorkflowPatch(rule, validation, patchOverrides);
     console.log("[Approve Rule update payload]", patch);
     
     let approvedRule;
@@ -698,24 +680,6 @@ export default function LeaseExpenseRules() {
       });
       console.log("[Approve Rule update result]", approvedRule);
     } catch (err) {
-      return;
-    }
-
-    const approvedValidation = getRuleValidation({ ...rule, ...approvedRule });
-    if (lease?.id && approvedValidation.canPublishToCam && !approvedValidation.publishedToCam) {
-      await leaseExpenseRuleService.upsertRuleIntoCamSetup({
-        lease,
-        rule: { ...rule, ...approvedRule },
-        categoriesById: categoryById,
-      });
-      await updateRuleMutation.mutateAsync({
-        ruleId: approvedRule.id,
-        patch: {
-          published_to_cam: true,
-          updated_at: new Date().toISOString(),
-        },
-      });
-      toast.success("Rule approved and published to CAM");
       return;
     }
 
@@ -746,7 +710,6 @@ export default function LeaseExpenseRules() {
         allocation_basis: null,
         is_recoverable: false,
         is_excluded: true,
-        published_to_cam: false,
       }),
     }).then(() => toast.success("Rule rejected"));
   };
@@ -778,41 +741,8 @@ export default function LeaseExpenseRules() {
         allocation_basis: null,
         is_excluded: true,
         is_recoverable: false,
-        published_to_cam: false,
       }),
     }).then(() => toast.success("Rule marked N/A"));
-  };
-
-  const publishRuleToCam = async (rawRule, lease, propertyId) => {
-    let rule;
-    try {
-      rule = await ensurePersistedRule(rawRule, lease);
-    } catch {
-      return;
-    }
-    const authResult = await supabase.auth.getUser();
-    const userId = authResult?.data?.user?.id || null;
-    const now = new Date().toISOString();
-    const validation = getRuleValidation(rule);
-    await leaseExpenseRuleService.upsertRuleIntoCamSetup({
-      lease,
-      rule,
-      categoriesById: categoryById,
-    });
-    return updateRuleMutation.mutateAsync({
-      ruleId: rule.id,
-      patch: buildRuleWorkflowPatch(rule, validation, {
-        published_to_cam: true,
-        review_status: "approved",
-        approval_status: "approved",
-        approved_by: userId,
-        approved_at: now,
-        updated_at: now,
-      }),
-    }).then(() => {
-      toast.success("Rule published to CAM");
-      navigate(createPageUrl("CAMSetup") + `?property=${propertyId}`);
-    });
   };
 
   const saveRuleEdits = async () => {
@@ -869,7 +799,7 @@ export default function LeaseExpenseRules() {
               <Link to={createPageUrl("Expenses")} className="underline">
                 Actual Expenses
               </Link>
-              . CAM Setup and Budget consume only approved rules.
+              . This page is for contract rule review only.
             </p>
           </div>
         </CardContent>
@@ -945,20 +875,19 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Approval Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Field Key</TableHead>
-                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Published to CAM</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={26} className="py-12 text-center">
+                  <TableCell colSpan={25} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={26} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={25} className="py-12 text-center text-sm text-slate-400">
                     No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
                   </TableCell>
                 </TableRow>
@@ -981,12 +910,6 @@ export default function LeaseExpenseRules() {
                     : "-";
                   const sourcePage = getSourcePage(rule);
                   const sourceText = getExactSourceText(rule) || "-";
-                  const publishSummary = validation.publishedToCam
-                    ? "Published"
-                    : validation.canPublishToCam
-                      ? "Ready to publish"
-                      : validation.publishBlockers[0] || "Not ready";
-
                   return (
                     <TableRow key={rule.id} className="align-top hover:bg-slate-50">
                       <TableCell className="text-sm font-medium text-slate-900">
@@ -1086,19 +1009,6 @@ export default function LeaseExpenseRules() {
                       <TableCell className="text-xs text-slate-500 font-mono">
                         {rule.source_field_key || "-"}
                       </TableCell>
-                      <TableCell className="max-w-[180px] text-xs text-slate-600">
-                        <Badge className={`text-[10px] ${validation.publishedToCam ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
-                          {validation.publishedToCam ? "Published" : "Not Published"}
-                        </Badge>
-                        {!validation.publishedToCam && (
-                          <p
-                            className="mt-1 text-[10px] uppercase tracking-wide text-slate-500"
-                            title={validation.publishBlockers.join(" · ")}
-                          >
-                            {publishSummary}
-                          </p>
-                        )}
-                      </TableCell>
                       <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -1146,23 +1056,6 @@ export default function LeaseExpenseRules() {
                               <MinusCircle className="mr-2 h-3.5 w-3.5" />
                               Mark N/A
                             </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-slate-500">
-                              CAM
-                            </DropdownMenuLabel>
-                            <DropdownMenuItem
-                              disabled={!lease || !validation.canPublishToCam || validation.publishedToCam}
-                              onSelect={(event) => {
-                                event.preventDefault();
-                                if (!lease) return;
-                                publishRuleToCam(rule, lease, property?.id || lease.property_id);
-                              }}
-                              className="text-blue-700 focus:text-blue-800"
-                            >
-                              <Send className="mr-2 h-3.5 w-3.5" />
-                              {validation.publishedToCam ? "Published to CAM" : "Publish to CAM"}
-                            </DropdownMenuItem>
-
                             {lease ? (
                               <>
                                 <DropdownMenuSeparator />
@@ -1194,21 +1087,8 @@ export default function LeaseExpenseRules() {
 
       <p className="text-xs text-slate-500">
         Looking for actual expense rows (invoices, imports, vendor bills)? Go to{" "}
-        <Link to={createPageUrl("Expenses")} className="underline">Actual Expenses</Link>. Looking for CAM recovery setup? Go to{" "}
-        <Link to={createPageUrl("CAMSetup")} className="underline">CAM Setup</Link>.
+        <Link to={createPageUrl("Expenses")} className="underline">Actual Expenses</Link>.
       </p>
-
-      <Card className="border-slate-200 bg-slate-50">
-        <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4 text-sm">
-          <span className="text-slate-600">
-            <Calculator className="mr-1 inline h-4 w-4 text-slate-500" />
-            Approved lease expense rules feed CAM Setup and Recovery Budget.
-          </span>
-          <Link to={createPageUrl("CAMDashboard")} className="text-blue-600 hover:text-blue-700">
-            Go to CAM Dashboard {"->"}
-          </Link>
-        </CardContent>
-      </Card>
 
       <Dialog open={!!editingRuleContext} onOpenChange={(open) => { if (!open) closeRuleEditor(); }}>
         <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
