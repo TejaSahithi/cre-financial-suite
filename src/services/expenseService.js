@@ -935,6 +935,8 @@ const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
   "updated_at",
 ]);
 
+const missingExpenseClassificationColumns = new Set();
+
 const EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS = [
   "classification_key",
   "actual_expense_id",
@@ -996,7 +998,11 @@ function normalizeExpenseClassificationPayload(payload = {}) {
 
 function pickColumns(row = {}, allowedColumns = new Set()) {
   return Object.fromEntries(
-    Object.entries(row).filter(([key, value]) => allowedColumns.has(key) && value !== undefined)
+    Object.entries(row).filter(([key, value]) =>
+      allowedColumns.has(key) &&
+      !missingExpenseClassificationColumns.has(key) &&
+      value !== undefined
+    )
   );
 }
 
@@ -1353,6 +1359,7 @@ async function upsertExpenseClassification(payload) {
         if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
           throw error;
         }
+        missingExpenseClassificationColumns.add(missingColumn);
         delete attemptPayload[missingColumn];
       }
     }
@@ -1371,6 +1378,10 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
     updated_at: patch.updated_at || new Date().toISOString(),
   };
 
+  for (const missingColumn of missingExpenseClassificationColumns) {
+    delete payload[missingColumn];
+  }
+
   while (Object.keys(payload).length > 0) {
     const { data, error } = await supabase
       .from("expense_classifications")
@@ -1387,6 +1398,7 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
     if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
       throw error;
     }
+    missingExpenseClassificationColumns.add(missingColumn);
     delete payload[missingColumn];
   }
 
@@ -2631,8 +2643,8 @@ export const expenseService = {
     if (!rule?.id) {
       throw new Error("Lease expense rule not found");
     }
-    if (!leaseExpenseRuleService.isRuleCamPublishable(rule) || rule.published_to_cam !== true) {
-      throw new Error("Only approved, published, CAM-eligible lease rules can receive a CAM rule amount.");
+    if (!leaseExpenseRuleService.isRuleCamPublishable(rule)) {
+      throw new Error("Only approved, CAM-eligible lease rules can receive a CAM rule amount.");
     }
 
     const orgId = await getCurrentOrgId();
@@ -2648,6 +2660,19 @@ export const expenseService = {
       leaseExpenseRuleId: rule.id,
     });
     const amountBuckets = buildAmountBuckets(numericAmount, "recoverable");
+
+    if (rule.published_to_cam !== true) {
+      try {
+        const { error: publishError } = await supabase
+          .from("lease_expense_rules")
+          .update({ published_to_cam: true, updated_at: now })
+          .eq("id", rule.id);
+        if (publishError) throw publishError;
+        rule.published_to_cam = true;
+      } catch (error) {
+        console.warn("[expenseService] unable to publish CAM-eligible rule before saving amount; continuing with classification amount:", error);
+      }
+    }
 
     const existingClassifications = await selectExpenseClassifications({
       columns: ["id", "lease_expense_rule_id", "row_type"],
