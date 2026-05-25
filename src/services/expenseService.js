@@ -961,7 +961,7 @@ async function upsertExpenseClassification(payload) {
         const conflictError = String(error?.message || error?.details || "").toLowerCase();
         if (
           onConflict === "classification_key" &&
-          (error?.code === "42P10" || conflictError.includes("no unique") || conflictError.includes("no constraint"))
+          (error?.code === "42P10" || error?.code === "PGRST204" || conflictError.includes("no unique") || conflictError.includes("no constraint") || conflictError.includes("schema cache"))
         ) {
           break;
         }

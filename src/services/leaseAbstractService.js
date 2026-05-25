@@ -492,6 +492,58 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
     addRule(["default_interest_percent"], "additional_rent", { cam_eligible: "yes" });
     addRule(["holdover_multiplier"], "additional_rent", { cam_eligible: "yes" });
 
+    // Extract workflow/LLM rules from extraction_data
+    let workflowRules = [];
+    if (Array.isArray(lease?.extraction_data?.workflow_output?.expense_rules)) {
+      workflowRules = lease.extraction_data.workflow_output.expense_rules;
+    } else if (Array.isArray(lease?.extraction_data?.expenses)) {
+      workflowRules = lease.extraction_data.expenses;
+    } else if (Array.isArray(lease?.extraction_data?.rules)) {
+      workflowRules = lease.extraction_data.rules;
+    }
+
+    workflowRules.forEach((rule, index) => {
+      const expenseCategory = rule.expense_category || rule.category || `rule_${index}`;
+      const ruleType = rule.rule_type || "additional_rent";
+      
+      const num = (v) => {
+        if (v === null || v === undefined) return null;
+        const n = Number(String(v).replace(/[$,%\s,]/g, ""));
+        return Number.isFinite(n) ? n : null;
+      };
+
+      rulesToUpsert.push({
+        org_id: orgId,
+        lease_id: leaseId,
+        rule_set_id: ruleSetId,
+        rule_key: `${leaseId}_workflow_${expenseCategory}_${index}`,
+        rule_type: ruleType,
+        expense_category: expenseCategory,
+        review_status: "reviewed",
+        approval_status: "needs_review",
+        source_page: rule.source_page || null,
+        exact_source_text: rule.exact_source_text || rule.source_text || rule.raw_value || null,
+        confidence_score: rule.confidence_score || rule.confidence || 0.8,
+        extraction_status: rule.extraction_status || "extracted",
+        created_from: "approved_lease_abstract",
+        generation_source: "workflow_output",
+        payment_treatment: rule.payment_treatment || "not_applicable",
+        recoverable_from_tenant: rule.recoverable_from_tenant || "no",
+        cam_eligible: rule.cam_eligible || "no",
+        recovery_method: rule.recovery_method || null,
+        allocation_basis: rule.allocation_basis || null,
+        cap_type: rule.cap_type || null,
+        cap_percent: num(rule.cap_percent),
+        cap_amount: num(rule.cap_amount),
+        tenant_share_percent: num(rule.tenant_share_percent),
+        admin_fee_applicable: rule.admin_fee_applicable === true || rule.admin_fee_applicable === "yes",
+        admin_fee_percent: num(rule.admin_fee_percent),
+        estimated_annual_amount: num(rule.estimated_annual_amount),
+        estimated_monthly_amount: num(rule.estimated_monthly_amount),
+        notes: rule.notes || rule.reason || null
+      });
+    });
+
     console.log("structured payload count", rulesToUpsert.length);
 
     if (rulesToUpsert.length > 0) {
