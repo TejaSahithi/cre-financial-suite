@@ -59,19 +59,6 @@ function inferEntityId(entry) {
   return entry.entityId || entry.entity_id || entry.target_user_id || null;
 }
 
-function extractMissingColumn(err) {
-  const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(' ');
-  if (!message) return null;
-
-  let match = message.match(/Could not find the '([^']+)' column/i);
-  if (match?.[1]) return match[1];
-
-  match = message.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
-  if (match?.[1]) return match[1];
-
-  return null;
-}
-
 async function resolveAuditContext(entry) {
   const resolved = {
     orgId: cleanUuid(entry.orgId || entry.org_id || getStoredActingOrgId()),
@@ -128,44 +115,34 @@ export async function logAudit(entry) {
   }
 
   const context = await resolveAuditContext(entry);
+  if (!context.orgId) {
+    console.warn('[audit] Skipped audit log without valid org context:', {
+      entity_type: inferEntityType(entry),
+      action: entry.action,
+    });
+    return;
+  }
+
+  const optionalDetails = serializeAuditValue(
+    entry.newValue ?? entry.new_value ?? entry.details ?? null,
+  );
   const row = {
     entity_type:   inferEntityType(entry),
-    entity_id:     inferEntityId(entry),
+    entity_id:     cleanUuid(inferEntityId(entry)),
     action:        entry.action,
     org_id:        context.orgId,
-    field_changed: entry.fieldChanged || entry.field_changed || null,
-    old_value:     serializeAuditValue(entry.oldValue ?? entry.old_value),
-    new_value:     serializeAuditValue(
-      entry.newValue ?? entry.new_value ?? entry.details ?? null,
-    ),
-    user_email:    context.userEmail,
-    user_name:     entry.userName || entry.user_name || null,
-    property_id:   cleanUuid(entry.propertyId || entry.property_id),
-    timestamp:     new Date().toISOString(),
-    created_at:    new Date().toISOString(),
   };
 
   try {
     if (supabase) {
-      const payload = { ...row };
-
-      while (true) {
-        const { error } = await supabase.from('audit_logs').insert(payload);
-        if (!error) break;
-
-        const missingColumn = extractMissingColumn(error);
-        if (!missingColumn || !(missingColumn in payload)) {
-          throw error;
-        }
-
-        delete payload[missingColumn];
-      }
+      const { error } = await supabase.from('audit_logs').insert(row);
+      if (error) throw error;
     } else {
-      console.log('[audit]', row);
+      console.log('[audit]', { ...row, details: optionalDetails });
     }
   } catch (err) {
     // Audit logging should never crash the caller
-    console.error('[audit] Failed to write audit log:', {
+    console.warn('[audit] Failed to write audit log:', {
       error: err?.message || err,
       row,
     });

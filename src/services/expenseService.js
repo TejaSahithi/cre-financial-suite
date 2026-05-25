@@ -1300,6 +1300,40 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
   return null;
 }
 
+async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
+  if (!supabase || !expenseId) {
+    throw new Error("Expense record not found");
+  }
+
+  const payload = compactDefined(patch);
+  const strippedColumns = [];
+
+  while (Object.keys(payload).length > 0) {
+    const { data, error } = await supabase
+      .from("expenses")
+      .update(payload)
+      .eq("id", expenseId)
+      .select("*")
+      .maybeSingle();
+
+    if (!error) {
+      if (strippedColumns.length > 0) {
+        console.warn(`[expenseService] expenses workflow update stripped unsupported columns: ${strippedColumns.join(", ")}`);
+      }
+      return data || { id: expenseId, ...payload };
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
+      throw error;
+    }
+    strippedColumns.push(missingColumn);
+    delete payload[missingColumn];
+  }
+
+  return { id: expenseId };
+}
+
 async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
   const updatedAt =
     expensePatch.updated_at ||
@@ -1332,7 +1366,7 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
       Object.entries(attempt).filter(([, value]) => value !== undefined)
     );
     try {
-      return await baseExpenseService.update(expenseId, payload);
+      return await updateExpenseWorkflowDirect(expenseId, payload);
     } catch (error) {
       if (!isSchemaCompatibilityError(error)) {
         throw error;
