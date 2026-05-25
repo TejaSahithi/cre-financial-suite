@@ -1630,33 +1630,17 @@ export const leaseExpenseRuleService = {
 
       const ruleSet = selectPreferredRuleSet(ruleSets || []);
       if (!ruleSet) {
-        const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
-        const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
-        return fallbackEntry
-          ? { ruleSet: fallbackEntry.ruleSet, rules: fallbackEntry.rules }
-          : { ruleSet: null, rules: [] };
+        return { ruleSet: null, rules: [] };
       }
 
       const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
       const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
       const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft");
 
-      if (finalizedRules.length === 0) {
-        const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
-        const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
-        if (fallbackEntry) {
-          return { ruleSet: ruleSet || fallbackEntry.ruleSet, rules: fallbackEntry.rules };
-        }
-      }
-
       return { ruleSet, rules: finalizedRules };
     } catch (error) {
       if (!isMissingExpenseRuleTable(error)) throw error;
-      const fallbackLease = (await fetchLeasesForFallback([leaseId]))[0] || null;
-      const fallbackEntry = fallbackLease ? buildFallbackRuleSetEntry(fallbackLease) : null;
-      return fallbackEntry
-        ? { ruleSet: fallbackEntry.ruleSet, rules: fallbackEntry.rules }
-        : { ruleSet: null, rules: [] };
+      return { ruleSet: null, rules: [] };
     }
   },
 
@@ -1666,13 +1650,6 @@ export const leaseExpenseRuleService = {
       console.log(`${tag} early return — no leaseIds`);
       return [];
     }
-
-    const leasesForFallback = await fetchLeasesForFallback(leaseIds);
-    const fallbackByLeaseId = new Map(
-      leasesForFallback
-        .map((lease) => [lease.id, buildFallbackRuleSetEntry(lease)])
-        .filter(([, entry]) => Boolean(entry))
-    );
 
     try {
       const { data: ruleSets, error } = await supabase
@@ -1739,25 +1716,19 @@ export const leaseExpenseRuleService = {
         const rulesForSet = (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id);
         const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
         const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft");
-        const fallbackEntry = fallbackByLeaseId.get(ruleSet.lease_id);
         console.log(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
         return {
           leaseId: ruleSet.lease_id,
           ruleSet,
-          rules: finalizedRules.length > 0 ? finalizedRules : (fallbackEntry?.rules || []),
+          rules: finalizedRules,
         };
       });
       console.log(`${tag} returning ${persistedEntries.length} entries`);
 
-      const persistedLeaseIds = new Set(persistedEntries.map((entry) => entry.leaseId));
-      const fallbackEntries = [...fallbackByLeaseId.values()].filter(
-        (entry) => entry && !persistedLeaseIds.has(entry.leaseId)
-      );
-
-      return [...persistedEntries, ...fallbackEntries];
+      return persistedEntries;
     } catch (error) {
-      if (!isMissingExpenseRuleTable(error)) throw error;
-      return [...fallbackByLeaseId.values()].filter(Boolean);
+      console.error(`${tag} FAILED`, error);
+      return [];
     }
   },
 
