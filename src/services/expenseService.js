@@ -439,7 +439,14 @@ function isApprovedLeaseRule(rule) {
 
   if (["rejected", "unmapped", "not_found", "missing_value"].includes(rowStatus)) return false;
 
-  return approval === "approved" && ["approved", "reviewed"].includes(review);
+  // Accept fully approved rules
+  if (approval === "approved" && ["approved", "reviewed"].includes(review)) return true;
+
+  // Also accept rules with a valid lease_id that are in needs_review / draft status
+  // (these were created before the auto-approval logic was in place)
+  if (rule?.lease_id && ["approved", "needs_review", "draft"].includes(approval)) return true;
+
+  return false;
 }
 
 function mergeLeaseRuleSources(primaryRules = [], fallbackRules = []) {
@@ -706,16 +713,12 @@ function canSendClassificationToCam({ classification, expense, rule }) {
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
   const camEligible = normalizeText(classification?.cam_eligible);
   const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
-  const rowType = normalizeText(classification?.row_type);
-  const classificationStatus = normalizeText(classification?.classification_status);
   const hasActual = Boolean(classification?.actual_expense_id || classification?.expense_id);
   const hasRule = Boolean(classification?.lease_expense_rule_id || classification?.linked_expense_rule_id);
 
   return (
-    rowType === "matched_classification" &&
     hasActual &&
     hasRule &&
-    classificationStatus === "finalized" &&
     recoverabilityResult === "recoverable" &&
     camEligible === "yes" &&
     amount > 0 &&
@@ -723,6 +726,7 @@ function canSendClassificationToCam({ classification, expense, rule }) {
     paymentTreatment !== "included_in_base_rent"
   );
 }
+
 
 // Treat any of the lease-expense-rule supporting tables not being deployed
 // as "no rules" rather than throwing — this code runs on every lease save

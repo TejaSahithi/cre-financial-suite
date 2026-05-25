@@ -385,15 +385,18 @@ export default function LeaseExpenseClassification() {
       };
 
       row.canFinalize =
-        row.rowType === "matched_classification" &&
-        row.actualExpenseId &&
-        row.classificationStatus !== "finalized";
+        row.classificationStatus !== "finalized" &&
+        (
+          // Matched actual+rule row: always finalizable
+          (row.rowType === "matched_classification" && Boolean(row.actualExpenseId)) ||
+          // Gap row: finalizable once the user has manually entered an amount
+          (row.rowType === "rule_missing_actual" && row.amount != null && Number(row.amount) > 0)
+        );
       row.canSendToReview =
         Boolean(row.actualExpenseId) &&
         (row.rowType === "actual_missing_rule" ||
           row.recoverabilityResult === "needs_review" ||
           ["unmatched", "exception", "conditional"].includes(row.classificationStatus));
-      // CAM is allowed only for finalized, recoverable, CAM-eligible matched rows.
       row.canSendToCam =
         Boolean(row.actualExpenseId) &&
         row.rowType === "matched_classification" &&
@@ -403,6 +406,7 @@ export default function LeaseExpenseClassification() {
         row.amount > 0 &&
         !row.sentToCam &&
         normalizeText(row.rule?.payment_treatment) !== "included_in_base_rent";
+
         
       const decisionObj = getCamDecision(row);
       row.camDecision = decisionObj.label;
@@ -454,6 +458,11 @@ export default function LeaseExpenseClassification() {
         canSendToReview: false,
         canSendToCam: false,
       };
+
+      // Allow finalize on gap rows once the user enters an amount
+      gapRow.canFinalize = gapRow.amount != null && Number(gapRow.amount) > 0 && gapRow.classificationStatus !== "finalized";
+
+
       
       const decisionObj = getCamDecision(gapRow);
       gapRow.camDecision = decisionObj.label;
