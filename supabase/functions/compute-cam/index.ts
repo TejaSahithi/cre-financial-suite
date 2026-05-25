@@ -436,12 +436,19 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Expense review must be approved before CAM calculation. ${reviewBlockingExpenses.length} expense(s) still need review.`);
     }
 
-    // Filter recoverable expenses — accept 'recoverable', 'cam', 'nnn', or null classification
+    // Filter recoverable expenses. Per spec: "conditional expenses block
+    // CAM until reviewed" — so 'conditional' is rejected upstream (the
+    // reviewBlockingExpenses throw above). Anything reaching this filter
+    // must be a clean recoverable + cam_eligible=yes row. We do NOT
+    // accept camEligible="conditional" here for the same reason: the
+    // earlier guard already rejected them. Previous code included
+    // "conditional" on both axes, but the upstream throw made it dead
+    // code that mis-represented the contract.
     const recoverableExpenses = actualExpenses.filter((expense: any) => {
       const cls = normalizeText(expense.recoverability_result || expense.classification);
       const camEligible = normalizeDecision(expense.cam_eligible);
-      return (cls === "recoverable" || cls === "conditional" || cls === "cam" || cls === "nnn" || cls === "") &&
-        ["yes", "conditional"].includes(camEligible);
+      return (cls === "recoverable" || cls === "cam" || cls === "nnn" || cls === "") &&
+        camEligible === "yes";
     });
 
     const activeScopedLeases = leases.filter((lease: any) =>

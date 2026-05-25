@@ -198,11 +198,29 @@ export const leaseRulePipelineService = {
       extractionKeys: Object.keys(lease?.extraction_data || {})
     });
 
-    // For Summit (force true rerun), clean up bad null rows first
+    // Force reruns should only replace unresolved extraction output. Human-approved
+    // rows are the durable approval record and must survive regeneration.
     if (force) {
-      console.log("[FORCE DELETE OLD RULES]", { leaseId, force });
-      const { data: deletedData, error: deleteError } = await supabase.from("lease_expense_rules").delete().eq("lease_id", leaseId).select("*");
-      console.log("[DELETE RESULT]", { deletedData, deleteError });
+      console.log("[FORCE DELETE UNRESOLVED RULES]", { leaseId, force });
+      const { data: existingRules, error: existingRulesError } = await supabase
+        .from("lease_expense_rules")
+        .select("id, review_status, approval_status")
+        .eq("lease_id", leaseId);
+      if (existingRulesError) {
+        console.log("[FORCE SELECT OLD RULES FAILED]", { existingRulesError });
+      }
+      const deletableIds = (existingRules || [])
+        .filter((rule) => {
+          const reviewStatus = String(rule.review_status || "").toLowerCase();
+          const approvalStatus = String(rule.approval_status || "").toLowerCase();
+          return !(reviewStatus === "approved" && approvalStatus === "approved");
+        })
+        .map((rule) => rule.id)
+        .filter(Boolean);
+      const { data: deletedData, error: deleteError } = deletableIds.length > 0
+        ? await supabase.from("lease_expense_rules").delete().in("id", deletableIds).select("*")
+        : { data: [], error: null };
+      console.log("[DELETE UNRESOLVED RESULT]", { deleted: deletedData?.length || 0, deleteError });
       
       const { count: postDeleteCount, error: countError } = await supabase.from("lease_expense_rules").select("*", { count: "exact", head: true }).eq("lease_id", leaseId);
       console.log("[POST DELETE RULE COUNT]", { postDeleteCount, countError });

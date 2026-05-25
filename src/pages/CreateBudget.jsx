@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare } from "lucide-react";
 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
+import { budgetService } from "@/services/budgetService";
 import { supabase } from "@/services/supabaseClient";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
@@ -126,7 +127,9 @@ export default function CreateBudget() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...data }) => BudgetService.update(id, data),
+    // Route through budgetService (guarded wrapper) so locked budgets are
+    // rejected with a clear user-facing error instead of silently writing.
+    mutationFn: ({ id, ...data }) => budgetService.update(id, data),
     onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
     },

@@ -34,6 +34,14 @@ function serializeAuditValue(value) {
   }
 }
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+function cleanUuid(value) {
+  return isUuidLike(value) ? value : null;
+}
+
 function inferEntityType(entry) {
   if (entry.entityType || entry.entity_type) {
     return entry.entityType || entry.entity_type;
@@ -66,7 +74,7 @@ function extractMissingColumn(err) {
 
 async function resolveAuditContext(entry) {
   const resolved = {
-    orgId: entry.orgId || entry.org_id || getStoredActingOrgId() || null,
+    orgId: cleanUuid(entry.orgId || entry.org_id || getStoredActingOrgId()),
     userId: entry.userId || entry.user_id || null,
     userEmail: entry.userEmail || entry.user_email || null,
   };
@@ -100,7 +108,7 @@ async function resolveAuditContext(entry) {
         return (rank[a.role] ?? 99) - (rank[b.role] ?? 99);
       })[0];
 
-      resolved.orgId = prioritizedMembership?.org_id || null;
+      resolved.orgId = cleanUuid(prioritizedMembership?.org_id);
     }
   } catch (err) {
     console.warn('[audit] Unable to resolve audit context:', err?.message || err);
@@ -132,7 +140,7 @@ export async function logAudit(entry) {
     ),
     user_email:    context.userEmail,
     user_name:     entry.userName || entry.user_name || null,
-    property_id:   entry.propertyId || entry.property_id || null,
+    property_id:   cleanUuid(entry.propertyId || entry.property_id),
     timestamp:     new Date().toISOString(),
     created_at:    new Date().toISOString(),
   };

@@ -858,10 +858,22 @@ export default function LeaseExpenseClassification() {
               <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("BulkImport"))}>
                 <Upload className="mr-1.5 h-3 w-3" /> Bulk Import
               </Button>
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("LeaseExpenseRules"))}>
+              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("LeaseExpenseRules", {
+                property: lease?.property_id,
+                building: lease?.building_id,
+                unit: lease?.unit_id,
+              }))}>
                 <FileText className="mr-1.5 h-3 w-3" /> Lease Rules
               </Button>
-              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("ExpenseReview"))}>
+              {/* Carry scope (property/building/unit + lease_id) so the
+                  Exception Queue is auto-filtered to this lease instead
+                  of showing all-org exceptions. */}
+              <Button size="sm" variant="outline" className="h-8 border-white/10 bg-white/5 text-xs text-white hover:bg-white/10" onClick={() => navigate(createPageUrl("ExpenseReview", {
+                property: lease?.property_id,
+                building: lease?.building_id,
+                unit: lease?.unit_id,
+                lease_id: lease?.id,
+              }))}>
                 <CheckCircle className="mr-1.5 h-3 w-3" /> Expense Review
               </Button>
             </div>
@@ -933,7 +945,12 @@ export default function LeaseExpenseClassification() {
               <p className="text-sm font-semibold">Actual Expense Input</p>
               <p className="mt-1 text-xs text-amber-700">{actualEmptyState}</p>
             </div>
-            <Button size="sm" variant="outline" className="h-8 border-amber-300 bg-white text-xs text-amber-900" onClick={() => navigate(createPageUrl("Expenses"))}>
+            <Button size="sm" variant="outline" className="h-8 border-amber-300 bg-white text-xs text-amber-900" onClick={() => navigate(createPageUrl("Expenses", {
+  property: lease?.property_id,
+  building: lease?.building_id,
+  unit: lease?.unit_id,
+  lease_id: lease?.id,
+}))}>
               Actual Expenses
             </Button>
           </div>
@@ -1248,7 +1265,12 @@ export default function LeaseExpenseClassification() {
                                     </DropdownMenuItem>
                                   )}
                                   {row.actualExpenseId && (
-                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses"))}>
+                                    <DropdownMenuItem onClick={() => navigate(createPageUrl("Expenses", {
+  property: lease?.property_id,
+  building: lease?.building_id,
+  unit: lease?.unit_id,
+  lease_id: lease?.id,
+}))}>
                                       <FileText className="mr-2 h-4 w-4 text-slate-500" />
                                       View Actual Expense
                                     </DropdownMenuItem>

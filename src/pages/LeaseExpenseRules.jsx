@@ -153,7 +153,7 @@ function buildRuleEditForm(rule) {
 }
 
 function isApprovedRule(rule) {
-  return ["approved", "reviewed"].includes(String(rule?.review_status || "").toLowerCase());
+  return leaseExpenseRuleService.isRuleApproved(rule);
 }
 
 function needsReviewRule(rule) {
@@ -233,17 +233,8 @@ function truncate(value, length = 140) {
   return text.length > length ? `${text.slice(0, length)}...` : text;
 }
 
-function isApprovedWorkflowValue(value) {
-  return String(value || "").toLowerCase() === "approved";
-}
-
-function pickPreferredRuleSet(ruleSets = []) {
-  const approvedRuleSet = ruleSets.find((ruleSet) =>
-    isApprovedWorkflowValue(ruleSet?.status) ||
-    isApprovedWorkflowValue(ruleSet?.approval_status) ||
-    isApprovedWorkflowValue(ruleSet?.review_status)
-  );
-  return approvedRuleSet || ruleSets[0] || null;
+function pickPreferredRuleSet(ruleSets = [], rulesBySet = new Map()) {
+  return leaseExpenseRuleService.pickPreferredRuleSetWithApprovedChildren(ruleSets, rulesBySet);
 }
 
 export default function LeaseExpenseRules() {
@@ -321,7 +312,7 @@ export default function LeaseExpenseRules() {
     queryFn: async () => {
       const { data: sets, error: setsErr } = await supabase
         .from("lease_expense_rule_sets")
-        .select("id, lease_id, org_id, property_id, version, status, created_at, updated_at")
+        .select("*")
         .not("status", "eq", "archived")
         .order("version", { ascending: false });
       if (setsErr) {
@@ -334,9 +325,8 @@ export default function LeaseExpenseRules() {
         existing.push(s);
         ruleSetsByLease.set(s.lease_id, existing);
       }
-      const latest = [...ruleSetsByLease.values()].map((ruleSetsForLease) => pickPreferredRuleSet(ruleSetsForLease)).filter(Boolean);
-      const setIds = latest.map((s) => s.id);
-      console.log("[LeaseExpenseRules-DIRECT] rule_sets read:", latest.length);
+      const setIds = (sets || []).map((s) => s.id).filter(Boolean);
+      console.log("[LeaseExpenseRules-DIRECT] rule_sets read:", sets?.length || 0);
       if (setIds.length === 0) return [];
       const { data: rules, error: rulesErr } = await supabase
         .from("lease_expense_rules")
@@ -353,6 +343,7 @@ export default function LeaseExpenseRules() {
         list.push(r);
         byRuleSet.set(r.rule_set_id, list);
       }
+      const latest = [...ruleSetsByLease.values()].map((ruleSetsForLease) => pickPreferredRuleSet(ruleSetsForLease, byRuleSet)).filter(Boolean);
       return latest.map((s) => ({
         leaseId: s.lease_id,
         ruleSet: s,
@@ -587,6 +578,9 @@ export default function LeaseExpenseRules() {
         .select()
         .single();
       if (error) throw error;
+      if (data?.rule_set_id) {
+        await leaseExpenseRuleService.recalculateRuleSetStatus(data.rule_set_id);
+      }
       return data;
     },
     onSuccess: () => {
@@ -676,14 +670,17 @@ export default function LeaseExpenseRules() {
     }
     console.log("[Approve Rule clicked]", rule.id);
 
-    const patch = {
+    const patch = buildRuleWorkflowPatch(approvalPreview, validation, {
       ...buildRuleHierarchyPatch(lease),
       review_status: "approved",
       approval_status: "approved",
       approved_by: userId,
       approved_at: now,
       updated_at: now,
-    };
+      is_recoverable: validation.recoverableFromTenant === "yes" || validation.recoverableFromTenant === "conditional",
+      is_excluded: Boolean(rule.is_excluded),
+    });
+    patch.published_to_cam = leaseExpenseRuleService.derivePublishedToCam({ ...rule, ...patch });
     console.log("[Approve Rule update payload]", patch);
     
     let approvedRule;
@@ -713,14 +710,15 @@ export default function LeaseExpenseRules() {
       ruleId: rule.id,
       patch: buildRuleWorkflowPatch(rule, validation, {
         ...buildRuleHierarchyPatch(lease),
-        row_status: "needs_review",
-        review_status: "needs_review",
-        approval_status: "draft",
+        row_status: "rejected",
+        review_status: "rejected",
+        approval_status: "rejected",
         approved_by: null,
         approved_at: null,
         updated_at: now,
         recoverable_from_tenant: "no",
         cam_eligible: "no",
+        published_to_cam: false,
         recovery_method: "not_applicable",
         allocation_basis: null,
         is_recoverable: false,
@@ -753,6 +751,7 @@ export default function LeaseExpenseRules() {
         payment_treatment: validation.includedInBaseRent ? "included_in_base_rent" : "not_applicable",
         recoverable_from_tenant: "no",
         cam_eligible: "no",
+        published_to_cam: false,
         recovery_method: validation.includedInBaseRent ? "included_in_base_rent" : "not_applicable",
         allocation_basis: null,
         is_excluded: true,
@@ -763,30 +762,35 @@ export default function LeaseExpenseRules() {
 
   const saveRuleEdits = async () => {
     if (!editingRuleContext?.rule || !editForm) return;
+    const patch = {
+      ...buildRuleHierarchyPatch(editingRuleContext.lease),
+      expense_category: editForm.category_name || null,
+      expense_subcategory: editForm.expense_subcategory || null,
+      included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),
+      operational_responsibility: editForm.responsibility || null,
+      payment_treatment: editForm.payment_treatment || "not_applicable",
+      recoverable_from_tenant: editForm.recoverable_from_tenant || "no",
+      cam_eligible: editForm.cam_eligible || "no",
+      recovery_method: editForm.recovery_method || "not_applicable",
+      allocation_basis: editForm.allocation_basis === "none" ? null : editForm.allocation_basis,
+      cap_type: editForm.cap_type || null,
+      cap_percent: toNullableNumber(editForm.cap_percent),
+      cap_amount: toNullableNumber(editForm.cap_amount),
+      admin_fee_applicable: fromBooleanString(editForm.admin_fee_applicable),
+      admin_fee_percent: toNullableNumber(editForm.admin_fee_percent),
+      gross_up_applicable: fromBooleanString(editForm.gross_up_applicable),
+      gross_up_percent: toNullableNumber(editForm.gross_up_percent),
+      reconciliation_required: fromBooleanString(editForm.reconciliation_required),
+      notes: editForm.notes || null,
+      updated_at: new Date().toISOString(),
+    };
+    patch.published_to_cam = leaseExpenseRuleService.derivePublishedToCam({
+      ...editingRuleContext.rule,
+      ...patch,
+    });
     await updateRuleMutation.mutateAsync({
       ruleId: editingRuleContext.rule.id,
-      patch: {
-        ...buildRuleHierarchyPatch(editingRuleContext.lease),
-        expense_category: editForm.category_name || null,
-        expense_subcategory: editForm.expense_subcategory || null,
-        included_in_base_rent: fromBooleanString(editForm.included_in_base_rent),
-        operational_responsibility: editForm.responsibility || null,
-        payment_treatment: editForm.payment_treatment || "not_applicable",
-        recoverable_from_tenant: editForm.recoverable_from_tenant || "no",
-        cam_eligible: editForm.cam_eligible || "no",
-        recovery_method: editForm.recovery_method || "not_applicable",
-        allocation_basis: editForm.allocation_basis === "none" ? null : editForm.allocation_basis,
-        cap_type: editForm.cap_type || null,
-        cap_percent: toNullableNumber(editForm.cap_percent),
-        cap_amount: toNullableNumber(editForm.cap_amount),
-        admin_fee_applicable: fromBooleanString(editForm.admin_fee_applicable),
-        admin_fee_percent: toNullableNumber(editForm.admin_fee_percent),
-        gross_up_applicable: fromBooleanString(editForm.gross_up_applicable),
-        gross_up_percent: toNullableNumber(editForm.gross_up_percent),
-        reconciliation_required: fromBooleanString(editForm.reconciliation_required),
-        notes: editForm.notes || null,
-        updated_at: new Date().toISOString(),
-      },
+      patch,
     });
     toast.success("Rule details updated");
     closeRuleEditor();

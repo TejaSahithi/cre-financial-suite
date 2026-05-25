@@ -826,6 +826,89 @@ function isSchemaCompatibilityError(error) {
   return isMissingColumnError(error) || text.includes("schema mismatch");
 }
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function cleanUuid(value) {
+  return isUuidLike(value) ? value : null;
+}
+
+function compactDefined(row = {}) {
+  return Object.fromEntries(
+    Object.entries(row).filter(([, value]) => value !== undefined)
+  );
+}
+
+const EXPENSE_CLASSIFICATION_UUID_COLUMNS = new Set([
+  "id",
+  "org_id",
+  "expense_id",
+  "actual_expense_id",
+  "property_id",
+  "building_id",
+  "unit_id",
+  "lease_id",
+  "tenant_id",
+  "rule_set_id",
+  "recovery_rule_id",
+  "linked_expense_rule_id",
+  "lease_expense_rule_id",
+  "approved_by",
+  "reviewed_by",
+  "sent_to_cam_by",
+  "cam_pool_id",
+]);
+
+const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
+  "id",
+  "org_id",
+  "expense_id",
+  "property_id",
+  "building_id",
+  "unit_id",
+  "lease_id",
+  "tenant_id",
+  "rule_set_id",
+  "recovery_rule_id",
+  "recovery_status",
+  "allocation_method",
+  "cap_applied",
+  "exclusion_applied",
+  "condition_applied",
+  "condition_reason",
+  "rule_source",
+  "confidence_score",
+  "evidence_text",
+  "evidence_page_number",
+  "approved_status",
+  "notes",
+  "classified_at",
+  "approved_by",
+  "approved_at",
+  "created_at",
+  "updated_at",
+]);
+
+function normalizeExpenseClassificationPayload(payload = {}) {
+  const normalized = compactDefined(payload);
+  for (const column of EXPENSE_CLASSIFICATION_UUID_COLUMNS) {
+    if (column in normalized) {
+      normalized[column] = cleanUuid(normalized[column]);
+    }
+  }
+  if (!normalized.id) delete normalized.id;
+  normalized.expense_id = cleanUuid(normalized.expense_id || normalized.actual_expense_id);
+  normalized.actual_expense_id = cleanUuid(normalized.actual_expense_id || normalized.expense_id);
+  return normalized;
+}
+
+function pickColumns(row = {}, allowedColumns = new Set()) {
+  return Object.fromEntries(
+    Object.entries(row).filter(([key, value]) => allowedColumns.has(key) && value !== undefined)
+  );
+}
+
 async function selectExpenseClassifications({ columns = [], apply = (query) => query } = {}) {
   if (!supabase || columns.length === 0) return [];
 
@@ -899,30 +982,35 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
     ruleSetsByLease.set(ruleSet.lease_id, existing);
   }
 
-  const latestRuleSets = [...ruleSetsByLease.values()]
-    .map((setsForLease) =>
-      setsForLease.find((ruleSet) =>
-        ["approved"].includes(normalizeText(ruleSet?.status))
-      ) || setsForLease[0]
-    )
-    .filter(Boolean);
-
-  const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
   const { data: rules, error: rulesError } = await supabase
     .from("lease_expense_rules")
     .select("*")
-    .in("rule_set_id", ruleSetIds);
+    .in("rule_set_id", (ruleSets || []).map((ruleSet) => ruleSet.id).filter(Boolean));
 
   if (rulesError) {
     if (isMissingExpenseRuleTable(rulesError)) {
       console.warn("[expenseService] lease_expense_rules table missing — treating as no rules.");
-      return { ruleSets: latestRuleSets, rules: [], categories: [] };
+      return { ruleSets: [], rules: [], categories: [] };
     }
     throw rulesError;
   }
 
-  const ruleIds = (rules || []).map((rule) => rule.id);
-  const categoryIds = [...new Set((rules || []).map((rule) => rule.expense_category_id).filter(Boolean))];
+  const rulesBySet = new Map();
+  for (const rule of rules || []) {
+    const existing = rulesBySet.get(rule.rule_set_id) || [];
+    existing.push(rule);
+    rulesBySet.set(rule.rule_set_id, existing);
+  }
+
+  const latestRuleSets = [...ruleSetsByLease.values()]
+    .map((setsForLease) => leaseExpenseRuleService.pickPreferredRuleSetWithApprovedChildren(setsForLease, rulesBySet))
+    .filter(Boolean);
+  const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
+  const selectedRuleSetIds = new Set(ruleSetIds);
+  const selectedRules = (rules || []).filter((rule) => selectedRuleSetIds.has(rule.rule_set_id));
+
+  const ruleIds = selectedRules.map((rule) => rule.id);
+  const categoryIds = [...new Set(selectedRules.map((rule) => rule.expense_category_id).filter(Boolean))];
 
   const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }, { data: categories, error: categoriesError }] = await Promise.all([
     ruleIds.length > 0
@@ -952,7 +1040,7 @@ async function fetchApprovedRuleArtifacts(leaseIds = []) {
     clausesByRuleId.set(clause.lease_expense_rule_id, existing);
   });
 
-  const rulesWithRelations = (rules || []).map((rule) => ({
+  const rulesWithRelations = selectedRules.map((rule) => ({
     ...rule,
     lease_id: latestRuleSets.find((ruleSet) => ruleSet.id === rule.rule_set_id)?.lease_id || null,
     ...valuesByRuleId.get(rule.id),
@@ -1139,29 +1227,31 @@ async function upsertExpenseClassification(payload) {
           (!hasExpense && hasRule) ? "rule_missing_actual" : "unknown"
     );
 
-    const nextPayload = {
+    const nextPayload = normalizeExpenseClassificationPayload({
       ...payload,
       expense_id: payload.expense_id || payload.actual_expense_id || null,
       actual_expense_id: payload.actual_expense_id || payload.expense_id || null,
       row_type: rowType,
-    };
-    const conflictTargets = nextPayload.classification_key
-      ? ["classification_key", "org_id,expense_id"]
-      : ["org_id,expense_id"];
+    });
+    const baselinePayload = pickColumns(nextPayload, BASELINE_EXPENSE_CLASSIFICATION_COLUMNS);
+    const conflictTargets = ["org_id,expense_id"];
 
     for (const onConflict of conflictTargets) {
-      const attemptPayload = { ...nextPayload };
+      const attemptPayload = { ...baselinePayload };
 
       while (Object.keys(attemptPayload).length > 0) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("expense_classifications")
-          .upsert(attemptPayload, { onConflict });
-        if (!error) return;
+          .upsert(attemptPayload, { onConflict })
+          .select("*")
+          .maybeSingle();
+        if (!error) return data;
 
         const conflictError = String(error?.message || error?.details || "").toLowerCase();
         if (
-          onConflict === "classification_key" &&
-          (error?.code === "42P10" || error?.code === "PGRST204" || conflictError.includes("no unique") || conflictError.includes("no constraint") || conflictError.includes("schema cache"))
+          error?.code === "42P10" ||
+          conflictError.includes("no unique") ||
+          conflictError.includes("no constraint")
         ) {
           break;
         }
@@ -1217,7 +1307,6 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
     new Date().toISOString();
 
   const attempts = [
-    expensePatch,
     {
       classification: expensePatch.classification,
       recovery_status: expensePatch.recovery_status,
@@ -1225,6 +1314,7 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
       review_status: expensePatch.review_status,
       updated_at: updatedAt,
     },
+    expensePatch,
     {
       classification: expensePatch.classification,
       recovery_status: expensePatch.recovery_status,
@@ -2548,6 +2638,24 @@ export const expenseService = {
   },
 
   async publishRuleToCamSetup(ruleId) {
+    const { data: rule, error: fetchError } = await supabase
+      .from("lease_expense_rules")
+      .select("*")
+      .eq("id", ruleId)
+      .single();
+
+    if (fetchError) {
+      throw new Error("Failed to load rule before publishing to CAM setup");
+    }
+    if (!leaseExpenseRuleService.isRuleCamPublishable(rule)) {
+      const { error: unpublishError } = await supabase
+        .from("lease_expense_rules")
+        .update({ published_to_cam: false })
+        .eq("id", ruleId);
+      if (unpublishError) throw new Error("Failed to update rule CAM publish state");
+      throw new Error("Only approved, recoverable, CAM-eligible rules can be published to CAM setup.");
+    }
+
     const { error } = await supabase
       .from("lease_expense_rules")
       .update({ published_to_cam: true })

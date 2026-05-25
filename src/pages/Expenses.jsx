@@ -156,10 +156,20 @@ export default function Expenses() {
     })
   );
 
+  // Pick up an optional ?lease_id= from the URL so links from Lease
+  // Review / Expense Classification land on this page already filtered
+  // to the relevant lease. Without this, scope was being lost during
+  // cross-page navigation (audit Pass 5 finding).
+  const leaseIdParam = useMemo(
+    () => new URLSearchParams(location.search).get("lease_id") || null,
+    [location.search],
+  );
+
   const selectorScopedAllExpenses = scopedAllExpenses.filter((expense) => {
     if (scopeProperty !== "all" && expense.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && expense.building_id !== scopeBuilding) return false;
     if (scopeUnit !== "all" && expense.unit_id !== scopeUnit) return false;
+    if (leaseIdParam && expense.lease_id !== leaseIdParam) return false;
     return true;
   });
 

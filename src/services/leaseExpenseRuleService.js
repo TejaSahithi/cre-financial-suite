@@ -68,18 +68,117 @@ function firstPresent(...values) {
   return null;
 }
 
+function isLlmGeneratedRule(rule) {
+  return [
+    rule?.source_type,
+    rule?.generation_source,
+    rule?.created_from,
+    rule?.extraction_source,
+  ].some((value) => normalizeText(value).includes("llm"));
+}
+
 function isApprovedWorkflowStatus(value) {
   return normalizeText(value) === "approved";
 }
 
-function selectPreferredRuleSet(ruleSets = []) {
+function isRuleApproved(rule) {
+  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+  return reviewStatus === "approved" && approvalStatus === "approved";
+}
+
+function isRuleRejected(rule) {
+  const reviewStatus = normalizeText(rule?.review_status);
+  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+  const rowStatus = normalizeText(rule?.row_status || rule?.status);
+  return reviewStatus === "rejected" || approvalStatus === "rejected" || rowStatus === "rejected";
+}
+
+function isRuleNotApplicable(rule) {
+  const rowStatus = normalizeText(rule?.row_status || rule?.status || rule?.extraction_status);
+  if (["unmapped", "not_found", "not_mentioned", "not_applicable", "na", "n/a"].includes(rowStatus)) return true;
+  return Boolean(rule?.is_excluded) &&
+    deriveRuleRecoverableFromTenant(rule) === "no" &&
+    deriveRuleCamEligible(rule) === "no" &&
+    ["approved", "rejected"].includes(normalizeText(rule?.approval_status));
+}
+
+function isRuleActiveForRuleSetStatus(rule) {
+  const rowStatus = normalizeText(rule?.row_status || rule?.status);
+  return !["archived", "deleted", "void", "voided"].includes(rowStatus);
+}
+
+function isRuleResolvedForRuleSetStatus(rule) {
+  return isRuleApproved(rule) || isRuleRejected(rule) || isRuleNotApplicable(rule);
+}
+
+function deriveRuleSetStatusFromRules(rules = []) {
+  const activeRules = (rules || []).filter(isRuleActiveForRuleSetStatus);
+  if (activeRules.length === 0) return "draft";
+  if (activeRules.every(isRuleResolvedForRuleSetStatus)) return "approved";
+  if (activeRules.some((rule) => {
+    const reviewStatus = normalizeText(rule?.review_status);
+    const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+    const rowStatus = normalizeText(rule?.row_status || rule?.status || rule?.extraction_status);
+    return reviewStatus === "needs_review" ||
+      approvalStatus === "needs_review" ||
+      rowStatus === "needs_review" ||
+      rowStatus === "uncertain" ||
+      rowStatus === "missing_value";
+  })) {
+    return "needs_review";
+  }
+  return "draft";
+}
+
+function isRuleCamPublishable(rule) {
+  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+  const recoverableFromTenant = deriveRuleRecoverableFromTenant(rule);
+  const camEligible = deriveRuleCamEligible(rule);
+  const paymentTreatment = deriveRulePaymentTreatment(rule);
+  const rowStatus = normalizeText(rule?.row_status || rule?.status);
+
+  return reviewStatus === "approved" &&
+    approvalStatus === "approved" &&
+    recoverableFromTenant === "yes" &&
+    camEligible === "yes" &&
+    !deriveRuleIncludedInBaseRent(rule) &&
+    paymentTreatment !== "included_in_base_rent" &&
+    paymentTreatment !== "tenant_direct_contract" &&
+    !rule?.is_excluded &&
+    !["unmapped", "not_found", "not_mentioned", "not_applicable", "rejected"].includes(rowStatus);
+}
+
+function derivePublishedToCam(rule) {
+  if (isRuleNotApplicable(rule) || isRuleRejected(rule)) return false;
+  return isRuleCamPublishable(rule);
+}
+
+function pickPreferredRuleSetWithApprovedChildren(ruleSets = [], rulesBySet = new Map()) {
   if (!Array.isArray(ruleSets) || ruleSets.length === 0) return null;
+  const sorted = [...ruleSets].sort((a, b) => {
+    const aVersion = Number(a?.version) || 0;
+    const bVersion = Number(b?.version) || 0;
+    if (aVersion !== bVersion) return bVersion - aVersion;
+    return Date.parse(b?.updated_at || b?.created_at || "") - Date.parse(a?.updated_at || a?.created_at || "");
+  });
+
+  const withApprovedChildren = sorted.find((ruleSet) =>
+    (rulesBySet.get(ruleSet?.id) || []).some(isRuleApproved)
+  );
+  if (withApprovedChildren) return withApprovedChildren;
+
   const approvedRuleSet = ruleSets.find((ruleSet) =>
     isApprovedWorkflowStatus(ruleSet?.status) ||
     isApprovedWorkflowStatus(ruleSet?.approval_status) ||
     isApprovedWorkflowStatus(ruleSet?.review_status)
   );
-  return approvedRuleSet || ruleSets[0] || null;
+  return approvedRuleSet || sorted[0] || null;
+}
+
+function selectPreferredRuleSet(ruleSets = [], rulesBySet = new Map()) {
+  return pickPreferredRuleSetWithApprovedChildren(ruleSets, rulesBySet);
 }
 
 function deriveRuleCategoryName(rule) {
@@ -185,19 +284,20 @@ function deriveRuleResponsibility(rule) {
 }
 
 function deriveRuleCamEligible(rule) {
+  const paymentTreatment = deriveRulePaymentTreatment(rule);
+  const recoverable = deriveRuleRecoverableFromTenant(rule);
+
+  if (deriveRuleIncludedInBaseRent(rule) || paymentTreatment === "included_in_base_rent") return "no";
+  if (paymentTreatment === "tenant_direct_contract") return "no";
+  if (recoverable === "no") return "no";
+  if (recoverable === "conditional") return "conditional";
+
   const explicit = normalizeTriStateDecision(rule?.cam_eligible);
   if (explicit) {
-    if (deriveRuleIncludedInBaseRent(rule)) return "no";
-    if (deriveRuleRecoverableFromTenant(rule) === "no" && explicit === "yes") return "no";
     return explicit;
   }
 
   const categoryKey = normalizeCategoryKey(firstPresent(rule?.normalized_key, rule?.expense_subcategory, rule?.expense_category, rule?.category_name));
-  const paymentTreatment = deriveRulePaymentTreatment(rule);
-  const recoverable = deriveRuleRecoverableFromTenant(rule);
-
-  if (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract") return "no";
-  if (recoverable === "no") return "no";
 
   const coreCamCategories = new Set([
     "common_area_maintenance",
@@ -220,10 +320,10 @@ function deriveRuleCamEligible(rule) {
   ]);
 
   if (coreCamCategories.has(categoryKey)) {
-    return recoverable === "conditional" ? "conditional" : "yes";
+    return "yes";
   }
 
-  return recoverable === "yes" ? "conditional" : "no";
+  return "conditional";
 }
 
 function deriveRuleBillingTreatment(rule) {
@@ -294,6 +394,7 @@ function deriveRuleReviewStatus(rule) {
   if (rule?.review_status) {
     return normalizeText(rule.review_status) === "reviewed" ? "approved" : rule.review_status;
   }
+  if (isLlmGeneratedRule(rule)) return "needs_review";
   const status = normalizeRuleStatus(rule);
   if (status === "not_mentioned") return "not_found";
   if (status === "manually_added") return "approved"; // explicit human input
@@ -541,6 +642,7 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
   const notFoundRow = explicitExtractionStatus === "not_found"
     || explicitExtractionStatus === "missing_source_evidence";
   const autoApproved =
+    !isLlmGeneratedRule(rule) &&
     !notFoundRow &&
     Boolean(exactSourceText) &&
     confidence != null &&
@@ -559,12 +661,6 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
       : (autoApproved || normalizeText(rule?.row_status) === "manually_added")
         ? normalizeText(rule?.row_status) || "mapped"
         : "needs_review";
-  const canPublishToCam = canPublishRuleToCamByState({
-    ...rule,
-    review_status: reviewStatus,
-    approval_status: approvalStatus,
-  });
-
   return {
     exactSourceText,
     confidence,
@@ -573,12 +669,13 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
     reviewStatus,
     approvalStatus,
     rowStatus,
-    publishedToCam: canPublishToCam ? Boolean(rule?.published_to_cam) : false,
+    publishedToCam: derivePublishedToCam({
+      ...rule,
+      review_status: reviewStatus,
+      approval_status: approvalStatus,
+      row_status: rowStatus,
+    }),
   };
-}
-
-function canPublishRuleToCamByState(rule) {
-  return getRuleValidation(rule).canPublishToCam;
 }
 
 function getRuleValidation(rule) {
@@ -646,10 +743,12 @@ function getRuleValidation(rule) {
   publishBlockers.push(...approvalBlockers);
   if (reviewStatus !== "approved") publishBlockers.push("Not reviewed");
   if (approvalStatus !== "approved") publishBlockers.push("Not approved");
-  if (!["yes", "conditional"].includes(recoverableFromTenant)) publishBlockers.push("Not recoverable");
-  if (!["yes", "conditional"].includes(camEligible)) publishBlockers.push("Not CAM eligible");
+  if (recoverableFromTenant !== "yes") publishBlockers.push("Not recoverable");
+  if (camEligible !== "yes") publishBlockers.push("Not CAM eligible");
   if (includedInBaseRent) publishBlockers.push("Included in rent");
   if (paymentTreatment === "included_in_base_rent") publishBlockers.push("Included in rent");
+  if (paymentTreatment === "tenant_direct_contract") publishBlockers.push("Tenant direct contract");
+  if (rule?.is_excluded) publishBlockers.push("Excluded");
   if (alreadyPublished) publishBlockers.push("Already published");
   publishBlockers.push(...issues);
 
@@ -1632,7 +1731,23 @@ export const leaseExpenseRuleService = {
 
       if (error) throw error;
 
-      const ruleSet = selectPreferredRuleSet(ruleSets || []);
+      const setIds = (ruleSets || []).map((ruleSet) => ruleSet.id).filter(Boolean);
+      const { data: ruleRows, error: ruleRowsError } = setIds.length > 0
+        ? await supabase
+          .from("lease_expense_rules")
+          .select("*")
+          .in("rule_set_id", setIds)
+        : { data: [], error: null };
+      if (ruleRowsError) throw ruleRowsError;
+
+      const rulesBySet = new Map();
+      for (const rule of ruleRows || []) {
+        const existing = rulesBySet.get(rule.rule_set_id) || [];
+        existing.push(rule);
+        rulesBySet.set(rule.rule_set_id, existing);
+      }
+
+      const ruleSet = selectPreferredRuleSet(ruleSets || [], rulesBySet);
       if (!ruleSet) {
         return { ruleSet: null, rules: [] };
       }
@@ -1676,24 +1791,39 @@ export const leaseExpenseRuleService = {
         ruleSetsByLeaseId.set(ruleSet.lease_id, existing);
       }
 
-      const latestRuleSets = [...ruleSetsByLeaseId.values()]
-        .map((leaseRuleSets) => selectPreferredRuleSet(leaseRuleSets))
-        .filter(Boolean);
-      const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
-      if (ruleSetIds.length === 0) {
-        return [...fallbackByLeaseId.values()].filter(Boolean);
+      const allRuleSetIds = (ruleSets || []).map((ruleSet) => ruleSet.id).filter(Boolean);
+      if (allRuleSetIds.length === 0) {
+        return [];
       }
 
-      const { data: rules, error: rulesError } = await supabase
+      const { data: allRules, error: rulesError } = await supabase
         .from("lease_expense_rules")
         .select("*")
-        .in("rule_set_id", ruleSetIds);
+        .in("rule_set_id", allRuleSetIds);
 
       if (rulesError) {
         console.error(`${tag} rules query failed:`, rulesError);
         throw rulesError;
       }
-      console.log(`${tag} rules read: ${rules?.length || 0} for ${ruleSetIds.length} rule_set(s)`);
+      console.log(`${tag} rules read: ${allRules?.length || 0} for ${allRuleSetIds.length} rule_set(s)`);
+
+      const rulesBySet = new Map();
+      for (const rule of allRules || []) {
+        const existing = rulesBySet.get(rule.rule_set_id) || [];
+        existing.push(rule);
+        rulesBySet.set(rule.rule_set_id, existing);
+      }
+
+      const latestRuleSets = [...ruleSetsByLeaseId.values()]
+        .map((leaseRuleSets) => selectPreferredRuleSet(leaseRuleSets, rulesBySet))
+        .filter(Boolean);
+      const ruleSetIds = latestRuleSets.map((ruleSet) => ruleSet.id);
+      if (ruleSetIds.length === 0) {
+        return [];
+      }
+
+      const selectedRuleSetIdLookup = new Set(ruleSetIds);
+      const rules = (allRules || []).filter((rule) => selectedRuleSetIdLookup.has(rule.rule_set_id));
 
       const ruleIds = (rules || []).map((rule) => rule.id).filter(Boolean);
       const [{ data: values, error: valuesError }, { data: clauses, error: clausesError }] = await Promise.all([
@@ -1734,6 +1864,31 @@ export const leaseExpenseRuleService = {
       console.error(`${tag} FAILED`, error);
       return [];
     }
+  },
+
+  async recalculateRuleSetStatus(ruleSetId) {
+    if (!supabase || !ruleSetId) return null;
+
+    const { data: rules, error: rulesError } = await supabase
+      .from("lease_expense_rules")
+      .select("*")
+      .eq("rule_set_id", ruleSetId);
+    if (rulesError) throw rulesError;
+
+    const nextStatus = deriveRuleSetStatusFromRules(rules || []);
+    const patch = {
+      status: nextStatus,
+      approved_at: nextStatus === "approved" ? new Date().toISOString() : null,
+    };
+
+    const { data, error } = await supabase
+      .from("lease_expense_rule_sets")
+      .update(patch)
+      .eq("id", ruleSetId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
   },
 
   // Diagnostic: dump the full state of the lease expense-rule pipeline for
@@ -2388,7 +2543,11 @@ export const leaseExpenseRuleService = {
         extraction_status: deriveRuleExtractionStatus(rule),
         review_status: deriveRuleReviewStatus(rule),
         approval_status: deriveRuleApprovalStatus(rule, status),
-        published_to_cam: Boolean(resolveRuleWorkflowState(rule, status).publishedToCam && rule.published_to_cam),
+        published_to_cam: derivePublishedToCam({
+          ...rule,
+          review_status: deriveRuleReviewStatus(rule),
+          approval_status: deriveRuleApprovalStatus(rule, status),
+        }),
         notes: rule.notes || null,
         confidence: deriveRuleConfidence(rule),
         source: normalizeRuleSource(firstPresent(rule.source, deriveRuleExactSourceText(rule))),
@@ -2440,7 +2599,10 @@ export const leaseExpenseRuleService = {
           payload.approval_status = "approved";
           payload.approved_by = existing.approved_by ?? payload.approved_by;
           payload.approved_at = existing.approved_at ?? payload.approved_at ?? approvedAtIso ?? now;
-          payload.published_to_cam = existing.published_to_cam ?? payload.published_to_cam;
+          payload.published_to_cam = derivePublishedToCam({
+            ...payload,
+            published_to_cam: existing.published_to_cam ?? payload.published_to_cam,
+          });
           // Keep human-edited notes too if they exist
           if (existing.notes && !payload.notes) payload.notes = existing.notes;
         }
@@ -2567,6 +2729,12 @@ export const leaseExpenseRuleService = {
       } catch (error) {
         console.warn("[leaseExpenseRuleService] clause persistence warning:", error);
       }
+    }
+
+    try {
+      await this.recalculateRuleSetStatus(ruleSetId);
+    } catch (error) {
+      console.warn("[leaseExpenseRuleService] rule set status recalculation warning:", error?.message || error);
     }
 
     const persisted = await this.loadRuleSet(lease.id);
@@ -2716,6 +2884,26 @@ export const leaseExpenseRuleService = {
 
   getRuleValidation(rule) {
     return getRuleValidation(rule);
+  },
+
+  isRuleApproved(rule) {
+    return isRuleApproved(rule);
+  },
+
+  isRuleCamPublishable(rule) {
+    return isRuleCamPublishable(rule);
+  },
+
+  derivePublishedToCam(rule) {
+    return derivePublishedToCam(rule);
+  },
+
+  deriveRuleSetStatusFromRules(rules = []) {
+    return deriveRuleSetStatusFromRules(rules);
+  },
+
+  pickPreferredRuleSetWithApprovedChildren(ruleSets = [], rulesBySet = new Map()) {
+    return pickPreferredRuleSetWithApprovedChildren(ruleSets, rulesBySet);
   },
 
   getBillingTreatment(rule) {
