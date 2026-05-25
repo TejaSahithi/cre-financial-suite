@@ -26,7 +26,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { leaseService } from "@/services/leaseService";
 import { loadFieldReviewMap } from "@/services/leaseAbstractService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { getLeaseFieldLabel } from "@/lib/leaseFieldOptions";

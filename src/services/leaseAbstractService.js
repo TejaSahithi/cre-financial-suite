@@ -13,7 +13,6 @@
  * reads `extraction_data` keeps working during the transition.
  */
 import { supabase } from "@/services/supabaseClient";
-import { leaseService } from "./leaseService";
 import { resolveLeaseField, resolveLeaseFields } from "@/lib/leaseFieldResolver";
 import {
   readFieldConfidence,

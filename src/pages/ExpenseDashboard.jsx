@@ -23,7 +23,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createPageUrl } from "@/utils";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
-import { expenseService } from "@/services/expenseService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 
 function normalizeStatus(value) {

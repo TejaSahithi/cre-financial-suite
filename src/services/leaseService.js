@@ -1,7 +1,7 @@
 import { createEntityService } from '@/services/api';
 import { supabase } from '@/services/supabaseClient';
 import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
-import { LEASE_REVIEW_FIELDS, NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
+import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
 
 export const leaseService = createEntityService('Lease');
 
