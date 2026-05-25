@@ -984,6 +984,47 @@ function hydrateClassificationRule(rule, { leaseById = new Map(), unitById = new
   };
 }
 
+async function fetchRuleSetScopeRowsCompat(ruleSetIds = []) {
+  if (!supabase || ruleSetIds.length === 0) return [];
+
+  const remainingColumns = ["id", "lease_id", "property_id", "building_id", "unit_id", "tenant_id"];
+  const droppedColumns = [];
+
+  while (remainingColumns.length > 0) {
+    const { data, error } = await supabase
+      .from("lease_expense_rule_sets")
+      .select(remainingColumns.join(", "))
+      .in("id", ruleSetIds);
+
+    if (!error) {
+      if (droppedColumns.length > 0) {
+        console.warn("[expenseService] lease_expense_rule_sets scope lookup degraded due to missing columns:", droppedColumns);
+      }
+      return data || [];
+    }
+
+    if (isMissingExpenseRuleTable(error)) {
+      console.warn("[expenseService] lease_expense_rule_sets scope lookup missing — continuing without rule_set scope hydration.");
+      return [];
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (!isMissingColumnError(error) || !missingColumn) {
+      throw error;
+    }
+
+    const index = remainingColumns.indexOf(missingColumn);
+    if (index === -1) {
+      throw error;
+    }
+
+    droppedColumns.push(missingColumn);
+    remainingColumns.splice(index, 1);
+  }
+
+  return [];
+}
+
 function summarizeApprovedRulesBy(rules = [], key) {
   const counts = {};
   for (const rule of rules) {
@@ -1027,7 +1068,7 @@ async function fetchApprovedClassificationRules(scope = {}) {
   const [leases, units, ruleSetRows] = await Promise.all([
     listWorkflowEntityRows("Lease"),
     listWorkflowEntityRows("Unit").catch(() => []),
-    fetchRuleSetScopeRows([...new Set((data || []).map((rule) => rule.rule_set_id).filter(Boolean))]),
+    fetchRuleSetScopeRowsCompat([...new Set((data || []).map((rule) => rule.rule_set_id).filter(Boolean))]),
   ]);
 
   const leaseById = new Map((leases || []).map((lease) => [lease.id, lease]));
