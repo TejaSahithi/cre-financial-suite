@@ -717,6 +717,43 @@ function buildClassificationNextStep({
   return "Finalize row";
 }
 
+function isClassificationSentToCam(classification = {}) {
+  return Boolean(
+    classification?.sent_to_cam ||
+    normalizeText(classification?.cam_status) === "sent" ||
+    classification?.sent_to_cam_at ||
+    normalizeText(classification?.next_step) === "sent to cam"
+  );
+}
+
+function classificationSortTime(row) {
+  return Date.parse(
+    row?.sent_to_cam_at ||
+    row?.updated_at ||
+    row?.classified_at ||
+    row?.reviewed_at ||
+    row?.finalized_at ||
+    ""
+  );
+}
+
+function preferExpenseClassificationRecord(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+
+  const currentSent = isClassificationSentToCam(current);
+  const candidateSent = isClassificationSentToCam(candidate);
+  if (currentSent !== candidateSent) {
+    return candidateSent ? candidate : current;
+  }
+
+  const currentTime = classificationSortTime(current);
+  const candidateTime = classificationSortTime(candidate);
+  if (!Number.isFinite(currentTime)) return candidate;
+  if (!Number.isFinite(candidateTime)) return current;
+  return candidateTime >= currentTime ? candidate : current;
+}
+
 function canSendClassificationToCam({ classification, expense, rule }) {
   const amount = toNumber(classification?.amount ?? expense?.amount);
   const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
@@ -731,7 +768,7 @@ function canSendClassificationToCam({ classification, expense, rule }) {
     recoverabilityResult === "recoverable" &&
     camEligible === "yes" &&
     amount > 0 &&
-    !classification?.sent_to_cam &&
+    !isClassificationSentToCam(classification) &&
     paymentTreatment !== "included_in_base_rent"
   );
 }
@@ -1285,8 +1322,14 @@ async function fetchExistingExpenseClassifications(expenseIds = []) {
       "conditional_amount",
       "excluded_amount",
       "sent_to_cam",
+      "sent_to_cam_at",
+      "sent_to_cam_by",
+      "cam_status",
+      "next_step",
+      "classified_at",
       "finalized_at",
       "reviewed_at",
+      "updated_at",
       "approved_status"
     ]);
   } catch (error) {
@@ -1456,8 +1499,14 @@ export const expenseService = {
         "conditional_amount",
         "excluded_amount",
         "sent_to_cam",
+        "sent_to_cam_at",
+        "sent_to_cam_by",
+        "cam_status",
+        "next_step",
+        "classified_at",
         "finalized_at",
         "reviewed_at",
+        "updated_at",
         "approved_status"
       ]);
     } catch (error) {
@@ -1510,8 +1559,14 @@ export const expenseService = {
           "conditional_amount",
           "excluded_amount",
           "sent_to_cam",
+          "sent_to_cam_at",
+          "sent_to_cam_by",
+          "cam_status",
+          "next_step",
+          "classified_at",
           "finalized_at",
           "reviewed_at",
+          "updated_at",
           "approved_status"
         ],
         apply: (query) => {
@@ -1602,8 +1657,14 @@ export const expenseService = {
           "conditional_amount",
           "excluded_amount",
           "sent_to_cam",
+          "sent_to_cam_at",
+          "sent_to_cam_by",
+          "cam_status",
+          "next_step",
+          "classified_at",
           "finalized_at",
           "reviewed_at",
+          "updated_at",
           "approved_status"
         ],
         apply: (query) => {
