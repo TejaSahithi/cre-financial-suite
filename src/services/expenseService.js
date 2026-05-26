@@ -404,9 +404,28 @@ function conditionApplied(rule) {
 }
 
 function isApprovedExpenseRecord(expense, classification = null) {
-  const approval = normalizeText(expense?.approval_status);
+  // Actual expense input gate for Expense Classification.
+  // Accept when any of approval_status / approved_status / review_status / status
+  // is explicitly approved (or finalized for "status"). Reject explicit-rejected,
+  // draft, needs-review, exception, and lease_rule_amount-sourced rows so that
+  // unapproved actuals and rule-amount inserts never enter the classification view.
+  const approval = normalizeText(expense?.approval_status || expense?.approved_status);
   const review = normalizeText(expense?.review_status);
-  return approval === "approved" || review === "approved";
+  const status = normalizeText(expense?.status);
+  const exceptionType = normalizeText(expense?.exception_type);
+  const source = normalizeText(expense?.source || expense?.source_type || expense?.cam_input_type);
+
+  if (source === "lease_rule_amount") return false;
+  if (approval === "rejected" || review === "rejected" || status === "rejected") return false;
+  if (approval === "needs_review" || review === "needs_review") return false;
+  if (approval === "draft" || review === "draft" || status === "draft") return false;
+  if (exceptionType && exceptionType !== "none" && exceptionType !== "resolved") return false;
+
+  if (approval === "approved") return true;
+  if (review === "approved") return true;
+  if (status === "approved" || status === "finalized") return true;
+
+  return false;
 }
 
 function isPendingExpenseRecord(expense) {
@@ -459,18 +478,22 @@ function approvedRuleState(rule) {
 }
 
 function isApprovedLeaseRule(rule) {
-  const approval = normalizeText(rule?.approval_status);
+  // Classification + matching must only consume APPROVED lease expense rules.
+  // Accept on: approval_status === approved, OR review_status === approved/reviewed,
+  // OR status === approved/finalized (whichever field the row actually carries).
+  // Reject explicit rejections, unmapped/not-found row statuses, or rule_status === rejected.
+  const approval = normalizeText(rule?.approval_status || rule?.approved_status);
   const review = normalizeText(rule?.review_status);
+  const status = normalizeText(rule?.status || rule?.rule_status);
   const rowStatus = normalizeText(rule?.row_status);
 
+  if (approval === "rejected" || review === "rejected" || status === "rejected") return false;
   if (["rejected", "unmapped", "not_found", "missing_value"].includes(rowStatus)) return false;
+  if (rule?.is_excluded === true) return false;
 
-  // Accept fully approved rules
-  if (approval === "approved" && ["approved", "reviewed"].includes(review)) return true;
-
-  // Also accept rules with a valid lease_id that are in needs_review / draft status
-  // (these were created before the auto-approval logic was in place)
-  if (rule?.lease_id && ["approved", "needs_review", "draft"].includes(approval)) return true;
+  if (approval === "approved") return true;
+  if (review === "approved" || review === "reviewed") return true;
+  if (status === "approved" || status === "finalized") return true;
 
   return false;
 }
@@ -2493,8 +2516,9 @@ export const expenseService = {
         cam_status: nextCamStatus,
         cam_source: nextCamSource,
         cam_input_type: "actual_expense",
-        approved_status: approvedStatus,
-        review_status: approvedStatus === "approved" ? "approved" : "needs_review",
+        // Do NOT write approved_status / review_status here.
+        // Classification only derives CAM treatment; expense approval is owned
+        // exclusively by the Expense Review workflow.
         rule_source: ruleSource,
         recovery_reason: plainReason,
         classification_updated_at: new Date().toISOString(),
@@ -2835,11 +2859,12 @@ export const expenseService = {
       expense = await baseExpenseService.get(expenseId);
     }
 
+    // Finalize only records the CAM derivation outcome on the expense; it must
+    // not promote review_status / approved_status. Expense approval is owned by
+    // the Expense Review workflow.
     const updatedExpense = await baseExpenseService.update(expenseId, {
       classification_updated_at: now,
       classification_updated_by: userId,
-      review_status: "approved",
-      approved_status: "approved",
       recovery_status: recoveryStatus,
       recoverability_result: recoveryStatus,
       classification: recoveryStatus,
