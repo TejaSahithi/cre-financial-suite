@@ -499,23 +499,30 @@ export const leaseRulePipelineService = {
     return rules;
   },
 
-  makeTemplateRule(category, included, recoverable, camEligible, responsibility = "landlord") {
-    let ruleType = "additional_rent";
-    if (included) ruleType = "full_service_included";
-    else if (recoverable === "yes") ruleType = "nnn_recoverable";
-    else if (recoverable === "conditional") ruleType = "modified_gross_base_year";
-    else if (recoverable === "tenant_direct" || responsibility === "tenant_direct_contract") ruleType = "tenant_direct";
-
+  makeTemplateRule(category, _included, _recoverable, _camEligible, responsibility = "landlord") {
+    // Lease-derivation rule: templates emit checklist coverage rows only.
+    // recoverable / cam_eligible / included_in_base_rent arguments are
+    // intentionally ignored — those assertions require per-rule lease clause
+    // evidence which a template by definition does not have. The reviewer
+    // sees the category in the gap list and must promote it manually after
+    // confirming a clause exists.
     return {
       expense_category: category,
       normalized_key: category.replace(/\s+/g, "_"),
-      included_in_base_rent: included,
-      recoverable_from_tenant: recoverable,
-      cam_eligible: camEligible,
+      included_in_base_rent: false,
+      recoverable_from_tenant: "needs_review",
+      cam_eligible: "needs_review",
       responsibility: responsibility,
       source_type: "deterministic_template",
-      confidence_score: 0.85,
-      rule_type: ruleType
+      generation_source: "template_checklist",
+      row_status: "needs_review",
+      review_status: "needs_review",
+      approval_status: "draft",
+      published_to_cam: false,
+      exact_source_text: null,
+      mentioned_in_lease: false,
+      confidence_score: 0.50,
+      rule_type: "additional_rent"
     };
   },
 

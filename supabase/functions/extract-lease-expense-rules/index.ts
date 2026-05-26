@@ -7,6 +7,12 @@ const SYSTEM_PROMPT = `You are an expert commercial real estate (CRE) lease abst
 Your task is to analyze lease text and extract explicit expense and CAM (Common Area Maintenance) recovery rules.
 You will map the findings against standard expense categories.
 
+STRICT RULES:
+- Do NOT invent rules. Only emit a rule for a category if the lease text contains a specific clause referring to that category.
+- If a category in the input list is not mentioned in the lease text, return it with row_status="not_mentioned", recoverable_from_tenant="needs_review", cam_eligible="needs_review", and exact_source_text=null.
+- Never set recoverable_from_tenant="yes" or cam_eligible="yes" unless the exact_source_text quotes the clause that supports it. If you cannot quote a specific clause, use "conditional" or "needs_review".
+- Generic NNN/Gross/Full-Service assumptions are not evidence. The clause must mention the specific category (or a broad operating-expense clause that explicitly enumerates it).
+
 For each of the categories provided in the JSON input, determine the following:
 - row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" to prompt the user to manually enter it.
 - mentioned_in_lease: boolean (is this category specifically mentioned?)

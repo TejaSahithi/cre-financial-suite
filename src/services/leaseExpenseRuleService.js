@@ -139,6 +139,24 @@ function isRuleCamPublishable(rule) {
   const paymentTreatment = deriveRulePaymentTreatment(rule);
   const rowStatus = normalizeText(rule?.row_status || rule?.status);
 
+  // Lease-derivation gate: a rule may publish to CAM only when there is
+  // either real lease clause evidence (non-weak exact_source_text) OR an
+  // explicit human manual-override with a written note. Template/checklist/
+  // amount-only/keyword-fallback rules persist with no evidence and thus
+  // cannot reach CAM, even if a reviewer flips the workflow flags.
+  const exactSourceText = String(deriveRuleExactSourceText(rule) || "").trim();
+  const hasLeaseEvidence = exactSourceText.length > 0 && !isWeakSourceText(exactSourceText);
+  const createdFrom = normalizeText(rule?.created_from);
+  const generationSource = normalizeText(rule?.generation_source);
+  const isManualOverride =
+    createdFrom === "manual" ||
+    createdFrom === "user_override" ||
+    generationSource === "manual" ||
+    generationSource === "user_override" ||
+    normalizeText(rule?.row_status) === "manually_added";
+  const overrideNote = String(rule?.notes || "").trim();
+  const hasEvidenceOrOverride = hasLeaseEvidence || (isManualOverride && overrideNote.length > 0);
+
   return reviewStatus === "approved" &&
     approvalStatus === "approved" &&
     recoverableFromTenant === "yes" &&
@@ -147,7 +165,8 @@ function isRuleCamPublishable(rule) {
     paymentTreatment !== "included_in_base_rent" &&
     paymentTreatment !== "tenant_direct_contract" &&
     !rule?.is_excluded &&
-    !["unmapped", "not_found", "not_mentioned", "not_applicable", "rejected"].includes(rowStatus);
+    !["unmapped", "not_found", "not_mentioned", "not_applicable", "rejected"].includes(rowStatus) &&
+    hasEvidenceOrOverride;
 }
 
 function derivePublishedToCam(rule) {
@@ -750,6 +769,20 @@ function getRuleValidation(rule) {
   if (paymentTreatment === "tenant_direct_contract") publishBlockers.push("Tenant direct contract");
   if (rule?.is_excluded) publishBlockers.push("Excluded");
   if (alreadyPublished) publishBlockers.push("Already published");
+  // Lease-evidence / manual-override gate (mirrors isRuleCamPublishable).
+  const createdFromForBlocker = normalizeText(rule?.created_from);
+  const generationSourceForBlocker = normalizeText(rule?.generation_source);
+  const isManualOverrideForBlocker =
+    createdFromForBlocker === "manual" ||
+    createdFromForBlocker === "user_override" ||
+    generationSourceForBlocker === "manual" ||
+    generationSourceForBlocker === "user_override" ||
+    normalizeText(rule?.row_status) === "manually_added";
+  const noteForBlocker = String(rule?.notes || "").trim();
+  const hasLeaseEvidenceForBlocker = hasLeaseSourceText && strongSourceText;
+  if (!hasLeaseEvidenceForBlocker && !(isManualOverrideForBlocker && noteForBlocker.length > 0)) {
+    publishBlockers.push("Missing lease evidence");
+  }
   publishBlockers.push(...issues);
 
   return {
@@ -1597,15 +1630,22 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       new RegExp(`${candidate.keywords.join("|")}[\\s\\S]{0,120}?\\$[\\d,]+(?:\\.\\d{2})?`, "i"),
     );
     const existing = existingByCategoryId.get(category.id) || {};
+    // Amount-only signals (positive extracted value with no surrounding
+    // lease clause text) cannot assert recoverability or CAM eligibility.
+    // We persist the value but mark the rule Needs Review so the reviewer
+    // confirms a clause before publishing to CAM.
+    const hasClauseEvidence = Boolean(snippet);
 
     draftRules.push({
       ...existing,
       expense_category_id: category.id,
       category_name: category.category_name,
       subcategory_name: category.subcategory_name || null,
-      row_status: "mapped",
-      mentioned_in_lease: true,
-      is_recoverable: true,
+      row_status: hasClauseEvidence ? "mapped" : "needs_review",
+      mentioned_in_lease: hasClauseEvidence,
+      is_recoverable: hasClauseEvidence,
+      recoverable_from_tenant: hasClauseEvidence ? "yes" : "needs_review",
+      ...(hasClauseEvidence ? {} : { cam_eligible: "needs_review" }),
       is_excluded: false,
       is_controllable: true,
       is_subject_to_cap: false,
@@ -1615,9 +1655,13 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       extracted_value: extractedValue,
       final_value: extractedValue,
       frequency: /monthly|per month/i.test(snippet || sourceText) ? "monthly" : "yearly",
-      confidence: 0.78,
+      confidence: hasClauseEvidence ? 0.78 : 0.50,
       notes: candidate.notes,
-      source: snippet || candidate.notes,
+      source: snippet || null,
+      exact_source_text: snippet || null,
+      generation_source: hasClauseEvidence ? "deterministic_amount" : "amount_only_gap",
+      ...(hasClauseEvidence ? {} : { review_status: "needs_review", approval_status: "draft" }),
+      published_to_cam: false,
     });
   }
 
@@ -2175,25 +2219,35 @@ export const leaseExpenseRuleService = {
       else if (/\bshared\b|\bpro rata\b|\bapportioned\b/.test(window)) responsibility = "shared";
 
       const includedInRent = /\bincluded in (?:base )?rent\b|\bfull[-\s]?service\b|\bgross lease\b/.test(window);
-      const recoverable =
-        includedInRent ? false
-        : responsibility === "tenant" ? true
-        : null;
+
+      // Keyword-only matches cannot reliably distinguish "tenant pays base
+      // rent" from "tenant reimburses operating expenses". Per the
+      // lease-derivation rule, the fallback must never assert
+      // recoverable_from_tenant=yes from a heuristic — only the explicit
+      // "included in base rent" clause is strong enough to assert "no".
+      // Everything else lands as Needs Review for a human to confirm.
+      const recoverableFromTenant = includedInRent ? "no" : "needs_review";
+      const camEligibleFallback = includedInRent ? "no" : "needs_review";
 
       rules.push({
         expense_category: key,
         normalized_key: key,
         category_name: humanizeLabel(key),
         responsibility,
-        recoverable_from_tenant: recoverable === true ? "yes" : recoverable === false ? "no" : "unknown",
+        recoverable_from_tenant: recoverableFromTenant,
+        cam_eligible: camEligibleFallback,
         included_in_base_rent: includedInRent,
-        recovery_method: includedInRent ? "included_in_rent" : (recoverable ? "manual_review" : "manual_review"),
+        recovery_method: includedInRent ? "included_in_rent" : "manual_review",
         exact_source_text: snippet,
         source_clause: snippet,
-        
+
         confidence_score: 0.55,
         extraction_status: "inferred",
         status: "needs_review",
+        review_status: "needs_review",
+        approval_status: "draft",
+        published_to_cam: false,
+        generation_source: "text_fallback_keyword",
         mentioned_in_lease: true,
         notes: `Inferred from lease language matching keyword "${matchedPhrase}"`,
       });
