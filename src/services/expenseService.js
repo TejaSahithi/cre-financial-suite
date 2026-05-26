@@ -959,6 +959,7 @@ const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
 ]);
 
 const missingExpenseClassificationColumns = new Set();
+const missingExpenseWorkflowColumns = new Set();
 
 const EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS = [
   "classification_key",
@@ -1535,6 +1536,10 @@ async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
   const payload = compactDefined(patch);
   const strippedColumns = [];
 
+  for (const missingColumn of missingExpenseWorkflowColumns) {
+    delete payload[missingColumn];
+  }
+
   while (Object.keys(payload).length > 0) {
     const { data, error } = await supabase
       .from("expenses")
@@ -1554,6 +1559,7 @@ async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
     if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
       throw error;
     }
+    missingExpenseWorkflowColumns.add(missingColumn);
     strippedColumns.push(missingColumn);
     delete payload[missingColumn];
   }
@@ -1571,11 +1577,8 @@ async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
     {
       classification: expensePatch.classification,
       recovery_status: expensePatch.recovery_status,
-      approved_status: expensePatch.approved_status,
-      review_status: expensePatch.review_status,
       updated_at: updatedAt,
     },
-    expensePatch,
     {
       classification: expensePatch.classification,
       recovery_status: expensePatch.recovery_status,
