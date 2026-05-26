@@ -404,7 +404,10 @@ export default function LeaseExpenseClassification() {
         ? normalizeText(
           classificationRecord?.cam_eligible ||
           leaseExpenseRuleService.getCamEligibleDecision(matchedRule) ||
-          "no"
+          // Matched rule with missing cam_eligible must NOT fall through as "no"
+          // (Excluded). Excluded requires an explicit lease signal; missing data
+          // is Needs Review.
+          "needs_review"
         )
         : normalizeText(classificationRecord?.cam_eligible || expense.cam_eligible || "needs_review");
       const amountBuckets = hasMatchedRule

@@ -93,10 +93,23 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       throw new Error("Failed to extract rules from AI.");
     }
 
-    const rules = (Array.isArray(result) ? result : result?.rules || []).map((rule: Record<string, unknown>) => ({
+    const rules = (Array.isArray(result) ? result : result?.rules || []).map((rule: Record<string, unknown>) => {
+      const normalizedRecoverable = normalizeDecision(rule.recoverable_from_tenant, rule.is_recoverable === true ? "yes" : "no");
+      const paymentTreatmentText = normalizeText(rule.payment_treatment);
+      // cam_eligible may only default to "no" when there is an EXPLICIT exclusion
+      // signal: recoverable=no, included in base rent, tenant direct contract, or
+      // is_excluded. Otherwise unknown/missing must fall to "conditional" so the
+      // row routes through Needs Review instead of being treated as Excluded.
+      const hasExplicitExclusion =
+        normalizedRecoverable === "no" ||
+        Boolean(rule.included_in_base_rent) ||
+        paymentTreatmentText === "tenant_direct_contract" ||
+        Boolean(rule.is_excluded);
+      const camEligibleFallback = hasExplicitExclusion ? "no" : "conditional";
+      return ({
       ...rule,
-      recoverable_from_tenant: normalizeDecision(rule.recoverable_from_tenant, rule.is_recoverable === true ? "yes" : "no"),
-      cam_eligible: normalizeDecision(rule.cam_eligible, rule.is_recoverable === true ? "conditional" : "no"),
+      recoverable_from_tenant: normalizedRecoverable,
+      cam_eligible: normalizeDecision(rule.cam_eligible, camEligibleFallback),
       payment_treatment: normalizeText(rule.payment_treatment) || "not_applicable",
       recovery_method: normalizeText(rule.recovery_method) || "not_applicable",
       allocation_basis: normalizeText(rule.allocation_basis) || null,
@@ -114,7 +127,8 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       review_status: "needs_review",
       approval_status: "draft",
       published_to_cam: false,
-    }));
+      });
+    });
 
     return new Response(JSON.stringify({ rules }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

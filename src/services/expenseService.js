@@ -2317,7 +2317,9 @@ export const expenseService = {
       return {
         linked_expense_rule_id: null,
         recoverability_result: "needs_review",
-        cam_eligible: "conditional",
+        // Unmatched actuals are Needs Review. They are NOT conditional (no rule
+        // to be conditional about) and NOT excluded (no explicit lease signal).
+        cam_eligible: "needs_review",
         recovery_method: null,
         reason: "No approved lease expense rule matched this actual expense with enough confidence.",
         lease: matchedLease,
