@@ -77,6 +77,7 @@ import {
   isResolvedReview,
   classifyConfidence,
   hasEvidenceOverride,
+  resolveFieldColumns,
 } from "@/lib/leaseReviewSchema";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -2619,14 +2620,71 @@ export default function LeaseReview() {
         onNeedsLegal={(f) => handleNeedsLegal(f)}
         onMarkManualRequired={(f) => handleMarkManualRequired(f)}
         onReset={(f) => handleResetField(f)}
-        onSaveEdit={async (f, val) => {
-          // Mirror the existing handleFieldSave path but without the Dialog.
-          const columnUpdates = {};
-          for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
-          if (f.key === "total_sf") columnUpdates.square_footage = val;
-          const previousValue = readFieldValue(lease, f.key);
+        onSaveEdit={async (f, val, evidencePatch = {}) => {
+          // Save edit persists the full drawer state: value + any evidence
+          // fields the reviewer typed. Evidence fields that the reviewer
+          // left blank arrive as `undefined` and are NOT written, so
+          // pre-existing extractor evidence is preserved. Synchronous prep
+          // runs inside the try block so any throw surfaces as a toast.
           try {
-            const updatedLease = await updateLeaseMutation.mutateAsync({
+            const columnUpdates = {};
+            for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
+            if (f.key === "total_sf") columnUpdates.square_footage = val;
+            const previousValue = readFieldValue(lease, f.key);
+            const existingFieldRecord = lease.extraction_data?.fields?.[f.key] || {};
+            const existingEvidenceRecord = lease.extraction_data?.field_evidence?.[f.key] || {};
+
+            // Build the merged field record. Reviewer-provided evidence
+            // overlays the existing extractor evidence; omitted fields
+            // (undefined) fall through to whatever the extractor stamped.
+            const mergedFieldRecord = {
+              ...existingFieldRecord,
+              value: val,
+              manually_edited: true,
+              edited_at: new Date().toISOString(),
+              source: "manual",
+              ...(evidencePatch.raw_value !== undefined ? { raw_value: evidencePatch.raw_value } : {}),
+              ...(evidencePatch.source_page !== undefined
+                ? { source_page: evidencePatch.source_page, page: evidencePatch.source_page, page_number: evidencePatch.source_page }
+                : {}),
+              ...(evidencePatch.source_text !== undefined
+                ? {
+                    source_text: evidencePatch.source_text,
+                    exact_source_text: evidencePatch.source_text,
+                    source_clause: evidencePatch.source_text,
+                    snippet: evidencePatch.source_text,
+                  }
+                : {}),
+              ...(evidencePatch.confidence !== undefined
+                ? { confidence_score: evidencePatch.confidence, confidence: evidencePatch.confidence }
+                : {}),
+              ...(evidencePatch.extraction_status !== undefined
+                ? { extraction_status: evidencePatch.extraction_status }
+                : {}),
+            };
+
+            // Mirror the same evidence shape under field_evidence (the
+            // separate map review-approve / Re-extract write to).
+            const mergedEvidenceRecord = {
+              ...existingEvidenceRecord,
+              ...(evidencePatch.raw_value !== undefined ? { raw_value: evidencePatch.raw_value } : {}),
+              ...(evidencePatch.source_page !== undefined ? { source_page: evidencePatch.source_page, page_number: evidencePatch.source_page } : {}),
+              ...(evidencePatch.source_text !== undefined
+                ? { source_text: evidencePatch.source_text, exact_source_text: evidencePatch.source_text, source_clause: evidencePatch.source_text }
+                : {}),
+              ...(evidencePatch.extraction_status !== undefined ? { extraction_status: evidencePatch.extraction_status } : {}),
+            };
+
+            // Confidence map (0-100 ints) mirrored separately so the
+            // existing confidence resolver also sees the manual value.
+            const nextConfidenceScores = evidencePatch.confidence !== undefined
+              ? {
+                  ...(lease.extraction_data?.confidence_scores || {}),
+                  [f.key]: evidencePatch.confidence,
+                }
+              : (lease.extraction_data?.confidence_scores || undefined);
+
+            await updateLeaseMutation.mutateAsync({
               id: lease.id,
               data: {
                 ...columnUpdates,
@@ -2634,20 +2692,30 @@ export default function LeaseReview() {
                   ...(lease.extraction_data || {}),
                   fields: {
                     ...(lease.extraction_data?.fields || {}),
-                    [f.key]: { value: val, manually_edited: true, edited_at: new Date().toISOString() },
+                    [f.key]: mergedFieldRecord,
                   },
+                  field_evidence: {
+                    ...(lease.extraction_data?.field_evidence || {}),
+                    [f.key]: mergedEvidenceRecord,
+                  },
+                  ...(nextConfidenceScores ? { confidence_scores: nextConfidenceScores } : {}),
                 },
               },
             });
-            await persistFieldAction({
-              field: f,
-              status: REVIEW_STATUSES.EDITED,
-              value: val,
-              previousReview: { value: previousValue, status: fieldReviews[f.key]?.status },
-            });
+            try {
+              await persistFieldAction({
+                field: f,
+                status: REVIEW_STATUSES.EDITED,
+                value: val,
+                previousReview: { value: previousValue, status: fieldReviews[f.key]?.status },
+              });
+            } catch (auditErr) {
+              console.warn("[LeaseReview] persistFieldAction non-fatal failure on edit:", auditErr?.message || auditErr);
+            }
             toast.success(`Updated ${f.label}`);
-          } catch {
-            /* toasted by mutation onError */
+          } catch (err) {
+            console.error("[LeaseReview] onSaveEdit failed:", err);
+            toast.error(err?.message || `Could not save ${f.label}`);
           }
         }}
         onViewInDocument={() => drawerField && viewInDocument(drawerField)}

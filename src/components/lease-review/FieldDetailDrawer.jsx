@@ -184,7 +184,30 @@ export default function FieldDetailDrawer({
     if (field.type === "boolean") {
       val = val === true || val === "true" || val === "yes";
     }
-    await onSaveEdit(field, val);
+    // Bundle evidence form state alongside the value so a single "Save edit"
+    // click persists everything the reviewer typed. Blank fields are
+    // omitted (encoded as undefined) so the parent can preserve the
+    // extractor's existing evidence rather than clobbering it with null.
+    const evidencePatch = {
+      raw_value: typeof evRaw === "string" && evRaw.trim().length > 0 ? evRaw.trim() : undefined,
+      source_page: (() => {
+        const trimmed = String(evSourcePage ?? "").trim();
+        if (!trimmed) return undefined;
+        const n = parseInt(trimmed, 10);
+        return Number.isFinite(n) ? n : undefined;
+      })(),
+      source_text: typeof evSourceText === "string" && evSourceText.trim().length > 0 ? evSourceText.trim() : undefined,
+      confidence: (() => {
+        const trimmed = String(evConfidence ?? "").trim();
+        if (!trimmed) return undefined;
+        const n = parseFloat(trimmed);
+        if (!Number.isFinite(n)) return undefined;
+        // Accept either 0-1 or 0-100 input; normalize to 0-100.
+        return n <= 1 ? Math.round(n * 100) : Math.round(n);
+      })(),
+      extraction_status: typeof evExtractionStatus === "string" && evExtractionStatus.trim().length > 0 ? evExtractionStatus.trim() : undefined,
+    };
+    await onSaveEdit(field, val, evidencePatch);
     setMode("view");
   };
 
