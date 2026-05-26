@@ -114,6 +114,11 @@ const EXCLUDED_EXPENSE_RULE_KEYS = new Set([
   "additional_rent",
 ]);
 
+// Confidence threshold below which an extracted value should NOT be treated
+// as a confirmed extraction. Values under this score get downgraded to
+// "needs_review" so the reviewer treats them as a candidate, not a fact.
+const LOW_CONFIDENCE_THRESHOLD = 0.55;
+
 const CANONICAL_EXPENSE_RULE_CONFIG = [
   { canonicalKey: "common_area_maintenance", categoryName: "Common Area Maintenance", aliases: ["cam", "common_area_maintenance", "common area maintenance"] },
   { canonicalKey: "real_estate_taxes", categoryName: "Real Estate Taxes", aliases: ["property_tax", "real_estate_taxes", "taxes", "property taxes", "taxes and assessments"] },
@@ -216,9 +221,17 @@ const FIELD_SPECS = [
   { key: "land_area", group: "premises", aliases: ["land_area"], patterns: [/([\d,]+)\s*(?:acres?|land area)/i] },
   { key: "ground_rent", group: "rent_terms", aliases: ["ground_rent"], patterns: [/\bground rent\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { key: "ground_rent_escalations", group: "rent_terms", aliases: ["ground_rent_escalations"], patterns: [/\bground rent\b[^\n]{0,160}\b(escalat(?:ion|es)|increase)\b/i] },
-  { key: "tax_responsibility", group: "expense_terms", aliases: ["tax_responsibility"], patterns: [/\b(?:tax(?:es)?|real estate taxes)\b[^\n]{0,160}\b(tenant|landlord)\b/i] },
-  { key: "insurance_responsibility", group: "expense_terms", aliases: ["insurance_responsibility"], patterns: [/\binsurance\b[^\n]{0,160}\b(tenant|landlord)\b/i] },
-  { key: "maintenance_responsibility", group: "expense_terms", aliases: ["maintenance_responsibility"], patterns: [/\bmaintenance\b[^\n]{0,160}\b(tenant|landlord)\b/i] },
+  // Responsibility patterns require an explicit *action* verb (pay / provide /
+  // maintain / carry / obtain / be responsible for). A bare "tenant" or
+  // "landlord" appearing near the noun is not enough — reimbursement clauses
+  // ("Landlord shall maintain insurance and Tenant shall reimburse")
+  // mention BOTH parties and the old regex was always returning the first
+  // match (landlord) regardless of who pays. The reimbursement keyword is
+  // intentionally excluded so we don't misclassify reimbursement clauses
+  // as direct responsibility; those land as needs_review via not_found.
+  { key: "tax_responsibility", group: "expense_terms", aliases: ["tax_responsibility"], patterns: [/\b(?:tax(?:es)?|real estate taxes|property taxes)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:pay|be\s+responsible)/i] },
+  { key: "insurance_responsibility", group: "expense_terms", aliases: ["insurance_responsibility"], patterns: [/\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i] },
+  { key: "maintenance_responsibility", group: "expense_terms", aliases: ["maintenance_responsibility"], patterns: [/\b(?:maintenance|repairs?)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:perform|maintain|repair|be\s+responsible)/i] },
   { key: "permitted_development", group: "premises", aliases: ["permitted_development"], patterns: [/\bpermitted development\b[:\s-]+([^\n.]{4,220})/i] },
 ];
 
@@ -354,20 +367,31 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     }
   }
 
+  // Strict match: only accept a docling field whose KEY semantically aligns
+  // with the field we're searching for (key contains the humanized field
+  // name). Falling back to a pure value-containment match was causing
+  // unrelated rows (e.g. unit_number with value "1110") to be returned as
+  // evidence for square_footage when the values happened to overlap.
+  const humanizedFieldKey = fieldKey.replace(/_/g, " ").toLowerCase();
   const directField = docFields.find((field) => {
     const fieldValue = cleanText(field?.value || field?.text || "");
     const fieldKeyText = cleanText(field?.key || field?.label || "").toLowerCase();
-    return (
-      fieldValue &&
-      comparableValue &&
-      (fieldValue.includes(comparableValue) || comparableValue.includes(fieldValue) || fieldKeyText.includes(fieldKey.replace(/_/g, " ")))
-    );
+    if (!fieldValue || !comparableValue) return false;
+    const keyMatches = fieldKeyText && fieldKeyText.includes(humanizedFieldKey);
+    if (!keyMatches) return false;
+    return fieldValue.includes(comparableValue) || comparableValue.includes(fieldValue);
   });
   if (directField) {
-    return {
-      source_page: Number.isFinite(Number(directField?.page)) ? Number(directField.page) : null,
-      source_clause: cleanText(directField?.key || directField?.label || comparableValue || humanize(fieldKey)),
-    };
+    // source_clause MUST be a lease-text snippet, never a field key. Prefer
+    // the docling field's text/value (the actual lease language) and never
+    // fall back to a key/label identifier string.
+    const directText = cleanText(directField?.text || directField?.value || "");
+    if (directText) {
+      return {
+        source_page: Number.isFinite(Number(directField?.page)) ? Number(directField.page) : null,
+        source_clause: directText.slice(0, 260),
+      };
+    }
   }
 
   const directBlock = textBlocks.find((block) => comparableValue && cleanText(block?.text || "").includes(comparableValue));
@@ -614,7 +638,12 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     }
 
     if (spec.key === "base_rent_monthly" && isBlank(value)) {
-      value = getFirstValue(row, ["monthly_rent"]);
+      // Only fall back to row.monthly_rent if it is a real, positive value.
+      // The leases table column has a NOT NULL DEFAULT 0, so a zero here is
+      // almost always "we never extracted it" — not "the lease really says
+      // $0". Treating that as extracted produced a misleading green badge.
+      const rowMonthly = asNumber(getFirstValue(row, ["monthly_rent"]));
+      value = rowMonthly != null && rowMonthly > 0 ? rowMonthly : null;
     }
 
     if (spec.key === "commencement_date" && isBlank(value)) {
@@ -632,6 +661,15 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     if (isBlank(value)) {
       extractionStatus = spec.manualRequired ? "manual_required" : "not_found";
       confidenceScore = 0;
+    } else if (
+      typeof confidenceScore === "number" &&
+      confidenceScore < LOW_CONFIDENCE_THRESHOLD &&
+      extractionStatus === "extracted"
+    ) {
+      // Low-confidence extracted values must not show the green "Extracted"
+      // badge. Downgrade to a review-required state so the reviewer treats
+      // the value as a candidate, not a confirmed extraction.
+      extractionStatus = "needs_review";
     }
 
     const relatedClause = spec.clauseType

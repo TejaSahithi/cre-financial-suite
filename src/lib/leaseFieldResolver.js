@@ -128,6 +128,24 @@ function extractValueFromSource(source, aliases) {
   return null;
 }
 
+// Pattern that matches a bare snake_case/identifier string with no spaces or
+// digits — e.g. "unit_number" or "tenant_name". These are never real lease
+// text; they leak in when a downstream writer accidentally persists a field
+// KEY where a clause snippet was expected. Used to scrub evidence before it
+// reaches the UI.
+const FIELD_KEY_LOOKING_PATTERN = /^[a-z][a-z0-9_]*$/;
+function looksLikeFieldKey(text) {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 60) return false;
+  return FIELD_KEY_LOOKING_PATTERN.test(trimmed);
+}
+function scrubEvidenceText(text) {
+  if (text == null) return null;
+  if (looksLikeFieldKey(text)) return null;
+  return text;
+}
+
 function buildResolverOutput(rawResult, sourcePath) {
   if (rawResult === null || rawResult === undefined || rawResult === "") {
     return null;
@@ -156,7 +174,7 @@ function buildResolverOutput(rawResult, sourcePath) {
     // The resolver must accept every key family so Page / Exact Source Text
     // light up regardless of which writer populated the row.
     output.value = rawResult.value !== undefined ? rawResult.value : null;
-    output.rawValue =
+    const candidateRaw =
       rawResult.raw_value ||
       rawResult.rawValue ||
       rawResult.exact_source_text ||
@@ -164,6 +182,11 @@ function buildResolverOutput(rawResult, sourcePath) {
       rawResult.source_clause ||
       rawResult.snippet ||
       String(rawResult.value || "");
+    output.rawValue = scrubEvidenceText(candidateRaw) ?? candidateRaw;
+    if (looksLikeFieldKey(output.rawValue)) {
+      // Last-resort scrub: never display a field key as the raw value.
+      output.rawValue = output.value != null ? String(output.value) : null;
+    }
     output.normalizedValue = rawResult.normalized_value || rawResult.normalizedValue || null;
     output.sourcePage =
       rawResult.source_page ??
@@ -174,7 +197,7 @@ function buildResolverOutput(rawResult, sourcePath) {
       rawResult.evidence?.page_number ??
       rawResult.evidence?.page ??
       null;
-    output.exactSourceText =
+    const candidateExact =
       rawResult.exact_source_text ||
       rawResult.exactSourceText ||
       rawResult.source_clause ||
@@ -184,6 +207,7 @@ function buildResolverOutput(rawResult, sourcePath) {
       rawResult.evidence?.source_text ||
       rawResult.evidence?.exact_source_text ||
       null;
+    output.exactSourceText = scrubEvidenceText(candidateExact);
     output.confidence =
       rawResult.confidence_score ??
       rawResult.confidence ??

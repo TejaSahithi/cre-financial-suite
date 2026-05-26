@@ -99,6 +99,38 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
 }
 
 /**
+ * Find the docling page number that contains a given source snippet. Used
+ * to back-fill source_page when an LLM or workflow extractor returned a
+ * source_text but did not stamp the page. Returns null if no match.
+ */
+function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefined, snippet: string): number | null {
+  if (!doclingRaw || !snippet) return null;
+  const trimmed = String(snippet).trim();
+  if (trimmed.length < 8) return null;
+  // Anchor on the first ~60 characters; matching longer substrings is fragile
+  // because the LLM frequently lightly paraphrases or trims whitespace.
+  const probe = trimmed.slice(0, Math.min(80, trimmed.length)).toLowerCase();
+  const blocks = Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : [];
+  for (const block of blocks) {
+    const text = String(block?.text || "").toLowerCase();
+    if (!text) continue;
+    const page = Number(block?.page);
+    if (!Number.isFinite(page)) continue;
+    if (text.includes(probe)) return page;
+  }
+  // Fall back to docling fields (key/value pairs with page numbers).
+  const fields = Array.isArray((doclingRaw as any)?.fields) ? (doclingRaw as any).fields : [];
+  for (const field of fields) {
+    const value = String(field?.value || field?.text || "").toLowerCase();
+    if (!value) continue;
+    const page = Number(field?.page);
+    if (!Number.isFinite(page)) continue;
+    if (value.includes(probe) || probe.includes(value)) return page;
+  }
+  return null;
+}
+
+/**
  * Build the review payload consumed by the frontend review screen.
  * Structured so the UI can render a field-by-field grid with source and
  * confidence badges, and so we can diff it after the reviewer edits.
@@ -159,7 +191,7 @@ function buildReviewPayload(opts: {
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
       const llmEvidence = fieldEvidence[fieldKey];
-      const mergedSourcePage =
+      let mergedSourcePage =
         llmEvidence?.source_page
         ?? workflowField?.source_page
         ?? null;
@@ -167,17 +199,40 @@ function buildReviewPayload(opts: {
         llmEvidence?.source_text
         ?? workflowField?.source_clause
         ?? null;
+      // Page back-fill: when we have a clause snippet but no page number,
+      // search docling's per-page text_blocks for the snippet and assign the
+      // matching page. Prevents Page from being blank when source text is
+      // clearly identifiable in the parsed document.
+      if (mergedSourcePage == null && typeof mergedSourceText === "string" && mergedSourceText.trim().length > 0) {
+        const matchedPage = findPageForSnippet(doclingRaw, mergedSourceText);
+        if (matchedPage != null) mergedSourcePage = matchedPage;
+      }
       const hasEvidence = mergedSourcePage != null || (typeof mergedSourceText === "string" && mergedSourceText.length > 0);
-      const inferredStatus = value == null || value === ""
+      const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
+      let inferredStatus = value == null || value === ""
         ? "missing"
         : hasEvidence
           ? (workflowField?.extraction_status ?? "extracted")
           : "missing_source_evidence";
+      // Low-confidence gate: never present a low-confidence value as a
+      // confirmed extraction. Downgrade to needs_review so the UI shows the
+      // value as a reviewer candidate, not a green Extracted badge.
+      if (
+        (inferredStatus === "extracted" || workflowField?.extraction_status === "extracted") &&
+        typeof effectiveConfidence === "number" &&
+        effectiveConfidence < 0.55
+      ) {
+        inferredStatus = "needs_review";
+      }
+      const finalStatus =
+        inferredStatus === "needs_review"
+          ? "needs_review"
+          : (workflowField?.extraction_status ?? inferredStatus);
       return buildReviewField({
         recordIndex: index,
         fieldKey,
         value,
-        confidence: normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence,
+        confidence: effectiveConfidence,
         source: fieldSources[fieldKey] ?? source,
         isStandard: true,
         required: !!def.required,
@@ -187,7 +242,7 @@ function buildReviewPayload(opts: {
           page_number: mergedSourcePage,
           source_clause: mergedSourceText,
         },
-        status: workflowField?.extraction_status ?? inferredStatus,
+        status: finalStatus,
         editable: workflowField?.editable ?? true,
       });
     });
