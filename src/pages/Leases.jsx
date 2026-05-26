@@ -102,6 +102,11 @@ function normalizeLeaseListView(value) {
   return ["approved", "drafts", "all"].includes(value) ? value : "approved";
 }
 
+function getLeaseBuildingId(lease, scope) {
+  const unit = lease?.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
+  return lease?.building_id || unit?.building_id || null;
+}
+
 export default function Leases() {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -227,8 +232,7 @@ export default function Leases() {
   );
 
   const selectorFilteredLeases = scopedLeases.filter((lease) => {
-    const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
-    const buildingId = unit?.building_id || null;
+    const buildingId = getLeaseBuildingId(lease, scope);
 
     if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && buildingId !== scopeBuilding) return false;
@@ -529,7 +533,8 @@ export default function Leases() {
               filtered.map((lease) => {
                 const daysLeft = lease.end_date ? differenceInDays(new Date(lease.end_date), new Date()) : null;
                 const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
-                const building = unit?.building_id ? scope.buildingById.get(unit.building_id) ?? null : null;
+                const buildingId = getLeaseBuildingId(lease, scope);
+                const building = buildingId ? scope.buildingById.get(buildingId) ?? null : null;
                 const property = lease.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
                 const tenantName = resolveLeaseField(lease, "tenant_name").value || lease.tenant_name || "—";
                 const landlordName = resolveLeaseField(lease, "landlord_name").value || lease.landlord_name || property?.landlord_name || "—";

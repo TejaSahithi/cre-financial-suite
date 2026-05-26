@@ -4,7 +4,7 @@
  * LeaseExpenseClassification; this page is the cross-lease audit and
  * approval surface backed by the existing rule-set tables.
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -65,7 +65,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
-import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { supabase } from "@/services/supabaseClient";
 import { logAudit } from "@/services/audit";
 import { createPageUrl } from "@/utils";
@@ -292,6 +291,11 @@ function pickPreferredRuleSet(ruleSets = [], rulesBySet = new Map()) {
   return leaseExpenseRuleService.pickPreferredRuleSetWithApprovedChildren(ruleSets, rulesBySet);
 }
 
+function getLeaseBuildingId(lease, scope) {
+  const unit = lease?.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
+  return lease?.building_id || unit?.building_id || null;
+}
+
 export default function LeaseExpenseRules() {
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -336,6 +340,12 @@ export default function LeaseExpenseRules() {
   const [scopeBuilding, setScopeBuilding] = useState(scope.buildingId || "all");
   const [scopeUnit, setScopeUnit] = useState(scope.unitId || "all");
 
+  useEffect(() => {
+    setScopeProperty(scope.propertyId || "all");
+    setScopeBuilding(scope.buildingId || "all");
+    setScopeUnit(scope.unitId || "all");
+  }, [scope.propertyId, scope.buildingId, scope.unitId]);
+
   const scopedLeases = useMemo(
     () =>
       leases.filter((lease) =>
@@ -345,8 +355,7 @@ export default function LeaseExpenseRules() {
   );
 
   const selectorFilteredLeases = scopedLeases.filter((lease) => {
-    const unit = lease.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
-    const buildingId = unit?.building_id || null;
+    const buildingId = getLeaseBuildingId(lease, scope);
     if (scopeProperty !== "all" && lease.property_id !== scopeProperty) return false;
     if (scopeBuilding !== "all" && buildingId !== scopeBuilding) return false;
     if (scopeUnit !== "all" && lease.unit_id !== scopeUnit) return false;
@@ -430,9 +439,6 @@ export default function LeaseExpenseRules() {
 
 
 
-  const [regenerateState, setRegenerateState] = useState({ running: false });
-  const hasRunAutoRegen = useRef(false);
-
   const isUuid = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
   const leaseById = useMemo(() => {
@@ -440,67 +446,6 @@ export default function LeaseExpenseRules() {
     for (const lease of leases) map.set(lease.id, lease);
     return map;
   }, [leases]);
-
-  const staleLeases = useMemo(() => {
-    const rulesByLease = new Map();
-    for (const entry of ruleSetsByLease) {
-      rulesByLease.set(entry.leaseId, entry.rules || []);
-    }
-    return selectorFilteredLeases.filter((lease) => {
-      const isApproved = ["approved", "executed", "budget_ready"].includes(
-        String(lease?.abstract_status || lease?.status).toLowerCase()
-      );
-      if (!isApproved) return false;
-      
-      const rules = rulesByLease.get(lease.id) || [];
-      // If there are no rules for an approved lease, it needs extraction
-      if (rules.length === 0) return true;
-      
-      return false;
-    });
-  }, [ruleSetsByLease, selectorFilteredLeases]);
-
-  const runForceRegenerateAll = async () => {
-    if (staleLeases.length === 0) return;
-    if (regenerateState.running) return;
-    setRegenerateState({ running: true });
-
-    try {
-      for (const lease of staleLeases) {
-        toast.loading(`Extracting rules for ${lease.tenant_name || lease.name}...`, { id: "regen-toast" });
-        await leaseRulePipelineService.generateLeaseExpenseRulesForLease({
-          leaseId: lease.id,
-          force: true,
-          source: "manual_extract"
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
-      queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
-      toast.success(`Successfully extracted rules.`, { id: "regen-toast" });
-    } catch (err) {
-      console.error("[LeaseExpenseRules] regenerate all FAILED", err);
-      toast.error(`Extraction failed: ${err.message}`, { id: "regen-toast" });
-    } finally {
-      setRegenerateState({ running: false });
-    }
-  };
-
-  useEffect(() => {
-    if (staleLeases.length > 0 && !regenerateState.running && !hasRunAutoRegen.current) {
-      hasRunAutoRegen.current = true;
-      runForceRegenerateAll();
-    }
-  }, [staleLeases]);
-
-
-  const targetLease = useMemo(() => {
-    if (search && search.length >= 8) {
-      return leases.find(l => l.id.toLowerCase() === search.toLowerCase() || l.id.toLowerCase().startsWith(search.toLowerCase()));
-    }
-    if (staleLeases.length === 1) return staleLeases[0];
-    return leases.find(l => l.id === "310ab875-f516-4a2b-94d9-686cf4b87d90") || null;
-  }, [search, leases, staleLeases]);
-
 
   const categoryById = useMemo(() => {
     const map = new Map();
