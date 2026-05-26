@@ -12,6 +12,14 @@ STRICT RULES:
 - If a category in the input list is not mentioned in the lease text, return it with row_status="not_mentioned", recoverable_from_tenant="needs_review", cam_eligible="needs_review", and exact_source_text=null.
 - Never set recoverable_from_tenant="yes" or cam_eligible="yes" unless the exact_source_text quotes the clause that supports it. If you cannot quote a specific clause, use "conditional" or "needs_review".
 - Generic NNN/Gross/Full-Service assumptions are not evidence. The clause must mention the specific category (or a broad operating-expense clause that explicitly enumerates it).
+- Do not attach evidence from the wrong clause. Base rent language is not CAM evidence. Property insurance language is not tenant-insurance evidence. Capital-expenditure interest language is not generic interest/late-fee evidence.
+- Separately metered or premises utilities are tenant_direct_contract and cam_eligible="no"; only common-area utilities listed in a CAM/operating-expense clause may be CAM eligible.
+- Percentage rent, late fees, generic interest, tenant insurance, alterations, and merchant association dues are not CAM expense rules unless a specific expense-recovery clause supports that category.
+- Exclusions such as mortgage interest, depreciation, leasing commissions, vacant-space marketing, TI allowances, reimbursed costs, fines, income/franchise taxes, sale/financing costs, owner overhead, political contributions, tenant-dispute legal fees, and costs for another tenant's premises must be recoverable_from_tenant="no" and cam_eligible="no".
+- Capital expenditures are conditional only when the lease allows legally required or cost-saving improvements amortized over useful life; structural/major replacements are generally excluded or needs_review.
+- Management fees are not CAM eligible unless the lease says law requires them or tenant gave written approval.
+- Administrative fees require the administrative-fee clause and must not be inferred from general CAM language.
+- Vacant-unit/gross-up language controls gross_up_allowed/gross_up_applicable; if vacant units remain in denominator and landlord absorbs vacant share, gross-up is not permitted.
 
 For each of the categories provided in the JSON input, determine the following:
 - row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" to prompt the user to manually enter it.

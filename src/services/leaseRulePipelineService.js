@@ -24,6 +24,551 @@ const asNumber = (val) => {
   return isNaN(num) ? null : num;
 };
 
+const normalizeKey = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/&/g, " and ")
+  .replace(/[^a-z0-9]+/g, "_")
+  .replace(/^_+|_+$/g, "");
+
+const CATEGORY_ALIASES = new Map([
+  ["cam", "common_area_maintenance"],
+  ["common_area_maintenance", "common_area_maintenance"],
+  ["operating_expenses", "operating_expenses"],
+  ["property_tax", "real_estate_taxes"],
+  ["property_taxes", "real_estate_taxes"],
+  ["real_estate_tax", "real_estate_taxes"],
+  ["real_estate_taxes", "real_estate_taxes"],
+  ["taxes", "real_estate_taxes"],
+  ["property_insurance", "property_insurance"],
+  ["insurance", "property_insurance"],
+  ["utilities", "utilities"],
+  ["electricity", "electricity"],
+  ["gas", "gas"],
+  ["water", "water"],
+  ["sewer", "sewer"],
+  ["repairs_and_maintenance", "repairs_maintenance"],
+  ["repair_and_maintenance", "repairs_maintenance"],
+  ["repairs_maintenance", "repairs_maintenance"],
+  ["maintenance", "repairs_maintenance"],
+  ["janitorial", "janitorial"],
+  ["trash", "trash_removal"],
+  ["trash_removal", "trash_removal"],
+  ["security", "security"],
+  ["landscaping", "landscaping"],
+  ["snow", "snow_removal"],
+  ["snow_removal", "snow_removal"],
+  ["parking", "parking"],
+  ["admin_fee", "administrative_fees"],
+  ["administrative_fee", "administrative_fees"],
+  ["administrative_fees", "administrative_fees"],
+  ["management_fee", "management_fees"],
+  ["management_fees", "management_fees"],
+  ["capital_expenditure", "capital_expenditures"],
+  ["capital_expenditures", "capital_expenditures"],
+  ["percentage_rent", "percentage_rent"],
+  ["late_fee", "late_fees"],
+  ["late_fees", "late_fees"],
+  ["interest", "interest"],
+  ["tenant_insurance", "tenant_insurance"],
+  ["alterations", "alterations"],
+  ["merchant_association_dues", "merchant_association_dues"],
+  ["tenant_caused_damage", "tenant_caused_damage"],
+  ["separately_metered_charges", "separately_metered_charges"],
+  ["excess_usage", "excess_usage"],
+  ["legal_enforcement_fees", "legal_enforcement_fees"],
+]);
+
+const CANONICAL_TO_LABEL = {
+  common_area_maintenance: "Common Area Maintenance",
+  operating_expenses: "Operating Expenses",
+  real_estate_taxes: "Real Estate Taxes",
+  property_insurance: "Property Insurance",
+  utilities: "Utilities",
+  electricity: "Electricity",
+  gas: "Gas",
+  water: "Water",
+  sewer: "Sewer",
+  repairs_maintenance: "Repairs & Maintenance",
+  janitorial: "Janitorial",
+  trash_removal: "Trash Removal",
+  security: "Security",
+  landscaping: "Landscaping",
+  snow_removal: "Snow Removal",
+  parking: "Parking",
+  administrative_fees: "Administrative Fees",
+  management_fees: "Management Fees",
+  capital_expenditures: "Capital Expenditures",
+  percentage_rent: "Percentage Rent",
+  late_fees: "Late Fees",
+  interest: "Interest",
+  tenant_insurance: "Tenant Insurance",
+  alterations: "Alterations",
+  merchant_association_dues: "Merchant Association Dues",
+  tenant_caused_damage: "Tenant Caused Damage",
+  separately_metered_charges: "Separately Metered Charges",
+  excess_usage: "Excess Usage",
+  legal_enforcement_fees: "Legal / Enforcement Fees",
+};
+
+const COMMON_CAM_KEYS = new Set([
+  "common_area_maintenance",
+  "operating_expenses",
+  "janitorial",
+  "trash_removal",
+  "security",
+  "landscaping",
+  "snow_removal",
+  "parking",
+]);
+
+const DIRECT_UTILITY_KEYS = new Set(["utilities", "electricity", "gas", "water", "sewer", "separately_metered_charges", "excess_usage"]);
+const NOT_CAM_KEYS = new Set(["percentage_rent", "late_fees", "interest", "tenant_insurance", "alterations", "merchant_association_dues"]);
+
+function canonicalRuleKey(rule) {
+  const raw = normalizeKey(firstPresent(
+    rule?.normalized_key,
+    rule?.expense_subcategory,
+    rule?.subcategory_name,
+    rule?.expense_category,
+    rule?.category_name,
+    rule?.category,
+    rule?.key,
+  ));
+  return CATEGORY_ALIASES.get(raw) || raw;
+}
+
+function sectionRegex(number) {
+  return new RegExp(`(?:^|[\\n\\r\\s])(?:section\\s*)?${number}(?:\\.\\d+)?\\s*[\\).:-]?\\s`, "i");
+}
+
+function getSectionText(sourceText, number) {
+  const text = String(sourceText || "");
+  if (!text) return "";
+  const startMatch = sectionRegex(number).exec(text);
+  if (!startMatch) return "";
+  const start = Math.max(0, startMatch.index);
+  const nextMatch = new RegExp(`(?:^|[\\n\\r\\s])(?:section\\s*)?${number + 1}(?:\\.\\d+)?\\s*[\\).:-]?\\s`, "i").exec(text.slice(start + 20));
+  const end = nextMatch ? start + 20 + nextMatch.index : Math.min(text.length, start + 3500);
+  return text.slice(start, end).trim();
+}
+
+function compactSnippet(text, maxLength = 1200) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned;
+}
+
+function sectionIncludes(section, patterns = []) {
+  const text = String(section || "");
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function downgradeUnsupportedRule(rule, reason) {
+  return {
+    ...rule,
+    recoverable_from_tenant: "needs_review",
+    cam_eligible: "needs_review",
+    payment_treatment: "not_applicable",
+    recovery_method: "manual_review",
+    allocation_basis: null,
+    is_recoverable: false,
+    is_excluded: false,
+    published_to_cam: false,
+    review_status: "needs_review",
+    approval_status: "draft",
+    row_status: "needs_review",
+    extraction_status: "weak_evidence",
+    confidence_score: Math.min(Number(rule?.confidence_score || rule?.confidence || 0.5), 0.55),
+    notes: reason,
+  };
+}
+
+function notFoundRule(rule, reason) {
+  return {
+    ...rule,
+    recoverable_from_tenant: "needs_review",
+    cam_eligible: "needs_review",
+    payment_treatment: "not_applicable",
+    recovery_method: "not_applicable",
+    allocation_basis: null,
+    is_recoverable: false,
+    is_excluded: false,
+    published_to_cam: false,
+    exact_source_text: null,
+    source_clause: null,
+    review_status: "needs_review",
+    approval_status: "draft",
+    row_status: "not_mentioned",
+    extraction_status: "not_found",
+    confidence_score: Math.min(Number(rule?.confidence_score || rule?.confidence || 0.5), 0.45),
+    mentioned_in_lease: false,
+    notes: reason,
+  };
+}
+
+function applyLeaseEvidenceRules(rule, sourceText) {
+  const canonicalKey = canonicalRuleKey(rule);
+  const normalizedRule = {
+    ...rule,
+    normalized_key: canonicalKey,
+    expense_category: CANONICAL_TO_LABEL[canonicalKey] || rule?.expense_category || rule?.category_name || canonicalKey,
+    category_name: CANONICAL_TO_LABEL[canonicalKey] || rule?.category_name || rule?.expense_category || canonicalKey,
+  };
+
+  const section3 = getSectionText(sourceText, 3);
+  const section4 = getSectionText(sourceText, 4);
+  const section5 = getSectionText(sourceText, 5);
+  const section8 = getSectionText(sourceText, 8);
+  const section9 = getSectionText(sourceText, 9);
+  const section10 = getSectionText(sourceText, 10);
+  const section11 = getSectionText(sourceText, 11);
+  const section12 = getSectionText(sourceText, 12);
+  const section13 = getSectionText(sourceText, 13);
+  const section14 = getSectionText(sourceText, 14);
+  const section17 = getSectionText(sourceText, 17);
+  const existingEvidence = String(firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source) || "");
+  const existingLower = existingEvidence.toLowerCase();
+
+  const camEvidence = section3 || existingEvidence;
+  const camSectionSupports =
+    section3 &&
+    sectionIncludes(section3, [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i]);
+
+  if (canonicalKey === "common_area_maintenance") {
+    if (!camSectionSupports) return downgradeUnsupportedRule(normalizedRule, "CAM Costs require the Section 3 CAM clause as evidence.");
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section3),
+      source_clause: compactSnippet(section3),
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      recovery_method: "pro_rata_share",
+      allocation_basis: "pro_rata_share",
+      included_in_base_rent: false,
+      is_recoverable: true,
+      is_excluded: false,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.9),
+      notes: "Mapped to Section 3 CAM clause.",
+    };
+  }
+
+  if (canonicalKey === "real_estate_taxes") {
+    const evidence = [section4, section10].filter(Boolean).join(" ");
+    if (!sectionIncludes(evidence, [/tax(?:es)?/i, /assessment/i])) return downgradeUnsupportedRule(normalizedRule, "Real Estate Taxes require Sections 4/10 tax evidence.");
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(evidence),
+      source_clause: compactSnippet(evidence),
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      recovery_method: "base_year",
+      allocation_basis: "pro_rata_share",
+      base_year: firstPresent(rule?.base_year, "2026"),
+      has_base_year: true,
+      included_in_base_rent: false,
+      is_recoverable: true,
+      is_excluded: false,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.9),
+      notes: "Mapped to Sections 4 and 10 tax recovery/base-year language.",
+    };
+  }
+
+  if (canonicalKey === "property_insurance") {
+    if (!sectionIncludes(section5, [/insurance/i])) return downgradeUnsupportedRule(normalizedRule, "Property Insurance requires Section 5 insurance evidence.");
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section5),
+      source_clause: compactSnippet(section5),
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      recovery_method: "pro_rata_share",
+      allocation_basis: "pro_rata_share",
+      reconciliation_required: true,
+      reconciliation_frequency: "annual",
+      included_in_base_rent: false,
+      is_recoverable: true,
+      is_excluded: false,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.9),
+      notes: "Mapped to Section 5 property insurance recovery language.",
+    };
+  }
+
+  if (DIRECT_UTILITY_KEYS.has(canonicalKey)) {
+    const utilityEvidence = existingEvidence || section3;
+    const isTenantDirect =
+      sectionIncludes(utilityEvidence, [/separately\s+metered/i, /separate\s+meter/i, /premises\s+utilities/i, /tenant\s+shall\s+(?:pay|contract|maintain)/i, /direct(?:ly)?\s+to\s+(?:the\s+)?utility/i]) ||
+      canonicalKey !== "utilities";
+    const commonAreaUtility = camSectionSupports && sectionIncludes(section3, [/common\s+area\s+utilit/i, /parking\s+lot\s+lighting/i, /exterior\s+lighting/i]);
+    if (isTenantDirect && !commonAreaUtility) {
+      return {
+        ...normalizedRule,
+        exact_source_text: compactSnippet(utilityEvidence),
+        source_clause: compactSnippet(utilityEvidence),
+        recoverable_from_tenant: "no",
+        cam_eligible: "no",
+        payment_treatment: "tenant_direct_contract",
+        recovery_method: "tenant_direct_contract",
+        allocation_basis: "direct",
+        is_recoverable: false,
+        is_excluded: true,
+        row_status: "mapped",
+        extraction_status: "extracted",
+        confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.85),
+        notes: "Separately metered or premises utilities are tenant-direct and not common CAM.",
+      };
+    }
+    if (commonAreaUtility) {
+      return {
+        ...normalizedRule,
+        exact_source_text: compactSnippet(section3),
+        source_clause: compactSnippet(section3),
+        recoverable_from_tenant: "yes",
+        cam_eligible: "yes",
+        payment_treatment: "reimbursable",
+        recovery_method: "pro_rata_share",
+        allocation_basis: "pro_rata_share",
+        is_recoverable: true,
+        is_excluded: false,
+        row_status: "mapped",
+        extraction_status: "extracted",
+        confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.85),
+        notes: "Common-area utilities are recoverable through Section 3 CAM.",
+      };
+    }
+    return downgradeUnsupportedRule(normalizedRule, "Utility evidence does not clearly distinguish tenant-direct utilities from common-area CAM utilities.");
+  }
+
+  if (COMMON_CAM_KEYS.has(canonicalKey)) {
+    const aliases = {
+      operating_expenses: [/operating\s+expenses?/i],
+      janitorial: [/janitorial/i, /cleaning/i],
+      trash_removal: [/trash/i, /refuse/i, /garbage/i],
+      security: [/security/i],
+      landscaping: [/landscap/i],
+      snow_removal: [/snow/i],
+      parking: [/parking/i],
+    }[canonicalKey] || [];
+    if (!camSectionSupports || (aliases.length > 0 && !sectionIncludes(section3, aliases))) {
+      return downgradeUnsupportedRule(normalizedRule, `${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey} requires support in the Section 3 CAM clause.`);
+    }
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section3),
+      source_clause: compactSnippet(section3),
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      recovery_method: "pro_rata_share",
+      allocation_basis: "pro_rata_share",
+      is_recoverable: true,
+      is_excluded: false,
+      is_controllable: canonicalKey === "snow_removal" ? false : rule?.is_controllable,
+      is_subject_to_cap: canonicalKey === "snow_removal" && sectionIncludes(section9, [/snow/i, /non[-\s]?controllable/i]) ? false : rule?.is_subject_to_cap,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.88),
+      notes: canonicalKey === "snow_removal"
+        ? "Snow removal is recoverable under Section 3 and excluded/non-controllable for the Section 9 cap."
+        : `Mapped to Section 3 CAM clause for ${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey}.`,
+    };
+  }
+
+  if (canonicalKey === "repairs_maintenance") {
+    if (sectionIncludes(section11 || existingEvidence, [/capital/i, /structural/i, /major\s+replacement/i, /useful\s+life/i])) {
+      return {
+        ...normalizedRule,
+        exact_source_text: compactSnippet(section11 || existingEvidence),
+        source_clause: compactSnippet(section11 || existingEvidence),
+        recoverable_from_tenant: "conditional",
+        cam_eligible: "conditional",
+        payment_treatment: "reimbursable",
+        recovery_method: "amortized_capital",
+        allocation_basis: "pro_rata_share",
+        is_recoverable: false,
+        is_excluded: false,
+        row_status: "needs_review",
+        extraction_status: "extracted",
+        confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.8),
+        notes: "Capital/structural repairs require legal-required or cost-saving amortization review under Section 11.",
+      };
+    }
+    if (camSectionSupports && sectionIncludes(section3, [/repair/i, /maintenance/i])) {
+      return {
+        ...normalizedRule,
+        exact_source_text: compactSnippet(section3),
+        source_clause: compactSnippet(section3),
+        recoverable_from_tenant: "yes",
+        cam_eligible: "yes",
+        payment_treatment: "reimbursable",
+        recovery_method: "pro_rata_share",
+        allocation_basis: "pro_rata_share",
+        is_recoverable: true,
+        is_excluded: false,
+        row_status: "mapped",
+        extraction_status: "extracted",
+        confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.88),
+        notes: "Routine/common-area maintenance is recoverable through Section 3 CAM.",
+      };
+    }
+    return downgradeUnsupportedRule(normalizedRule, "Repairs & Maintenance evidence does not clearly identify common-area routine maintenance.");
+  }
+
+  if (canonicalKey === "administrative_fees") {
+    if (!sectionIncludes(section8, [/admin/i, /10\s*%/i])) return downgradeUnsupportedRule(normalizedRule, "Administrative Fee requires Section 8 evidence.");
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section8),
+      source_clause: compactSnippet(section8),
+      recoverable_from_tenant: "yes",
+      cam_eligible: "yes",
+      payment_treatment: "reimbursable",
+      recovery_method: "pro_rata_share",
+      allocation_basis: "pro_rata_share",
+      admin_fee_applicable: true,
+      admin_fee_percent: 10,
+      is_recoverable: true,
+      is_excluded: false,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.9),
+      notes: "Section 8 supports a 10% administrative fee; base excludes taxes and insurance.",
+    };
+  }
+
+  if (canonicalKey === "management_fees") {
+    if (!sectionIncludes(section8 || existingEvidence, [/management\s+fee/i, /written\s+tenant\s+approval/i, /required\s+by\s+law/i])) {
+      return downgradeUnsupportedRule(normalizedRule, "Management Fee requires Section 8 support.");
+    }
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section8 || existingEvidence),
+      source_clause: compactSnippet(section8 || existingEvidence),
+      recoverable_from_tenant: "conditional",
+      cam_eligible: "conditional",
+      payment_treatment: "not_applicable",
+      recovery_method: "not_applicable",
+      allocation_basis: null,
+      is_recoverable: false,
+      is_excluded: false,
+      row_status: "needs_review",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.8),
+      notes: "Management fee is not included in CAM unless required by law or approved in writing by tenant.",
+    };
+  }
+
+  if (canonicalKey === "capital_expenditures") {
+    if (!sectionIncludes(section11 || existingEvidence, [/capital/i, /useful\s+life/i, /8\s*%/i, /cost[-\s]?saving/i, /legally\s+required/i])) {
+      return downgradeUnsupportedRule(normalizedRule, "Capital Expenditures require Section 11 evidence.");
+    }
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section11 || existingEvidence),
+      source_clause: compactSnippet(section11 || existingEvidence),
+      recoverable_from_tenant: "conditional",
+      cam_eligible: "conditional",
+      payment_treatment: "reimbursable",
+      recovery_method: "amortized_capital",
+      allocation_basis: "pro_rata_share",
+      is_recoverable: false,
+      is_excluded: false,
+      row_status: "needs_review",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.85),
+      notes: "Section 11 allows only legally required or cost-saving capital improvements amortized over useful life with 8% interest.",
+    };
+  }
+
+  if (section12 && sectionIncludes(section12, [/mortgage\s+interest/i, /depreciation/i, /leasing\s+commission/i, /marketing/i, /tenant\s+improvement/i, /\bti\s+allowance/i, /fines/i, /income\s+tax/i, /franchise\s+tax/i, /political/i, /tenant[-\s]?dispute/i, /another\s+tenant/i])) {
+    const exclusionKeys = new Set(["tenant_improvements", "legal_enforcement_fees"]);
+    if (exclusionKeys.has(canonicalKey) || existingLower.includes("excluded")) {
+      return {
+        ...normalizedRule,
+        exact_source_text: compactSnippet(section12),
+        source_clause: compactSnippet(section12),
+        recoverable_from_tenant: "no",
+        cam_eligible: "no",
+        payment_treatment: "not_applicable",
+        recovery_method: "not_applicable",
+        allocation_basis: null,
+        is_recoverable: false,
+        is_excluded: true,
+        row_status: "mapped",
+        extraction_status: "extracted",
+        confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.88),
+        notes: "Explicitly excluded by Section 12.",
+      };
+    }
+  }
+
+  if (canonicalKey === "tenant_caused_damage") {
+    const evidence = section13 || existingEvidence;
+    if (!sectionIncludes(evidence, [/tenant[-\s]?specific/i, /storefront\s+sign/i, /grease\s+trap/i, /interior\s+janitorial/i, /private\s+security/i, /direct\s+billed/i])) {
+      return downgradeUnsupportedRule(normalizedRule, "Tenant-specific charges require Section 13 evidence.");
+    }
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(evidence),
+      source_clause: compactSnippet(evidence),
+      recoverable_from_tenant: "no",
+      cam_eligible: "no",
+      payment_treatment: "tenant_direct_contract",
+      recovery_method: "tenant_direct_contract",
+      allocation_basis: "direct",
+      is_recoverable: false,
+      is_excluded: true,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.85),
+      notes: "Tenant-specific charges are direct billed and excluded from common CAM.",
+    };
+  }
+
+  if (canonicalKey === "percentage_rent") {
+    if (!sectionIncludes(section17 || existingEvidence, [/percentage\s+rent/i])) return notFoundRule(normalizedRule, "Percentage Rent is not supported by a specific lease expense clause.");
+    return {
+      ...normalizedRule,
+      exact_source_text: compactSnippet(section17 || existingEvidence),
+      source_clause: compactSnippet(section17 || existingEvidence),
+      recoverable_from_tenant: "no",
+      cam_eligible: "no",
+      payment_treatment: "not_applicable",
+      recovery_method: "not_applicable",
+      allocation_basis: null,
+      is_recoverable: false,
+      is_excluded: true,
+      row_status: "mapped",
+      extraction_status: "extracted",
+      confidence_score: Math.max(Number(rule?.confidence_score || 0), 0.85),
+      notes: "Section 17 percentage rent is rent, not CAM or operating expense recovery.",
+    };
+  }
+
+  if (NOT_CAM_KEYS.has(canonicalKey)) {
+    return notFoundRule(normalizedRule, `${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey} is not a CAM expense rule without a specific supporting lease expense clause.`);
+  }
+
+  if (section14 && sectionIncludes(section14, [/vacant/i, /denominator/i, /landlord\s+absorbs/i, /gross[-\s]?up/i])) {
+    return {
+      ...normalizedRule,
+      gross_up_applicable: false,
+      gross_up_allowed: false,
+      notes: firstPresent(rule?.notes, "Section 14: vacant units remain in denominator; landlord absorbs vacant share; gross-up not permitted."),
+    };
+  }
+
+  return normalizedRule;
+}
+
 // ... Wait, I should fetch the lease first
 export const leaseRulePipelineService = {
   async generateLeaseExpenseRulesForLease({ leaseId, force = false, source = "manual_extract" }) {
@@ -291,21 +836,24 @@ export const leaseRulePipelineService = {
     }
 
     // 7. Evidence Validation & Save
-    const finalRules = merged.map(r => {
+    const finalRules = merged.map(rule => {
+      let r = applyLeaseEvidenceRules({ ...rule }, sourceText);
       let conf = r.confidence_score || r.confidence || 0.8;
       let valid = VALID_EVIDENCE(r.exact_source_text);
       if (!valid) {
         // If evidence is invalid, force weak evidence and need review
-        r.exact_source_text = null;
+        if (r.extraction_status !== "not_found") r.exact_source_text = null;
         r.confidence_score = Math.min(conf, 0.50);
         r.review_status = "needs_review";
         r.approval_status = "draft";
-        r.extraction_status = "weak_evidence";
+        r.extraction_status = r.extraction_status === "not_found" ? "not_found" : "weak_evidence";
+        r.published_to_cam = false;
         diagnostics.weakEvidenceCount++;
       } else if (r.confidence_score <= 0.55) {
         r.review_status = "needs_review";
         r.approval_status = "draft";
         r.extraction_status = r.exact_source_text ? "weak_evidence" : "inferred";
+        r.published_to_cam = false;
         diagnostics.weakEvidenceCount++;
       }
 
@@ -322,8 +870,8 @@ export const leaseRulePipelineService = {
       // Set rule_key explicitly so saveRuleSet uses it instead of regenerating
       r.rule_key = `${lease.id}_${r.rule_type}_${r.normalized_key}_${r.source_field_key || 'workflow'}`;
       
-      r.extraction_version = "lease_rule_pipeline_v2";
-      r.generation_source = "lease_rule_pipeline_v2";
+      r.extraction_version = "lease_rule_pipeline_v3_evidence_aligned";
+      r.generation_source = r.generation_source === "template_checklist" ? "template_checklist" : "lease_rule_pipeline_v3_evidence_aligned";
 
       return r;
     }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
@@ -483,8 +1031,8 @@ export const leaseRulePipelineService = {
        const nnnItems = [
          "Common Area Maintenance", "Operating Expenses", "Real Estate Taxes", "Property Insurance",
          "Utilities", "Repairs & Maintenance", "Management Fees", "Administrative Fees", "Trash Removal",
-         "Janitorial", "Security", "Landscaping", "Snow Removal", "Tenant Caused Damage",
-         "Legal / Enforcement Fees", "Late Fees", "Interest", "Separately Metered Charges", "Tenant Insurance"
+         "Janitorial", "Security", "Landscaping", "Snow Removal", "Parking", "Capital Expenditures",
+         "Tenant Caused Damage", "Legal / Enforcement Fees", "Separately Metered Charges"
        ];
        nnnItems.forEach(item => {
           rules.push(this.makeTemplateRule(item, false, "yes", "yes"));
@@ -541,40 +1089,62 @@ export const leaseRulePipelineService = {
      // 1. Find global structured terms
      const structuredTermsRule = candidates.find(c => c.normalized_key === "structured_terms") || {};
      
-     // Dedupe by normalized_key
+     // Dedupe by canonical expense category. Template/checklist rows are kept
+     // only when no evidence-backed extraction exists for the same category.
      for (let c of candidates) {
         if (!c.normalized_key || c.normalized_key === "structured_terms") continue;
+
+        const key = canonicalRuleKey(c);
+        const shareStructuredTerms = [
+          "common_area_maintenance",
+          "operating_expenses",
+          "real_estate_taxes",
+          "property_insurance",
+          "utilities",
+          "janitorial",
+          "trash_removal",
+          "security",
+          "landscaping",
+          "snow_removal",
+          "parking",
+          "repairs_maintenance",
+          "capital_expenditures",
+          "administrative_fees",
+        ].includes(key);
         
-        // Spread global structured terms onto the rule
+        // Spread only scoped structured terms. Do not put admin fees, caps, or
+        // base-year terms on unrelated categories such as late fees/interest.
         c = { 
            ...c,
-           tenant_share_percent: firstPresent(c.tenant_share_percent, structuredTermsRule.tenant_share_percent),
+           normalized_key: key,
+           expense_category: CANONICAL_TO_LABEL[key] || c.expense_category,
+           category_name: CANONICAL_TO_LABEL[key] || c.category_name,
+           tenant_share_percent: shareStructuredTerms ? firstPresent(c.tenant_share_percent, structuredTermsRule.tenant_share_percent) : c.tenant_share_percent,
            estimated_annual_amount: firstPresent(c.estimated_annual_amount, structuredTermsRule.estimated_annual_amount),
            estimated_monthly_amount: firstPresent(c.estimated_monthly_amount, structuredTermsRule.estimated_monthly_amount),
-           admin_fee_percent: firstPresent(c.admin_fee_percent, structuredTermsRule.admin_fee_percent),
-           admin_fee_applicable: firstPresent(c.admin_fee_applicable, structuredTermsRule.admin_fee_applicable),
-           management_fee_percent: firstPresent(c.management_fee_percent, structuredTermsRule.management_fee_percent),
-           gross_up_percent: firstPresent(c.gross_up_percent, structuredTermsRule.gross_up_percent),
-           gross_up_applicable: firstPresent(c.gross_up_applicable, structuredTermsRule.gross_up_applicable),
-           cap_percent: firstPresent(c.cap_percent, structuredTermsRule.cap_percent),
-           cap_type: firstPresent(c.cap_type, structuredTermsRule.cap_type),
-           is_subject_to_cap: firstPresent(c.is_subject_to_cap, structuredTermsRule.is_subject_to_cap),
-           reconciliation_required: firstPresent(c.reconciliation_required, structuredTermsRule.reconciliation_required),
-           base_year: firstPresent(c.base_year, structuredTermsRule.base_year),
-           base_year_amount: firstPresent(c.base_year_amount, structuredTermsRule.base_year_amount),
-           tax_base_amount: firstPresent(c.tax_base_amount, structuredTermsRule.tax_base_amount),
-           insurance_base_amount: firstPresent(c.insurance_base_amount, structuredTermsRule.insurance_base_amount)
+           admin_fee_percent: key === "administrative_fees" ? firstPresent(c.admin_fee_percent, structuredTermsRule.admin_fee_percent) : c.admin_fee_percent,
+           admin_fee_applicable: key === "administrative_fees" ? firstPresent(c.admin_fee_applicable, structuredTermsRule.admin_fee_applicable) : c.admin_fee_applicable,
+           management_fee_percent: key === "management_fees" ? firstPresent(c.management_fee_percent, structuredTermsRule.management_fee_percent) : c.management_fee_percent,
+           gross_up_percent: shareStructuredTerms ? firstPresent(c.gross_up_percent, structuredTermsRule.gross_up_percent) : c.gross_up_percent,
+           gross_up_applicable: shareStructuredTerms ? firstPresent(c.gross_up_applicable, structuredTermsRule.gross_up_applicable) : c.gross_up_applicable,
+           cap_percent: shareStructuredTerms ? firstPresent(c.cap_percent, structuredTermsRule.cap_percent) : c.cap_percent,
+           cap_type: shareStructuredTerms ? firstPresent(c.cap_type, structuredTermsRule.cap_type) : c.cap_type,
+           is_subject_to_cap: shareStructuredTerms ? firstPresent(c.is_subject_to_cap, structuredTermsRule.is_subject_to_cap) : c.is_subject_to_cap,
+           reconciliation_required: shareStructuredTerms ? firstPresent(c.reconciliation_required, structuredTermsRule.reconciliation_required) : c.reconciliation_required,
+           base_year: ["real_estate_taxes", "operating_expenses"].includes(key) ? firstPresent(c.base_year, structuredTermsRule.base_year) : c.base_year,
+           base_year_amount: key === "operating_expenses" ? firstPresent(c.base_year_amount, structuredTermsRule.base_year_amount) : c.base_year_amount,
+           tax_base_amount: key === "real_estate_taxes" ? firstPresent(c.tax_base_amount, structuredTermsRule.tax_base_amount) : c.tax_base_amount,
+           insurance_base_amount: key === "property_insurance" ? firstPresent(c.insurance_base_amount, structuredTermsRule.insurance_base_amount) : c.insurance_base_amount
         };
 
-        const key = c.normalized_key;
         if (!mergedMap.has(key)) {
            mergedMap.set(key, c);
         } else {
            const existing = mergedMap.get(key);
-           // Merge logic: prefer workflow > llm > template > text_fallback
-           const scoreMap = { workflow_output: 4, structured: 3, llm_extraction: 2, deterministic_template: 1, text_fallback: 0 };
-           const existingScore = scoreMap[existing.source_type] || 0;
-           const newScore = scoreMap[c.source_type] || 0;
+           const scoreMap = { workflow_output: 5, llm_extraction: 4, text_fallback: 3, structured: 2, deterministic_template: 1 };
+           const evidenceBonus = (row) => VALID_EVIDENCE(row?.exact_source_text) ? 2 : 0;
+           const existingScore = (scoreMap[existing.source_type] || 0) + evidenceBonus(existing);
+           const newScore = (scoreMap[c.source_type] || 0) + evidenceBonus(c);
            
            if (newScore > existingScore) {
               mergedMap.set(key, { ...existing, ...c, confidence_score: Math.max(existing.confidence_score||0, c.confidence_score||0) });

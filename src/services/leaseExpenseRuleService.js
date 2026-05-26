@@ -3,6 +3,9 @@ import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
 
+const EVIDENCE_ALIGNED_EXTRACTION_VERSION = "lease_rule_pipeline_v3_evidence_aligned";
+const LEGACY_EXTRACTION_VERSION = "v1.2026.05.19";
+
 function asNumber(val) {
   if (val === null || val === undefined || val === "") return null;
   if (typeof val === 'number') return val;
@@ -81,10 +84,34 @@ function isApprovedWorkflowStatus(value) {
   return normalizeText(value) === "approved";
 }
 
+function isEvidenceAlignedVersion(value) {
+  return normalizeText(value) === EVIDENCE_ALIGNED_EXTRACTION_VERSION;
+}
+
+function isRuleSuperseded(rule) {
+  return [rule?.row_status, rule?.status, rule?.extraction_status]
+    .some((value) => normalizeText(value) === "superseded");
+}
+
 function isRuleApproved(rule) {
   const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
   const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
   return reviewStatus === "approved" && approvalStatus === "approved";
+}
+
+function isManualOverrideRule(rule) {
+  return [
+    rule?.created_from,
+    rule?.generation_source,
+    rule?.source_type,
+  ].some((value) => ["manual", "manual_override", "user_override"].includes(normalizeText(value))) ||
+    normalizeText(rule?.row_status) === "manually_added";
+}
+
+function isProtectedHumanRule(rule) {
+  return isRuleApproved(rule) ||
+    Boolean(rule?.published_to_cam) ||
+    isManualOverrideRule(rule);
 }
 
 function isRuleRejected(rule) {
@@ -104,8 +131,9 @@ function isRuleNotApplicable(rule) {
 }
 
 function isRuleActiveForRuleSetStatus(rule) {
+  if (isRuleSuperseded(rule)) return false;
   const rowStatus = normalizeText(rule?.row_status || rule?.status);
-  return !["archived", "deleted", "void", "voided"].includes(rowStatus);
+  return !["archived", "deleted", "void", "voided", "superseded"].includes(rowStatus);
 }
 
 function isRuleResolvedForRuleSetStatus(rule) {
@@ -183,17 +211,40 @@ function pickPreferredRuleSetWithApprovedChildren(ruleSets = [], rulesBySet = ne
     return Date.parse(b?.updated_at || b?.created_at || "") - Date.parse(a?.updated_at || a?.created_at || "");
   });
 
-  const withApprovedChildren = sorted.find((ruleSet) =>
-    (rulesBySet.get(ruleSet?.id) || []).some(isRuleApproved)
-  );
-  if (withApprovedChildren) return withApprovedChildren;
+  const latestV3WithEvidence = sorted.find((ruleSet) => {
+    if (!isEvidenceAlignedVersion(ruleSet?.extraction_version)) return false;
+    return (rulesBySet.get(ruleSet?.id) || []).some((rule) =>
+      !isRuleSuperseded(rule) &&
+      isEvidenceAlignedVersion(rule?.extraction_version) &&
+      normalizeText(rule?.generation_source) !== "template_checklist" &&
+      Boolean(String(firstPresent(rule?.exact_source_text, rule?.source) || "").trim())
+    );
+  });
+  if (latestV3WithEvidence) return latestV3WithEvidence;
 
-  const approvedRuleSet = ruleSets.find((ruleSet) =>
+  const v3ApprovedOrPublished = sorted.find((ruleSet) =>
+    isEvidenceAlignedVersion(ruleSet?.extraction_version) &&
+    (
+      isApprovedWorkflowStatus(ruleSet?.status) ||
+      (rulesBySet.get(ruleSet?.id) || []).some((rule) =>
+        !isRuleSuperseded(rule) && (isRuleApproved(rule) || Boolean(rule?.published_to_cam))
+      )
+    )
+  );
+  if (v3ApprovedOrPublished) return v3ApprovedOrPublished;
+
+  const latestNonSuperseded = sorted.find((ruleSet) =>
+    (rulesBySet.get(ruleSet?.id) || []).some((rule) => !isRuleSuperseded(rule))
+  );
+  if (latestNonSuperseded) return latestNonSuperseded;
+
+  const olderApprovedRuleSet = sorted.find((ruleSet) =>
     isApprovedWorkflowStatus(ruleSet?.status) ||
     isApprovedWorkflowStatus(ruleSet?.approval_status) ||
-    isApprovedWorkflowStatus(ruleSet?.review_status)
+    isApprovedWorkflowStatus(ruleSet?.review_status) ||
+    (rulesBySet.get(ruleSet?.id) || []).some(isRuleApproved)
   );
-  return approvedRuleSet || sorted[0] || null;
+  return olderApprovedRuleSet || sorted[0] || null;
 }
 
 function selectPreferredRuleSet(ruleSets = [], rulesBySet = new Map()) {
@@ -244,6 +295,7 @@ function normalizeTriStateDecision(value, fallback = null) {
   const normalized = normalizeText(value);
   if (["yes", "true", "recoverable", "approved"].includes(normalized)) return "yes";
   if (["no", "false", "non_recoverable", "excluded"].includes(normalized)) return "no";
+  if (["needs_review", "manual_review", "unknown", "unclear"].includes(normalized)) return "needs_review";
   if (["conditional", "shared", "maybe", "review"].includes(normalized)) return "conditional";
   return fallback;
 }
@@ -650,6 +702,19 @@ function isRuleRecoveryMethodSpecific(rule) {
 }
 
 function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
+  if (isRuleSuperseded(rule)) {
+    return {
+      exactSourceText: deriveRuleExactSourceText(rule),
+      confidence: normalizeConfidenceScore(firstPresent(rule?.confidence_score, rule?.confidence)),
+      strongEvidence: false,
+      extractionStatus: "superseded",
+      reviewStatus: "needs_review",
+      approvalStatus: "draft",
+      rowStatus: "superseded",
+      publishedToCam: false,
+    };
+  }
+
   const exactSourceText = deriveRuleExactSourceText(rule);
   const confidence = normalizeConfidenceScore(firstPresent(rule?.confidence_score, rule?.confidence));
   const strongEvidence = hasStrongRuleEvidence({ ...rule, exact_source_text: exactSourceText });
@@ -911,6 +976,133 @@ function finalizeLeaseExpenseRules(rules = [], ruleSetStatus = "draft") {
 function normalizeRuleStatus(rule) {
   const raw = String(rule?.row_status || "").trim().toLowerCase();
   return raw || "needs_review";
+}
+
+function canonicalRulePersistenceKey(rule) {
+  const category = normalizeCategoryKey(firstPresent(
+    rule?.normalized_key,
+    rule?.fallback_category_key,
+    rule?.expense_category,
+    rule?.category_name,
+    rule?.category,
+  ));
+  const subcategory = normalizeCategoryKey(firstPresent(rule?.expense_subcategory, rule?.subcategory_name));
+  const paymentTreatment = normalizeCategoryKey(firstPresent(rule?.payment_treatment, deriveRulePaymentTreatment(rule)));
+  const recoveryMethod = normalizeCategoryKey(firstPresent(rule?.recovery_method, deriveRuleRecoveryMethod(rule)));
+  return [category, subcategory, paymentTreatment, recoveryMethod].join("::");
+}
+
+function scorePersistedRuleForMerge(rule) {
+  return [
+    isProtectedHumanRule(rule) ? 1000 : 0,
+    isRuleApproved(rule) ? 500 : 0,
+    Boolean(rule?.published_to_cam) ? 300 : 0,
+    isEvidenceAlignedVersion(rule?.extraction_version) ? 200 : 0,
+    normalizeText(rule?.generation_source) === "template_checklist" ? -100 : 0,
+    deriveRuleExactSourceText(rule) ? 80 : 0,
+    Number.isFinite(Number(rule?.confidence_score || rule?.confidence))
+      ? Math.round(Number(rule?.confidence_score || rule?.confidence) * 100)
+      : 0,
+  ].reduce((sum, score) => sum + score, 0);
+}
+
+function getMissingColumnName(error) {
+  const errorMessage = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`;
+  return (
+    errorMessage.match(/Could not find the '([^']+)' column/i)?.[1] ||
+    errorMessage.match(/column "?([a-zA-Z0-9_]+)"? of relation/i)?.[1] ||
+    errorMessage.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i)?.[1] ||
+    null
+  );
+}
+
+function isMissingColumnError(error) {
+  return error?.code === "PGRST204" || error?.code === "42703" || Boolean(getMissingColumnName(error));
+}
+
+async function updateWithMissingColumnFallback(makeQuery, patch, { maxAttempts = 12 } = {}) {
+  let nextPatch = { ...patch };
+  const droppedColumns = [];
+  let attemptsRemaining = maxAttempts;
+
+  while (Object.keys(nextPatch).length > 0 && attemptsRemaining > 0) {
+    const { data, error } = await makeQuery(nextPatch);
+    if (!error) {
+      return { data, droppedColumns, appliedPatch: nextPatch };
+    }
+
+    const missingColumn = getMissingColumnName(error);
+    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in nextPatch)) {
+      throw error;
+    }
+    droppedColumns.push(missingColumn);
+    const { [missingColumn]: _stripped, ...rest } = nextPatch;
+    nextPatch = rest;
+    attemptsRemaining -= 1;
+  }
+
+  return { data: null, droppedColumns, appliedPatch: nextPatch };
+}
+
+async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionVersion }) {
+  if (!leaseId || !ruleSetId) return { superseded: 0, deleted: 0, droppedColumns: [] };
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from("lease_expense_rules")
+    .select("*")
+    .eq("lease_id", leaseId)
+    .eq("rule_set_id", ruleSetId);
+  if (existingError) throw existingError;
+
+  const targetIds = (existingRows || [])
+    .filter((rule) => !isProtectedHumanRule(rule))
+    .map((rule) => rule.id)
+    .filter(Boolean);
+  if (targetIds.length === 0) return { superseded: 0, deleted: 0, droppedColumns: [] };
+
+  const now = new Date().toISOString();
+  const patch = {
+    row_status: "superseded",
+    status: "superseded",
+    extraction_status: "superseded",
+    review_status: "needs_review",
+    approval_status: "draft",
+    published_to_cam: false,
+    superseded_at: now,
+    superseded_by_version: extractionVersion || EVIDENCE_ALIGNED_EXTRACTION_VERSION,
+    updated_at: now,
+  };
+
+  const result = await updateWithMissingColumnFallback(
+    (nextPatch) => supabase
+      .from("lease_expense_rules")
+      .update(nextPatch)
+      .in("id", targetIds)
+      .eq("lease_id", leaseId)
+      .eq("rule_set_id", ruleSetId)
+      .select("id"),
+    patch,
+  );
+
+  const markerColumns = ["row_status", "status", "extraction_status"];
+  const appliedMarker = markerColumns.some((column) => Object.prototype.hasOwnProperty.call(result.appliedPatch || {}, column));
+  if (appliedMarker) {
+    if (result.droppedColumns.length > 0) {
+      console.warn("[leaseExpenseRuleService] supersedeUnresolvedRules stripped unsupported columns:", result.droppedColumns);
+    }
+    return { superseded: result.data?.length || targetIds.length, deleted: 0, droppedColumns: result.droppedColumns };
+  }
+
+  const deleteQuery = supabase
+    .from("lease_expense_rules")
+    .delete()
+    .in("id", targetIds)
+    .eq("lease_id", leaseId)
+    .eq("rule_set_id", ruleSetId);
+  const scopedDelete = orgId ? deleteQuery.eq("org_id", orgId) : deleteQuery;
+  const { data: deletedRows, error: deleteError } = await scopedDelete.select("id");
+  if (deleteError) throw deleteError;
+  return { superseded: 0, deleted: deletedRows?.length || targetIds.length, droppedColumns: result.droppedColumns };
 }
 
 function normalizeRecoveryStatus(rule) {
@@ -2414,11 +2606,19 @@ export const leaseExpenseRuleService = {
   async saveRuleSet({ lease, rules = [], status = "draft", existingRuleSetId = null, categories = [], createdFrom = "workflow", approver = null }) {
     if (!supabase || !lease?.id) throw new Error("Lease is required to save expense rules");
 
+    const tag = `[saveRuleSet lease=${lease?.id}]`;
     const orgId = await resolveWorkflowOrgId(lease);
     if (!orgId) {
       throw new Error("Unable to resolve organization for lease expense rules");
     }
 
+    const incomingExtractionVersion = firstPresent(
+      ...((rules || []).map((rule) => rule?.extraction_version)),
+      normalizeText(createdFrom).includes("v3") ? EVIDENCE_ALIGNED_EXTRACTION_VERSION : null,
+      normalizeText(createdFrom).includes("lease_rule_pipeline") ? EVIDENCE_ALIGNED_EXTRACTION_VERSION : null,
+      LEGACY_EXTRACTION_VERSION,
+    );
+    const isEvidenceAlignedSave = isEvidenceAlignedVersion(incomingExtractionVersion);
     const normalizedRules = finalizeLeaseExpenseRules(rules, status);
     const { categories: persistedCategories, rules: resolvedRules } = await ensurePersistentCategories({
       orgId,
@@ -2431,12 +2631,20 @@ export const leaseExpenseRuleService = {
     let currentVersion = 1;
 
     if (ruleSetId) {
+      const { data: targetRuleSet } = await supabase
+        .from("lease_expense_rule_sets")
+        .select("version")
+        .eq("id", ruleSetId)
+        .eq("org_id", orgId)
+        .maybeSingle();
+      currentVersion = Number(targetRuleSet?.version) || currentVersion;
       const { error: updateRuleSetError } = await supabase
         .from("lease_expense_rule_sets")
         .update({
           status,
           property_id: lease.property_id || null,
           approved_at: status === "approved" ? now : null,
+          extraction_version: incomingExtractionVersion,
         })
         .eq("id", ruleSetId)
         .eq("org_id", orgId);
@@ -2445,24 +2653,68 @@ export const leaseExpenseRuleService = {
     } else {
       const { data: existingSets } = await supabase
         .from("lease_expense_rule_sets")
-        .select("id, version")
+        .select("*")
         .eq("lease_id", lease.id)
+        .not("status", "eq", "archived")
         .order("version", { ascending: false })
-        .limit(1);
+        .limit(5);
 
       if (existingSets && existingSets.length > 0) {
-        ruleSetId = existingSets[0].id;
-        currentVersion = existingSets[0].version;
-        // Optionally update the existing rule set status
-        await supabase
-          .from("lease_expense_rule_sets")
-          .update({
-            status,
-            property_id: lease.property_id || null,
-            approved_at: status === "approved" ? now : null,
-          })
-          .eq("id", ruleSetId)
-          .eq("org_id", orgId);
+        const latestSet = existingSets[0];
+        const latestVersion = Number(latestSet.version) || 1;
+        currentVersion = latestVersion;
+        let latestRows = [];
+        try {
+          const { data: rows, error: rowsError } = await supabase
+            .from("lease_expense_rules")
+            .select("*")
+            .eq("rule_set_id", latestSet.id)
+            .eq("lease_id", lease.id);
+          if (rowsError) throw rowsError;
+          latestRows = rows || [];
+        } catch (error) {
+          console.warn(`${tag} latest rule_set child lookup skipped:`, error?.message || error);
+        }
+
+        const latestHasProtectedRows = latestRows.some(isProtectedHumanRule);
+        const latestVersionMatches = normalizeText(latestSet.extraction_version) === normalizeText(incomingExtractionVersion);
+        const latestIsFrozen = isApprovedWorkflowStatus(latestSet.status) || latestHasProtectedRows;
+        const shouldCreateNewVersion = isEvidenceAlignedSave && !latestVersionMatches && latestIsFrozen;
+
+        if (shouldCreateNewVersion) {
+          currentVersion = latestVersion + 1;
+          const { data: createdRuleSet, error: createRuleSetError } = await supabase
+            .from("lease_expense_rule_sets")
+            .insert({
+              org_id: orgId,
+              lease_id: lease.id,
+              property_id: lease.property_id || null,
+              version: currentVersion,
+              status,
+              approved_at: status === "approved" ? now : null,
+              extraction_version: incomingExtractionVersion,
+            })
+            .select("*")
+            .single();
+          if (createRuleSetError) throw createRuleSetError;
+          ruleSetId = createdRuleSet.id;
+          console.log(`${tag} created v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
+        } else {
+          ruleSetId = latestSet.id;
+          currentVersion = latestVersion;
+          const { error: updateExistingSetError } = await supabase
+            .from("lease_expense_rule_sets")
+            .update({
+              status,
+              property_id: lease.property_id || null,
+              approved_at: status === "approved" ? now : null,
+              extraction_version: incomingExtractionVersion,
+            })
+            .eq("id", ruleSetId)
+            .eq("org_id", orgId);
+          if (updateExistingSetError) throw updateExistingSetError;
+          console.log(`${tag} reusing rule_set ${ruleSetId} (v${currentVersion}) for ${incomingExtractionVersion}`);
+        }
       } else {
         currentVersion = 1;
         const { data: createdRuleSet, error: createRuleSetError } = await supabase
@@ -2474,7 +2726,7 @@ export const leaseExpenseRuleService = {
             version: currentVersion,
             status,
             approved_at: status === "approved" ? now : null,
-            extraction_version: "v1.2026.05.19",
+            extraction_version: incomingExtractionVersion,
           })
           .select("*")
           .single();
@@ -2525,8 +2777,7 @@ export const leaseExpenseRuleService = {
       const sourceKey = norm(ruleObj.source_field_key);
       return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}`;
     };
-    const EXTRACTION_VERSION = "v1.2026.05.19";
-    const rulePayloads = savableRules.map((rule) => {
+    let rulePayloads = savableRules.map((rule) => {
       // Only include `id` when the rule actually has a UUID — sending
       // `id: undefined` in a PostgREST upsert payload triggers a 400 on
       // some clients because PostgREST expects either a complete `id` per
@@ -2542,7 +2793,7 @@ export const leaseExpenseRuleService = {
         tenant_share_percent: asNumber(rule.tenant_share_percent),
         estimated_annual_amount: asNumber(rule.estimated_annual_amount),
         estimated_monthly_amount: asNumber(rule.estimated_monthly_amount),
-        extraction_version: rule.extraction_version || EXTRACTION_VERSION,
+        extraction_version: rule.extraction_version || incomingExtractionVersion,
         source_hash: exactSourceText ? String(exactSourceText).toLowerCase().slice(0, 80) : null,
         generation_source: rule.generation_source || createdFrom || "workflow",
         expense_category_id: isUuid(rule?.expense_category_id) ? rule.expense_category_id : null,
@@ -2622,23 +2873,81 @@ export const leaseExpenseRuleService = {
     // rule_key UPSERTs the row back to 'needs_review' and silently undoes
     // the user's approval.
     let preservedByKey = new Map();
+    let protectedByCanonicalKey = new Map();
     if (rulePayloads.length > 0 && ruleSetId) {
       try {
         const ruleKeys = rulePayloads.map((p) => p.rule_key).filter(Boolean);
         if (ruleKeys.length > 0) {
           const { data: existing } = await supabase
             .from("lease_expense_rules")
-            .select("rule_key, review_status, approval_status, approved_by, approved_at, published_to_cam, notes, created_from, generation_source")
+            .select("*")
             .eq("lease_id", lease.id)
             .in("rule_key", ruleKeys);
           for (const row of existing || []) {
             preservedByKey.set(row.rule_key, row);
           }
         }
+        const { data: existingForLease, error: existingForLeaseError } = await supabase
+          .from("lease_expense_rules")
+          .select("*")
+          .eq("lease_id", lease.id);
+        if (existingForLeaseError) throw existingForLeaseError;
+        for (const row of existingForLease || []) {
+          if (isRuleSuperseded(row) || !isProtectedHumanRule(row)) continue;
+          const canonicalKey = canonicalRulePersistenceKey(row);
+          const current = protectedByCanonicalKey.get(canonicalKey);
+          if (!current || scorePersistedRuleForMerge(row) > scorePersistedRuleForMerge(current)) {
+            protectedByCanonicalKey.set(canonicalKey, row);
+          }
+        }
       } catch (err) {
         console.warn(`${tag} existing-rule pre-fetch skipped:`, err?.message || err);
       }
     }
+
+    if (protectedByCanonicalKey.size > 0) {
+      let canonicalMergedCount = 0;
+      for (const payload of rulePayloads) {
+        const protectedRow = protectedByCanonicalKey.get(canonicalRulePersistenceKey(payload));
+        if (!protectedRow) continue;
+        canonicalMergedCount += 1;
+        payload.id = protectedRow.id || payload.id;
+        payload.rule_key = protectedRow.rule_key || payload.rule_key;
+        payload.review_status = normalizeText(protectedRow.review_status) === "reviewed" ? "approved" : (protectedRow.review_status || payload.review_status);
+        payload.approval_status = protectedRow.approval_status || payload.approval_status;
+        payload.approved_by = protectedRow.approved_by ?? payload.approved_by;
+        payload.approved_at = protectedRow.approved_at ?? payload.approved_at;
+        payload.published_to_cam = protectedRow.published_to_cam ?? payload.published_to_cam;
+        if (protectedRow.notes && !payload.notes) payload.notes = protectedRow.notes;
+      }
+      if (canonicalMergedCount > 0) {
+        console.log(`[leaseExpenseRuleService] saveRuleSet merged ${canonicalMergedCount} v3 candidate(s) into existing protected human rule(s)`);
+      }
+    }
+
+    if (rulePayloads.length > 1) {
+      const payloadsByCanonicalKey = new Map();
+      for (const payload of rulePayloads) {
+        const key = canonicalRulePersistenceKey(payload);
+        const existing = payloadsByCanonicalKey.get(key);
+        if (!existing || scorePersistedRuleForMerge(payload) >= scorePersistedRuleForMerge(existing)) {
+          payloadsByCanonicalKey.set(key, payload);
+        }
+      }
+      rulePayloads = [...payloadsByCanonicalKey.values()];
+    }
+
+    if (rulePayloads.length > 1) {
+      const payloadsByRuleKey = new Map();
+      for (const payload of rulePayloads) {
+        const existing = payloadsByRuleKey.get(payload.rule_key);
+        if (!existing || scorePersistedRuleForMerge(payload) >= scorePersistedRuleForMerge(existing)) {
+          payloadsByRuleKey.set(payload.rule_key, payload);
+        }
+      }
+      rulePayloads = [...payloadsByRuleKey.values()];
+    }
+
     if (preservedByKey.size > 0) {
       let preservedApprovedCount = 0;
       for (const payload of rulePayloads) {
@@ -2663,6 +2972,25 @@ export const leaseExpenseRuleService = {
       }
       if (preservedApprovedCount > 0) {
         console.log(`[leaseExpenseRuleService] saveRuleSet preserved approval on ${preservedApprovedCount} existing rule(s)`);
+      }
+    }
+
+    if (isEvidenceAlignedSave && ruleSetId) {
+      try {
+        const supersedeResult = await supersedeUnresolvedRules({
+          leaseId: lease.id,
+          ruleSetId,
+          orgId,
+          extractionVersion: incomingExtractionVersion,
+        });
+        if (supersedeResult.superseded || supersedeResult.deleted) {
+          console.log(
+            `[leaseExpenseRuleService] saveRuleSet ${supersedeResult.superseded ? "superseded" : "deleted"} ` +
+            `${supersedeResult.superseded || supersedeResult.deleted} stale unresolved rule(s) before v3 upsert`,
+          );
+        }
+      } catch (error) {
+        console.warn("[leaseExpenseRuleService] stale rule supersede warning:", error?.message || error);
       }
     }
 

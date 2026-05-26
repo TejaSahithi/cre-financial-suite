@@ -164,6 +164,48 @@ function getRecoverableDecision(rule) {
   return leaseExpenseRuleService.getRecoverableDecision(rule);
 }
 
+function normalizeRuleToken(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeDisplayKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isSupersededRule(rule) {
+  return [rule?.row_status, rule?.status, rule?.extraction_status]
+    .some((value) => normalizeRuleToken(value) === "superseded");
+}
+
+function displayDedupeKey(row) {
+  const rule = row?.rule || {};
+  return [
+    row?.lease?.id || rule.lease_id || "",
+    normalizeDisplayKey(rule.normalized_key || rule.expense_category || rule.category_name),
+    normalizeDisplayKey(rule.expense_subcategory || rule.subcategory_name),
+    normalizeDisplayKey(rule.payment_treatment),
+    normalizeDisplayKey(rule.recovery_method),
+  ].join("::");
+}
+
+function scoreDisplayRow(row) {
+  const rule = row?.rule || {};
+  return [
+    isApprovedRule(rule) ? 1000 : 0,
+    rule.published_to_cam ? 500 : 0,
+    normalizeRuleToken(rule.extraction_version) === "lease_rule_pipeline_v3_evidence_aligned" ? 250 : 0,
+    normalizeRuleToken(rule.generation_source) === "template_checklist" ? -100 : 0,
+    String(rule.exact_source_text || rule.source || "").trim() ? 80 : 0,
+    Number.isFinite(Number(rule.confidence_score || rule.confidence))
+      ? Math.round(Number(rule.confidence_score || rule.confidence) * 100)
+      : 0,
+  ].reduce((sum, score) => sum + score, 0);
+}
+
 function getOperationalResponsibility(rule) {
   return leaseExpenseRuleService.getOperationalResponsibility(rule);
 }
@@ -464,6 +506,7 @@ export default function LeaseExpenseRules() {
       const lease = leaseById.get(entry.leaseId);
       const property = lease?.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
       for (const rule of entry.rules || []) {
+        if (isSupersededRule(rule)) continue;
         rows.push({
           rule,
           ruleSet: entry.ruleSet,
@@ -473,7 +516,15 @@ export default function LeaseExpenseRules() {
         });
       }
     }
-    return rows;
+    const dedupedRows = new Map();
+    for (const row of rows) {
+      const key = displayDedupeKey(row);
+      const existing = dedupedRows.get(key);
+      if (!existing || scoreDisplayRow(row) >= scoreDisplayRow(existing)) {
+        dedupedRows.set(key, row);
+      }
+    }
+    return [...dedupedRows.values()];
   }, [ruleSetsByLease, leaseById, categoryById, scope]);
 
   // Dev-only diagnostic: print scope / filter / hide counts so we can see why
