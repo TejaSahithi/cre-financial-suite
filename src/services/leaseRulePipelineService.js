@@ -124,6 +124,36 @@ const COMMON_CAM_KEYS = new Set([
 
 const DIRECT_UTILITY_KEYS = new Set(["utilities", "electricity", "gas", "water", "sewer", "separately_metered_charges", "excess_usage"]);
 const NOT_CAM_KEYS = new Set(["percentage_rent", "late_fees", "interest", "tenant_insurance", "alterations", "merchant_association_dues"]);
+const LLM_EXPENSE_CATEGORIES = Object.entries(CANONICAL_TO_LABEL).map(([normalized_key, category_name]) => ({
+  normalized_key,
+  category_name,
+}));
+
+const CATEGORY_EVIDENCE_PATTERNS = {
+  common_area_maintenance: [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i],
+  operating_expenses: [/operating\s+expenses?/i, /common\s+area\s+maintenance/i, /\bcam\b/i],
+  real_estate_taxes: [/real\s+estate\s+tax/i, /property\s+tax/i, /\btaxes\b/i, /assessment/i],
+  property_insurance: [/property\s+insurance/i, /\binsurance\b/i],
+  utilities: [/utilit/i, /electric/i, /water/i, /gas/i, /sewer/i],
+  electricity: [/electric/i],
+  gas: [/\bgas\b/i],
+  water: [/\bwater\b/i],
+  sewer: [/\bsewer\b/i],
+  repairs_maintenance: [/repair/i, /maintenance/i],
+  janitorial: [/janitorial/i, /cleaning/i],
+  trash_removal: [/trash/i, /refuse/i, /garbage/i],
+  security: [/security/i],
+  landscaping: [/landscap/i],
+  snow_removal: [/snow/i],
+  parking: [/parking/i],
+  administrative_fees: [/admin/i, /administrative\s+fee/i],
+  management_fees: [/management\s+fee/i],
+  capital_expenditures: [/capital/i, /improvement/i, /replacement/i],
+  tenant_caused_damage: [/tenant[-\s]?specific/i, /damage/i, /repair/i],
+  separately_metered_charges: [/separately\s+metered/i, /separate\s+meter/i, /direct(?:ly)?\s+to\s+(?:the\s+)?utility/i],
+  excess_usage: [/excess\s+usage/i, /excess\s+utilit/i],
+  legal_enforcement_fees: [/legal/i, /attorney/i, /enforcement/i],
+};
 
 function canonicalRuleKey(rule) {
   const raw = normalizeKey(firstPresent(
@@ -161,6 +191,31 @@ function compactSnippet(text, maxLength = 1200) {
 function sectionIncludes(section, patterns = []) {
   const text = String(section || "");
   return patterns.some((pattern) => pattern.test(text));
+}
+
+function evidenceSupportsCategory(canonicalKey, evidence) {
+  const text = String(evidence || "");
+  if (!VALID_EVIDENCE(text)) return false;
+  const patterns = CATEGORY_EVIDENCE_PATTERNS[canonicalKey] || [];
+  return patterns.length === 0 ? text.trim().length > 0 : sectionIncludes(text, patterns);
+}
+
+function preserveEvidenceBackedRule(rule, evidence, note) {
+  const snippet = compactSnippet(evidence);
+  const confidence = Number(rule?.confidence_score || rule?.confidence || 0.72);
+  return {
+    ...rule,
+    exact_source_text: snippet,
+    source_clause: snippet,
+    row_status: normalizeKey(rule?.row_status) === "not_mentioned" ? "needs_review" : (rule?.row_status || "mapped"),
+    extraction_status: "extracted",
+    review_status: "needs_review",
+    approval_status: "draft",
+    published_to_cam: false,
+    mentioned_in_lease: true,
+    confidence_score: Math.max(confidence, 0.72),
+    notes: firstPresent(rule?.notes, note),
+  };
 }
 
 function downgradeUnsupportedRule(rule, reason) {
@@ -228,6 +283,7 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   const section17 = getSectionText(sourceText, 17);
   const existingEvidence = String(firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source) || "");
   const existingLower = existingEvidence.toLowerCase();
+  const existingEvidenceSupportsCategory = evidenceSupportsCategory(canonicalKey, existingEvidence);
 
   const camEvidence = section3 || existingEvidence;
   const camSectionSupports =
@@ -235,7 +291,12 @@ function applyLeaseEvidenceRules(rule, sourceText) {
     sectionIncludes(section3, [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i]);
 
   if (canonicalKey === "common_area_maintenance") {
-    if (!camSectionSupports) return downgradeUnsupportedRule(normalizedRule, "CAM Costs require the Section 3 CAM clause as evidence.");
+    if (!camSectionSupports) {
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for CAM/common area maintenance.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "CAM Costs require lease clause evidence supporting CAM/common area maintenance.");
+    }
     return {
       ...normalizedRule,
       exact_source_text: compactSnippet(section3),
@@ -257,7 +318,12 @@ function applyLeaseEvidenceRules(rule, sourceText) {
 
   if (canonicalKey === "real_estate_taxes") {
     const evidence = [section4, section10].filter(Boolean).join(" ");
-    if (!sectionIncludes(evidence, [/tax(?:es)?/i, /assessment/i])) return downgradeUnsupportedRule(normalizedRule, "Real Estate Taxes require Sections 4/10 tax evidence.");
+    if (!sectionIncludes(evidence, [/tax(?:es)?/i, /assessment/i])) {
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for real estate taxes.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Real Estate Taxes require lease clause evidence supporting tax recovery.");
+    }
     return {
       ...normalizedRule,
       exact_source_text: compactSnippet(evidence),
@@ -280,7 +346,12 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   }
 
   if (canonicalKey === "property_insurance") {
-    if (!sectionIncludes(section5, [/insurance/i])) return downgradeUnsupportedRule(normalizedRule, "Property Insurance requires Section 5 insurance evidence.");
+    if (!sectionIncludes(section5, [/insurance/i])) {
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for property insurance.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Property Insurance requires lease clause evidence supporting insurance recovery.");
+    }
     return {
       ...normalizedRule,
       exact_source_text: compactSnippet(section5),
@@ -358,7 +429,10 @@ function applyLeaseEvidenceRules(rule, sourceText) {
       parking: [/parking/i],
     }[canonicalKey] || [];
     if (!camSectionSupports || (aliases.length > 0 && !sectionIncludes(section3, aliases))) {
-      return downgradeUnsupportedRule(normalizedRule, `${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey} requires support in the Section 3 CAM clause.`);
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, `Mapped from lease clause evidence for ${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey}.`);
+      }
+      return downgradeUnsupportedRule(normalizedRule, `${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey} requires supporting lease clause evidence.`);
     }
     return {
       ...normalizedRule,
@@ -419,11 +493,19 @@ function applyLeaseEvidenceRules(rule, sourceText) {
         notes: "Routine/common-area maintenance is recoverable through Section 3 CAM.",
       };
     }
+    if (existingEvidenceSupportsCategory) {
+      return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for repairs and maintenance.");
+    }
     return downgradeUnsupportedRule(normalizedRule, "Repairs & Maintenance evidence does not clearly identify common-area routine maintenance.");
   }
 
   if (canonicalKey === "administrative_fees") {
-    if (!sectionIncludes(section8, [/admin/i, /10\s*%/i])) return downgradeUnsupportedRule(normalizedRule, "Administrative Fee requires Section 8 evidence.");
+    if (!sectionIncludes(section8, [/admin/i, /10\s*%/i])) {
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for administrative fees.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Administrative Fee requires lease clause evidence.");
+    }
     return {
       ...normalizedRule,
       exact_source_text: compactSnippet(section8),
@@ -446,7 +528,10 @@ function applyLeaseEvidenceRules(rule, sourceText) {
 
   if (canonicalKey === "management_fees") {
     if (!sectionIncludes(section8 || existingEvidence, [/management\s+fee/i, /written\s+tenant\s+approval/i, /required\s+by\s+law/i])) {
-      return downgradeUnsupportedRule(normalizedRule, "Management Fee requires Section 8 support.");
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for management fees.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Management Fee requires lease clause evidence.");
     }
     return {
       ...normalizedRule,
@@ -468,7 +553,10 @@ function applyLeaseEvidenceRules(rule, sourceText) {
 
   if (canonicalKey === "capital_expenditures") {
     if (!sectionIncludes(section11 || existingEvidence, [/capital/i, /useful\s+life/i, /8\s*%/i, /cost[-\s]?saving/i, /legally\s+required/i])) {
-      return downgradeUnsupportedRule(normalizedRule, "Capital Expenditures require Section 11 evidence.");
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for capital expenditures.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Capital Expenditures require lease clause evidence.");
     }
     return {
       ...normalizedRule,
@@ -513,7 +601,10 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   if (canonicalKey === "tenant_caused_damage") {
     const evidence = section13 || existingEvidence;
     if (!sectionIncludes(evidence, [/tenant[-\s]?specific/i, /storefront\s+sign/i, /grease\s+trap/i, /interior\s+janitorial/i, /private\s+security/i, /direct\s+billed/i])) {
-      return downgradeUnsupportedRule(normalizedRule, "Tenant-specific charges require Section 13 evidence.");
+      if (existingEvidenceSupportsCategory) {
+        return preserveEvidenceBackedRule(normalizedRule, existingEvidence, "Mapped from lease clause evidence for tenant-specific damage or charges.");
+      }
+      return downgradeUnsupportedRule(normalizedRule, "Tenant-specific charges require lease clause evidence.");
     }
     return {
       ...normalizedRule,
@@ -803,9 +894,19 @@ export const leaseRulePipelineService = {
 
     // 5.e LLM Extraction
     let llmRules = [];
-    if (sourceText && force) {
+    const shouldRunLlmExtraction = Boolean(sourceText) && (
+      force ||
+      ["manual_extract", "extract_draft", "approve_abstract"].includes(String(source || "").toLowerCase()) ||
+      workflowRules.length === 0
+    );
+    if (shouldRunLlmExtraction) {
        try {
-         const { data: llmData, error: llmErr } = await supabase.functions.invoke("extract-lease-expense-rules", { body: { text: sourceText } });
+         const { data: llmData, error: llmErr } = await supabase.functions.invoke("extract-lease-expense-rules", {
+           body: {
+             source_text: sourceText,
+             categories: LLM_EXPENSE_CATEGORIES,
+           },
+         });
          if (llmErr) {
             console.error("[LLM EXTRACTION FAILED]", llmErr);
          } else if (llmData?.rules) {
@@ -828,6 +929,7 @@ export const leaseRulePipelineService = {
       deterministicRulesCount: diagnostics.deterministicRulesCount,
       textFallbackRulesCount: diagnostics.textFallbackRulesCount,
       llmRulesCount: diagnostics.llmRulesCount,
+      shouldRunLlmExtraction,
       mergedRulesCount: diagnostics.mergedRulesCount
     });
 
