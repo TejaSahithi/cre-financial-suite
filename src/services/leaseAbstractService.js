@@ -412,7 +412,15 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
 
     const rulesToUpsert = [];
 
-    const fieldReviews = extractionData?.field_reviews || {};
+    // `extractionData` was never declared in this scope — the function only
+    // receives `lease` and `approvedSnapshot`. Pull from the lease record's
+    // JSONB directly (with a snapshot fallback in case the lease ref is
+    // stale). This was throwing ReferenceError and silently breaking the
+    // Confirm Approval flow.
+    const fieldReviews =
+      lease?.extraction_data?.field_reviews
+      || approvedSnapshot?.field_reviews
+      || {};
 
     const addRule = (aliases, ruleType, overrides = {}) => {
       const aliasList = Array.isArray(aliases) ? aliases : [aliases];
