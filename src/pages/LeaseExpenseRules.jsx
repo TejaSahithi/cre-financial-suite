@@ -419,6 +419,11 @@ export default function LeaseExpenseRules() {
   const ruleSetsByLease = useMemo(() => {
     const merged = [];
     const scopeIdSet = new Set(leaseIds);
+    const hasExplicitSelectorScope = scopeProperty !== "all" || scopeBuilding !== "all" || scopeUnit !== "all";
+
+    if (hasExplicitSelectorScope && scopeIdSet.size === 0) {
+      return [];
+    }
     
     // Direct DB rows are the source of truth for actionable rules
     for (const entry of directRuleSets) {
@@ -433,7 +438,7 @@ export default function LeaseExpenseRules() {
       after_scope_filter: finalMerged.length,
     });
     return finalMerged;
-  }, [directRuleSets, leaseIds]);
+  }, [directRuleSets, leaseIds, scopeProperty, scopeBuilding, scopeUnit]);
 
   const isLoading = isLoadingDirect;
 

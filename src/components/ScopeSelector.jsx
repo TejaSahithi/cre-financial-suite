@@ -15,10 +15,7 @@ export default function ScopeSelector({ properties, buildings, units, selectedPr
     ? units.filter(u => u.property_id === selectedProperty)
     : units;
 
-  const visibleUnits =
-    selectedBuilding && selectedBuilding !== "all" && filteredUnits.length === 0
-      ? units
-      : filteredUnits;
+  const visibleUnits = filteredUnits;
 
   const getUnitLabel = (unit) =>
     unit.unit_number ||
