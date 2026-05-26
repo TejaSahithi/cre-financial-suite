@@ -176,6 +176,19 @@ function normalizeDisplayKey(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+const WEAK_SOURCE_PATTERNS = [
+  /included in base rent under/i,
+  /recoverable under/i,
+  /explicit recurring charge extracted/i,
+  /lease mentions this category/i,
+  /direct reimbursement obligation/i,
+  /mixed included and recoverable treatment/i,
+  /tenant pays directly under the lease/i,
+  /fixed cam amount extracted/i,
+  /percentage rent rules were extracted/i,
+  /billable exception charge under/i,
+];
+
 function isSupersededRule(rule) {
   return [rule?.row_status, rule?.status, rule?.extraction_status]
     .some((value) => normalizeRuleToken(value) === "superseded");
@@ -187,8 +200,6 @@ function displayDedupeKey(row) {
     row?.lease?.id || rule.lease_id || "",
     normalizeDisplayKey(rule.normalized_key || rule.expense_category || rule.category_name),
     normalizeDisplayKey(rule.expense_subcategory || rule.subcategory_name),
-    normalizeDisplayKey(rule.payment_treatment),
-    normalizeDisplayKey(rule.recovery_method),
   ].join("::");
 }
 
@@ -204,6 +215,120 @@ function scoreDisplayRow(row) {
       ? Math.round(Number(rule.confidence_score || rule.confidence) * 100)
       : 0,
   ].reduce((sum, score) => sum + score, 0);
+}
+
+function hasManualOverrideNote(rule) {
+  return String(rule?.notes || rule?.reasoning_summary || "").trim().length > 0;
+}
+
+function isManualOverrideRule(rule) {
+  return [
+    rule?.created_from,
+    rule?.generation_source,
+    rule?.source_type,
+  ].some((value) => ["manual", "manual_override", "user_override"].includes(normalizeRuleToken(value))) ||
+    normalizeRuleToken(rule?.row_status) === "manually_added";
+}
+
+function isHumanApprovedOrManualRule(rule) {
+  return isApprovedRule(rule) || isManualOverrideRule(rule);
+}
+
+function getRuleSourceText(rule) {
+  const firstClause = Array.isArray(rule?.clauses) ? rule.clauses[0] : null;
+  return [
+    firstClause?.clause_text,
+    firstClause?.source_text,
+    firstClause?.evidence_text,
+    firstClause?.text,
+    rule?.exact_source_text,
+    rule?.source_clause_text,
+    rule?.source_clause,
+    rule?.clause_text,
+    rule?.evidence_text,
+    rule?.source_text,
+    rule?.source,
+  ].find((value) => String(value || "").trim()) || "";
+}
+
+function isWeakRuleSourceText(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized || normalized.length < 18) return true;
+  return WEAK_SOURCE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function hasSourcePageEvidence(rule) {
+  const page = Number(rule?.source_page ?? rule?.page_number ?? rule?.evidence_page_number);
+  if (Number.isFinite(page) && page > 0) return true;
+  const firstClause = Array.isArray(rule?.clauses) ? rule.clauses[0] : null;
+  const clausePage = Number(firstClause?.page_number);
+  return Number.isFinite(clausePage) && clausePage > 0;
+}
+
+function hasStrongLeaseEvidence(rule) {
+  const sourceText = getRuleSourceText(rule);
+  return !isWeakRuleSourceText(sourceText) || hasSourcePageEvidence(rule);
+}
+
+function isFallbackOrChecklistRule(rule) {
+  const tokens = [
+    rule?.generation_source,
+    rule?.source_type,
+    rule?.created_from,
+    rule?.extraction_status,
+    rule?.row_status,
+    rule?.status,
+  ].map(normalizeRuleToken);
+  return tokens.some((token) => [
+    "template_checklist",
+    "weak_evidence",
+    "not_found",
+    "not_mentioned",
+    "amount_only_gap",
+    "text_fallback_keyword",
+    "text_fallback",
+    "unsupported",
+    "unsupported_fallback",
+    "missing_source_evidence",
+    "inferred",
+  ].includes(token));
+}
+
+function isLeaseDerivedRule(rule) {
+  if (isSupersededRule(rule)) return false;
+  if (isHumanApprovedOrManualRule(rule)) return true;
+  if (isFallbackOrChecklistRule(rule)) return false;
+  const generationSource = normalizeRuleToken(rule?.generation_source);
+  const sourceType = normalizeRuleToken(rule?.source_type);
+  const evidenceAligned = [
+    generationSource,
+    sourceType,
+    normalizeRuleToken(rule?.extraction_version),
+  ].some((token) =>
+    token.includes("llm") ||
+    token.includes("lease_text") ||
+    token.includes("evidence_aligned") ||
+    token.includes("lease_rule_pipeline_v3")
+  );
+  return hasStrongLeaseEvidence(rule) && (evidenceAligned || Boolean(getRuleSourceText(rule)) || hasSourcePageEvidence(rule));
+}
+
+function isCoverageGapRule(rule) {
+  if (isSupersededRule(rule)) return false;
+  if (isLeaseDerivedRule(rule)) return false;
+  return true;
+}
+
+function getDisplayCamPublishStatus(rule, validation, displayMode) {
+  const status = getCamPublishStatus(rule, validation);
+  if (
+    displayMode === "gaps" &&
+    status.tone === "emerald" &&
+    !(isHumanApprovedOrManualRule(rule) && hasManualOverrideNote(rule))
+  ) {
+    return { label: "Not Published to CAM: Needs Review", tone: "amber" };
+  }
+  return status;
 }
 
 function getOperationalResponsibility(rule) {
@@ -342,6 +467,7 @@ export default function LeaseExpenseRules() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
+  const [displayMode, setDisplayMode] = useState("lease");
   const [search, setSearch] = useState(() => new URLSearchParams(location.search).get("lease") || "");
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -500,7 +626,7 @@ export default function LeaseExpenseRules() {
     return map;
   }, [categories]);
 
-  const flattenedRows = useMemo(() => {
+  const allDisplayRows = useMemo(() => {
     const rows = [];
     for (const entry of ruleSetsByLease) {
       const lease = leaseById.get(entry.leaseId);
@@ -516,6 +642,10 @@ export default function LeaseExpenseRules() {
         });
       }
     }
+    return rows;
+  }, [ruleSetsByLease, leaseById, categoryById, scope]);
+
+  const dedupeDisplayRows = (rows) => {
     const dedupedRows = new Map();
     for (const row of rows) {
       const key = displayDedupeKey(row);
@@ -525,7 +655,19 @@ export default function LeaseExpenseRules() {
       }
     }
     return [...dedupedRows.values()];
-  }, [ruleSetsByLease, leaseById, categoryById, scope]);
+  };
+
+  const leaseDerivedRows = useMemo(
+    () => dedupeDisplayRows(allDisplayRows.filter(({ rule }) => isLeaseDerivedRule(rule))),
+    [allDisplayRows],
+  );
+
+  const coverageGapRows = useMemo(
+    () => dedupeDisplayRows(allDisplayRows.filter(({ rule }) => isCoverageGapRule(rule))),
+    [allDisplayRows],
+  );
+
+  const flattenedRows = displayMode === "gaps" ? coverageGapRows : leaseDerivedRows;
 
   // Dev-only diagnostic: print scope / filter / hide counts so we can see why
   // a rule that exists in the DB might not be appearing in the table. Logged
@@ -950,6 +1092,12 @@ export default function LeaseExpenseRules() {
             <TabsTrigger value="approved" className="text-xs">Approved ({counts.approved})</TabsTrigger>
           </TabsList>
         </Tabs>
+        <Tabs value={displayMode} onValueChange={setDisplayMode}>
+          <TabsList className="bg-white border">
+            <TabsTrigger value="lease" className="text-xs">Lease-Derived ({leaseDerivedRows.length})</TabsTrigger>
+            <TabsTrigger value="gaps" className="text-xs">Coverage Gaps / Needs Review ({coverageGapRows.length})</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       <Card>
@@ -996,7 +1144,9 @@ export default function LeaseExpenseRules() {
               ) : filteredRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={26} className="py-12 text-center text-sm text-slate-400">
-                    No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
+                    {displayMode === "gaps"
+                      ? "No coverage gaps in this view."
+                      : "No lease-derived expense rules in this view. Coverage gaps and weak fallback rows are available in the Coverage Gaps / Needs Review view."}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -1017,7 +1167,7 @@ export default function LeaseExpenseRules() {
                       ].filter(Boolean).join(" ") || "-"
                     : "-";
                   const sourcePage = getSourcePage(rule);
-                  const sourceText = getExactSourceText(rule) || "-";
+                  const sourceText = getRuleSourceText(rule) || getExactSourceText(rule) || "-";
                   return (
                     <TableRow key={rule.id} className="align-top hover:bg-slate-50">
                       <TableCell className="text-sm font-medium text-slate-900">
@@ -1034,6 +1184,11 @@ export default function LeaseExpenseRules() {
                         <p className="text-[10px] text-slate-400">
                           Rule set v{ruleSet?.version} - {ruleSet?.status}
                         </p>
+                        {displayMode === "gaps" && (
+                          <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
+                            Not found in lease / Needs Review
+                          </Badge>
+                        )}
                         {rule._is_fallback && (
                           <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
                             Not persisted
@@ -1116,7 +1271,7 @@ export default function LeaseExpenseRules() {
                       </TableCell>
                       <TableCell className="max-w-[220px]">
                         {(() => {
-                          const camPublishStatus = getCamPublishStatus(rule, validation);
+                          const camPublishStatus = getDisplayCamPublishStatus(rule, validation, displayMode);
                           const toneClass =
                             camPublishStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
                             : camPublishStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
