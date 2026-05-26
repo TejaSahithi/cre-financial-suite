@@ -15,41 +15,62 @@ const FIELD_ALIASES = {
 
   // Premises
   property_name: ["property_name", "building_name", "premises.property_name", "building"],
-  property_address: ["property_address", "address", "premises_address"],
-  suite_number: ["suite_number", "suite", "unit", "premises", "premises_suite"],
+  property_address: ["property_address", "address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"],
+  suite_number: ["suite_number", "suite", "unit", "premises", "premises_suite", "unit_number", "space_number"],
   floor: ["floor", "floor_number"],
-  square_footage: ["square_footage", "rentable_square_feet", "tenant_rsf", "tenant_rentable_area", "rsf", "premises_rsf", "rentable_area"],
+  square_footage: ["square_footage", "rentable_square_feet", "tenant_rsf", "tenant_rentable_area", "rsf", "premises_rsf", "rentable_area", "rentable_area_sqft", "leased_premises_area", "square_feet"],
   building_rsf: ["building_rsf", "building_rentable_area"],
   tenant_pro_rata_share: ["tenant_pro_rata_share", "pro_rata_share", "tenant_share_percent", "tenant_share"],
   premises_use: ["premises_use", "permitted_use", "use"],
+  permitted_use: ["permitted_use", "premises_use", "use_clause", "use", "use_of_premises"],
 
   // Dates
-  commencement_date: ["commencement_date", "lease_commencement_date", "start_date", "term_start", "commencement", "lease_start_date"],
+  commencement_date: ["commencement_date", "lease_commencement_date", "start_date", "term_start", "commencement", "lease_start_date", "term_commencement_date", "beginning_of_term"],
   rent_commencement_date: ["rent_commencement_date", "rent_start_date", "rent_commencement"],
-  expiration_date: ["expiration_date", "expiry_date", "term_end", "lease_expiration_date", "end_date"],
+  expiration_date: ["expiration_date", "expiry_date", "term_end", "lease_expiration_date", "end_date", "termination_date", "end_of_term"],
   lease_date: ["lease_date", "execution_date", "date_of_lease"],
 
   // Rent
   lease_type: ["lease_type", "expense_structure", "lease_structure", "rent_structure"],
-  monthly_rent: ["monthly_rent", "base_rent_monthly", "monthly_base_rent", "current_monthly_rent"],
-  annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent"],
+  monthly_rent: ["monthly_rent", "base_rent_monthly", "monthly_base_rent", "current_monthly_rent", "base_rent"],
+  annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
+  security_deposit: ["security_deposit", "security_deposit_amount", "deposit"],
+  free_rent_months: ["free_rent_months", "free_rent", "rent_abatement_months", "abated_rent_months"],
+  escalation_rate: ["escalation_rate", "escalation_percent", "rent_escalation_percent", "annual_increase_percent"],
+  escalation_type: ["escalation_type", "rent_escalation_type"],
+  renewal_options: ["renewal_options", "renewal_option", "extension_options", "renewal_terms"],
+  renewal_notice_days: ["renewal_notice_days", "renewal_notice_period_days", "renewal_notice"],
+  holdover_multiplier: ["holdover_multiplier", "holdover_rent", "holdover_rate", "holdover_rent_multiplier"],
 
-  // CAM / Expenses
+  // CAM / Expenses / Base year / Caps / Exclusions
   admin_fee_percent: ["admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent", "adminFeePercent", "administrative fee", "admin fee", "administrative expenses not exceeding"],
+  management_fee_percent: ["management_fee_percent", "mgmt_fee_percent", "property_management_fee_percent", "management_fee_pct"],
   gross_up_percent: ["gross_up_percent", "gross_up_threshold_percent", "gross_up_threshold", "grossUpPercent", "gross-up", "gross up"],
+  gross_up_clause: ["gross_up_clause", "gross_up", "gross_up_applicable"],
   cap_percent: ["cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent", "controllable cap", "controllable expense cap"],
+  cam_cap_type: ["cam_cap_type", "cap_type", "expense_cap_type"],
+  base_year: ["base_year", "expense_base_year", "tax_base_year", "operating_expense_base_year"],
+  base_year_amount: ["base_year_amount", "base_year_stop", "operating_expense_base_amount"],
+  expense_stop_amount: ["expense_stop_amount", "expense_stop"],
+  cam_amount: ["cam_amount", "common_area_maintenance_amount", "cam_charge"],
+  nnn_amount: ["nnn_amount", "triple_net_amount"],
+  tax_reimbursement_amount: ["tax_reimbursement_amount", "real_estate_tax_reimbursement", "property_tax_reimbursement"],
+  insurance_reimbursement_amount: ["insurance_reimbursement_amount", "property_insurance_reimbursement"],
+  utility_reimbursement_amount: ["utility_reimbursement_amount", "utilities_reimbursement"],
+  excluded_expenses: ["excluded_expenses", "exclusions", "excluded_operating_expenses", "cam_exclusions"],
+  vacancy_handling: ["vacancy_handling", "vacancy_treatment", "vacancy_gross_up"],
   estimated_annual_amount: ["estimated_annual_cam", "cam_estimate_annual", "estimated_annual_amount", "annual_cam_estimate", "estimated annual cam", "annual_additional_rent", "total tenant excess share", "estimated annual amount"],
   estimated_monthly_amount: ["estimated_monthly_cam", "cam_estimate_monthly", "estimated_monthly_amount", "monthly_cam_estimate", "estimated monthly cam", "monthly_additional_rent", "estimated monthly additional rent"],
   reconciliation_required: ["reconciliation_required", "cam_reconciliation_required", "reconciliation"],
-  
+  reconciliation_frequency: ["reconciliation_frequency", "cam_reconciliation_frequency"],
+
   // Insurance
   commercial_general_liability: ["commercial_general_liability", "cgl", "general_liability"],
   property_insurance: ["property_insurance"],
 
   // Legal / Notices
   late_fee_percent: ["late_fee_percent", "late_fee", "late_charge_percent"],
-  default_interest_percent: ["default_interest_percent", "default_interest", "default_rate"],
-  holdover_multiplier: ["holdover_multiplier", "holdover_rent", "holdover_rate"]
+  default_interest_percent: ["default_interest_percent", "default_interest", "default_rate"]
 };
 
 export function getFieldAliases(fieldKey) {
@@ -125,14 +146,54 @@ function buildResolverOutput(rawResult, sourcePath) {
   };
 
   if (typeof rawResult === "object" && rawResult !== null) {
-    // Rich object format
+    // Rich object format. Lease evidence is persisted under different key
+    // names depending on which writer ran:
+    //   - workflow_output.lease_fields[k]:        source_page,  source_clause
+    //   - ui_review_payload …standard_fields[k]:  evidence.page_number,
+    //                                             evidence.source_clause
+    //   - review-approve buildPerFieldEvidence:   all aliases pre-mapped
+    //   - normalize-pdf-output evidence:          page_number,  source_clause
+    // The resolver must accept every key family so Page / Exact Source Text
+    // light up regardless of which writer populated the row.
     output.value = rawResult.value !== undefined ? rawResult.value : null;
-    output.rawValue = rawResult.raw_value || rawResult.rawValue || rawResult.exact_source_text || rawResult.source_text || String(rawResult.value || "");
+    output.rawValue =
+      rawResult.raw_value ||
+      rawResult.rawValue ||
+      rawResult.exact_source_text ||
+      rawResult.source_text ||
+      rawResult.source_clause ||
+      rawResult.snippet ||
+      String(rawResult.value || "");
     output.normalizedValue = rawResult.normalized_value || rawResult.normalizedValue || null;
-    output.sourcePage = rawResult.source_page || rawResult.sourcePage || null;
-    output.exactSourceText = rawResult.exact_source_text || rawResult.exactSourceText || null;
-    output.confidence = rawResult.confidence_score || rawResult.confidence || null;
-    output.reviewStatus = rawResult.review_status || rawResult.reviewStatus || null;
+    output.sourcePage =
+      rawResult.source_page ??
+      rawResult.sourcePage ??
+      rawResult.page_number ??
+      rawResult.page ??
+      rawResult.evidence?.source_page ??
+      rawResult.evidence?.page_number ??
+      rawResult.evidence?.page ??
+      null;
+    output.exactSourceText =
+      rawResult.exact_source_text ||
+      rawResult.exactSourceText ||
+      rawResult.source_clause ||
+      rawResult.source_text ||
+      rawResult.snippet ||
+      rawResult.evidence?.source_clause ||
+      rawResult.evidence?.source_text ||
+      rawResult.evidence?.exact_source_text ||
+      null;
+    output.confidence =
+      rawResult.confidence_score ??
+      rawResult.confidence ??
+      rawResult.evidence?.confidence ??
+      null;
+    output.reviewStatus =
+      rawResult.review_status ||
+      rawResult.reviewStatus ||
+      rawResult.extraction_status ||
+      null;
   } else {
     // Primitive format
     output.value = rawResult;
