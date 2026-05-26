@@ -173,7 +173,7 @@ const FIELD_SPECS = [
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
   { key: "property_name", group: "premises", aliases: ["property_name"] },
-  { key: "property_address", group: "lease_header", aliases: ["property_address"] },
+  { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
   { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "tenant_rsf", "square_footage"], patterns: [/(?:premises|leased|tenant)[^\n]{0,40}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i, /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i] },
   { key: "lease_type", group: "lease_header", aliases: ["lease_type"] },

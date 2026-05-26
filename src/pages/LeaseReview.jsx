@@ -864,13 +864,20 @@ export default function LeaseReview() {
     },
   });
 
-  // Auto-run extraction the first time we land on a lease that has a source
-  // file linked but no MEANINGFUL extracted data yet. "Meaningful" =
-  // workflow_output present (the extractor actually ran) OR at least one
-  // field key with a non-null value (real extraction, not a placeholder
-  // shell from upload). A stale empty `fields: {}` object from a previous
-  // failed attempt must NOT block auto-extraction — that was preventing
-  // re-extract from firing on partially-initialized leases.
+  // Auto-run extraction the first time we land on a lease that hasn't been
+  // through the full re-extract pipeline yet. The canonical "extraction has
+  // been finalized" marker is `evidence_refreshed_at`, which only
+  // handleReextractLease writes — review-approve creates the lease draft
+  // with workflow_output as a placeholder but does NOT pull per-field
+  // evidence from ui_review_payload.records[0].standard_fields the way
+  // re-extract does. So the gate now skips only when:
+  //   1. evidence_refreshed_at is already set (full pipeline ran), OR
+  //   2. there is no source_file_id (nothing to re-extract from), OR
+  //   3. there ARE meaningful fields with evidence (pre-existing lease that
+  //      has good evidence even without the marker — don't disturb it).
+  // This unifies the upload + re-extract paths so a freshly uploaded lease
+  // gets the same field-evidence enrichment and lease-expense-rule
+  // extraction as a manual Re-extract click.
   const autoExtractFiredRef = useRef(null);
   useEffect(() => {
     if (!lease?.id) return;
@@ -879,31 +886,33 @@ export default function LeaseReview() {
     const sourceFileId = lease?.extraction_data?.source_file_id;
     if (!sourceFileId) return;
 
-    const hasWorkflow = !!lease?.extraction_data?.workflow_output;
-    const hasMeaningfulField = (obj) => {
-      if (!obj || typeof obj !== "object") return false;
-      return Object.values(obj).some((v) => {
-        if (v == null) return false;
-        if (typeof v === "object") return v?.value != null && v.value !== "";
-        return v !== "" && v !== "unknown" && v !== "n/a";
-      });
-    };
-    const hasRealFields =
-      hasMeaningfulField(lease?.extraction_data?.fields) ||
-      hasMeaningfulField(lease?.extraction_data?.extracted_fields);
-    if (hasWorkflow || hasRealFields) {
-      console.log("[LeaseReview] auto-extract: skip — lease already has extraction data", {
-        hasWorkflow,
-        hasRealFields,
-      });
+    // If the full pipeline has already finalized this lease, skip.
+    if (lease?.extraction_data?.evidence_refreshed_at) {
       autoExtractFiredRef.current = lease.id;
       return;
     }
+
+    // Back-compat: pre-existing leases (created before evidence_refreshed_at
+    // was tracked) may already have per-field evidence with source pages /
+    // source text. If so, don't disturb them — only re-extract on demand.
+    const fieldEvidence = lease?.extraction_data?.field_evidence;
+    const hasPersistedEvidence =
+      fieldEvidence &&
+      typeof fieldEvidence === "object" &&
+      Object.values(fieldEvidence).some(
+        (e) => e && typeof e === "object" && (e.source_page != null || (typeof e.source_text === "string" && e.source_text.trim().length > 0)),
+      );
+    if (hasPersistedEvidence) {
+      console.log("[LeaseReview] auto-extract: skip — lease already has per-field evidence");
+      autoExtractFiredRef.current = lease.id;
+      return;
+    }
+
     autoExtractFiredRef.current = lease.id;
-    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted data yet");
-    toast.info("Source file linked. Running extraction in the background…");
+    console.log("[LeaseReview] auto-running re-extract — source linked but full pipeline has not finalized this lease yet (no evidence_refreshed_at)");
+    toast.info("Running full lease extraction in the background…");
     handleReextractLease();
-  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.fields, lease?.extraction_data?.extracted_fields, lease?.extraction_data?.workflow_output, reextracting]);  
+  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.evidence_refreshed_at, lease?.extraction_data?.field_evidence, reextracting]);
 
   // --- Early returns -------------------------------------------------------
   if (!leaseId) {
