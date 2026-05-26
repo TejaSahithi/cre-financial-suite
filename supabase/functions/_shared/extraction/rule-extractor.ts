@@ -222,6 +222,23 @@ const CANONICAL_LEASE_FIELD_ALIASES: Record<string, string> = {
   leased_premises_address: "property_address",
   building_address: "property_address",
   suite_address: "property_address",
+  // Strict address separation:
+  //   - PREMISES / PROPERTY / BUILDING / SHOPPING-CENTER address → property_address
+  //   - TENANT address / LANDLORD address → NOT routed here. These are
+  //     notice/mailing addresses, not the leased premises. Even in
+  //     single-tenant office leases where they happen to coincide,
+  //     conflating them at the record-level surface produces incorrect
+  //     property_address for the multi-tenant case. The workflow extractor
+  //     and LLM still capture tenant_address / landlord_address into
+  //     workflow_output.lease_fields[...] for display where supported.
+  //   - "shopping_center" stays mapped to property_name above (keep that
+  //     line); only the explicit "_address" variant maps here.
+  address_of_premises: "property_address",
+  address_of_property: "property_address",
+  address_of_building: "property_address",
+  demised_premises: "property_address",
+  demised_premises_address: "property_address",
+  shopping_center_address: "property_address",
 
   unit: "unit_number",
   unit_number: "unit_number",
@@ -415,6 +432,20 @@ function coerceFieldValue(fieldName: string, raw: string, fieldDef: FieldDef): u
   if (fieldName === "property_address" && looksLikeNoticeClause(raw)) {
     return null;
   }
+  if (fieldName === "property_address" && looksLikeSquareFootageOnly(raw)) {
+    // Reject "Premises: 1,110 rentable square feet" — the `premises` alias
+    // matches but this is the SQFT description, not an address. Returning
+    // null lets the LLM / patterns / docling fields find a real address.
+    return null;
+  }
+  if (fieldName === "property_address" && !looksLikeStreetAddress(raw)) {
+    // Premises labels can capture non-address premises descriptions
+    // ("the building", "Suite 211 in Tower A"). Only accept values that
+    // contain street-address signals so the field never holds a label
+    // string or a sqft figure. The LLM extractor's own value (which is
+    // typically a real street address) merges in separately.
+    return null;
+  }
   if (fieldName === "monthly_rent" && /\b(?:annual|yearly|per\s+year|\/yr|annually)\b/i.test(String(raw))) {
     return null;
   }
@@ -487,6 +518,36 @@ function looksLikeClauseNotName(raw: unknown): boolean {
 function looksLikeNoticeClause(raw: unknown): boolean {
   const text = String(raw ?? "").trim();
   return /\b(for\s+assignee|notice|notices|purposes\s+under\s+the\s+lease)\b/i.test(text);
+}
+
+// True when a value captured for property_address is actually a square-footage
+// description (e.g. "1,110 rentable square feet", "12,000 SF"). Such values
+// are common after a "Premises:" label and must not be persisted as the
+// premises address.
+function looksLikeSquareFootageOnly(raw: unknown): boolean {
+  const text = String(raw ?? "").trim();
+  if (!text) return false;
+  if (!/\b(?:rentable\s+square\s+feet|square\s*feet|sq\.?\s*ft\.?|\bsf\b|\brsf\b)\b/i.test(text)) return false;
+  // If it ALSO contains a street word, it's a real address that happens to
+  // mention sqft — let it through.
+  if (/\b(?:road|rd|street|st\.?|avenue|ave|lane|ln|drive|dr|boulevard|blvd|highway|hwy|way|parkway|pkwy|court|ct)\b/i.test(text)) return false;
+  return true;
+}
+
+// True when a value looks like a real street address: contains a street word
+// OR a US state abbreviation followed by a zip OR a leading street number.
+// Used to reject premises labels whose value is just a description ("the
+// building", "Suite 211", "Tower A") rather than an address.
+function looksLikeStreetAddress(raw: unknown): boolean {
+  const text = String(raw ?? "").trim();
+  if (!text) return false;
+  // Street word
+  if (/\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|boulevard|blvd\.?|highway|hwy\.?|way|parkway|pkwy\.?|court|ct\.?|place|pl\.?|circle|cir\.?|terrace|ter\.?|plaza|trail|trl\.?|route|rt\.?|crossing|xing)\b/i.test(text)) return true;
+  // US state abbreviation + ZIP
+  if (/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(text)) return true;
+  // Leading street number followed by a capitalized word (e.g. "224 S Peters")
+  if (/^\s*\d{1,6}\s+[A-Z][A-Za-z]/.test(text)) return true;
+  return false;
 }
 
 function normalizedConfidence(value: unknown, fallback: number): number {

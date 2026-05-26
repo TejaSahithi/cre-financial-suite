@@ -91,17 +91,24 @@ export const LEASE_SCHEMA: ModuleSchema = {
   property_address: {
     type: "string",
     required: true,
-    labels: ["property address", "premises", "premises address", "address", "location", "street address", "building", "address of tenant"],
+    // Strict address separation: "address of tenant" / "address of landlord"
+    // are intentionally NOT labels here — they are mailing/notice addresses
+    // and must not flow into the premises address column even via label
+    // fallback. The workflow extractor and LLM still capture them under
+    // tenant_address / landlord_address workflow fields for display.
+    labels: ["property address", "premises", "premises address", "address", "location", "street address", "building", "address of premises", "address of property", "address of building"],
     tableHeaders: ["property_address", "property address", "premises", "address", "location", "street address", "building"],
     patterns: [
       // Building location line: "Building: ... located at 224 S Peters Road Knoxville, TN 37923"
       /\bbuilding\b[^\n]{0,80}?(?:located\s+at|address[:\s]+)\s*([^\n.]{8,180})/i,
-      // Numbered summary: "5. Address of Tenant: 224 S Peters Road Suite #211 Knoxville, TN 37923"
-      /\d+\s*\.\s*(?:address\s+of\s+(?:tenant|premises|landlord)|property\s+address|premises\s+address|street\s+address|premises|building)\s*[:.]?\s*([^\n]{8,180})/i,
+      // Numbered summary: "5. Address of Premises: 224 S Peters Road Suite #211 Knoxville, TN 37923"
+      // Note: "address of tenant" / "address of landlord" excluded — those
+      // are notice/mailing addresses, not the leased premises.
+      /\d+\s*\.\s*(?:address\s+of\s+(?:premises|property|building)|property\s+address|premises\s+address|street\s+address|premises|building)\s*[:.]?\s*([^\n]{8,180})/i,
       // Inline label variants
       /(?:premises|property\s+address|premises\s+address|street\s+address|address)\s*[:.]\s*([^\n]{4,180})/i,
     ],
-    description: "Street address or premises description for the leased property (NOT the landlord's mailing address)",
+    description: "Street address or premises description for the leased property (NOT the landlord's or tenant's mailing address)",
   },
   landlord_name: {
     type: "string",
