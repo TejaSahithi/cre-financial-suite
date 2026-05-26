@@ -1221,6 +1221,37 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
         if (!category?.id) return null;
         const recoveryMethod = String(rule?.recovery_method || "").toLowerCase();
         const status = mapRuleStatus(rule);
+        const recoverableFromTenant = deriveExpenseRuleRecoverableFromTenant(rule);
+        const camEligible = deriveExpenseRuleCamEligible(rule);
+        const paymentTreatment = deriveExpenseRulePaymentTreatment(rule);
+        const includedInBaseRent = deriveExpenseRuleIncludedInBaseRent(rule);
+        const exactSourceText = deriveExpenseRuleSourceText(rule);
+        const reviewStatus = deriveExpenseRuleReviewStatus(rule, status);
+        const approvalStatus = deriveExpenseRuleApprovalStatus(rule, ruleSetStatus);
+
+        // Lease-derivation publish guard. The inbound `published_to_cam`
+        // flag is trusted only if the rule independently passes the
+        // publishable contract; otherwise we force it to false. This
+        // prevents template/checklist/amount-only/keyword-fallback rows
+        // from leaking into CAM via the server-side insert path.
+        const isPublishable = isExpenseRulePublishable(rule, {
+          reviewStatus,
+          approvalStatus,
+          rowStatus: status,
+          recoverableFromTenant,
+          camEligible,
+          paymentTreatment,
+          includedInBaseRent,
+          exactSourceText,
+        });
+        const requestedPublished = Boolean(rule?.published_to_cam);
+        const publishedToCam = requestedPublished && isPublishable;
+        if (requestedPublished && !isPublishable) {
+          console.warn(
+            `[review-approve] forced published_to_cam=false for category="${category.normalized_key}" (lease ${leaseId}) — rule failed publishable contract`,
+          );
+        }
+
         return {
           rule_set_id: ruleSetId,
           expense_category_id: category.id,
@@ -1233,16 +1264,16 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
           expense_subcategory: deriveExpenseRuleSubcategoryName(rule),
           operational_responsibility: deriveExpenseRuleOperationalResponsibility(rule),
           responsibility: deriveExpenseRuleResponsibility(rule),
-          payment_treatment: deriveExpenseRulePaymentTreatment(rule),
-          included_in_base_rent: deriveExpenseRuleIncludedInBaseRent(rule),
-          recoverable_from_tenant: deriveExpenseRuleRecoverableFromTenant(rule),
-          cam_eligible: deriveExpenseRuleCamEligible(rule),
+          payment_treatment: paymentTreatment,
+          included_in_base_rent: includedInBaseRent,
+          recoverable_from_tenant: recoverableFromTenant,
+          cam_eligible: camEligible,
           billing_treatment: deriveExpenseRuleBillingTreatment(rule),
           recovery_method: deriveExpenseRuleRecoveryMethod(rule),
           allocation_basis: deriveExpenseRuleAllocationBasis(rule),
           row_status: status,
           mentioned_in_lease: Boolean(rule?.mentioned_in_lease ?? status !== "not_mentioned"),
-          is_recoverable: ["yes", "conditional"].includes(deriveExpenseRuleRecoverableFromTenant(rule)),
+          is_recoverable: ["yes", "conditional"].includes(recoverableFromTenant),
           is_excluded: Boolean(rule?.is_excluded || rule?.excluded_from_recovery),
           is_controllable: Boolean(rule?.is_controllable),
           is_subject_to_cap: Boolean(rule?.is_subject_to_cap || rule?.cap_type),
@@ -1263,13 +1294,13 @@ async function syncLeaseExpenseRules(supabaseAdmin: any, orgId: string, leaseId:
           reconciliation_required: deriveExpenseRuleReconciliationRequired(rule),
           reconciliation_frequency: deriveExpenseRuleReconciliationFrequency(rule),
           source_page: toNumberOrNull(rule?.source_page),
-          exact_source_text: deriveExpenseRuleSourceText(rule),
+          exact_source_text: exactSourceText,
           confidence_score: toNumberOrNull(rule?.confidence_score ?? rule?.confidence),
           extraction_status: deriveExpenseRuleExtractionStatus(rule, status),
-          review_status: deriveExpenseRuleReviewStatus(rule, status),
-          approval_status: deriveExpenseRuleApprovalStatus(rule, ruleSetStatus),
-          published_to_cam: Boolean(rule?.published_to_cam),
-          notes: rule?.notes ?? deriveExpenseRuleSourceText(rule),
+          review_status: reviewStatus,
+          approval_status: approvalStatus,
+          published_to_cam: publishedToCam,
+          notes: rule?.notes ?? exactSourceText,
           confidence: toNumberOrNull(rule?.confidence ?? rule?.confidence_score),
           source: "lease_workflow",
         };
@@ -1466,6 +1497,77 @@ function mapRuleStatus(rule: any): string {
   if (rule?.status === "approved" || rule?.status === "confirmed") return "mapped";
   if (rule?.recoverable_flag === true || rule?.is_recoverable === true) return "mapped";
   return "needs_review";
+}
+
+// Generic boilerplate that should NOT count as lease clause evidence.
+// Mirrors the GENERIC_SOURCE_PATTERNS / isWeakSourceText logic in
+// src/services/leaseExpenseRuleService.js so the server enforces the
+// same lease-derivation contract.
+const REVIEW_APPROVE_GENERIC_SOURCE_PATTERNS = [
+  /included in base rent under/i,
+  /recoverable under/i,
+  /explicit recurring charge extracted/i,
+  /lease mentions this category/i,
+  /direct reimbursement obligation/i,
+  /mixed included and recoverable treatment/i,
+  /tenant pays directly under the lease/i,
+  /fixed cam amount extracted/i,
+  /percentage rent rules were extracted/i,
+  /billable exception charge under/i,
+  /derived from extracted/i,
+  /inferred from lease language matching keyword/i,
+];
+
+function isWeakExpenseRuleSourceText(text: string | null | undefined): boolean {
+  const normalized = String(text || "").trim();
+  if (!normalized || normalized.length < 18) return true;
+  return REVIEW_APPROVE_GENERIC_SOURCE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+// Server-side mirror of isRuleCamPublishable (src/services/leaseExpenseRuleService.js).
+// A rule may publish to CAM only when:
+// - review_status = approved AND approval_status = approved
+// - recoverable_from_tenant = yes AND cam_eligible = yes
+// - not included_in_base_rent, payment_treatment is not tenant_direct_contract
+// - is_excluded is not true
+// - row_status not in rejected/not_found/not_mentioned/not_applicable/unmapped
+// - AND either: non-weak exact_source_text OR manual override with non-empty notes
+function isExpenseRulePublishable(rule: any, derived: {
+  reviewStatus: string;
+  approvalStatus: string;
+  rowStatus: string;
+  recoverableFromTenant: string;
+  camEligible: string;
+  paymentTreatment: string;
+  includedInBaseRent: boolean;
+  exactSourceText: string | null;
+}): boolean {
+  const reviewStatus = derived.reviewStatus === "reviewed" ? "approved" : derived.reviewStatus;
+  if (reviewStatus !== "approved") return false;
+  if (derived.approvalStatus !== "approved") return false;
+  if (derived.recoverableFromTenant !== "yes") return false;
+  if (derived.camEligible !== "yes") return false;
+  if (derived.includedInBaseRent) return false;
+  if (derived.paymentTreatment === "included_in_base_rent") return false;
+  if (derived.paymentTreatment === "tenant_direct_contract") return false;
+  if (rule?.is_excluded || rule?.excluded_from_recovery) return false;
+  if (["rejected", "not_found", "not_mentioned", "not_applicable", "unmapped"].includes(derived.rowStatus)) return false;
+
+  const trimmedSource = String(derived.exactSourceText || "").trim();
+  const hasLeaseEvidence = trimmedSource.length > 0 && !isWeakExpenseRuleSourceText(trimmedSource);
+
+  const createdFrom = normalizeText(rule?.created_from);
+  const generationSource = normalizeText(rule?.generation_source);
+  const isManualOverride =
+    createdFrom === "manual" ||
+    createdFrom === "user_override" ||
+    generationSource === "manual" ||
+    generationSource === "user_override" ||
+    normalizeText(rule?.row_status) === "manually_added";
+  const overrideNote = String(rule?.notes || rule?.manual_cam_reason || "").trim();
+  const hasManualOverrideWithNote = isManualOverride && overrideNote.length > 0;
+
+  return hasLeaseEvidence || hasManualOverrideWithNote;
 }
 
 function toNumberOrNull(value: unknown): number | null {

@@ -181,6 +181,60 @@ function getRuleValidation(rule) {
   return leaseExpenseRuleService.getRuleValidation(rule);
 }
 
+// Map the publishBlockers list returned by getRuleValidation into a single,
+// user-facing reason string. No business logic — just translates the
+// existing blocker phrases into the labels the product wants surfaced.
+function getCamPublishStatus(rule, validation) {
+  if (rule?.published_to_cam === true) {
+    return { label: "CAM Published", tone: "emerald" };
+  }
+
+  const blockers = Array.isArray(validation?.publishBlockers) ? validation.publishBlockers : [];
+
+  // "Already published" is not actually a "not-published" reason — it means
+  // the rule IS on CAM. Surface it as a positive label rather than a blocker.
+  if (blockers.some((b) => /Already published/i.test(b))) {
+    return { label: "Already Published to CAM", tone: "emerald" };
+  }
+
+  const reasonOrder = [
+    { test: (b) => /Included in rent/i.test(b), reason: "Included in base rent" },
+    { test: (b) => /Tenant direct/i.test(b), reason: "Tenant direct responsibility" },
+    { test: (b) => /Excluded/i.test(b), reason: "Explicitly excluded" },
+    { test: (b) => /Not CAM eligible/i.test(b), reason: "Conditional rule" },
+    { test: (b) => /Not recoverable/i.test(b), reason: "Not recoverable" },
+    { test: (b) => /Not reviewed/i.test(b), reason: "Awaiting review" },
+    { test: (b) => /Not approved/i.test(b), reason: "Awaiting approval" },
+  ];
+
+  for (const check of reasonOrder) {
+    if (blockers.some(check.test)) {
+      return { label: `Not Published to CAM: ${check.reason}`, tone: "amber" };
+    }
+  }
+
+  // Differentiate the "missing evidence" case based on whether this is a
+  // manual override (which needs a note) vs an AI/template rule (which
+  // needs lease clause text).
+  if (blockers.some((b) => /Missing lease evidence/i.test(b))) {
+    const created = String(rule?.created_from || "").toLowerCase();
+    const gen = String(rule?.generation_source || "").toLowerCase();
+    const isManualOverride =
+      created === "manual" ||
+      created === "user_override" ||
+      gen === "manual" ||
+      gen === "user_override" ||
+      String(rule?.row_status || "").toLowerCase() === "manually_added";
+    const reason = isManualOverride ? "Manual override note required" : "Missing lease evidence";
+    return { label: `Not Published to CAM: ${reason}`, tone: "amber" };
+  }
+
+  if (blockers.length === 0) {
+    return { label: "Not Published to CAM", tone: "slate" };
+  }
+  return { label: `Not Published to CAM: ${blockers[0]}`, tone: "amber" };
+}
+
 function buildRuleWorkflowPatch(rule, validation, overrides = {}) {
   return {
     included_in_base_rent: validation.includedInBaseRent,
@@ -926,6 +980,7 @@ export default function LeaseExpenseRules() {
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Extraction</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Review Status</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Approval Status</TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase text-slate-500">CAM Publish</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Source Field Key</TableHead>
                 <TableHead className="text-[11px] font-semibold uppercase text-slate-500">Actions</TableHead>
               </TableRow>
@@ -933,13 +988,13 @@ export default function LeaseExpenseRules() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={25} className="py-12 text-center">
+                  <TableCell colSpan={26} className="py-12 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" />
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={25} className="py-12 text-center text-sm text-slate-400">
+                  <TableCell colSpan={26} className="py-12 text-center text-sm text-slate-400">
                     No lease expense rules in this view. Approve a lease abstract and run rule extraction to populate this list.
                   </TableCell>
                 </TableRow>
@@ -1057,6 +1112,23 @@ export default function LeaseExpenseRules() {
                         }`}>
                           {humanizeToken(rule.approval_status || rule.row_status || "Needs Review")}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-[220px]">
+                        {(() => {
+                          const camPublishStatus = getCamPublishStatus(rule, validation);
+                          const toneClass =
+                            camPublishStatus.tone === "emerald" ? "bg-emerald-100 text-emerald-700"
+                            : camPublishStatus.tone === "amber" ? "bg-amber-100 text-amber-800"
+                            : "bg-slate-100 text-slate-600";
+                          return (
+                            <Badge
+                              className={`text-[10px] whitespace-normal text-left leading-tight ${toneClass}`}
+                              title={camPublishStatus.label}
+                            >
+                              {camPublishStatus.label}
+                            </Badge>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-xs text-slate-500 font-mono">
                         {rule.source_field_key || "-"}
