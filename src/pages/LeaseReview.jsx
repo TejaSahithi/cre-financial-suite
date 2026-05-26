@@ -844,6 +844,12 @@ export default function LeaseReview() {
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => leaseService.update(id, data),
     onSuccess: (updated) => {
+      // Seed the cache with the returned row so a chained read (e.g.
+      // Save edit → Accept) sees the new evidence immediately, without
+      // waiting for the invalidation-triggered refetch to complete.
+      if (updated && updated.id === leaseId) {
+        queryClient.setQueryData(["lease", leaseId], (prev) => ({ ...(prev || {}), ...updated }));
+      }
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       if (updated?.property_id) {
@@ -1162,16 +1168,38 @@ export default function LeaseReview() {
   };
 
   const handleAccept = (field) => {
-    // Refuse auto-accept when there's no source evidence — the reviewer must
-    // either Edit + confirm, mark Manual Required, or mark N/A.
-    const value = readFieldValue(lease, field.key);
-    const { sourcePage, sourceText } = readFieldEvidence(lease, field.key);
+    // Re-read the lease from the React Query cache. The closure-captured
+    // `lease` ref is stale right after a Save edit chains into Accept; the
+    // cache has the fresh write but the parent component hasn't re-rendered
+    // yet. Falling back to the captured ref keeps things safe if the cache
+    // is somehow empty.
+    const freshLease = queryClient.getQueryData(["lease", leaseId]) || lease;
+    const value = readFieldValue(freshLease, field.key);
+    const { sourcePage, sourceText } = readFieldEvidence(freshLease, field.key);
     const hasEvidence = sourcePage != null || (typeof sourceText === "string" && sourceText.length > 0);
+
+    // Manual-override signals: the reviewer can accept without lease
+    // evidence by explicitly marking the field as Manual Required, or by
+    // having saved a reviewer-edited record (source: "manual" /
+    // manually_edited: true). Treat any of these as the equivalent of
+    // evidence for the Accept gate.
+    const fieldRecord = freshLease?.extraction_data?.fields?.[field.key] || {};
+    const extractionStatus = String(
+      fieldRecord.extraction_status
+        || freshLease?.extraction_data?.field_evidence?.[field.key]?.extraction_status
+        || "",
+    ).toLowerCase();
+    const isManualOverride =
+      extractionStatus === "manual_required"
+      || extractionStatus === "manually_edited"
+      || fieldRecord.manually_edited === true
+      || String(fieldRecord.source || "").toLowerCase() === "manual";
+
     if (value == null || value === "") {
       toast.error("Cannot accept a field with no value. Edit, mark N/A, or mark Manual Required.");
       return;
     }
-    if (!hasEvidence) {
+    if (!hasEvidence && !isManualOverride) {
       toast.error("Cannot accept without source evidence. Edit and confirm the value, or mark Manual Required.");
       return;
     }

@@ -508,7 +508,17 @@ export default function FieldDetailDrawer({
                 size="sm"
                 variant="outline"
                 className="text-emerald-700"
-                onClick={() => onAccept(field)}
+                onClick={async () => {
+                  // If the reviewer typed value/evidence in the form but
+                  // hasn't clicked Save edit yet, persist that first so
+                  // the Accept gate sees fresh evidence. handleSave runs
+                  // through onSaveEdit which now bundles evidence too.
+                  if (mode === "edit") {
+                    try { await handleSave(); }
+                    catch (err) { console.warn("[FieldDetailDrawer] save-before-accept failed:", err); return; }
+                  }
+                  await onAccept(field);
+                }}
                 disabled={isSaving}
               >
                 <Check className="mr-1 h-3.5 w-3.5" />
