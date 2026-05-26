@@ -45,6 +45,11 @@ For each of the categories provided in the JSON input, determine the following:
 - admin_fee_allowed: boolean
 - admin_fee_applicable: boolean
 - admin_fee_percent: number or null
+- tenant_share_percent: number or null
+- base_year_amount: number or null
+- operating_expense_base_amount: number or null
+- tax_base_amount: number or null
+- insurance_base_amount: number or null
 - source_page: number or null
 - exact_source_text: exact lease text supporting the rule, or null
 - confidence_score: number from 0.0 to 1.0
@@ -57,6 +62,13 @@ For each of the categories provided in the JSON input, determine the following:
 - notes: string (a brief explanation of your reasoning)
 - confidence: number (0.0 to 1.0)
 - source: string (the exact lease clause text snippet justifying this rule)
+
+Document-type rules:
+- If the document is only an assignment, assumption, consent to assignment, term amendment, rent amendment, estoppel, or abstract summary and does not include expense recovery clauses, return only not_mentioned/needs_review rows with reasoning "original_lease_required". Do not infer CAM/taxes/insurance/utilities from assignment or amendment language.
+- Assignment clauses, assumption by assignee, landlord consent, term extension, and base-rent-only amendments do not support lease expense rules.
+- For full-service/gross leases, mark expenses included in base rent only when the lease text clearly says base rent includes those expenses.
+- For modified gross/base-year leases, extract base_year, base_year_amount, operating_expense_base_amount, tax_base_amount, insurance_base_amount, tenant_share_percent, gross_up_percent, and caps only from explicit clauses.
+- Do not output base_year_amount as 0 unless the lease explicitly states zero.
 
 Return a JSON array of objects representing these rules. The output MUST be valid JSON.
 Format:
@@ -135,6 +147,11 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
         admin_fee_allowed: Boolean(rule.admin_fee_allowed ?? rule.admin_fee_applicable),
         admin_fee_applicable: Boolean(rule.admin_fee_applicable ?? rule.admin_fee_allowed),
         source_page: toNullableNumber(rule.source_page),
+        tenant_share_percent: toNullableNumber(rule.tenant_share_percent),
+        base_year_amount: toNullableNumber(rule.base_year_amount),
+        operating_expense_base_amount: toNullableNumber(rule.operating_expense_base_amount),
+        tax_base_amount: toNullableNumber(rule.tax_base_amount),
+        insurance_base_amount: toNullableNumber(rule.insurance_base_amount),
         exact_source_text: String(rule.exact_source_text || rule.source || "").trim() || null,
         confidence_score: toNullableNumber(rule.confidence_score ?? rule.confidence) ?? 0.7,
         reasoning_summary: String(rule.reasoning_summary || rule.notes || "").trim() || null,

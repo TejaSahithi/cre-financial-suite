@@ -166,6 +166,9 @@ function isRuleCamPublishable(rule) {
   const camEligible = deriveRuleCamEligible(rule);
   const paymentTreatment = deriveRulePaymentTreatment(rule);
   const rowStatus = normalizeText(rule?.row_status || rule?.status);
+  const extractionStatus = normalizeText(rule?.extraction_status);
+  const generationSource = normalizeText(rule?.generation_source);
+  const sourceType = normalizeText(rule?.source_type);
 
   // Lease-derivation gate: a rule may publish to CAM only when there is
   // either real lease clause evidence (non-weak exact_source_text) OR an
@@ -175,7 +178,6 @@ function isRuleCamPublishable(rule) {
   const exactSourceText = String(deriveRuleExactSourceText(rule) || "").trim();
   const hasLeaseEvidence = exactSourceText.length > 0 && !isWeakSourceText(exactSourceText);
   const createdFrom = normalizeText(rule?.created_from);
-  const generationSource = normalizeText(rule?.generation_source);
   const isManualOverride =
     createdFrom === "manual" ||
     createdFrom === "user_override" ||
@@ -184,6 +186,12 @@ function isRuleCamPublishable(rule) {
     normalizeText(rule?.row_status) === "manually_added";
   const overrideNote = String(rule?.notes || "").trim();
   const hasEvidenceOrOverride = hasLeaseEvidence || (isManualOverride && overrideNote.length > 0);
+  const weakOrFallback =
+    ["weak_evidence", "not_found", "not_mentioned", "inferred", "missing_source_evidence"].includes(extractionStatus) ||
+    ["template_checklist", "amount_only_gap", "text_fallback_keyword", "original_lease_required"].includes(generationSource) ||
+    ["deterministic_template", "text_fallback", "document_profile"].includes(sourceType);
+  const weakRowAllowedByManualOverride = weakOrFallback && isManualOverride && overrideNote.length > 0;
+  if (weakOrFallback && !weakRowAllowedByManualOverride) return false;
 
   return reviewStatus === "approved" &&
     approvalStatus === "approved" &&

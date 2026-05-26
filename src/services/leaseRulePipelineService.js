@@ -4,11 +4,13 @@ import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 
 const VALID_EVIDENCE = (text) => {
   if (!text) return false;
+  const raw = String(text).trim();
+  if (raw.length < 18) return false;
   const lower = String(text).toLowerCase();
   const invalid = ["manual_review", "tenant_recovery", "tenant_direct", "inferred", "default"];
   if (invalid.some(word => lower.includes(word))) return false;
   
-  const unrelated = ["assignment", "notice address", "permitted use", "tenant improvement"];
+  const unrelated = ["notice address", "permitted use"];
   if (unrelated.some(word => lower.includes(word))) return false;
 
   return true;
@@ -153,6 +155,32 @@ const CATEGORY_EVIDENCE_PATTERNS = {
   separately_metered_charges: [/separately\s+metered/i, /separate\s+meter/i, /direct(?:ly)?\s+to\s+(?:the\s+)?utility/i],
   excess_usage: [/excess\s+usage/i, /excess\s+utilit/i],
   legal_enforcement_fees: [/legal/i, /attorney/i, /enforcement/i],
+  tenant_insurance: [/tenant\b[\s\S]{0,120}\b(?:insurance|liability|certificate)/i, /commercial\s+general\s+liability/i],
+  alterations: [/alteration/i, /tenant\s+improvement/i],
+  percentage_rent: [/percentage\s+rent/i, /gross\s+sales/i],
+  late_fees: [/late\s+(?:fee|charge)/i, /delinquent/i],
+  interest: [/default\s+interest/i, /interest\s+on\s+(?:late|delinquent|overdue)/i],
+  merchant_association_dues: [/merchant\s+association/i, /marketing\s+fund/i],
+};
+
+const CATEGORY_REJECTION_PATTERNS = {
+  security: [/security\s+deposit/i, /deposit/i],
+  parking: [/premises\s+known\s+as/i, /parking\s+rights/i, /parking\s+spaces?\b(?![\s\S]{0,80}(?:maint|repair|light|sweep|snow|common|operating|cam))/i],
+  snow_removal: [/\bcap\b(?![\s\S]{0,120}(?:snow|ice)\s+removal)/i],
+  property_insurance: [/tenant\s+(?:shall|must|will|agrees).{0,80}(?:maintain|carry|obtain).{0,80}insurance/i],
+  tenant_insurance: [/landlord.{0,80}property\s+insurance/i, /property\s+insurance.{0,80}(?:reimburs|recover)/i],
+  interest: [/capital\s+expenditure/i, /assignment/i],
+  capital_expenditures: [/interest\s+on\s+late/i, /default\s+interest/i],
+  legal_enforcement_fees: [/cam\s+exclusion/i, /excluded\s+from\s+operating\s+expenses/i],
+};
+
+const CATEGORY_CONTEXT_REQUIREMENTS = {
+  security: [/security\s+(?:service|services|patrol|guard|monitoring)/i],
+  parking: [/parking[\s\S]{0,120}(?:maintenance|repair|lighting|sweeping|striping|snow|common\s+area|operating\s+expense|cam)/i],
+  snow_removal: [/(?:snow|ice)[\s\S]{0,80}removal/i, /snow\s+plowing/i],
+  management_fees: [/management\s+fee/i, /property\s+management/i],
+  administrative_fees: [/admin(?:istrative)?\s+fee/i],
+  capital_expenditures: [/capital[\s\S]{0,120}(?:expenditure|improvement|replacement|amorti|useful\s+life|cost[-\s]?saving|legally\s+required)/i],
 };
 
 function canonicalRuleKey(rule) {
@@ -196,6 +224,10 @@ function sectionIncludes(section, patterns = []) {
 function evidenceSupportsCategory(canonicalKey, evidence) {
   const text = String(evidence || "");
   if (!VALID_EVIDENCE(text)) return false;
+  const rejectionPatterns = CATEGORY_REJECTION_PATTERNS[canonicalKey] || [];
+  if (sectionIncludes(text, rejectionPatterns)) return false;
+  const contextRequirements = CATEGORY_CONTEXT_REQUIREMENTS[canonicalKey] || [];
+  if (contextRequirements.length > 0 && !sectionIncludes(text, contextRequirements)) return false;
   const patterns = CATEGORY_EVIDENCE_PATTERNS[canonicalKey] || [];
   return patterns.length === 0 ? text.trim().length > 0 : sectionIncludes(text, patterns);
 }
@@ -215,6 +247,30 @@ function preserveEvidenceBackedRule(rule, evidence, note) {
     mentioned_in_lease: true,
     confidence_score: Math.max(confidence, 0.72),
     notes: firstPresent(rule?.notes, note),
+  };
+}
+
+function nonCamObligationRule(rule, evidence, reason, treatment = "not_applicable") {
+  const snippet = compactSnippet(evidence);
+  return {
+    ...rule,
+    exact_source_text: snippet,
+    source_clause: snippet,
+    recoverable_from_tenant: "no",
+    cam_eligible: "no",
+    payment_treatment: treatment,
+    recovery_method: treatment === "tenant_direct_contract" ? "tenant_direct_contract" : "not_applicable",
+    allocation_basis: treatment === "tenant_direct_contract" ? "direct" : null,
+    is_recoverable: false,
+    is_excluded: treatment !== "tenant_direct_contract",
+    row_status: "mapped",
+    extraction_status: "extracted",
+    review_status: "needs_review",
+    approval_status: "draft",
+    published_to_cam: false,
+    mentioned_in_lease: true,
+    confidence_score: Math.max(Number(rule?.confidence_score || rule?.confidence || 0.72), 0.72),
+    notes: reason,
   };
 }
 
@@ -258,6 +314,100 @@ function notFoundRule(rule, reason) {
     confidence_score: Math.min(Number(rule?.confidence_score || rule?.confidence || 0.5), 0.45),
     mentioned_in_lease: false,
     notes: reason,
+  };
+}
+
+function originalLeaseRequiredRule(leaseId, documentType) {
+  return {
+    lease_id: leaseId,
+    expense_category: "Operating Expenses",
+    category_name: "Operating Expenses",
+    normalized_key: "operating_expenses",
+    source_field_key: "original_lease_required",
+    rule_type: "coverage_gap",
+    generation_source: "original_lease_required",
+    source_type: "document_profile",
+    extraction_version: "lease_rule_pipeline_v3_evidence_aligned",
+    recoverable_from_tenant: "needs_review",
+    cam_eligible: "needs_review",
+    payment_treatment: "not_applicable",
+    recovery_method: "not_applicable",
+    allocation_basis: null,
+    included_in_base_rent: false,
+    is_recoverable: false,
+    is_excluded: false,
+    published_to_cam: false,
+    exact_source_text: null,
+    source_clause: null,
+    review_status: "needs_review",
+    approval_status: "draft",
+    row_status: "not_mentioned",
+    extraction_status: "not_found",
+    confidence_score: 0.25,
+    mentioned_in_lease: false,
+    notes: `${documentType === "assignment" ? "Assignment" : "Amendment"} document does not contain expense recovery clauses. Original lease required for expense rules.`,
+  };
+}
+
+function detectDocumentProfile({ lease, sourceText }) {
+  const text = String(sourceText || "");
+  const lower = text.toLowerCase();
+  const nameLower = String(lease?.name || lease?.lease_name || lease?.document_name || "").toLowerCase();
+  const combined = `${nameLower}\n${lower}`;
+  const assignmentSignals = [
+    /assignment\s+(?:and\s+assumption\s+)?of\s+lease/i,
+    /\bassignor\b/i,
+    /\bassignee\b/i,
+    /landlord\s+consent\s+to\s+assignment/i,
+    /assumption\s+by\s+assignee/i,
+  ].filter((pattern) => pattern.test(combined)).length;
+  const amendmentSignals = [
+    /amendment\s+to\s+lease/i,
+    /lease\s+amendment/i,
+    /term\s+extension/i,
+    /amended\s+and\s+restated/i,
+    /base\s+rent\s+for\s+(?:the\s+)?(?:additional|extended)\s+(?:term|year)/i,
+  ].filter((pattern) => pattern.test(combined)).length;
+  const expenseSignals = [
+    /common\s+area\s+maintenance/i,
+    /\bcam\b/i,
+    /operating\s+expenses?/i,
+    /real\s+estate\s+tax(?:es)?/i,
+    /property\s+tax(?:es)?/i,
+    /property\s+insurance/i,
+    /pro\s*rata\s+share/i,
+    /expense\s+stop/i,
+    /base\s+year/i,
+    /tenant\s+shall\s+(?:reimburse|pay).{0,80}(?:tax|insurance|operating|cam|common\s+area|expense)/i,
+    /triple\s+net|\bnnn\b/i,
+    /full[-\s]?service|modified\s+gross|gross\s+lease/i,
+    /after[-\s]?hours\s+hvac|separately\s+metered/i,
+  ].filter((pattern) => pattern.test(combined)).length;
+  const documentType = assignmentSignals >= 2
+    ? "assignment"
+    : amendmentSignals >= 2
+      ? "amendment"
+      : nameLower.includes("assignment")
+        ? "assignment"
+        : nameLower.includes("amend")
+          ? "amendment"
+          : "full_lease";
+  const assignmentOrAmendmentOnly = ["assignment", "amendment"].includes(documentType) && expenseSignals < 2;
+  const leaseStructure = /modified\s+gross|base\s+year|expense\s+stop/i.test(combined)
+    ? "modified_gross_base_year"
+    : /full[-\s]?service|gross\s+lease/i.test(combined)
+      ? "full_service"
+      : /triple\s+net|\bnnn\b|net\s+lease/i.test(combined)
+        ? "nnn"
+        : "unknown";
+
+  return {
+    documentType,
+    leaseStructure,
+    assignmentOrAmendmentOnly,
+    expenseSignals,
+    assignmentSignals,
+    amendmentSignals,
   };
 }
 
@@ -645,6 +795,21 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   }
 
   if (NOT_CAM_KEYS.has(canonicalKey)) {
+    if (existingEvidenceSupportsCategory) {
+      const directTreatment = ["tenant_insurance", "alterations"].includes(canonicalKey)
+        ? "tenant_direct_contract"
+        : "not_applicable";
+      const reason = canonicalKey === "tenant_insurance"
+        ? "Tenant insurance is a tenant direct obligation, not CAM or common operating expense recovery."
+        : canonicalKey === "alterations"
+          ? "Alterations are tenant direct obligations unless a specific CAM recovery clause says otherwise."
+          : canonicalKey === "late_fees"
+            ? "Late fees are default charges, not CAM or operating expense recovery."
+            : canonicalKey === "interest"
+              ? "Interest is a default/revenue charge unless tied to an allowed amortized capital exception."
+              : "Lease obligation is not a CAM expense recovery rule.";
+      return nonCamObligationRule(normalizedRule, existingEvidence, reason, directTreatment);
+    }
     return notFoundRule(normalizedRule, `${CANONICAL_TO_LABEL[canonicalKey] || canonicalKey} is not a CAM expense rule without a specific supporting lease expense clause.`);
   }
 
@@ -813,14 +978,11 @@ export const leaseRulePipelineService = {
     diagnostics.sourceTextLength = sourceText?.length || 0;
 
     // 4. Document Type Detection
-    const leaseNameLower = String(lease.name || lease.lease_name || "").toLowerCase();
-    const isAssignment = leaseNameLower.includes("assignment");
-    const isAmendment = leaseNameLower.includes("amend");
-    if (isAssignment) diagnostics.documentType = "assignment";
-    else if (isAmendment) diagnostics.documentType = "amendment";
-    else if (leaseNameLower.includes("renewal")) diagnostics.documentType = "renewal";
-    else if (leaseNameLower.includes("estoppel")) diagnostics.documentType = "estoppel";
-    else if (leaseNameLower.includes("exhibit")) diagnostics.documentType = "exhibit";
+    const documentProfile = detectDocumentProfile({ lease, sourceText });
+    diagnostics.documentType = documentProfile.documentType;
+    diagnostics.leaseStructure = documentProfile.leaseStructure;
+    diagnostics.assignmentOrAmendmentOnly = documentProfile.assignmentOrAmendmentOnly;
+    diagnostics.expenseSignals = documentProfile.expenseSignals;
 
 
 
@@ -829,37 +991,32 @@ export const leaseRulePipelineService = {
       sourceFileId: diagnostics.sourceFileId,
       sourceTextLength: diagnostics.sourceTextLength,
       documentType: diagnostics.documentType,
+      leaseStructure: diagnostics.leaseStructure,
+      assignmentOrAmendmentOnly: diagnostics.assignmentOrAmendmentOnly,
+      expenseSignals: diagnostics.expenseSignals,
       leaseType: lease.lease_type,
       hasExtractionData: !!lease?.extraction_data,
       extractionKeys: Object.keys(lease?.extraction_data || {})
     });
 
+    if (documentProfile.assignmentOrAmendmentOnly) {
+      console.log("[PIPELINE DOCUMENT PROFILE] original lease required for expense rules", documentProfile);
+      const saved = await leaseExpenseRuleService.saveRuleSet({
+        lease,
+        rules: [originalLeaseRequiredRule(lease.id, documentProfile.documentType)],
+        status: "draft",
+        createdFrom: "original_lease_required",
+        categories: []
+      });
+      diagnostics.persistedRulesCount = saved?.rules?.length || 0;
+      diagnostics.skippedReasons = "original_lease_required";
+      return diagnostics;
+    }
+
     // Force reruns should only replace unresolved extraction output. Human-approved
     // rows are the durable approval record and must survive regeneration.
     if (force) {
-      console.log("[FORCE DELETE UNRESOLVED RULES]", { leaseId, force });
-      const { data: existingRules, error: existingRulesError } = await supabase
-        .from("lease_expense_rules")
-        .select("id, review_status, approval_status")
-        .eq("lease_id", leaseId);
-      if (existingRulesError) {
-        console.log("[FORCE SELECT OLD RULES FAILED]", { existingRulesError });
-      }
-      const deletableIds = (existingRules || [])
-        .filter((rule) => {
-          const reviewStatus = String(rule.review_status || "").toLowerCase();
-          const approvalStatus = String(rule.approval_status || "").toLowerCase();
-          return !(reviewStatus === "approved" && approvalStatus === "approved");
-        })
-        .map((rule) => rule.id)
-        .filter(Boolean);
-      const { data: deletedData, error: deleteError } = deletableIds.length > 0
-        ? await supabase.from("lease_expense_rules").delete().in("id", deletableIds).select("*")
-        : { data: [], error: null };
-      console.log("[DELETE UNRESOLVED RESULT]", { deleted: deletedData?.length || 0, deleteError });
-      
-      const { count: postDeleteCount, error: countError } = await supabase.from("lease_expense_rules").select("*", { count: "exact", head: true }).eq("lease_id", leaseId);
-      console.log("[POST DELETE RULE COUNT]", { postDeleteCount, countError });
+      console.log("[FORCE REEXTRACT] destructive delete skipped; saveRuleSet will supersede stale unresolved rows", { leaseId, force });
     }
 
     // 5. Collect Candidates
@@ -1070,10 +1227,18 @@ export const leaseRulePipelineService = {
     const capType = resolve("cap_type");
     const reconciliation = resolve("reconciliation_required") || resolve("cam_reconciliation");
     
-    const baseYear = resolve("base_year") || resolve("expense_base_year");
-    const opExBase = asNumber(resolve("operating_expense_base_amount"));
-    const taxBase = asNumber(resolve("tax_base_amount"));
-    const insBase = asNumber(resolve("insurance_base_amount"));
+    const baseYear = resolve("base_year") || resolve("expense_base_year")
+      || textMatcher(/base\s+year(?:\s+(?:shall\s+be|is|means|of))?[^\d]{0,40}(20\d{2})/i, (val) => val)
+      || textMatcher(/(20\d{2})[^\n.]{0,80}(?:base\s+year|expense\s+stop)/i, (val) => val);
+    const opExBase = asNumber(resolve("operating_expense_base_amount"))
+      || textMatcher(/operating\s+expenses?(?:\s+base|\s+stop|)[^$]{0,120}\$?\s*([\d,]+(?:\.\d{2})?)/i, (val) => asNumber(val.replace(/,/g, '')))
+      || textMatcher(/\$?\s*([\d,]+(?:\.\d{2})?)[^.\n]{0,80}operating\s+expenses?\s+(?:base|stop)/i, (val) => asNumber(val.replace(/,/g, '')));
+    const taxBase = asNumber(resolve("tax_base_amount"))
+      || textMatcher(/(?:real\s+estate\s+)?tax(?:es)?(?:\s+base|\s+stop|)[^$]{0,120}\$?\s*([\d,]+(?:\.\d{2})?)/i, (val) => asNumber(val.replace(/,/g, '')))
+      || textMatcher(/\$?\s*([\d,]+(?:\.\d{2})?)[^.\n]{0,80}(?:real\s+estate\s+)?tax(?:es)?\s+(?:base|stop)/i, (val) => asNumber(val.replace(/,/g, '')));
+    const insBase = asNumber(resolve("insurance_base_amount"))
+      || textMatcher(/insurance(?:\s+base|\s+stop|)[^$]{0,120}\$?\s*([\d,]+(?:\.\d{2})?)/i, (val) => asNumber(val.replace(/,/g, '')))
+      || textMatcher(/\$?\s*([\d,]+(?:\.\d{2})?)[^.\n]{0,80}insurance\s+(?:base|stop)/i, (val) => asNumber(val.replace(/,/g, '')));
 
     // If we have these values, we should append them to all structured rules or create a dummy rule 
     // that the merger will merge into other rules.
@@ -1177,11 +1342,19 @@ export const leaseRulePipelineService = {
   },
 
   mapLlmRule(rule, leaseId) {
+    const normalizedKey = canonicalRuleKey(rule);
     return {
       ...rule,
       lease_id: leaseId,
+      normalized_key: normalizedKey,
       source_type: "llm_extraction",
-      confidence_score: rule.confidence || 0.7
+      generation_source: "llm_extraction",
+      confidence_score: rule.confidence_score || rule.confidence || 0.7,
+      base_year_amount: normalizedKey === "operating_expenses"
+        ? firstPresent(rule.base_year_amount, rule.operating_expense_base_amount)
+        : rule.base_year_amount,
+      tax_base_amount: firstPresent(rule.tax_base_amount, normalizedKey === "real_estate_taxes" ? rule.base_year_amount : null),
+      insurance_base_amount: firstPresent(rule.insurance_base_amount, normalizedKey === "property_insurance" ? rule.base_year_amount : null),
     };
   },
 

@@ -189,6 +189,32 @@ const WEAK_SOURCE_PATTERNS = [
   /billable exception charge under/i,
 ];
 
+const CATEGORY_EVIDENCE_PATTERNS = {
+  common_area_maintenance: [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i],
+  operating_expenses: [/operating\s+expenses?/i, /common\s+area\s+maintenance/i, /\bcam\b/i],
+  real_estate_taxes: [/real\s+estate\s+tax/i, /property\s+tax/i, /\btaxes\b/i, /assessment/i],
+  property_insurance: [/property\s+insurance/i, /\binsurance\b/i],
+  utilities: [/utilit/i, /electric/i, /water/i, /gas/i, /sewer/i],
+  janitorial: [/janitorial/i, /cleaning/i],
+  trash_removal: [/trash/i, /refuse/i, /garbage/i],
+  security: [/security\s+(?:service|services|patrol|guard|monitoring)/i],
+  landscaping: [/landscap/i],
+  snow_removal: [/(?:snow|ice)[\s\S]{0,80}removal/i, /snow\s+plowing/i],
+  parking: [/parking[\s\S]{0,120}(?:maintenance|repair|lighting|sweeping|striping|snow|common\s+area|operating\s+expense|cam)/i],
+  administrative_fees: [/admin(?:istrative)?\s+fee/i],
+  management_fees: [/management\s+fee/i, /property\s+management/i],
+  capital_expenditures: [/capital[\s\S]{0,120}(?:expenditure|improvement|replacement|amorti|useful\s+life|cost[-\s]?saving|legally\s+required)/i],
+  tenant_insurance: [/tenant\b[\s\S]{0,120}\b(?:insurance|liability|certificate)/i, /commercial\s+general\s+liability/i],
+};
+
+const CATEGORY_REJECTION_PATTERNS = {
+  security: [/security\s+deposit/i, /deposit/i],
+  parking: [/premises\s+known\s+as/i, /parking\s+rights/i],
+  property_insurance: [/tenant\s+(?:shall|must|will|agrees).{0,80}(?:maintain|carry|obtain).{0,80}insurance/i],
+  tenant_insurance: [/landlord.{0,80}property\s+insurance/i, /property\s+insurance.{0,80}(?:reimburs|recover)/i],
+  interest: [/capital\s+expenditure/i, /assignment/i],
+};
+
 function isSupersededRule(rule) {
   return [rule?.row_status, rule?.status, rule?.extraction_status]
     .some((value) => normalizeRuleToken(value) === "superseded");
@@ -231,7 +257,10 @@ function isManualOverrideRule(rule) {
 }
 
 function isHumanApprovedOrManualRule(rule) {
-  return isApprovedRule(rule) || isManualOverrideRule(rule);
+  const weak = isFallbackOrChecklistRule(rule);
+  const manualWithNote = isManualOverrideRule(rule) && hasManualOverrideNote(rule);
+  if (weak) return manualWithNote;
+  return isApprovedRule(rule) || manualWithNote;
 }
 
 function getRuleSourceText(rule) {
@@ -267,7 +296,19 @@ function hasSourcePageEvidence(rule) {
 
 function hasStrongLeaseEvidence(rule) {
   const sourceText = getRuleSourceText(rule);
-  return !isWeakRuleSourceText(sourceText) || hasSourcePageEvidence(rule);
+  if (isWeakRuleSourceText(sourceText) && !hasSourcePageEvidence(rule)) return false;
+  return sourceSupportsRuleCategory(rule, sourceText);
+}
+
+function sourceSupportsRuleCategory(rule, sourceText) {
+  const categoryKey = normalizeDisplayKey(rule.normalized_key || rule.expense_subcategory || rule.expense_category || rule.category_name);
+  const text = String(sourceText || "");
+  if (!text.trim()) return false;
+  const rejectionPatterns = CATEGORY_REJECTION_PATTERNS[categoryKey] || [];
+  if (rejectionPatterns.some((pattern) => pattern.test(text))) return false;
+  const evidencePatterns = CATEGORY_EVIDENCE_PATTERNS[categoryKey] || [];
+  if (evidencePatterns.length === 0) return true;
+  return evidencePatterns.some((pattern) => pattern.test(text));
 }
 
 function isFallbackOrChecklistRule(rule) {
@@ -289,6 +330,7 @@ function isFallbackOrChecklistRule(rule) {
     "text_fallback",
     "unsupported",
     "unsupported_fallback",
+    "original_lease_required",
     "missing_source_evidence",
     "inferred",
   ].includes(token));
@@ -317,6 +359,23 @@ function isCoverageGapRule(rule) {
   if (isSupersededRule(rule)) return false;
   if (isLeaseDerivedRule(rule)) return false;
   return true;
+}
+
+function getCoverageGapLabel(rule) {
+  const tokens = [
+    rule?.generation_source,
+    rule?.source_type,
+    rule?.extraction_status,
+    rule?.row_status,
+    rule?.status,
+  ].map(normalizeRuleToken);
+  if (tokens.includes("original_lease_required")) return "Original lease required";
+  if (tokens.includes("weak_evidence")) return "Weak evidence";
+  if (tokens.includes("not_found") || tokens.includes("not_mentioned")) return "Not found in lease / Needs Review";
+  if (tokens.includes("template_checklist")) return "Checklist gap / Needs Review";
+  if (tokens.includes("amount_only_gap")) return "Amount gap / Needs Review";
+  if (tokens.includes("text_fallback_keyword") || tokens.includes("text_fallback")) return "Keyword fallback / Needs Review";
+  return "Unsupported category / Needs Review";
 }
 
 function getDisplayCamPublishStatus(rule, validation, displayMode) {
@@ -1186,7 +1245,7 @@ export default function LeaseExpenseRules() {
                         </p>
                         {displayMode === "gaps" && (
                           <Badge className="bg-amber-100 text-amber-800 text-[9px] px-1 py-0 h-4 mt-1">
-                            Not found in lease / Needs Review
+                            {getCoverageGapLabel(rule)}
                           </Badge>
                         )}
                         {rule._is_fallback && (
