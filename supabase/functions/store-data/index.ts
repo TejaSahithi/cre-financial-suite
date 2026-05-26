@@ -61,8 +61,11 @@ function mapRow(
         tenant_name: row.tenant_name ?? null,
         start_date: row.start_date ?? row.lease_start ?? null,
         end_date: row.end_date ?? row.lease_end ?? null,
-        monthly_rent: row.monthly_rent ?? row.base_rent ?? 0,
-        square_footage: row.square_footage ?? row.total_sf ?? 0,
+        // Preserve null when the row has no rent/sqft value — defaulting to 0
+        // stamps a misleading "extracted" zero on the lease. Downstream
+        // calculations that need a number already coalesce null to 0.
+        monthly_rent: row.monthly_rent ?? row.base_rent ?? null,
+        square_footage: row.square_footage ?? row.total_sf ?? null,
         lease_type: row.lease_type ?? null,
         status: row.status === "expired" || row.status === "budget_ready" ? row.status : "draft",
         property_id: row.property_id ?? null,

@@ -930,8 +930,13 @@ function buildLeaseReviewDraftPayload(
     tenant_name: row.tenant_name ?? "Lease Review Draft",
     start_date: normalizeDate(row.start_date ?? row.lease_start),
     end_date: normalizeDate(row.end_date ?? row.lease_end),
-    monthly_rent: monthlyRent ?? 0,
-    square_footage: squareFootage ?? 0,
+    // Preserve null when extraction found no rent value. The leases.monthly_rent
+    // column is `numeric DEFAULT 0` but nullable; writing null here keeps the
+    // extraction surface honest ("Not Found") instead of stamping a misleading
+    // $0 that the UI then renders as a confirmed extracted value. Downstream
+    // arithmetic consumers (billing/budget/CAM) already coalesce null to 0.
+    monthly_rent: monthlyRent ?? null,
+    square_footage: squareFootage ?? null,
     lease_type: row.lease_type ?? null,
     lease_date: normalizeDate(workflowFieldValue("lease_date")),
     property_name: workflowFieldValue("property_name") ?? null,

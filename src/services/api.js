@@ -907,14 +907,25 @@ export function createEntityService(entityName) {
         normalized.base_rent = normalized.monthly_rent;
       }
       if (normalized.annual_rent === undefined && normalized.monthly_rent !== undefined) {
-        normalized.annual_rent = Number(normalized.monthly_rent || 0) * 12;
+        // Only derive annual_rent when monthly is a real positive number.
+        // Defaulting null/0 to 0 here was producing a misleading $0 annual
+        // value on leases where rent was never extracted.
+        const numericMonthly = Number(normalized.monthly_rent);
+        normalized.annual_rent = Number.isFinite(numericMonthly) && numericMonthly > 0
+          ? numericMonthly * 12
+          : null;
       }
       if (
         normalized.rent_per_sf === undefined &&
         normalized.annual_rent !== undefined &&
         normalized.square_footage
       ) {
-        normalized.rent_per_sf = Number(normalized.annual_rent || 0) / Number(normalized.square_footage || 1);
+        const numericAnnual = Number(normalized.annual_rent);
+        const numericSf = Number(normalized.square_footage);
+        normalized.rent_per_sf =
+          Number.isFinite(numericAnnual) && numericAnnual > 0 && Number.isFinite(numericSf) && numericSf > 0
+            ? numericAnnual / numericSf
+            : null;
       }
     }
 

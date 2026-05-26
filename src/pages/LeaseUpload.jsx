@@ -949,9 +949,13 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
     expiration_date: normalizeDate(firstRow.expiration_date),
     lease_date: normalizeDate(firstRow.lease_date),
     rent_commencement_date: normalizeDate(firstRow.rent_commencement_date),
-    monthly_rent: numeric(firstRow.monthly_rent ?? firstRow.base_rent) ?? 0,
+    // Preserve null when extraction returned no rent value. Defaulting to 0
+    // here surfaces in Lease Review as a confirmed "$0 Extracted" badge,
+    // which is wrong — extraction never produced a value. Leave it null so
+    // the resolver reports Not Found / Needs Review correctly.
+    monthly_rent: numeric(firstRow.monthly_rent ?? firstRow.base_rent),
     annual_rent: numeric(firstRow.annual_rent),
-    square_footage: numeric(firstRow.square_footage ?? firstRow.total_sf) ?? 0,
+    square_footage: numeric(firstRow.square_footage ?? firstRow.total_sf),
     lease_type: firstRow.lease_type ?? null,
     cam_amount: numeric(firstRow.cam_amount),
     nnn_amount: numeric(firstRow.nnn_amount),
