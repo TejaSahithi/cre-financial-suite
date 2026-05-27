@@ -171,6 +171,14 @@ const FIELD_SPECS = [
   { key: "landlord_name", group: "lease_header", aliases: ["landlord_name", "landlord", "lessor", "owner_landlord", "owner_name"], patterns: [/\bLANDLORD[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|TENANT|LESSEE|Address|whose|having)|\s*\n|$)/, /\bLessor[:\s-]+([A-Z][^\n]{2,160})/] },
   { key: "landlord_address", group: "lease_header", aliases: ["landlord_address", "landlord_notice_address", "lessor_address"], patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i, /\baddress\s+of\s+landlord\b[:\s-]+([^\n]{6,180})/i] },
   { key: "tenant_name", group: "lease_header", aliases: ["tenant_name", "tenant", "lessee", "occupant"], patterns: [/\bTENANT[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|LANDLORD|LESSOR|Address|whose|having)|\s*\n|$)/, /\bLessee[:\s-]+([A-Z][^\n]{2,160})/] },
+  { key: "assignor_name", group: "assignment_amendment", aliases: ["assignor_name", "assignor", "original_tenant", "transferor"], patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
+  { key: "assignee_name", group: "assignment_amendment", aliases: ["assignee_name", "assignee", "new_tenant", "transferee"], patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
+  { key: "assignment_effective_date", group: "assignment_amendment", aliases: ["assignment_effective_date", "assignment_date"], patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { key: "landlord_consent", group: "assignment_amendment", aliases: ["landlord_consent"], patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
+  { key: "assumption_scope", group: "assignment_amendment", aliases: ["assumption_scope"], patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
+  { key: "assignee_notice_address", group: "assignment_amendment", aliases: ["assignee_notice_address"], patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
+  { key: "assignment_consideration", group: "assignment_amendment", aliases: ["assignment_consideration"], patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { key: "all_other_terms_remain_same", group: "assignment_amendment", aliases: ["all_other_terms_remain_same"], patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
   // tenant_contact_name aliases must include tenant_signatory_name (set by
   // the Gemini extractor) so the signer goes here, NOT into tenant_name.
   // The fallback regex for `By: <name>` is left in place for documents
@@ -192,6 +200,8 @@ const FIELD_SPECS = [
   { key: "renewal_escalation_percent", group: "lease_term", aliases: ["renewal_escalation_percent", "escalation_rate"], patterns: [/\brenewal\b[^\n]{0,80}?(\d{1,2}(?:\.\d+)?)\s*%/i] },
   { key: "holdover_rent_multiplier", group: "lease_term", aliases: ["holdover_rent_multiplier"], clauseType: "holdover", patterns: [/\bholdover\b[^\n]{0,80}?(\d(?:\.\d+)?)\s*x/i, /\bholdover\b[^\n]{0,80}?(\d{2,3})\s*%/i] },
   { key: "base_rent_monthly", group: "rent_terms", aliases: ["base_rent_monthly", "monthly_rent", "base_rent", "monthly_base_rent", "current_monthly_rent"], patterns: [/\b(?:base rent|monthly rent|rent)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per month|\/month|\/mo|monthly)/i] },
+  { key: "annual_rent", group: "rent_terms", aliases: ["annual_rent"], patterns: [/\b(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i, /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i, /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i] },
+  { key: "amended_base_rent_for_additional_year", group: "assignment_amendment", aliases: ["amended_base_rent_for_additional_year"], patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { key: "rent_due_day", group: "rent_terms", aliases: ["rent_due_day"], patterns: [/\brent\s+.*due[^\n]{0,20}?day\s+(\d{1,2})/i, /\bon\s+the\s+(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+each\s+month/i] },
   { key: "rent_frequency", group: "rent_terms", aliases: ["rent_frequency"], patterns: [/\b(monthly|quarterly|annually|annual)\b/i] },
   { key: "rent_payment_timing", group: "rent_terms", aliases: ["rent_payment_timing"], patterns: [/\b(monthly\s+in\s+advance|payable\s+monthly\s+in\s+advance|in\s+advance)\b/i] },
@@ -596,6 +606,281 @@ function buildClauseRecords(doclingRaw: any, fullText: string) {
       structured_fields_json: structuredFieldsJson,
     };
   });
+}
+
+const BUSINESS_AREA_BY_FIELD_GROUP: Record<string, string> = {
+  lease_header: "parties_premises",
+  premises: "parties_premises",
+  lease_term: "dates_term",
+  rent_terms: "rent_charges",
+  expense_terms: "expenses_recoveries",
+  insurance: "insurance",
+  assignment_amendment: "assignment_amendment",
+};
+
+const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
+  rent_clause: "rent_charges",
+  operating_expense_recovery: "expenses_recoveries",
+  cam_recoveries: "cam_rules",
+  insurance_requirements: "insurance",
+  renewal_option: "critical_dates",
+  termination: "critical_dates",
+  assignment_subletting: "assignment_amendment",
+  notices: "assignment_amendment",
+  defaults_remedies: "legal_options",
+  late_fees: "rent_charges",
+  alterations: "legal_options",
+  holdover: "rent_charges",
+};
+
+const UNIVERSAL_ITEM_DEFS = [
+  { item_type: "lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\b(?:lease\s+date|dated)\b[^\n]{0,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
+  { item_type: "premises_size", business_area: "parties_premises", field_key: "rentable_area_sqft", maps: true, patterns: [/\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?([\d,]+)\s+rentable\s+square\s+feet/i, /\b([\d,]+)\s+rentable\s+square\s+feet[^.\n]{0,120}?(?:premises|leased premises|demised premises)/i] },
+  { item_type: "premises_address", business_area: "parties_premises", field_key: "property_address", maps: true, patterns: [/\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?(?:located|address|known)\s+(?:at|as)?\s*([0-9]{2,6}[^.\n]{8,220})/i] },
+  { item_type: "landlord", business_area: "parties_premises", field_key: "landlord_name", maps: true, patterns: [/\b(?:landlord|lessor)\b[:\s-]+([A-Z][^\n]{2,140}?)(?=\s+(?:and|,?\s*a\s|By:|Assignor|Assignee|Tenant|Lessee)|\n|$)/i] },
+  { item_type: "assignor", business_area: "assignment_amendment", field_key: "assignor_name", maps: true, patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
+  { item_type: "assignee_current_tenant", business_area: "assignment_amendment", field_key: "tenant_name", maps: true, patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
+  { item_type: "assignee_name", business_area: "assignment_amendment", field_key: "assignee_name", maps: true, patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
+  { item_type: "assignment_effective_date", business_area: "assignment_amendment", field_key: "assignment_effective_date", maps: true, patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { item_type: "assignment_consideration", business_area: "assignment_amendment", field_key: "assignment_consideration", maps: false, patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { item_type: "assumption_of_obligations", business_area: "assignment_amendment", field_key: "assumption_scope", maps: true, booleanValue: "yes", patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
+  { item_type: "landlord_consent", business_area: "assignment_amendment", field_key: "landlord_consent", maps: true, booleanValue: "yes", patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
+  { item_type: "amended_expiration_date", business_area: "dates_term", field_key: "expiration_date", maps: true, patterns: [/\b(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expiring|expires?\s+on)\b[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { item_type: "amended_base_rent_for_additional_year", business_area: "rent_charges", field_key: "annual_rent", maps: true, patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { item_type: "assignee_notice_address", business_area: "assignment_amendment", field_key: "assignee_notice_address", maps: true, patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
+  { item_type: "all_other_terms_remain_same", business_area: "assignment_amendment", field_key: "all_other_terms_remain_same", maps: false, booleanValue: "yes", patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
+];
+
+function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
+  const text = normalizeToken(`${documentSubtype || ""} ${fullText}`);
+  const isAssignment = /assignment|assignor|assignee|consent to assignment|assumption of lease/.test(text);
+  const isAmendment = /amendment|amended|extension|extended|modified|all other terms/.test(text);
+  if (isAssignment && isAmendment) return "assignment_amendment";
+  if (isAssignment) return "assignment";
+  if (isAmendment) return "amendment";
+  if (/abstract|summary/.test(text)) return "abstract";
+  if (/addendum/.test(text)) return "addendum";
+  if (/exhibit/.test(text)) return "exhibit";
+  return "full_lease";
+}
+
+function findUniversalMatch(doclingRaw: any, fullText: string, patterns: RegExp[]) {
+  const blocks = asArray(doclingRaw?.text_blocks);
+  for (const pattern of patterns) {
+    for (const block of blocks) {
+      const text = cleanText(block?.text || "");
+      const match = text.match(pattern);
+      if (match?.[0]) {
+        return {
+          raw: cleanText(match[1] || match[0]),
+          source_text: cleanText(match[0]),
+          source_page: block?.page ?? null,
+        };
+      }
+    }
+    const match = fullText.match(pattern);
+    if (match?.[0]) {
+      return {
+        raw: cleanText(match[1] || match[0]),
+        source_text: cleanText(match[0]),
+        source_page: null,
+      };
+    }
+  }
+  return null;
+}
+
+function normalizeUniversalValue(itemType: string, raw: unknown) {
+  if (raw == null) return null;
+  if (/date/.test(itemType)) return toIsoDate(raw) || cleanText(raw);
+  if (/rent|consideration|size|sqft|amount/.test(itemType)) {
+    const numeric = asNumber(raw);
+    return numeric != null ? numeric : cleanText(raw);
+  }
+  return cleanText(raw);
+}
+
+function createDocumentItem(args: Record<string, unknown>) {
+  const sourceText = cleanText(args.source_text || "");
+  return {
+    item_id: String(args.item_id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
+    document_id: args.document_id ?? null,
+    lease_id: args.lease_id ?? null,
+    document_profile: args.document_profile ?? "full_lease",
+    section_title: args.section_title ?? null,
+    section_number: args.section_number ?? null,
+    item_type: args.item_type,
+    business_area: args.business_area || "unknown_needs_review",
+    field_key: args.field_key ?? null,
+    category: args.category ?? null,
+    subcategory: args.subcategory ?? null,
+    value: args.value ?? null,
+    normalized_value: args.normalized_value ?? args.value ?? null,
+    raw_value: args.raw_value ?? args.value ?? null,
+    source_text: sourceText || null,
+    source_page: args.source_page ?? null,
+    confidence: args.confidence ?? (sourceText ? 0.78 : 0.35),
+    extraction_method: args.extraction_method || "workflow_universal_item",
+    extraction_status: args.extraction_status || (sourceText ? "extracted" : "needs_review"),
+    maps_to_existing_field: Boolean(args.maps_to_existing_field),
+    creates_lease_expense_rule: Boolean(args.creates_lease_expense_rule),
+    requires_original_lease: Boolean(args.requires_original_lease),
+    review_status: args.review_status || "needs_review",
+  };
+}
+
+function buildUniversalDocumentItems(args: {
+  row: Record<string, unknown>;
+  doclingRaw: any;
+  fullText: string;
+  documentProfile: string;
+  leaseFields: Record<string, LeaseWorkflowField>;
+  clauses: LeaseWorkflowClause[];
+}) {
+  const { row, doclingRaw, fullText, documentProfile, leaseFields, clauses } = args;
+  const items: any[] = [];
+  const seen = new Set<string>();
+  const addItem = (item: any) => {
+    const key = [
+      item.item_type,
+      item.field_key || "",
+      normalizeToken(item.source_text || item.raw_value || item.value || "").slice(0, 140),
+    ].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+
+  for (const [fieldKey, field] of Object.entries(leaseFields || {})) {
+    if (isBlank(field?.value) || isBlank(field?.source_clause)) continue;
+    if (field?.extraction_status === "calculated") continue;
+    const group = field?.field_group || "clause_records";
+    addItem(createDocumentItem({
+      item_id: `field:${fieldKey}`,
+      document_profile: documentProfile,
+      item_type: fieldKey,
+      business_area: BUSINESS_AREA_BY_FIELD_GROUP[group] || "clause_records",
+      field_key: fieldKey,
+      value: field.value,
+      normalized_value: field.value,
+      raw_value: field.value,
+      source_text: field.source_clause,
+      source_page: field.source_page,
+      confidence: field.confidence_score ?? 0.74,
+      extraction_method: "mapped_lease_field",
+      extraction_status: field.extraction_status || "extracted",
+      maps_to_existing_field: true,
+      creates_lease_expense_rule: group === "expense_terms",
+    }));
+  }
+
+  for (const def of UNIVERSAL_ITEM_DEFS) {
+    const match = findUniversalMatch(doclingRaw, fullText, def.patterns);
+    if (!match?.source_text) continue;
+    const value = def.booleanValue || normalizeUniversalValue(def.item_type, match.raw);
+    addItem(createDocumentItem({
+      item_id: `universal:${def.item_type}:${normalizeToken(match.source_text).slice(0, 40)}`,
+      document_profile: documentProfile,
+      item_type: def.item_type,
+      business_area: def.business_area,
+      field_key: def.field_key,
+      value,
+      normalized_value: value,
+      raw_value: match.raw,
+      source_text: match.source_text,
+      source_page: match.source_page,
+      confidence: 0.82,
+      extraction_method: "universal_pattern",
+      extraction_status: "extracted",
+      maps_to_existing_field: def.maps,
+      creates_lease_expense_rule: false,
+    }));
+  }
+
+  for (const clause of clauses || []) {
+    if (!clause?.clause_text) continue;
+    const clauseType = clause.clause_type || "clause_record";
+    addItem(createDocumentItem({
+      item_id: `clause:${clauseType}`,
+      document_profile: documentProfile,
+      section_title: clause.clause_title,
+      item_type: clauseType,
+      business_area: BUSINESS_AREA_BY_CLAUSE_TYPE[clauseType] || "clause_records",
+      value: clause.clause_title,
+      normalized_value: clause.clause_title,
+      raw_value: clause.clause_text,
+      source_text: clause.clause_text,
+      source_page: clause.source_page,
+      confidence: clause.confidence_score ?? 0.78,
+      extraction_method: "clause_record",
+      extraction_status: "extracted",
+      maps_to_existing_field: false,
+      creates_lease_expense_rule: ["operating_expense_recovery", "cam_recoveries", "insurance_requirements", "repairs_maintenance", "late_fees"].includes(clauseType),
+    }));
+  }
+
+  const hasExpenseClause = items.some((item) =>
+    item.creates_lease_expense_rule ||
+    ["expenses_recoveries", "cam_rules", "insurance"].includes(item.business_area)
+  );
+  if (["assignment", "amendment", "assignment_amendment"].includes(documentProfile) && !hasExpenseClause) {
+    const support = items.find((item) =>
+      item.business_area === "assignment_amendment" &&
+      /assignment|assignee|amend|all other terms|remain/i.test(String(item.source_text || ""))
+    );
+    addItem(createDocumentItem({
+      item_id: "coverage_gap:original_lease_required_for_expense_rules",
+      document_profile: documentProfile,
+      item_type: "original_lease_required_for_expense_rules",
+      business_area: "expenses_recoveries",
+      field_key: "original_lease_required_for_expense_rules",
+      value: "yes",
+      normalized_value: "yes",
+      raw_value: "original lease required",
+      source_text: support?.source_text || null,
+      source_page: support?.source_page ?? null,
+      confidence: support?.source_text ? 0.74 : 0.45,
+      extraction_method: "document_profile",
+      extraction_status: "needs_review",
+      maps_to_existing_field: false,
+      creates_lease_expense_rule: false,
+      requires_original_lease: true,
+    }));
+  }
+
+  return items;
+}
+
+function applyDocumentItemsToLeaseFields(
+  leaseFields: Record<string, LeaseWorkflowField>,
+  items: any[],
+) {
+  for (const item of items || []) {
+    if (!item?.maps_to_existing_field || !item?.field_key || isBlank(item.value) || !item.source_text) continue;
+    const fieldKey = String(item.field_key);
+    const existing = leaseFields[fieldKey];
+    const shouldOverride =
+      !existing ||
+      isBlank(existing.value) ||
+      ["not_found", "manual_required", "needs_review", "missing_source_evidence"].includes(String(existing.extraction_status || ""));
+    const assignmentCurrentTenant = item.item_type === "assignee_current_tenant";
+    if (!shouldOverride && !assignmentCurrentTenant) continue;
+    leaseFields[fieldKey] = {
+      ...(existing || {
+        key: fieldKey,
+        editable: true,
+        field_group: item.business_area === "assignment_amendment" ? "assignment_amendment" : "lease_header",
+      }),
+      key: fieldKey,
+      value: normalizeWorkflowFieldValue(fieldKey, item.normalized_value ?? item.value),
+      source_page: item.source_page ?? null,
+      source_clause: item.source_text,
+      confidence_score: item.confidence ?? 0.82,
+      extraction_status: "extracted",
+      editable: true,
+      field_group: existing?.field_group || (item.business_area === "assignment_amendment" ? "assignment_amendment" : "lease_header"),
+    };
+  }
 }
 
 function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, clauses: LeaseWorkflowClause[]) {
@@ -1688,7 +1973,25 @@ export function buildLeaseWorkflowAbstraction(args: {
   const doclingRaw = args?.doclingRaw || {};
   const fullText = cleanText(doclingRaw?.full_text || "");
   const clauses = buildClauseRecords(doclingRaw, fullText);
+  const documentProfile = detectDocumentProfile(fullText, args?.documentSubtype || null);
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
+  let extractedDocumentItems = buildUniversalDocumentItems({
+    row,
+    doclingRaw,
+    fullText,
+    documentProfile,
+    leaseFields,
+    clauses,
+  });
+  applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
+  extractedDocumentItems = buildUniversalDocumentItems({
+    row,
+    doclingRaw,
+    fullText,
+    documentProfile,
+    leaseFields,
+    clauses,
+  });
   let expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   const signals = inferLeaseSignals(fullText, row);
   const finalLeaseType = classifyLeaseType(fullText, expenseRules, signals);
@@ -1715,8 +2018,11 @@ export function buildLeaseWorkflowAbstraction(args: {
 
   return {
     document_subtype: args?.documentSubtype || null,
+    document_profile: documentProfile,
     lease_fields: leaseFields,
     lease_clauses: clauses,
+    extracted_document_items: extractedDocumentItems,
+    clause_records: extractedDocumentItems,
     expense_rules: expenseRules,
     cam_profile: camProfile,
     budget_preview: budgetPreview,
@@ -1727,6 +2033,7 @@ export function buildLeaseWorkflowAbstraction(args: {
       manual_required_count: Object.values(leaseFields).filter((field) => field.extraction_status === "manual_required").length,
       conflict_count: Object.values(leaseFields).filter((field) => field.extraction_status === "conflict_detected").length,
       clause_count: clauses.filter((clause) => clause.clause_text).length,
+      extracted_document_item_count: extractedDocumentItems.length,
       expense_rule_count: expenseRules.length,
       validation_error_count: validations.filter((item) => item.pass === false).length,
     },

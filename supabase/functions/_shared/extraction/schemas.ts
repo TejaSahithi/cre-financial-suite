@@ -163,13 +163,38 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: ["assumption", "assumption scope", "assumes", "obligations assumed", "scope of assumption"],
     tableHeaders: ["assumption_scope", "assumption", "obligations assumed"],
+    patterns: [/(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i],
     description: "Assignment assumption language or obligations assumed by the assignee",
   },
   assignee_notice_address: {
     type: "string",
     labels: ["assignee notice address", "notice address", "address for notices", "assignee address"],
     tableHeaders: ["assignee_notice_address", "notice address", "assignee address"],
+    patterns: [/(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)[:\s]+([^\n]{8,220})/i],
     description: "Notice address for the assignee or new tenant",
+  },
+  assignment_consideration: {
+    type: "number",
+    min: 0,
+    labels: ["assignment consideration", "consideration", "transfer consideration", "assignment fee"],
+    tableHeaders: ["assignment_consideration", "consideration", "assignment fee"],
+    patterns: [/(?:assignment\s+consideration|consideration)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    description: "Explicit consideration paid for an assignment, if stated. Do not infer.",
+  },
+  amended_base_rent_for_additional_year: {
+    type: "number",
+    min: 0,
+    labels: ["amended base rent", "additional year base rent", "base rent for additional year", "extended term rent"],
+    tableHeaders: ["amended_base_rent", "additional year base rent", "extended term rent"],
+    patterns: [/(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
+    description: "Explicit base rent stated for an amendment/extension period. Do not calculate monthly rent from it.",
+  },
+  all_other_terms_remain_same: {
+    type: "boolean",
+    labels: ["all other terms remain unchanged", "all other terms remain same", "remaining terms unchanged"],
+    tableHeaders: ["all_other_terms_remain_same", "remaining terms"],
+    patterns: [/(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i],
+    description: "Whether an amendment/assignment states all other lease terms remain unchanged.",
   },
   unit_number: {
     type: "string",
@@ -190,6 +215,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     required: true,
     labels: ["end date", "expiration date", "lease end", "termination date", "expiry", "expire date"],
     tableHeaders: ["end_date", "end date", "expiration", "expire", "end", "termination"],
+    patterns: [
+      /(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expires?\s+on)[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+    ],
     description: "Lease expiration date in YYYY-MM-DD",
   },
   monthly_rent: {
@@ -198,8 +226,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent"],
     tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent"],
     patterns: [
-      /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
-      /(?:monthly|base)\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
+      /monthly\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
     ],
     description:
@@ -215,6 +243,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["annual_rent", "annual rent", "yearly rent", "annual base rent"],
     patterns: [
       /(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i,
       /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i,
     ],
     description:
@@ -1247,7 +1276,7 @@ const LEASE_GROUPS: FieldGroup[] = [
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
       "Also extract property name, premises address, and unit/suite if present.",
   },
-  { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, and notice address." },
+  { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address", "assignment_consideration", "all_other_terms_remain_same"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, notice address, explicit consideration, and all-other-terms language. Do not infer expense terms from assignment language." },
   {
     name: "dates",
     fields: ["start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
@@ -1260,7 +1289,7 @@ const LEASE_GROUPS: FieldGroup[] = [
   },
   {
     name: "financial",
-    fields: ["monthly_rent", "annual_rent", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing", "billing_frequency"],
+    fields: ["monthly_rent", "annual_rent", "amended_base_rent_for_additional_year", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing", "billing_frequency"],
     hint:
       "Extract base rent values EXACTLY as labeled in the lease. " +
       "monthly_rent must be the per-month rent; annual_rent must be the per-year rent. " +

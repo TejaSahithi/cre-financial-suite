@@ -370,8 +370,13 @@ export function ClauseRecordsTable({ lease }) {
   const fallbackClauses = useMemo(() => {
     const fromWorkflow = lease?.extraction_data?.workflow_output?.lease_clauses;
     const fromTopLevel = lease?.extraction_data?.lease_clauses;
+    const itemRows =
+      lease?.extraction_data?.workflow_output?.extracted_document_items ||
+      lease?.extraction_data?.workflow_output?.clause_records ||
+      lease?.extraction_data?.extracted_document_items ||
+      [];
     const list = Array.isArray(fromWorkflow) ? fromWorkflow : Array.isArray(fromTopLevel) ? fromTopLevel : [];
-    return list.map((c, idx) => ({
+    const clauseRows = list.map((c, idx) => ({
       id: `extract-${idx}`,
       clause_type: c.clause_type,
       clause_title: c.clause_title,
@@ -379,10 +384,25 @@ export function ClauseRecordsTable({ lease }) {
       source_page: c.source_page,
       confidence_score: c.confidence_score,
     }));
+    const discoveredRows = Array.isArray(itemRows)
+      ? itemRows
+          .filter((item) => item?.source_text)
+          .map((item, idx) => ({
+            id: item.item_id || `document-item-${idx}`,
+            is_document_item: true,
+            clause_type: item.business_area || item.item_type || "clause_records",
+            clause_title: item.item_type || item.field_key || "Discovered Field",
+            clause_text: item.source_text,
+            source_page: item.source_page,
+            confidence_score: item.confidence,
+          }))
+      : [];
+    return [...clauseRows, ...discoveredRows];
   }, [lease]);
 
   const allClauses = useMemo(() => {
-    if (Array.isArray(dbClauses) && dbClauses.length > 0) return dbClauses;
+    const discovered = fallbackClauses.filter((clause) => clause.is_document_item);
+    if (Array.isArray(dbClauses) && dbClauses.length > 0) return [...dbClauses, ...discovered];
     return fallbackClauses;
   }, [dbClauses, fallbackClauses]);
 

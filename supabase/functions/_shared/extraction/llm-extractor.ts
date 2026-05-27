@@ -106,7 +106,19 @@ RULES:
     property_address / premises_address = the address of the LEASED PREMISES (where the tenant operates).
     In single-tenant office leases this often equals "Address of Tenant" (suite #).
     "Address of Landlord" is the landlord's mailing address — DO NOT use it as property_address.
-    The "Building:" or "Premises:" line is the most authoritative source for property_address.`;
+    The "Building:" or "Premises:" line is the most authoritative source for property_address.
+
+16. Universal document handling:
+    Always extract explicit terms found in the uploaded document, whether it is a full lease, amendment,
+    assignment, addendum, exhibit, abstract, image, PDF, DOCX, or plain text. Document type may guide
+    field mapping, but it must never cause you to ignore explicit fields.
+
+17. Assignment/amendment documents:
+    Extract assignor, assignee/current tenant, landlord, lease date, premises size/address, assignment
+    effective date, assumption language, landlord consent, amended expiration date, amended base rent,
+    assignee notice address, assignment consideration, and all-other-terms-remain-unchanged language
+    ONLY when explicitly stated. Do NOT infer CAM, taxes, insurance, utilities, or other expense recovery
+    rules from "assumes all obligations" or "all other terms remain unchanged."`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 
