@@ -1730,18 +1730,43 @@ function classifyClauseTreatment(snippet) {
   const text = String(snippet || "");
   if (!text) return { ambiguous: true };
 
-  // 1. Explicit exclusion — highest priority.
-  if (
+  // 1. Explicit exclusion — but only when there is NO exception/condition
+  // that would carve the category back into recovery. Clauses like "CAM
+  // shall not include capital expenditures except those required by law"
+  // contain BOTH exclusion language and an exception, and must be
+  // classified as conditional, not hard excluded.
+  const hasExclusionPhrase =
     /\b(?:cam|operating\s+expenses?|recovery)\s+(?:shall\s+)?(?:not\s+include|excludes?)\b/i.test(text)
     || /\bexcluded\s+from\s+(?:cam|operating\s+expenses?|recovery)\b/i.test(text)
     || /\bshall\s+not\s+be\s+(?:included|recoverable|charged|passed[-\s]through)\b/i.test(text)
-  ) {
+    || /\bnot\s+recoverable\b/i.test(text);
+  const hasExceptionCarveout =
+    /\bexcept(?:\s+(?:those|for|where|when|as|if|to\s+the\s+extent))?\b/i.test(text)
+    || /\bunless\b/i.test(text)
+    || /\bother\s+than\b/i.test(text)
+    || /\bsave\s+(?:for|where|as)\b/i.test(text)
+    || /\bif\s+(?:required\s+by\s+law|approved\s+(?:in\s+writing\s+)?by|amortized)/i.test(text)
+    || /\bto\s+the\s+extent\b/i.test(text);
+
+  if (hasExclusionPhrase && !hasExceptionCarveout) {
     return {
       recoverableFromTenant: "no",
       camEligible: "no",
       paymentTreatment: "not_applicable",
       isExcluded: true,
       ruleType: "excluded",
+    };
+  }
+  if (hasExclusionPhrase && hasExceptionCarveout) {
+    // Exclusion with an exception carve-out → conditional recovery.
+    // Reviewer must confirm the carve-out applies to the actual expense.
+    return {
+      recoverableFromTenant: "conditional",
+      camEligible: "conditional",
+      paymentTreatment: "reimbursable",
+      isConditional: true,
+      ruleType: "conditional_recovery",
+      classifierNote: "Excluded with exception — see clause for the carve-out condition (e.g. required by law, amortized over useful life, written approval).",
     };
   }
 
@@ -2015,7 +2040,9 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       frequency: /monthly|per month/i.test(snippet || sourceText) ? "monthly" : "yearly",
       // Clear-clause classification gets higher confidence than ambiguous.
       confidence: isStrongMatch ? 0.78 : useClassifier ? 0.72 : hasClauseEvidence ? 0.55 : 0.50,
-      notes: candidate.notes,
+      notes: clauseClassification.classifierNote
+        ? `${candidate.notes} — ${clauseClassification.classifierNote}`
+        : candidate.notes,
       source: snippet || null,
       exact_source_text: snippet || null,
       generation_source: isStrongMatch
