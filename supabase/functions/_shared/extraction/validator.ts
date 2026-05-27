@@ -332,7 +332,8 @@ function normalizeLeaseContextualFields(record: ExtractedRecord): void {
         value: fields.assignee_name.value,
         source: "rule",
         confidence: Math.max(fields.assignee_name.confidence ?? 0.8, 0.9),
-        sourceText: "Assignment current tenant derived from assignee",
+        sourceText: fields.assignee_name.sourceText ?? null,
+        sourcePage: fields.assignee_name.sourcePage ?? null,
       };
     }
   }

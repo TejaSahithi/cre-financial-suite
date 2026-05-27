@@ -142,8 +142,13 @@ function looksLikeFieldKey(text) {
 }
 function scrubEvidenceText(text) {
   if (text == null) return null;
-  if (looksLikeFieldKey(text)) return null;
-  return text;
+  const trimmed = String(text).trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed) return null;
+  if (looksLikeFieldKey(trimmed)) return null;
+  if (lower.includes("derived from")) return null;
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(trimmed)) return null;
+  return trimmed;
 }
 
 function buildResolverOutput(rawResult, sourcePath) {
@@ -182,11 +187,7 @@ function buildResolverOutput(rawResult, sourcePath) {
       rawResult.source_clause ||
       rawResult.snippet ||
       String(rawResult.value || "");
-    output.rawValue = scrubEvidenceText(candidateRaw) ?? candidateRaw;
-    if (looksLikeFieldKey(output.rawValue)) {
-      // Last-resort scrub: never display a field key as the raw value.
-      output.rawValue = output.value != null ? String(output.value) : null;
-    }
+    output.rawValue = scrubEvidenceText(candidateRaw) ?? (output.value != null ? String(output.value) : null);
     output.normalizedValue = rawResult.normalized_value || rawResult.normalizedValue || null;
     output.sourcePage =
       rawResult.source_page ??

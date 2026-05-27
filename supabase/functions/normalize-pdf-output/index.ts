@@ -114,7 +114,7 @@ function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefin
   for (const block of blocks) {
     const text = String(block?.text || "").toLowerCase();
     if (!text) continue;
-    const page = Number(block?.page);
+    const page = Number(block?.page ?? block?.page_number ?? block?.source_page);
     if (!Number.isFinite(page)) continue;
     if (text.includes(probe)) return page;
   }
@@ -123,11 +123,40 @@ function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefin
   for (const field of fields) {
     const value = String(field?.value || field?.text || "").toLowerCase();
     if (!value) continue;
-    const page = Number(field?.page);
+    const page = Number(field?.page ?? field?.page_number ?? field?.source_page);
     if (!Number.isFinite(page)) continue;
     if (value.includes(probe) || probe.includes(value)) return page;
   }
   return null;
+}
+
+function isGenericSourceText(value: unknown): boolean {
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
+  if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
+  return false;
+}
+
+function usableSourceText(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  return isGenericSourceText(text) ? null : text;
+}
+
+function workflowFieldFor(fieldKey: string, leaseFields: Record<string, any> = {}) {
+  const aliases: Record<string, string[]> = {
+    property_address: ["property_address", "premises_address"],
+    square_footage: ["square_footage", "rentable_area_sqft", "tenant_rsf"],
+    tenant_name: ["tenant_name", "assignee_name"],
+    annual_rent: ["annual_rent", "amended_base_rent_for_additional_year"],
+    expiration_date: ["expiration_date", "amended_expiration_date"],
+  };
+  for (const key of aliases[fieldKey] || [fieldKey]) {
+    if (leaseFields?.[key]) return leaseFields[key];
+  }
+  return leaseFields?.[fieldKey] ?? null;
 }
 
 /**
@@ -185,8 +214,8 @@ function buildReviewPayload(opts: {
     ) ?? avgConfidence;
     const workflowOutput = workflowOutputs[index] ?? null;
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
-      const value = values[fieldKey] ?? null;
-      const workflowField = workflowOutput?.lease_fields?.[fieldKey] ?? null;
+      const workflowField = workflowFieldFor(fieldKey, workflowOutput?.lease_fields ?? {});
+      const value = values[fieldKey] ?? workflowField?.value ?? null;
       // Prefer evidence produced by the LLM/rule extractor; fall back to the
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
@@ -196,8 +225,8 @@ function buildReviewPayload(opts: {
         ?? workflowField?.source_page
         ?? null;
       const mergedSourceText =
-        llmEvidence?.source_text
-        ?? workflowField?.source_clause
+        usableSourceText(llmEvidence?.source_text)
+        ?? usableSourceText(workflowField?.source_clause)
         ?? null;
       // Page back-fill: when we have a clause snippet but no page number,
       // search docling's per-page text_blocks for the snippet and assign the

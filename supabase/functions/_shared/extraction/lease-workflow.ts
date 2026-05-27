@@ -186,9 +186,9 @@ const FIELD_SPECS = [
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
   { key: "property_name", group: "premises", aliases: ["property_name"] },
-  { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
+  { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\bpremises\s+located\s+at\s+([^\n.]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number", "space_number", "premises_suite"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
-  { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "tenant_rsf", "square_footage", "leased_premises_area", "square_feet", "rentable_square_feet"], patterns: [/(?:premises|leased|tenant)[^\n]{0,40}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i, /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i] },
+  { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "tenant_rsf", "square_footage", "leased_premises_area", "square_feet", "rentable_square_feet"], patterns: [/\bapproximately\s+([\d,]+)\s+rentable\s+square\s+feet/i, /(?:premises|leased|tenant)[^\n]{0,60}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i, /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i] },
   { key: "lease_type", group: "lease_header", aliases: ["lease_type", "expense_structure", "rent_structure", "lease_structure"] },
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
@@ -257,6 +257,27 @@ function normalizeToken(value: unknown) {
   return cleanText(value).toLowerCase();
 }
 
+function sourcePageOf(value: any): number | null {
+  const page = value?.page ?? value?.page_number ?? value?.source_page ?? null;
+  const numeric = Number(page);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function isGenericSourceText(value: unknown) {
+  const text = cleanText(value);
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
+  if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
+  return false;
+}
+
+function cleanSourceText(value: unknown) {
+  const text = cleanText(value);
+  return isGenericSourceText(text) ? null : text;
+}
+
 function asArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
@@ -309,9 +330,10 @@ function getLlmEvidenceForAliases(row: Record<string, unknown>, aliases: string[
   for (const alias of aliases) {
     const e = evidenceMap?.[alias];
     if (!e) continue;
-    if ((typeof e.source_text === "string" && e.source_text.length > 0) || typeof e.source_page === "number") {
+    const sourceText = cleanSourceText(e.source_text);
+    if (sourceText || typeof e.source_page === "number") {
       return {
-        source_text: typeof e.source_text === "string" && e.source_text.length > 0 ? e.source_text : null,
+        source_text: sourceText,
         source_page: typeof e.source_page === "number" && Number.isFinite(e.source_page) ? e.source_page : null,
       };
     }
@@ -398,7 +420,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     const directText = cleanText(directField?.text || directField?.value || "");
     if (directText) {
       return {
-        source_page: Number.isFinite(Number(directField?.page)) ? Number(directField.page) : null,
+        source_page: sourcePageOf(directField),
         source_clause: directText.slice(0, 260),
       };
     }
@@ -407,7 +429,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
   const directBlock = textBlocks.find((block) => comparableValue && cleanText(block?.text || "").includes(comparableValue));
   if (directBlock) {
     return {
-      source_page: Number.isFinite(Number(directBlock?.page)) ? Number(directBlock.page) : null,
+      source_page: sourcePageOf(directBlock),
       source_clause: cleanText(directBlock?.text || "").slice(0, 260) || null,
     };
   }
@@ -635,8 +657,9 @@ const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
 
 const UNIVERSAL_ITEM_DEFS = [
   { item_type: "lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\b(?:lease\s+date|dated)\b[^\n]{0,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
-  { item_type: "premises_size", business_area: "parties_premises", field_key: "rentable_area_sqft", maps: true, patterns: [/\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?([\d,]+)\s+rentable\s+square\s+feet/i, /\b([\d,]+)\s+rentable\s+square\s+feet[^.\n]{0,120}?(?:premises|leased premises|demised premises)/i] },
-  { item_type: "premises_address", business_area: "parties_premises", field_key: "property_address", maps: true, patterns: [/\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?(?:located|address|known)\s+(?:at|as)?\s*([0-9]{2,6}[^.\n]{8,220})/i] },
+  { item_type: "original_lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\bLease\s+dated\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
+  { item_type: "premises_square_footage", business_area: "parties_premises", field_key: "rentable_area_sqft", maps: true, patterns: [/\bapproximately\s+([\d,]+)\s+rentable\s+square\s+feet/i, /\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?([\d,]+)\s+rentable\s+square\s+feet/i, /\b([\d,]+)\s+rentable\s+square\s+feet[^.\n]{0,120}?(?:premises|leased premises|demised premises)/i] },
+  { item_type: "premises_address", business_area: "parties_premises", field_key: "property_address", maps: true, patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\bpremises\s+located\s+at\s+([0-9]{2,6}[^.\n]{8,220})/i, /\b(?:premises|leased premises|demised premises)[^.\n]{0,120}?(?:located|address|known)\s+(?:at|as)?\s*([0-9]{2,6}[^.\n]{8,220})/i] },
   { item_type: "landlord", business_area: "parties_premises", field_key: "landlord_name", maps: true, patterns: [/\b(?:landlord|lessor)\b[:\s-]+([A-Z][^\n]{2,140}?)(?=\s+(?:and|,?\s*a\s|By:|Assignor|Assignee|Tenant|Lessee)|\n|$)/i] },
   { item_type: "assignor", business_area: "assignment_amendment", field_key: "assignor_name", maps: true, patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
   { item_type: "assignee_current_tenant", business_area: "assignment_amendment", field_key: "tenant_name", maps: true, patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
@@ -645,7 +668,7 @@ const UNIVERSAL_ITEM_DEFS = [
   { item_type: "assignment_consideration", business_area: "assignment_amendment", field_key: "assignment_consideration", maps: false, patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { item_type: "assumption_of_obligations", business_area: "assignment_amendment", field_key: "assumption_scope", maps: true, booleanValue: "yes", patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
   { item_type: "landlord_consent", business_area: "assignment_amendment", field_key: "landlord_consent", maps: true, booleanValue: "yes", patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
-  { item_type: "amended_expiration_date", business_area: "dates_term", field_key: "expiration_date", maps: true, patterns: [/\b(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expiring|expires?\s+on)\b[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { item_type: "amended_expiration_date", business_area: "dates_term", field_key: "expiration_date", maps: true, patterns: [/\binitial\s+Term\s+shall\s+now\s+expire\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\b(?:amended\s+expiration\s+date|expiration\s+date\s+is\s+amended\s+to|term\s+is\s+extended\s+to|extended\s+through|expiring|expires?\s+on)\b[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { item_type: "amended_base_rent_for_additional_year", business_area: "rent_charges", field_key: "annual_rent", maps: true, patterns: [/\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   { item_type: "assignee_notice_address", business_area: "assignment_amendment", field_key: "assignee_notice_address", maps: true, patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
   { item_type: "all_other_terms_remain_same", business_area: "assignment_amendment", field_key: "all_other_terms_remain_same", maps: false, booleanValue: "yes", patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
@@ -674,7 +697,7 @@ function findUniversalMatch(doclingRaw: any, fullText: string, patterns: RegExp[
         return {
           raw: cleanText(match[1] || match[0]),
           source_text: cleanText(match[0]),
-          source_page: block?.page ?? null,
+          source_page: sourcePageOf(block),
         };
       }
     }
@@ -702,6 +725,7 @@ function normalizeUniversalValue(itemType: string, raw: unknown) {
 
 function createDocumentItem(args: Record<string, unknown>) {
   const sourceText = cleanText(args.source_text || "");
+  const safeSourceText = cleanSourceText(sourceText);
   return {
     item_id: String(args.item_id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
     document_id: args.document_id ?? null,
@@ -717,11 +741,11 @@ function createDocumentItem(args: Record<string, unknown>) {
     value: args.value ?? null,
     normalized_value: args.normalized_value ?? args.value ?? null,
     raw_value: args.raw_value ?? args.value ?? null,
-    source_text: sourceText || null,
+    source_text: safeSourceText,
     source_page: args.source_page ?? null,
-    confidence: args.confidence ?? (sourceText ? 0.78 : 0.35),
+    confidence: args.confidence ?? (safeSourceText ? 0.78 : 0.35),
     extraction_method: args.extraction_method || "workflow_universal_item",
-    extraction_status: args.extraction_status || (sourceText ? "extracted" : "needs_review"),
+    extraction_status: args.extraction_status || (safeSourceText ? "extracted" : "needs_review"),
     maps_to_existing_field: Boolean(args.maps_to_existing_field),
     creates_lease_expense_rule: Boolean(args.creates_lease_expense_rule),
     requires_original_lease: Boolean(args.requires_original_lease),
@@ -879,6 +903,14 @@ function applyDocumentItemsToLeaseFields(
       extraction_status: "extracted",
       editable: true,
       field_group: existing?.field_group || (item.business_area === "assignment_amendment" ? "assignment_amendment" : "lease_header"),
+    };
+  }
+
+  if (leaseFields.rentable_area_sqft?.value && !leaseFields.square_footage) {
+    leaseFields.square_footage = {
+      ...leaseFields.rentable_area_sqft,
+      key: "square_footage",
+      field_group: "premises",
     };
   }
 }
@@ -1991,6 +2023,32 @@ export function buildLeaseWorkflowAbstraction(args: {
     documentProfile,
     leaseFields,
     clauses,
+  });
+  const genericSourceTextRejected = Object.values(leaseFields).reduce((count, field) => {
+    if (field?.source_clause && isGenericSourceText(field.source_clause)) {
+      field.source_clause = null;
+      if (field.extraction_status === "extracted") field.extraction_status = "missing_source_evidence";
+      return count + 1;
+    }
+    return count;
+  }, 0);
+  const assignmentItems = extractedDocumentItems.filter((item) =>
+    ["assignment_amendment", "parties_premises", "dates_term", "rent_charges"].includes(String(item.business_area || "")) &&
+    ["assignment", "amendment", "assignment_amendment"].includes(documentProfile)
+  );
+  const premisesCandidates = extractedDocumentItems
+    .filter((item) => item.item_type === "premises_address" || item.field_key === "property_address")
+    .map((item) => ({ value: item.value, source_text: item.source_text, source_page: item.source_page }));
+  const mappedFieldsFromAssignment = assignmentItems.filter((item) => item.maps_to_existing_field).length;
+  console.log("[lease-workflow assignment mapping]", {
+    document_profile: documentProfile,
+    assignment_items_extracted: assignmentItems.length,
+    mapped_fields_from_assignment: mappedFieldsFromAssignment,
+    premises_address_candidates: premisesCandidates,
+    selected_premises_address: leaseFields.property_address?.value ?? null,
+    selected_premises_address_source_text: leaseFields.property_address?.source_clause ?? null,
+    generic_source_text_rejected: genericSourceTextRejected,
+    extracted_document_items_count: extractedDocumentItems.length,
   });
   let expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   const signals = inferLeaseSignals(fullText, row);

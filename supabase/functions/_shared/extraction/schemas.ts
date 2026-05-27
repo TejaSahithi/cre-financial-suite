@@ -99,6 +99,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["property address", "premises", "premises address", "address", "location", "street address", "building", "address of premises", "address of property", "address of building"],
     tableHeaders: ["property_address", "property address", "premises", "address", "location", "street address", "building"],
     patterns: [
+      // Assignment/amendment phrasing:
+      // "for the lease of approximately 4,200 rentable square feet of space (the 'Premises') located at 7804..."
+      /for\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{8,180})/i,
+      /premises\s+located\s+at\s+([^\n.]{8,180})/i,
       // Building location line: "Building: ... located at 224 S Peters Road Knoxville, TN 37923"
       /\bbuilding\b[^\n]{0,80}?(?:located\s+at|address[:\s]+)\s*([^\n.]{8,180})/i,
       // Numbered summary: "5. Address of Premises: 224 S Peters Road Suite #211 Knoxville, TN 37923"
@@ -265,6 +269,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["rentable area", "leased area", "premises rentable square feet", "rentable square feet", "rsf", "leased sf", "tenant rsf", "premises area"],
     tableHeaders: ["square_footage", "sqft", "sq ft", "sf", "rsf", "rentable sf", "leased sf"],
     patterns: [
+      /approximately\s+([\d,]+)\s+rentable\s+square\s+feet/i,
       /(?:premises|leased|rentable)[^\n]{0,40}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i,
       /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i,
     ],

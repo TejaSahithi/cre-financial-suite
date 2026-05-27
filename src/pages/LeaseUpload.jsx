@@ -1075,6 +1075,7 @@ function buildFieldsWithEvidence(payload) {
   for (const field of fields) {
     if (!field?.field_key) continue;
     if (field.status === "rejected") continue;
+    const sourceText = cleanExtractedSourceText(field.evidence?.source_clause ?? field.evidence?.source_text);
     out[field.field_key] = {
       value: field.value ?? null,
       confidence: typeof field.confidence === "number" ? field.confidence : null,
@@ -1083,12 +1084,27 @@ function buildFieldsWithEvidence(payload) {
       // Mirror evidence as flat keys so the resolver finds them regardless
       // of whether it reads from extraction_data.fields[key] or
       // extraction_data.field_evidence[key].
-      source_page: field.evidence?.page_number ?? null,
-      source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+      source_page: field.evidence?.page_number ?? field.evidence?.source_page ?? null,
+      source_text: sourceText,
       raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
       extraction_status: field.status ?? null,
     };
   }
+  const workflowOutput = extractWorkflowOutputForFirstRow(payload);
+  for (const [fieldKey, field] of Object.entries(workflowOutput?.lease_fields || {})) {
+    if (!field || typeof field !== "object") continue;
+    out[fieldKey] = {
+      ...(out[fieldKey] || {}),
+      value: field.value ?? out[fieldKey]?.value ?? null,
+      confidence: field.confidence_score ?? out[fieldKey]?.confidence ?? null,
+      source_page: field.source_page ?? out[fieldKey]?.source_page ?? null,
+      source_text: cleanExtractedSourceText(field.source_clause) ?? out[fieldKey]?.source_text ?? null,
+      raw_value: field.value ?? out[fieldKey]?.raw_value ?? null,
+      extraction_status: field.extraction_status ?? out[fieldKey]?.extraction_status ?? null,
+    };
+  }
+  if (!out.square_footage && out.rentable_area_sqft) out.square_footage = { ...out.rentable_area_sqft, value: out.rentable_area_sqft.value };
+  if (!out.premises_address && out.property_address) out.premises_address = { ...out.property_address, value: out.property_address.value };
   return out;
 }
 
@@ -1102,14 +1118,37 @@ function buildFieldEvidenceMap(payload) {
   const out = {};
   for (const field of record.standard_fields || []) {
     if (!field?.field_key || !field?.evidence) continue;
+    const sourceText = cleanExtractedSourceText(field.evidence.source_clause ?? field.evidence.source_text);
     out[field.field_key] = {
       raw_value: field.original_value ?? field.evidence.raw_value ?? null,
       source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
-      source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+      source_text: sourceText,
       extraction_status: field.status ?? null,
     };
   }
+  const workflowOutput = extractWorkflowOutputForFirstRow(payload);
+  for (const [fieldKey, field] of Object.entries(workflowOutput?.lease_fields || {})) {
+    if (!field || typeof field !== "object") continue;
+    out[fieldKey] = {
+      raw_value: field.value ?? null,
+      source_page: field.source_page ?? null,
+      source_text: cleanExtractedSourceText(field.source_clause),
+      extraction_status: field.extraction_status ?? null,
+    };
+  }
+  if (!out.square_footage && out.rentable_area_sqft) out.square_footage = { ...out.rentable_area_sqft };
+  if (!out.premises_address && out.property_address) out.premises_address = { ...out.property_address };
   return out;
+}
+
+function cleanExtractedSourceText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
+  if (lower.includes("derived from")) return null;
+  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
+  return text;
 }
 
 // The normalize-pdf-output edge function stores the per-row workflow output

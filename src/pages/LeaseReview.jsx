@@ -126,7 +126,9 @@ function buildSearchBlocks(docling) {
     blocks.push({
       text,
       lowered: text.toLowerCase(),
-      page: Number.isFinite(Number(block?.page)) ? Number(block.page) : null,
+      page: Number.isFinite(Number(block?.page ?? block?.page_number ?? block?.source_page))
+        ? Number(block?.page ?? block?.page_number ?? block?.source_page)
+        : null,
     });
   }
   // Add full_text as a fallback block with unknown page so single-page
@@ -307,6 +309,21 @@ function detectFieldConflicts(lease) {
     }
   }
   return conflicts;
+}
+
+function isGenericExtractedSourceText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
+  if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
+  return false;
+}
+
+function cleanExtractedSourceText(value) {
+  const text = String(value ?? "").trim();
+  return isGenericExtractedSourceText(text) ? null : text;
 }
 
 function updateLeaseQueryCache(queryClient, leaseId, updater) {
@@ -684,13 +701,14 @@ export default function LeaseReview() {
           ];
           for (const field of allFields) {
             if (!field?.field_key) continue;
+            const sourceText = cleanExtractedSourceText(field.evidence?.source_clause ?? field.evidence?.source_text);
             fieldsWithEvidence[field.field_key] = {
               value: field.value ?? null,
               confidence: typeof field.confidence === "number" ? field.confidence : null,
               source: field.source ?? null,
               evidence: field.evidence ?? null,
               source_page: field.evidence?.page_number ?? null,
-              source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+              source_text: sourceText,
               raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
               extraction_status: field.status ?? null,
             };
@@ -698,7 +716,7 @@ export default function LeaseReview() {
               fieldEvidence[field.field_key] = {
                 raw_value: field.original_value ?? field.evidence.raw_value ?? null,
                 source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
-                source_text: field.evidence.source_clause ?? field.evidence.source_text ?? null,
+                source_text: sourceText,
                 extraction_status: field.status ?? null,
               };
             }
@@ -1937,6 +1955,28 @@ export default function LeaseReview() {
       const fieldsWithEvidence = {};
       const evidenceMap = {};
       const confidenceMap = {};
+      const upsertFieldEvidence = (fieldKey, payload = {}) => {
+        if (!fieldKey) return;
+        const sourceText = cleanExtractedSourceText(payload.source_text ?? payload.source_clause);
+        const sourcePage = payload.source_page ?? payload.page_number ?? null;
+        const value = payload.value ?? null;
+        fieldsWithEvidence[fieldKey] = {
+          ...(fieldsWithEvidence[fieldKey] || {}),
+          value,
+          confidence: typeof payload.confidence === "number" ? payload.confidence : fieldsWithEvidence[fieldKey]?.confidence ?? null,
+          source: payload.source ?? fieldsWithEvidence[fieldKey]?.source ?? null,
+          source_page: sourcePage,
+          source_text: sourceText,
+          raw_value: payload.raw_value ?? value,
+          extraction_status: payload.extraction_status ?? fieldsWithEvidence[fieldKey]?.extraction_status ?? null,
+        };
+        evidenceMap[fieldKey] = {
+          raw_value: payload.raw_value ?? value,
+          source_page: sourcePage,
+          source_text: sourceText,
+          extraction_status: payload.extraction_status ?? null,
+        };
+      };
       if (reviewedRow) {
         const allFields = [
           ...(reviewedRow.standard_fields || []),
@@ -1944,25 +1984,42 @@ export default function LeaseReview() {
         ];
         for (const f of allFields) {
           if (!f?.field_key) continue;
-          fieldsWithEvidence[f.field_key] = {
+          upsertFieldEvidence(f.field_key, {
             value: f.value ?? null,
             confidence: typeof f.confidence === "number" ? f.confidence : null,
             source: f.source ?? null,
-            source_page: f.evidence?.page_number ?? null,
+            source_page: f.evidence?.page_number ?? f.evidence?.source_page ?? null,
             source_text: f.evidence?.source_clause ?? f.evidence?.source_text ?? null,
             raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
             extraction_status: f.status ?? null,
-          };
-          evidenceMap[f.field_key] = {
-            raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
-            source_page: f.evidence?.page_number ?? null,
-            source_text: f.evidence?.source_clause ?? f.evidence?.source_text ?? null,
-            extraction_status: f.status ?? null,
-          };
+          });
           if (typeof f.confidence === "number") {
             confidenceMap[f.field_key] = f.confidence <= 1 ? Math.round(f.confidence * 100) : Math.round(f.confidence);
           }
         }
+      }
+      const workflowFields = workflowOutput?.lease_fields || {};
+      for (const [fieldKey, wfField] of Object.entries(workflowFields)) {
+        if (!wfField || typeof wfField !== "object") continue;
+        upsertFieldEvidence(fieldKey, {
+          value: wfField.value ?? null,
+          confidence: wfField.confidence_score ?? null,
+          source_page: wfField.source_page ?? null,
+          source_text: wfField.source_clause ?? null,
+          raw_value: wfField.value ?? null,
+          extraction_status: wfField.extraction_status ?? null,
+        });
+        if (typeof wfField.confidence_score === "number") {
+          confidenceMap[fieldKey] = wfField.confidence_score <= 1
+            ? Math.round(wfField.confidence_score * 100)
+            : Math.round(wfField.confidence_score);
+        }
+      }
+      if (!fieldsWithEvidence.square_footage && fieldsWithEvidence.rentable_area_sqft) {
+        upsertFieldEvidence("square_footage", fieldsWithEvidence.rentable_area_sqft);
+      }
+      if (!fieldsWithEvidence.premises_address && fieldsWithEvidence.property_address) {
+        upsertFieldEvidence("premises_address", fieldsWithEvidence.property_address);
       }
       // Re-extract overrides prior data. Strip stale sentinel/junk evidence
       // (e.g. raw_value="unknown" or source_text="renewal_options") that the
