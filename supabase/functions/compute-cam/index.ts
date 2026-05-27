@@ -36,10 +36,10 @@ function asStringArray(value: unknown): string[] {
 function getCategoryName(rule: any) {
   return String(
     rule?.expense_categories?.category_name ||
-      rule?.expense_category ||
-      rule?.category_name ||
-      rule?.normalized_key ||
-      "",
+    rule?.expense_category ||
+    rule?.category_name ||
+    rule?.normalized_key ||
+    "",
   ).trim();
 }
 
@@ -71,12 +71,12 @@ function isCamPublishableChildRule(rule: any) {
 function ruleSourceText(rule: any) {
   return String(
     rule?.exact_source_text ||
-      rule?.source_clause_text ||
-      rule?.source_clause ||
-      rule?.source_text ||
-      rule?.evidence_text ||
-      rule?.source ||
-      "",
+    rule?.source_clause_text ||
+    rule?.source_clause ||
+    rule?.source_text ||
+    rule?.evidence_text ||
+    rule?.source ||
+    "",
   );
 }
 
@@ -361,7 +361,7 @@ function camReadyExpenseFromRow(row: any, sourceLabel: string) {
     allocationBasis === "tenant_specific";
   const classification =
     normalizeText(row?.recoverability_result || row?.recovery_status || row?.classification) === "recoverable" ||
-    normalizeText(row?.cam_eligible) === "yes"
+      normalizeText(row?.cam_eligible) === "yes"
       ? "recoverable"
       : "needs_review";
 
@@ -547,7 +547,7 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
             // If a base year is found on any approved CAM-published rule, and no
             // global base year exists, use it as a fallback hint.
             if (isCamPublishableChildRule(rule) && rule.has_base_year && !configValues.base_year) {
-               console.log(`[compute-cam] Lease ${leaseId} has base year for ${catName} but global base_year not set.`);
+              console.log(`[compute-cam] Lease ${leaseId} has base year for ${catName} but global base_year not set.`);
             }
           }
         }
@@ -748,22 +748,22 @@ Deno.serve(async (req: Request) => {
     const calculation = shouldSkip
       ? emptyCalculation(propertyId, fiscalYear, scopeLevel, scopeId, [skipReason])
       : calculateCam({
-          fiscal_year: fiscalYear,
-          scope_level: scopeLevel,
-          scope_id: scopeId,
-          property: {
-            id: property.id,
-            name: property.name,
-            total_sqft: property.total_sqft,
-          },
-          buildings,
-          units,
-          expenses: recoverableExpenses,
-          leases,
-          property_config: mergedPropertyConfig,
-          lease_configs: leaseConfigMap,
-          historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
-        });
+        fiscal_year: fiscalYear,
+        scope_level: scopeLevel,
+        scope_id: scopeId,
+        property: {
+          id: property.id,
+          name: property.name,
+          total_sqft: property.total_sqft,
+        },
+        buildings,
+        units,
+        expenses: recoverableExpenses,
+        leases,
+        property_config: mergedPropertyConfig,
+        lease_configs: leaseConfigMap,
+        historical_by_year: buildHistoricalIndex(historicalSnapshots ?? []),
+      });
 
     const { data: budgetSnapshot } = await supabaseAdmin
       .from("computation_snapshots")
