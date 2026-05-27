@@ -442,7 +442,7 @@ export default function Expenses() {
       return id;
     },
     onSuccess: (id) => {
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries();
       setDeleteTarget(null);
       setSelectedExpenseIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Expense deleted successfully");
@@ -463,7 +463,7 @@ export default function Expenses() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ["Expense"] });
+      queryClient.invalidateQueries();
       setSelectedExpenseIds([]);
       setShowBulkDelete(false);
       toast.success(`${count} expense record${count === 1 ? "" : "s"} deleted successfully`);

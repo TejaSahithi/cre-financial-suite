@@ -118,9 +118,7 @@ export default function Properties() {
       return id;
     },
     onSuccess: (id) => {
-      queryClient.invalidateQueries({ queryKey: ["Property"] });
-      queryClient.invalidateQueries({ queryKey: ["Building"] });
-      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      queryClient.invalidateQueries();
       setDeleteTarget(null);
       setSelectedPropertyIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Property deleted successfully");
@@ -142,9 +140,7 @@ export default function Properties() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ["Property"] });
-      queryClient.invalidateQueries({ queryKey: ["Building"] });
-      queryClient.invalidateQueries({ queryKey: ["Unit"] });
+      queryClient.invalidateQueries();
       setSelectedPropertyIds([]);
       setShowBulkDelete(false);
       toast.success(`${count} propert${count === 1 ? "y" : "ies"} deleted successfully`);

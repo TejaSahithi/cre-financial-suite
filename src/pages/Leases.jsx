@@ -308,7 +308,7 @@ export default function Leases() {
       return id;
     },
     onSuccess: (id) => {
-      queryClient.invalidateQueries({ queryKey: ["Lease"] });
+      queryClient.invalidateQueries();
       setDeleteTarget(null);
       setSelectedLeaseIds((prev) => prev.filter((selectedId) => selectedId !== id));
       toast.success("Lease deleted successfully");
@@ -329,7 +329,7 @@ export default function Leases() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ["Lease"] });
+      queryClient.invalidateQueries();
       setSelectedLeaseIds([]);
       setShowBulkDelete(false);
       toast.success(`${count} lease${count === 1 ? "" : "s"} deleted successfully`);

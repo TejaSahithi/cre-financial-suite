@@ -194,7 +194,7 @@ export default function Portfolios() {
       return id;
     },
     onSuccess: (id) => {
-      queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
+      queryClient.invalidateQueries();
       toast.success("Portfolio deleted");
       setDeleteTarget(null);
       setSelectedPortfolioIds((prev) => prev.filter((selectedId) => selectedId !== id));
@@ -216,7 +216,7 @@ export default function Portfolios() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ["Portfolio"] });
+      queryClient.invalidateQueries();
       setSelectedPortfolioIds([]);
       setShowBulkDelete(false);
       toast.success(`${count} portfolio${count === 1 ? "" : "s"} deleted`);
