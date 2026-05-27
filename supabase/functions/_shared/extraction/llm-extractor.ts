@@ -83,9 +83,9 @@ RULES:
 
 10. Monetary values: plain numbers only. "$12,500" → 12500.
 11. Percentages: plain number. "3%" → 3.
-12. source_text is BEST EFFORT, not gating. Prefer a verbatim 30–200 char excerpt from the snippet.
-    If the text is OCR-garbled or you can only paraphrase, paraphrase concisely — the VALUE still goes through.
-    Only return value=null when the field is truly not present in the snippet.
+12. source_text MUST BE THE EXACT VERBATIM text from the document snippet. NEVER paraphrase your reasoning. NEVER explain how you derived the value.
+    If you derived the value from a specific phrase (e.g. extracting Tenant from "Assignee: John"), the source_text MUST BE the exact phrase "Assignee: John".
+    If the text is OCR-garbled, return the garbled text exactly as it appears.
 
 13. Numbered-summary documents are common — leases often start with a section like:
         "1. Date: January 9, 2024
@@ -349,7 +349,7 @@ async function fillMissingFieldsForRecords(
   }
 
   for (const group of groups) {
-    const snippet = buildRelevantSnippet(docling, allLabels, 2000);
+    const snippet = buildRelevantSnippet(docling, allLabels, 16000);
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
 
     try {
@@ -423,7 +423,7 @@ async function extractFieldGroups(
     }
 
     // Build a focused snippet instead of sending entire chunks
-    const snippet = buildRelevantSnippet(docling, labels, 2000);
+    const snippet = buildRelevantSnippet(docling, labels, 16000);
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType);
 
     try {
