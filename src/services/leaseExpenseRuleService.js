@@ -1068,6 +1068,37 @@ async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionV
     .filter(Boolean);
   if (targetIds.length === 0) return { superseded: 0, deleted: 0, droppedColumns: [] };
 
+  // Per spec: post-upsert count must reflect (new rules + preserved approved
+  // rows), not stale rows + new rows. Marking rows with row_status="superseded"
+  // leaves them physically present in the table — every downstream count and
+  // listing still sees them. So we DELETE stale unresolved rows first.
+  // If the delete fails (e.g. RLS), fall back to marker columns so at
+  // least the row state is updated; never silently succeed when both
+  // paths fail.
+  const deleteQuery = supabase
+    .from("lease_expense_rules")
+    .delete()
+    .in("id", targetIds)
+    .eq("lease_id", leaseId)
+    .eq("rule_set_id", ruleSetId);
+  const scopedDelete = orgId ? deleteQuery.eq("org_id", orgId) : deleteQuery;
+  const { data: deletedRows, error: deleteError } = await scopedDelete.select("id");
+
+  if (!deleteError) {
+    return { superseded: 0, deleted: deletedRows?.length || targetIds.length, droppedColumns: [] };
+  }
+
+  console.warn(
+    "[leaseExpenseRuleService] supersedeUnresolvedRules DELETE failed; falling back to marker update.",
+    {
+      code: deleteError.code,
+      message: deleteError.message,
+      details: deleteError.details,
+      hint: deleteError.hint,
+      targetIdCount: targetIds.length,
+    },
+  );
+
   const now = new Date().toISOString();
   const patch = {
     row_status: "superseded",
@@ -1094,23 +1125,16 @@ async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionV
 
   const markerColumns = ["row_status", "status", "extraction_status"];
   const appliedMarker = markerColumns.some((column) => Object.prototype.hasOwnProperty.call(result.appliedPatch || {}, column));
-  if (appliedMarker) {
-    if (result.droppedColumns.length > 0) {
-      console.warn("[leaseExpenseRuleService] supersedeUnresolvedRules stripped unsupported columns:", result.droppedColumns);
-    }
-    return { superseded: result.data?.length || targetIds.length, deleted: 0, droppedColumns: result.droppedColumns };
+  if (!appliedMarker) {
+    // Both DELETE and any marker-column UPDATE failed. Surface the original
+    // delete error so the caller knows cleanup is incomplete.
+    throw deleteError;
   }
 
-  const deleteQuery = supabase
-    .from("lease_expense_rules")
-    .delete()
-    .in("id", targetIds)
-    .eq("lease_id", leaseId)
-    .eq("rule_set_id", ruleSetId);
-  const scopedDelete = orgId ? deleteQuery.eq("org_id", orgId) : deleteQuery;
-  const { data: deletedRows, error: deleteError } = await scopedDelete.select("id");
-  if (deleteError) throw deleteError;
-  return { superseded: 0, deleted: deletedRows?.length || targetIds.length, droppedColumns: result.droppedColumns };
+  if (result.droppedColumns.length > 0) {
+    console.warn("[leaseExpenseRuleService] supersedeUnresolvedRules marker UPDATE stripped unsupported columns:", result.droppedColumns);
+  }
+  return { superseded: result.data?.length || targetIds.length, deleted: 0, droppedColumns: result.droppedColumns };
 }
 
 function normalizeRecoveryStatus(rule) {

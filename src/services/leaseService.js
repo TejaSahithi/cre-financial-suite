@@ -2,8 +2,41 @@ import { createEntityService } from '@/services/api';
 import { supabase } from '@/services/supabaseClient';
 import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
 import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
+import { logAudit } from '@/services/audit';
 
-export const leaseService = createEntityService('Lease');
+const baseService = createEntityService('Lease');
+
+export const leaseService = {
+  ...baseService,
+  async delete(id) {
+    if (!id) throw new Error("Lease ID is required for deletion");
+    if (supabase) {
+      // 1. Fetch lease to know its org_id for the audit log
+      const lease = await baseService.get(id);
+      
+      // 2. Call the transactional cascade RPC
+      const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
+      if (error) {
+        console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
+        throw error;
+      }
+      
+      // 3. Log the audit manually since we bypassed baseService.delete
+      if (lease) {
+        logAudit({
+          entityType: 'Lease',
+          entityId: id,
+          action: 'delete',
+          orgId: lease.org_id
+        }).catch(() => {});
+      }
+      
+      return true;
+    }
+    
+    return baseService.delete(id);
+  }
+};
 
 /**
  * Backfills missing top-level summary columns on the `leases` table using the 

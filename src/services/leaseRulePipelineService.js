@@ -2,6 +2,73 @@ import { supabase } from "@/services/supabaseClient";
 import leaseExpenseRuleService from "./leaseExpenseRuleService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 
+// Per-field whitelists. A given structured-terms field is meaningful only
+// on these canonical categories; for all others it must be null to avoid
+// global leakage. Update if you add new categories that legitimately carry
+// admin/management fees, caps, base years, gross-up, or pro-rata shares.
+const ADMIN_FEE_CATEGORIES = new Set(["administrative_fees"]);
+const MANAGEMENT_FEE_CATEGORIES = new Set(["management_fees"]);
+const GROSS_UP_CATEGORIES = new Set([
+  "common_area_maintenance", "operating_expenses", "utilities",
+]);
+const CAP_CATEGORIES = new Set([
+  "common_area_maintenance", "operating_expenses", "real_estate_taxes",
+  "property_insurance", "repairs_maintenance", "utilities",
+]);
+const BASE_YEAR_CATEGORIES = new Set([
+  "operating_expenses", "real_estate_taxes", "property_insurance",
+]);
+const PRO_RATA_CATEGORIES = new Set([
+  "common_area_maintenance", "operating_expenses", "real_estate_taxes",
+  "property_insurance", "utilities", "repairs_maintenance",
+  "capital_expenditures", "administrative_fees", "management_fees",
+]);
+
+function scrubInapplicableStructuredFields(rule) {
+  if (!rule || typeof rule !== "object") return;
+  const key = String(rule.normalized_key || rule.expense_category || "").toLowerCase().replace(/[\s-]+/g, "_");
+
+  if (!ADMIN_FEE_CATEGORIES.has(key)) {
+    rule.admin_fee_percent = null;
+    rule.admin_fee_applicable = false;
+  }
+  if (!MANAGEMENT_FEE_CATEGORIES.has(key)) {
+    rule.management_fee_percent = null;
+    rule.management_fee_applicable = false;
+  }
+  if (!GROSS_UP_CATEGORIES.has(key)) {
+    rule.gross_up_percent = null;
+    rule.gross_up_applicable = false;
+    rule.gross_up_allowed = false;
+  }
+  if (!CAP_CATEGORIES.has(key)) {
+    rule.cap_percent = null;
+    rule.cap_type = null;
+    rule.cap_value = null;
+    rule.cap_amount = null;
+    rule.is_subject_to_cap = false;
+  }
+  if (!BASE_YEAR_CATEGORIES.has(key)) {
+    rule.base_year = null;
+    rule.base_year_type = null;
+    rule.base_year_amount = null;
+    rule.tax_base_amount = null;
+    rule.insurance_base_amount = null;
+    rule.operating_expense_base_amount = null;
+    rule.has_base_year = false;
+    rule.expense_stop_amount = null;
+  }
+  if (!PRO_RATA_CATEGORIES.has(key)) {
+    rule.tenant_share_percent = null;
+    // Tenant-direct / late-fee / interest / percentage-rent style rules
+    // should not carry a pro-rata estimate either.
+    if (rule.payment_treatment === "tenant_direct_contract" || rule.is_excluded) {
+      rule.estimated_annual_amount = null;
+      rule.estimated_monthly_amount = null;
+    }
+  }
+}
+
 const VALID_EVIDENCE = (text) => {
   if (!text) return false;
   const raw = String(text).trim();
@@ -1185,6 +1252,14 @@ export const leaseRulePipelineService = {
       r.extraction_version = "lease_rule_pipeline_v3_evidence_aligned";
       r.generation_source = r.generation_source === "template_checklist" ? "template_checklist" : "lease_rule_pipeline_v3_evidence_aligned";
 
+      // Per-category leakage scrub. The LLM and structured-terms merger
+      // sometimes propagate global percentages (admin fee, gross-up, cap,
+      // base year, tenant share) onto every category. Force-null them when
+      // the rule's category doesn't actually support that field. This
+      // prevents e.g. admin_fee_percent=10 appearing on taxes / utilities /
+      // repairs / security / landscaping rules.
+      scrubInapplicableStructuredFields(r);
+
       return r;
     }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
 
@@ -1207,6 +1282,32 @@ export const leaseRulePipelineService = {
       })));
     }
 
+    // Generated-rule summary by source + leakage-field count by category.
+    // Helps verify that the per-category scrub did its job and that
+    // template/checklist rows haven't drowned out evidence-backed rows.
+    const summaryBySource = finalRules.reduce((acc, r) => {
+      const k = r.generation_source || "unknown";
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+    const adminFeeRows = finalRules
+      .filter((r) => r.admin_fee_percent != null)
+      .map((r) => ({ key: r.normalized_key, admin_fee_percent: r.admin_fee_percent }));
+    const grossUpRows = finalRules
+      .filter((r) => r.gross_up_percent != null)
+      .map((r) => ({ key: r.normalized_key, gross_up_percent: r.gross_up_percent }));
+    const capRows = finalRules
+      .filter((r) => r.cap_percent != null || r.is_subject_to_cap)
+      .map((r) => ({ key: r.normalized_key, cap_percent: r.cap_percent, is_subject_to_cap: r.is_subject_to_cap }));
+    console.log("[PIPELINE SUMMARY]", {
+      leaseId,
+      generated_total: finalRules.length,
+      by_generation_source: summaryBySource,
+      admin_fee_rows: adminFeeRows,
+      gross_up_rows: grossUpRows,
+      cap_rows: capRows,
+    });
+
     const saved = await leaseExpenseRuleService.saveRuleSet({
       lease,
       rules: finalRules,
@@ -1220,7 +1321,13 @@ export const leaseRulePipelineService = {
       .select("id", { count: "exact", head: true })
       .eq("lease_id", leaseId);
 
-    console.log("[POST UPSERT RULE COUNT]", { leaseId, count, countError });
+    console.log("[POST UPSERT RULE COUNT]", {
+      leaseId,
+      count,
+      countError,
+      expected_close_to: (saved?.rules?.length || 0),
+      delta_vs_expected: count != null && saved?.rules?.length != null ? count - saved.rules.length : null,
+    });
 
     diagnostics.persistedRulesCount = saved?.rules?.length || 0;
 
