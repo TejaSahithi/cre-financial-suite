@@ -12,6 +12,13 @@ STRICT RULES:
 - If a category in the input list is not mentioned in the lease text, return it with row_status="not_mentioned", recoverable_from_tenant="needs_review", cam_eligible="needs_review", and exact_source_text=null.
 - Never set recoverable_from_tenant="yes" or cam_eligible="yes" unless the exact_source_text quotes the clause that supports it. If you cannot quote a specific clause, use "conditional" or "needs_review".
 - Generic NNN/Gross/Full-Service assumptions are not evidence. The clause must mention the specific category (or a broad operating-expense clause that explicitly enumerates it).
+- Missing amount alone is NOT a reason to mark a rule as needs_review/conditional. Classify treatment based on the clause language, even when no dollar figure is present:
+    * "Tenant shall reimburse" / "Tenant's Pro Rata Share" / "tenant shall pay … additional rent" / "pass-through" → recoverable_from_tenant="yes", cam_eligible="yes" (when in a CAM/operating-expense/tax/insurance/common-area context)
+    * "included in base rent" / "full service" / "gross lease" → recoverable_from_tenant="no", cam_eligible="no", payment_treatment="included_in_base_rent"
+    * "Tenant shall contract directly" / "Tenant shall pay directly" / "at Tenant's sole cost" / "separately metered" → recoverable_from_tenant="no", cam_eligible="no", payment_treatment="tenant_direct_contract"
+    * "CAM shall not include" / "excluded from CAM/operating expenses" → recoverable_from_tenant="no", cam_eligible="no", is_excluded=true
+    * "may be included only if" / "if required by law" / "if approved in writing" / "subject to landlord's consent" / "capped at" / "base year" / "expense stop" / "amortized over useful life" → recoverable_from_tenant="conditional", cam_eligible="conditional"
+    * Use "needs_review" ONLY when the clause text is genuinely ambiguous about the treatment.
 - Do not attach evidence from the wrong clause. Base rent language is not CAM evidence. Property insurance language is not tenant-insurance evidence. Capital-expenditure interest language is not generic interest/late-fee evidence.
 - Separately metered or premises utilities are tenant_direct_contract and cam_eligible="no"; only common-area utilities listed in a CAM/operating-expense clause may be CAM eligible.
 - Percentage rent, late fees, generic interest, tenant insurance, alterations, and merchant association dues are not CAM expense rules unless a specific expense-recovery clause supports that category.

@@ -1715,6 +1715,117 @@ function extractSnippet(text, pattern) {
   return match?.[0] ? match[0].trim() : null;
 }
 
+/**
+ * Inspect a lease clause snippet and classify the treatment without needing
+ * a dollar amount. The classifier returns explicit yes / no / conditional
+ * for recoverable_from_tenant and cam_eligible, plus payment_treatment and
+ * rule_type, whenever the language clearly states the obligation. If the
+ * snippet is ambiguous, classification keys are left undefined so the
+ * caller falls back to "needs_review". Order matters — explicit-exclusion
+ * checks must run before tenant-pays checks so a clause like "CAM shall
+ * not include Tenant's pro rata share of capital expenditures" lands as
+ * EXCLUDED, not RECOVERABLE.
+ */
+function classifyClauseTreatment(snippet) {
+  const text = String(snippet || "");
+  if (!text) return { ambiguous: true };
+
+  // 1. Explicit exclusion — highest priority.
+  if (
+    /\b(?:cam|operating\s+expenses?|recovery)\s+(?:shall\s+)?(?:not\s+include|excludes?)\b/i.test(text)
+    || /\bexcluded\s+from\s+(?:cam|operating\s+expenses?|recovery)\b/i.test(text)
+    || /\bshall\s+not\s+be\s+(?:included|recoverable|charged|passed[-\s]through)\b/i.test(text)
+  ) {
+    return {
+      recoverableFromTenant: "no",
+      camEligible: "no",
+      paymentTreatment: "not_applicable",
+      isExcluded: true,
+      ruleType: "excluded",
+    };
+  }
+
+  // 2. Included in base rent / full-service / gross lease.
+  if (
+    /\bincluded\s+in\s+(?:base\s+)?rent\b/i.test(text)
+    || /\bfull[\s-]service\s+(?:lease|rent|basis)\b/i.test(text)
+    || /\bgross\s+lease\b/i.test(text)
+  ) {
+    return {
+      recoverableFromTenant: "no",
+      camEligible: "no",
+      paymentTreatment: "included_in_base_rent",
+      includedInBaseRent: true,
+    };
+  }
+
+  // 3. Tenant direct contract / sole cost / separately metered.
+  if (
+    /\btenant\s+shall\s+(?:contract\s+(?:directly|with)|pay\s+directly)\b/i.test(text)
+    || /\b(?:at\s+)?(?:tenant'?s\s+)?sole\s+cost(?:\s+and\s+expense)?\b/i.test(text)
+    || /\bseparately\s+metered\b/i.test(text)
+    || /\btenant\s+shall\s+(?:obtain|procure|maintain)[^.\n]{0,40}(?:directly|in\s+tenant'?s\s+name)\b/i.test(text)
+  ) {
+    return {
+      recoverableFromTenant: "no",
+      camEligible: "no",
+      paymentTreatment: "tenant_direct_contract",
+    };
+  }
+
+  // 4. Conditional treatment — clauses that allow recovery only under
+  // specific conditions (legal requirement, written approval, cap, base
+  // year, expense stop, etc.). These should NOT auto-promote to yes.
+  const conditionalSignals = [
+    /\bmay\s+be\s+included\s+only\s+if\b/i,
+    /\bif\s+required\s+by\s+(?:law|legal\s+requirement)\b/i,
+    /\bif\s+approved\s+(?:in\s+writing\s+)?by\b/i,
+    /\bsubject\s+to\s+landlord'?s?\s+(?:prior\s+)?(?:written\s+)?(?:consent|approval)\b/i,
+    /\b(?:not\s+to\s+exceed|capped\s+at|cap\s+of|subject\s+to\s+a?\s*cap)\b/i,
+    /\b(?:base\s+year|expense\s+stop)\b/i,
+    /\bamortized\s+over\s+(?:its|their)?\s*useful\s+life\b/i,
+  ];
+  if (conditionalSignals.some((rx) => rx.test(text))) {
+    return {
+      recoverableFromTenant: "conditional",
+      camEligible: "conditional",
+      paymentTreatment: "reimbursable",
+      isConditional: true,
+    };
+  }
+
+  // 5. Tenant pays / reimburses / pro rata share → recoverable yes.
+  if (
+    /\btenant\s+shall\s+(?:reimburse|pay)\s+(?:landlord\s+)?(?:for\s+)?(?:its\s+|tenant'?s\s+)?(?:pro[\s-]*rata\s+share|share\s+of|proportionate\s+share)\b/i.test(text)
+    || /\btenant'?s\s+pro[\s-]*rata\s+share\b/i.test(text)
+    || /\btenant\s+shall\s+pay\s+(?:as\s+)?additional\s+rent\b/i.test(text)
+    || /\brecoverable\s+(?:from\s+tenant|as\s+additional\s+rent)\b/i.test(text)
+    || /\bpass[-\s]through\b/i.test(text)
+    || /\btenant\s+shall\s+reimburse\s+landlord\b/i.test(text)
+  ) {
+    return {
+      recoverableFromTenant: "yes",
+      camEligible: "yes",
+      paymentTreatment: "reimbursable",
+    };
+  }
+
+  // 6. Landlord-pays language with no tenant-reimbursement → not recoverable.
+  if (
+    /\blandlord\s+shall\s+(?:pay|be\s+responsible\s+for|provide|maintain|carry)\b/i.test(text)
+    && !/\btenant\s+shall\s+(?:reimburse|pay)\b/i.test(text)
+  ) {
+    return {
+      recoverableFromTenant: "no",
+      camEligible: "no",
+      paymentTreatment: "not_applicable",
+    };
+  }
+
+  // 7. Ambiguous — caller should fall back to needs_review.
+  return { ambiguous: true };
+}
+
 function buildDeterministicDraftRules({ lease, categories = [], sourceText = "", existingRules = [] }) {
   const draftRules = [];
   const existingByCategoryId = new Map(
@@ -1841,28 +1952,60 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
     if (!hasClauseEvidence && !hasAmount) continue;
 
     const existing = existingByCategoryId.get(category.id) || {};
-
-    // Three persisted shapes:
-    //   1. clause + amount  → strong, mapped, recoverable=yes
-    //   2. clause only      → mapped, needs_review on recoverability/CAM
-    //                          (rule exists so the reviewer can confirm)
-    //   3. amount only      → needs_review (legacy amount-only gap)
     const isStrongMatch = hasClauseEvidence && hasAmount;
+
+    // Classify the clause itself when we have one. If the snippet clearly
+    // states the treatment (tenant reimburses / included in rent / tenant
+    // direct / excluded / conditional), use it. Only fall back to
+    // "needs_review" when the clause is genuinely ambiguous. Missing
+    // amount alone does NOT force needs_review.
+    const clauseClassification = hasClauseEvidence
+      ? classifyClauseTreatment(snippet)
+      : { ambiguous: true };
+    const ambiguous = Boolean(clauseClassification.ambiguous);
+    // Strong-match (clause + amount, no ambiguous-treatment override) keeps
+    // the historical "auto-yes" behavior. Clause-only with a clear
+    // classification follows the classifier's verdict. Truly ambiguous
+    // clauses and amount-only-gap rows land as needs_review.
+    const useClassifier = hasClauseEvidence && !ambiguous;
+    const recoverableFromTenant = useClassifier
+      ? clauseClassification.recoverableFromTenant
+      : isStrongMatch
+        ? "yes"
+        : "needs_review";
+    const camEligible = useClassifier
+      ? clauseClassification.camEligible
+      : isStrongMatch
+        ? undefined /* derived downstream from recoverable */
+        : "needs_review";
+    const paymentTreatment = useClassifier ? clauseClassification.paymentTreatment : undefined;
+    const isExcluded = Boolean(clauseClassification.isExcluded);
+    const includedInBaseRent = Boolean(clauseClassification.includedInBaseRent);
+    const isConditional = Boolean(clauseClassification.isConditional);
+
+    // A clause that locks the rule into a definitive treatment (exclusion,
+    // included-in-rent, tenant-direct) is "resolved" enough to leave
+    // review_status / approval_status alone (downstream derives). A clause
+    // that needs human confirmation (ambiguous, or amount-only gap) is
+    // explicitly marked needs_review / draft.
+    const needsHumanReview = ambiguous || !hasClauseEvidence;
 
     draftRules.push({
       ...existing,
       expense_category_id: category.id,
       category_name: category.category_name,
       subcategory_name: category.subcategory_name || null,
-      row_status: isStrongMatch ? "mapped" : hasClauseEvidence ? "mapped" : "needs_review",
+      row_status: hasClauseEvidence ? "mapped" : "needs_review",
       mentioned_in_lease: hasClauseEvidence,
-      is_recoverable: isStrongMatch,
-      recoverable_from_tenant: isStrongMatch ? "yes" : "needs_review",
-      ...(isStrongMatch ? {} : { cam_eligible: "needs_review" }),
-      is_excluded: false,
+      is_recoverable: useClassifier ? recoverableFromTenant === "yes" || recoverableFromTenant === "conditional" : isStrongMatch,
+      recoverable_from_tenant: recoverableFromTenant,
+      ...(camEligible !== undefined ? { cam_eligible: camEligible } : {}),
+      ...(paymentTreatment !== undefined ? { payment_treatment: paymentTreatment } : {}),
+      ...(includedInBaseRent ? { included_in_base_rent: true } : {}),
+      is_excluded: isExcluded,
       is_controllable: true,
-      is_subject_to_cap: false,
-      has_base_year: false,
+      is_subject_to_cap: isConditional && /\b(?:cap|not\s+to\s+exceed)/i.test(snippet || ""),
+      has_base_year: isConditional && /\bbase\s+year\b/i.test(snippet || ""),
       gross_up_applicable: false,
       admin_fee_applicable: false,
       // Amount is OPTIONAL — preserve null when the lease doesn't include
@@ -1870,16 +2013,19 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
       extracted_value: hasAmount ? extractedValue : null,
       final_value: hasAmount ? extractedValue : null,
       frequency: /monthly|per month/i.test(snippet || sourceText) ? "monthly" : "yearly",
-      confidence: isStrongMatch ? 0.78 : hasClauseEvidence ? 0.65 : 0.50,
+      // Clear-clause classification gets higher confidence than ambiguous.
+      confidence: isStrongMatch ? 0.78 : useClassifier ? 0.72 : hasClauseEvidence ? 0.55 : 0.50,
       notes: candidate.notes,
       source: snippet || null,
       exact_source_text: snippet || null,
       generation_source: isStrongMatch
         ? "deterministic_amount"
-        : hasClauseEvidence
-          ? "clause_evidence_no_amount"
-          : "amount_only_gap",
-      ...(isStrongMatch ? {} : { review_status: "needs_review", approval_status: "draft" }),
+        : useClassifier
+          ? "clause_classified"
+          : hasClauseEvidence
+            ? "clause_evidence_ambiguous"
+            : "amount_only_gap",
+      ...(needsHumanReview ? { review_status: "needs_review", approval_status: "draft" } : {}),
       published_to_cam: false,
     });
   }
