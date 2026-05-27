@@ -264,7 +264,7 @@ function isManualOverrideRule(rule) {
 }
 
 function isHumanApprovedOrManualRule(rule) {
-  const weak = isFallbackOrChecklistRule(rule);
+  const weak = isWeakOrFallbackRule(rule);
   const manualWithNote = isManualOverrideRule(rule) && hasManualOverrideNote(rule);
   if (weak) return manualWithNote;
   return isApprovedRule(rule) || manualWithNote;
@@ -326,7 +326,7 @@ function sourceSupportsRuleCategory(rule, sourceText) {
   return evidencePatterns.some((pattern) => pattern.test(text));
 }
 
-function isFallbackOrChecklistRule(rule) {
+function isWeakOrFallbackRule(rule) {
   const tokens = [
     rule?.generation_source,
     rule?.source_type,
@@ -351,10 +351,31 @@ function isFallbackOrChecklistRule(rule) {
   ].includes(token));
 }
 
+function isHardCoverageGapRule(rule) {
+  const tokens = [
+    rule?.generation_source,
+    rule?.source_type,
+    rule?.created_from,
+    rule?.extraction_status,
+    rule?.row_status,
+    rule?.status,
+  ].map(normalizeRuleToken);
+  return tokens.some((token) => [
+    "template_checklist",
+    "not_found",
+    "not_mentioned",
+    "amount_only_gap",
+    "unsupported",
+    "unsupported_fallback",
+    "original_lease_required",
+    "missing_source_evidence",
+  ].includes(token));
+}
+
 function isLeaseDerivedRule(rule) {
   if (isSupersededRule(rule)) return false;
   if (isHumanApprovedOrManualRule(rule)) return true;
-  if (isFallbackOrChecklistRule(rule)) return false;
+  if (isHardCoverageGapRule(rule)) return false;
   const generationSource = normalizeRuleToken(rule?.generation_source);
   const sourceType = normalizeRuleToken(rule?.source_type);
   const evidenceAligned = [
@@ -365,7 +386,9 @@ function isLeaseDerivedRule(rule) {
     token.includes("llm") ||
     token.includes("lease_text") ||
     token.includes("evidence_aligned") ||
-    token.includes("lease_rule_pipeline_v3")
+    token.includes("lease_rule_pipeline_v3") ||
+    token.includes("rule_extractor") ||
+    token.includes("text_fallback")
   );
   return hasStrongLeaseEvidence(rule) && (evidenceAligned || Boolean(getRuleSourceText(rule)) || hasSourcePageEvidence(rule));
 }

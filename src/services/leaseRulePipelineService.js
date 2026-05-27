@@ -1161,7 +1161,7 @@ export const leaseRulePipelineService = {
         r.extraction_status = r.extraction_status === "not_found" ? "not_found" : "weak_evidence";
         r.published_to_cam = false;
         diagnostics.weakEvidenceCount++;
-      } else if (r.confidence_score <= 0.55) {
+      } else if (r.confidence_score < 0.55) {
         r.review_status = "needs_review";
         r.approval_status = "draft";
         r.extraction_status = r.exact_source_text ? "weak_evidence" : "inferred";
