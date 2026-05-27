@@ -2198,19 +2198,144 @@ export default function LeaseReview() {
         cleanedEvidence[key] = val;
       }
 
-      const nextExtraction = {
-        ...(lease.extraction_data || {}),
-        fields: fieldsWithEvidence,
-        field_evidence: evidenceMap,
-        confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
-        ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
-        evidence_refreshed_at: new Date().toISOString(),
+      // ── Re-extract preservation safety ────────────────────────────────────
+      // A re-extract that returns zero source-backed fields (Vision failed,
+      // file load failed, model timeout, etc.) must NOT blank the previous
+      // good extraction. Approved/manually-edited fields are preserved
+      // regardless. The lease columns themselves are NOT touched here —
+      // only extraction_data.fields / field_evidence / confidence_scores.
+      const SOURCE_BACKED_MIN_THRESHOLD = 3; // need at least N grounded fields to accept the overwrite
+      const isSourceBacked = (entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        const sp = entry.source_page;
+        const st = entry.source_text;
+        return (sp != null && Number.isFinite(Number(sp))) || (typeof st === "string" && st.trim().length > 0);
       };
+      const isProtectedField = (key, entry) => {
+        if (entry?.manually_edited === true) return true;
+        if (String(entry?.source || "").toLowerCase() === "manual") return true;
+        const review = fieldReviews?.[key];
+        const status = String(review?.status || "").toLowerCase();
+        if (status === REVIEW_STATUSES.ACCEPTED || status === REVIEW_STATUSES.EDITED || status === "approved") return true;
+        return false;
+      };
+
+      const previousSourceBackedCount = Object.values(cleanedFields).filter(isSourceBacked).length;
+      const newSourceBackedCount = Object.values(fieldsWithEvidence).filter(isSourceBacked).length;
+      let manualFieldsPreservedCount = 0;
+      let approvedFieldsPreservedCount = 0;
+      let overwriteBlockedReason = null;
+
+      // If the new extraction produced no usable evidence, skip the
+      // fields/field_evidence/confidence_scores write entirely. We still
+      // stamp extraction_debug so the user can see why nothing changed.
+      if (newSourceBackedCount === 0) {
+        overwriteBlockedReason = previousSourceBackedCount > 0
+          ? "new_extraction_has_zero_source_backed_fields_previous_data_preserved"
+          : "new_extraction_has_zero_source_backed_fields";
+      }
+
+      // Build the merged fields/evidence/confidence so manual+approved+
+      // previously-source-backed fields are NEVER lost when the new
+      // extraction only covers part of the document.
+      const mergedFields = { ...cleanedFields };
+      const mergedEvidence = { ...cleanedEvidence };
+      const mergedConfidence = { ...(lease.extraction_data?.confidence_scores || {}) };
+
+      if (!overwriteBlockedReason) {
+        for (const [key, newEntry] of Object.entries(fieldsWithEvidence)) {
+          const prevEntry = cleanedFields[key];
+          if (isProtectedField(key, prevEntry)) {
+            if (prevEntry?.manually_edited === true || String(prevEntry?.source || "").toLowerCase() === "manual") {
+              manualFieldsPreservedCount += 1;
+            } else {
+              approvedFieldsPreservedCount += 1;
+            }
+            continue; // keep manual / accepted previous entry as-is
+          }
+          // Otherwise overlay the new value only when it actually carries
+          // evidence; an evidence-less new entry should not erase a
+          // source-backed previous entry.
+          if (isSourceBacked(newEntry) || !isSourceBacked(prevEntry)) {
+            mergedFields[key] = newEntry;
+          }
+        }
+        for (const [key, newEv] of Object.entries(evidenceMap)) {
+          if (isProtectedField(key, cleanedFields[key])) continue;
+          if (isSourceBacked(newEv) || !isSourceBacked(cleanedEvidence[key])) {
+            mergedEvidence[key] = newEv;
+          }
+        }
+        Object.assign(mergedConfidence, confidenceMap);
+      } else {
+        // Block path: count what we'd preserve to surface in the toast.
+        for (const [key, prevEntry] of Object.entries(cleanedFields)) {
+          if (!isProtectedField(key, prevEntry)) continue;
+          if (prevEntry?.manually_edited === true || String(prevEntry?.source || "").toLowerCase() === "manual") {
+            manualFieldsPreservedCount += 1;
+          } else {
+            approvedFieldsPreservedCount += 1;
+          }
+        }
+      }
+
+      const extractionDebug = {
+        ...(lease.extraction_data?.extraction_debug || {}),
+        last_reextract_at: new Date().toISOString(),
+        last_reextract_source_file_id: sourceFileId,
+        previous_source_backed_fields_count: previousSourceBackedCount,
+        new_source_backed_fields_count: newSourceBackedCount,
+        source_backed_min_threshold: SOURCE_BACKED_MIN_THRESHOLD,
+        overwrite_allowed: !overwriteBlockedReason,
+        overwrite_blocked_reason: overwriteBlockedReason,
+        manual_fields_preserved_count: manualFieldsPreservedCount,
+        approved_fields_preserved_count: approvedFieldsPreservedCount,
+        merged_fields_total: Object.keys(mergedFields).length,
+      };
+
+      const nextExtraction = overwriteBlockedReason
+        ? {
+            // Preserve previous extraction entirely; only refresh the debug
+            // breadcrumb so the reviewer can see this run was rejected.
+            ...(lease.extraction_data || {}),
+            extraction_debug: extractionDebug,
+            last_reextract_blocked_at: extractionDebug.last_reextract_at,
+          }
+        : {
+            ...(lease.extraction_data || {}),
+            fields: mergedFields,
+            field_evidence: mergedEvidence,
+            confidence_scores: mergedConfidence,
+            ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
+            evidence_refreshed_at: new Date().toISOString(),
+            extraction_debug: extractionDebug,
+          };
+
       const { error: updateErr } = await supabase
         .from("leases")
         .update({ extraction_data: nextExtraction })
         .eq("id", lease.id);
       if (updateErr) throw updateErr;
+
+      if (overwriteBlockedReason) {
+        // Re-extract produced nothing usable. Surface the blocker clearly
+        // and short-circuit — the success toast / rule generation below
+        // assume a successful overwrite.
+        console.warn("[LeaseReview] re-extract blocked from overwriting previous data:", {
+          reason: overwriteBlockedReason,
+          previousSourceBackedCount,
+          newSourceBackedCount,
+          manualFieldsPreservedCount,
+          approvedFieldsPreservedCount,
+        });
+        toast.error(
+          previousSourceBackedCount > 0
+            ? `Re-extract produced no source-backed fields. Previous ${previousSourceBackedCount} extracted field${previousSourceBackedCount === 1 ? "" : "s"} preserved. Check Extraction Debug for details.`
+            : "Re-extract produced no source-backed fields. The source document may be unreadable; check Extraction Debug.",
+        );
+        queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+        return;
+      }
 
       await logAudit({
         entityType: "Lease",
@@ -2222,6 +2347,10 @@ export default function LeaseReview() {
           source_file_id: sourceFileId,
           refreshed_at: nextExtraction.evidence_refreshed_at,
           stripped_junk_fields: Object.keys(prevFields).length - Object.keys(cleanedFields).length,
+          previous_source_backed_fields_count: previousSourceBackedCount,
+          new_source_backed_fields_count: newSourceBackedCount,
+          manual_fields_preserved_count: manualFieldsPreservedCount,
+          approved_fields_preserved_count: approvedFieldsPreservedCount,
         },
       });
 
@@ -2239,7 +2368,13 @@ export default function LeaseReview() {
         console.warn("[LeaseReview] draft expense rule extraction skipped:", ruleErr?.message || ruleErr);
       }
 
-      toast.success("Lease re-extracted. Latest values, evidence, and expense rules applied.");
+      const preservedSummary = manualFieldsPreservedCount + approvedFieldsPreservedCount;
+      const preservedSuffix = preservedSummary > 0
+        ? ` ${preservedSummary} reviewer-edited field${preservedSummary === 1 ? "" : "s"} preserved.`
+        : "";
+      toast.success(
+        `Lease re-extracted. ${newSourceBackedCount} source-backed field${newSourceBackedCount === 1 ? "" : "s"} from this run.${preservedSuffix}`,
+      );
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseId] });

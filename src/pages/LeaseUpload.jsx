@@ -988,7 +988,11 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
     property_id: firstRow.property_id ?? fileRecord.property_id ?? null,
     building_id: firstRow.building_id ?? fileRecord.building_id ?? null,
     unit_id: firstRow.unit_id ?? fileRecord.unit_id ?? null,
-    tenant_name: firstRow.tenant_name || "Lease Review Draft",
+    // Preserve null when extraction returned no tenant_name. The previous
+    // "Lease Review Draft" string fallback was being persisted to the lease
+    // row and displayed as the extracted tenant. List views can show
+    // "Untitled" as a UI label without writing it into the data column.
+    tenant_name: firstRow.tenant_name || null,
     start_date: normalizeDate(firstRow.start_date || firstRow.lease_start),
     end_date: normalizeDate(firstRow.end_date || firstRow.lease_end),
     commencement_date: normalizeDate(firstRow.commencement_date),

@@ -735,12 +735,44 @@ Deno.serve(async (req: Request) => {
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
     let fileLoadStatus: string = "not_attempted";
     let fileLoadError: string | null = null;
+    let fileBytesLength = 0;
+    let detectedMagic: string | null = null;
+
+    // Detect what was actually downloaded by inspecting the first bytes.
+    // If the download silently returned an HTML error page (expired signed
+    // URL, RLS deny rendered as HTML, etc.) we must NOT send that to
+    // Gemini Vision and pretend it's the lease PDF.
+    const detectMagic = (bytes: Uint8Array): string | null => {
+      if (!bytes || bytes.length < 4) return null;
+      // %PDF
+      if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "pdf";
+      // JPEG: FF D8 FF
+      if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return "jpeg";
+      // PNG: 89 50 4E 47
+      if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return "png";
+      // GIF: 47 49 46 38
+      if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "gif";
+      // TIFF: 49 49 2A 00 or 4D 4D 00 2A
+      if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2A) ||
+          (bytes[0] === 0x4D && bytes[1] === 0x4D && bytes[3] === 0x2A)) return "tiff";
+      // WEBP: RIFF....WEBP
+      if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return "webp_or_riff";
+      // HTML error page leaked from CDN — anything starting with "<" or "<!"
+      const lead = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]).toLowerCase();
+      if (lead.startsWith("<!do") || lead.startsWith("<htm") || lead.startsWith("<?xm")) return "html_or_xml";
+      return null;
+    };
 
     if (fileRecord.file_url) {
       try {
         const storagePath = String(fileRecord.file_url).replace(
           /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
           "",
+        );
+        console.log(
+          `[normalize-pdf-output] loading file bytes file_id=${file_id} ` +
+          `file_name=${fileRecord.file_name ?? "?"} storage_path=${storagePath} ` +
+          `module=${moduleType}`,
         );
         const { data: fileBlob, error: downloadError } = await supabaseAdmin
           .storage
@@ -754,23 +786,50 @@ Deno.serve(async (req: Request) => {
           );
         } else {
           const bytes = new Uint8Array(await fileBlob.arrayBuffer());
-          // Deno base64 encoder is available; encode incrementally if large.
-          // For typical lease PDFs (<10MB) the inline conversion is fine.
-          let binary = "";
-          const CHUNK = 8 * 1024;
-          for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-            const slice = bytes.subarray(offset, offset + CHUNK);
-            // String.fromCharCode.apply rejects very large arrays; chunked
-            // conversion keeps each call within the JS arg limit.
-            binary += String.fromCharCode.apply(null, Array.from(slice));
+          fileBytesLength = bytes.length;
+          detectedMagic = detectMagic(bytes);
+
+          if (!detectedMagic || detectedMagic === "html_or_xml") {
+            // Don't send a non-document to Vision. Mark load as failed and
+            // let extraction proceed with whatever Docling produced.
+            fileLoadStatus = "unexpected_content_type";
+            fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${
+              Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
+            })`;
+            console.warn(
+              `[normalize-pdf-output] file bytes failed magic check for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
+            );
+          } else {
+            // Deno base64 encoder is available; encode incrementally if large.
+            // For typical lease PDFs (<10MB) the inline conversion is fine.
+            let binary = "";
+            const CHUNK = 8 * 1024;
+            for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+              const slice = bytes.subarray(offset, offset + CHUNK);
+              // String.fromCharCode.apply rejects very large arrays; chunked
+              // conversion keeps each call within the JS arg limit.
+              binary += String.fromCharCode.apply(null, Array.from(slice));
+            }
+            fileBase64 = btoa(binary);
+            // Resolve fileMimeType from magic when possible — this is more
+            // reliable than the column value or blob.type, which can be
+            // wrong for files re-uploaded via Storage REST.
+            const magicMime =
+              detectedMagic === "pdf" ? "application/pdf"
+              : detectedMagic === "jpeg" ? "image/jpeg"
+              : detectedMagic === "png" ? "image/png"
+              : detectedMagic === "gif" ? "image/gif"
+              : detectedMagic === "tiff" ? "image/tiff"
+              : detectedMagic === "webp_or_riff" ? "image/webp"
+              : null;
+            fileMimeType = magicMime || fileMimeType || (fileBlob as any).type || "application/pdf";
+            fileLoadStatus = "loaded";
+            console.log(
+              `[normalize-pdf-output] file bytes loaded for file_id=${file_id} ` +
+              `(${bytes.length} bytes, magic=${detectedMagic}, mime=${fileMimeType}) ` +
+              `— Vision fallback enabled if needed`,
+            );
           }
-          fileBase64 = btoa(binary);
-          fileMimeType = fileMimeType || (fileBlob as any).type || "application/pdf";
-          fileLoadStatus = "loaded";
-          console.log(
-            `[normalize-pdf-output] file bytes loaded for file_id=${file_id} (` +
-            `${bytes.length} bytes, mime=${fileMimeType}) — Vision fallback enabled if needed`,
-          );
         }
       } catch (loadErr: any) {
         fileLoadStatus = "exception";
@@ -823,6 +882,11 @@ Deno.serve(async (req: Request) => {
           file_load_status: fileLoadStatus,
           file_load_error: fileLoadError,
           file_url_present: !!fileRecord.file_url,
+          file_bytes_length: fileBytesLength,
+          file_magic_detected: detectedMagic,
+          file_name: fileRecord.file_name ?? null,
+          file_mime_resolved: fileMimeType,
+          file_id: file_id,
         };
       }
 

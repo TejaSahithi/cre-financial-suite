@@ -832,8 +832,13 @@ async function ensureLeaseReviewDrafts(
 }
 
 function buildEmptyLeaseReviewRow() {
+  // Empty row when extraction produced no structured fields. EVERY field
+  // stays null so downstream readers can't mistake a UI placeholder for
+  // extracted lease data. The "Lease Review Draft" string used to live in
+  // tenant_name and silently became the tenant's name on the lease row —
+  // that regression is what this nullification prevents.
   return {
-    tenant_name: "Lease Review Draft",
+    tenant_name: null,
     start_date: null,
     end_date: null,
     monthly_rent: null,
@@ -927,7 +932,11 @@ function buildLeaseReviewDraftPayload(
     property_id: row.property_id ?? fileRecord.property_id ?? null,
     building_id: row.building_id ?? fileRecord.building_id ?? null,
     unit_id: row.unit_id ?? fileRecord.unit_id ?? null,
-    tenant_name: row.tenant_name ?? "Lease Review Draft",
+    // Write null when extraction returned no tenant_name. The previous
+    // fallback wrote the literal string "Lease Review Draft" which the
+    // resolver then displayed as the extracted tenant. Lease list views
+    // can show "Untitled draft" — that's a display decision, not data.
+    tenant_name: row.tenant_name ?? null,
     start_date: normalizeDate(row.start_date ?? row.lease_start),
     end_date: normalizeDate(row.end_date ?? row.lease_end),
     // Preserve null when extraction found no rent value. The leases.monthly_rent

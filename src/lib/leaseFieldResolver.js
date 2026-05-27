@@ -180,6 +180,33 @@ function scrubEvidenceText(text) {
   return trimmed;
 }
 
+// UI/page/fallback labels that have historically leaked into lease fields
+// when extraction returned no structured data. Treating these as null at
+// the resolver layer means even if a downstream writer regresses, the UI
+// won't display them as extracted lease data.
+const FALLBACK_VALUE_SENTINELS = new Set([
+  "lease review draft",
+  "lease review",
+  "draft",
+  "untitled",
+  "untitled draft",
+  "upload lease",
+  "back to leases",
+  "cre platform",
+  "budgeting & cam",
+  "budgeting and cam",
+  "unknown type",
+  "unknown",
+  "review expense rules",
+  "request signature",
+]);
+function isFallbackPlaceholderValue(value) {
+  if (typeof value !== "string") return false;
+  const lower = value.trim().toLowerCase();
+  if (!lower) return false;
+  return FALLBACK_VALUE_SENTINELS.has(lower);
+}
+
 function buildResolverOutput(rawResult, sourcePath) {
   if (rawResult === null || rawResult === undefined || rawResult === "") {
     return null;
@@ -208,6 +235,12 @@ function buildResolverOutput(rawResult, sourcePath) {
     // The resolver must accept every key family so Page / Exact Source Text
     // light up regardless of which writer populated the row.
     output.value = rawResult.value !== undefined ? rawResult.value : null;
+    // Defensive: strip UI/fallback sentinel strings ("Lease Review Draft",
+    // "Untitled", etc.) at the resolver layer so even if a downstream
+    // writer regresses, the value never displays as extracted lease data.
+    if (isFallbackPlaceholderValue(output.value)) {
+      output.value = null;
+    }
     const candidateRaw =
       rawResult.raw_value ||
       rawResult.rawValue ||
@@ -250,11 +283,11 @@ function buildResolverOutput(rawResult, sourcePath) {
       null;
   } else {
     // Primitive format
-    output.value = rawResult;
-    output.rawValue = String(rawResult);
+    output.value = isFallbackPlaceholderValue(rawResult) ? null : rawResult;
+    output.rawValue = output.value != null ? String(output.value) : null;
   }
 
-  // Final sanitization
+  // Final sanitization — null/empty values produce no resolver output.
   if (output.value === undefined || output.value === null || output.value === "") {
      return null;
   }
