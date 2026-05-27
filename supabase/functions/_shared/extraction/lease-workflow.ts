@@ -2207,6 +2207,76 @@ export function buildLeaseWorkflowAbstraction(args: {
     };
     expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   }
+
+  // ── Assignment / amendment short-circuit ──────────────────────────────
+  // For assignment / amendment / consent / estoppel documents that don't
+  // contain an explicit expense recovery clause, the blueprint loop above
+  // produces ~31 "not_found" coverage rows that the UI surfaces as
+  // "lease expense rules generated". Replace them with a single
+  // `original_lease_required` coverage marker so the panel reflects what
+  // the document actually says.
+  //
+  // An explicit clause keeps the blueprint output intact so terms the
+  // assignment introduces (e.g. "Assignee shall pay CAM charges from the
+  // Effective Date") still extract into normal rules.
+  const isAssignmentOrAmendment =
+    documentProfile === "assignment"
+    || documentProfile === "amendment"
+    || documentProfile === "assignment_amendment"
+    || /\b(consent|estoppel)\b/i.test(normalizeToken(`${args?.documentSubtype || ""} ${fullText}`));
+  const explicitExpenseClausePatterns = [
+    /tenant\s+shall\s+(?:pay|reimburse|contribute).{0,100}(?:cam|common\s+area\s+maintenance|operating\s+expenses?|real\s+estate\s+tax(?:es)?|property\s+tax(?:es)?|insurance\s+premium)/i,
+    /(?:assignee|tenant)\s+shall\s+(?:pay|reimburse).{0,100}(?:cam|tax(?:es)?|insurance|utilit|operating\s+expenses?)/i,
+    /(?:cam|common\s+area\s+maintenance|operating\s+expenses?).{0,140}(?:tenant'?s\s+pro\s*rata\s+share|reimburs|recover|additional\s+rent)/i,
+    /base\s+year.{0,120}(?:operating\s+expenses?|tax(?:es)?|insurance)|expense\s+stop/i,
+    /full[-\s]?service.{0,160}(?:utilities|janitorial|tax(?:es)?|insurance|operating\s+expenses?)/i,
+    /separately\s+metered.{0,120}(?:tenant\s+shall\s+pay|direct(?:ly)?\s+to\s+(?:the\s+)?utility)/i,
+    /utilities\s+shall\s+be.{0,80}(?:tenant'?s)?\s+(?:direct|sole)\s+responsibility/i,
+  ];
+  const explicitExpenseClauseCount = explicitExpenseClausePatterns
+    .filter((pattern) => pattern.test(fullText))
+    .length;
+  const assignmentExpenseShortCircuitApplied =
+    isAssignmentOrAmendment && explicitExpenseClauseCount === 0;
+  const templateRulesSkippedCount = assignmentExpenseShortCircuitApplied ? expenseRules.length : 0;
+
+  if (assignmentExpenseShortCircuitApplied) {
+    // Use the "all other terms remain unchanged" / "ratification" clause as
+    // source_text if it's present in the doc — otherwise null so the row
+    // surfaces as needs_review without a fabricated quote.
+    const ratificationSnippet = (() => {
+      const m = fullText.match(/(?:all\s+other\s+terms[^.]{0,160}(?:remain[^.]{0,80}(?:same|unchanged|full\s+force))|ratif(?:y|ies|ied)[^.]{0,160})/i);
+      return m?.[0] ? cleanText(m[0]).slice(0, 280) : null;
+    })();
+    expenseRules = [{
+      expense_category: "original_lease_required",
+      normalized_key: "original_lease_required",
+      category_name: "Original Lease Required",
+      rule_type: "coverage_gap",
+      row_type: "coverage_gap",
+      generation_source: "original_lease_required",
+      source_type: "document_profile",
+      source_field_key: "original_lease_required_for_expense_rules",
+      document_profile: documentProfile,
+      mentioned_in_lease: false,
+      recoverable_from_tenant: "needs_review",
+      cam_eligible: "needs_review",
+      is_recoverable: false,
+      is_excluded: false,
+      published_to_cam: false,
+      review_status: "needs_review",
+      approval_status: "draft",
+      extraction_status: "needs_review",
+      row_status: "needs_review",
+      source_clause: ratificationSnippet,
+      exact_source_text: ratificationSnippet,
+      source_page: null,
+      confidence_score: 0.65,
+      notes:
+        `This document is an ${documentProfile.replace(/_/g, " ")} and does not contain expense recovery clauses. ` +
+        "Load the original lease to extract CAM / tax / insurance / utility rules.",
+    }];
+  }
   const camProfile = deriveCamProfile(leaseFields, expenseRules);
   const budgetPreview = deriveBudgetPreview(leaseFields, expenseRules, camProfile);
   const validations = buildValidationResults(leaseFields, expenseRules, camProfile, budgetPreview);
@@ -2232,6 +2302,18 @@ export function buildLeaseWorkflowAbstraction(args: {
       expense_rule_count: expenseRules.length,
       validation_error_count: validations.filter((item) => item.pass === false).length,
       document_profile: documentProfile,
+      // Assignment / amendment short-circuit diagnostics. When applied,
+      // expense_rule_count drops to 1 (the original_lease_required marker)
+      // and template_rules_skipped_count reflects how many blueprint
+      // coverage rows were suppressed.
+      assignment_expense_short_circuit_applied: assignmentExpenseShortCircuitApplied,
+      explicit_expense_clause_count: explicitExpenseClauseCount,
+      template_rules_skipped_count: templateRulesSkippedCount,
+      original_lease_required_count: assignmentExpenseShortCircuitApplied ? 1 : 0,
+      real_expense_rules_generated_count: assignmentExpenseShortCircuitApplied
+        ? 0
+        : expenseRules.filter((r: any) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,
+      coverage_gap_rules_generated_count: expenseRules.filter((r: any) => r?.rule_type === "coverage_gap" || r?.generation_source === "original_lease_required").length,
       pages_detected: pagesDetected,
       docling_pages_parsed: doclingPagesParsed,
       pdf_page_count_total: pdfPageCountTotal,

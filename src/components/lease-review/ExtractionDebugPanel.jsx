@@ -138,6 +138,17 @@ export default function ExtractionDebugPanel({ lease }) {
     unmapped_items_count: workflowOutput?.summary?.unmapped_items_count ?? uniqueItems.filter((item) => !item?.maps_to_fixed_field).length,
     clause_records_count: workflowOutput?.summary?.clause_records_count ?? uniqueItems.length,
     lease_expense_rules_generated: workflowOutput?.summary?.lease_expense_rules_generated ?? (workflowOutput?.expense_rules?.length || 0),
+    real_expense_rules_generated_count: workflowOutput?.summary?.real_expense_rules_generated_count
+      ?? (workflowOutput?.expense_rules || []).filter((r) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,
+    coverage_gap_rules_generated_count: workflowOutput?.summary?.coverage_gap_rules_generated_count
+      ?? (workflowOutput?.expense_rules || []).filter((r) => r?.rule_type === "coverage_gap" || r?.generation_source === "original_lease_required").length,
+    original_lease_required_count: workflowOutput?.summary?.original_lease_required_count
+      ?? (workflowOutput?.expense_rules || []).filter((r) => r?.generation_source === "original_lease_required").length,
+    template_rules_skipped_count: workflowOutput?.summary?.template_rules_skipped_count ?? 0,
+    explicit_expense_clause_count: workflowOutput?.summary?.explicit_expense_clause_count ?? 0,
+    assignment_expense_short_circuit_applied: workflowOutput?.summary?.assignment_expense_short_circuit_applied
+      ? "yes"
+      : "no",
     coverage_gaps_generated: workflowOutput?.summary?.coverage_gaps_generated ?? uniqueItems.filter((item) => item?.requires_original_lease || item?.extraction_status === "needs_review").length,
     rejected_generic_source_count: workflowOutput?.summary?.rejected_generic_source_count ?? 0,
   };
