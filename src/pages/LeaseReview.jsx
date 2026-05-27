@@ -1980,8 +1980,8 @@ export default function LeaseReview() {
 
       const nextExtraction = {
         ...(lease.extraction_data || {}),
-        fields: { ...cleanedFields, ...fieldsWithEvidence },
-        field_evidence: { ...cleanedEvidence, ...evidenceMap },
+        fields: fieldsWithEvidence,
+        field_evidence: evidenceMap,
         confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
         ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
         evidence_refreshed_at: new Date().toISOString(),
