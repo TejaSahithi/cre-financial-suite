@@ -399,9 +399,14 @@ function buildDynamicDocumentFieldsByTab(lease) {
     const sourceText = cleanExtractedSourceText(
       item?.source_text || item?.exact_source_text || item?.source_clause,
     );
-    if (!sourceText) continue;
     const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
-    if (value === undefined || value === null || value === "") continue;
+    const hasValue = value !== undefined && value !== null && value !== "";
+    // Show the row if EITHER a value OR a source clause is present. Earlier
+    // gate required both, which silently dropped clause-only items (e.g.
+    // "Landlord Consent", "All Other Terms Remain Same") that the
+    // assignment-pipeline extracts as boolean facts without a normalized
+    // value. Reviewer can fill the value once the row is visible.
+    if (!hasValue && !sourceText) continue;
     const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
@@ -981,6 +986,37 @@ export default function LeaseReview() {
     },
   });
   const approvedRuleSet = ruleSetSummary?.ruleSet?.status === "approved" ? ruleSetSummary.ruleSet : null;
+
+  // Detect assignment/amendment-only documents so the rule-readiness banner
+  // says something accurate. The pipeline tags these docs with
+  // document_profile.documentType ∈ {assignment, amendment, ...} or by
+  // emitting a single coverage rule with rule_type / generation_source =
+  // "original_lease_required". For those docs, "Lease expense rules
+  // approved" is misleading — there are no real recovery clauses to
+  // approve; the original lease is required for CAM/expense rules.
+  const isAssignmentOnlyDocument = useMemo(() => {
+    const workflowOutput = lease?.extraction_data?.workflow_output || {};
+    const documentType = String(
+      workflowOutput?.document_profile?.documentType
+        || workflowOutput?.document_profile?.document_type
+        || lease?.extraction_data?.document_profile?.documentType
+        || lease?.extraction_data?.document_profile?.document_type
+        || "",
+    ).toLowerCase();
+    const isAssignmentDoc =
+      documentType.includes("assignment")
+      || documentType.includes("amendment")
+      || documentType.includes("estoppel")
+      || documentType.includes("consent");
+    const expenseRules = Array.isArray(workflowOutput?.expense_rules) ? workflowOutput.expense_rules : [];
+    const onlyOriginalLeaseRequired =
+      expenseRules.length > 0
+      && expenseRules.every((r) => {
+        const tag = String(r?.rule_type || r?.generation_source || r?.source_field_key || "").toLowerCase();
+        return tag.includes("original_lease_required") || tag === "coverage_gap";
+      });
+    return isAssignmentDoc || onlyOriginalLeaseRequired;
+  }, [lease?.extraction_data?.workflow_output, lease?.extraction_data?.document_profile]);
 
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => leaseService.update(id, data),
@@ -2469,21 +2505,25 @@ export default function LeaseReview() {
       {/* Rule readiness banner */}
       <div
         className={`rounded-xl border px-4 py-3 text-sm ${
-          approvedRuleSet
-            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-            : "border-amber-200 bg-amber-50 text-amber-800"
+          isAssignmentOnlyDocument
+            ? "border-slate-200 bg-slate-50 text-slate-700"
+            : approvedRuleSet
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-amber-200 bg-amber-50 text-amber-800"
         }`}
       >
-        {approvedRuleSet
-          ? "Lease expense rules are approved. Approving the lease abstract will refresh lease-derived charges and CAM readiness."
-          : (
-            <span>
-              Expense/CAM rule review is pending. You may approve the lease abstract now, but downstream recoveries/CAM will remain blocked until rules are approved.{" "}
-              <Link to={createPageUrl("LeaseExpenseRules") + `?lease=${lease.id}`} className="underline font-medium">
-                Review rules on the Lease Expense Rules page
-              </Link>
-            </span>
-          )}
+        {isAssignmentOnlyDocument
+          ? "No lease expense recovery clauses found in this document — it appears to be an assignment / amendment / consent. The original lease is required for CAM and expense recovery rules."
+          : approvedRuleSet
+            ? "Lease expense rules are approved. Approving the lease abstract will refresh lease-derived charges and CAM readiness."
+            : (
+              <span>
+                Expense/CAM rule review is pending. You may approve the lease abstract now, but downstream recoveries/CAM will remain blocked until rules are approved.{" "}
+                <Link to={createPageUrl("LeaseExpenseRules") + `?lease=${lease.id}`} className="underline font-medium">
+                  Review rules on the Lease Expense Rules page
+                </Link>
+              </span>
+            )}
       </div>
 
       {/* Confidence summary — 6 cards */}

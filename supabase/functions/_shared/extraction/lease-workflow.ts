@@ -1062,7 +1062,23 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       // almost always "we never extracted it" — not "the lease really says
       // $0". Treating that as extracted produced a misleading green badge.
       const rowMonthly = asNumber(getFirstValue(row, ["monthly_rent"]));
-      value = rowMonthly != null && rowMonthly > 0 ? rowMonthly : null;
+      const rowAnnual = asNumber(getFirstValue(row, ["annual_rent"]));
+      if (rowMonthly != null && rowMonthly > 0) {
+        value = rowMonthly;
+        // If row.monthly_rent looks like annual_rent / 12 (within $1, since
+        // lease-normalizer rounds), this value is CALCULATED, not extracted
+        // from a clause. Mark accordingly so the UI doesn't display a
+        // misleading "extracted" badge against a derived figure.
+        if (rowAnnual != null && rowAnnual > 0) {
+          const derived = rowAnnual / 12;
+          if (Math.abs(derived - rowMonthly) < 1) {
+            extractionStatus = "calculated";
+            confidenceScore = 0.95;
+          }
+        }
+      } else {
+        value = null;
+      }
     }
 
     if (spec.key === "commencement_date" && isBlank(value)) {
