@@ -444,7 +444,22 @@ function originalLeaseRequiredRule(leaseId, documentType) {
 function detectDocumentProfile({ lease, sourceText }) {
   const text = String(sourceText || "");
   const lower = text.toLowerCase();
-  const nameLower = String(lease?.name || lease?.lease_name || lease?.document_name || "").toLowerCase();
+  const profileHint = normalizeKey(firstPresent(
+    lease?.document_profile,
+    lease?.document_subtype,
+    lease?.extraction_data?.document_profile,
+    lease?.extraction_data?.document_type,
+    lease?.extraction_data?.document_subtype,
+    lease?.extraction_data?.workflow_output?.document_profile,
+    lease?.extraction_data?.workflow_output?.document_type,
+    lease?.extraction_data?.fields?.document_profile?.value,
+  ));
+  const nameLower = String(firstPresent(
+    lease?.name,
+    lease?.lease_name,
+    lease?.document_name,
+    lease?.extraction_data?.source_file_name,
+  ) || "").toLowerCase();
   const combined = `${nameLower}\n${lower}`;
   const assignmentSignals = [
     /assignment\s+(?:and\s+assumption\s+)?of\s+lease/i,
@@ -475,16 +490,26 @@ function detectDocumentProfile({ lease, sourceText }) {
     /full[-\s]?service|modified\s+gross|gross\s+lease/i,
     /after[-\s]?hours\s+hvac|separately\s+metered/i,
   ].filter((pattern) => pattern.test(combined)).length;
-  const documentType = assignmentSignals >= 2
+  const hasExplicitExpenseRecoveryClause = [
+    /tenant\s+shall\s+(?:pay|reimburse|contribute).{0,100}(?:cam|common\s+area\s+maintenance|operating\s+expenses?|real\s+estate\s+tax(?:es)?|property\s+tax(?:es)?|insurance\s+premium)/i,
+    /(?:cam|common\s+area\s+maintenance|operating\s+expenses?).{0,140}(?:tenant'?s\s+pro\s*rata\s+share|reimburs|recover|additional\s+rent)/i,
+    /base\s+year.{0,120}(?:operating\s+expenses?|tax(?:es)?|insurance)|expense\s+stop/i,
+    /full[-\s]?service.{0,160}(?:utilities|janitorial|tax(?:es)?|insurance|operating\s+expenses?)/i,
+    /separately\s+metered.{0,120}(?:tenant\s+shall\s+pay|direct(?:ly)?\s+to\s+(?:the\s+)?utility)/i,
+  ].some((pattern) => pattern.test(text));
+  const hintedAssignment = profileHint.includes("assignment") || nameLower.includes("assignment");
+  const hintedAmendment = profileHint.includes("amendment") || nameLower.includes("amend");
+  const documentType = hintedAssignment
+    ? "assignment"
+    : hintedAmendment
+      ? "amendment"
+      : assignmentSignals >= 2
     ? "assignment"
     : amendmentSignals >= 2
       ? "amendment"
-      : nameLower.includes("assignment")
-        ? "assignment"
-        : nameLower.includes("amend")
-          ? "amendment"
-          : "full_lease";
-  const assignmentOrAmendmentOnly = ["assignment", "amendment"].includes(documentType) && expenseSignals < 2;
+      : "full_lease";
+  const assignmentOrAmendmentOnly =
+    ["assignment", "amendment"].includes(documentType) && !hasExplicitExpenseRecoveryClause;
   const leaseStructure = /modified\s+gross|base\s+year|expense\s+stop/i.test(combined)
     ? "modified_gross_base_year"
     : /full[-\s]?service|gross\s+lease/i.test(combined)
@@ -498,9 +523,45 @@ function detectDocumentProfile({ lease, sourceText }) {
     leaseStructure,
     assignmentOrAmendmentOnly,
     expenseSignals,
+    hasExplicitExpenseRecoveryClause,
     assignmentSignals,
     amendmentSignals,
   };
+}
+
+function extractDocumentTextCandidate(candidate) {
+  if (!candidate) return "";
+  if (typeof candidate === "string") return candidate.trim();
+  if (Array.isArray(candidate)) {
+    return candidate
+      .map((item) => extractDocumentTextCandidate(item))
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+  }
+  if (typeof candidate !== "object") return "";
+
+  const direct = firstPresent(
+    candidate.full_text,
+    candidate.raw_text,
+    candidate.markdown,
+    candidate.text,
+    candidate.body,
+    candidate.content,
+    candidate.source_text,
+    candidate.extracted_text,
+  );
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const nestedText = firstPresent(
+    extractDocumentTextCandidate(candidate.docling_raw),
+    extractDocumentTextCandidate(candidate.normalized_output),
+    extractDocumentTextCandidate(candidate.parsed_data),
+    extractDocumentTextCandidate(candidate.pages),
+    extractDocumentTextCandidate(candidate.text_blocks),
+    extractDocumentTextCandidate(candidate.blocks),
+  );
+  return typeof nestedText === "string" ? nestedText.trim() : "";
 }
 
 function applyLeaseEvidenceRules(rule, sourceText) {
@@ -1051,25 +1112,18 @@ export const leaseRulePipelineService = {
           file?.parsed_data?.full_text,
           file?.parsed_data?.raw_text,
           file?.parsed_data?.text,
-          file?.reviewed_output,
-          file?.ui_review_payload,
-          lease?.extraction_data?.workflow_output,
+          file?.docling_raw,
+          file?.normalized_output,
+          file?.parsed_data,
           lease?.extraction_data?.abstract,
           lease?.extracted_text
         ];
 
         for (const c of candidates) {
-          if (c && typeof c === 'string' && c.trim()) {
-            sourceText = c.trim();
+          const extracted = extractDocumentTextCandidate(c);
+          if (extracted && extracted.length > 50) {
+            sourceText = extracted;
             break;
-          } else if (c && typeof c === 'object') {
-             // If it's an object, stringify to check if it has useful content?
-             // Actually, reviewed_output might be an object. We'll stringify it just in case if it has text inside.
-             const s = JSON.stringify(c);
-             if (s.length > 50) {
-                 sourceText = s;
-                 break;
-             }
           }
         }
 
@@ -1103,6 +1157,7 @@ export const leaseRulePipelineService = {
     diagnostics.leaseStructure = documentProfile.leaseStructure;
     diagnostics.assignmentOrAmendmentOnly = documentProfile.assignmentOrAmendmentOnly;
     diagnostics.expenseSignals = documentProfile.expenseSignals;
+    diagnostics.hasExplicitExpenseRecoveryClause = documentProfile.hasExplicitExpenseRecoveryClause;
 
 
 
@@ -1114,6 +1169,7 @@ export const leaseRulePipelineService = {
       leaseStructure: diagnostics.leaseStructure,
       assignmentOrAmendmentOnly: diagnostics.assignmentOrAmendmentOnly,
       expenseSignals: diagnostics.expenseSignals,
+      hasExplicitExpenseRecoveryClause: diagnostics.hasExplicitExpenseRecoveryClause,
       leaseType: lease.lease_type,
       hasExtractionData: !!lease?.extraction_data,
       extractionKeys: Object.keys(lease?.extraction_data || {})
