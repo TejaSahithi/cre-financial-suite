@@ -1350,7 +1350,16 @@ export default function LeaseReview() {
     // cache has the fresh write but the parent component hasn't re-rendered
     // yet. Falling back to the captured ref keeps things safe if the cache
     // is somehow empty.
-    const freshLease = queryClient.getQueryData(["lease", leaseId]) || lease;
+    //
+    // The query uses `select: (data) => data?.[0]` — meaning the CACHE
+    // holds the raw array returned by leaseService.filter (typically
+    // `[leaseRow]`), while `useQuery`'s `data` is the unwrapped first
+    // element. We have to unwrap here too, otherwise readFieldValue
+    // receives an array and returns null, blocking Accept with
+    // "Cannot accept a field with no value" even when the displayed
+    // value is fine.
+    const cached = queryClient.getQueryData(["lease", leaseId]);
+    const freshLease = Array.isArray(cached) ? (cached[0] ?? lease) : (cached || lease);
     const value = readFieldValue(freshLease, field.key);
     const { sourcePage, sourceText } = readFieldEvidence(freshLease, field.key);
     const hasEvidence = sourcePage != null || (typeof sourceText === "string" && sourceText.length > 0);
