@@ -374,10 +374,60 @@ export async function runExtractionPipeline(
     : 0;
 
   const processingTimeMs = Date.now() - startTime;
+
+  // Source-backed evidence counting. A field is "source-backed" if it has a
+  // non-empty sourceText OR a sourcePage. Used to surface how much of the
+  // extraction is grounded in real document evidence vs derived/inferred.
+  const WEAK_TEXT_THRESHOLD = 800; // chars; below this triggers Vision fallback
+  const isGenericSourceText = (text: unknown) => {
+    const t = String(text || "").trim();
+    if (!t) return true;
+    if (/^(llm extracted|extracted|manual_review|unknown|n\/?a|null)$/i.test(t)) return true;
+    if (/^[a-z][a-z0-9_]{2,40}$/.test(t)) return true; // bare identifier
+    if (/derived from|calculated from|workflow placeholder/i.test(t)) return true;
+    return false;
+  };
+  let fieldsReturnedCount = 0;
+  let sourceBackedFieldsCount = 0;
+  let fieldsWithoutSourceCount = 0;
+  let rejectedGenericSourceCount = 0;
+  for (const record of validated.records || []) {
+    for (const field of Object.values(record.fields || {})) {
+      if (field?.value == null || field.value === "") continue;
+      fieldsReturnedCount += 1;
+      const sourceText = (field as any).sourceText ?? (field as any).source_text ?? null;
+      const sourcePage = (field as any).sourcePage ?? (field as any).source_page ?? null;
+      if (isGenericSourceText(sourceText) && sourcePage == null) {
+        fieldsWithoutSourceCount += 1;
+        if (sourceText) rejectedGenericSourceCount += 1;
+      } else {
+        sourceBackedFieldsCount += 1;
+      }
+    }
+  }
+
+  const embeddedTextChars = fullText.length;
+  const weakTextDetected = embeddedTextChars < WEAK_TEXT_THRESHOLD;
+  const fileBase64Available = Boolean(input.fileBase64);
+  // Vision fallback "triggered" means the LLM step ran in file mode. The
+  // llm-extractor only switches to callVertexAIFileJSON when input.fileBase64
+  // is truthy; if any LLM fields were produced under that condition we
+  // count it as fired. (No flag bubbles back from llm-extractor today, so
+  // this is the closest non-invasive observation.)
+  const visionFallbackTriggered = fileBase64Available && llmFieldCount > 0;
+  const visionFallbackSkippedReason = !fileBase64Available && weakTextDetected
+    ? "file_bytes_not_provided"
+    : (fileBase64Available && llmFieldCount === 0 && weakTextDetected)
+      ? "llm_returned_zero_fields"
+      : null;
+
   log.info(
     `Pipeline complete: ${flatRows.length} rows, method=${method}, ` +
     `confidence=${avgConfidence}%, time=${processingTimeMs}ms, ` +
-    `rule=${ruleFieldCount}f / table=${tableFieldCount}f / llm=${llmFieldCount}f`,
+    `rule=${ruleFieldCount}f / table=${tableFieldCount}f / llm=${llmFieldCount}f, ` +
+    `text=${embeddedTextChars}ch weak=${weakTextDetected} ` +
+    `fileBase64=${fileBase64Available} vision=${visionFallbackTriggered}, ` +
+    `sourceBackedFields=${sourceBackedFieldsCount}/${fieldsReturnedCount}`,
   );
 
   return {
@@ -395,6 +445,29 @@ export async function runExtractionPipeline(
       parsingMethod: rawDocling.extraction_method || "text",
       charCount: fullText.length,
       processingTimeMs,
+      // Extraction diagnostics for normalize-pdf-output to forward into
+      // uploaded_files.normalized_output.metadata and ultimately into
+      // lease.extraction_data.extraction_debug.
+      extractionDebug: {
+        embedded_text_chars_total: embeddedTextChars,
+        normalized_text_chars_total: embeddedTextChars,
+        weak_text_detected: weakTextDetected,
+        weak_text_threshold: WEAK_TEXT_THRESHOLD,
+        fileBase64_available: fileBase64Available,
+        fileMimeType: input.fileMimeType || null,
+        vision_fallback_triggered: visionFallbackTriggered,
+        vision_fallback_skipped_reason: visionFallbackSkippedReason,
+        llm_file_mode_used: visionFallbackTriggered,
+        fields_returned_count: fieldsReturnedCount,
+        source_backed_fields_count: sourceBackedFieldsCount,
+        fields_without_source_count: fieldsWithoutSourceCount,
+        rejected_generic_source_count: rejectedGenericSourceCount,
+        rule_fields_extracted: ruleFieldCount,
+        table_fields_extracted: tableFieldCount,
+        llm_fields_extracted: llmFieldCount,
+        parsing_method: rawDocling.extraction_method || "text",
+        processing_time_ms: processingTimeMs,
+      },
     },
   };
 }

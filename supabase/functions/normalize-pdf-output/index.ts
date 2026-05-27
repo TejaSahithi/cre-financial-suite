@@ -724,6 +724,68 @@ Deno.serve(async (req: Request) => {
     const extractionModuleType = toExtractionModuleType(moduleType);
     const fileName = fileRecord.file_name ?? "document";
 
+    // Load file bytes from Supabase Storage so the pipeline can fall back
+    // to Gemini Vision when Docling text is weak (scanned / handwritten /
+    // image-only PDFs). pipeline.ts already wires `fileBase64` into the
+    // LLM extractor's file-mode branch — but until now the orchestrator
+    // never passed it, so the Vision path was unreachable for every file.
+    let fileBase64: string | null = null;
+    let fileMimeType: string | null = fileRecord.mime_type
+      ?? fileRecord.file_type
+      ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
+    let fileLoadStatus: string = "not_attempted";
+    let fileLoadError: string | null = null;
+
+    if (fileRecord.file_url) {
+      try {
+        const storagePath = String(fileRecord.file_url).replace(
+          /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
+          "",
+        );
+        const { data: fileBlob, error: downloadError } = await supabaseAdmin
+          .storage
+          .from("financial-uploads")
+          .download(storagePath);
+        if (downloadError || !fileBlob) {
+          fileLoadStatus = "download_failed";
+          fileLoadError = downloadError?.message ?? "blob_missing";
+          console.warn(
+            `[normalize-pdf-output] file bytes unavailable for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
+          );
+        } else {
+          const bytes = new Uint8Array(await fileBlob.arrayBuffer());
+          // Deno base64 encoder is available; encode incrementally if large.
+          // For typical lease PDFs (<10MB) the inline conversion is fine.
+          let binary = "";
+          const CHUNK = 8 * 1024;
+          for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+            const slice = bytes.subarray(offset, offset + CHUNK);
+            // String.fromCharCode.apply rejects very large arrays; chunked
+            // conversion keeps each call within the JS arg limit.
+            binary += String.fromCharCode.apply(null, Array.from(slice));
+          }
+          fileBase64 = btoa(binary);
+          fileMimeType = fileMimeType || (fileBlob as any).type || "application/pdf";
+          fileLoadStatus = "loaded";
+          console.log(
+            `[normalize-pdf-output] file bytes loaded for file_id=${file_id} (` +
+            `${bytes.length} bytes, mime=${fileMimeType}) — Vision fallback enabled if needed`,
+          );
+        }
+      } catch (loadErr: any) {
+        fileLoadStatus = "exception";
+        fileLoadError = loadErr?.message ?? String(loadErr);
+        console.warn(
+          `[normalize-pdf-output] file bytes load exception for file_id=${file_id}: ${fileLoadError}`,
+        );
+      }
+    } else {
+      fileLoadStatus = "no_file_url";
+      console.warn(
+        `[normalize-pdf-output] uploaded_files.file_url missing for file_id=${file_id} — Vision fallback disabled`,
+      );
+    }
+
     // Transition to 'validating' while the pipeline runs.
     // (pdf_parsed → validating is allowed in the FSM.)
     const { error: validatingStatusError } = await setStatus(supabaseAdmin, file_id, "validating");
@@ -739,6 +801,11 @@ Deno.serve(async (req: Request) => {
           moduleType: extractionModuleType,
           fileName,
           docling: fileRecord.docling_raw,
+          // Pass file bytes + MIME so the LLM extractor can delegate to
+          // Gemini Vision file-mode when embedded text is too weak to
+          // ground a field. Pipeline returns metadata.extractionDebug
+          // describing what happened.
+          ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
           // Conservative defaults — tune per-module if needed later.
@@ -747,6 +814,17 @@ Deno.serve(async (req: Request) => {
           llmTemperature: 0,
         },
       );
+
+      // Forward file-load status into the pipeline's extractionDebug so the
+      // UI/debug panel can show why Vision did or didn't run.
+      if (result.metadata && typeof result.metadata === "object") {
+        (result.metadata as any).extractionDebug = {
+          ...((result.metadata as any).extractionDebug || {}),
+          file_load_status: fileLoadStatus,
+          file_load_error: fileLoadError,
+          file_url_present: !!fileRecord.file_url,
+        };
+      }
 
       if ((!result.rows || result.rows.length === 0) && fileRecord.review_required) {
         result.rows = [buildFallbackReviewRow(moduleType)];
