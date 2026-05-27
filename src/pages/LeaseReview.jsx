@@ -317,6 +317,7 @@ function isGenericExtractedSourceText(value) {
   const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
   if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
   return false;
 }
@@ -357,6 +358,7 @@ function collectExtractedDocumentItems(lease) {
 }
 
 function inferDynamicItemTab(item, key) {
+  if (item?.display_tab) return String(item.display_tab);
   const businessArea = String(item?.business_area || "").toLowerCase();
   if (businessArea === "assignment_amendment") {
     if (/(assignor|assignee|tenant|landlord|notice_address|address|premises)/i.test(key)) return "parties_premises";
@@ -401,14 +403,16 @@ function buildDynamicDocumentFieldsByTab(lease) {
     const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
     if (value === undefined || value === null || value === "") continue;
     const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
-    if (!key || staticKeys.has(key) || seen.has(key)) continue;
+    const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
+    const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
+    if (!key || !createsDynamicRow || seen.has(key)) continue;
     const tab = inferDynamicItemTab(item, key);
-    if (!tab) continue;
+    if (!tab || tab === "clause_records") continue;
     seen.add(key);
     if (!byTab[tab]) byTab[tab] = [];
     byTab[tab].push({
       key,
-      label: titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
+      label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
       tab,
       type: inferDynamicItemType(item, key),
       allowNA: true,

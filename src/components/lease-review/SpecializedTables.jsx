@@ -30,6 +30,16 @@ function formatDate(value) {
 }
 
 // ─── Rent Schedule ────────────────────────────────────────────────────
+function cleanDocumentItemSource(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
+  if (text.toLowerCase().includes("derived from")) return null;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
+  if (/^[a-z][a-z0-9_]{2,60}$/i.test(text)) return null;
+  return text;
+}
+
 export function RentScheduleTable({ leaseId }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["rent-schedule-rows", leaseId],
@@ -370,11 +380,16 @@ export function ClauseRecordsTable({ lease }) {
   const fallbackClauses = useMemo(() => {
     const fromWorkflow = lease?.extraction_data?.workflow_output?.lease_clauses;
     const fromTopLevel = lease?.extraction_data?.lease_clauses;
-    const itemRows =
-      lease?.extraction_data?.workflow_output?.extracted_document_items ||
-      lease?.extraction_data?.workflow_output?.clause_records ||
-      lease?.extraction_data?.extracted_document_items ||
-      [];
+    const workflowOutput = lease?.extraction_data?.workflow_output || {};
+    const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
+    const itemRows = [
+      workflowOutput.extracted_document_items,
+      workflowOutput.clause_records,
+      recordOutput.extracted_document_items,
+      recordOutput.clause_records,
+      lease?.extraction_data?.extracted_document_items,
+      lease?.extraction_data?.clause_records,
+    ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
     const list = Array.isArray(fromWorkflow) ? fromWorkflow : Array.isArray(fromTopLevel) ? fromTopLevel : [];
     const clauseRows = list.map((c, idx) => ({
       id: `extract-${idx}`,
@@ -386,18 +401,34 @@ export function ClauseRecordsTable({ lease }) {
     }));
     const discoveredRows = Array.isArray(itemRows)
       ? itemRows
-          .filter((item) => item?.source_text)
+          .filter((item) => cleanDocumentItemSource(item?.source_text || item?.exact_source_text || item?.source_clause))
           .map((item, idx) => ({
             id: item.item_id || `document-item-${idx}`,
             is_document_item: true,
-            clause_type: item.business_area || item.item_type || "clause_records",
-            clause_title: item.item_type || item.field_key || "Discovered Field",
-            clause_text: item.source_text,
+            clause_type: item.business_area || item.display_tab || item.item_type || "clause_records",
+            clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
+            clause_text: cleanDocumentItemSource(item.source_text || item.exact_source_text || item.source_clause),
             source_page: item.source_page,
-            confidence_score: item.confidence,
+            confidence_score: item.confidence_score ?? item.confidence,
+            structured_fields_json: {
+              item_type: item.item_type || null,
+              display_tab: item.display_tab || null,
+              value: item.normalized_value ?? item.value ?? null,
+              extraction_status: item.extraction_status || null,
+              maps_to_fixed_field: item.maps_to_fixed_field ?? null,
+              creates_dynamic_row: item.creates_dynamic_row ?? null,
+            },
           }))
       : [];
-    return [...clauseRows, ...discoveredRows];
+    const dedupedDiscovered = [];
+    const seenDiscovered = new Set();
+    for (const row of discoveredRows) {
+      const key = `${row.clause_title}|${row.source_page ?? ""}|${row.clause_text}`;
+      if (seenDiscovered.has(key)) continue;
+      seenDiscovered.add(key);
+      dedupedDiscovered.push(row);
+    }
+    return [...clauseRows, ...dedupedDiscovered];
   }, [lease]);
 
   const allClauses = useMemo(() => {

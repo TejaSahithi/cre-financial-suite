@@ -591,7 +591,9 @@ export function readFieldEvidence(lease, key) {
   
   return {
     rawValue: resolved.rawValue ?? null,
-    sourcePage: resolved.sourcePage ? Number(resolved.sourcePage) : null,
+    sourcePage: resolved.sourcePage !== null && resolved.sourcePage !== undefined && resolved.sourcePage !== ""
+      ? Number(resolved.sourcePage)
+      : null,
     sourceText: resolved.exactSourceText ?? null,
     extractionStatus: resolved.reviewStatus ?? null,
   };

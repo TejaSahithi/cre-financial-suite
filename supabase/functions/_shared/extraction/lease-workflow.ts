@@ -269,6 +269,7 @@ function isGenericSourceText(value: unknown) {
   const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
   if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
   return false;
 }
@@ -418,10 +419,11 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     // the docling field's text/value (the actual lease language) and never
     // fall back to a key/label identifier string.
     const directText = cleanText(directField?.text || directField?.value || "");
-    if (directText) {
+    const safeDirectText = cleanSourceText(directText);
+    if (safeDirectText) {
       return {
         source_page: sourcePageOf(directField),
-        source_clause: directText.slice(0, 260),
+        source_clause: safeDirectText.slice(0, 260),
       };
     }
   }
@@ -655,6 +657,96 @@ const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
   holdover: "rent_charges",
 };
 
+const FIXED_REVIEW_FIELD_KEYS = new Set([
+  "tenant_name",
+  "landlord_name",
+  "property_address",
+  "premises_address",
+  "rentable_area_sqft",
+  "square_footage",
+  "premises_use",
+  "permitted_use",
+  "lease_date",
+  "commencement_date",
+  "rent_commencement_date",
+  "expiration_date",
+  "renewal_notice_months",
+  "termination_notice_months",
+  "option_exercise_deadline",
+  "monthly_rent",
+  "base_rent_monthly",
+  "annual_rent",
+  "rent_frequency",
+  "billing_frequency",
+  "escalation_type",
+  "escalation_rate",
+  "escalation_timing",
+  "free_rent_months",
+  "ti_allowance",
+  "security_deposit_amount",
+  "security_deposit",
+  "lease_type",
+  "tax_responsibility",
+  "insurance_responsibility",
+  "utilities_responsibility",
+  "maintenance_responsibility",
+  "base_year",
+  "expense_stop",
+  "cam_cap_type",
+  "cap_percent",
+  "admin_fee_percent",
+  "management_fee_basis",
+  "hvac_responsibility",
+  "gross_up_enabled",
+  "gross_up_percent",
+  "tenant_insurance_required",
+  "general_liability_min",
+  "property_insurance_responsibility",
+  "waiver_of_subrogation",
+  "additional_insureds_required",
+  "renewal_type",
+  "renewal_options",
+  "right_of_first_refusal",
+  "early_termination_option",
+  "assignment_provisions",
+  "default_cure_period",
+]);
+
+function titleizeItemLabel(value: unknown) {
+  return cleanText(value || "Discovered Field")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function displayTabForItem(itemType: unknown, businessArea: unknown, fieldKey?: unknown) {
+  const type = normalizeToken(itemType);
+  const area = normalizeToken(businessArea);
+  const key = normalizeToken(fieldKey || itemType);
+  if (area === "assignment_amendment") {
+    if (/(assignor|assignee|tenant|landlord|notice address|address|premises)/.test(key)) return "parties_premises";
+    if (/(date|term|expiration|commencement|effective|signature|consent date)/.test(key)) return "dates_term";
+    if (/(rent|consideration|fee|charge|amount|deposit)/.test(key)) return "rent_charges";
+    return "legal_options";
+  }
+  if (area === "critical_dates") return "dates_term";
+  if ([
+    "parties_premises",
+    "dates_term",
+    "rent_charges",
+    "expenses_recoveries",
+    "cam_rules",
+    "insurance",
+    "legal_options",
+  ].includes(area)) return area;
+  if (/(insurance|insured|subrogation|certificate)/.test(type)) return "insurance";
+  if (/(cam|gross up|cap|admin|management|base year|expense stop|reconciliation|audit|capital expenditure)/.test(type)) return "cam_rules";
+  if (/(tax|utility|repair|recover|expense|direct|base rent|exclusion)/.test(type)) return "expenses_recoveries";
+  if (/(rent|fee|charge|deposit|interest|holdover|allowance|consideration)/.test(type)) return "rent_charges";
+  if (/(date|term|deadline|expiration|commencement|effective)/.test(type)) return "dates_term";
+  if (/(assign|consent|assumption|default|remedy|surrender|alteration|indemnity|sublet)/.test(type)) return "legal_options";
+  return "clause_records";
+}
+
 const UNIVERSAL_ITEM_DEFS = [
   { item_type: "lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\b(?:lease\s+date|dated)\b[^\n]{0,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
   { item_type: "original_lease_date", business_area: "dates_term", field_key: "lease_date", maps: true, patterns: [/\bLease\s+dated\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i] },
@@ -703,10 +795,12 @@ function findUniversalMatch(doclingRaw: any, fullText: string, patterns: RegExp[
     }
     const match = fullText.match(pattern);
     if (match?.[0]) {
+      const sourceText = cleanText(match[0]);
+      const sourceBlock = blocks.find((block) => cleanText(block?.text || "").includes(sourceText));
       return {
         raw: cleanText(match[1] || match[0]),
-        source_text: cleanText(match[0]),
-        source_page: null,
+        source_text: sourceText,
+        source_page: sourcePageOf(sourceBlock),
       };
     }
   }
@@ -726,16 +820,22 @@ function normalizeUniversalValue(itemType: string, raw: unknown) {
 function createDocumentItem(args: Record<string, unknown>) {
   const sourceText = cleanText(args.source_text || "");
   const safeSourceText = cleanSourceText(sourceText);
+  const fieldKey = args.field_key ? String(args.field_key) : null;
+  const mapsToFixedField = Boolean(args.maps_to_fixed_field ?? (fieldKey && FIXED_REVIEW_FIELD_KEYS.has(fieldKey)));
+  const mapsToExistingField = Boolean(args.maps_to_existing_field ?? args.maps_to_fixed_field ?? fieldKey);
+  const displayTab = args.display_tab || displayTabForItem(args.item_type, args.business_area, fieldKey);
   return {
     item_id: String(args.item_id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
     document_id: args.document_id ?? null,
     lease_id: args.lease_id ?? null,
+    label: args.label || titleizeItemLabel(args.item_type || fieldKey),
     document_profile: args.document_profile ?? "full_lease",
     section_title: args.section_title ?? null,
     section_number: args.section_number ?? null,
     item_type: args.item_type,
     business_area: args.business_area || "unknown_needs_review",
-    field_key: args.field_key ?? null,
+    display_tab: displayTab,
+    field_key: fieldKey,
     category: args.category ?? null,
     subcategory: args.subcategory ?? null,
     value: args.value ?? null,
@@ -746,7 +846,9 @@ function createDocumentItem(args: Record<string, unknown>) {
     confidence: args.confidence ?? (safeSourceText ? 0.78 : 0.35),
     extraction_method: args.extraction_method || "workflow_universal_item",
     extraction_status: args.extraction_status || (safeSourceText ? "extracted" : "needs_review"),
-    maps_to_existing_field: Boolean(args.maps_to_existing_field),
+    maps_to_existing_field: mapsToExistingField,
+    maps_to_fixed_field: mapsToFixedField,
+    creates_dynamic_row: Boolean(args.creates_dynamic_row ?? (!mapsToFixedField && safeSourceText)),
     creates_lease_expense_rule: Boolean(args.creates_lease_expense_rule),
     requires_original_lease: Boolean(args.requires_original_lease),
     review_status: args.review_status || "needs_review",
@@ -880,7 +982,7 @@ function applyDocumentItemsToLeaseFields(
   items: any[],
 ) {
   for (const item of items || []) {
-    if (!item?.maps_to_existing_field || !item?.field_key || isBlank(item.value) || !item.source_text) continue;
+    if (!item?.maps_to_fixed_field || !item?.field_key || isBlank(item.value) || !item.source_text) continue;
     const fieldKey = String(item.field_key);
     const existing = leaseFields[fieldKey];
     const shouldOverride =
@@ -2004,6 +2106,11 @@ export function buildLeaseWorkflowAbstraction(args: {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
   const fullText = cleanText(doclingRaw?.full_text || "");
+  const pagesDetected = new Set(
+    asArray(doclingRaw?.text_blocks)
+      .map((block) => sourcePageOf(block))
+      .filter((page) => page != null),
+  ).size;
   const clauses = buildClauseRecords(doclingRaw, fullText);
   const documentProfile = detectDocumentProfile(fullText, args?.documentSubtype || null);
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
@@ -2094,6 +2201,17 @@ export function buildLeaseWorkflowAbstraction(args: {
       extracted_document_item_count: extractedDocumentItems.length,
       expense_rule_count: expenseRules.length,
       validation_error_count: validations.filter((item) => item.pass === false).length,
+      document_profile: documentProfile,
+      pages_detected: pagesDetected,
+      fixed_fields_extracted: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
+      dynamic_items_extracted: extractedDocumentItems.length,
+      dynamic_items_displayed: extractedDocumentItems.filter((item) => item.creates_dynamic_row && item.display_tab !== "clause_records").length,
+      mapped_items_count: extractedDocumentItems.filter((item) => item.maps_to_fixed_field).length,
+      unmapped_items_count: extractedDocumentItems.filter((item) => !item.maps_to_fixed_field).length,
+      clause_records_count: extractedDocumentItems.length,
+      lease_expense_rules_generated: expenseRules.length,
+      coverage_gaps_generated: extractedDocumentItems.filter((item) => item.requires_original_lease || item.extraction_status === "needs_review").length,
+      rejected_generic_source_count: genericSourceTextRejected,
     },
   };
 }

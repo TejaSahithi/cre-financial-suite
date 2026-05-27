@@ -136,6 +136,7 @@ function isGenericSourceText(value: unknown): boolean {
   const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
   if (lower.includes("derived from")) return true;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
   return false;
 }

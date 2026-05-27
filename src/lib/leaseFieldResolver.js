@@ -175,6 +175,7 @@ function scrubEvidenceText(text) {
   if (!trimmed) return null;
   if (looksLikeFieldKey(trimmed)) return null;
   if (lower.includes("derived from")) return null;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(trimmed)) return null;
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(trimmed)) return null;
   return trimmed;
 }
@@ -313,14 +314,19 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
     );
   }
 
+  let firstFound = null;
   for (const { path, data } of fallbackHierarchy) {
     if (!data) continue;
     const rawResult = extractValueFromSource(data, aliases);
     const output = buildResolverOutput(rawResult, path);
     if (output && output.found) {
-      return output;
+      const hasRealEvidence = Boolean(output.exactSourceText || output.sourcePage);
+      if (hasRealEvidence) return output;
+      if (!firstFound) firstFound = output;
     }
   }
+
+  if (firstFound) return firstFound;
 
   // Not found
   return {

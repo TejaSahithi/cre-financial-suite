@@ -93,6 +93,36 @@ export default function ExtractionDebugPanel({ lease }) {
   const fieldEvidence = lease?.extraction_data?.field_evidence || extractionFields;
   const confidenceScores = lease?.extraction_data?.confidence_scores || {};
   const validations = Array.isArray(workflowOutput?.validations) ? workflowOutput.validations : [];
+  const workflowItems = [
+    workflowOutput?.extracted_document_items,
+    workflowOutput?.clause_records,
+    ...(Array.isArray(workflowOutput?.records)
+      ? [workflowOutput.records[0]?.extracted_document_items, workflowOutput.records[0]?.clause_records]
+      : []),
+    lease?.extraction_data?.extracted_document_items,
+    lease?.extraction_data?.clause_records,
+  ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
+  const uniqueItems = [];
+  const seenItemKeys = new Set();
+  for (const item of workflowItems) {
+    const key = `${item?.item_type || item?.field_key || ""}|${item?.source_page ?? ""}|${item?.source_text || item?.source_clause || ""}`;
+    if (seenItemKeys.has(key)) continue;
+    seenItemKeys.add(key);
+    uniqueItems.push(item);
+  }
+  const debugSummary = {
+    document_profile: workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
+    pages_detected: workflowOutput?.summary?.pages_detected || new Set(textBlocks.map((block) => block?.page ?? block?.page_number ?? block?.source_page).filter(Boolean)).size,
+    fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
+    dynamic_items_extracted: workflowOutput?.summary?.dynamic_items_extracted ?? uniqueItems.length,
+    dynamic_items_displayed: workflowOutput?.summary?.dynamic_items_displayed ?? uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,
+    mapped_items_count: workflowOutput?.summary?.mapped_items_count ?? uniqueItems.filter((item) => item?.maps_to_fixed_field).length,
+    unmapped_items_count: workflowOutput?.summary?.unmapped_items_count ?? uniqueItems.filter((item) => !item?.maps_to_fixed_field).length,
+    clause_records_count: workflowOutput?.summary?.clause_records_count ?? uniqueItems.length,
+    lease_expense_rules_generated: workflowOutput?.summary?.lease_expense_rules_generated ?? (workflowOutput?.expense_rules?.length || 0),
+    coverage_gaps_generated: workflowOutput?.summary?.coverage_gaps_generated ?? uniqueItems.filter((item) => item?.requires_original_lease || item?.extraction_status === "needs_review").length,
+    rejected_generic_source_count: workflowOutput?.summary?.rejected_generic_source_count ?? 0,
+  };
 
   const reviewTableRows = useMemo(() => {
     return LEASE_REVIEW_FIELDS.map((field) => {
@@ -329,6 +359,17 @@ export default function ExtractionDebugPanel({ lease }) {
           </CardContent>
         </Card>
       )}
+
+      <Section title="Extraction Summary" count={`${debugSummary.dynamic_items_extracted} discovered items`}>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {Object.entries(debugSummary).map(([key, value]) => (
+            <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">{String(value ?? "-")}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
 
       <Section
         title="1. Docling page text"
