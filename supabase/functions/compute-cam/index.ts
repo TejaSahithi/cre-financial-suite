@@ -23,6 +23,88 @@ function normalizeDecision(value: unknown) {
   return normalized || "no";
 }
 
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function getCategoryName(rule: any) {
+  return String(
+    rule?.expense_categories?.category_name ||
+      rule?.expense_category ||
+      rule?.category_name ||
+      rule?.normalized_key ||
+      "",
+  ).trim();
+}
+
+function isSupersededRule(rule: any) {
+  return [rule?.row_status, rule?.status, rule?.extraction_status]
+    .some((value) => normalizeText(value) === "superseded");
+}
+
+function isApprovedChildRule(rule: any) {
+  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  const approvalStatus = normalizeText(rule?.approval_status);
+  return reviewStatus === "approved" && approvalStatus === "approved";
+}
+
+function isCamPublishableChildRule(rule: any) {
+  const paymentTreatment = normalizeText(rule?.payment_treatment);
+  return (
+    isApprovedChildRule(rule) &&
+    rule?.published_to_cam === true &&
+    normalizeDecision(rule?.recoverable_from_tenant) === "yes" &&
+    normalizeDecision(rule?.cam_eligible) === "yes" &&
+    paymentTreatment !== "tenant_direct_contract" &&
+    paymentTreatment !== "included_in_base_rent" &&
+    rule?.is_excluded !== true &&
+    !isSupersededRule(rule)
+  );
+}
+
+function ruleSourceText(rule: any) {
+  return String(
+    rule?.exact_source_text ||
+      rule?.source_clause_text ||
+      rule?.source_clause ||
+      rule?.source_text ||
+      rule?.evidence_text ||
+      rule?.source ||
+      "",
+  );
+}
+
+function isExplicitWholeCategoryCamExclusion(rule: any, categoryName: string) {
+  if (!isApprovedChildRule(rule) || isSupersededRule(rule)) return false;
+  if (normalizeText(rule?.rule_type) !== "excluded" && rule?.is_excluded !== true) return false;
+
+  const source = ruleSourceText(rule);
+  if (!source.trim()) return false;
+  const mentionsCamPool = /(?:cam|common\s+area\s+maintenance|operating\s+expenses?)[\s\S]{0,120}(?:shall\s+not\s+include|must\s+not\s+include|does\s+not\s+include|excludes?|excluded|not\s+included)|(?:shall\s+not\s+include|must\s+not\s+include|does\s+not\s+include|excludes?|excluded|not\s+included)[\s\S]{0,120}(?:cam|common\s+area\s+maintenance|operating\s+expenses?)/i
+    .test(source);
+  if (!mentionsCamPool) return false;
+
+  const category = normalizeText(categoryName);
+  const subcategory = normalizeText(rule?.expense_subcategory || rule?.subcategory_name);
+  const broadMixedCategories = new Set(["utilities", "repairs & maintenance", "repairs and maintenance", "insurance"]);
+  if (broadMixedCategories.has(category) && subcategory && subcategory !== category) return false;
+
+  return true;
+}
+
+function isApprovedActualExpense(expense: any) {
+  const approval = normalizeText(expense?.approval_status || expense?.approved_status);
+  const review = normalizeText(expense?.review_status);
+  const status = normalizeText(expense?.status);
+  return approval === "approved" || review === "approved" || status === "approved" || status === "finalized";
+}
+
 function leaseOverlapsFiscalYear(lease: any, fiscalYear: number) {
   const status = String(lease?.status || "active").toLowerCase();
   if (status === "expired") return false;
@@ -308,6 +390,7 @@ function camReadyExpenseFromRow(row: any, sourceLabel: string) {
 function buildCamReadyExpenses({
   classifications,
   inputs,
+  expenses,
   units,
   leases,
   scopeLevel,
@@ -316,6 +399,7 @@ function buildCamReadyExpenses({
 }: {
   classifications: any[];
   inputs: any[];
+  expenses: any[];
   units: any[];
   leases: any[];
   scopeLevel: ScopeLevel;
@@ -324,15 +408,28 @@ function buildCamReadyExpenses({
 }) {
   const rows: any[] = [];
   const seen = new Set<string>();
+  const expensesById = new Map((expenses ?? []).map((expense: any) => [String(expense.id), expense]));
 
-  const addRow = (row: any, sourceLabel: string) => {
+  const addRow = (row: any, sourceLabel: string, rowKind: "classification" | "input") => {
     const camStatus = normalizeText(row?.cam_status || row?.status);
     const camEligible = normalizeDecision(row?.cam_eligible || "yes");
     const inputType = normalizeText(row?.cam_input_type || row?.source || sourceLabel);
+    const camSource = normalizeText(row?.cam_source || row?.source);
     if (camStatus !== "cam_ready" && normalizeText(row?.status) !== "cam_ready") return;
     if (camEligible !== "yes") return;
-    if (!["actual_expense", "manual_review", "lease_rule", "lease_rule_amount"].includes(inputType)) return;
     if (!camReadyRowMatchesScope(row, units, leases, scopeLevel, scopeId, propertyId)) return;
+
+    if (rowKind === "classification") {
+      const isManualReview = camSource === "manual_review";
+      if (inputType !== "actual_expense") return;
+      if (isManualReview && !String(row?.manual_cam_reason || row?.manual_cam_note || "").trim()) return;
+
+      const actualExpenseId = String(row?.expense_id || row?.actual_expense_id || "");
+      const actualExpense = actualExpenseId ? expensesById.get(actualExpenseId) : null;
+      if (!actualExpense || !isApprovedActualExpense(actualExpense)) return;
+    } else {
+      if (!["actual_expense", "lease_rule_amount"].includes(inputType)) return;
+    }
 
     const dedupeKey =
       row?.classification_result_id
@@ -347,8 +444,8 @@ function buildCamReadyExpenses({
     rows.push(camReadyExpenseFromRow(row, sourceLabel));
   };
 
-  for (const input of inputs) addRow(input, normalizeText(input?.source || "cam_expense_input"));
-  for (const classification of classifications) addRow(classification, normalizeText(classification?.cam_source || "expense_classification"));
+  for (const input of inputs) addRow(input, normalizeText(input?.source || "cam_expense_input"), "input");
+  for (const classification of classifications) addRow(classification, normalizeText(classification?.cam_source || "expense_classification"), "classification");
 
   return rows.filter((row) => row.amount > 0 && row.category);
 }
@@ -369,6 +466,14 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
   let leaseConfigMap: Record<string, Record<string, unknown>> = {};
   const appliedRuleSetIds: string[] = [];
   const appliedRuleIds: string[] = [];
+  const approvedPublishedCamRuleLeaseIds: string[] = [];
+  const approvedPublishedCamRuleRefs: Array<{ id: string; lease_id: string }> = [];
+  const diagnostics = {
+    approvedPublishedCamChildRuleCount: 0,
+    skippedIncludedInBaseRentCount: 0,
+    skippedTenantDirectCount: 0,
+    explicitExclusionCount: 0,
+  };
   if (leaseIds.length) {
     const { data: leaseConfigs, error: leaseConfigError } = await supabaseAdmin
       .from("lease_config")
@@ -382,8 +487,9 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
       leaseConfigMap = Object.fromEntries((leaseConfigs ?? []).map((row: any) => [row.lease_id, row]));
     }
 
-    // Fetch approved expense rules for these leases
-    const { data: approvedRuleSets, error: rulesError } = await supabaseAdmin
+    // Fetch child rules directly. Parent rule_set status can remain needs_review
+    // while approved/published child rules are valid CAM inputs.
+    const { data: ruleSets, error: rulesError } = await supabaseAdmin
       .from("lease_expense_rule_sets")
       .select(`
         *,
@@ -393,62 +499,56 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
         )
       `)
       .eq("org_id", orgId)
-      .eq("status", "approved")
       .in("lease_id", leaseIds)
       .order("version", { ascending: false });
 
     if (rulesError) {
       console.warn("[compute-cam] lease_expense_rules fetch warning:", rulesError.message);
-    } else if (approvedRuleSets && approvedRuleSets.length > 0) {
-      // Group by lease_id (taking the first one because of order by version desc)
-      const latestRulesByLease = new Map();
-      for (const rs of approvedRuleSets) {
-        if (!latestRulesByLease.has(rs.lease_id)) {
-          latestRulesByLease.set(rs.lease_id, rs);
-        }
+    } else if (ruleSets && ruleSets.length > 0) {
+      const ruleSetsByLease = new Map<string, any[]>();
+      for (const rs of ruleSets) {
+        const leaseRows = ruleSetsByLease.get(String(rs.lease_id)) ?? [];
+        leaseRows.push(rs);
+        ruleSetsByLease.set(String(rs.lease_id), leaseRows);
       }
 
-      // Merge into leaseConfigMap
-      for (const [leaseId, rs] of latestRulesByLease.entries()) {
-        if (rs?.id) appliedRuleSetIds.push(String(rs.id));
-        for (const rule of rs?.lease_expense_rules || []) {
-          if (rule?.id) appliedRuleIds.push(String(rule.id));
-        }
+      // Merge only approved/published CAM child rules and explicit whole-category
+      // exclusions into leaseConfigMap. Non-CAM lease terms are intentionally
+      // skipped so they do not globally exclude mixed categories.
+      for (const [leaseId, leaseRuleSets] of ruleSetsByLease.entries()) {
         const config = leaseConfigMap[leaseId] || { lease_id: leaseId, config_values: {} };
         const configValues = (config.config_values as Record<string, any>) || {};
-        
         const excludedCategories = asStringArray(configValues.excluded_expenses);
-        
-        // Apply rules
-        for (const rule of rs.lease_expense_rules || []) {
-          const catName = rule.expense_categories?.category_name;
-          if (!catName) continue;
 
-          const reviewStatus = normalizeText(rule.review_status) === "reviewed" ? "approved" : normalizeText(rule.review_status);
-          const approvalStatus = normalizeText(rule.approval_status);
-          const recoverableDecision = normalizeDecision(rule.recoverable_from_tenant);
-          const camEligibleDecision = normalizeDecision(rule.cam_eligible);
-          const paymentTreatment = normalizeText(rule.payment_treatment);
+        for (const rs of leaseRuleSets) {
+          for (const rule of rs.lease_expense_rules || []) {
+            const catName = getCategoryName(rule);
+            if (!catName) continue;
 
-          if (
-            reviewStatus !== "approved" ||
-            approvalStatus !== "approved" ||
-            rule.published_to_cam !== true ||
-            recoverableDecision === "no" ||
-            camEligibleDecision === "no" ||
-            paymentTreatment === "included_in_base_rent" ||
-            rule.is_excluded ||
-            rule.row_status === "unmapped"
-          ) {
-            if (!excludedCategories.includes(catName)) {
-              excludedCategories.push(catName);
+            if (isCamPublishableChildRule(rule)) {
+              diagnostics.approvedPublishedCamChildRuleCount += 1;
+              approvedPublishedCamRuleLeaseIds.push(leaseId);
+              if (rule?.id) approvedPublishedCamRuleRefs.push({ id: String(rule.id), lease_id: leaseId });
+              if (rs?.id) appliedRuleSetIds.push(String(rs.id));
+              if (rule?.id) appliedRuleIds.push(String(rule.id));
+            } else {
+              const paymentTreatment = normalizeText(rule.payment_treatment);
+              if (paymentTreatment === "included_in_base_rent") diagnostics.skippedIncludedInBaseRentCount += 1;
+              if (paymentTreatment === "tenant_direct_contract") diagnostics.skippedTenantDirectCount += 1;
             }
-          }
-          
-          // If a base year is found on any rule, and no global base year exists, use it as a fallback hint
-          if (rule.has_base_year && !configValues.base_year) {
-             // We ideally need the values table here, but for now we note it.
-             console.log(`[compute-cam] Lease ${leaseId} has base year for ${catName} but global base_year not set.`);
+
+            if (isExplicitWholeCategoryCamExclusion(rule, catName) && !excludedCategories.includes(catName)) {
+              excludedCategories.push(catName);
+              diagnostics.explicitExclusionCount += 1;
+              if (rs?.id) appliedRuleSetIds.push(String(rs.id));
+              if (rule?.id) appliedRuleIds.push(String(rule.id));
+            }
+
+            // If a base year is found on any approved CAM-published rule, and no
+            // global base year exists, use it as a fallback hint.
+            if (isCamPublishableChildRule(rule) && rule.has_base_year && !configValues.base_year) {
+               console.log(`[compute-cam] Lease ${leaseId} has base year for ${catName} but global base_year not set.`);
+            }
           }
         }
 
@@ -464,6 +564,9 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
     leaseConfigMap,
     appliedRuleSetIds: Array.from(new Set(appliedRuleSetIds)).sort(),
     appliedRuleIds: Array.from(new Set(appliedRuleIds)).sort(),
+    approvedPublishedCamRuleLeaseIds: Array.from(new Set(approvedPublishedCamRuleLeaseIds)).sort(),
+    approvedPublishedCamRuleRefs,
+    diagnostics,
   };
 }
 
@@ -544,7 +647,14 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const leaseIds = leases.map((lease: any) => lease.id);
-    const { propertyConfig, leaseConfigMap, appliedRuleSetIds, appliedRuleIds } = await fetchConfigs(
+    const {
+      propertyConfig,
+      leaseConfigMap,
+      appliedRuleSetIds,
+      appliedRuleIds,
+      approvedPublishedCamRuleRefs,
+      diagnostics: configDiagnostics,
+    } = await fetchConfigs(
       supabaseAdmin,
       orgId,
       propertyId,
@@ -562,21 +672,6 @@ Deno.serve(async (req: Request) => {
       throw new Error("No approved or budget-ready leases found for this scope");
     }
 
-    const { data: approvedRuleSets, error: approvedRuleSetsError } = await supabaseAdmin
-      .from("lease_expense_rule_sets")
-      .select("lease_id")
-      .eq("org_id", orgId)
-      .eq("status", "approved")
-      .in("lease_id", approvedScopedLeases.map((lease: any) => lease.id));
-
-    if (approvedRuleSetsError) {
-      throw new Error(`Failed to validate approved lease expense rules: ${approvedRuleSetsError.message}`);
-    }
-
-    if (!approvedRuleSets || approvedRuleSets.length === 0) {
-      throw new Error("Lease expense/CAM rules must be approved before CAM calculation");
-    }
-
     // Filter recoverable expenses. Per spec: "conditional expenses block
     // CAM until reviewed" — so 'conditional' is rejected upstream (the
     // reviewBlockingExpenses throw above). Anything reaching this filter
@@ -588,12 +683,22 @@ Deno.serve(async (req: Request) => {
     const recoverableExpenses = buildCamReadyExpenses({
       classifications: camReadyClassifications,
       inputs: camReadyInputs,
+      expenses,
       units,
       leases,
       scopeLevel,
       scopeId,
       propertyId,
     });
+
+    const scopedApprovedLeaseIds = new Set(approvedScopedLeases.map((lease: any) => String(lease.id)));
+    const scopedPublishedChildRuleCount = approvedPublishedCamRuleRefs
+      .filter((rule: any) => scopedApprovedLeaseIds.has(String(rule.lease_id))).length;
+    const scopedCamReadyInputCount = recoverableExpenses.length;
+
+    if (scopedPublishedChildRuleCount === 0 && scopedCamReadyInputCount === 0) {
+      throw new Error("No CAM-ready classifications, CAM input rows, or approved published CAM lease rules found for this scope");
+    }
 
     const activeScopedLeases = leases.filter((lease: any) =>
       scopedLeaseMatches(lease, units, scopeLevel, scopeId, propertyId) &&
@@ -611,8 +716,14 @@ Deno.serve(async (req: Request) => {
       scope_level: scopeLevel,
       scope_id: scopeId,
       expense_count: expenses.length,
-      recoverable_expense_count: recoverableExpenses.length,
-      active_lease_count: activeScopedLeases.length,
+      active_leases_count: activeScopedLeases.length,
+      cam_ready_classification_count: camReadyClassifications.length,
+      cam_ready_input_count: camReadyInputs.length,
+      approved_published_cam_child_rule_count: scopedPublishedChildRuleCount,
+      skipped_included_in_base_rent_count: configDiagnostics.skippedIncludedInBaseRentCount,
+      skipped_tenant_direct_count: configDiagnostics.skippedTenantDirectCount,
+      explicit_exclusion_count: configDiagnostics.explicitExclusionCount,
+      final_recoverable_expense_count: recoverableExpenses.length,
     });
 
     const historicalYears = collectHistoricalYears(fiscalYear, leaseConfigMap);
@@ -755,6 +866,11 @@ Deno.serve(async (req: Request) => {
           leases: leases.length,
           lease_expense_rule_sets: appliedRuleSetIds.length,
           lease_expense_rules: appliedRuleIds.length,
+          approved_published_cam_child_rules: scopedPublishedChildRuleCount,
+          skipped_included_in_base_rent: configDiagnostics.skippedIncludedInBaseRentCount,
+          skipped_tenant_direct: configDiagnostics.skippedTenantDirectCount,
+          explicit_exclusions: configDiagnostics.explicitExclusionCount,
+          final_recoverable_expenses: recoverableExpenses.length,
         },
         source_snapshot_ids: {
           budget: budgetSnapshot?.[0]?.id ?? null,

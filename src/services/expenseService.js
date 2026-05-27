@@ -3172,19 +3172,71 @@ export const expenseService = {
 
     const leaseIds = scopedLeases.map((lease) => lease.id).filter(Boolean);
     const { rules } = await fetchApprovedRuleArtifacts(leaseIds);
-    const approvedRuleLeaseIds = new Set((rules || []).filter((rule) => approvedRuleForMatching(rule)).map((rule) => rule.lease_id).filter(Boolean));
+    const approvedCamRuleLeaseIds = new Set((rules || []).filter((rule) =>
+      approvedRuleForMatching(rule) &&
+      rule?.published_to_cam === true &&
+      leaseExpenseRuleService.getRecoverableDecision(rule) === "yes" &&
+      normalizeText(rule?.cam_eligible) === "yes" &&
+      !["tenant_direct_contract", "included_in_base_rent"].includes(normalizeText(rule?.payment_treatment)) &&
+      rule?.is_excluded !== true &&
+      ![rule?.row_status, rule?.status, rule?.extraction_status].some((value) => normalizeText(value) === "superseded")
+    ).map((rule) => rule.lease_id).filter(Boolean));
 
     const actualExpenses = scopedExpenses.filter((expense) => normalizeSourceType(expense) !== "lease_import");
+    const approvedActualById = new Map(actualExpenses.filter((expense) => isApprovedExpenseRecord(expense)).map((expense) => [String(expense.id), expense]));
     const needsReviewExpenses = actualExpenses.filter((expense) => normalizeText(expense.approved_status) === "needs_review" || normalizeText(expense.recovery_status) === "needs_review");
     const missingCategoryExpenses = actualExpenses.filter((expense) => !expense.category && !expense.expense_subcategory);
     const conditionalExpenses = actualExpenses.filter((expense) => normalizeText(expense.recovery_status) === "conditional");
     const missingSqftLeases = scopedLeases.filter((lease) => !toNumber(lease.square_footage));
     const missingDatesLeases = scopedLeases.filter((lease) => !lease.start_date || !lease.end_date);
+    const scopeForRow = { property_id: propertyId, building_id: buildingId, unit_id: unitId, fiscal_year: fiscalYear };
+
+    let camReadyClassificationCount = 0;
+    let camReadyInputCount = 0;
+    let blockingCamNeedsReviewCount = 0;
+    try {
+      const [{ data: classifications }, { data: camInputs }] = await Promise.all([
+        supabase
+          .from("expense_classifications")
+          .select("*"),
+        supabase
+          .from("cam_expense_inputs")
+          .select("*")
+          .eq("status", "cam_ready"),
+      ]);
+
+      const scopedClassifications = (classifications || []).filter((row) => expenseMatchesScope(row, scopeForRow));
+      camReadyClassificationCount = scopedClassifications.filter((row) => {
+        if (!expenseMatchesScope(row, scopeForRow)) return false;
+        if (normalizeText(row?.cam_status) !== "cam_ready") return false;
+        if (normalizeText(row?.cam_eligible) !== "yes") return false;
+        if (normalizeText(row?.cam_input_type) !== "actual_expense") return false;
+        if (normalizeText(row?.cam_source) === "manual_review" && !String(row?.manual_cam_reason || row?.manual_cam_note || "").trim()) return false;
+        const actualExpenseId = String(row?.expense_id || row?.actual_expense_id || "");
+        return actualExpenseId && approvedActualById.has(actualExpenseId);
+      }).length;
+      blockingCamNeedsReviewCount = scopedClassifications.filter((row) =>
+        normalizeText(row?.cam_status) === "needs_review" &&
+        ["yes", "conditional", "needs_review"].includes(normalizeText(row?.cam_eligible))
+      ).length;
+
+      camReadyInputCount = (camInputs || []).filter((row) => {
+        if (!expenseMatchesScope(row, scopeForRow)) return false;
+        if (!["actual_expense", "lease_rule_amount"].includes(normalizeText(row?.cam_input_type || row?.source))) return false;
+        return toNumber(row?.amount) > 0;
+      }).length;
+    } catch (error) {
+      console.warn("[expenseService] CAM readiness summary query failed:", error?.message || error);
+    }
 
     return {
       scopedLeaseCount: scopedLeases.length,
       approvedLeaseCount: scopedLeases.filter((lease) => ["approved", "budget_ready", "active", "executed"].includes(normalizeLeaseStatus(lease.status))).length,
-      approvedRuleLeaseCount: approvedRuleLeaseIds.size,
+      approvedRuleLeaseCount: approvedCamRuleLeaseIds.size,
+      approvedCamRuleLeaseCount: approvedCamRuleLeaseIds.size,
+      camReadyClassificationCount,
+      camReadyInputCount,
+      blockingCamNeedsReviewCount,
       expenseCount: actualExpenses.length,
       actualExpenseCount: actualExpenses.length,
       needsReviewCount: needsReviewExpenses.length,
@@ -3194,9 +3246,8 @@ export const expenseService = {
       missingLeaseDatesCount: missingDatesLeases.length,
       canRunCam:
         scopedLeases.length > 0 &&
-        approvedRuleLeaseIds.size > 0 &&
-        actualExpenses.length > 0 &&
-        needsReviewExpenses.length === 0 &&
+        (approvedCamRuleLeaseIds.size > 0 || camReadyClassificationCount > 0 || camReadyInputCount > 0) &&
+        blockingCamNeedsReviewCount === 0 &&
         missingSqftLeases.length === 0 &&
         missingDatesLeases.length === 0,
     };

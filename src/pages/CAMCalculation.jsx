@@ -170,13 +170,16 @@ export default function CAMCalculation() {
     !scope.targetPropertyId ? "property_id is required" : null,
     scope.totalSqft <= 0 ? "Total scope square footage must be greater than 0" : null,
     workflowSummary?.approvedLeaseCount === 0 && scope.activeLeases.length > 0 ? "No approved or budget-ready leases found for this scope" : null,
-    workflowSummary?.approvedRuleLeaseCount === 0 && scope.activeLeases.length > 0 ? "Lease expense/CAM rules must be approved before CAM calculation" : null,
-    workflowSummary?.actualExpenseCount === 0 ? "No actual expenses found. Upload expenses, import GL, import invoices, or add manual expenses before CAM calculation." : null,
-    workflowSummary?.needsReviewCount > 0 ? `${workflowSummary.needsReviewCount} expense(s) still need review before CAM can run` : null,
+    workflowSummary &&
+    workflowSummary.approvedCamRuleLeaseCount === 0 &&
+    workflowSummary.camReadyClassificationCount === 0 &&
+    workflowSummary.camReadyInputCount === 0 &&
+    scope.activeLeases.length > 0
+      ? "No CAM-ready classifications, CAM input rows, or approved published CAM lease rules found for this scope"
+      : null,
+    workflowSummary?.blockingCamNeedsReviewCount > 0 ? `${workflowSummary.blockingCamNeedsReviewCount} CAM item(s) still need review before CAM can run` : null,
     workflowSummary?.missingSquareFootageCount > 0 ? `${workflowSummary.missingSquareFootageCount} lease(s) are missing square footage` : null,
     workflowSummary?.missingLeaseDatesCount > 0 ? `${workflowSummary.missingLeaseDatesCount} lease(s) are missing start/end dates` : null,
-    workflowSummary?.missingCategoryCount > 0 ? `${workflowSummary.missingCategoryCount} expense(s) are missing categories` : null,
-    workflowSummary?.conditionalExpenseCount > 0 ? `${workflowSummary.conditionalExpenseCount} conditional expense(s) require manual review` : null,
   ].filter(Boolean);
 
   const leaseNotice =
