@@ -1823,44 +1823,63 @@ function buildDeterministicDraftRules({ lease, categories = [], sourceText = "",
     if (!category?.id) continue;
 
     const extractedValue = asNumber(getLeaseExtractedValue(lease, candidate.field));
-    if (extractedValue == null || extractedValue <= 0) continue;
-
-    const snippet = extractSnippet(
+    // Try to find a clause snippet for this category, with OR without an
+    // amount. A rule is valid when EITHER (a) clause text supports the
+    // category, OR (b) a lease abstract extracted_value is present. Amount
+    // is NOT required. The loop only skips when neither signal exists.
+    const snippetWithAmount = extractSnippet(
       sourceText,
       new RegExp(`${candidate.keywords.join("|")}[\\s\\S]{0,120}?\\$[\\d,]+(?:\\.\\d{2})?`, "i"),
     );
-    const existing = existingByCategoryId.get(category.id) || {};
-    // Amount-only signals (positive extracted value with no surrounding
-    // lease clause text) cannot assert recoverability or CAM eligibility.
-    // We persist the value but mark the rule Needs Review so the reviewer
-    // confirms a clause before publishing to CAM.
+    const snippetClauseOnly = snippetWithAmount || extractSnippet(
+      sourceText,
+      new RegExp(`(?:^|[.\\n])\\s*([^.\\n]{0,40}(?:${candidate.keywords.join("|")})[^.\\n]{0,180})`, "i"),
+    );
+    const snippet = snippetWithAmount || snippetClauseOnly;
     const hasClauseEvidence = Boolean(snippet);
+    const hasAmount = extractedValue != null && extractedValue > 0;
+    if (!hasClauseEvidence && !hasAmount) continue;
+
+    const existing = existingByCategoryId.get(category.id) || {};
+
+    // Three persisted shapes:
+    //   1. clause + amount  → strong, mapped, recoverable=yes
+    //   2. clause only      → mapped, needs_review on recoverability/CAM
+    //                          (rule exists so the reviewer can confirm)
+    //   3. amount only      → needs_review (legacy amount-only gap)
+    const isStrongMatch = hasClauseEvidence && hasAmount;
 
     draftRules.push({
       ...existing,
       expense_category_id: category.id,
       category_name: category.category_name,
       subcategory_name: category.subcategory_name || null,
-      row_status: hasClauseEvidence ? "mapped" : "needs_review",
+      row_status: isStrongMatch ? "mapped" : hasClauseEvidence ? "mapped" : "needs_review",
       mentioned_in_lease: hasClauseEvidence,
-      is_recoverable: hasClauseEvidence,
-      recoverable_from_tenant: hasClauseEvidence ? "yes" : "needs_review",
-      ...(hasClauseEvidence ? {} : { cam_eligible: "needs_review" }),
+      is_recoverable: isStrongMatch,
+      recoverable_from_tenant: isStrongMatch ? "yes" : "needs_review",
+      ...(isStrongMatch ? {} : { cam_eligible: "needs_review" }),
       is_excluded: false,
       is_controllable: true,
       is_subject_to_cap: false,
       has_base_year: false,
       gross_up_applicable: false,
       admin_fee_applicable: false,
-      extracted_value: extractedValue,
-      final_value: extractedValue,
+      // Amount is OPTIONAL — preserve null when the lease doesn't include
+      // an explicit dollar figure. Downstream must not treat null as 0.
+      extracted_value: hasAmount ? extractedValue : null,
+      final_value: hasAmount ? extractedValue : null,
       frequency: /monthly|per month/i.test(snippet || sourceText) ? "monthly" : "yearly",
-      confidence: hasClauseEvidence ? 0.78 : 0.50,
+      confidence: isStrongMatch ? 0.78 : hasClauseEvidence ? 0.65 : 0.50,
       notes: candidate.notes,
       source: snippet || null,
       exact_source_text: snippet || null,
-      generation_source: hasClauseEvidence ? "deterministic_amount" : "amount_only_gap",
-      ...(hasClauseEvidence ? {} : { review_status: "needs_review", approval_status: "draft" }),
+      generation_source: isStrongMatch
+        ? "deterministic_amount"
+        : hasClauseEvidence
+          ? "clause_evidence_no_amount"
+          : "amount_only_gap",
+      ...(isStrongMatch ? {} : { review_status: "needs_review", approval_status: "draft" }),
       published_to_cam: false,
     });
   }

@@ -471,9 +471,18 @@ function approvedRuleState(rule) {
   const rowStatus = normalizeText(rule?.row_status);
 
   if (["rejected"].includes(approval) || ["rejected"].includes(review) || status === "rejected") return "rejected";
-  if (rowStatus === "unmapped" || rowStatus === "not_found" || rowStatus === "missing_value") return "na";
+  // Note: "missing_value" means the lease mentions the term but no dollar
+  // amount was found. The rule is still valid — it just lacks an estimate.
+  // Map to "needs_review" so the reviewer can confirm; do NOT treat as N/A.
+  if (rowStatus === "unmapped" || rowStatus === "not_found") return "na";
   if (approval === "approved" && review === "approved") return "approved";
-  if ([approval, review, status].includes("needs_review") || rowStatus === "needs_review" || rowStatus === "uncertain" || rowStatus === "mapped") return "needs_review";
+  if (
+    [approval, review, status].includes("needs_review")
+    || rowStatus === "needs_review"
+    || rowStatus === "uncertain"
+    || rowStatus === "mapped"
+    || rowStatus === "missing_value"
+  ) return "needs_review";
   return "draft";
 }
 
@@ -482,13 +491,15 @@ function isApprovedLeaseRule(rule) {
   // Accept on: approval_status === approved, OR review_status === approved/reviewed,
   // OR status === approved/finalized (whichever field the row actually carries).
   // Reject explicit rejections, unmapped/not-found row statuses, or rule_status === rejected.
+  // "missing_value" is NOT a rejection — a clause-supported rule with no
+  // dollar amount is still a valid lease expense rule.
   const approval = normalizeText(rule?.approval_status || rule?.approved_status);
   const review = normalizeText(rule?.review_status);
   const status = normalizeText(rule?.status || rule?.rule_status);
   const rowStatus = normalizeText(rule?.row_status);
 
   if (approval === "rejected" || review === "rejected" || status === "rejected") return false;
-  if (["rejected", "unmapped", "not_found", "missing_value"].includes(rowStatus)) return false;
+  if (["rejected", "unmapped", "not_found"].includes(rowStatus)) return false;
   if (rule?.is_excluded === true) return false;
 
   if (approval === "approved") return true;

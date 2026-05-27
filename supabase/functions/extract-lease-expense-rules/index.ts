@@ -22,7 +22,7 @@ STRICT RULES:
 - Vacant-unit/gross-up language controls gross_up_allowed/gross_up_applicable; if vacant units remain in denominator and landlord absorbs vacant share, gross-up is not permitted.
 
 For each of the categories provided in the JSON input, determine the following:
-- row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" to prompt the user to manually enter it.
+- row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" — the rule IS still valid and MUST be emitted. Amount is OPTIONAL: a clause that describes an obligation, exclusion, cap, base year, reimbursement method, included-in-rent term, or tenant-direct responsibility is enough to create a rule, even with no dollar amount.
 - mentioned_in_lease: boolean (is this category specifically mentioned?)
 - is_recoverable: boolean (can the landlord recover this expense?)
 - is_excluded: boolean (is this explicitly excluded from recovery?)
