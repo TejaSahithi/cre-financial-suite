@@ -110,9 +110,27 @@ export default function ExtractionDebugPanel({ lease }) {
     seenItemKeys.add(key);
     uniqueItems.push(item);
   }
+  const extractionDebug = lease?.extraction_data?.extraction_debug || {};
+  const doclingPagesParsed = workflowOutput?.summary?.docling_pages_parsed
+    ?? workflowOutput?.summary?.pages_detected
+    ?? new Set(textBlocks.map((block) => block?.page ?? block?.page_number ?? block?.source_page).filter(Boolean)).size;
+  const pdfPageCountTotal = workflowOutput?.summary?.pdf_page_count_total
+    ?? lease?.extraction_data?.docling_raw?.page_count
+    ?? null;
+  const visionTriggered = Boolean(
+    extractionDebug?.vision_fallback_triggered ?? extractionDebug?.llm_file_mode_used,
+  );
+
   const debugSummary = {
     document_profile: workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
-    pages_detected: workflowOutput?.summary?.pages_detected || new Set(textBlocks.map((block) => block?.page ?? block?.page_number ?? block?.source_page).filter(Boolean)).size,
+    // Show both metrics so reviewers don't mistake Docling's per-page text
+    // count for the actual PDF page count. Vision reads multi-page PDFs
+    // natively when file bytes are sent (see vision_processed flag).
+    pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "—",
+    docling_pages_parsed: doclingPagesParsed,
+    vision_processed: visionTriggered
+      ? (pdfPageCountTotal ? `all ${pdfPageCountTotal} pages` : "all pages")
+      : (extractionDebug?.vision_fallback_skipped_reason || "not run"),
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
     dynamic_items_extracted: workflowOutput?.summary?.dynamic_items_extracted ?? uniqueItems.length,
     dynamic_items_displayed: workflowOutput?.summary?.dynamic_items_displayed ?? uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,

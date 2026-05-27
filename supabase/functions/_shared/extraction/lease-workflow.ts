@@ -2122,11 +2122,25 @@ export function buildLeaseWorkflowAbstraction(args: {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
   const fullText = cleanText(doclingRaw?.full_text || "");
-  const pagesDetected = new Set(
+  // doclingPagesParsed = number of distinct pages Docling produced text
+  // blocks for. For scanned / handwritten PDFs this is often << the real
+  // page count because Docling can't structure-parse image-only pages.
+  // pdfPageCountTotal = the source PDF's actual page count, surfaced by
+  // parse-pdf-docling on doclingRaw.page_count. When file bytes are sent
+  // to Vision (callVertexAIFileJSON) Gemini reads ALL pages natively,
+  // even when Docling only produced text blocks for one.
+  const doclingPagesParsed = new Set(
     asArray(doclingRaw?.text_blocks)
       .map((block) => sourcePageOf(block))
       .filter((page) => page != null),
   ).size;
+  const pdfPageCountTotal = (() => {
+    const n = Number((doclingRaw as any)?.page_count);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+  // Back-compat: keep `pages_detected` as docling-parsed pages so older
+  // panels keep working. New panels can read pdf_page_count_total.
+  const pagesDetected = doclingPagesParsed;
   const clauses = buildClauseRecords(doclingRaw, fullText);
   const documentProfile = detectDocumentProfile(fullText, args?.documentSubtype || null);
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
@@ -2219,6 +2233,14 @@ export function buildLeaseWorkflowAbstraction(args: {
       validation_error_count: validations.filter((item) => item.pass === false).length,
       document_profile: documentProfile,
       pages_detected: pagesDetected,
+      docling_pages_parsed: doclingPagesParsed,
+      pdf_page_count_total: pdfPageCountTotal,
+      // Vision (Gemini multimodal) processes every page of the PDF when the
+      // file bytes are sent via callVertexAIFileJSON. There's no per-page
+      // toggle — it's all-or-nothing from the LLM step. This flag reflects
+      // what's POSSIBLE; the actual vision_fallback_triggered diagnostic
+      // (in normalize-pdf-output's extractionDebug) reflects what RAN.
+      vision_pages_available: pdfPageCountTotal,
       fixed_fields_extracted: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
       dynamic_items_extracted: extractedDocumentItems.length,
       dynamic_items_displayed: extractedDocumentItems.filter((item) => item.creates_dynamic_row && item.display_tab !== "clause_records").length,
