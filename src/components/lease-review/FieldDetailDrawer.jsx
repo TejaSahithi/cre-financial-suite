@@ -177,7 +177,7 @@ export default function FieldDetailDrawer({
 
   const handleSave = async () => {
     let val = typeof editValue === "string" ? editValue.trim() : editValue;
-    if (NUMERIC_REVIEW_FIELDS.has(field.key)) {
+    if (NUMERIC_REVIEW_FIELDS.has(field.key) || field.type === "number" || field.type === "currency") {
       const n = parseFloat(String(val).replace(/[$,]/g, ""));
       val = Number.isNaN(n) ? null : n;
     }

@@ -82,6 +82,34 @@ export function getFieldAliases(fieldKey) {
 function extractValueFromSource(source, aliases) {
   if (!source || typeof source !== "object") return null;
 
+  if (Array.isArray(source)) {
+    const normalizedCandidates = new Set(aliases.map(normalizeLeaseFieldKey));
+    for (const item of source) {
+      if (!item || typeof item !== "object") continue;
+      const itemKeys = [
+        item.field_key,
+        item.key,
+        item.name,
+        item.item_type,
+        item.category,
+        item.subcategory,
+      ].filter(Boolean).map(normalizeLeaseFieldKey);
+      if (!itemKeys.some((key) => normalizedCandidates.has(key))) continue;
+      return {
+        value: item.normalized_value ?? item.value ?? item.raw_value ?? null,
+        raw_value: item.raw_value ?? item.rawValue ?? item.value ?? null,
+        source_page: item.source_page ?? item.page_number ?? item.page ?? null,
+        source_text: item.source_text ?? item.exact_source_text ?? item.source_clause ?? null,
+        exact_source_text: item.exact_source_text ?? item.source_text ?? item.source_clause ?? null,
+        source_clause: item.source_clause ?? item.source_text ?? item.exact_source_text ?? null,
+        confidence_score: item.confidence_score ?? item.confidence ?? null,
+        confidence: item.confidence ?? item.confidence_score ?? null,
+        extraction_status: item.extraction_status ?? item.review_status ?? null,
+      };
+    }
+    return null;
+  }
+
   for (const alias of aliases) {
     // Check direct property match
     let match = source[alias];
@@ -258,6 +286,8 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.workflow_output.lease_clauses", data: lease?.extraction_data?.workflow_output?.lease_clauses },
       { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
       { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
+      { path: "lease.extraction_data.workflow_output.extracted_document_items", data: lease?.extraction_data?.workflow_output?.extracted_document_items },
+      { path: "lease.extraction_data.extracted_document_items", data: lease?.extraction_data?.extracted_document_items },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
       { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload }
@@ -274,6 +304,8 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.workflow_output.lease_clauses", data: lease?.extraction_data?.workflow_output?.lease_clauses },
       { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
       { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
+      { path: "lease.extraction_data.workflow_output.extracted_document_items", data: lease?.extraction_data?.workflow_output?.extracted_document_items },
+      { path: "lease.extraction_data.extracted_document_items", data: lease?.extraction_data?.extracted_document_items },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
       { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload },

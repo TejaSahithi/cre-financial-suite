@@ -79,7 +79,7 @@ import {
   hasEvidenceOverride,
   resolveFieldColumns,
 } from "@/lib/leaseReviewSchema";
-import { resolveLeaseField } from "@/lib/leaseFieldResolver";
+import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { supabase } from "@/services/supabaseClient";
@@ -326,6 +326,98 @@ function cleanExtractedSourceText(value) {
   return isGenericExtractedSourceText(text) ? null : text;
 }
 
+function titleizeFieldKey(value) {
+  return String(value || "Discovered Field")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeDynamicKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function collectExtractedDocumentItems(lease) {
+  const workflowOutput = lease?.extraction_data?.workflow_output || {};
+  const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
+  const sources = [
+    workflowOutput.extracted_document_items,
+    workflowOutput.clause_records,
+    recordOutput.extracted_document_items,
+    recordOutput.clause_records,
+    lease?.extraction_data?.extracted_document_items,
+    lease?.extraction_data?.clause_records,
+  ];
+  return sources.flatMap((rows) => (Array.isArray(rows) ? rows : []));
+}
+
+function inferDynamicItemTab(item, key) {
+  const businessArea = String(item?.business_area || "").toLowerCase();
+  if (businessArea === "assignment_amendment") {
+    if (/(assignor|assignee|tenant|landlord|notice_address|address|premises)/i.test(key)) return "parties_premises";
+    if (/(date|term|expiration|commencement|effective)/i.test(key)) return "dates_term";
+    if (/(rent|consideration|fee|charge|amount|deposit)/i.test(key)) return "rent_charges";
+    return "legal_options";
+  }
+  const knownTabs = new Set([
+    "parties_premises",
+    "dates_term",
+    "rent_charges",
+    "expenses_recoveries",
+    "cam_rules",
+    "insurance",
+    "legal_options",
+  ]);
+  if (knownTabs.has(businessArea)) return businessArea;
+  if (businessArea === "critical_dates") return "dates_term";
+  return null;
+}
+
+function inferDynamicItemType(item, key) {
+  const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
+  if (typeof value === "boolean") return "boolean";
+  if (/date|deadline|expiration|commencement|effective/i.test(key)) return "date";
+  if (/rent|amount|fee|deposit|consideration|allowance|cost|charge/i.test(key)) return "currency";
+  if (/percent|pct|share|rate|multiplier|months|days|sqft|rsf|square_footage|area/i.test(key)) return "number";
+  return "text";
+}
+
+function buildDynamicDocumentFieldsByTab(lease) {
+  const staticKeys = new Set(
+    LEASE_REVIEW_FIELDS.flatMap((field) => getFieldAliases(field.key)).map(normalizeDynamicKey),
+  );
+  const byTab = {};
+  const seen = new Set();
+  for (const item of collectExtractedDocumentItems(lease)) {
+    const sourceText = cleanExtractedSourceText(
+      item?.source_text || item?.exact_source_text || item?.source_clause,
+    );
+    if (!sourceText) continue;
+    const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
+    if (value === undefined || value === null || value === "") continue;
+    const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
+    if (!key || staticKeys.has(key) || seen.has(key)) continue;
+    const tab = inferDynamicItemTab(item, key);
+    if (!tab) continue;
+    seen.add(key);
+    if (!byTab[tab]) byTab[tab] = [];
+    byTab[tab].push({
+      key,
+      label: titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
+      tab,
+      type: inferDynamicItemType(item, key),
+      allowNA: true,
+      dynamic_document_item: true,
+    });
+  }
+  return byTab;
+}
+
 function updateLeaseQueryCache(queryClient, leaseId, updater) {
   queryClient.setQueryData(["lease", leaseId], (prev) => {
     const applyUpdate = (row) => {
@@ -402,6 +494,18 @@ export default function LeaseReview() {
     enabled: !!leaseId,
     select: (data) => data?.[0],
   });
+
+  const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(lease), [lease]);
+  const fieldsForTab = useMemo(() => {
+    const merged = {};
+    for (const tab of LEASE_REVIEW_TABS) {
+      merged[tab.key] = [
+        ...(FIELDS_BY_TAB[tab.key] || []),
+        ...(dynamicFieldsByTab[tab.key] || []),
+      ];
+    }
+    return merged;
+  }, [dynamicFieldsByTab]);
 
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
@@ -1306,7 +1410,7 @@ export default function LeaseReview() {
     if (!editingField) return;
     const key = editingField.key;
     let val = typeof editValue === "string" ? editValue.trim() : editValue;
-    if (NUMERIC_REVIEW_FIELDS.has(key)) {
+    if (NUMERIC_REVIEW_FIELDS.has(key) || editingField.type === "number" || editingField.type === "currency") {
       const n = parseFloat(String(val).replace(/[$,]/g, ""));
       val = Number.isNaN(n) ? null : n;
     }
@@ -1314,10 +1418,14 @@ export default function LeaseReview() {
       val = val === true || val === "true" || val === "yes";
     }
 
-    // Write to every aliased column so legacy + new columns stay in sync.
+    // Write fixed fields to every aliased column so legacy + new columns stay
+    // in sync. Dynamic discovered rows live only in extraction_data because
+    // they intentionally do not have rigid lease-table columns.
     const columnUpdates = {};
-    for (const column of resolveFieldColumns(key)) {
-      columnUpdates[column] = val;
+    if (!editingField.dynamic_document_item) {
+      for (const column of resolveFieldColumns(key)) {
+        columnUpdates[column] = val;
+      }
     }
     // total_sf alias → square_footage column (legacy).
     if (key === "total_sf") columnUpdates.square_footage = val;
@@ -2428,7 +2536,7 @@ export default function LeaseReview() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
-            const tabFields = FIELDS_BY_TAB[tab.key] || [];
+            const tabFields = fieldsForTab[tab.key] || [];
             const pendingInTab = tabFields.filter((f) => {
               if (!f.required) return false;
               return !isResolvedReview(fieldReviews[f.key]);
@@ -2584,7 +2692,7 @@ export default function LeaseReview() {
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <FieldReviewTable
-                fields={FIELDS_BY_TAB[tab.key] || []}
+                fields={fieldsForTab[tab.key] || []}
                 lease={lease}
                 fieldReviews={fieldReviews}
                 onOpenDetail={(field) => openDrawer(field, "view")}
@@ -2606,7 +2714,7 @@ export default function LeaseReview() {
             reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
           <FieldReviewTable
-            fields={FIELDS_BY_TAB.rent_charges || []}
+            fields={fieldsForTab.rent_charges || []}
             lease={lease}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
@@ -2624,7 +2732,7 @@ export default function LeaseReview() {
         {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
           <FieldReviewTable
-            fields={FIELDS_BY_TAB.expenses_recoveries || []}
+            fields={fieldsForTab.expenses_recoveries || []}
             lease={lease}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
@@ -2642,7 +2750,7 @@ export default function LeaseReview() {
         {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
           <FieldReviewTable
-            fields={FIELDS_BY_TAB.cam_rules || []}
+            fields={fieldsForTab.cam_rules || []}
             lease={lease}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
@@ -2728,7 +2836,9 @@ export default function LeaseReview() {
           // runs inside the try block so any throw surfaces as a toast.
           try {
             const columnUpdates = {};
-            for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
+            if (!f.dynamic_document_item) {
+              for (const column of resolveFieldColumns(f.key)) columnUpdates[column] = val;
+            }
             if (f.key === "total_sf") columnUpdates.square_footage = val;
             const previousValue = readFieldValue(lease, f.key);
             const existingFieldRecord = lease.extraction_data?.fields?.[f.key] || {};
