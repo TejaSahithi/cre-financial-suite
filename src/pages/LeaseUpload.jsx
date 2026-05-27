@@ -320,6 +320,7 @@ export default function LeaseUpload() {
       await fetchFileRecord(fileId);
       const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
       if (linkedLeaseId) {
+        await ensureLeaseSourceFileLink(linkedLeaseId, fileRecord || { id: fileId });
         await invalidateLeaseQueries();
         return linkedLeaseId;
       }
@@ -883,6 +884,51 @@ async function findLeaseByFileId(fileId) {
     .maybeSingle();
   if (error) return null;
   return data;
+}
+
+async function ensureLeaseSourceFileLink(leaseId, fileRecordOrId) {
+  if (!leaseId || !fileRecordOrId) return null;
+
+  let fileRecord = typeof fileRecordOrId === "string" ? { id: fileRecordOrId } : fileRecordOrId;
+  if (!fileRecord?.file_name) {
+    const { data } = await supabase
+      .from("uploaded_files")
+      .select("id, file_name, document_subtype")
+      .eq("id", fileRecord.id)
+      .maybeSingle();
+    fileRecord = { ...fileRecord, ...(data || {}) };
+  }
+
+  const { data: lease, error } = await supabase
+    .from("leases")
+    .select("id, extraction_data")
+    .eq("id", leaseId)
+    .maybeSingle();
+  if (error || !lease) return null;
+
+  const currentExtraction = lease.extraction_data || {};
+  if (currentExtraction.source_file_id === fileRecord.id) {
+    return lease.id;
+  }
+
+  const nextExtraction = {
+    ...currentExtraction,
+    source_file_id: fileRecord.id,
+    source_file_name: fileRecord.file_name ?? currentExtraction.source_file_name ?? null,
+    document_subtype: currentExtraction.document_subtype ?? fileRecord.document_subtype ?? null,
+    source_file_linked_at: new Date().toISOString(),
+  };
+
+  const { error: updateError } = await supabase
+    .from("leases")
+    .update({ extraction_data: nextExtraction })
+    .eq("id", lease.id);
+  if (updateError) {
+    console.warn("[LeaseUpload] could not persist source_file_id on lease draft:", updateError.message);
+    return null;
+  }
+
+  return lease.id;
 }
 
 // Client-side lease-draft creation. Used when review-approve fails or isn't

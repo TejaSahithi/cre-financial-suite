@@ -309,6 +309,23 @@ function detectFieldConflicts(lease) {
   return conflicts;
 }
 
+function updateLeaseQueryCache(queryClient, leaseId, updater) {
+  queryClient.setQueryData(["lease", leaseId], (prev) => {
+    const applyUpdate = (row) => {
+      const next = typeof updater === "function" ? updater(row) : updater;
+      return { ...(row || {}), ...(next || {}) };
+    };
+
+    if (Array.isArray(prev)) {
+      return prev.map((row) => (row?.id === leaseId ? applyUpdate(row) : row));
+    }
+    if (prev?.id === leaseId) {
+      return applyUpdate(prev);
+    }
+    return prev;
+  });
+}
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -588,10 +605,7 @@ export default function LeaseReview() {
         // new source_file_id without waiting for a refetch round-trip. The
         // invalidate still runs so server state is the source of truth.
         try {
-          queryClient.setQueryData(["lease", leaseId], (prev) => {
-            if (!prev) return prev;
-            return { ...prev, extraction_data: nextExtraction };
-          });
+          updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
         } catch { /* setQueryData best-effort */ }
         queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       } catch (err) {
@@ -620,6 +634,7 @@ export default function LeaseReview() {
         .eq("id", lease.id);
       if (updateErr) throw updateErr;
       toast.success(`Linked to ${picked?.file_name || fileId}`);
+      updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
     } catch (err) {
       console.error("[LeaseReview] manual link failed:", err);
@@ -848,7 +863,7 @@ export default function LeaseReview() {
       // Save edit → Accept) sees the new evidence immediately, without
       // waiting for the invalidation-triggered refetch to complete.
       if (updated && updated.id === leaseId) {
-        queryClient.setQueryData(["lease", leaseId], (prev) => ({ ...(prev || {}), ...updated }));
+        updateLeaseQueryCache(queryClient, leaseId, updated);
       }
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
@@ -1377,7 +1392,7 @@ export default function LeaseReview() {
         documentUrl: resolvedDocumentUrl,
       });
 
-      queryClient.setQueryData(["lease", leaseId], approvedLease);
+      updateLeaseQueryCache(queryClient, leaseId, approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
 
@@ -2043,7 +2058,7 @@ export default function LeaseReview() {
         reason: rejectReason,
         reviewer: lease?.signed_by || null,
       });
-      queryClient.setQueryData(["lease", leaseId], rejectedLease);
+      updateLeaseQueryCache(queryClient, leaseId, rejectedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
       toast.success("Lease document rejected");
