@@ -23,23 +23,50 @@ export const DATE_TYPE_LABELS = DATE_TYPES.reduce((acc, item) => {
   return acc;
 }, {});
 
+const CRITICAL_DATE_COLUMNS =
+  "id, org_id, lease_id, property_id, date_type, due_date, owner_email, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
+const CRITICAL_DATE_COLUMNS_NO_OWNER_EMAIL =
+  "id, org_id, lease_id, property_id, date_type, due_date, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
+
+function isMissingOwnerEmailColumn(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return text.includes("owner_email") && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
+}
+
+function withOwnerEmailFallback(row) {
+  return { ...row, owner_email: row?.owner_email || null };
+}
+
+function stripMissingOwnerEmail(error, payload) {
+  if (!isMissingOwnerEmailColumn(error)) return null;
+  const { owner_email, ...withoutOwnerEmail } = payload || {};
+  return withoutOwnerEmail;
+}
+
 export async function listCriticalDates({ orgId, propertyId, leaseId, status } = {}) {
-  let q = supabase
-    .from("lease_critical_dates")
-    .select(
-      "id, org_id, lease_id, property_id, date_type, due_date, owner_email, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at",
-    )
-    .order("due_date", { ascending: true });
-  if (orgId) q = q.eq("org_id", orgId);
-  if (propertyId) q = q.eq("property_id", propertyId);
-  if (leaseId) q = q.eq("lease_id", leaseId);
-  if (status) q = q.eq("status", status);
-  const { data, error } = await q;
+  const runQuery = (columns) => {
+    let q = supabase
+      .from("lease_critical_dates")
+      .select(columns)
+      .order("due_date", { ascending: true });
+    if (orgId) q = q.eq("org_id", orgId);
+    if (propertyId) q = q.eq("property_id", propertyId);
+    if (leaseId) q = q.eq("lease_id", leaseId);
+    if (status) q = q.eq("status", status);
+    return q;
+  };
+
+  let q = runQuery(CRITICAL_DATE_COLUMNS);
+  let { data, error } = await q;
+  if (error && isMissingOwnerEmailColumn(error)) {
+    console.warn("[criticalDateService] owner_email column missing; retrying without it.");
+    ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_NO_OWNER_EMAIL));
+  }
   if (error) {
     console.warn("[criticalDateService] list failed:", error.message);
     return [];
   }
-  return data || [];
+  return (data || []).map(withOwnerEmailFallback);
 }
 
 export async function createCriticalDate(row) {
@@ -59,24 +86,41 @@ export async function createCriticalDate(row) {
     note: row.note || null,
     source: row.source || "manual",
   };
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("lease_critical_dates")
     .upsert(payload, { onConflict: "lease_id,date_type,due_date" })
     .select()
     .single();
+  const fallbackPayload = stripMissingOwnerEmail(error, payload);
+  if (fallbackPayload) {
+    ({ data, error } = await supabase
+      .from("lease_critical_dates")
+      .upsert(fallbackPayload, { onConflict: "lease_id,date_type,due_date" })
+      .select()
+      .single());
+  }
   if (error) throw error;
-  return data;
+  return withOwnerEmailFallback(data);
 }
 
 export async function updateCriticalDate(id, patch) {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("lease_critical_dates")
     .update(patch)
     .eq("id", id)
     .select()
     .single();
+  const fallbackPatch = stripMissingOwnerEmail(error, patch);
+  if (fallbackPatch) {
+    ({ data, error } = await supabase
+      .from("lease_critical_dates")
+      .update(fallbackPatch)
+      .eq("id", id)
+      .select()
+      .single());
+  }
   if (error) throw error;
-  return data;
+  return withOwnerEmailFallback(data);
 }
 
 export async function markCriticalDateComplete(id, completedBy) {

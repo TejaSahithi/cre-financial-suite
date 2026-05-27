@@ -60,13 +60,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { supabase } from "@/services/supabaseClient";
 import {
   createCriticalDate,
   daysUntil,
   DATE_TYPES,
   DATE_TYPE_LABELS,
   deleteCriticalDate,
+  listCriticalDates,
   markCriticalDateComplete,
   updateCriticalDate,
   urgencyOf,
@@ -138,19 +138,7 @@ export default function CriticalDates() {
 
   const { data: criticalDates = [], isLoading } = useQuery({
     queryKey: ["lease-critical-dates"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("lease_critical_dates")
-        .select(
-          "id, org_id, lease_id, property_id, date_type, due_date, owner_email, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at",
-        )
-        .order("due_date", { ascending: true });
-      if (error) {
-        console.warn("[CriticalDates] query failed:", error.message);
-        return [];
-      }
-      return data || [];
-    },
+    queryFn: () => listCriticalDates(),
   });
 
   const leaseById = useMemo(() => {

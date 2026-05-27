@@ -6,6 +6,78 @@ import { logAudit } from '@/services/audit';
 
 const baseService = createEntityService('Lease');
 
+function isMissingSchemaError(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return (
+    error?.code === "PGRST202" ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205" ||
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    text.includes("schema cache") ||
+    text.includes("could not find the function") ||
+    text.includes("does not exist") ||
+    text.includes("not found")
+  );
+}
+
+async function ignoreMissingSchema(label, operation) {
+  const { error } = await operation();
+  if (error) {
+    if (isMissingSchemaError(error)) {
+      console.warn(`[leaseService] ${label} skipped: ${error.message}`);
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
+async function updateIfPresent(table, patch, column, value) {
+  return ignoreMissingSchema(`${table}.${column} update`, () =>
+    supabase.from(table).update(patch).eq(column, value)
+  );
+}
+
+async function deleteIfPresent(table, column, value) {
+  return ignoreMissingSchema(`${table}.${column} delete`, () =>
+    supabase.from(table).delete().eq(column, value)
+  );
+}
+
+async function deleteLeaseCascadeFallback(id) {
+  await updateIfPresent("units", { lease_id: null }, "lease_id", id);
+  await updateIfPresent("uploaded_files", { lease_id: null }, "lease_id", id);
+  await updateIfPresent("expense_classification_templates", { based_on_lease_id: null }, "based_on_lease_id", id);
+  await updateIfPresent("documents", { lease_id: null }, "lease_id", id);
+
+  const childDeletes = [
+    ["cam_expense_inputs", "lease_id"],
+    ["expense_classifications", "lease_id"],
+    ["expenses", "lease_id"],
+    ["rent_projections", "lease_id"],
+    ["rent_schedules", "lease_id"],
+    ["revenues", "lease_id"],
+    ["lease_critical_dates", "lease_id"],
+    ["lease_clauses", "lease_id"],
+    ["lease_field_reviews", "lease_id"],
+    ["lease_config", "lease_id"],
+    ["cam_profiles", "lease_id"],
+    ["lease_amendments", "lease_id"],
+    ["lease_assignments", "lease_id"],
+    ["lease_expense_rule_clauses", "lease_id"],
+    ["lease_expense_rules", "lease_id"],
+    ["lease_expense_rule_sets", "lease_id"],
+  ];
+
+  for (const [table, column] of childDeletes) {
+    await deleteIfPresent(table, column, id);
+  }
+
+  const { error } = await supabase.from("leases").delete().eq("id", id);
+  if (error) throw error;
+}
+
 export const leaseService = {
   ...baseService,
   async delete(id) {
@@ -14,11 +86,17 @@ export const leaseService = {
       // 1. Fetch lease to know its org_id for the audit log
       const lease = await baseService.get(id);
       
-      // 2. Call the transactional cascade RPC
+      // 2. Prefer the transactional cascade RPC. Older deployments may not
+      // have the migration yet, so fall back to the same ordered cleanup client-side.
       const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
       if (error) {
-        console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
-        throw error;
+        if (isMissingSchemaError(error)) {
+          console.warn(`[leaseService] delete_lease_cascade RPC missing; using client fallback for lease ${id}.`);
+          await deleteLeaseCascadeFallback(id);
+        } else {
+          console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
+          throw error;
+        }
       }
       
       // 3. Log the audit manually since we bypassed baseService.delete
