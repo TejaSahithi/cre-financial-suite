@@ -205,6 +205,13 @@ const CATEGORY_EVIDENCE_PATTERNS = {
   management_fees: [/management\s+fee/i, /property\s+management/i],
   capital_expenditures: [/capital[\s\S]{0,120}(?:expenditure|improvement|replacement|amorti|useful\s+life|cost[-\s]?saving|legally\s+required)/i],
   tenant_insurance: [/tenant\b[\s\S]{0,120}\b(?:insurance|liability|certificate)/i, /commercial\s+general\s+liability/i],
+  alterations: [/alteration/i, /tenant\s+improvement/i],
+  percentage_rent: [/percentage\s+rent/i, /gross\s+sales/i],
+  late_fees: [/late\s+(?:fee|charge)/i, /delinquent/i],
+  interest: [/default\s+interest/i, /interest\s+on\s+(?:late|delinquent|overdue)/i],
+  legal_enforcement_fees: [/legal/i, /attorney/i, /enforcement/i],
+  tenant_caused_damage: [/tenant[-\s]?specific/i, /tenant[-\s]?caused/i, /damage/i, /direct\s+billed/i],
+  merchant_association_dues: [/merchant\s+association/i, /marketing\s+fund/i],
 };
 
 const CATEGORY_REJECTION_PATTERNS = {
@@ -306,6 +313,14 @@ function sourceSupportsRuleCategory(rule, sourceText) {
   if (!text.trim()) return false;
   const rejectionPatterns = CATEGORY_REJECTION_PATTERNS[categoryKey] || [];
   if (rejectionPatterns.some((pattern) => pattern.test(text))) return false;
+  const paymentTreatment = normalizeRuleToken(rule?.payment_treatment);
+  const recoveryMethod = normalizeRuleToken(rule?.recovery_method);
+  const isIncluded = rule?.included_in_base_rent === true || paymentTreatment === "included_in_base_rent" || recoveryMethod === "included_in_base_rent";
+  const isTenantDirect = paymentTreatment === "tenant_direct_contract" || recoveryMethod === "tenant_direct_contract";
+  const isExplicitExclusion = rule?.is_excluded === true || /excluded\s+from|not\s+included\s+in/i.test(text);
+  if (isIncluded && /included\s+in\s+(?:base\s+)?rent|full[-\s]?service|gross\s+lease|base\s+rent\s+includes/i.test(text)) return true;
+  if (isTenantDirect && /tenant\s+(?:shall|must|will|agrees\s+to)|separately\s+metered|direct(?:ly)?\s+to|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense)/i.test(text)) return true;
+  if (isExplicitExclusion) return true;
   const evidencePatterns = CATEGORY_EVIDENCE_PATTERNS[categoryKey] || [];
   if (evidencePatterns.length === 0) return true;
   return evidencePatterns.some((pattern) => pattern.test(text));
@@ -1084,7 +1099,9 @@ export default function LeaseExpenseRules() {
   };
 
   const subtitle = getScopeSubtitle(scope, {
-    default: `${filteredRows.length} lease expense rule${filteredRows.length === 1 ? "" : "s"}`,
+    default: displayMode === "gaps"
+      ? `${filteredRows.length} coverage gap${filteredRows.length === 1 ? "" : "s"} / needs review`
+      : `${filteredRows.length} expense-related lease term${filteredRows.length === 1 ? "" : "s"} found in the lease`,
   });
 
   return (

@@ -274,6 +274,31 @@ function nonCamObligationRule(rule, evidence, reason, treatment = "not_applicabl
   };
 }
 
+function includedInBaseRentRule(rule, evidence, reason) {
+  const snippet = compactSnippet(evidence);
+  return {
+    ...rule,
+    exact_source_text: snippet,
+    source_clause: snippet,
+    included_in_base_rent: true,
+    recoverable_from_tenant: "no",
+    cam_eligible: "no",
+    payment_treatment: "included_in_base_rent",
+    recovery_method: "included_in_base_rent",
+    allocation_basis: null,
+    is_recoverable: false,
+    is_excluded: false,
+    row_status: "mapped",
+    extraction_status: "extracted",
+    review_status: "needs_review",
+    approval_status: "draft",
+    published_to_cam: false,
+    mentioned_in_lease: true,
+    confidence_score: Math.max(Number(rule?.confidence_score || rule?.confidence || 0.72), 0.72),
+    notes: reason,
+  };
+}
+
 function downgradeUnsupportedRule(rule, reason) {
   return {
     ...rule,
@@ -413,6 +438,8 @@ function detectDocumentProfile({ lease, sourceText }) {
 
 function applyLeaseEvidenceRules(rule, sourceText) {
   const canonicalKey = canonicalRuleKey(rule);
+  const explicitPaymentTreatment = normalizeKey(rule?.payment_treatment);
+  const explicitRecoveryMethod = normalizeKey(rule?.recovery_method);
   const normalizedRule = {
     ...rule,
     normalized_key: canonicalKey,
@@ -434,11 +461,37 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   const existingEvidence = String(firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source) || "");
   const existingLower = existingEvidence.toLowerCase();
   const existingEvidenceSupportsCategory = evidenceSupportsCategory(canonicalKey, existingEvidence);
+  const isIncludedInRentTerm =
+    rule?.included_in_base_rent === true ||
+    rule?.included_in_base_rent === "yes" ||
+    explicitPaymentTreatment === "included_in_base_rent" ||
+    explicitRecoveryMethod === "included_in_base_rent" ||
+    (/included\s+in\s+(?:base\s+)?rent|full[-\s]?service|gross\s+lease/i.test(existingEvidence) && evidenceSupportsCategory(canonicalKey, existingEvidence));
+  const isTenantDirectTerm =
+    explicitPaymentTreatment === "tenant_direct_contract" ||
+    explicitRecoveryMethod === "tenant_direct_contract" ||
+    /tenant\s+(?:shall|must|will|agrees\s+to)\s+(?:maintain|repair|provide|carry|obtain|contract)/i.test(existingEvidence) ||
+    /separately\s+metered|direct(?:ly)?\s+to\s+(?:the\s+)?utility|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense)/i.test(existingEvidence);
+  const isExplicitExclusionTerm =
+    rule?.is_excluded === true ||
+    /excluded\s+from\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)|not\s+included\s+in\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)/i.test(existingEvidence);
 
   const camEvidence = section3 || existingEvidence;
   const camSectionSupports =
     section3 &&
     sectionIncludes(section3, [/common\s+area\s+maintenance/i, /\bcam\b/i, /operating\s+expenses?/i]);
+
+  if (existingEvidenceSupportsCategory && isIncludedInRentTerm) {
+    return includedInBaseRentRule(normalizedRule, existingEvidence, "Expense-related lease term is included in base rent/full-service treatment.");
+  }
+
+  if (existingEvidenceSupportsCategory && isTenantDirectTerm) {
+    return nonCamObligationRule(normalizedRule, existingEvidence, "Tenant direct obligation found in lease; not CAM recoverable.", "tenant_direct_contract");
+  }
+
+  if (existingEvidenceSupportsCategory && isExplicitExclusionTerm) {
+    return nonCamObligationRule(normalizedRule, existingEvidence, "Expense-related term is explicitly excluded from CAM/operating expense recovery.");
+  }
 
   if (canonicalKey === "common_area_maintenance") {
     if (!camSectionSupports) {
