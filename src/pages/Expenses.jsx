@@ -174,7 +174,12 @@ export default function Expenses() {
   });
 
   const selectorScopedExpenses = selectorScopedAllExpenses.filter(
-    (expense) => expense.source_type !== "lease_import" && expense.source !== "lease_import"
+    (expense) => {
+      const isLeaseImport = expense.source_type === "lease_import" || expense.source === "lease_import";
+      // Hide lease imports only if they are actively attached to a lease.
+      // Orphaned imports should be visible so they can be bulk deleted.
+      return !isLeaseImport || expense.lease_id === null;
+    }
   );
   const selectorScopedExpenseIds = useMemo(
     () => selectorScopedExpenses.map((expense) => expense.id).filter(Boolean),
