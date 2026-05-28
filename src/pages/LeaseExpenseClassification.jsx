@@ -43,6 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import ClassificationDebugPanel from "@/components/lease-expense/ClassificationDebugPanel";
 
 function fmt(value) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value) || 0);
@@ -302,7 +303,14 @@ export default function LeaseExpenseClassification() {
   const queriesEnabled = resolvedOrgId !== undefined;
 
   const {
-    data: workspace = { approvedRules: [], approvedActuals: [], existingClassifications: [], summary: {} },
+    data: workspace = {
+      approvedRules: [],
+      approvedActuals: [],
+      existingClassifications: [],
+      ruleExclusions: {},
+      actualExclusions: {},
+      summary: {},
+    },
     isLoading: loadingWorkspace,
   } = useQuery({
     queryKey: ["expense-recoverability-workspace", orgScopeKey, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear],
@@ -319,6 +327,10 @@ export default function LeaseExpenseClassification() {
   const approvedActuals = workspace.approvedActuals || [];
   const approvedRules = workspace.approvedRules || [];
   const existingClassifications = workspace.existingClassifications || [];
+  const ruleExclusions = workspace.ruleExclusions || {};
+  const actualExclusions = workspace.actualExclusions || {};
+  const workspaceSummary = workspace.summary || {};
+  const [showClassificationDebug, setShowClassificationDebug] = useState(false);
 
   const rows = useMemo(() => {
     const result = [];
@@ -1095,6 +1107,27 @@ export default function LeaseExpenseClassification() {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        <div className="flex items-center justify-end">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-[11px] text-slate-600 hover:text-slate-900"
+            onClick={() => setShowClassificationDebug((prev) => !prev)}
+          >
+            {showClassificationDebug ? "Hide" : "Show"} classification diagnostics
+          </Button>
+        </div>
+
+        {showClassificationDebug && (
+          <ClassificationDebugPanel
+            ruleExclusions={ruleExclusions}
+            actualExclusions={actualExclusions}
+            summary={workspaceSummary}
+            counts={counts}
+            existingClassifications={existingClassifications}
+          />
         )}
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">

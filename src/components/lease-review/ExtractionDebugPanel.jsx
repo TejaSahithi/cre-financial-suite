@@ -133,25 +133,76 @@ export default function ExtractionDebugPanel({ lease }) {
     uniqueItems.push(item);
   }
   const extractionDebug = lease?.extraction_data?.extraction_debug || {};
+  // The pipeline's full extractionDebug lives on the uploaded_files
+  // normalized_output too. Fall back to it when the lease row's own
+  // extraction_debug hasn't been refreshed yet (the initial review-approve
+  // path doesn't copy it onto the lease).
+  const pipelineDebug = uploadedFile?.normalized_output?.metadata?.extractionDebug
+    || uploadedFile?.normalized_output?.metadata?.extraction_debug
+    || {};
+  const debugRead = (key) => extractionDebug?.[key] ?? pipelineDebug?.[key];
   const doclingPagesParsed = workflowOutput?.summary?.docling_pages_parsed
     ?? workflowOutput?.summary?.pages_detected
     ?? new Set(textBlocks.map((block) => block?.page ?? block?.page_number ?? block?.source_page).filter(Boolean)).size;
   const pdfPageCountTotal = workflowOutput?.summary?.pdf_page_count_total
     ?? lease?.extraction_data?.docling_raw?.page_count
     ?? null;
+
+  // ── Vision Parser (Stage 1: PDF/image → text) ─────────────────────────
+  // The parser tags its output via `extraction_method` on docling_raw —
+  // "gemini_vision" or "hybrid" means Gemini Vision read the document.
+  // We probe several sources because the field is set by parser.ts and
+  // surfaces in different places depending on which write path ran.
+  const parserSource = (
+    debugRead("vision_parser_source")
+    || uploadedFile?.docling_raw?.extraction_method
+    || lease?.extraction_data?.docling_raw?.extraction_method
+    || doclingRaw?.extraction_method
+    || uploadedFile?.extraction_method
+    || ""
+  ).toString().toLowerCase();
+  const visionParserUsed = debugRead("vision_parser_used") === true
+    || parserSource === "gemini_vision"
+    || parserSource === "hybrid"
+    // Last-resort signal: any text block tagged with gemini_vision source.
+    || textBlocks.some((b) => String(b?.source || "").toLowerCase().includes("gemini_vision"));
+  const visionParserPages = debugRead("vision_parser_pages_count")
+    ?? pdfPageCountTotal
+    ?? doclingPagesParsed
+    ?? null;
+  const visionParserLabel = visionParserUsed
+    ? (parserSource === "hybrid"
+      ? `used (hybrid${visionParserPages ? `, ${visionParserPages} pages` : ""})`
+      : `used${visionParserPages ? ` (${visionParserPages} pages)` : ""}`)
+    : (parserSource ? `not used (parser: ${parserSource})` : "not used");
+
+  // ── Vision Field Extraction (Stage 2: file bytes → LLM JSON) ──────────
   const visionTriggered = Boolean(
-    extractionDebug?.vision_fallback_triggered ?? extractionDebug?.llm_file_mode_used,
+    debugRead("vision_field_extraction_used")
+    ?? debugRead("vision_fallback_triggered")
+    ?? debugRead("llm_file_mode_used"),
   );
-  const visionSkipReason = extractionDebug?.vision_fallback_skipped_reason
-    || workflowOutput?.summary?.vision_fallback_skipped_reason
-    || (!pdfPageCountTotal
-      ? "pdf_page_count_unavailable"
-      : extractionDebug?.fileBase64_available === false
-        ? "fileBase64_unavailable"
-        : extractionDebug?.weak_text_detected === false
-          ? "weak_text_not_detected"
-          : extractionDebug?.llm_file_mode_used === false
-            ? "llm_file_mode_not_used"
+  const fileBase64Available = debugRead("fileBase64_available");
+  const weakTextDetected = debugRead("weak_text_detected");
+  const llmFieldsCount = debugRead("vision_field_extraction_fields_count")
+    ?? debugRead("llm_fields_extracted");
+  const visionFieldSkipReason = debugRead("vision_field_extraction_skipped_reason")
+    ?? debugRead("vision_fallback_skipped_reason")
+    ?? (fileBase64Available === false
+      ? "file_bytes_unavailable"
+      : (weakTextDetected === false
+        ? "parser_text_sufficient"
+        : (llmFieldsCount === 0 ? "llm_returned_zero_fields" : null)));
+  const visionFieldLabel = visionTriggered
+    ? `used${typeof llmFieldsCount === "number" ? ` (${llmFieldsCount} fields)` : ""}`
+    : (visionFieldSkipReason === "parser_text_sufficient"
+      ? "not run — parser text sufficient"
+      : visionFieldSkipReason === "file_bytes_unavailable"
+        ? "skipped — file bytes unavailable"
+        : visionFieldSkipReason === "llm_returned_zero_fields"
+          ? "attempted, returned zero fields"
+          : visionFieldSkipReason
+            ? `skipped — ${visionFieldSkipReason}`
             : "not run");
 
   const debugSummary = {
@@ -165,9 +216,11 @@ export default function ExtractionDebugPanel({ lease }) {
     // natively when file bytes are sent (see vision_processed flag).
     pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "—",
     docling_pages_parsed: doclingPagesParsed,
-    vision_processed: visionTriggered
-      ? (pdfPageCountTotal ? `all ${pdfPageCountTotal} pages` : "all pages")
-      : visionSkipReason,
+    // Two distinct Vision stages — keeping them separate so reviewers can
+    // tell whether Gemini read the document at all (parser) from whether
+    // it pulled structured fields from the bytes (field extraction).
+    vision_parser: visionParserLabel,
+    vision_field_extraction: visionFieldLabel,
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
     dynamic_items_extracted: workflowOutput?.summary?.dynamic_items_extracted ?? uniqueItems.length,
     dynamic_items_displayed: workflowOutput?.summary?.dynamic_items_displayed ?? uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,

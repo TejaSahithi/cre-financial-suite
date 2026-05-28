@@ -2,6 +2,12 @@ import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
+import {
+  getEffectiveApprovalStatus,
+  getEffectiveReviewStatus,
+  getRawReviewStatus,
+  getEffectiveRowStatus,
+} from "@/lib/ruleStatus";
 
 const EVIDENCE_ALIGNED_EXTRACTION_VERSION = "lease_rule_pipeline_v3_evidence_aligned";
 const LEGACY_EXTRACTION_VERSION = "v1.2026.05.19";
@@ -94,9 +100,9 @@ function isRuleSuperseded(rule) {
 }
 
 function isRuleApproved(rule) {
-  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
-  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
-  return reviewStatus === "approved" && approvalStatus === "approved";
+  // Logic-preserving migration to the central helper. See src/lib/ruleStatus.js.
+  return getEffectiveReviewStatus(rule) === "approved"
+    && getEffectiveApprovalStatus(rule) === "approved";
 }
 
 function isManualOverrideRule(rule) {
@@ -115,10 +121,12 @@ function isProtectedHumanRule(rule) {
 }
 
 function isRuleRejected(rule) {
-  const reviewStatus = normalizeText(rule?.review_status);
-  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+  // Bare review_status read (no "reviewed" → "approved" promotion) preserves
+  // original semantics from before the helper consolidation.
   const rowStatus = normalizeText(rule?.row_status || rule?.status);
-  return reviewStatus === "rejected" || approvalStatus === "rejected" || rowStatus === "rejected";
+  return getRawReviewStatus(rule) === "rejected"
+    || getEffectiveApprovalStatus(rule) === "rejected"
+    || rowStatus === "rejected";
 }
 
 function isRuleNotApplicable(rule) {
@@ -145,11 +153,9 @@ function deriveRuleSetStatusFromRules(rules = []) {
   if (activeRules.length === 0) return "draft";
   if (activeRules.every(isRuleResolvedForRuleSetStatus)) return "approved";
   if (activeRules.some((rule) => {
-    const reviewStatus = normalizeText(rule?.review_status);
-    const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
-    const rowStatus = normalizeText(rule?.row_status || rule?.status || rule?.extraction_status);
-    return reviewStatus === "needs_review" ||
-      approvalStatus === "needs_review" ||
+    const rowStatus = getEffectiveRowStatus(rule);
+    return getRawReviewStatus(rule) === "needs_review" ||
+      getEffectiveApprovalStatus(rule) === "needs_review" ||
       rowStatus === "needs_review" ||
       rowStatus === "uncertain" ||
       rowStatus === "missing_value";
@@ -160,8 +166,8 @@ function deriveRuleSetStatusFromRules(rules = []) {
 }
 
 function isRuleCamPublishable(rule) {
-  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
-  const approvalStatus = normalizeText(rule?.approval_status || rule?.approved_status);
+  const reviewStatus = getEffectiveReviewStatus(rule);
+  const approvalStatus = getEffectiveApprovalStatus(rule);
   const recoverableFromTenant = deriveRuleRecoverableFromTenant(rule);
   const camEligible = deriveRuleCamEligible(rule);
   const paymentTreatment = deriveRulePaymentTreatment(rule);
@@ -741,7 +747,7 @@ function resolveRuleWorkflowState(rule, ruleSetStatus = "draft") {
     confidence >= RULE_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
 
   const extractionStatus = explicitExtractionStatus || (strongEvidence ? "extracted" : "inferred");
-  const explicitReviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status);
+  const explicitReviewStatus = getEffectiveReviewStatus(rule);
   const reviewStatus = explicitReviewStatus || (autoApproved ? "approved" : "needs_review");
   const approvalStatus =
     reviewStatus === "approved"
@@ -777,7 +783,8 @@ function getRuleValidation(rule) {
   const camEligible = deriveRuleCamEligible(rule);
   const recoveryMethod = deriveRuleRecoveryMethod(rule);
   const allocationBasis = deriveRuleAllocationBasis(rule);
-  const reviewStatus = normalizeText(rule?.review_status) === "reviewed" ? "approved" : normalizeText(rule?.review_status || deriveRuleReviewStatus(rule));
+  // Fall back to the derived status when no explicit field is present.
+  const reviewStatus = getEffectiveReviewStatus(rule) || normalizeText(deriveRuleReviewStatus(rule));
   const approvalStatus = normalizeText(rule?.approval_status || deriveRuleApprovalStatus(rule));
   const sourcePage = deriveRuleSourcePage(rule);
   const exactSourceText = deriveRuleExactSourceText(rule);
@@ -1400,7 +1407,7 @@ function mapExtractedRulesToCategories(aiRules = [], categories = [], existingRu
 }
 
 function buildLeaseConfigFromRules(lease, rules = [], categoriesById = new Map()) {
-  const approvedRules = rules.filter((rule) => normalizeText(rule?.approval_status) === "approved" && normalizeText(rule?.review_status) === "approved");
+  const approvedRules = rules.filter(isRuleApproved);
   const camPublishedRules = approvedRules.filter((rule) =>
     Boolean(getRuleValidation(rule).publishedToCam)
   );

@@ -165,7 +165,7 @@ export default function AddExpense() {
     },
   });
 
-  const handleSubmit = async (addAnother) => {
+  const handleSubmit = async (addAnother, { saveAsDraft = false } = {}) => {
     const writableOrgId = await resolveWritableOrgId(orgId);
     const property = form.property_id ? scope.propertyById.get(form.property_id) ?? null : null;
     
@@ -228,15 +228,19 @@ export default function AddExpense() {
         tenant_id: resolvedTenantId,
         source: "manual",
         fiscal_year: form.date ? new Date(form.date).getFullYear() : new Date().getFullYear(),
-        approval_status: "approved",
-        review_status: "approved",
+        // Batch E (F9). Manual entries default to approved so the existing
+        // single-step path stays unchanged. Save-as-draft sets both fields
+        // to "draft" so the row fails isActualClassificationEligible until
+        // a reviewer promotes it via the Expense Review workflow.
+        approval_status: saveAsDraft ? "draft" : "approved",
+        review_status: saveAsDraft ? "draft" : "approved",
         service_period_start: form.date || null,
         service_period_end: form.date || null,
       },
       {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ["Expense"] });
-          toast.success("Expense saved successfully");
+          toast.success(saveAsDraft ? "Expense saved as draft" : "Expense saved successfully");
           if (addAnother) {
             setForm({
               ...buildInitialForm(scope),
@@ -515,9 +519,19 @@ export default function AddExpense() {
           <Plus className="w-4 h-4 mr-1" />
           Save & Add Another
         </Button>
+        {!isEditing && (
+          <Button
+            variant="outline"
+            onClick={() => handleSubmit(false, { saveAsDraft: true })}
+            disabled={!isValid || createMutation.isPending}
+            title="Save without approving — the expense stays out of classification until a reviewer promotes it."
+          >
+            Save as Draft
+          </Button>
+        )}
         <Button onClick={() => handleSubmit(false)} disabled={!isValid || createMutation.isPending || updateMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700">
           {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-          {isEditing ? "Save Changes" : "Save Expense"}
+          {isEditing ? "Save Changes" : "Save & Approve"}
         </Button>
       </div>
 

@@ -3,6 +3,76 @@ import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveTableName } from "@/types";
+import {
+  getActualClassificationExclusionReason,
+  getRuleCamExclusionReason,
+  getRuleClassificationExclusionReason,
+  isActualClassificationEligible,
+  isRuleCamEligible,
+  isRuleClassificationEligible,
+} from "@/lib/expenseEligibility";
+
+// Typed errors so UI handlers can render a specific reason rather than a
+// generic "operation failed" toast. Batch D wires the LeaseExpenseClassification
+// page to surface error.message verbatim; the `.reason` property is available
+// for analytics/logging.
+class ClassificationEligibilityError extends Error {
+  constructor(message, { reason } = {}) {
+    super(message);
+    this.name = "ClassificationEligibilityError";
+    this.reason = reason || null;
+  }
+}
+
+class CamEligibilityError extends Error {
+  constructor(message, { reason } = {}) {
+    super(message);
+    this.name = "CamEligibilityError";
+    this.reason = reason || null;
+  }
+}
+import {
+  getEffectiveApprovalStatus,
+  getRawReviewStatus,
+} from "@/lib/ruleStatus";
+
+// Histogram buckets surfaced in the Classification debug panel (Batch B). Every
+// reason returned by getRuleClassificationExclusionReason / getActualClassificationExclusionReason
+// must have a slot here so the panel doesn't silently drop rows.
+const EMPTY_RULE_EXCLUSIONS = Object.freeze({
+  superseded: 0,
+  not_approved: 0,
+  original_lease_required: 0,
+  coverage_gap: 0,
+  weak_fallback: 0,
+  missing_source: 0,
+  missing_category: 0,
+  included_in_base_rent: 0,
+  tenant_direct: 0,
+  explicit_exclusion: 0,
+  non_recoverable: 0,
+  non_cam: 0,
+  needs_review: 0,
+  wrong_scope: 0,
+});
+
+const EMPTY_ACTUAL_EXCLUSIONS = Object.freeze({
+  wrong_scope: 0,
+  not_actual_expense: 0,
+  original_lease_required: 0,
+  coverage_gap: 0,
+  superseded: 0,
+  rejected: 0,
+  draft: 0,
+  needs_review: 0,
+  not_approved: 0,
+  missing_amount: 0,
+});
+
+function bumpExclusion(target, reason) {
+  if (!reason) return;
+  target[reason] = (target[reason] ?? 0) + 1;
+}
 
 const baseExpenseService = createEntityService("Expense");
 const baseLeaseService = createEntityService("Lease");
@@ -409,8 +479,11 @@ function isApprovedExpenseRecord(expense, classification = null) {
   // is explicitly approved (or finalized for "status"). Reject explicit-rejected,
   // draft, needs-review, exception, and lease_rule_amount-sourced rows so that
   // unapproved actuals and rule-amount inserts never enter the classification view.
-  const approval = normalizeText(expense?.approval_status || expense?.approved_status);
-  const review = normalizeText(expense?.review_status);
+  // Use the centralized status helpers (src/lib/ruleStatus.js). Review uses
+  // the RAW reader because this function treats "reviewed" and "approved"
+  // separately (only "approved" passes; "reviewed" alone does not).
+  const approval = getEffectiveApprovalStatus(expense);
+  const review = getRawReviewStatus(expense);
   const status = normalizeText(expense?.status);
   const exceptionType = normalizeText(expense?.exception_type);
   const source = normalizeText(expense?.source || expense?.source_type || expense?.cam_input_type);
@@ -2298,6 +2371,24 @@ export const expenseService = {
   },
 
   matchActualExpenseToLeaseRule(actualExpense, { leases = [], rulesByLeaseId = new Map() } = {}) {
+    // Defensive eligibility gate. Loaders SHOULD filter both sides before
+    // reaching this matcher, but the matcher is also called by other code
+    // paths (runExpenseClassification, manual review flows). Short-circuiting
+    // here guarantees an ineligible row never produces a matched_classification
+    // even if a caller skipped the loader filter.
+    if (!isActualClassificationEligible(actualExpense, { scopeMatch: true })) {
+      return {
+        linked_expense_rule_id: null,
+        recoverability_result: "needs_review",
+        cam_eligible: "needs_review",
+        recovery_method: null,
+        reason: `Actual expense is not classification-eligible (${getActualClassificationExclusionReason(actualExpense, { scopeMatch: true })}).`,
+        lease: null,
+        rule: null,
+        score: 0,
+      };
+    }
+
     const expenseLeaseId = actualExpense?.lease_id || null;
     const candidateLeases = expenseLeaseId
       ? (leases || []).filter((lease) => lease?.id === expenseLeaseId)
@@ -2315,6 +2406,10 @@ export const expenseService = {
     for (const lease of candidateLeases) {
       const candidateRules = rulesByLeaseId.get(lease.id) || [];
       for (const rule of candidateRules) {
+        // Skip ineligible rules as defensive double-check. Loaders already
+        // filter; this guards against rulesByLeaseId being built from a
+        // different source than loadApprovedLeaseExpenseRules.
+        if (!isRuleClassificationEligible(rule, { scopeMatch: true })) continue;
         const scopeScore = scoreScopeMatch(actualExpense, rule);
         const categoryScore = scoreRuleMatch(actualExpense, rule);
         const periodScore = servicePeriodOverlaps(actualExpense, lease) ? 40 : -1000;
@@ -2875,6 +2970,36 @@ export const expenseService = {
       expense = await baseExpenseService.get(expenseId);
     }
 
+    // ── Hard-block eligibility gate (Batch D, F7) ──────────────────────
+    // Refuse to finalize a row whose actual expense or linked rule fails
+    // the centralized eligibility helpers. Without this, the UI could
+    // finalize coverage-gap / original_lease_required / draft rows and the
+    // resulting state would diverge from the loader's view of the workspace.
+    if (expense && !isActualClassificationEligible(expense, { scopeMatch: true })) {
+      const reason = getActualClassificationExclusionReason(expense, { scopeMatch: true });
+      throw new ClassificationEligibilityError(
+        `Cannot finalize: actual expense is not classification-eligible (${reason}).`,
+        { reason },
+      );
+    }
+    const ruleIdForFinalize =
+      classification?.lease_expense_rule_id || classification?.linked_expense_rule_id || null;
+    if (ruleIdForFinalize) {
+      const { data: linkedRule, error: linkedRuleErr } = await supabase
+        .from("lease_expense_rules")
+        .select("*")
+        .eq("id", ruleIdForFinalize)
+        .maybeSingle();
+      if (linkedRuleErr) throw linkedRuleErr;
+      if (linkedRule && !isRuleClassificationEligible(linkedRule, { scopeMatch: true })) {
+        const reason = getRuleClassificationExclusionReason(linkedRule, { scopeMatch: true });
+        throw new ClassificationEligibilityError(
+          `Cannot finalize: linked rule is not classification-eligible (${reason}).`,
+          { reason },
+        );
+      }
+    }
+
     // Finalize only records the CAM derivation outcome on the expense; it must
     // not promote review_status / approved_status. Expense approval is owned by
     // the Expense Review workflow.
@@ -3067,6 +3192,27 @@ export const expenseService = {
     }
 
     const rule = ruleResult?.data || null;
+
+    // ── Hard-block CAM eligibility gate (Batch D, F12) ────────────────
+    // Spec: CAM may only consume cam_eligible="yes" classifications. A manual
+    // reason can no longer override this — the gate ran too loose, allowing
+    // needs_review / conditional rows to be marked sent_to_cam with a free-form
+    // reason. The compute-cam edge function rejects downstream, but the
+    // classification row stayed marked, producing UI/state drift.
+    if (String(classification.cam_eligible || "").toLowerCase() !== "yes") {
+      throw new CamEligibilityError(
+        `Cannot send to CAM: classification cam_eligible="${classification.cam_eligible || "missing"}". Resolve the row in Expense Review first.`,
+        { reason: classification.cam_eligible || "missing_cam_eligible" },
+      );
+    }
+    if (rule && !isRuleCamEligible(rule, { scopeMatch: true })) {
+      const reason = getRuleCamExclusionReason(rule, { scopeMatch: true });
+      throw new CamEligibilityError(
+        `Cannot send to CAM: linked rule is not CAM-eligible (${reason}).`,
+        { reason },
+      );
+    }
+
     const isAutomatic =
       Boolean(rule) &&
       classification.recoverability_result === "recoverable" &&
@@ -3270,14 +3416,33 @@ export const expenseService = {
       approvedRules,
       diagnostics,
     } = await fetchApprovedClassificationRules(scope);
+
+    // Apply the centralized classification-eligibility gate. Rules already
+    // approved by review can still be ineligible for downstream classification
+    // when they carry coverage-gap, included-in-base-rent, tenant-direct, or
+    // explicit-exclusion semantics. Filtering here ensures the Classification
+    // page, runExpenseClassification, and CAM consumers see the same view.
+    const eligibleRules = [];
+    const exclusions = { ...EMPTY_RULE_EXCLUSIONS };
+    for (const rule of approvedRules) {
+      const reason = getRuleClassificationExclusionReason(rule, { scopeMatch: true });
+      if (reason === null) {
+        eligibleRules.push(rule);
+      } else {
+        bumpExclusion(exclusions, reason);
+      }
+    }
+
     console.log("[Classification approvedRules]", {
       scope: normalizedScope,
-      approvedRulesCount: approvedRules.length,
+      approvedRulesCount: eligibleRules.length,
       rawApprovedRuleCount: diagnostics?.rawApprovedRuleCount || 0,
       accessibleApprovedRuleCount: diagnostics?.accessibleApprovedRuleCount || 0,
       reviewedButDraftCount: diagnostics?.reviewedButDraftCount || 0,
       reviewedButDraftRuleIds: diagnostics?.reviewedButDraftRuleIds || [],
-      sampleRules: approvedRules.slice(0, 10).map((rule) => ({
+      excludedByEligibility: approvedRules.length - eligibleRules.length,
+      eligibilityExclusions: exclusions,
+      sampleRules: eligibleRules.slice(0, 10).map((rule) => ({
         id: rule.id,
         review_status: rule.review_status,
         approval_status: rule.approval_status,
@@ -3287,10 +3452,10 @@ export const expenseService = {
         building_id: rule.building_id,
         unit_id: rule.unit_id,
       })),
-      rulesByLease: summarizeApprovedRulesBy(approvedRules, "lease_id"),
-      rulesByTenant: summarizeApprovedRulesBy(approvedRules, "tenant_id"),
+      rulesByLease: summarizeApprovedRulesBy(eligibleRules, "lease_id"),
+      rulesByTenant: summarizeApprovedRulesBy(eligibleRules, "tenant_id"),
     });
-    return approvedRules;
+    return { rules: eligibleRules, exclusions, rawApprovedCount: approvedRules.length };
   },
 
   async loadApprovedActualExpenses(scope = {}) {
@@ -3301,6 +3466,8 @@ export const expenseService = {
     ]);
 
     const approvedExpenses = [];
+    const exclusions = { ...EMPTY_ACTUAL_EXCLUSIONS };
+    let rawApprovedCount = 0;
 
     for (const rawExpense of allExpenses || []) {
       if (normalizeSourceType(rawExpense) === "lease_import") continue;
@@ -3308,12 +3475,22 @@ export const expenseService = {
       const { expense: linkedExpense } = await this.resolveExpenseLeaseLink(rawExpense, allLeases);
 
       if (!isApprovedExpenseRecord(linkedExpense)) continue;
-      if (!expenseMatchesScope(linkedExpense, normalizedScope)) continue;
+      const scopeMatch = expenseMatchesScope(linkedExpense, normalizedScope);
+      rawApprovedCount += 1;
 
-      approvedExpenses.push(linkedExpense);
+      // Centralized eligibility check (scope + extended actual filters such as
+      // row_status / generation_source / draft / missing_amount). Keep the
+      // legacy isApprovedExpenseRecord above so coarse approval gating still
+      // runs first — the helper is the fine-grained gate.
+      const reason = getActualClassificationExclusionReason(linkedExpense, { scopeMatch });
+      if (reason === null) {
+        approvedExpenses.push(linkedExpense);
+      } else {
+        bumpExclusion(exclusions, reason);
+      }
     }
 
-    return approvedExpenses;
+    return { actuals: approvedExpenses, exclusions, rawApprovedCount };
   },
 
   async loadExpenseRecoverabilityScope(scope = {}) {
@@ -3334,20 +3511,37 @@ export const expenseService = {
       }
     };
 
-    const [approvedRules, approvedActuals, existingClassifications] = await Promise.all([
-      safe("approved lease rules", () => this.loadApprovedLeaseExpenseRules(normalizedScope)),
-      safe("approved actual expenses", () => this.loadApprovedActualExpenses(normalizedScope)),
+    const [rulesResult, actualsResult, existingClassifications] = await Promise.all([
+      safe("approved lease rules", () => this.loadApprovedLeaseExpenseRules(normalizedScope), { rules: [], exclusions: { ...EMPTY_RULE_EXCLUSIONS }, rawApprovedCount: 0 }),
+      safe("approved actual expenses", () => this.loadApprovedActualExpenses(normalizedScope), { actuals: [], exclusions: { ...EMPTY_ACTUAL_EXCLUSIONS }, rawApprovedCount: 0 }),
       safe("classification rows", () => this.listExpenseClassificationsForScope(normalizedScope)),
     ]);
+
+    // Normalize back-compat: prior loaders returned bare arrays. Now they
+    // return { rules|actuals, exclusions, rawApprovedCount }. Expose both the
+    // arrays (for unchanged consumers) and the exclusion histograms (for the
+    // ClassificationDebugPanel in Batch B).
+    const approvedRules = Array.isArray(rulesResult) ? rulesResult : rulesResult.rules;
+    const approvedActuals = Array.isArray(actualsResult) ? actualsResult : actualsResult.actuals;
+    const ruleExclusions = Array.isArray(rulesResult) ? { ...EMPTY_RULE_EXCLUSIONS } : rulesResult.exclusions;
+    const actualExclusions = Array.isArray(actualsResult) ? { ...EMPTY_ACTUAL_EXCLUSIONS } : actualsResult.exclusions;
+    const rawApprovedRulesCount = Array.isArray(rulesResult) ? approvedRules.length : rulesResult.rawApprovedCount;
+    const rawApprovedActualsCount = Array.isArray(actualsResult) ? approvedActuals.length : actualsResult.rawApprovedCount;
 
     return {
       approvedRules,
       approvedActuals,
       existingClassifications,
+      ruleExclusions,
+      actualExclusions,
       summary: {
         rulesCount: approvedRules.length,
         actualsCount: approvedActuals.length,
         classificationsCount: existingClassifications.length,
+        rawApprovedRulesCount,
+        rawApprovedActualsCount,
+        rulesExcludedCount: rawApprovedRulesCount - approvedRules.length,
+        actualsExcludedCount: rawApprovedActualsCount - approvedActuals.length,
       },
     };
   },

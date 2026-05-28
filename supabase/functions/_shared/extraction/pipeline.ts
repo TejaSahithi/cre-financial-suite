@@ -419,7 +419,32 @@ export async function runExtractionPipeline(
     ? "file_bytes_not_provided"
     : (fileBase64Available && llmFieldCount === 0 && weakTextDetected)
       ? "llm_returned_zero_fields"
-      : null;
+      : (!weakTextDetected ? "parser_text_sufficient" : null);
+
+  // ── Stage 1: Vision-as-parser diagnostics ─────────────────────────────
+  // The parser's extraction_method (set by parser.ts tag()) records which
+  // backend produced the docling_raw payload. "gemini_vision" or "hybrid"
+  // mean the PDF was read by Gemini Vision (Stage 1). This is distinct
+  // from the Stage 2 fileBase64 LLM fallback above. Either may be true
+  // independently — for example, a strong-text scan can be Vision-parsed
+  // but never need the Stage 2 file-mode LLM fallback.
+  const parserSource = String(rawDocling?.extraction_method || "").toLowerCase();
+  const visionParserUsed = parserSource === "gemini_vision" || parserSource === "hybrid";
+  // Best-effort page count from the parser output. Not all parsers fill
+  // page_count, so fall back to the count of distinct block pages.
+  const parserPageCount = (() => {
+    const explicit = (rawDocling as any)?.page_count;
+    if (typeof explicit === "number" && explicit > 0) return explicit;
+    const blocks = Array.isArray((rawDocling as any)?.text_blocks)
+      ? (rawDocling as any).text_blocks
+      : [];
+    const pages = new Set<number>();
+    for (const b of blocks) {
+      const p = b?.page ?? b?.page_number ?? b?.source_page;
+      if (typeof p === "number" && p > 0) pages.add(p);
+    }
+    return pages.size || null;
+  })();
 
   log.info(
     `Pipeline complete: ${flatRows.length} rows, method=${method}, ` +
@@ -458,6 +483,23 @@ export async function runExtractionPipeline(
         vision_fallback_triggered: visionFallbackTriggered,
         vision_fallback_skipped_reason: visionFallbackSkippedReason,
         llm_file_mode_used: visionFallbackTriggered,
+        // ── Split Vision diagnostics ─────────────────────────────────
+        // Stage 1 (parser): did Gemini Vision read the document?
+        vision_parser_used: visionParserUsed,
+        vision_parser_source: parserSource || null,
+        vision_parser_pages_count: parserPageCount,
+        // Stage 2 (field extraction): did the LLM run in file mode to
+        // pull structured fields directly from the PDF bytes?
+        vision_field_extraction_attempted: fileBase64Available,
+        vision_field_extraction_used: visionFallbackTriggered,
+        vision_field_extraction_skipped_reason: visionFallbackTriggered
+          ? null
+          : (!fileBase64Available
+            ? "file_bytes_unavailable"
+            : (!weakTextDetected
+              ? "parser_text_sufficient"
+              : (llmFieldCount === 0 ? "llm_returned_zero_fields" : null))),
+        vision_field_extraction_fields_count: llmFieldCount,
         fields_returned_count: fieldsReturnedCount,
         source_backed_fields_count: sourceBackedFieldsCount,
         fields_without_source_count: fieldsWithoutSourceCount,
