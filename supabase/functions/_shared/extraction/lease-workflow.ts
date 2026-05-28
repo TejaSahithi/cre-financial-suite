@@ -243,6 +243,20 @@ const FIELD_SPECS = [
   { key: "insurance_responsibility", group: "expense_terms", aliases: ["insurance_responsibility"], patterns: [/\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i] },
   { key: "maintenance_responsibility", group: "expense_terms", aliases: ["maintenance_responsibility"], patterns: [/\b(?:maintenance|repairs?)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:perform|maintain|repair|be\s+responsible)/i] },
   { key: "permitted_development", group: "premises", aliases: ["permitted_development"], patterns: [/\bpermitted development\b[:\s-]+([^\n.]{4,220})/i] },
+  // ── Fields that were missing from FIELD_SPECS but present in the LLM schema.
+  // Without these, the LLM's extracted values for these keys are absorbed into
+  // the pipeline row but never promoted to lease_fields, so Lease Review
+  // resolver finds nothing.
+  { key: "rent_commencement_date", group: "dates_term", aliases: ["rent_commencement_date", "rent_start_date", "commencement_of_rent"], patterns: [/\b(?:rent\s+commencement\s+date|commencement\s+of\s+rent|rent\s+start\s+date|rent\s+commencement)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  // escalation_rate = initial-term annual increase.  renewal_escalation_percent
+  // (line 200) covers the renewal-period escalation separately.
+  { key: "escalation_rate", group: "rent_terms", aliases: ["escalation_rate", "annual_escalation", "base_rent_escalation"], patterns: [/\b(?:annual|base)\s+rent\b[^\n]{0,60}\bincreases?\s+by\s*(\d{1,2}(?:\.\d+)?)\s*%/i, /\bescalation\s+rate\b[:\s]+(\d{1,2}(?:\.\d+)?)\s*%/i, /\brent\b[^\n]{0,60}(?:increases?|escalates?)\s+(?:by\s+)?(\d{1,2}(?:\.\d+)?)\s*%[^\n]{0,40}(?:year|annual|each)/i] },
+  // CAM structure fields — schema uses *_pct / *_percent suffixes that the LLM
+  // returns verbatim; aliases bridge to whatever the workflow/UI key is.
+  { key: "cam_cap_pct", group: "expense_terms", aliases: ["cam_cap_pct", "cam_cap_percent", "cap_percent", "controllable_cap_percent"], patterns: [/\b(?:cam\s+cap|controllable\s+(?:expense|operating\s+expense)s?\s+(?:cap|shall\s+not\s+increase)|operating\s+expense\s+cap)\b[^\n]{0,80}?(\d{1,2}(?:\.\d+)?)\s*%/i, /\bcontrollable\b[^\n]{0,80}?(?:not\s+(?:more|greater)\s+than|no\s+more\s+than)[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i] },
+  { key: "gross_up_enabled", group: "expense_terms", aliases: ["gross_up_enabled", "grossup_enabled"], patterns: [/\bgross[\s-]up\b/i] },
+  { key: "gross_up_threshold", group: "expense_terms", aliases: ["gross_up_threshold", "gross_up_percent", "grossup_threshold"], patterns: [/\bgross[\s-]up\b[^\n]{0,80}?(\d{2,3})\s*%/i, /(?:less\s+than|below|under)\s+(\d{2,3})\s*%\s+(?:occupied|occupancy)[^\n]{0,80}?(?:gross[\s-]?up|variable\s+expenses?)/i, /gross[\s-]up[^\n]{0,60}?(?:as\s+if|to\s+reflect)[^\n]{0,40}?(\d{2,3})\s*%\s+(?:occupied|occupancy)/i] },
+  { key: "hvac_responsibility", group: "expense_terms", aliases: ["hvac_responsibility", "hvac"], patterns: [/\bhvac\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i] },
 ];
 
 function cleanText(value: unknown) {
@@ -1510,8 +1524,24 @@ function deriveExpenseRules(
   const textBlocks = asArray(doclingRaw?.text_blocks);
   const explicitBaseYear = asNumber(fieldMap.base_year_expense_amount?.value) ?? asNumber(fieldMap.base_year?.value);
   const explicitExpenseStop = asNumber(fieldMap.expense_stop_amount?.value);
-  const explicitAdminFee = asNumber(row?.admin_fee_pct);
-  const explicitGrossUp = asNumber(row?.gross_up_percent ?? row?.cam_cap_rate);
+  // admin_fee_pct — schema key used by LLM; also read from fieldMap for cases
+  // where the FIELD_SPEC populated it via pattern matching.
+  const explicitAdminFee = asNumber(fieldMap.admin_fee_pct?.value ?? row?.admin_fee_pct);
+  // gross_up — schema key is gross_up_threshold (LLM/FIELD_SPEC); legacy row
+  // key is gross_up_percent; keep both for back-compat.
+  const explicitGrossUp = asNumber(
+    fieldMap.gross_up_threshold?.value
+    ?? row?.gross_up_threshold
+    ?? row?.gross_up_percent
+    ?? row?.cam_cap_rate,
+  );
+  // cam_cap_pct — controllable/CAM cap percentage extracted by LLM or patterns.
+  const explicitCapPercent = asNumber(
+    fieldMap.cam_cap_pct?.value
+    ?? row?.cam_cap_pct
+    ?? row?.cam_cap_percent
+    ?? row?.cap_percent,
+  );
 
   return finalizeDerivedExpenseRules(EXPENSE_RULE_BLUEPRINTS.map((blueprint) => {
     const supportingClause = findSupportingClauseForRule(clauses, textBlocks, fullText, blueprint.keywords);
@@ -1525,7 +1555,11 @@ function deriveExpenseRules(
     let allocationBasis = fieldMap.tenant_pro_rata_share?.value != null ? "rentable_area" : "manual";
     let capType = "none";
     let capAmount = null;
-    let capPercent = null;
+    // For CAM-eligible rules, seed capPercent from the extracted
+    // controllable/CAM cap value (cam_cap_pct / controllable_cap_percent).
+    // This surfaces in deriveCamProfile as cam_cap_percent without changing
+    // any calculation logic — deriveCamProfile only reads from expenseRules.
+    let capPercent = blueprint.camLike ? explicitCapPercent : null;
     let baseYear = null;
     let expenseStopAmount = null;
     let adminFeePercent = explicitAdminFee;

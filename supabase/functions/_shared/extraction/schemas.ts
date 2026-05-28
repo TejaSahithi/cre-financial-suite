@@ -237,6 +237,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     description:
       "The base rent paid PER MONTH in USD (plain number, no $ or commas). " +
       "ONLY use the number explicitly described as 'per month', 'monthly', or 'monthly rent'. " +
+      "If the lease shows a rent schedule table with multiple rows (e.g. year-over-year escalations), " +
+      "extract the FIRST NON-ZERO 'Monthly Base Rent' value — that is the first PAID period, " +
+      "skipping any $0 free-rent / rent-abatement period at the start. " +
       "NEVER use annual rent or year totals; if only an annual figure is shown, leave monthly_rent NULL " +
       "and the calculator will derive it.",
   },
@@ -416,7 +419,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["escalation", "annual increase", "rent increase", "escalation rate", "annual escalation"],
     tableHeaders: ["escalation", "escalation_rate", "increase", "annual increase", "esc rate"],
     patterns: [/(?:annual\s+)?(?:escalation|increase|adjustment)[:\s]+([\d.]+)\s*%/i],
-    description: "Annual rent escalation as plain percentage (e.g., 3 for 3%)",
+    description:
+      "Annual rent escalation for the INITIAL term as a plain percentage (e.g. 3 for '3.00% per year'). " +
+      "Look for phrases like 'annual base rent increases by X%', 'rent escalates X% per year', " +
+      "'3.00% increase on each anniversary', or a rent escalation % column in a rent schedule table.",
   },
   renewal_options: {
     type: "string",
@@ -603,19 +609,25 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "number",
     min: 0,
     max: 100,
-    labels: ["cam cap percent", "cam cap"],
+    labels: ["cam cap percent", "cam cap", "controllable expense cap", "operating expense cap"],
     tableHeaders: ["cam_cap_pct"],
     patterns: [/\bcam\b[^\n]{0,80}?(?:cap|increase)[^\n]{0,30}?(\d{1,2}(?:\.\d+)?)\s*%/i],
-    description: "Annual cap percentage on CAM increases (e.g. 5 for 5%)",
+    description:
+      "Annual cap percentage on CAM or controllable operating expense increases. " +
+      "May be labeled 'CAM cap', 'controllable expense cap', 'controllable operating expenses shall not " +
+      "increase by more than X%', or 'operating expense cap' (e.g. 6 for '6.00% per year cumulative').",
   },
   admin_fee_pct: {
     type: "number",
     min: 0,
     max: 100,
-    labels: ["admin fee", "administrative fee", "management fee"],
+    labels: ["admin fee", "administrative fee", "management fee", "administrative expenses"],
     tableHeaders: ["admin_fee_pct"],
     patterns: [/(?:admin(?:istrative)?\s+fee|management\s+fee)[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i],
-    description: "Administrative fee percentage charged on CAM (e.g. 15 for 15%)",
+    description:
+      "Administrative or management fee percentage on recoverable CAM/operating expenses. " +
+      "May be labeled 'administrative expenses not to exceed X% of recoverable expenses', " +
+      "'admin fee X%', or 'management fee not exceeding X%' (e.g. 4 for '4.00% of recoverable expenses').",
   },
   management_fee_basis: {
     type: "enum",
@@ -643,10 +655,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "number",
     min: 0,
     max: 100,
-    labels: ["gross up threshold", "gross-up threshold"],
+    labels: ["gross up threshold", "gross-up threshold", "gross up occupancy"],
     tableHeaders: ["gross_up_threshold"],
     patterns: [/\bgross[\s-]up\b[^\n]{0,40}?(\d{1,3})\s*%/i],
-    description: "Occupancy percentage threshold for gross-up (typically 95%)",
+    description:
+      "Occupancy percentage threshold at which the lease grosses up variable expenses. " +
+      "Look for 'if the Building is less than X% occupied' or 'gross up to reflect X% occupancy'. " +
+      "Typically 90 or 95 (e.g. 95 for '95% occupied').",
   },
 
   // ─── Insurance ──────────────────────────────────────────────────────
@@ -1297,8 +1312,16 @@ const LEASE_GROUPS: FieldGroup[] = [
     fields: ["monthly_rent", "annual_rent", "amended_base_rent_for_additional_year", "rent_per_sf", "security_deposit", "cam_amount", "escalation_rate", "escalation_type", "escalation_timing", "billing_frequency"],
     hint:
       "Extract base rent values EXACTLY as labeled in the lease. " +
+      "If the lease shows a STEPPED RENT SCHEDULE table (multiple rows for different periods), " +
+      "extract the FIRST NON-ZERO Monthly Base Rent row — this is the first paid period, " +
+      "after any free-rent / rent-abatement period where Monthly Base Rent = $0. " +
+      "For example, if row 1 is '$0.00 (Free Rent)' and row 2 is '$18,562.50 (Initial paid rent)', " +
+      "extract monthly_rent = 18562.50 and annual_rent = 222750 from row 2. " +
       "monthly_rent must be the per-month rent; annual_rent must be the per-year rent. " +
-      "If only one is present, leave the other NULL — the system will derive it. " +
+      "If only one is present, leave the other NULL. " +
+      "escalation_rate: the fixed annual percentage increase (e.g. 3 for '3.00% per year' or " +
+      "'annual base rent increases by 3.00%'). " +
+      "security_deposit: look for 'Cash Security Deposit', 'Security Deposit', or 'Deposit' labeled rows. " +
       "escalation_type: fixed_pct / cpi / stepped / fmv / none. " +
       "billing_frequency: monthly / quarterly / annual.",
   },
@@ -1322,12 +1345,20 @@ const LEASE_GROUPS: FieldGroup[] = [
     name: "cam_structure",
     fields: ["cam_cap_type", "cam_cap_pct", "admin_fee_pct", "management_fee_basis", "hvac_responsibility", "gross_up_enabled", "gross_up_threshold"],
     hint:
-      "Extract CAM (Common Area Maintenance) structural rules. " +
-      "cap_type: cumulative / non_cumulative / compounding / none. " +
-      "cap_pct: annual percentage cap on CAM increases (e.g. 5 for 5%). " +
-      "admin_fee_pct: percentage admin/management fee on CAM (e.g. 15 for 15%). " +
-      "gross_up_enabled: true if the lease includes a gross-up provision. " +
-      "gross_up_threshold: occupancy % the lease grosses up to (typically 95).",
+      "Extract CAM (Common Area Maintenance) and operating expense structural rules. " +
+      "cam_cap_type: cumulative / non_cumulative / compounding / none. " +
+      "cam_cap_pct: the annual percentage cap on CAM or controllable operating expense increases. " +
+      "  In leases this may be labeled 'Controllable Expense Cap', 'CAM cap', or " +
+      "  'controllable operating expenses shall not increase by more than X% per year' (e.g. 6 for 6.00%). " +
+      "admin_fee_pct: the administrative or management fee percentage on recoverable/CAM expenses. " +
+      "  Look for 'administrative expenses not exceeding X% of recoverable operating expenses' or " +
+      "  'management fee not exceeding X%' (e.g. 4 for 4.00%, or 3 for 3.00%). " +
+      "management_fee_basis: what mgmt fees are calculated on — cam_pool_pro_rata / tenant_annual_rent / gross_rent / fixed. " +
+      "  'Not exceeding X% of gross collected revenue' → gross_rent. " +
+      "gross_up_enabled: true if the lease contains a gross-up provision (look for 'gross-up' or 'gross up'). " +
+      "gross_up_threshold: the occupancy % at which gross-up applies. " +
+      "  Look for 'if the Building is less than X% occupied ... gross up' (e.g. 95 for 95% occupied). " +
+      "hvac_responsibility: landlord / tenant / shared — who maintains HVAC.",
   },
   {
     name: "insurance",

@@ -127,6 +127,7 @@ function buildFieldGroupPrompt(
   fieldDefs: Record<string, FieldDef>,
   textSnippet: string,
   moduleType: string,
+  isFileMode = false,
 ): string {
   const fieldDescriptions = group.fields
     .map((f) => {
@@ -143,6 +144,19 @@ function buildFieldGroupPrompt(
     .filter(Boolean)
     .join("\n");
 
+  // When file bytes are attached (isFileMode), the text snippet is often only
+  // page 1 of a multi-page PDF. Explicitly direct the model to use the full
+  // attached document so values on pages 2+ are not missed.
+  const snippetLabel = isFileMode
+    ? "TEXT EXCERPT — page 1 only (values may be on later pages; use the ATTACHED PDF)"
+    : "TEXT SNIPPET (May contain OCR fragments/errors)";
+  const importantNote = isFileMode
+    ? "IMPORTANT: The COMPLETE lease document is attached as a PDF. Extract values from the ATTACHED FILE — do not limit yourself to the text excerpt above. Values such as rent schedules, security deposits, CAM caps, gross-up provisions, and escalation rates are often on pages 2 or later and are only in the attached file. Use the text excerpt as a supplement, not the sole source."
+    : "IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Use context to infer the correct values where possible.";
+  const noTextFallback = isFileMode
+    ? "(No extracted text — use the ATTACHED PDF document exclusively)"
+    : "[No text provided, refer to the attached visual document]";
+
   return `Extract these ${moduleType} fields from the text below.
 Context: ${group.hint}
 
@@ -151,12 +165,12 @@ FIELDS TO EXTRACT (return null if not found):
 ${fieldDescriptions}
 }
 
-TEXT SNIPPET (May contain OCR fragments/errors):
+${snippetLabel}:
 ───────────────────────────
-${textSnippet || "[No text provided, refer to the attached visual document]"}
+${textSnippet || noTextFallback}
 ───────────────────────────
 
-IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Use context to infer the correct values where possible.
+${importantNote}
 Return ONLY a JSON object with the field keys above. Nothing else.`;
 }
 
@@ -507,6 +521,9 @@ async function fillMissingFieldsForRecords(
     const snippet = buildRelevantSnippet(docling, allLabels, 16000);
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
     diag.groups_attempted += 1;
+    // Note: buildMultiRowPrompt is for multi-record extraction; file-mode
+    // directive is embedded in the system prompt (LLM_SYSTEM_PROMPT rule 16)
+    // rather than repeated here to avoid conflicting instructions.
 
     try {
       const result = await callVertexAndParse(
@@ -593,7 +610,7 @@ async function extractFieldGroups(
 
     // Build a focused snippet instead of sending entire chunks
     const snippet = buildRelevantSnippet(docling, labels, 16000);
-    const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType);
+    const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType, Boolean(input.fileBase64));
     diag.groups_attempted += 1;
 
     try {
