@@ -1,4 +1,5 @@
 // @ts-nocheck
+// v2 — shared extraction module updates (FIELD_SPECS, prompt, classifyLeaseType)
 /**
  * normalize-pdf-output — Step 3 of the canonical pipeline
  *
