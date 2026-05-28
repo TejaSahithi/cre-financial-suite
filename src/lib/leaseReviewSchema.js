@@ -603,6 +603,8 @@ const CALCULATED_ACCEPT_FIELD_KEY_PATTERNS = [
   /(^|_)lease_term($|_)/,
   /(^|_)term_months($|_)/,
   /(^|_)lease_term_months($|_)/,
+  /(^|_)monthly_rent($|_)/,
+  /(^|_)base_rent_monthly($|_)/,
   /(^|_)annual_rent($|_)/,
   /(^|_)base_rent_annual($|_)/,
   /(^|_)rent_per_sf($|_)/,
