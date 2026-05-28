@@ -9,7 +9,7 @@
  * additive and non-breaking.
  */
 
-import { resolveLeaseField } from "./leaseFieldResolver";
+import { resolveLeaseField, getFieldAliases } from "./leaseFieldResolver";
 export const REVIEW_STATUSES = {
   PENDING: "pending",
   ACCEPTED: "accepted",
@@ -587,15 +587,64 @@ export function resolveFieldColumns(key) {
 export function readFieldEvidence(lease, key) {
   if (!lease) return { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
   const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
-  if (!resolved) return { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
-  
+
+  // Probe richer evidence sources directly. When the value lives on a
+  // lease top-level column (primitive number / string), the resolver
+  // returns just the primitive with no source_page / source_text /
+  // extraction_status attached. The evidence and status actually live on
+  // workflow_output.lease_fields[<alias>] or extraction_data.fields[key]
+  // / .field_evidence[key]. Without this probe, calculated values
+  // surface as "Missing Source Evidence" and Page stays blank.
+  const aliases = getFieldAliases(key);
+  const richSources = [
+    lease?.extraction_data?.fields,
+    lease?.extraction_data?.field_evidence,
+    lease?.extraction_data?.workflow_output?.lease_fields,
+    lease?.extraction_data?.workflow_output?.records?.[0]?.lease_fields,
+    lease?.abstract_snapshot?.field_evidence,
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.fields,
+    lease?.uploaded_file?.ui_review_payload?.records?.[0]?.fields,
+  ].filter((src) => src && typeof src === "object");
+
+  let evSourcePage = resolved?.sourcePage ?? null;
+  let evSourceText = resolved?.exactSourceText ?? null;
+  let evRawValue = resolved?.rawValue ?? null;
+  let evExtractionStatus = resolved?.reviewStatus ?? null;
+
+  for (const source of richSources) {
+    if (evSourcePage != null && evSourceText && evExtractionStatus) break;
+    let entry = null;
+    for (const alias of aliases) {
+      if (source[alias]) { entry = source[alias]; break; }
+    }
+    if (!entry || typeof entry !== "object") continue;
+    if (evSourcePage == null) {
+      evSourcePage = entry.source_page ?? entry.sourcePage ?? entry.page_number ?? entry.page
+        ?? entry.evidence?.source_page ?? entry.evidence?.page_number ?? entry.evidence?.page
+        ?? null;
+    }
+    if (!evSourceText) {
+      evSourceText = entry.exact_source_text ?? entry.exactSourceText ?? entry.source_clause
+        ?? entry.source_text ?? entry.snippet ?? entry.evidence?.source_clause
+        ?? entry.evidence?.source_text ?? entry.evidence?.exact_source_text ?? null;
+    }
+    if (!evRawValue) {
+      evRawValue = entry.raw_value ?? entry.rawValue ?? null;
+    }
+    if (!evExtractionStatus) {
+      evExtractionStatus = entry.extraction_status ?? entry.extractionStatus
+        ?? entry.review_status ?? entry.reviewStatus ?? null;
+    }
+  }
+
   return {
-    rawValue: resolved.rawValue ?? null,
-    sourcePage: resolved.sourcePage !== null && resolved.sourcePage !== undefined && resolved.sourcePage !== ""
-      ? Number(resolved.sourcePage)
-      : null,
-    sourceText: resolved.exactSourceText ?? null,
-    extractionStatus: resolved.reviewStatus ?? null,
+    rawValue: evRawValue,
+    sourcePage:
+      evSourcePage !== null && evSourcePage !== undefined && evSourcePage !== ""
+        ? Number(evSourcePage)
+        : null,
+    sourceText: evSourceText ?? null,
+    extractionStatus: evExtractionStatus,
   };
 }
 

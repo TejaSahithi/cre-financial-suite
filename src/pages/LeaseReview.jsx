@@ -3164,6 +3164,12 @@ export default function LeaseReview() {
               .update({ extraction_data: nextExtraction })
               .eq("id", lease.id);
             if (updateErr) throw updateErr;
+            // Seed the cache with the new extraction_data immediately so the
+            // drawer / table re-render before the invalidation refetch
+            // round-trips. Previously only invalidateQueries fired here,
+            // which made the UI lag behind the actual save and looked like
+            // "Save Evidence isn't reflecting".
+            updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
             await logAudit({
               entityType: "LeaseFieldReview",
               entityId: lease.id,
