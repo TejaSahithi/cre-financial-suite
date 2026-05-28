@@ -242,7 +242,7 @@ function buildReviewPayload(opts: {
       let inferredStatus = value == null || value === ""
         ? "missing"
         : hasEvidence
-          ? (workflowField?.extraction_status ?? "extracted")
+          ? (workflowField?.extraction_status === "calculated" ? "calculated" : "extracted")
           : "missing_source_evidence";
       // Low-confidence gate: never present a low-confidence value as a
       // confirmed extraction. Downgrade to needs_review so the UI shows the
@@ -254,10 +254,15 @@ function buildReviewPayload(opts: {
       ) {
         inferredStatus = "needs_review";
       }
+      const workflowStatus = String(workflowField?.extraction_status ?? "").toLowerCase();
       const finalStatus =
         inferredStatus === "needs_review"
           ? "needs_review"
-          : (workflowField?.extraction_status ?? inferredStatus);
+          : workflowStatus === "calculated"
+            ? "calculated"
+            : workflowStatus === "manual_required"
+              ? "manual_required"
+              : inferredStatus;
       return buildReviewField({
         recordIndex: index,
         fieldKey,

@@ -267,8 +267,8 @@ function isGenericSourceText(value: unknown) {
   const text = cleanText(value);
   if (!text) return true;
   const lower = text.toLowerCase();
-  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
-  if (lower.includes("derived from")) return true;
+  if (/^(llm extracted|extracted|manual_review|manual review|workflow placeholder|not found|unknown|n\/a|na|null|none|missing)$/i.test(text)) return true;
+  if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(lower)) return true;
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
   return false;
@@ -2200,6 +2200,14 @@ export function buildLeaseWorkflowAbstraction(args: {
       if (field.extraction_status === "extracted") field.extraction_status = "missing_source_evidence";
       return count + 1;
     }
+    if (
+      !isBlank(field?.value) &&
+      field?.extraction_status === "extracted" &&
+      !field?.source_clause &&
+      !Number.isFinite(Number(field?.source_page))
+    ) {
+      field.extraction_status = "missing_source_evidence";
+    }
     return count;
   }, 0);
   const assignmentItems = extractedDocumentItems.filter((item) =>
@@ -2327,8 +2335,16 @@ export function buildLeaseWorkflowAbstraction(args: {
     validations,
     summary: {
       extracted_field_count: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
+      extracted_source_backed_count: Object.values(leaseFields).filter((field) =>
+        field.extraction_status === "extracted" &&
+        !isBlank(field.value) &&
+        Number.isFinite(Number(field.confidence_score)) &&
+        (!isBlank(field.source_clause) || Number.isFinite(Number(field.source_page)))
+      ).length,
+      missing_source_evidence_count: Object.values(leaseFields).filter((field) => field.extraction_status === "missing_source_evidence").length,
       calculated_field_count: Object.values(leaseFields).filter((field) => field.extraction_status === "calculated").length,
       manual_required_count: Object.values(leaseFields).filter((field) => field.extraction_status === "manual_required").length,
+      not_found_count: Object.values(leaseFields).filter((field) => field.extraction_status === "not_found").length,
       conflict_count: Object.values(leaseFields).filter((field) => field.extraction_status === "conflict_detected").length,
       clause_count: clauses.filter((clause) => clause.clause_text).length,
       extracted_document_item_count: extractedDocumentItems.length,
@@ -2357,6 +2373,16 @@ export function buildLeaseWorkflowAbstraction(args: {
       // (in normalize-pdf-output's extractionDebug) reflects what RAN.
       vision_pages_available: pdfPageCountTotal,
       fixed_fields_extracted: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
+      extracted_source_backed_count: Object.values(leaseFields).filter((field) =>
+        field.extraction_status === "extracted" &&
+        !isBlank(field.value) &&
+        Number.isFinite(Number(field.confidence_score)) &&
+        (!isBlank(field.source_clause) || Number.isFinite(Number(field.source_page)))
+      ).length,
+      missing_source_evidence_count: Object.values(leaseFields).filter((field) => field.extraction_status === "missing_source_evidence").length,
+      calculated_count: Object.values(leaseFields).filter((field) => field.extraction_status === "calculated").length,
+      manual_count: Object.values(leaseFields).filter((field) => field.extraction_status === "manual_required").length,
+      not_found_count: Object.values(leaseFields).filter((field) => field.extraction_status === "not_found").length,
       dynamic_items_extracted: extractedDocumentItems.length,
       dynamic_items_displayed: extractedDocumentItems.filter((item) => item.creates_dynamic_row && item.display_tab !== "clause_records").length,
       mapped_items_count: extractedDocumentItems.filter((item) => item.maps_to_fixed_field).length,

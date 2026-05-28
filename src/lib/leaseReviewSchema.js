@@ -577,6 +577,48 @@ export function readFieldValue(lease, key) {
   return resolved?.value ?? null;
 }
 
+export function cleanSourceEvidenceText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (/^(llm extracted|extracted|manual_review|manual review|workflow placeholder|not found|unknown|n\/a|na|null|none|missing)$/i.test(text)) return null;
+  if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(text)) return null;
+  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
+  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
+  return text;
+}
+
+export function isCalculatedExtractionStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return normalized === "calculated" || normalized === "derived" || normalized === "computed";
+}
+
+export function isManualExtractionStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return normalized === "manual" || normalized === "manual_required" || normalized === "manually_edited";
+}
+
+export function hasValidSourceEvidence(evidence = {}) {
+  const page = evidence?.sourcePage ?? evidence?.source_page ?? evidence?.page_number ?? evidence?.page;
+  const hasPage = page !== null && page !== undefined && page !== "" && Number.isFinite(Number(page));
+  const sourceText = cleanSourceEvidenceText(
+    evidence?.sourceText
+      ?? evidence?.source_text
+      ?? evidence?.exact_source_text
+      ?? evidence?.source_clause
+      ?? evidence?.snippet,
+  );
+  return hasPage || Boolean(sourceText);
+}
+
+export function isSourceBackedField({ value, confidence, evidence, extractionStatus } = {}) {
+  if (!isMeaningfulValue(value)) return false;
+  if (isCalculatedExtractionStatus(extractionStatus)) return false;
+  if (isManualExtractionStatus(extractionStatus)) return false;
+  if (typeof confidence !== "number" || Number.isNaN(confidence)) return false;
+  return hasValidSourceEvidence(evidence);
+}
+
 // Resolve which lease columns to write for a given review field key. Edits
 // to commencement_date should also update the legacy start_date column so
 // downstream code that reads either keeps working.
@@ -603,30 +645,31 @@ export function readFieldEvidence(lease, key) {
     lease?.extraction_data?.workflow_output?.records?.[0]?.lease_fields,
     lease?.abstract_snapshot?.field_evidence,
     lease?.uploaded_files?.ui_review_payload?.records?.[0]?.fields,
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.standard_fields,
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.custom_fields,
     lease?.uploaded_file?.ui_review_payload?.records?.[0]?.fields,
+    lease?.uploaded_file?.ui_review_payload?.records?.[0]?.standard_fields,
+    lease?.uploaded_file?.ui_review_payload?.records?.[0]?.custom_fields,
   ].filter((src) => src && typeof src === "object");
 
   let evSourcePage = resolved?.sourcePage ?? null;
-  const cleanSourceText = (value) => {
-    const text = String(value ?? "").trim();
-    if (!text) return null;
-    const lower = text.toLowerCase();
-    if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
-    if (lower.includes("derived from")) return null;
-    if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
-    if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
-    return text;
-  };
-
-  let evSourceText = cleanSourceText(resolved?.exactSourceText);
+  let evSourceText = cleanSourceEvidenceText(resolved?.exactSourceText);
   let evRawValue = resolved?.rawValue ?? null;
   let evExtractionStatus = resolved?.reviewStatus ?? null;
 
   for (const source of richSources) {
     if (evSourcePage != null && evSourceText && evExtractionStatus) break;
     let entry = null;
-    for (const alias of aliases) {
-      if (source[alias]) { entry = source[alias]; break; }
+    if (Array.isArray(source)) {
+      entry = source.find((item) => {
+        if (!item || typeof item !== "object") return false;
+        const itemKey = item.field_key ?? item.key ?? item.name ?? item.item_type;
+        return aliases.includes(getFieldAliases(itemKey)[0]);
+      });
+    } else {
+      for (const alias of aliases) {
+        if (source[alias]) { entry = source[alias]; break; }
+      }
     }
     if (!entry || typeof entry !== "object") continue;
     if (evSourcePage == null) {
@@ -635,7 +678,7 @@ export function readFieldEvidence(lease, key) {
         ?? null;
     }
     if (!evSourceText) {
-      evSourceText = cleanSourceText(entry.exact_source_text ?? entry.exactSourceText ?? entry.source_clause
+      evSourceText = cleanSourceEvidenceText(entry.exact_source_text ?? entry.exactSourceText ?? entry.source_clause
         ?? entry.source_text ?? entry.snippet ?? entry.evidence?.source_clause
         ?? entry.evidence?.source_text ?? entry.evidence?.exact_source_text ?? null);
     }
@@ -695,6 +738,7 @@ export const EXTRACTION_STATUSES = {
   EXTRACTED: "extracted",
   EXTRACTED_NO_CONFIDENCE: "extracted_no_confidence",
   NOT_FOUND: "not_found",
+  NEEDS_REVIEW: "needs_review",
   MANUAL_REQUIRED: "manual_required",
   MISSING: "missing",
   MISSING_SOURCE_EVIDENCE: "missing_source_evidence",
@@ -706,6 +750,7 @@ export const EXTRACTION_STATUS_LABELS = {
   extracted: "Extracted",
   extracted_no_confidence: "Extracted (no confidence)",
   not_found: "Not Found",
+  needs_review: "Needs Review",
   manual_required: "Manual Required",
   missing: "Missing",
   missing_source_evidence: "Missing Source Evidence",
@@ -717,6 +762,7 @@ export const EXTRACTION_STATUS_STYLES = {
   extracted: "bg-emerald-50 text-emerald-700",
   extracted_no_confidence: "bg-slate-100 text-slate-700",
   not_found: "bg-amber-50 text-amber-700",
+  needs_review: "bg-amber-100 text-amber-800",
   manual_required: "bg-purple-50 text-purple-700",
   missing: "bg-slate-100 text-slate-600",
   missing_source_evidence: "bg-amber-100 text-amber-800",
@@ -737,17 +783,34 @@ export const EXTRACTION_STATUS_STYLES = {
  * never infer it client-side because it implies a policy decision.
  */
 export function resolveExtractionStatus(lease, key, { value, confidence, evidence } = {}) {
-  const explicit = evidence?.extractionStatus;
-  if (explicit) return explicit;
-  const present = value !== null && value !== undefined && value !== "";
-  const hasEvidence = Boolean(
-    evidence?.sourcePage
-    || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
-    || evidence?.rawValue,
-  );
+  const explicit = String(evidence?.extractionStatus || "").trim().toLowerCase();
+  const present = isMeaningfulValue(value);
+  const hasEvidence = hasValidSourceEvidence(evidence);
+
+  if (explicit) {
+    if (isCalculatedExtractionStatus(explicit)) return EXTRACTION_STATUSES.CALCULATED;
+    if (isManualExtractionStatus(explicit)) return explicit;
+    if (explicit === EXTRACTION_STATUSES.EXTRACTED) {
+      if (!present) return EXTRACTION_STATUSES.NOT_FOUND;
+      if (!hasEvidence) return EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE;
+      return typeof confidence === "number" && !Number.isNaN(confidence)
+        ? EXTRACTION_STATUSES.EXTRACTED
+        : EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE;
+    }
+    if (explicit === EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE && !hasEvidence) {
+      return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;
+    }
+    if (explicit === EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE) {
+      return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;
+    }
+    if (explicit === EXTRACTION_STATUSES.NEEDS_REVIEW) return explicit;
+    if (explicit === EXTRACTION_STATUSES.NOT_FOUND || explicit === EXTRACTION_STATUSES.MISSING) return explicit;
+    if (explicit === EXTRACTION_STATUSES.CONFLICT) return explicit;
+  }
+
   if (present) {
     if (!hasEvidence) return EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE;
-    return typeof confidence === "number"
+    return typeof confidence === "number" && !Number.isNaN(confidence)
       ? EXTRACTION_STATUSES.EXTRACTED
       : EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE;
   }

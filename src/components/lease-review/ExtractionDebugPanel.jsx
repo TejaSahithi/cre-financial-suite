@@ -15,6 +15,10 @@ import {
   readFieldConfidence,
   readFieldEvidence,
   resolveExtractionStatus,
+  hasValidSourceEvidence,
+  isCalculatedExtractionStatus,
+  isManualExtractionStatus,
+  cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
 
 function prettyJson(value, limit = 4000) {
@@ -193,8 +197,43 @@ export default function ExtractionDebugPanel({ lease }) {
 
   const sourceMatching = reviewTableRows.filter((r) => r.value != null && r.value !== "");
   const missingEvidence = reviewTableRows.filter(
-    (r) => r.value != null && r.value !== "" && !r.sourcePage && !r.sourceText,
+    (r) => r.value != null && r.value !== "" && !hasValidSourceEvidence({ sourcePage: r.sourcePage, sourceText: r.sourceText }),
   );
+  const statusCounts = reviewTableRows.reduce(
+    (acc, row) => {
+      const hasValue = row.value !== null && row.value !== undefined && row.value !== "";
+      const evidence = { sourcePage: row.sourcePage, sourceText: row.sourceText };
+      if (hasValue && row.status === "extracted" && hasValidSourceEvidence(evidence) && typeof row.confidence === "number") {
+        acc.extracted_source_backed_count += 1;
+      }
+      if (hasValue && row.status === "missing_source_evidence") acc.missing_source_evidence_count += 1;
+      if (row.status === "calculated") acc.calculated_count += 1;
+      if (isManualExtractionStatus(row.status)) acc.manual_count += 1;
+      if (row.status === "not_found") acc.not_found_count += 1;
+      return acc;
+    },
+    {
+      extracted_source_backed_count: 0,
+      missing_source_evidence_count: 0,
+      calculated_count: 0,
+      manual_count: 0,
+      not_found_count: 0,
+    },
+  );
+  debugSummary.extracted_source_backed_count = statusCounts.extracted_source_backed_count;
+  debugSummary.missing_source_evidence_count = statusCounts.missing_source_evidence_count;
+  debugSummary.calculated_count = statusCounts.calculated_count;
+  debugSummary.manual_count = statusCounts.manual_count;
+  debugSummary.not_found_count = statusCounts.not_found_count;
+  debugSummary.dynamic_rows_missing_source_count = uniqueItems.filter((item) =>
+    item?.creates_dynamic_row
+    && (item?.value ?? item?.normalized_value ?? item?.raw_value) != null
+    && !hasValidSourceEvidence({
+      sourcePage: item?.source_page ?? item?.page_number ?? item?.page,
+      sourceText: item?.source_text ?? item?.source_clause ?? item?.exact_source_text,
+    })
+  ).length;
+  debugSummary.accept_blocked_missing_source_count = missingEvidence.filter((row) => row.required).length;
 
   // ── Actions ──────────────────────────────────────────────────────────
 
@@ -236,6 +275,14 @@ export default function ExtractionDebugPanel({ lease }) {
       const fieldsWithEvidence = {};
       const evidenceMap = {};
       const confidenceMap = {};
+      const normalizeIncomingExtractionStatus = ({ value, confidence, sourcePage, sourceText, extractionStatus }) => {
+        const explicit = String(extractionStatus || "").trim().toLowerCase();
+        if (isCalculatedExtractionStatus(explicit)) return "calculated";
+        if (isManualExtractionStatus(explicit)) return explicit;
+        if (value == null || value === "") return "not_found";
+        if (!hasValidSourceEvidence({ sourcePage, sourceText })) return "missing_source_evidence";
+        return typeof confidence === "number" && !Number.isNaN(confidence) ? "extracted" : "extracted_no_confidence";
+      };
 
       if (reviewedRow) {
         const allFields = [
@@ -244,20 +291,30 @@ export default function ExtractionDebugPanel({ lease }) {
         ];
         for (const field of allFields) {
           if (!field?.field_key) continue;
+          const sourceText = cleanSourceEvidenceText(field.evidence?.source_clause ?? field.evidence?.source_text);
+          const sourcePage = field.evidence?.page_number ?? field.evidence?.source_page ?? null;
+          const confidence = typeof field.confidence === "number" ? field.confidence : null;
+          const extractionStatus = normalizeIncomingExtractionStatus({
+            value: field.value ?? null,
+            confidence,
+            sourcePage,
+            sourceText,
+            extractionStatus: field.status ?? null,
+          });
           fieldsWithEvidence[field.field_key] = {
             value: field.value ?? null,
-            confidence: typeof field.confidence === "number" ? field.confidence : null,
+            confidence,
             source: field.source ?? null,
-            source_page: field.evidence?.page_number ?? null,
-            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
+            source_page: sourcePage,
+            source_text: sourceText,
             raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
-            extraction_status: field.status ?? null,
+            extraction_status: extractionStatus,
           };
           evidenceMap[field.field_key] = {
             raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
-            source_page: field.evidence?.page_number ?? null,
-            source_text: field.evidence?.source_clause ?? field.evidence?.source_text ?? null,
-            extraction_status: field.status ?? null,
+            source_page: sourcePage,
+            source_text: sourceText,
+            extraction_status: extractionStatus,
           };
           if (typeof field.confidence === "number") {
             confidenceMap[field.field_key] = field.confidence <= 1 ? Math.round(field.confidence * 100) : Math.round(field.confidence);
@@ -265,10 +322,30 @@ export default function ExtractionDebugPanel({ lease }) {
         }
       }
 
+      const isSourceBackedEntry = (entry) =>
+        entry && typeof entry === "object" && hasValidSourceEvidence({
+          sourcePage: entry.source_page,
+          sourceText: entry.source_text,
+        }) && !isCalculatedExtractionStatus(entry.extraction_status);
+      const mergedFields = { ...(lease.extraction_data?.fields || {}) };
+      const mergedEvidence = { ...(lease.extraction_data?.field_evidence || {}) };
+      for (const [key, entry] of Object.entries(fieldsWithEvidence)) {
+        const prev = mergedFields[key];
+        if (isSourceBackedEntry(entry) || !isSourceBackedEntry(prev)) {
+          mergedFields[key] = entry;
+        }
+      }
+      for (const [key, entry] of Object.entries(evidenceMap)) {
+        const prev = mergedEvidence[key];
+        if (isSourceBackedEntry(entry) || !isSourceBackedEntry(prev)) {
+          mergedEvidence[key] = entry;
+        }
+      }
+
       const nextExtraction = {
         ...(lease.extraction_data || {}),
-        fields: { ...(lease.extraction_data?.fields || {}), ...fieldsWithEvidence },
-        field_evidence: { ...(lease.extraction_data?.field_evidence || {}), ...evidenceMap },
+        fields: mergedFields,
+        field_evidence: mergedEvidence,
         confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
         ...(workflowOutputFromFile ? { workflow_output: workflowOutputFromFile } : {}),
         evidence_refreshed_at: new Date().toISOString(),

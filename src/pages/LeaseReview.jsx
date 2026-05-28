@@ -78,6 +78,11 @@ import {
   classifyConfidence,
   hasEvidenceOverride,
   resolveFieldColumns,
+  resolveExtractionStatus,
+  hasValidSourceEvidence,
+  isCalculatedExtractionStatus,
+  isManualExtractionStatus,
+  cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -387,6 +392,17 @@ function collectExtractedDocumentItems(lease) {
       const extractionStatus = typeof entry === "object" && entry
         ? entry.extraction_status ?? entry.extractionStatus ?? entry.review_status ?? entry.reviewStatus ?? null
         : null;
+      const confidence = typeof entry === "object" && entry
+        ? entry.confidence_score ?? entry.confidence ?? null
+        : null;
+      const statusEvidence = { sourcePage, sourceText };
+      const effectiveStatus = isCalculatedExtractionStatus(extractionStatus)
+        ? "calculated"
+        : isManualExtractionStatus(extractionStatus)
+          ? String(extractionStatus).toLowerCase()
+          : hasValidSourceEvidence(statusEvidence)
+            ? (typeof confidence === "number" ? "extracted" : "extracted_no_confidence")
+            : "missing_source_evidence";
       if ((value === null || value === undefined || value === "") && !sourceText) continue;
       fieldMapItems.push({
         item_id: `${sourceName}:${key}`,
@@ -400,11 +416,9 @@ function collectExtractedDocumentItems(lease) {
         raw_value: typeof entry === "object" && entry ? entry.raw_value ?? entry.rawValue ?? value : value,
         source_text: sourceText,
         source_page: sourcePage,
-        confidence: typeof entry === "object" && entry
-          ? entry.confidence_score ?? entry.confidence ?? null
-          : null,
+        confidence,
         extraction_method: sourceName,
-        extraction_status: extractionStatus || (sourceText || sourcePage ? "extracted" : "missing_source_evidence"),
+        extraction_status: effectiveStatus,
         maps_to_existing_field: false,
         maps_to_fixed_field: false,
         creates_dynamic_row: true,
@@ -1338,8 +1352,8 @@ export default function LeaseReview() {
   //    & re-confirm so evidence is set, or (c) mark Manual Required / N/A.
   const pendingNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
     if (isResolvedReview(fieldReviews[key])) return false;
-    const { sourcePage, sourceText, rawValue } = readFieldEvidence(lease, key);
-    return !sourcePage && !sourceText && !rawValue;
+    const evidence = readFieldEvidence(lease, key);
+    return !hasValidSourceEvidence(evidence);
   });
   const acceptedNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
     const review = fieldReviews[key];
@@ -1349,8 +1363,8 @@ export default function LeaseReview() {
     if (status === REVIEW_STATUSES.N_A || status === REVIEW_STATUSES.MANUAL_REQUIRED) return false;
     if (!isResolvedReview(review)) return false;
     if (hasEvidenceOverride(review)) return false;
-    const { sourcePage, sourceText, rawValue } = readFieldEvidence(lease, key);
-    return !sourcePage && !sourceText && !rawValue;
+    const evidence = readFieldEvidence(lease, key);
+    return !hasValidSourceEvidence(evidence);
   });
 
   const approvalBlockers = [];
@@ -1451,8 +1465,8 @@ export default function LeaseReview() {
     const cached = queryClient.getQueryData(["lease", leaseId]);
     const freshLease = Array.isArray(cached) ? (cached[0] ?? lease) : (cached || lease);
     const value = readFieldValue(freshLease, field.key);
-    const { sourcePage, sourceText } = readFieldEvidence(freshLease, field.key);
-    const hasEvidence = sourcePage != null || (typeof sourceText === "string" && sourceText.length > 0);
+    const evidence = readFieldEvidence(freshLease, field.key);
+    const hasEvidence = hasValidSourceEvidence(evidence);
 
     // Manual-override signals: the reviewer can accept without lease
     // evidence by explicitly marking the field as Manual Required, or by
@@ -1466,8 +1480,7 @@ export default function LeaseReview() {
         || "",
     ).toLowerCase();
     const isManualOverride =
-      extractionStatus === "manual_required"
-      || extractionStatus === "manually_edited"
+      isManualExtractionStatus(extractionStatus)
       || fieldRecord.manually_edited === true
       || String(fieldRecord.source || "").toLowerCase() === "manual";
 
@@ -1475,8 +1488,13 @@ export default function LeaseReview() {
       toast.error("Cannot accept a field with no value. Edit, mark N/A, or mark Manual Required.");
       return;
     }
-    if (!hasEvidence && !isManualOverride) {
+    const isCalculated = isCalculatedExtractionStatus(extractionStatus);
+    if (!hasEvidence && !isManualOverride && !isCalculated) {
       toast.error("Cannot accept without source evidence. Edit and confirm the value, or mark Manual Required.");
+      return;
+    }
+    if (isCalculated && field.allowCalculatedAccept !== true) {
+      toast.error("Cannot accept a calculated value as extracted. Edit/confirm it with source evidence, or mark Manual Required.");
       return;
     }
     return persistFieldAction({
@@ -2202,26 +2220,42 @@ export default function LeaseReview() {
       const fieldsWithEvidence = {};
       const evidenceMap = {};
       const confidenceMap = {};
+      const normalizeIncomingExtractionStatus = ({ value, confidence, sourcePage, sourceText, extractionStatus }) => {
+        const explicit = String(extractionStatus || "").trim().toLowerCase();
+        if (isCalculatedExtractionStatus(explicit)) return "calculated";
+        if (isManualExtractionStatus(explicit)) return explicit;
+        if (value == null || value === "") return "not_found";
+        if (!hasValidSourceEvidence({ sourcePage, sourceText })) return "missing_source_evidence";
+        return typeof confidence === "number" && !Number.isNaN(confidence) ? "extracted" : "extracted_no_confidence";
+      };
       const upsertFieldEvidence = (fieldKey, payload = {}) => {
         if (!fieldKey) return;
-        const sourceText = cleanExtractedSourceText(payload.source_text ?? payload.source_clause);
+        const sourceText = cleanSourceEvidenceText(cleanExtractedSourceText(payload.source_text ?? payload.source_clause));
         const sourcePage = payload.source_page ?? payload.page_number ?? null;
         const value = payload.value ?? null;
+        const confidence = typeof payload.confidence === "number" ? payload.confidence : fieldsWithEvidence[fieldKey]?.confidence ?? null;
+        const extractionStatus = normalizeIncomingExtractionStatus({
+          value,
+          confidence,
+          sourcePage,
+          sourceText,
+          extractionStatus: payload.extraction_status ?? fieldsWithEvidence[fieldKey]?.extraction_status ?? null,
+        });
         fieldsWithEvidence[fieldKey] = {
           ...(fieldsWithEvidence[fieldKey] || {}),
           value,
-          confidence: typeof payload.confidence === "number" ? payload.confidence : fieldsWithEvidence[fieldKey]?.confidence ?? null,
+          confidence,
           source: payload.source ?? fieldsWithEvidence[fieldKey]?.source ?? null,
           source_page: sourcePage,
           source_text: sourceText,
           raw_value: payload.raw_value ?? value,
-          extraction_status: payload.extraction_status ?? fieldsWithEvidence[fieldKey]?.extraction_status ?? null,
+          extraction_status: extractionStatus,
         };
         evidenceMap[fieldKey] = {
           raw_value: payload.raw_value ?? value,
           source_page: sourcePage,
           source_text: sourceText,
-          extraction_status: payload.extraction_status ?? null,
+          extraction_status: extractionStatus,
         };
       };
       if (reviewedRow) {
@@ -2306,9 +2340,10 @@ export default function LeaseReview() {
       const SOURCE_BACKED_MIN_THRESHOLD = 3; // need at least N grounded fields to accept the overwrite
       const isSourceBacked = (entry) => {
         if (!entry || typeof entry !== "object") return false;
-        const sp = entry.source_page;
-        const st = entry.source_text;
-        return (sp != null && Number.isFinite(Number(sp))) || (typeof st === "string" && st.trim().length > 0);
+        return hasValidSourceEvidence({
+          sourcePage: entry.source_page,
+          sourceText: entry.source_text,
+        }) && !isCalculatedExtractionStatus(entry.extraction_status);
       };
       const isProtectedField = (key, entry) => {
         if (entry?.manually_edited === true) return true;
@@ -3783,12 +3818,11 @@ function FieldReviewRow({
       : `${Math.round(confidence)}%`;
 
   const inferredExtractionStatus =
-    extractionStatus
-    || (value === null || value === undefined || value === ""
-      ? "missing"
-      : confidenceBucket === "unknown"
-        ? "extracted_no_confidence"
-        : "extracted");
+    resolveExtractionStatus(lease, field.key, {
+      value,
+      confidence,
+      evidence: { rawValue, sourcePage, sourceText, extractionStatus },
+    });
 
   return (
     <Card className={status === REVIEW_STATUSES.PENDING && required ? "border-amber-200" : ""}>

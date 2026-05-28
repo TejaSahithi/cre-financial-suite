@@ -41,6 +41,7 @@ import {
   readFieldEvidence,
   readFieldValue,
   resolveExtractionStatus,
+  hasValidSourceEvidence,
   NUMERIC_REVIEW_FIELDS,
 } from "@/lib/leaseReviewSchema";
 import {
@@ -126,11 +127,7 @@ export default function FieldDetailDrawer({
   }, [open, field?.key]);  
 
   // Whether this field needs an override reason to clear the approval gate.
-  const hasEvidence = Boolean(
-    evidence?.sourcePage
-    || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
-    || evidence?.rawValue,
-  );
+  const hasEvidence = hasValidSourceEvidence(evidence);
   const valuePresent = value !== null && value !== undefined && value !== "";
   const needsOverride =
     field?.required
