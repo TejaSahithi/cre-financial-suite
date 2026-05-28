@@ -77,9 +77,25 @@ function leaseOverlapsExpense(expense, lease) {
   return true;
 }
 
-function resolveDisplayLeaseForExpense(expense, leases = []) {
+function resolveDisplayLeaseForExpense(expense, leases = [], unitsById = new Map()) {
   if (expense?.lease_id) {
     return leases.find((lease) => lease.id === expense.lease_id) || null;
+  }
+
+  const unit = expense?.unit_id ? unitsById.get(expense.unit_id) : null;
+  if (unit?.lease_id) {
+    const unitLease = leases.find((lease) => lease.id === unit.lease_id);
+    if (unitLease && leaseOverlapsExpense(expense, unitLease)) return unitLease;
+  }
+  if (unit?.tenant_id) {
+    const unitTenantLease = leases
+      .filter((lease) => lease.tenant_id === unit.tenant_id && leaseOverlapsExpense(expense, lease))
+      .sort((left, right) => {
+        const leftUnitMatch = left?.unit_id === expense?.unit_id ? 1 : 0;
+        const rightUnitMatch = right?.unit_id === expense?.unit_id ? 1 : 0;
+        return rightUnitMatch - leftUnitMatch;
+      })[0];
+    if (unitTenantLease) return unitTenantLease;
   }
 
   const candidates = (leases || [])
@@ -236,19 +252,25 @@ export default function Expenses() {
     () => new Map((tenants || []).map((tenant) => [tenant.id, tenant])),
     [tenants]
   );
+  const unitById = useMemo(
+    () => new Map((allUnits || []).map((unit) => [unit.id, unit])),
+    [allUnits]
+  );
 
   const displayedExpenses = useMemo(() => {
     return selectorScopedExpenses.map((expense) => {
-      const matchedLease = resolveDisplayLeaseForExpense(expense, leases);
+      const unit = expense.unit_id ? unitById.get(expense.unit_id) || null : null;
+      const matchedLease = resolveDisplayLeaseForExpense(expense, leases, unitById);
       const directTenant =
         tenantById.get(expense.tenant_id) ||
         tenantById.get(matchedLease?.tenant_id) ||
+        tenantById.get(unit?.tenant_id) ||
         null;
       const linkedExpense = matchedLease
         ? {
             ...expense,
             lease_id: expense.lease_id || matchedLease.id || null,
-            tenant_id: expense.tenant_id || matchedLease.tenant_id || null,
+            tenant_id: expense.tenant_id || matchedLease.tenant_id || unit?.tenant_id || null,
             tenant_name:
               expense.tenant_name ||
               matchedLease.tenant_name ||
@@ -261,6 +283,7 @@ export default function Expenses() {
           }
         : {
             ...expense,
+            tenant_id: expense.tenant_id || unit?.tenant_id || null,
             tenant_name:
               expense.tenant_name ||
               directTenant?.tenant_name ||
@@ -334,7 +357,7 @@ export default function Expenses() {
           : (classification.finalized_at || linkedExpense.finalized_at),
       };
     });
-  }, [classificationByExpenseId, leases, selectorScopedExpenses, tenantById]);
+  }, [classificationByExpenseId, leases, selectorScopedExpenses, tenantById, unitById]);
 
   const displayedExpenseById = useMemo(
     () => new Map(displayedExpenses.map((expense) => [expense.id, expense])),
@@ -831,7 +854,7 @@ export default function Expenses() {
                     const matchedVendor = vendors.find(
                       (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
                     );
-                    const matchedLease = resolveDisplayLeaseForExpense(expense, leases);
+                    const matchedLease = resolveDisplayLeaseForExpense(expense, leases, unitById);
                     const tenantName = expense.tenant_name || matchedLease?.tenant_name || "—";
 
                     return (
