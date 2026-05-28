@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createPageUrl } from "@/utils";
+import { resolveTenantForExpense } from "@/lib/tenantResolver";
 
 function normalizeBucket(expense) {
   const status = String(expense?.recoverability_result || expense?.recovery_status || expense?.classification || "needs_review").toLowerCase();
@@ -86,6 +87,10 @@ export default function ExpenseReview() {
   const { data: allBuildings = [] } = useOrgQuery("Building");
   const { data: allUnits = [] } = useOrgQuery("Unit");
   const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  // Tenants are loaded only for the centralized tenant resolver
+  // (src/lib/tenantResolver.js) — used for the diagnostic tooltip when a
+  // review row has no tenant_name on it.
+  const { data: tenants = [] } = useOrgQuery("Tenant");
 
   const scope = useMemo(
     () =>
@@ -693,6 +698,9 @@ export default function ExpenseReview() {
                 bucket="recoverable"
                 expenses={filteredBuckets.recoverable}
                 scope={scope}
+                leases={leases}
+                units={allUnits}
+                tenants={tenants}
                 isLoading={isLoading}
                 mutation={reviewMutation}
               />
@@ -702,6 +710,9 @@ export default function ExpenseReview() {
                 bucket="non_recoverable"
                 expenses={filteredBuckets.non_recoverable}
                 scope={scope}
+                leases={leases}
+                units={allUnits}
+                tenants={tenants}
                 isLoading={isLoading}
                 mutation={reviewMutation}
               />
@@ -711,6 +722,9 @@ export default function ExpenseReview() {
                 bucket="conditional"
                 expenses={filteredBuckets.conditional}
                 scope={scope}
+                leases={leases}
+                units={allUnits}
+                tenants={tenants}
                 isLoading={isLoading}
                 mutation={reviewMutation}
               />
@@ -720,6 +734,9 @@ export default function ExpenseReview() {
                 bucket="excluded"
                 expenses={filteredBuckets.excluded}
                 scope={scope}
+                leases={leases}
+                units={allUnits}
+                tenants={tenants}
                 isLoading={isLoading}
                 mutation={reviewMutation}
               />
@@ -729,6 +746,9 @@ export default function ExpenseReview() {
                 bucket="needs_review"
                 expenses={filteredBuckets.needs_review}
                 scope={scope}
+                leases={leases}
+                units={allUnits}
+                tenants={tenants}
                 isLoading={isLoading}
                 mutation={reviewMutation}
               />
@@ -740,7 +760,7 @@ export default function ExpenseReview() {
   );
 }
 
-function ExpenseBucketTable({ expenses, scope, isLoading, mutation }) {
+function ExpenseBucketTable({ expenses, scope, leases = [], units = [], tenants = [], isLoading, mutation }) {
   return (
     <Card className="border-slate-200/80">
       <Table>
@@ -774,12 +794,43 @@ function ExpenseBucketTable({ expenses, scope, isLoading, mutation }) {
               const building = expense.building_id ? scope.buildingById.get(expense.building_id) ?? null : null;
               const unit = expense.unit_id ? scope.unitById.get(expense.unit_id) ?? null : null;
               const reviewStatus = normalizeBucket(expense);
+              // Surface a tooltip-friendly diagnostic when tenant cannot be
+              // resolved. Mirrors the behavior on Actual Expenses and
+              // Expense Classification pages.
+              const tenantResolution = resolveTenantForExpense(expense, {
+                leases,
+                units,
+                tenants,
+              });
+              const tenantOrVendor = tenantResolution.tenant?.name || expense.vendor_name || expense.vendor || null;
 
               return (
                 <TableRow key={expense.id}>
                   <TableCell className="text-xs">
                     <div className="font-medium text-slate-900">{expense.description || expense.category || "Expense"}</div>
-                    <div className="mt-1 text-slate-500">{expense.tenant_name || expense.vendor_name || expense.vendor || "—"}</div>
+                    {tenantOrVendor ? (
+                      <div
+                        className="mt-1 text-slate-500"
+                        title={
+                          tenantResolution.tenant?.name
+                            ? `Tenant resolved via ${tenantResolution.source}`
+                            : "No tenant linked — showing vendor"
+                        }
+                      >
+                        {tenantOrVendor}
+                      </div>
+                    ) : (
+                      <div
+                        className="mt-1 inline-flex items-center gap-1 text-slate-400"
+                        title={
+                          tenantResolution.reasonText
+                            ? `No tenant linked: ${tenantResolution.reasonText}`
+                            : "No tenant or vendor linked"
+                        }
+                      >
+                        — <span className="text-amber-500">⚠</span>
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-xs text-slate-600">
                     {[property?.name, building?.name, unit?.unit_number || unit?.unit_id_code].filter(Boolean).join(" / ") || "Unscoped"}

@@ -44,6 +44,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import ClassificationDebugPanel from "@/components/lease-expense/ClassificationDebugPanel";
+import { resolveTenantForExpense } from "@/lib/tenantResolver";
 
 function fmt(value) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value) || 0);
@@ -267,6 +268,8 @@ export default function LeaseExpenseClassification() {
   }, [leases, scope, scopeProperty, scopeBuilding, scopeUnit, scopeLease, scopeTenant, scopeYear]);
 
   const leaseById = useMemo(() => new Map(leases.map((lease) => [lease.id, lease])), [leases]);
+  // Tenant index for the centralized tenant resolver (src/lib/tenantResolver.js).
+  const tenantById = useMemo(() => new Map((tenants || []).map((tenant) => [tenant.id, tenant])), [tenants]);
   const propertyById = useMemo(() => new Map(properties.map((property) => [property.id, property])), [properties]);
   const buildingById = useMemo(() => new Map(buildings.map((building) => [building.id, building])), [buildings]);
   const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
@@ -454,7 +457,21 @@ export default function LeaseExpenseClassification() {
         unit,
         expenseDate: expense.expense_date || expense.date || expense.service_period_start || null,
         vendor: expense.vendor || expense.vendor_name || "-",
-        tenantLabel: expense.tenant_name || lease?.tenant_name || "-",
+        // Centralized tenant resolution + diagnostic. tenantLabel keeps the
+        // legacy string-or-"-" shape so existing renderers stay simple; the
+        // tenantResolution object is also attached for tooltip rendering.
+        ...(() => {
+          const resolution = resolveTenantForExpense(expense, {
+            leases,
+            leaseById,
+            unitById,
+            tenantById,
+          });
+          return {
+            tenantLabel: resolution.tenant?.name || "-",
+            tenantResolution: resolution,
+          };
+        })(),
         ruleLabel: matchedRule
           ? `${matchedRule.expense_category || matchedRule.category_name || "-"}${matchedRule.expense_subcategory ? ` / ${matchedRule.expense_subcategory}` : ""}`
           : "-",
@@ -544,7 +561,12 @@ export default function LeaseExpenseClassification() {
         unit,
         expenseDate: null,
         vendor: "-",
+        // For rule-missing-actual rows there is no actual expense; resolve from
+        // the lease's tenant directly so the diagnostic shape stays consistent.
         tenantLabel: lease?.tenant_name || "-",
+        tenantResolution: lease?.tenant_name
+          ? { tenant: { id: lease.tenant_id || null, name: lease.tenant_name }, source: "matched_lease", reason: null, lease, unit, reasonText: null }
+          : { tenant: null, source: "unresolved", reason: "lease_missing_tenant_id", lease, unit, reasonText: "Matched lease has no tenant_id." },
         ruleLabel: `${rule.expense_category || rule.category_name || "-"}${rule.expense_subcategory ? ` / ${rule.expense_subcategory}` : ""}`,
         amount: c?.amount != null ? Number(c.amount) : null,
         financialAmount: c?.amount != null ? Number(c.financial_amount || c.amount || 0) : 0,
@@ -1281,8 +1303,25 @@ export default function LeaseExpenseClassification() {
                               <div className="text-[11px] text-slate-400">{buildingLabel} / {unitLabel}</div>
                             </TableCell>
                             <TableCell className="text-xs text-slate-500">
-                              <div>{row.lease?.tenant_name || "-"}</div>
-                              <div className="text-[11px] text-slate-400">{row.tenantLabel}</div>
+                              {row.tenantResolution?.tenant?.name ? (
+                                <div title={`Resolved via ${row.tenantResolution.source}`}>
+                                  {row.tenantResolution.tenant.name}
+                                </div>
+                              ) : (
+                                <div
+                                  className="text-slate-400"
+                                  title={
+                                    row.tenantResolution?.reasonText
+                                      ? `No tenant linked: ${row.tenantResolution.reasonText}`
+                                      : "No tenant linked"
+                                  }
+                                >
+                                  — <span className="text-amber-500">⚠</span>
+                                </div>
+                              )}
+                              {row.lease?.tenant_name && row.tenantResolution?.tenant?.name !== row.lease.tenant_name && (
+                                <div className="text-[11px] text-slate-400">via lease: {row.lease.tenant_name}</div>
+                              )}
                             </TableCell>
                             <TableCell className="text-right text-sm font-medium text-slate-700">
                               {row.actualExpenseId ? fmt(row.amount) : <span className="text-slate-300">-</span>}

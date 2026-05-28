@@ -35,6 +35,10 @@ import {
   getEffectiveApprovalStatus,
   getRawReviewStatus,
 } from "@/lib/ruleStatus";
+import {
+  resolveTenantForExpense,
+  ruleRequiresPerTenantAllocation,
+} from "@/lib/tenantResolver";
 
 // Histogram buckets surfaced in the Classification debug panel (Batch B). Every
 // reason returned by getRuleClassificationExclusionReason / getActualClassificationExclusionReason
@@ -3211,6 +3215,35 @@ export const expenseService = {
         `Cannot send to CAM: linked rule is not CAM-eligible (${reason}).`,
         { reason },
       );
+    }
+
+    // ── Tenant resolution gate (tenant resolver, F-tenant) ─────────────
+    // Per-tenant CAM allocation (pro_rata_share / fixed_monthly / base_year /
+    // expense_stop / pass_through / monthly_reimbursement) requires a tenant.
+    // If the linked rule requires per-tenant allocation but the actual
+    // expense has no resolvable tenant, the CAM compute step cannot assign
+    // a share. Block here so the row stays in Expense Review until a tenant
+    // is linked. Rules with property-level allocation (e.g. allocation_basis
+    // = "property") are unaffected.
+    if (expense && ruleRequiresPerTenantAllocation(rule)) {
+      // Cheapest possible lookup — read the lease + unit only if we have ids;
+      // skip the tenants table because tenant_name on the expense or lease is
+      // a sufficient positive signal.
+      const tenantLeases = expense.lease_id
+        ? [await baseLeaseService.get(expense.lease_id).catch(() => null)].filter(Boolean)
+        : [];
+      const resolution = resolveTenantForExpense(expense, {
+        leases: tenantLeases,
+        units: [], // unit-side lookup not available server-side; the resolver
+                   // still resolves via expense.tenant_name / tenant_id / lease.
+        tenants: [],
+      });
+      if (!resolution.tenant?.name && !resolution.tenant?.id) {
+        throw new CamEligibilityError(
+          `Cannot send to CAM: tenant unresolved (${resolution.reason}) but the linked rule requires per-tenant allocation. Link a tenant or lease to the expense in Expense Review first.`,
+          { reason: `tenant_unresolved_${resolution.reason}` },
+        );
+      }
     }
 
     const isAutomatic =

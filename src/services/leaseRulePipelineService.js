@@ -1094,9 +1094,13 @@ export const leaseRulePipelineService = {
     let sourceText = "";
     let uploadedFile = null;
     if (fileId) {
+      // The uploaded_files table has `mime_type` and `file_name`; `is_scanned`
+      // and `file_type` do not exist (PostgREST returned 400 Bad Request when
+      // we asked for them, which silently dropped the whole row including the
+      // docling/normalized/parsed payloads and made re-extract a no-op).
       const { data: file } = await supabase
         .from("uploaded_files")
-        .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, is_scanned, file_type")
+        .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, mime_type, file_name")
         .eq("id", fileId)
         .maybeSingle();
       uploadedFile = file;
@@ -1127,8 +1131,18 @@ export const leaseRulePipelineService = {
           }
         }
 
-        // OCR Fallback for Scanned PDF
-        if (!sourceText && (file.is_scanned || String(file.file_type).toLowerCase().includes('pdf') || String(file.file_type).toLowerCase().includes('image'))) {
+        // OCR Fallback for Scanned PDF.
+        // Detect scanned-ish documents from mime_type and file_name extension
+        // (the columns that actually exist). Reaching this branch already
+        // means the parser produced no usable text — that IS the "scanned"
+        // signal, so the mime/extension check is just a guard to skip OCR
+        // for things like .docx/.csv where Vision won't help.
+        const mime = String(file.mime_type || "").toLowerCase();
+        const fname = String(file.file_name || "").toLowerCase();
+        const looksLikeScannable =
+          mime.includes("pdf") || mime.startsWith("image/")
+          || /\.(pdf|png|jpe?g|tiff?|webp|heic)$/i.test(fname);
+        if (!sourceText && looksLikeScannable) {
           try {
             console.log("Triggering OCR Vision Fallback...");
             const { data: ocrData } = await supabase.functions.invoke("ocr-vision-extract", { body: { fileId } });

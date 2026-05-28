@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { createPageUrl, downloadCSV } from "@/utils";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { resolveTenantForExpense } from "@/lib/tenantResolver";
 
 function normalizeExpenseDate(value) {
   if (!value) return null;
@@ -854,8 +855,14 @@ export default function Expenses() {
                     const matchedVendor = vendors.find(
                       (vendor) => vendor.name?.toLowerCase() === expense.vendor?.toLowerCase() || vendor.id === expense.vendor_id
                     );
-                    const matchedLease = resolveDisplayLeaseForExpense(expense, leases, unitById);
-                    const tenantName = expense.tenant_name || matchedLease?.tenant_name || "—";
+                    // Centralized tenant resolver. Use the page's already-built
+                    // index maps for cheaper lookup.
+                    const tenantResolution = resolveTenantForExpense(expense, {
+                      leases,
+                      leaseById: undefined, // resolver builds its own from `leases`
+                      unitById,
+                      tenantById,
+                    });
 
                     return (
                       <TableRow key={expense.id} className="hover:bg-slate-50">
@@ -872,7 +879,28 @@ export default function Expenses() {
                         <TableCell className="text-xs font-medium text-slate-800">{property?.name || getPropertyName(expense.property_id)}</TableCell>
                         <TableCell className="text-xs text-slate-600">{building?.name || "—"}</TableCell>
                         <TableCell className="text-xs text-slate-600">{unit?.unit_number || unit?.unit_id_code || "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-600">{tenantName}</TableCell>
+                        <TableCell className="text-xs text-slate-600">
+                          {tenantResolution.tenant?.name ? (
+                            <span
+                              title={`Resolved via ${tenantResolution.source}`}
+                              className="text-slate-700"
+                            >
+                              {tenantResolution.tenant.name}
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 text-slate-400"
+                              title={
+                                tenantResolution.reasonText
+                                  ? `No tenant linked: ${tenantResolution.reasonText}`
+                                  : "No tenant linked"
+                              }
+                            >
+                              —
+                              <HelpCircle className="h-3 w-3 text-amber-500" aria-label="tenant unresolved" />
+                            </span>
+                          )}
+                        </TableCell>
                         <TableCell className="text-xs font-medium capitalize">{expense.category?.replace(/_/g, " ")}</TableCell>
                         <TableCell className="text-xs text-slate-600">{expense.expense_subcategory || "—"}</TableCell>
                         <TableCell className="text-[10px] font-mono text-slate-500">{expense.gl_code || "—"}</TableCell>

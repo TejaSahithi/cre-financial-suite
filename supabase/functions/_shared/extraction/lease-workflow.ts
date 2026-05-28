@@ -804,6 +804,46 @@ function profileSignalContext(
   return cleanText(`${documentSubtype || ""} ${fullText || ""} ${fieldContext} ${itemContext}`);
 }
 
+// Patterns that mark a document as an amendment at the TITLE/HEADING level
+// (not in a passing clause mention). Full leases frequently contain phrases
+// like "may not be amended" or "no modification" — those would trip the
+// generic AMENDMENT_PROFILE_SIGNALS list but should NOT cause the document
+// to be classified as an amendment. Requiring at least one of these strong
+// signals before applying the amendment label prevents the false positive
+// that triggers the assignment/amendment short-circuit on a real lease.
+//
+// Strong signal examples that should match:
+//   "FIRST AMENDMENT TO LEASE"
+//   "Amendment to Lease Agreement"
+//   "Modification of Lease"
+//   "Second Amended and Restated Lease"
+// Strong signal examples that should NOT match (in body clauses):
+//   "this Lease may not be amended except in writing"
+//   "no modification of any term shall be binding"
+const AMENDMENT_TITLE_SIGNALS = [
+  // Ordinal/numeric amendment in a title position.
+  { key: "amendment_title_ordinal", pattern: /\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th))\s+amendment\b/i },
+  // Bare "Amendment to / of (the) Lease/Agreement".
+  { key: "amendment_to_lease", pattern: /\bamendment\s+(?:to|of)\s+(?:the\s+)?(?:lease|sublease|agreement|tenancy)\b/i },
+  // "Modification of Lease/Agreement" in a title position.
+  { key: "modification_of_lease", pattern: /\bmodification\s+of\s+(?:the\s+)?(?:lease|sublease|agreement|tenancy)\b/i },
+  // "Amended and Restated …" title phrase.
+  { key: "amended_and_restated", pattern: /\bamended\s+and\s+restated\b/i },
+];
+
+// Patterns that read as title/heading positioning when found in the
+// document's first ~1500 chars OR in the document subtype. We deliberately
+// do NOT scan the whole document body for these, because that's what
+// causes false positives on full leases.
+function isStrongAmendmentSignal(fullText: string, documentSubtype?: string | null) {
+  const subtype = String(documentSubtype || "");
+  const head = String(fullText || "").slice(0, 1500);
+  for (const { pattern } of AMENDMENT_TITLE_SIGNALS) {
+    if (pattern.test(subtype) || pattern.test(head)) return true;
+  }
+  return false;
+}
+
 function detectDocumentProfileSignals(
   fullText: string,
   documentSubtype?: string | null,
@@ -828,23 +868,29 @@ function detectDocumentProfileSignals(
 
   const assignmentSignalCount = assignmentSignals.length;
   const amendmentSignalCount = amendmentSignals.length;
+  // Strong amendment context — title, heading, or explicit subtype. Without
+  // at least one of these, the soft "amendment" / "modification" mentions
+  // are treated as passing clause text rather than the document's own type.
+  const hasStrongAmendmentContext = isStrongAmendmentSignal(fullText, documentSubtype);
   let selectedDocumentProfile = "full_lease";
 
   if (/abstract|summary/.test(subtype)) selectedDocumentProfile = "abstract";
   else if (/addendum/.test(subtype)) selectedDocumentProfile = "addendum";
   else if (/exhibit/.test(subtype)) selectedDocumentProfile = "exhibit";
-  else if (assignmentSignalCount >= 2 && amendmentSignalCount >= 1) selectedDocumentProfile = "assignment_amendment";
+  else if (assignmentSignalCount >= 2 && amendmentSignalCount >= 1 && hasStrongAmendmentContext) selectedDocumentProfile = "assignment_amendment";
   else if (assignmentSignalCount >= 2) selectedDocumentProfile = "assignment";
-  else if (amendmentSignalCount >= 2) selectedDocumentProfile = "amendment";
+  else if (amendmentSignalCount >= 2 && hasStrongAmendmentContext) selectedDocumentProfile = "amendment";
 
   return {
     selected_document_profile: selectedDocumentProfile,
     assignment_signal_count: assignmentSignalCount,
     amendment_signal_count: amendmentSignalCount,
+    has_strong_amendment_context: hasStrongAmendmentContext,
     profile_detection_signals: {
       document_subtype: documentSubtype || null,
       assignment: assignmentSignals,
       amendment: amendmentSignals,
+      strong_amendment_context: hasStrongAmendmentContext,
       context_text_chars: context.length,
     },
   };
