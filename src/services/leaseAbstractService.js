@@ -32,6 +32,7 @@ export const ABSTRACT_STATUS = {
 };
 
 const autoApproveAcceptedExpenseRules = false;
+let leaseFieldReviewsMirrorDisabled = false;
 
 function extractMissingColumn(err) {
   const message = [err?.message, err?.details, err?.hint].filter(Boolean).join(" ");
@@ -98,6 +99,7 @@ function toText(value) {
  */
 export async function persistFieldReviews({ lease, fieldReviews, reviewer }) {
   if (!lease?.id || !lease?.org_id) return [];
+  if (leaseFieldReviewsMirrorDisabled) return [];
   const rows = Object.entries(fieldReviews || {}).map(([fieldKey, review]) => {
     const { rawValue, sourcePage, sourceText } = readFieldEvidence(lease, fieldKey);
     const value = review?.value !== undefined ? review.value : readFieldValue(lease, fieldKey);
@@ -126,6 +128,12 @@ export async function persistFieldReviews({ lease, fieldReviews, reviewer }) {
     // Table not present yet (older schema) — don't block callers.
     if (error.code === "PGRST205" || error.code === "42P01") {
       console.warn("[leaseAbstractService] lease_field_reviews table missing; skipping audit upsert.");
+      leaseFieldReviewsMirrorDisabled = true;
+      return [];
+    }
+    if (error.code === "42501" || /row-level security|permission denied/i.test([error.message, error.details, error.hint].filter(Boolean).join(" "))) {
+      console.warn("[leaseAbstractService] lease_field_reviews mirror blocked by RLS; using leases.extraction_data.field_reviews only.");
+      leaseFieldReviewsMirrorDisabled = true;
       return [];
     }
     throw error;

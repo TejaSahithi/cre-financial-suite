@@ -87,14 +87,14 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "commencement_date",          label: "Commencement Date",                   tab: "dates_term", required: true,  allowNA: false, type: "date" },
   { key: "rent_commencement_date",     label: "Rent Commencement Date",              tab: "dates_term", type: "date" },
   { key: "expiration_date",            label: "Expiration Date",                     tab: "dates_term", required: true,  allowNA: false, type: "date" },
-  { key: "renewal_notice_months",      label: "Renewal Notice (months)",             tab: "dates_term", type: "number" },
-  { key: "termination_notice_months",  label: "Termination Notice (months)",         tab: "dates_term", type: "number" },
+  { key: "renewal_notice_months",      label: "Renewal Notice (months)",             tab: "dates_term", type: "number", allowCalculatedAccept: true },
+  { key: "termination_notice_months",  label: "Termination Notice (months)",         tab: "dates_term", type: "number", allowCalculatedAccept: true },
   { key: "option_exercise_deadline",   label: "Option Exercise Deadline",            tab: "dates_term", type: "date" },
 
   // Rent & Charges
   { key: "monthly_rent",        label: "Monthly Rent",            tab: "rent_charges", required: true, allowNA: false, type: "currency" },
-  { key: "annual_rent",         label: "Annual Rent",             tab: "rent_charges", type: "currency" },
-  { key: "rent_per_sf",         label: "Base Rent ($/SF/yr)",     tab: "rent_charges", type: "number" },
+  { key: "annual_rent",         label: "Annual Rent",             tab: "rent_charges", type: "currency", allowCalculatedAccept: true },
+  { key: "rent_per_sf",         label: "Base Rent ($/SF/yr)",     tab: "rent_charges", type: "number", allowCalculatedAccept: true },
   { key: "billing_frequency",   label: "Billing Frequency",       tab: "rent_charges", type: "select", options: "billing_frequency" },
   { key: "escalation_type",     label: "Escalation Type",         tab: "rent_charges", type: "select", options: "escalation_type" },
   { key: "escalation_rate",     label: "Escalation Rate (%)",     tab: "rent_charges", type: "number" },
@@ -109,8 +109,8 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "responsibility_insurance",   label: "Insurance Responsibility",        tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
   { key: "responsibility_utilities",   label: "Utilities Responsibility",        tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
   { key: "responsibility_repairs",     label: "Repairs & Maintenance",           tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
-  { key: "base_year",                  label: "Base Year",                       tab: "expenses_recoveries", type: "number" },
-  { key: "expense_stop",               label: "Expense Stop ($)",                tab: "expenses_recoveries", type: "currency" },
+  { key: "base_year",                  label: "Base Year",                       tab: "expenses_recoveries", type: "number", allowCalculatedAccept: true },
+  { key: "expense_stop",               label: "Expense Stop ($)",                tab: "expenses_recoveries", type: "currency", allowCalculatedAccept: true },
 
   // CAM Rules
   { key: "cam_cap_type",          label: "CAM Cap Type",           tab: "cam_rules", type: "select", options: "cam_cap_type" },
@@ -596,6 +596,31 @@ export function isCalculatedExtractionStatus(status) {
 export function isManualExtractionStatus(status) {
   const normalized = String(status || "").trim().toLowerCase();
   return normalized === "manual" || normalized === "manual_required" || normalized === "manually_edited";
+}
+
+const CALCULATED_ACCEPT_FIELD_KEY_PATTERNS = [
+  /(^|_)initial_term($|_)/,
+  /(^|_)lease_term($|_)/,
+  /(^|_)term_months($|_)/,
+  /(^|_)lease_term_months($|_)/,
+  /(^|_)annual_rent($|_)/,
+  /(^|_)base_rent_annual($|_)/,
+  /(^|_)rent_per_sf($|_)/,
+  /(^|_)rent_psf($|_)/,
+  /(^|_)tenant_pro_rata_share($|_)/,
+  /(^|_)pro_rata_share($|_)/,
+  /(^|_)tenant_share($|_)/,
+  /(^|_)renewal_notice_(?:days|months)($|_)/,
+  /(^|_)termination_notice_(?:days|months)($|_)/,
+  /(^|_)base_year($|_)/,
+  /(^|_)expense_stop($|_)/,
+];
+
+export function canAcceptCalculatedReviewField(field) {
+  if (field?.allowCalculatedAccept === true) return true;
+  const key = String(field?.key || field?.field_key || "").trim().toLowerCase();
+  if (!key) return false;
+  return CALCULATED_ACCEPT_FIELD_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 
 export function hasValidSourceEvidence(evidence = {}) {

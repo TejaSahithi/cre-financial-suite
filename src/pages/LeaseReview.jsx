@@ -83,6 +83,7 @@ import {
   isCalculatedExtractionStatus,
   isManualExtractionStatus,
   cleanSourceEvidenceText,
+  canAcceptCalculatedReviewField,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -515,6 +516,7 @@ function buildDynamicDocumentFieldsByTab(lease) {
       tab,
       type: inferDynamicItemType(item, key),
       allowNA: true,
+      allowCalculatedAccept: canAcceptCalculatedReviewField({ key }),
       dynamic_document_item: true,
     });
   }
@@ -627,30 +629,11 @@ export default function LeaseReview() {
     hydratedReviewsForLeaseId.current = lease.id;
     let cancelled = false;
     (async () => {
-      let nextReviews = lease.extraction_data?.field_reviews || {};
-      if (supabase && lease.id) {
-        try {
-          const { data, error } = await supabase
-            .from("lease_field_reviews")
-            .select("field_key, status, normalized_value, note, reviewer, reviewed_at")
-            .eq("lease_id", lease.id);
-          if (!error && Array.isArray(data) && data.length > 0) {
-            const merged = { ...nextReviews };
-            for (const row of data) {
-              merged[row.field_key] = {
-                status: row.status,
-                value: row.normalized_value,
-                note: row.note,
-                reviewer: row.reviewer,
-                reviewed_at: row.reviewed_at,
-              };
-            }
-            nextReviews = merged;
-          }
-        } catch (err) {
-          console.warn("[LeaseReview] load reviews skipped:", err?.message || err);
-        }
-      }
+      // `lease_field_reviews` is an optional SQL mirror for reporting. In
+      // client-side review, the authoritative state is the JSONB map on the
+      // lease row; querying the mirror can be blocked by RLS in deployed
+      // projects and creates noisy 403s while the review still works.
+      const nextReviews = lease.extraction_data?.field_reviews || {};
       if (!cancelled) setFieldReviews(nextReviews);
     })();
     return () => {
@@ -1493,7 +1476,7 @@ export default function LeaseReview() {
       toast.error("Cannot accept without source evidence. Edit and confirm the value, or mark Manual Required.");
       return;
     }
-    if (isCalculated && field.allowCalculatedAccept !== true) {
+    if (isCalculated && !canAcceptCalculatedReviewField(field)) {
       toast.error("Cannot accept a calculated value as extracted. Edit/confirm it with source evidence, or mark Manual Required.");
       return;
     }
@@ -1539,7 +1522,12 @@ export default function LeaseReview() {
           .from("lease_field_reviews")
           .delete()
           .eq("lease_id", lease.id)
-          .eq("field_key", field.key);
+          .eq("field_key", field.key)
+          .then(({ error }) => {
+            if (error && !/row-level security|permission denied/i.test([error.message, error.details, error.hint].filter(Boolean).join(" "))) {
+              throw error;
+            }
+          });
       }
       await logAudit({
         entityType: "LeaseFieldReview",
