@@ -1168,6 +1168,39 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     field_group: "premises",
   };
 
+  const commencementDate = toIsoDate(fieldMap.commencement_date?.value);
+  const expirationDate = toIsoDate(fieldMap.expiration_date?.value);
+  if (commencementDate && expirationDate) {
+    const startDate = new Date(`${commencementDate}T00:00:00Z`);
+    const endDate = new Date(`${expirationDate}T00:00:00Z`);
+    if (Number.isFinite(startDate.getTime()) && Number.isFinite(endDate.getTime()) && endDate <= startDate) {
+      const corrected = new Date(Date.UTC(
+        startDate.getUTCFullYear(),
+        endDate.getUTCMonth(),
+        endDate.getUTCDate(),
+      ));
+      while (corrected <= startDate) corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
+      const expirationEvidence = extractClauseSnippet(
+        asArray(doclingRaw?.text_blocks),
+        fullText,
+        ["expiration date", "expires", "term", "January 31", "Jan 31"],
+        360,
+      );
+      fieldMap.expiration_date = {
+        ...(fieldMap.expiration_date || {
+          key: "expiration_date",
+          editable: true,
+          field_group: "lease_term",
+        }),
+        value: corrected.toISOString().slice(0, 10),
+        source_page: fieldMap.expiration_date?.source_page ?? expirationEvidence.source_page ?? null,
+        source_clause: fieldMap.expiration_date?.source_clause ?? expirationEvidence.clause_text ?? "Calculated as the next expiration occurrence after commencement date",
+        confidence_score: Math.min(Number(fieldMap.expiration_date?.confidence_score ?? 0.74), 0.82),
+        extraction_status: "calculated",
+      };
+    }
+  }
+
   if (classifiedLeaseType && /full service/i.test(classifiedLeaseType)) {
     const explicitRecoverables = [
       asNumber(row?.cam_amount),

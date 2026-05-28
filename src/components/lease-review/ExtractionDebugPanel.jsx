@@ -102,9 +102,27 @@ export default function ExtractionDebugPanel({ lease }) {
     lease?.extraction_data?.extracted_document_items,
     lease?.extraction_data?.clause_records,
   ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
+  const fieldMapItems = [
+    workflowOutput?.lease_fields,
+    ...(Array.isArray(workflowOutput?.records) ? [workflowOutput.records[0]?.lease_fields] : []),
+    lease?.extraction_data?.fields,
+  ].flatMap((map, mapIdx) => {
+    if (!map || typeof map !== "object" || Array.isArray(map)) return [];
+    return Object.entries(map).map(([key, entry]) => ({
+      item_id: `field-map-${mapIdx}-${key}`,
+      item_type: key,
+      field_key: key,
+      display_tab: null,
+      maps_to_fixed_field: LEASE_REVIEW_FIELDS.some((field) => field.key === key),
+      creates_dynamic_row: !LEASE_REVIEW_FIELDS.some((field) => field.key === key),
+      source_page: entry?.source_page ?? entry?.page_number ?? entry?.page ?? null,
+      source_text: entry?.source_clause ?? entry?.source_text ?? entry?.exact_source_text ?? null,
+      extraction_status: entry?.extraction_status ?? null,
+    }));
+  });
   const uniqueItems = [];
   const seenItemKeys = new Set();
-  for (const item of workflowItems) {
+  for (const item of [...workflowItems, ...fieldMapItems]) {
     const key = `${item?.item_type || item?.field_key || ""}|${item?.source_page ?? ""}|${item?.source_text || item?.source_clause || ""}`;
     if (seenItemKeys.has(key)) continue;
     seenItemKeys.add(key);

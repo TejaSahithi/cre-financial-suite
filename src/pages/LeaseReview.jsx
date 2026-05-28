@@ -123,11 +123,14 @@ function buildSearchBlocks(docling) {
   for (const block of raw) {
     const text = String(block?.text ?? "").trim();
     if (!text) continue;
+    const explicitPage = block?.page ?? block?.page_number ?? block?.source_page;
     blocks.push({
       text,
       lowered: text.toLowerCase(),
-      page: Number.isFinite(Number(block?.page ?? block?.page_number ?? block?.source_page))
-        ? Number(block?.page ?? block?.page_number ?? block?.source_page)
+      page: Number.isFinite(Number(explicitPage))
+        ? Number(explicitPage)
+        : raw.length === 1
+          ? 1
         : null,
     });
   }
@@ -141,6 +144,34 @@ function buildSearchBlocks(docling) {
     });
   }
   return blocks;
+}
+
+function entryValue(entry) {
+  if (entry == null) return null;
+  if (typeof entry !== "object") return entry;
+  return entry.normalized_value ?? entry.value ?? entry.raw_value ?? entry.raw ?? null;
+}
+
+function entrySourceText(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  return cleanExtractedSourceText(
+    entry.exact_source_text
+      ?? entry.exactSourceText
+      ?? entry.source_clause
+      ?? entry.source_text
+      ?? entry.snippet
+      ?? entry.evidence?.source_clause
+      ?? entry.evidence?.source_text
+      ?? entry.evidence?.exact_source_text,
+  );
+}
+
+function entrySourcePage(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const page = entry.source_page ?? entry.sourcePage ?? entry.page_number ?? entry.page
+    ?? entry.evidence?.source_page ?? entry.evidence?.page_number ?? entry.evidence?.page;
+  const numeric = Number(page);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 // Generic / sentinel values that produce false matches if we text-search
@@ -346,6 +377,45 @@ function normalizeDynamicKey(value) {
 function collectExtractedDocumentItems(lease) {
   const workflowOutput = lease?.extraction_data?.workflow_output || {};
   const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
+  const fieldMapItems = [];
+  const addFieldMapItems = (map, sourceName) => {
+    if (!map || typeof map !== "object" || Array.isArray(map)) return;
+    for (const [key, entry] of Object.entries(map)) {
+      const value = entryValue(entry);
+      const sourceText = entrySourceText(entry);
+      const sourcePage = entrySourcePage(entry);
+      const extractionStatus = typeof entry === "object" && entry
+        ? entry.extraction_status ?? entry.extractionStatus ?? entry.review_status ?? entry.reviewStatus ?? null
+        : null;
+      if ((value === null || value === undefined || value === "") && !sourceText) continue;
+      fieldMapItems.push({
+        item_id: `${sourceName}:${key}`,
+        label: titleizeFieldKey(key),
+        item_type: key,
+        field_key: key,
+        business_area: inferDynamicItemTab({ business_area: "" }, key) || "unknown_needs_review",
+        display_tab: inferDynamicItemTab({ business_area: "" }, key),
+        value,
+        normalized_value: value,
+        raw_value: typeof entry === "object" && entry ? entry.raw_value ?? entry.rawValue ?? value : value,
+        source_text: sourceText,
+        source_page: sourcePage,
+        confidence: typeof entry === "object" && entry
+          ? entry.confidence_score ?? entry.confidence ?? null
+          : null,
+        extraction_method: sourceName,
+        extraction_status: extractionStatus || (sourceText || sourcePage ? "extracted" : "missing_source_evidence"),
+        maps_to_existing_field: false,
+        maps_to_fixed_field: false,
+        creates_dynamic_row: true,
+        review_status: "needs_review",
+      });
+    }
+  };
+  addFieldMapItems(workflowOutput.lease_fields, "workflow_lease_fields");
+  addFieldMapItems(recordOutput.lease_fields, "workflow_record_lease_fields");
+  addFieldMapItems(lease?.extraction_data?.fields, "extraction_data_fields");
+  addFieldMapItems(lease?.extraction_data?.field_evidence, "extraction_data_field_evidence");
   const sources = [
     workflowOutput.extracted_document_items,
     workflowOutput.clause_records,
@@ -353,6 +423,7 @@ function collectExtractedDocumentItems(lease) {
     recordOutput.clause_records,
     lease?.extraction_data?.extracted_document_items,
     lease?.extraction_data?.clause_records,
+    fieldMapItems,
   ];
   return sources.flatMap((rows) => (Array.isArray(rows) ? rows : []));
 }
@@ -377,6 +448,15 @@ function inferDynamicItemTab(item, key) {
   ]);
   if (knownTabs.has(businessArea)) return businessArea;
   if (businessArea === "critical_dates") return "dates_term";
+  if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|signatory|contact|building)/i.test(key)) return "parties_premises";
+  if (/(date|term|expiration|commencement|effective|start|end|renewal_notice|signature)/i.test(key)) return "dates_term";
+  if (/(rent|fee|deposit|allowance|charge|amount|payment|holdover|interest|premium|breakpoint|percentage)/i.test(key)) return "rent_charges";
+  if (/(tax|insurance|utilit|maintenance|repair|expense|cam|gross_up|cap|base_year|reconciliation|deductible)/i.test(key)) {
+    if (/(gross_up|cam_|cap|admin|management|base_year|reconciliation)/i.test(key)) return "cam_rules";
+    if (/(insurance|insured|deductible|liability|subrogation)/i.test(key)) return "insurance";
+    return "expenses_recoveries";
+  }
+  if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|broker|estoppel|subordination|notice|rofr|termination)/i.test(key)) return "legal_options";
   return null;
 }
 
@@ -783,15 +863,19 @@ export default function LeaseReview() {
     if (!lease?.id || !supabase) return;
     const ed = lease.extraction_data || {};
     const evidenceMap = ed.field_evidence || {};
-    const hasMeaningfulEvidence = Object.values(evidenceMap).some(
-      (e) => e && (e.source_text || e.source_page || e.raw_value),
-    );
-    const hasWorkflowFields = Boolean(
-      ed.workflow_output?.lease_fields
-      || ed.workflow_output?.records?.[0]?.lease_fields,
-    );
     const sourceFileId = ed.source_file_id;
-    if ((hasMeaningfulEvidence || hasWorkflowFields) || !sourceFileId) return;
+    if (!sourceFileId) return;
+
+    const reviewFieldKeys = LEASE_REVIEW_FIELDS.map((field) => field.key);
+    const extractedFieldKeys = Object.keys(ed.fields || {});
+    const candidateKeys = [...new Set([...reviewFieldKeys, ...extractedFieldKeys])];
+    const needsEvidenceBackfill = candidateKeys.some((key) => {
+      const value = readFieldValue(lease, key) ?? entryValue(ed.fields?.[key]);
+      if (value == null || value === "") return false;
+      const evidence = readFieldEvidence(lease, key);
+      return !evidence.sourcePage && !evidence.sourceText;
+    });
+    if (!needsEvidenceBackfill) return;
 
     let cancelled = false;
     (async () => {
@@ -842,22 +926,28 @@ export default function LeaseReview() {
         const docling = file.docling_raw || file.normalized_output || null;
         if (docling) {
           const blocks = buildSearchBlocks(docling);
-          for (const field of LEASE_REVIEW_FIELDS) {
-            const value = readFieldValue(lease, field.key);
+          const fieldByKey = new Map(LEASE_REVIEW_FIELDS.map((field) => [field.key, field]));
+          for (const key of candidateKeys) {
+            const field = fieldByKey.get(key) || {
+              key,
+              type: inferDynamicItemType(ed.fields?.[key], key),
+            };
+            const value = readFieldValue(lease, key) ?? entryValue(ed.fields?.[key]);
             if (value == null || value === "") continue;
             // Don't overwrite real evidence we already have.
-            const existing = fieldEvidence[field.key] || ed.field_evidence?.[field.key];
-            if (existing?.source_text || existing?.raw_value) continue;
+            const existing = fieldEvidence[key] || ed.field_evidence?.[key];
+            if (existing?.source_text || existing?.source_page) continue;
             const hit = findEvidenceForValue(blocks, value, field);
             if (!hit) continue;
-            fieldEvidence[field.key] = {
+            fieldEvidence[key] = {
               raw_value: hit.raw,
               source_page: hit.page,
               source_text: hit.text,
               extraction_status: "extracted_text_match",
             };
-            fieldsWithEvidence[field.key] = {
-              ...(fieldsWithEvidence[field.key] || {}),
+            fieldsWithEvidence[key] = {
+              ...(fieldsWithEvidence[key] || {}),
+              ...(ed.fields?.[key] || {}),
               value,
               raw_value: hit.raw,
               source_page: hit.page,

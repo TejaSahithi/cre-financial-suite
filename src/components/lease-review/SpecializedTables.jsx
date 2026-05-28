@@ -390,6 +390,27 @@ export function ClauseRecordsTable({ lease }) {
       lease?.extraction_data?.extracted_document_items,
       lease?.extraction_data?.clause_records,
     ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
+    const fieldMapRows = [
+      workflowOutput.lease_fields,
+      recordOutput.lease_fields,
+      lease?.extraction_data?.fields,
+    ].flatMap((map, mapIdx) => {
+      if (!map || typeof map !== "object" || Array.isArray(map)) return [];
+      return Object.entries(map).map(([key, entry]) => ({
+        item_id: `field-map-${mapIdx}-${key}`,
+        item_type: key,
+        label: key.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+        business_area: "clause_records",
+        source_text: cleanDocumentItemSource(
+          entry?.exact_source_text || entry?.source_clause || entry?.source_text || entry?.snippet,
+        ),
+        source_page: entry?.source_page ?? entry?.page_number ?? entry?.page ?? null,
+        confidence: entry?.confidence_score ?? entry?.confidence ?? null,
+        normalized_value: entry?.normalized_value ?? entry?.value ?? entry?.raw_value ?? null,
+        value: entry?.value ?? entry?.normalized_value ?? entry?.raw_value ?? null,
+        extraction_status: entry?.extraction_status ?? null,
+      }));
+    });
     const list = Array.isArray(fromWorkflow) ? fromWorkflow : Array.isArray(fromTopLevel) ? fromTopLevel : [];
     const clauseRows = list.map((c, idx) => ({
       id: `extract-${idx}`,
@@ -400,7 +421,7 @@ export function ClauseRecordsTable({ lease }) {
       confidence_score: c.confidence_score,
     }));
     const discoveredRows = Array.isArray(itemRows)
-      ? itemRows
+      ? [...itemRows, ...fieldMapRows]
           .filter((item) => cleanDocumentItemSource(item?.source_text || item?.exact_source_text || item?.source_clause))
           .map((item, idx) => ({
             id: item.item_id || `document-item-${idx}`,

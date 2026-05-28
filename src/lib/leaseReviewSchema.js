@@ -607,7 +607,18 @@ export function readFieldEvidence(lease, key) {
   ].filter((src) => src && typeof src === "object");
 
   let evSourcePage = resolved?.sourcePage ?? null;
-  let evSourceText = resolved?.exactSourceText ?? null;
+  const cleanSourceText = (value) => {
+    const text = String(value ?? "").trim();
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
+    if (lower.includes("derived from")) return null;
+    if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
+    if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
+    return text;
+  };
+
+  let evSourceText = cleanSourceText(resolved?.exactSourceText);
   let evRawValue = resolved?.rawValue ?? null;
   let evExtractionStatus = resolved?.reviewStatus ?? null;
 
@@ -624,9 +635,9 @@ export function readFieldEvidence(lease, key) {
         ?? null;
     }
     if (!evSourceText) {
-      evSourceText = entry.exact_source_text ?? entry.exactSourceText ?? entry.source_clause
+      evSourceText = cleanSourceText(entry.exact_source_text ?? entry.exactSourceText ?? entry.source_clause
         ?? entry.source_text ?? entry.snippet ?? entry.evidence?.source_clause
-        ?? entry.evidence?.source_text ?? entry.evidence?.exact_source_text ?? null;
+        ?? entry.evidence?.source_text ?? entry.evidence?.exact_source_text ?? null);
     }
     if (!evRawValue) {
       evRawValue = entry.raw_value ?? entry.rawValue ?? null;
