@@ -1336,10 +1336,16 @@ const LEASE_GROUPS: FieldGroup[] = [
     name: "expense_recovery",
     fields: ["responsibility_taxes", "responsibility_insurance", "responsibility_utilities", "responsibility_repairs", "base_year", "expense_stop"],
     hint:
-      "Identify WHO PAYS for each expense category. Read clauses like 'Tenant shall pay all real estate taxes' → responsibility_taxes = 'tenant'. " +
-      "Use 'landlord', 'tenant', 'shared', or 'landlord_with_cap'. " +
-      "For Full Service / Gross leases, landlord pays most categories. For Triple Net (NNN), tenant pays most. " +
-      "Also extract base_year (for base-year pass-throughs) and expense_stop dollar amount if present.",
+      "Identify WHO PAYS for each expense category. Use: 'landlord', 'tenant', 'shared', or 'landlord_with_cap'. " +
+      "For Triple Net (NNN): tenant pays most. For Full Service / Gross: landlord pays most. " +
+      "For MODIFIED GROSS or BASE YEAR leases: base rent includes landlord's share of taxes/insurance/CAM for the " +
+      "Base Year — that means responsibility = 'landlord_with_cap' (landlord covers base year, tenant pays increases). " +
+      "Example: 'Base rent includes Tenant's share of operating expenses, real estate taxes, and property insurance " +
+      "for the Base Year only. Tenant shall pay Tenant's Pro Rata Share of increases.' → " +
+      "responsibility_taxes = 'landlord_with_cap', responsibility_insurance = 'landlord_with_cap'. " +
+      "For utilities: 'included in base rent during normal business hours' + 'Tenant shall pay for after-hours/supplemental' " +
+      "→ responsibility_utilities = 'shared'. " +
+      "Also extract base_year (calendar year for base-year pass-throughs) and expense_stop dollar amount if present.",
   },
   {
     name: "cam_structure",

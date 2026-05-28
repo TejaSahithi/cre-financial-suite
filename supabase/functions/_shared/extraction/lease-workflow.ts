@@ -167,7 +167,7 @@ const CLAUSE_DEFINITIONS = [
 ];
 
 const FIELD_SPECS = [
-  { key: "lease_date", group: "lease_header", aliases: ["lease_date"], patterns: [/\b(?:dated|lease date)\b[^\n]{0,30}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
+  { key: "lease_date", group: "lease_header", aliases: ["lease_date", "effective_date", "date_of_lease"], patterns: [/\b(?:dated|lease date|effective date)\b[^\n]{0,30}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i] },
   { key: "landlord_name", group: "lease_header", aliases: ["landlord_name", "landlord", "lessor", "owner_landlord", "owner_name"], patterns: [/\bLANDLORD[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|TENANT|LESSEE|Address|whose|having)|\s*\n|$)/, /\bLessor[:\s-]+([A-Z][^\n]{2,160})/] },
   { key: "landlord_address", group: "lease_header", aliases: ["landlord_address", "landlord_notice_address", "lessor_address"], patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i, /\baddress\s+of\s+landlord\b[:\s-]+([^\n]{6,180})/i] },
   { key: "tenant_name", group: "lease_header", aliases: ["tenant_name", "tenant", "lessee", "occupant"], patterns: [/\bTENANT[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|LANDLORD|LESSOR|Address|whose|having)|\s*\n|$)/, /\bLessee[:\s-]+([A-Z][^\n]{2,160})/] },
@@ -239,9 +239,28 @@ const FIELD_SPECS = [
   // match (landlord) regardless of who pays. The reimbursement keyword is
   // intentionally excluded so we don't misclassify reimbursement clauses
   // as direct responsibility; those land as needs_review via not_found.
-  { key: "tax_responsibility", group: "expense_terms", aliases: ["tax_responsibility"], patterns: [/\b(?:tax(?:es)?|real estate taxes|property taxes)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:pay|be\s+responsible)/i] },
-  { key: "insurance_responsibility", group: "expense_terms", aliases: ["insurance_responsibility"], patterns: [/\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i] },
-  { key: "maintenance_responsibility", group: "expense_terms", aliases: ["maintenance_responsibility"], patterns: [/\b(?:maintenance|repairs?)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:perform|maintain|repair|be\s+responsible)/i] },
+  { key: "tax_responsibility", group: "expense_terms",
+    aliases: ["tax_responsibility", "responsibility_taxes", "responsibility_tax", "tax_resp"],
+    patterns: [
+      /\b(?:tax(?:es)?|real estate taxes|property taxes)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:pay|be\s+responsible)/i,
+      // Modified Gross / Base Year: "base rent includes ... real estate taxes ... Base Year only" → landlord_with_cap
+      /base\s+rent\s+includes\b[^.\n]{0,200}\breal\s+estate\s+tax/i,
+    ],
+  },
+  { key: "insurance_responsibility", group: "expense_terms",
+    aliases: ["insurance_responsibility", "responsibility_insurance"],
+    patterns: [
+      /\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i,
+      // Modified Gross / Base Year: "base rent includes ... property insurance ... Base Year only" → landlord_with_cap
+      /base\s+rent\s+includes\b[^.\n]{0,200}\bproperty\s+insurance/i,
+    ],
+  },
+  { key: "maintenance_responsibility", group: "expense_terms",
+    aliases: ["maintenance_responsibility", "responsibility_repairs", "responsibility_maintenance"],
+    patterns: [
+      /\b(?:maintenance|repairs?)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:perform|maintain|repair|be\s+responsible)/i,
+    ],
+  },
   { key: "permitted_development", group: "premises", aliases: ["permitted_development"], patterns: [/\bpermitted development\b[:\s-]+([^\n.]{4,220})/i] },
   // ── Fields that were missing from FIELD_SPECS but present in the LLM schema.
   // Without these, the LLM's extracted values for these keys are absorbed into
@@ -571,6 +590,12 @@ function classifyLeaseType(text: string, extractedExpenseRules: any[], signals: 
   }
   if (containsAny(text, ["triple net", "nnn", "taxes, insurance and common area maintenance"])) {
     return "Triple Net";
+  }
+  // Check Modified Gross BEFORE base_year — a "Modified Gross with Base Year" document
+  // contains BOTH phrases. Checking base_year first would misclassify it as "Base Year"
+  // and lose the Modified Gross signal from the document title/body.
+  if (containsAny(text, ["modified gross", "modified-gross"])) {
+    return "Modified Gross";
   }
   if (containsAny(text, ["base year", "expenses in excess of base year", "base year expenses"])) {
     return "Base Year";
@@ -2394,7 +2419,18 @@ export function buildLeaseWorkflowAbstraction(args: {
   let expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   const signals = inferLeaseSignals(fullText, row);
   const finalLeaseType = classifyLeaseType(fullText, expenseRules, signals);
-  if (finalLeaseType && finalLeaseType !== leaseFields.lease_type?.value) {
+  // Only apply the computed type when it adds information:
+  //   (a) The computed type is a real classification (not the Unknown fallback), OR
+  //   (b) The current type is blank/not_found (Unknown is still better than nothing).
+  // This prevents classifyLeaseType from clobbering a valid LLM extraction of
+  // e.g. "modified_gross" with "Unknown / Manual Review" when the embedded
+  // text is too short (page 1 only) to trigger the signal checks.
+  const currentLlmType = leaseFields.lease_type?.value;
+  const currentIsBlank = isBlank(currentLlmType) || leaseFields.lease_type?.extraction_status === "not_found";
+  const computedIsUnknown = finalLeaseType === "Unknown / Manual Review";
+  const shouldApplyComputed = finalLeaseType && finalLeaseType !== currentLlmType &&
+    (!computedIsUnknown || currentIsBlank);
+  if (shouldApplyComputed) {
     leaseFields.lease_type = {
       ...(leaseFields.lease_type || {
         key: "lease_type",
