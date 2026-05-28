@@ -1,5 +1,5 @@
 // @ts-nocheck
-// v2 — shared extraction module updates (FIELD_SPECS, prompt, classifyLeaseType)
+// v3 — fix isBaseYear for Modified Gross+Base Year; remove broken FIELD_SPEC patterns
 /**
  * normalize-pdf-output — Step 3 of the canonical pipeline
  *

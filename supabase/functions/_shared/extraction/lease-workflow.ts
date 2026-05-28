@@ -243,16 +243,12 @@ const FIELD_SPECS = [
     aliases: ["tax_responsibility", "responsibility_taxes", "responsibility_tax", "tax_resp"],
     patterns: [
       /\b(?:tax(?:es)?|real estate taxes|property taxes)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:pay|be\s+responsible)/i,
-      // Modified Gross / Base Year: "base rent includes ... real estate taxes ... Base Year only" → landlord_with_cap
-      /base\s+rent\s+includes\b[^.\n]{0,200}\breal\s+estate\s+tax/i,
     ],
   },
   { key: "insurance_responsibility", group: "expense_terms",
     aliases: ["insurance_responsibility", "responsibility_insurance"],
     patterns: [
       /\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i,
-      // Modified Gross / Base Year: "base rent includes ... property insurance ... Base Year only" → landlord_with_cap
-      /base\s+rent\s+includes\b[^.\n]{0,200}\bproperty\s+insurance/i,
     ],
   },
   { key: "maintenance_responsibility", group: "expense_terms",
@@ -1540,7 +1536,14 @@ function deriveExpenseRules(
   const isTripleNet = /triple net|nnn|absolute net/.test(leaseType.toLowerCase());
   const isDoubleNet = /double net|nn lease/.test(leaseType.toLowerCase());
   const isSingleNet = /single net| n /.test(` ${leaseType.toLowerCase()} `);
-  const isBaseYear = /base year/.test(leaseType.toLowerCase());
+  // A "Modified Gross with Base Year" lease has leaseType = "Modified Gross"
+  // after the classifyLeaseType fix, so /base year/ won't match the type string.
+  // Fall back to checking whether the LLM actually extracted a base_year value —
+  // if it did, the document has a base year structure regardless of the type label.
+  const isModifiedGrossRaw = /modified gross|hybrid/.test(leaseType.toLowerCase());
+  const isBaseYear = /base year/.test(leaseType.toLowerCase())
+    || (isModifiedGrossRaw && asNumber(row?.base_year) != null)
+    || (isModifiedGrossRaw && asNumber(fieldMap.base_year?.value) != null);
   const isExpenseStop = /expense stop/.test(leaseType.toLowerCase());
   const isFixedCam = /fixed cam/.test(leaseType.toLowerCase());
   const isPercentageRent = /percentage rent/.test(leaseType.toLowerCase());
