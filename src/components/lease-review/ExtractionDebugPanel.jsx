@@ -142,9 +142,24 @@ export default function ExtractionDebugPanel({ lease }) {
   const visionTriggered = Boolean(
     extractionDebug?.vision_fallback_triggered ?? extractionDebug?.llm_file_mode_used,
   );
+  const visionSkipReason = extractionDebug?.vision_fallback_skipped_reason
+    || workflowOutput?.summary?.vision_fallback_skipped_reason
+    || (!pdfPageCountTotal
+      ? "pdf_page_count_unavailable"
+      : extractionDebug?.fileBase64_available === false
+        ? "fileBase64_unavailable"
+        : extractionDebug?.weak_text_detected === false
+          ? "weak_text_not_detected"
+          : extractionDebug?.llm_file_mode_used === false
+            ? "llm_file_mode_not_used"
+            : "not run");
 
   const debugSummary = {
     document_profile: workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
+    selected_document_profile: workflowOutput?.selected_document_profile || workflowOutput?.summary?.selected_document_profile || workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
+    assignment_signal_count: workflowOutput?.assignment_signal_count ?? workflowOutput?.summary?.assignment_signal_count ?? 0,
+    amendment_signal_count: workflowOutput?.amendment_signal_count ?? workflowOutput?.summary?.amendment_signal_count ?? 0,
+    profile_detection_signals: JSON.stringify(workflowOutput?.profile_detection_signals || workflowOutput?.summary?.profile_detection_signals || {}),
     // Show both metrics so reviewers don't mistake Docling's per-page text
     // count for the actual PDF page count. Vision reads multi-page PDFs
     // natively when file bytes are sent (see vision_processed flag).
@@ -152,7 +167,7 @@ export default function ExtractionDebugPanel({ lease }) {
     docling_pages_parsed: doclingPagesParsed,
     vision_processed: visionTriggered
       ? (pdfPageCountTotal ? `all ${pdfPageCountTotal} pages` : "all pages")
-      : (extractionDebug?.vision_fallback_skipped_reason || "not run"),
+      : visionSkipReason,
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
     dynamic_items_extracted: workflowOutput?.summary?.dynamic_items_extracted ?? uniqueItems.length,
     dynamic_items_displayed: workflowOutput?.summary?.dynamic_items_displayed ?? uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,

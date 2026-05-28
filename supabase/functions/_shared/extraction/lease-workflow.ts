@@ -766,17 +766,92 @@ const UNIVERSAL_ITEM_DEFS = [
   { item_type: "all_other_terms_remain_same", business_area: "assignment_amendment", field_key: "all_other_terms_remain_same", maps: false, booleanValue: "yes", patterns: [/\b(all\s+other\s+terms[^.\n]{0,160}(?:remain|shall\s+remain|continue)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect))/i] },
 ];
 
+const ASSIGNMENT_PROFILE_SIGNALS = [
+  { key: "assignment_and_assumption", pattern: /\bassignment\s+and\s+assumption\b/i },
+  { key: "assignment_of_lease", pattern: /\bassignment\s+of\s+(?:the\s+)?lease\b/i },
+  { key: "assignor", pattern: /\bassignor\b/i },
+  { key: "assignee", pattern: /\bassignee\b/i },
+  { key: "landlord_consent", pattern: /\blandlord\s+consent\b/i },
+  { key: "consent_to_assignment", pattern: /\bconsent\s+to\s+assignment\b/i },
+  { key: "assignee_assumes_obligations", pattern: /\bassignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease)\b/i },
+  { key: "assignment_effective_date", pattern: /\bassignment\s+effective\s+date\b/i },
+  { key: "original_lease_reference", pattern: /\boriginal\s+lease\b|\blease\s+dated\s+[a-z]+\s+\d{1,2},?\s+\d{4}/i },
+];
+
+const AMENDMENT_PROFILE_SIGNALS = [
+  { key: "amendment", pattern: /\bamendment\b/i },
+  { key: "amended", pattern: /\bamended\b|\bamend(?:s|ed)?\b/i },
+  { key: "modification", pattern: /\bmodification\b|\bmodified\b/i },
+  { key: "initial_term_now_expire", pattern: /\binitial\s+term\s+shall\s+now\s+expire\b/i },
+  { key: "term_extension", pattern: /\b(?:term\s+is\s+extended|extended\s+term|extension\s+term|extended\s+through)\b/i },
+  { key: "amended_base_rent", pattern: /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|amended\s+base\s+rent|additional\s+year\s+base\s+rent)\b/i },
+  { key: "all_other_terms_remain_unchanged", pattern: /\ball\s+other\s+terms[^.\n]{0,180}(?:remain|continue|shall\s+remain)[^.\n]{0,120}(?:unchanged|same|full\s+force\s+and\s+effect)\b/i },
+];
+
+function profileSignalContext(
+  fullText: string,
+  documentSubtype?: string | null,
+  leaseFields?: Record<string, LeaseWorkflowField>,
+  extractedItems?: any[],
+) {
+  const fieldContext = Object.entries(leaseFields || {})
+    .filter(([, field]) => !isBlank(field?.value))
+    .map(([key, field]) => `${key}: ${field?.value}`)
+    .join(" ");
+  const itemContext = asArray(extractedItems)
+    .map((item) => `${item?.item_type || ""} ${item?.field_key || ""} ${item?.business_area || ""} ${item?.value || ""} ${item?.source_text || ""}`)
+    .join(" ");
+  return cleanText(`${documentSubtype || ""} ${fullText || ""} ${fieldContext} ${itemContext}`);
+}
+
+function detectDocumentProfileSignals(
+  fullText: string,
+  documentSubtype?: string | null,
+  leaseFields?: Record<string, LeaseWorkflowField>,
+  extractedItems?: any[],
+) {
+  const context = profileSignalContext(fullText, documentSubtype, leaseFields, extractedItems);
+  const subtype = normalizeToken(documentSubtype || "");
+  const assignmentSignals = ASSIGNMENT_PROFILE_SIGNALS
+    .filter((signal) => signal.pattern.test(context))
+    .map((signal) => signal.key);
+  const amendmentSignals = AMENDMENT_PROFILE_SIGNALS
+    .filter((signal) => signal.pattern.test(context))
+    .map((signal) => signal.key);
+
+  if (/\bassignment\b/i.test(subtype) && !assignmentSignals.includes("document_subtype_assignment")) {
+    assignmentSignals.unshift("document_subtype_assignment");
+  }
+  if (/\bamend(?:ment|ed)?\b/i.test(subtype) && !amendmentSignals.includes("document_subtype_amendment")) {
+    amendmentSignals.unshift("document_subtype_amendment");
+  }
+
+  const assignmentSignalCount = assignmentSignals.length;
+  const amendmentSignalCount = amendmentSignals.length;
+  let selectedDocumentProfile = "full_lease";
+
+  if (/abstract|summary/.test(subtype)) selectedDocumentProfile = "abstract";
+  else if (/addendum/.test(subtype)) selectedDocumentProfile = "addendum";
+  else if (/exhibit/.test(subtype)) selectedDocumentProfile = "exhibit";
+  else if (assignmentSignalCount >= 2 && amendmentSignalCount >= 1) selectedDocumentProfile = "assignment_amendment";
+  else if (assignmentSignalCount >= 2) selectedDocumentProfile = "assignment";
+  else if (amendmentSignalCount >= 2) selectedDocumentProfile = "amendment";
+
+  return {
+    selected_document_profile: selectedDocumentProfile,
+    assignment_signal_count: assignmentSignalCount,
+    amendment_signal_count: amendmentSignalCount,
+    profile_detection_signals: {
+      document_subtype: documentSubtype || null,
+      assignment: assignmentSignals,
+      amendment: amendmentSignals,
+      context_text_chars: context.length,
+    },
+  };
+}
+
 function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
-  const text = normalizeToken(`${documentSubtype || ""} ${fullText}`);
-  const isAssignment = /assignment|assignor|assignee|consent to assignment|assumption of lease/.test(text);
-  const isAmendment = /amendment|amended|extension|extended|modified|all other terms/.test(text);
-  if (isAssignment && isAmendment) return "assignment_amendment";
-  if (isAssignment) return "assignment";
-  if (isAmendment) return "amendment";
-  if (/abstract|summary/.test(text)) return "abstract";
-  if (/addendum/.test(text)) return "addendum";
-  if (/exhibit/.test(text)) return "exhibit";
-  return "full_lease";
+  return detectDocumentProfileSignals(fullText, documentSubtype).selected_document_profile;
 }
 
 function findUniversalMatch(doclingRaw: any, fullText: string, patterns: RegExp[]) {
@@ -2175,7 +2250,8 @@ export function buildLeaseWorkflowAbstraction(args: {
   // panels keep working. New panels can read pdf_page_count_total.
   const pagesDetected = doclingPagesParsed;
   const clauses = buildClauseRecords(doclingRaw, fullText);
-  const documentProfile = detectDocumentProfile(fullText, args?.documentSubtype || null);
+  let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
+  let documentProfile = profileDetection.selected_document_profile;
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
@@ -2186,6 +2262,10 @@ export function buildLeaseWorkflowAbstraction(args: {
     clauses,
   });
   applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
+  profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null, leaseFields, extractedDocumentItems);
+  if (profileDetection.selected_document_profile !== documentProfile) {
+    documentProfile = profileDetection.selected_document_profile;
+  }
   extractedDocumentItems = buildUniversalDocumentItems({
     row,
     doclingRaw,
@@ -2220,6 +2300,9 @@ export function buildLeaseWorkflowAbstraction(args: {
   const mappedFieldsFromAssignment = assignmentItems.filter((item) => item.maps_to_existing_field).length;
   console.log("[lease-workflow assignment mapping]", {
     document_profile: documentProfile,
+    profile_detection_signals: profileDetection.profile_detection_signals,
+    assignment_signal_count: profileDetection.assignment_signal_count,
+    amendment_signal_count: profileDetection.amendment_signal_count,
     assignment_items_extracted: assignmentItems.length,
     mapped_fields_from_assignment: mappedFieldsFromAssignment,
     premises_address_candidates: premisesCandidates,
@@ -2325,6 +2408,10 @@ export function buildLeaseWorkflowAbstraction(args: {
   return {
     document_subtype: args?.documentSubtype || null,
     document_profile: documentProfile,
+    profile_detection_signals: profileDetection.profile_detection_signals,
+    assignment_signal_count: profileDetection.assignment_signal_count,
+    amendment_signal_count: profileDetection.amendment_signal_count,
+    selected_document_profile: profileDetection.selected_document_profile,
     lease_fields: leaseFields,
     lease_clauses: clauses,
     extracted_document_items: extractedDocumentItems,
@@ -2351,6 +2438,10 @@ export function buildLeaseWorkflowAbstraction(args: {
       expense_rule_count: expenseRules.length,
       validation_error_count: validations.filter((item) => item.pass === false).length,
       document_profile: documentProfile,
+      selected_document_profile: profileDetection.selected_document_profile,
+      profile_detection_signals: profileDetection.profile_detection_signals,
+      assignment_signal_count: profileDetection.assignment_signal_count,
+      amendment_signal_count: profileDetection.amendment_signal_count,
       // Assignment / amendment short-circuit diagnostics. When applied,
       // expense_rule_count drops to 1 (the original_lease_required marker)
       // and template_rules_skipped_count reflects how many blueprint
