@@ -39,6 +39,9 @@ export interface ExtractedRecord {
 export interface StepResult {
   records: ExtractedRecord[];
   warnings: string[];
+  /** Optional structured diagnostics — populated by the LLM step so the
+   *  pipeline can forward them into extractionDebug without reading logs. */
+  diagnostics?: Record<string, unknown>;
 }
 
 // ── Docling input types ──────────────────────────────────────────────────────

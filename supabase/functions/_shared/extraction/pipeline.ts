@@ -509,6 +509,26 @@ export async function runExtractionPipeline(
         llm_fields_extracted: llmFieldCount,
         parsing_method: rawDocling.extraction_method || "text",
         processing_time_ms: processingTimeMs,
+        // ── LLM call diagnostics (from extractWithLLM) ───────────────
+        // All requested diagnostic fields come directly from the extractor's
+        // accumulator so they reflect what actually happened inside the call.
+        ...((llmResult as any).diagnostics ?? {}),
+        // ── Validator rejection counts (computed here post-validate) ──
+        // fields_rejected_by_validator_count = fields whose value was
+        // non-null when they entered validateRecords but null came out.
+        fields_rejected_by_validator_count: validated.errors.filter(
+          (e) => e.receivedValue !== null && e.receivedValue !== undefined,
+        ).length,
+        first_rejection_reasons: validated.errors
+          .filter((e) => e.receivedValue !== null && e.receivedValue !== undefined)
+          .slice(0, 5)
+          .map((e) => `${e.field}: ${e.message}`),
+        // llm_fields_after_validation_count: LLM fields that survived the
+        // validator (proxy: llmFieldCount minus validator-rejected that
+        // originated from the LLM step — we can't split by source here
+        // so expose the total llmFieldCount as "after merge" and let the
+        // debug panel show the gap).
+        llm_fields_after_validation_count: llmFieldCount,
       },
     },
   };

@@ -540,15 +540,50 @@ function uniqueStrings(values: string[]): string[] {
 
 /**
  * Call Vertex AI with a file and parse the response as JSON.
+ * Matches callVertexAIJSON: strips code fences, applies tryRepairJson on
+ * truncation, logs detailed diagnostics on failure.
  */
 export async function callVertexAIFileJSON<T = unknown>(opts: VertexAIFileOptions): Promise<T | null> {
   const response = await callVertexAIWithFile(opts);
+
   let text = response.content.trim();
+  // Strip markdown code fences the model sometimes adds despite responseMimeType
   text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+  if (!text) {
+    console.error(
+      `[vertex-ai] Empty file-mode response from ${response.model} ` +
+      `(in=${response.inputTokens} out=${response.outputTokens} tokens). ` +
+      `Likely model refusal or safety filter.`,
+    );
+    return null;
+  }
+
   try {
     return JSON.parse(text) as T;
-  } catch {
-    console.error("[vertex-ai] Failed to parse file JSON response:", text.slice(0, 300));
+  } catch (err) {
+    // Attempt the same truncation repair used by callVertexAIJSON
+    const repaired = tryRepairJson(text);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        console.warn(
+          `[vertex-ai] File-mode: recovered from malformed JSON via repair ` +
+          `(orig length ${text.length}, model=${response.model}). ` +
+          `Prompt: "${opts.userPrompt.slice(0, 120)}…"`,
+        );
+        return parsed;
+      } catch {
+        // fall through to full error
+      }
+    }
+    console.error(
+      `[vertex-ai] File-mode: failed to parse JSON from ${response.model} ` +
+      `(out=${response.outputTokens} tokens, content length=${text.length}). ` +
+      `First 400 chars: ${JSON.stringify(text.slice(0, 400))} ` +
+      `Last 200 chars: ${JSON.stringify(text.slice(-200))} ` +
+      `Parse error: ${err?.message || err}`,
+    );
     return null;
   }
 }

@@ -25,7 +25,7 @@ import type {
 } from "./types.ts";
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
-import { callVertexAIJSON, callVertexAIFileJSON } from "../vertex-ai.ts";
+import { callVertexAI, callVertexAIWithFile, callVertexAIJSON, callVertexAIFileJSON } from "../vertex-ai.ts";
 
 // ── System prompt — short, strict, no room for hallucination ─────────────────
 
@@ -258,6 +258,148 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
     });
 }
 
+// ── Diagnostic accumulator ────────────────────────────────────────────────────
+// Carried through the entire LLM extraction step and returned in
+// StepResult.diagnostics so the pipeline can forward them into
+// extractionDebug without reading edge-function logs.
+
+function makeDiag(input: ExtractionInput, missingVars: string[]) {
+  return {
+    vertex_config_present:
+      (!!Deno.env.get("VERTEX_PROJECT_ID") || !!Deno.env.get("GOOGLE_PROJECT_ID")) &&
+      (!!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || (!!Deno.env.get("GOOGLE_CLIENT_EMAIL") && !!Deno.env.get("GOOGLE_PRIVATE_KEY"))),
+    vertex_config_missing_vars: missingVars,
+    // Presence of each relevant env var (values never logged).
+    vertex_env_keys_present: {
+      VERTEX_PROJECT_ID: !!Deno.env.get("VERTEX_PROJECT_ID"),
+      GOOGLE_PROJECT_ID: !!Deno.env.get("GOOGLE_PROJECT_ID"),
+      VERTEX_LOCATION: !!Deno.env.get("VERTEX_LOCATION"),
+      GOOGLE_SERVICE_ACCOUNT_KEY: !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY"),
+      GOOGLE_CLIENT_EMAIL: !!Deno.env.get("GOOGLE_CLIENT_EMAIL"),
+      GOOGLE_PRIVATE_KEY: !!Deno.env.get("GOOGLE_PRIVATE_KEY"),
+    },
+    model_name: null as string | null,
+    llm_call_attempted: false,
+    llm_file_mode_attempted: false,
+    llm_text_mode_attempted: false,
+    llm_raw_response_chars: 0,
+    llm_json_parse_success: null as boolean | null,
+    llm_json_parse_error: null as string | null,
+    llm_json_repair_applied: false,
+    llm_raw_response_preview: null as string | null,
+    llm_fields_before_filter_count: 0,
+    llm_empty_response_reason: null as string | null,
+    fileBase64_available: Boolean(input.fileBase64),
+    fileMimeType: input.fileMimeType ?? null,
+    text_chars_sent_to_llm: 0,
+    groups_attempted: 0,
+    groups_succeeded: 0,
+    groups_failed: [] as string[],
+    call_errors: [] as string[],
+  };
+}
+
+// ── Diagnostic-aware Vertex call + JSON parse ─────────────────────────────────
+// Replaces direct callVertexAIJSON / callVertexAIFileJSON inside the extraction
+// loops so we can capture: raw response chars, parse success/fail, repair
+// applied, raw preview on failure — all without touching vertex-ai.ts API.
+
+function repairTruncatedJson(text: string): string | null {
+  const lastClose = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+  if (lastClose < 0) return null;
+  return text.slice(0, lastClose + 1);
+}
+
+async function callVertexAndParse<T = unknown>(
+  input: ExtractionInput,
+  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
+  diag: ReturnType<typeof makeDiag>,
+): Promise<T | null> {
+  const isFileMode = Boolean(input.fileBase64);
+  diag.llm_call_attempted = true;
+  if (isFileMode) {
+    diag.llm_file_mode_attempted = true;
+  } else {
+    diag.llm_text_mode_attempted = true;
+    diag.text_chars_sent_to_llm += opts.userPrompt.length;
+  }
+
+  let rawContent: string;
+  let modelUsed: string;
+
+  try {
+    if (isFileMode) {
+      const resp = await callVertexAIWithFile({
+        ...opts,
+        fileBase64: input.fileBase64,
+        fileMimeType: input.fileMimeType || "application/pdf",
+      });
+      rawContent = resp.content;
+      modelUsed = resp.model;
+    } else {
+      const resp = await callVertexAI(opts);
+      rawContent = resp.content;
+      modelUsed = resp.model;
+    }
+  } catch (callErr) {
+    const msg = String(callErr?.message ?? callErr);
+    diag.call_errors.push(msg);
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `vertex_call_error: ${msg.slice(0, 120)}`;
+    throw callErr;
+  }
+
+  if (!diag.model_name) diag.model_name = modelUsed;
+
+  // Strip code fences the model sometimes adds despite responseMimeType=json
+  let text = rawContent.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  diag.llm_raw_response_chars += text.length;
+
+  if (!text) {
+    diag.llm_json_parse_success = false;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason
+      ?? `empty_content_from_model_${modelUsed}`;
+    console.warn(`[llm-extractor] ${isFileMode ? "file" : "text"} mode: empty response from ${modelUsed}`);
+    return null;
+  }
+
+  // Attempt JSON parse
+  try {
+    const parsed = JSON.parse(text) as T;
+    diag.llm_json_parse_success = true;
+    return parsed;
+  } catch (parseErr) {
+    // Attempt truncation repair
+    const repaired = repairTruncatedJson(text);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        diag.llm_json_parse_success = true;
+        diag.llm_json_repair_applied = true;
+        console.warn(
+          `[llm-extractor] Repaired truncated JSON (orig ${text.length} chars, model=${modelUsed})`,
+        );
+        return parsed;
+      } catch {
+        // fall through to full failure
+      }
+    }
+    const preview = text.slice(0, 300);
+    diag.llm_json_parse_success = false;
+    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
+    diag.llm_raw_response_preview = preview;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
+    console.error(
+      `[llm-extractor] JSON parse failed (model=${modelUsed}, ${text.length} chars). ` +
+      `Error: ${parseErr?.message}. Preview: ${preview}`,
+    );
+    return null;
+  }
+}
+
 // ── Main: LLM field-wise extraction ──────────────────────────────────────────
 
 /**
@@ -265,10 +407,8 @@ function parseLLMArrayResponse(raw: unknown, expectedFields: string[]): Array<Re
  *
  * Only extracts fields that are MISSING from previous steps.
  * Uses targeted prompts with relevant text snippets.
- *
- * @param docling      Full Docling output
- * @param moduleType   The module being extracted
- * @param existingRecords  Records from Steps 1+2 (for context on how many rows to expect)
+ * Returns StepResult.diagnostics with full LLM call diagnostics so the
+ * pipeline can surface them in extractionDebug.
  */
 export async function extractWithLLM(
   input: ExtractionInput,
@@ -283,29 +423,32 @@ export async function extractWithLLM(
   const warnings: string[] = [];
   const { maxChunks = 6, temperature = 0 } = options;
 
-  // Check if Vertex AI is available
-  const hasVertexAI =
-    (!!Deno.env.get("VERTEX_PROJECT_ID") || !!Deno.env.get("GOOGLE_PROJECT_ID")) &&
-    (!!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || (!!Deno.env.get("GOOGLE_CLIENT_EMAIL") && !!Deno.env.get("GOOGLE_PRIVATE_KEY")));
+  // Collect which Vertex config vars are missing (regardless of whether
+  // hasVertexAI ends up true, so we always have a diagnostic).
+  const missingVars: string[] = [];
+  if (!Deno.env.get("VERTEX_PROJECT_ID") && !Deno.env.get("GOOGLE_PROJECT_ID")) {
+    missingVars.push("VERTEX_PROJECT_ID (or GOOGLE_PROJECT_ID)");
+  }
+  if (!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") && !(Deno.env.get("GOOGLE_CLIENT_EMAIL") && Deno.env.get("GOOGLE_PRIVATE_KEY"))) {
+    missingVars.push("GOOGLE_SERVICE_ACCOUNT_KEY (or GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY)");
+  }
+
+  const hasVertexAI = missingVars.length === 0;
+  const diag = makeDiag(input, missingVars);
 
   if (!hasVertexAI) {
-    const missingVars: string[] = [];
-    if (!Deno.env.get("VERTEX_PROJECT_ID") && !Deno.env.get("GOOGLE_PROJECT_ID")) {
-      missingVars.push("VERTEX_PROJECT_ID (or GOOGLE_PROJECT_ID)");
-    }
-    if (!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY")) {
-      missingVars.push("GOOGLE_SERVICE_ACCOUNT_KEY");
-    }
     const msg =
       `Vertex AI not configured — missing env vars: [${missingVars.join(", ")}]. ` +
       `LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);
-    return { records: [], warnings };
+    diag.llm_empty_response_reason = "vertex_not_configured";
+    return { records: [], warnings, diagnostics: diag };
   }
 
   if (missingFields.length === 0) {
-    return { records: [], warnings: ["No missing fields — LLM extraction skipped"] };
+    diag.llm_empty_response_reason = "no_missing_fields";
+    return { records: [], warnings: ["No missing fields — LLM extraction skipped"], diagnostics: diag };
   }
 
   // Filter groups to only include groups with missing fields
@@ -317,7 +460,8 @@ export async function extractWithLLM(
     .filter((g) => g.fields.length > 0);
 
   if (relevantGroups.length === 0) {
-    return { records: [], warnings: ["No field groups match missing fields"] };
+    diag.llm_empty_response_reason = "no_field_groups_match";
+    return { records: [], warnings: ["No field groups match missing fields"], diagnostics: diag };
   }
 
   // Determine extraction strategy:
@@ -326,15 +470,13 @@ export async function extractWithLLM(
   const isMultiRow = existingRecords.length > 1;
 
   if (isMultiRow) {
-    // Fill missing fields for existing records using field-group prompts
     return await fillMissingFieldsForRecords(
-      input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings,
+      input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings, diag,
     );
   }
 
-  // Single-record or no existing records → extract per group
   return await extractFieldGroups(
-    input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings,
+    input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings, diag,
   );
 }
 
@@ -349,6 +491,7 @@ async function fillMissingFieldsForRecords(
   existingRecords: ExtractedRecord[],
   temperature: number,
   warnings: string[],
+  diag: ReturnType<typeof makeDiag>,
 ): Promise<StepResult> {
   const records: ExtractedRecord[] = [];
 
@@ -363,28 +506,37 @@ async function fillMissingFieldsForRecords(
   for (const group of groups) {
     const snippet = buildRelevantSnippet(docling, allLabels, 16000);
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
+    diag.groups_attempted += 1;
 
     try {
-      let result;
-      if (input.fileBase64) {
-        result = await callVertexAIFileJSON({
-          systemPrompt: LLM_SYSTEM_PROMPT,
-          userPrompt: prompt,
-          maxOutputTokens: 4096,
-          temperature,
-          fileBase64: input.fileBase64,
-          fileMimeType: input.fileMimeType || "application/pdf"
-        });
-      } else {
-        result = await callVertexAIJSON({
-          systemPrompt: LLM_SYSTEM_PROMPT,
-          userPrompt: prompt,
-          maxOutputTokens: 4096,
-          temperature,
-        });
+      const result = await callVertexAndParse(
+        input,
+        { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
+        diag,
+      );
+
+      if (result == null) {
+        warnings.push(
+          `LLM group "${group.name}" (multi-row) returned no parseable result. ` +
+          `Reason: ${diag.llm_empty_response_reason ?? "unknown"}`,
+        );
+        diag.groups_failed.push(group.name);
+        continue;
       }
 
       const parsed = parseLLMArrayResponse(result, group.fields);
+
+      // Count non-null fields before the null-value filter
+      const nonNullBefore = parsed.reduce(
+        (sum, row) => sum + Object.values(row).filter((e) => e?.value != null).length, 0,
+      );
+      diag.llm_fields_before_filter_count += nonNullBefore;
+      if (nonNullBefore === 0) {
+        warnings.push(`LLM group "${group.name}" (multi-row) parsed successfully but all values are null.`);
+        diag.groups_failed.push(group.name);
+        continue;
+      }
+      diag.groups_succeeded += 1;
 
       // Map LLM rows back to existing record indices
       for (let i = 0; i < Math.min(parsed.length, existingRecords.length); i++) {
@@ -403,11 +555,17 @@ async function fillMissingFieldsForRecords(
         }
       }
     } catch (err) {
-      warnings.push(`LLM group "${group.name}" failed: ${err.message}`);
+      const msg = `LLM group "${group.name}" (multi-row) failed: ${err.message}`;
+      warnings.push(msg);
+      diag.groups_failed.push(group.name);
     }
   }
 
-  return { records, warnings };
+  if (diag.llm_empty_response_reason == null && records.length === 0) {
+    diag.llm_empty_response_reason = "all_groups_returned_null_or_zero_fields";
+  }
+
+  return { records, warnings, diagnostics: diag };
 }
 
 // ── Strategy B: Extract field groups for single-record documents ──────────────
@@ -422,9 +580,8 @@ async function extractFieldGroups(
   maxChunks: number,
   temperature: number,
   warnings: string[],
+  diag: ReturnType<typeof makeDiag>,
 ): Promise<StepResult> {
-  const chunks = chunkDocument(docling);
-  const chunksToProcess = chunks.slice(0, maxChunks);
   const merged: Record<string, ExtractedField> = {};
 
   for (const group of groups) {
@@ -437,52 +594,69 @@ async function extractFieldGroups(
     // Build a focused snippet instead of sending entire chunks
     const snippet = buildRelevantSnippet(docling, labels, 16000);
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType);
+    diag.groups_attempted += 1;
 
     try {
-      let result;
-      if (input.fileBase64) {
-        result = await callVertexAIFileJSON({
-          systemPrompt: LLM_SYSTEM_PROMPT,
-          userPrompt: prompt,
-          maxOutputTokens: 2048,
-          temperature,
-          fileBase64: input.fileBase64,
-          fileMimeType: input.fileMimeType || "application/pdf"
-        });
-      } else {
-        result = await callVertexAIJSON({
-          systemPrompt: LLM_SYSTEM_PROMPT,
-          userPrompt: prompt,
-          maxOutputTokens: 2048,
-          temperature,
-        });
+      const result = await callVertexAndParse(
+        input,
+        { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 2048, temperature },
+        diag,
+      );
+
+      if (result == null) {
+        warnings.push(
+          `LLM group "${group.name}" returned no parseable result. ` +
+          `Reason: ${diag.llm_empty_response_reason ?? "unknown"}`,
+        );
+        diag.groups_failed.push(group.name);
+        continue;
       }
 
       const parsed = parseLLMResponse(result, group.fields);
-      if (parsed) {
-        for (const [field, evidence] of Object.entries(parsed)) {
-          if (evidence?.value == null) continue;
-          if (merged[field]) continue;
-          merged[field] = {
-            value: evidence.value,
-            source: "llm",
-            confidence: evidence.confidence ?? 0.70,
-            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
-            sourcePage: evidence.sourcePage ?? null,
-          };
-        }
+      if (!parsed) {
+        warnings.push(`LLM group "${group.name}": response parsed but schema mapping returned null.`);
+        diag.groups_failed.push(group.name);
+        continue;
+      }
+
+      // Count non-null fields before the null-value filter below
+      const nonNullBefore = Object.values(parsed).filter((e) => e?.value != null).length;
+      diag.llm_fields_before_filter_count += nonNullBefore;
+      if (nonNullBefore === 0) {
+        warnings.push(`LLM group "${group.name}" parsed successfully but all field values are null.`);
+        diag.groups_failed.push(group.name);
+        continue;
+      }
+      diag.groups_succeeded += 1;
+
+      for (const [field, evidence] of Object.entries(parsed)) {
+        if (evidence?.value == null) continue;
+        if (merged[field]) continue;
+        merged[field] = {
+          value: evidence.value,
+          source: "llm",
+          confidence: evidence.confidence ?? 0.70,
+          sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+          sourcePage: evidence.sourcePage ?? null,
+        };
       }
     } catch (err) {
-      warnings.push(`LLM group "${group.name}" failed: ${err.message}`);
+      const msg = `LLM group "${group.name}" failed: ${err.message}`;
+      warnings.push(msg);
+      diag.groups_failed.push(group.name);
     }
   }
 
   if (Object.keys(merged).length === 0) {
-    return { records: [], warnings };
+    if (diag.llm_empty_response_reason == null) {
+      diag.llm_empty_response_reason = "all_groups_returned_null_or_zero_fields";
+    }
+    return { records: [], warnings, diagnostics: diag };
   }
 
   return {
     records: [{ fields: merged, rowIndex: 0 }],
     warnings,
+    diagnostics: diag,
   };
 }
