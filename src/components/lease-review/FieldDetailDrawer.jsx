@@ -138,7 +138,7 @@ export default function FieldDetailDrawer({
 
   // Load audit history when drawer opens.
   useEffect(() => {
-    if (!open || !field?.key || !lease?.id || !supabase) {
+    if (!open || !field?.key || !lease?.id || !lease?.org_id || !supabase) {
       setHistory([]);
       return;
     }
@@ -146,13 +146,25 @@ export default function FieldDetailDrawer({
     setHistoryLoading(true);
     (async () => {
       try {
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from("audit_logs")
-          .select("id, action, field_changed, old_value, new_value, user_email, user_name, timestamp, created_at")
+          .select("id, action, field_changed, old_value, new_value, user_email, user_name, created_at")
           .eq("entity_id", lease.id)
+          .eq("org_id", lease.org_id)
           .eq("field_changed", field.key)
-          .order("timestamp", { ascending: false })
+          .order("created_at", { ascending: false })
           .limit(25);
+        if (error && /created_at|column|schema cache/i.test([error.message, error.details, error.hint].filter(Boolean).join(" "))) {
+          const fallback = await supabase
+            .from("audit_logs")
+            .select("id, action, field_changed, old_value, new_value, user_email, user_name")
+            .eq("entity_id", lease.id)
+            .eq("org_id", lease.org_id)
+            .eq("field_changed", field.key)
+            .limit(25);
+          data = fallback.data;
+          error = fallback.error;
+        }
         if (!error && !cancelled) {
           setHistory(data || []);
         } else if (error) {

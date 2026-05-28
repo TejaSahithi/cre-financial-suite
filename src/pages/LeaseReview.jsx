@@ -1517,18 +1517,6 @@ export default function LeaseReview() {
     setFieldReviews(next);
     try {
       await saveAbstractDraft({ lease, fieldReviews: next, reviewer: lease?.signed_by || null });
-      if (supabase) {
-        await supabase
-          .from("lease_field_reviews")
-          .delete()
-          .eq("lease_id", lease.id)
-          .eq("field_key", field.key)
-          .then(({ error }) => {
-            if (error && !/row-level security|permission denied/i.test([error.message, error.details, error.hint].filter(Boolean).join(" "))) {
-              throw error;
-            }
-          });
-      }
       await logAudit({
         entityType: "LeaseFieldReview",
         entityId: lease.id,

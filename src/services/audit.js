@@ -116,7 +116,7 @@ export async function logAudit(entry) {
 
   const context = await resolveAuditContext(entry);
   if (!context.orgId) {
-    console.warn('[audit] Skipped audit log without valid org context:', {
+    console.debug('[audit] Skipped audit log without valid org context:', {
       entity_type: inferEntityType(entry),
       action: entry.action,
     });
