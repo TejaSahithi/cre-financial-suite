@@ -179,8 +179,12 @@ const FIELD_COLUMN_ALIASES = {
   total_sf:          ["total_sf", "square_footage", "rentable_area_sqft"],
   premises_address:  ["premises_address", "property_address", "premises_location"],
   premises_use:      ["premises_use", "permitted_use"],
-  monthly_rent:      ["monthly_rent", "base_rent_monthly", "base_rent"],
-  annual_rent:       ["annual_rent", "base_rent_annual"],
+  // Write only stable lease-table columns here. Read aliases such as
+  // base_rent_monthly/base_rent_annual still live in leaseFieldResolver and
+  // extraction_data; sending them as PATCH columns causes 400s on deployed
+  // schemas that have not run those additive migrations.
+  monthly_rent:      ["monthly_rent"],
+  annual_rent:       ["annual_rent"],
   rent_per_sf:       ["rent_per_sf", "tenant_rent_per_rsf"],
   billing_frequency: ["billing_frequency", "rent_frequency"],
   escalation_type:   ["escalation_type", "rent_escalation_type"],

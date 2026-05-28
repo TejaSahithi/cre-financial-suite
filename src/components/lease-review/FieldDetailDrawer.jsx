@@ -49,7 +49,6 @@ import {
   getLeaseFieldLabel,
   hasLeaseFieldOptions,
 } from "@/lib/leaseFieldOptions";
-import { supabase } from "@/services/supabaseClient";
 
 const confidenceClass = (score) => {
   const bucket = classifyConfidence(score);
@@ -138,48 +137,14 @@ export default function FieldDetailDrawer({
 
   // Load audit history when drawer opens.
   useEffect(() => {
-    if (!open || !field?.key || !lease?.id || !lease?.org_id || !supabase) {
-      setHistory([]);
-      return;
-    }
-    let cancelled = false;
-    setHistoryLoading(true);
-    (async () => {
-      try {
-        let { data, error } = await supabase
-          .from("audit_logs")
-          .select("id, action, field_changed, old_value, new_value, user_email, user_name, created_at")
-          .eq("entity_id", lease.id)
-          .eq("org_id", lease.org_id)
-          .eq("field_changed", field.key)
-          .order("created_at", { ascending: false })
-          .limit(25);
-        if (error && /created_at|column|schema cache/i.test([error.message, error.details, error.hint].filter(Boolean).join(" "))) {
-          const fallback = await supabase
-            .from("audit_logs")
-            .select("id, action, field_changed, old_value, new_value, user_email, user_name")
-            .eq("entity_id", lease.id)
-            .eq("org_id", lease.org_id)
-            .eq("field_changed", field.key)
-            .limit(25);
-          data = fallback.data;
-          error = fallback.error;
-        }
-        if (!error && !cancelled) {
-          setHistory(data || []);
-        } else if (error) {
-          // Suppress if audit table absent or columns differ.
-          if (!cancelled) setHistory([]);
-        }
-      } catch {
-        if (!cancelled) setHistory([]);
-      } finally {
-        if (!cancelled) setHistoryLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    // Browser-side audit history is optional. The deployed audit_logs table
+    // has drifted across environments, so probing it from every Actions open
+    // creates noisy 400s even though field review works from
+    // leases.extraction_data.field_reviews. Keep the drawer focused on the
+    // editable review state and leave audit history blank unless a stable
+    // API endpoint is added later.
+    setHistory([]);
+    setHistoryLoading(false);
   }, [open, field?.key, lease?.id, review?.reviewed_at]);
 
   if (!field) return null;
@@ -218,6 +183,26 @@ export default function FieldDetailDrawer({
     };
     await onSaveEdit(field, val, evidencePatch);
     setMode("view");
+  };
+
+  const buildEvidencePatchFromForm = () => ({
+    raw_value: evRaw.trim() || null,
+    source_page: evSourcePage === "" ? null : Number(evSourcePage),
+    source_text: evSourceText.trim() || null,
+    confidence: evConfidence === "" ? null : Number(evConfidence),
+    extraction_status: evExtractionStatus || null,
+  });
+
+  const evidenceFormChanged = () => {
+    const currentPage = evidence?.sourcePage == null ? "" : String(evidence.sourcePage);
+    const currentConfidence = typeof confidence === "number" ? String(confidence) : "";
+    return (
+      evRaw !== (evidence?.rawValue == null ? "" : String(evidence.rawValue))
+      || evSourcePage !== currentPage
+      || evSourceText !== (evidence?.sourceText == null ? "" : String(evidence.sourceText))
+      || evConfidence !== currentConfidence
+      || evExtractionStatus !== (evidence?.extractionStatus || inferredExtractionStatus || "")
+    );
   };
 
   return (
@@ -404,13 +389,7 @@ export default function FieldDetailDrawer({
                 className="bg-blue-600 hover:bg-blue-700"
                 disabled={!onSaveEvidence || isSaving}
                 onClick={() =>
-                  onSaveEvidence && onSaveEvidence(field, {
-                    raw_value: evRaw.trim() || null,
-                    source_page: evSourcePage === "" ? null : Number(evSourcePage),
-                    source_text: evSourceText.trim() || null,
-                    confidence: evConfidence === "" ? null : Number(evConfidence),
-                    extraction_status: evExtractionStatus || null,
-                  })
+                  onSaveEvidence && onSaveEvidence(field, buildEvidencePatchFromForm())
                 }
               >
                 {isSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
@@ -525,6 +504,9 @@ export default function FieldDetailDrawer({
                   if (mode === "edit") {
                     try { await handleSave(); }
                     catch (err) { console.warn("[FieldDetailDrawer] save-before-accept failed:", err); return; }
+                  } else if (onSaveEvidence && evidenceFormChanged()) {
+                    try { await onSaveEvidence(field, buildEvidencePatchFromForm()); }
+                    catch (err) { console.warn("[FieldDetailDrawer] evidence-save-before-accept failed:", err); return; }
                   }
                   await onAccept(field);
                 }}
