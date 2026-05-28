@@ -206,6 +206,40 @@ export default function ExtractionDebugPanel({ lease }) {
             : "not run");
 
   const debugSummary = {
+    // Headline mapping diagnostics — first so a failure is immediately visible.
+    mapping_failure_reason:
+      debugRead("mapping_failure_reason")
+      ?? workflowOutput?.mapping_failure_reason
+      ?? workflowOutput?.summary?.mapping_failure_reason
+      ?? "none",
+    core_mapping_failed:
+      (debugRead("core_mapping_failed") ?? workflowOutput?.summary?.core_mapping_failed)
+        ? "yes"
+        : "no",
+    lease_structure:
+      debugRead("lease_structure")
+      ?? workflowOutput?.lease_structure
+      ?? workflowOutput?.summary?.lease_structure
+      ?? "unknown",
+    full_text_chars:
+      debugRead("full_text_chars")
+      ?? workflowOutput?.summary?.full_text_chars
+      ?? debugRead("embedded_text_chars_total")
+      ?? fullText.length,
+    parser_source: debugRead("parser_source") ?? parserSource ?? "unknown",
+    mapped_standard_fields_count:
+      debugRead("mapped_standard_fields_count")
+      ?? workflowOutput?.summary?.mapped_standard_fields_count
+      ?? Object.values(workflowOutput?.lease_fields || {}).filter((f) => f?.value != null && f?.value !== "").length,
+    value_only_fields_count:
+      debugRead("value_only_fields_count")
+      ?? workflowOutput?.summary?.value_only_fields_count
+      ?? 0,
+    fields_rejected_missing_source_count:
+      debugRead("fields_rejected_missing_source_count")
+      ?? workflowOutput?.summary?.fields_rejected_missing_source_count
+      ?? 0,
+    ui_review_payload_fields_count: debugRead("ui_review_payload_fields_count") ?? "—",
     document_profile: workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
     selected_document_profile: workflowOutput?.selected_document_profile || workflowOutput?.summary?.selected_document_profile || workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
     assignment_signal_count: workflowOutput?.assignment_signal_count ?? workflowOutput?.summary?.assignment_signal_count ?? 0,

@@ -1456,6 +1456,21 @@ export default function LeaseReview() {
   ).length;
   const conflicts = detectFieldConflicts(lease);
 
+  // Core mapping failure: expense terms can be keyword-detected even when no
+  // standard lease field was mapped from the document. When that happens we
+  // must not present the expense-term counts as a successful extraction.
+  const mappingDebug = lease?.extraction_data?.extraction_debug || {};
+  const mappingWorkflowSummary =
+    lease?.extraction_data?.workflow_output?.summary
+    || lease?.extraction_data?.workflow_output?.records?.[0]?.summary
+    || {};
+  const coreMappingFailed = Boolean(
+    mappingDebug.core_mapping_failed
+    ?? mappingDebug.mapping_failure_reason
+    ?? mappingWorkflowSummary.core_mapping_failed
+    ?? mappingWorkflowSummary.mapping_failure_reason,
+  );
+
   // Validation checks (kept for summary panel).
   const validationChecks = [];
   const commencementValue = lease.commencement_date || lease.start_date;
@@ -3069,6 +3084,16 @@ export default function LeaseReview() {
               <CardTitle className="text-base">Expense / CAM Readiness</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {coreMappingFailed && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p className="text-xs">
+                    Expense terms may have been detected, but core lease fields were not mapped.
+                    These rows are held as coverage gaps for manual review and are not treated as
+                    confirmed lease terms.
+                  </p>
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <SummaryStat
                   label="Lease Expense Terms Found"

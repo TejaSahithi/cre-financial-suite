@@ -2447,6 +2447,90 @@ export function buildLeaseWorkflowAbstraction(args: {
         "Load the original lease to extract CAM / tax / insurance / utility rules.",
     }];
   }
+  // ── Core mapping success / failure diagnostics ────────────────────────
+  // The expense-rule blueprint loop generates rows from loose keyword
+  // presence in fullText, so it can report "N lease expense terms found"
+  // even when NO standard lease field (tenant, rent, dates, premises) was
+  // actually mapped from the document. To stop that from masquerading as a
+  // successful extraction we measure how many standard fields were mapped
+  // and how many are backed by real source evidence (a clause snippet or a
+  // page anchor + confidence). A "source-backed" field is the only kind we
+  // treat as a confirmed extraction.
+  const fullTextChars = fullText.length;
+  const leaseFieldList = Object.values(leaseFields);
+  const mappedStandardFieldsCount = leaseFieldList.filter((field) => !isBlank(field?.value)).length;
+  const sourceBackedFieldsCount = leaseFieldList.filter((field) =>
+    !isBlank(field?.value) &&
+    (field.extraction_status === "extracted" || field.extraction_status === "calculated") &&
+    Number.isFinite(Number(field.confidence_score)) &&
+    (!isBlank(field.source_clause) || Number.isFinite(Number(field.source_page)))
+  ).length;
+  const valueOnlyFieldsCount = leaseFieldList.filter((field) =>
+    !isBlank(field?.value) &&
+    isBlank(field.source_clause) &&
+    !Number.isFinite(Number(field.source_page))
+  ).length;
+  const fieldsRejectedMissingSourceCount = leaseFieldList.filter((field) =>
+    field?.extraction_status === "missing_source_evidence"
+  ).length;
+  // lease_structure is the normalized expense-recovery structure (distinct
+  // from document_profile, which is the document's role). Derived from the
+  // classified lease type so downstream can branch on modified_gross /
+  // full_service / nnn / base_year without re-parsing the type label.
+  const leaseStructure = (() => {
+    const t = String(finalLeaseType || leaseFields.lease_type?.value || "").toLowerCase();
+    if (!t || /unknown|manual/.test(t)) return null;
+    if (/triple\s*net|nnn/.test(t)) return "nnn";
+    if (/double\s*net/.test(t)) return "double_net";
+    if (/single\s*net/.test(t)) return "single_net";
+    if (/absolute\s*net/.test(t)) return "absolute_net";
+    if (/base\s*year/.test(t)) return "base_year";
+    if (/full\s*service/.test(t)) return "full_service";
+    if (/industrial\s*gross/.test(t)) return "industrial_gross";
+    if (/modified\s*gross/.test(t)) return "modified_gross";
+    if (/gross/.test(t)) return "gross";
+    return normalizeToken(t);
+  })();
+  // mapping_failure_reason: the single most diagnostic field. null when the
+  // extraction produced source-backed standard fields.
+  const mappingFailureReason = (() => {
+    if (fullTextChars === 0) return "no_text_extracted";
+    if (mappedStandardFieldsCount === 0) return "no_fields_mapped_from_document";
+    if (sourceBackedFieldsCount === 0) return "fields_mapped_without_source_evidence";
+    return null;
+  })();
+  const coreMappingFailed = mappingFailureReason !== null;
+
+  // ── Expense-rule gating on core mapping failure (do NOT flow to CAM) ───
+  // When NO standard lease field is source-backed, the keyword-derived
+  // expense rows cannot be trusted as lease-derived terms. Demote any real
+  // (non-coverage-gap) rules to coverage-gap / needs_review so they are not
+  // presented as approved lease terms and do not publish to CAM / Expense
+  // Classification. Source snippets are preserved so nothing is silently
+  // dropped — the reviewer still sees what was detected.
+  let expenseRulesDemotedForMappingFailure = 0;
+  if (coreMappingFailed && !assignmentExpenseShortCircuitApplied) {
+    expenseRules = expenseRules.map((rule: any) => {
+      const isCoverageGap = rule?.rule_type === "coverage_gap" || rule?.generation_source === "original_lease_required";
+      if (isCoverageGap) return rule;
+      expenseRulesDemotedForMappingFailure += 1;
+      return {
+        ...rule,
+        rule_type: "coverage_gap",
+        row_type: "coverage_gap",
+        lease_derived: false,
+        coverage_gap_due_to_mapping_failure: true,
+        recoverable_from_tenant: "needs_review",
+        is_recoverable: false,
+        published_to_cam: false,
+        review_status: "needs_review",
+        approval_status: "draft",
+        extraction_status: "needs_review",
+        row_status: "needs_review",
+      };
+    });
+  }
+
   const camProfile = deriveCamProfile(leaseFields, expenseRules);
   const budgetPreview = deriveBudgetPreview(leaseFields, expenseRules, camProfile);
   const validations = buildValidationResults(leaseFields, expenseRules, camProfile, budgetPreview);
@@ -2454,6 +2538,9 @@ export function buildLeaseWorkflowAbstraction(args: {
   return {
     document_subtype: args?.documentSubtype || null,
     document_profile: documentProfile,
+    lease_structure: leaseStructure,
+    mapping_failure_reason: mappingFailureReason,
+    core_mapping_failed: coreMappingFailed,
     profile_detection_signals: profileDetection.profile_detection_signals,
     assignment_signal_count: profileDetection.assignment_signal_count,
     amendment_signal_count: profileDetection.amendment_signal_count,
@@ -2528,6 +2615,23 @@ export function buildLeaseWorkflowAbstraction(args: {
       lease_expense_rules_generated: expenseRules.length,
       coverage_gaps_generated: extractedDocumentItems.filter((item) => item.requires_original_lease || item.extraction_status === "needs_review").length,
       rejected_generic_source_count: genericSourceTextRejected,
+      // ── Core mapping diagnostics (drive mapping_failure_reason) ──────
+      lease_structure: leaseStructure,
+      mapping_failure_reason: mappingFailureReason,
+      core_mapping_failed: coreMappingFailed,
+      full_text_chars: fullTextChars,
+      lease_fields_count: leaseFieldList.length,
+      mapped_standard_fields_count: mappedStandardFieldsCount,
+      source_backed_fields_count: sourceBackedFieldsCount,
+      value_only_fields_count: valueOnlyFieldsCount,
+      fields_rejected_missing_source_count: fieldsRejectedMissingSourceCount,
+      fields_rejected_generic_source_count: genericSourceTextRejected,
+      expense_rules_generated_count: expenseRules.length,
+      real_expense_rules_count: coreMappingFailed
+        ? 0
+        : expenseRules.filter((r: any) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,
+      coverage_gap_rules_count: expenseRules.filter((r: any) => r?.rule_type === "coverage_gap" || r?.generation_source === "original_lease_required").length,
+      expense_rules_demoted_for_mapping_failure: expenseRulesDemotedForMappingFailure,
     },
   };
 }

@@ -921,6 +921,15 @@ function buildLeaseReviewDraftPayload(
   const rentPerSf = toNumber(row.rent_per_sf) ??
     (annualRent != null && squareFootage ? roundMoney(annualRent / squareFootage) : null);
   const workflowOutput = getWorkflowOutputForRow(reviewedOutput, rowIndex);
+  // Carry the consolidated extraction diagnostics (incl. mapping_failure_reason)
+  // onto the lease so the Extraction Debug panel and Lease Review readiness
+  // banner can read them without falling back to the uploaded_files row.
+  const extractionDebug =
+    fileRecord?.normalized_output?.metadata?.extractionDebug
+    || fileRecord?.normalized_output?.metadata?.extraction_debug
+    || fileRecord?.ui_review_payload?.metadata?.extractionDebug
+    || fileRecord?.ui_review_payload?.metadata?.extraction_debug
+    || null;
   const workflowFields = workflowOutput?.lease_fields ?? {};
   const workflowFieldValue = (key: string) =>
     workflowFields?.[key] && workflowFields[key].value != null && workflowFields[key].value !== ""
@@ -1024,6 +1033,7 @@ function buildLeaseReviewDraftPayload(
       custom_fields: customFields,
       rejected_fields: rejectedFields,
       workflow_output: workflowOutput,
+      extraction_debug: extractionDebug,
       reviewed_at: reviewedOutput?.reviewed_at ?? now,
       reviewed_by: reviewedOutput?.reviewed_by ?? user.id,
     },

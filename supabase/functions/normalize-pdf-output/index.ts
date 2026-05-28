@@ -932,6 +932,96 @@ Deno.serve(async (req: Request) => {
         (result as Record<string, unknown>).workflow_output = uiReviewPayload.metadata.workflow_output;
       }
 
+      // ── Consolidated extraction_debug ──────────────────────────────────
+      // Merge the pipeline's parser/vision diagnostics with the workflow's
+      // profile + mapping + expense-rule diagnostics into one object using
+      // canonical key names, then surface mapping_failure_reason. The debug
+      // panel and Lease Review read this from
+      // uploaded_files.normalized_output.metadata.extractionDebug (and, after
+      // approval, lease.extraction_data.extraction_debug).
+      {
+        const firstRecord = Array.isArray(uiReviewPayload?.records) ? uiReviewPayload.records[0] : null;
+        const wf = (firstRecord as any)?.workflow_output ?? null;
+        const wfSummary = (wf?.summary ?? {}) as Record<string, unknown>;
+        const pipelineDebug = ((result.metadata as any)?.extractionDebug ?? {}) as Record<string, unknown>;
+        const uiFieldsCount = firstRecord
+          ? ((firstRecord as any).standard_fields?.length ?? 0) + ((firstRecord as any).custom_fields?.length ?? 0)
+          : 0;
+        const fullTextChars = Number(
+          wfSummary.full_text_chars
+          ?? pipelineDebug.embedded_text_chars_total
+          ?? pipelineDebug.normalized_text_chars_total
+          ?? 0,
+        );
+        // mapping_failure_reason precedence: an outright parse failure
+        // (no text) trumps the workflow's field-level reason.
+        const mappingFailureReason =
+          fullTextChars === 0
+            ? "no_text_extracted"
+            : (wfSummary.mapping_failure_reason as string | null) ?? null;
+        const coreMappingFailed = Boolean(wfSummary.core_mapping_failed) || mappingFailureReason != null;
+        const consolidated = {
+          ...pipelineDebug,
+          // Document classification
+          document_profile: wf?.document_profile ?? wfSummary.document_profile ?? null,
+          selected_document_profile: wf?.selected_document_profile ?? wfSummary.selected_document_profile ?? null,
+          lease_structure: wf?.lease_structure ?? wfSummary.lease_structure ?? null,
+          profile_detection_signals: wf?.profile_detection_signals ?? wfSummary.profile_detection_signals ?? null,
+          // Text + parser provenance
+          full_text_chars: fullTextChars,
+          parser_source: pipelineDebug.vision_parser_source ?? pipelineDebug.parsing_method ?? null,
+          vision_parser_used: pipelineDebug.vision_parser_used ?? false,
+          vision_field_extraction_used: pipelineDebug.vision_field_extraction_used ?? pipelineDebug.vision_fallback_triggered ?? false,
+          // Mapping counts
+          fixed_fields_extracted: wfSummary.fixed_fields_extracted ?? 0,
+          mapped_standard_fields_count: wfSummary.mapped_standard_fields_count ?? 0,
+          lease_fields_count: wfSummary.lease_fields_count ?? 0,
+          ui_review_payload_fields_count: uiFieldsCount,
+          source_backed_fields_count: wfSummary.source_backed_fields_count ?? pipelineDebug.source_backed_fields_count ?? 0,
+          value_only_fields_count: wfSummary.value_only_fields_count ?? 0,
+          fields_rejected_missing_source_count: wfSummary.fields_rejected_missing_source_count ?? 0,
+          fields_rejected_generic_source_count: wfSummary.fields_rejected_generic_source_count ?? pipelineDebug.rejected_generic_source_count ?? 0,
+          // Expense-rule generation
+          expense_rules_generated_count: wfSummary.expense_rules_generated_count ?? wfSummary.expense_rule_count ?? 0,
+          real_expense_rules_count: wfSummary.real_expense_rules_count ?? 0,
+          coverage_gap_rules_count: wfSummary.coverage_gap_rules_count ?? 0,
+          expense_rules_demoted_for_mapping_failure: wfSummary.expense_rules_demoted_for_mapping_failure ?? 0,
+          // The headline
+          mapping_failure_reason: mappingFailureReason,
+          core_mapping_failed: coreMappingFailed,
+        };
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          extractionDebug: consolidated,
+        };
+        // Also expose it on the review payload metadata so the draft-creation
+        // path (which only reads ui_review_payload) can persist it onto
+        // lease.extraction_data.extraction_debug.
+        if (uiReviewPayload?.metadata && typeof uiReviewPayload.metadata === "object") {
+          (uiReviewPayload.metadata as Record<string, unknown>).extractionDebug = consolidated;
+          (uiReviewPayload.metadata as Record<string, unknown>).extraction_debug = consolidated;
+        }
+
+        // Surface a user-facing warning so the Upload screen's
+        // "did not return mapped values" banner reflects a real signal and
+        // the Lease Review screen can show the honest message instead of a
+        // misleading "N expense terms found" success.
+        if (coreMappingFailed && extractionModuleType === "lease") {
+          const msg =
+            "Expense terms may have been detected, but core lease fields were not mapped. Manual review required.";
+          uiReviewPayload.global_warnings = [
+            ...(uiReviewPayload.global_warnings ?? []),
+            msg,
+          ];
+          uiReviewPayload.warnings = [
+            ...(uiReviewPayload.warnings ?? []),
+            msg,
+          ];
+          (uiReviewPayload as Record<string, unknown>).mapping_failed = true;
+          (uiReviewPayload as Record<string, unknown>).mapping_failure_reason = mappingFailureReason;
+        }
+      }
+
       // Decide the next status based on the review gate decided at ingest.
       const reviewRequired = !!fileRecord.review_required;
       const nextStatus = reviewRequired ? "review_required" : "validated";

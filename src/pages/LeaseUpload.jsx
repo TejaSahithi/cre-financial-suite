@@ -969,6 +969,12 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
   const fieldsWithEvidence = buildFieldsWithEvidence(fileRecord?.ui_review_payload);
   const fieldEvidence = buildFieldEvidenceMap(fileRecord?.ui_review_payload);
   const workflowOutput = extractWorkflowOutputForFirstRow(fileRecord?.ui_review_payload);
+  // Carry the consolidated extraction diagnostics (incl. mapping_failure_reason)
+  // onto the lease so Lease Review / Extraction Debug can read them directly.
+  const extractionDebug =
+    fileRecord?.ui_review_payload?.metadata?.extractionDebug
+    || fileRecord?.ui_review_payload?.metadata?.extraction_debug
+    || null;
 
   const numeric = (v) => {
     if (v == null || v === "") return null;
@@ -1032,6 +1038,7 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
       // the UI's getWorkflowLeaseFields resolver lights up Raw / Page /
       // Source Text / Confidence columns.
       workflow_output: workflowOutput,
+      extraction_debug: extractionDebug,
     },
     confidence_score: averageConfidence(confidenceScores),
     low_confidence_fields: lowConfidenceFields,
