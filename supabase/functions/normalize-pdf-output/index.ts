@@ -1095,12 +1095,33 @@ Deno.serve(async (req: Request) => {
           ?? pipelineDebug.normalized_text_chars_total
           ?? 0,
         );
+        const parsedPages = Number(wfSummary.docling_pages_parsed ?? 0);
+        const totalPages = Number(wfSummary.pdf_page_count_total ?? 0);
+        const partialDocumentTextDetected = Boolean(
+          wfSummary.partial_document_text_detected
+          || (
+            extractionModuleType === "lease" &&
+            totalPages > 1 &&
+            parsedPages <= 1 &&
+            fullTextChars > 0 &&
+            fullTextChars < 2500
+          )
+          || (
+            extractionModuleType === "lease" &&
+            String(pipelineDebug.parsing_method || pipelineDebug.vision_parser_source || "").toLowerCase() === "pdf_text" &&
+            totalPages > 1 &&
+            fullTextChars > 0 &&
+            fullTextChars < 2500
+          )
+        );
         // mapping_failure_reason precedence: an outright parse failure
-        // (no text) trumps the workflow's field-level reason.
+        // (no text) and a partial-page parse trump the workflow's field-level reason.
         const mappingFailureReason =
           fullTextChars === 0
             ? "no_text_extracted"
-            : (wfSummary.mapping_failure_reason as string | null) ?? null;
+            : partialDocumentTextDetected
+              ? "partial_document_text_detected"
+              : (wfSummary.mapping_failure_reason as string | null) ?? null;
         const coreMappingFailed = Boolean(wfSummary.core_mapping_failed) || mappingFailureReason != null;
         const fieldTrace = firstRecord
           ? buildFieldTraceForRecord({
@@ -1126,6 +1147,7 @@ Deno.serve(async (req: Request) => {
           parser_source: pipelineDebug.vision_parser_source ?? pipelineDebug.parsing_method ?? null,
           vision_parser_used: pipelineDebug.vision_parser_used ?? false,
           vision_field_extraction_used: pipelineDebug.vision_field_extraction_used ?? pipelineDebug.vision_fallback_triggered ?? false,
+          partial_document_text_detected: partialDocumentTextDetected,
           // Mapping counts
           fixed_fields_extracted: wfSummary.fixed_fields_extracted ?? 0,
           mapped_standard_fields_count: wfSummary.mapped_standard_fields_count ?? 0,

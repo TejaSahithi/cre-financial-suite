@@ -15,6 +15,7 @@ const FIELD_ALIASES = {
 
   // Premises
   property_name: ["property_name", "building_name", "premises.property_name", "building"],
+  premises_address: ["premises_address", "property_address", "address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"],
   property_address: ["property_address", "address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"],
   suite_number: ["suite_number", "suite", "unit", "premises", "premises_suite", "unit_number", "space_number"],
   floor: ["floor", "floor_number"],

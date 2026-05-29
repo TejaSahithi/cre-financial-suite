@@ -817,6 +817,11 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
   const explicit = String(evidence?.extractionStatus || "").trim().toLowerCase();
   const present = isMeaningfulValue(value);
   const hasEvidence = hasValidSourceEvidence(evidence);
+  const debug = lease?.extraction_data?.extraction_debug || {};
+  const extractionIncomplete = Boolean(
+    debug.partial_document_text_detected ||
+    debug.mapping_failure_reason === "partial_document_text_detected",
+  );
 
   if (explicit) {
     if (isCalculatedExtractionStatus(explicit)) return EXTRACTION_STATUSES.CALCULATED;
@@ -835,7 +840,9 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
       return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;
     }
     if (explicit === EXTRACTION_STATUSES.NEEDS_REVIEW) return explicit;
-    if (explicit === EXTRACTION_STATUSES.NOT_FOUND || explicit === EXTRACTION_STATUSES.MISSING) return explicit;
+    if (explicit === EXTRACTION_STATUSES.NOT_FOUND || explicit === EXTRACTION_STATUSES.MISSING) {
+      return extractionIncomplete && !present ? EXTRACTION_STATUSES.NEEDS_REVIEW : explicit;
+    }
     if (explicit === EXTRACTION_STATUSES.CONFLICT) return explicit;
   }
 
@@ -855,7 +862,8 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
     || lease?.abstract_snapshot?.fields
     || lease?.extracted_fields,
   );
-  return extractorRan ? EXTRACTION_STATUSES.NOT_FOUND : EXTRACTION_STATUSES.MISSING;
+  if (!extractorRan) return EXTRACTION_STATUSES.MISSING;
+  return extractionIncomplete ? EXTRACTION_STATUSES.NEEDS_REVIEW : EXTRACTION_STATUSES.NOT_FOUND;
 }
 
 /**

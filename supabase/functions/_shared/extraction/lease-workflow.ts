@@ -2566,6 +2566,13 @@ export function buildLeaseWorkflowAbstraction(args: {
   const fieldsRejectedMissingSourceCount = leaseFieldList.filter((field) =>
     field?.extraction_status === "missing_source_evidence"
   ).length;
+  const partialDocumentTextDetected = Boolean(
+    pdfPageCountTotal &&
+    pdfPageCountTotal > 1 &&
+    doclingPagesParsed <= 1 &&
+    fullTextChars > 0 &&
+    fullTextChars < 2500,
+  );
   // lease_structure is the normalized expense-recovery structure (distinct
   // from document_profile, which is the document's role). Derived from the
   // classified lease type so downstream can branch on modified_gross /
@@ -2588,6 +2595,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   // extraction produced source-backed standard fields.
   const mappingFailureReason = (() => {
     if (fullTextChars === 0) return "no_text_extracted";
+    if (partialDocumentTextDetected) return "partial_document_text_detected";
     if (mappedStandardFieldsCount === 0) return "no_fields_mapped_from_document";
     if (sourceBackedFieldsCount === 0) return "fields_mapped_without_source_evidence";
     return null;
@@ -2713,6 +2721,7 @@ export function buildLeaseWorkflowAbstraction(args: {
       mapping_failure_reason: mappingFailureReason,
       core_mapping_failed: coreMappingFailed,
       full_text_chars: fullTextChars,
+      partial_document_text_detected: partialDocumentTextDetected,
       lease_fields_count: leaseFieldList.length,
       mapped_standard_fields_count: mappedStandardFieldsCount,
       source_backed_fields_count: sourceBackedFieldsCount,

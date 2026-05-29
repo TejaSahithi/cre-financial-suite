@@ -40,6 +40,7 @@ const MAX_DOCLING_SUPPLEMENT_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_PDF_BYTES = 8 * 1024 * 1024;
 const MAX_NATIVE_PDF_TEXT_BYTES = 4 * 1024 * 1024;
 const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 15 * 1024 * 1024;
+const MIN_NATIVE_PDF_TEXT_CHARS = 2500;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";
 
@@ -71,10 +72,28 @@ export async function parseDocument(
   if (!likelyScannedPdf && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
     const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
     if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
-      console.log(
-        `[parser] Native PDF parser extracted ${nativePdfOutput.full_text?.length ?? 0} chars from "${fileName}"`,
+      const estimatedPageCount = estimatePdfPageCount(fileBytes);
+      if (estimatedPageCount) nativePdfOutput.page_count = estimatedPageCount;
+      const nativeTextChars = nativePdfOutput.full_text?.trim().length ?? 0;
+      const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
+      const nativeLooksComplete =
+        nativeTextChars >= MIN_NATIVE_PDF_TEXT_CHARS ||
+        nativeBlockCount >= MIN_DIGITAL_BLOCKS ||
+        ((estimatedPageCount ?? 1) <= 1 && nativeTextChars >= 800);
+
+      if (nativeLooksComplete) {
+        console.log(
+          `[parser] Native PDF parser extracted ${nativeTextChars} chars ` +
+          `across ${estimatedPageCount ?? nativePdfOutput.page_count ?? "?"} page(s) from "${fileName}"`,
+        );
+        return tag(nativePdfOutput, "pdf_text");
+      }
+
+      console.warn(
+        `[parser] Native PDF parser extracted only ${nativeTextChars} chars ` +
+        `from ${estimatedPageCount ?? "unknown"} page(s) for "${fileName}" — ` +
+        "continuing to Docling/Vision instead of treating partial text as complete.",
       );
-      return tag(nativePdfOutput, "pdf_text");
     }
   }
 
@@ -209,6 +228,17 @@ function looksLikeScannedPdf(bytes: Uint8Array): boolean {
   // They can still have a high printable ratio because PDF syntax itself is
   // printable, so use image-vs-text structure as the stronger signal.
   return imageMarkers >= 3 && textOperators < 5;
+}
+
+function estimatePdfPageCount(bytes: Uint8Array): number | null {
+  if (!bytes || bytes.length < 8) return null;
+  const sampleText = new TextDecoder("latin1", { fatal: false }).decode(bytes);
+  const explicitPages = sampleText.match(/\/Type\s*\/Page\b/g)?.length ?? 0;
+  if (explicitPages > 0) return explicitPages;
+  const countMatches = [...sampleText.matchAll(/\/Count\s+(\d{1,4})/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return countMatches.length ? Math.max(...countMatches) : null;
 }
 
 // ── Strategy implementations ────────────────────────────────────────────────

@@ -74,15 +74,22 @@ function normalizeDoclingOutput(docling: DoclingOutput): DoclingOutput {
   normalized.text_blocks = normalizedBlocks;
 
   // 2. Rebuild full_text from normalized blocks plus explicit key/value fields.
-  // Scanned PDFs can return sparse OCR text but rich Vision key/value pairs;
-  // those fields must still feed rule extraction and prevent false
-  // "document text too short" fallback.
+  // Keep the parser-provided full_text when it is richer than the rebuilt
+  // blocks. Some parsers return a complete full_text but sparse blocks; if we
+  // discard that here, downstream lease extraction reviews a tiny slice of the
+  // lease and incorrectly marks fields as Not Found.
   const blockText = normalizedBlocks.map((b) => b.text).join("\n");
+  const rawFullText = String(docling.full_text ?? "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   const fieldText = (docling.fields ?? [])
     .filter((f) => f?.key && f?.value)
     .map((f) => `${String(f.key).trim()}: ${String(f.value).trim()}`)
     .join("\n");
-  normalized.full_text = [blockText, fieldText].filter(Boolean).join("\n");
+  const primaryText = rawFullText.length > blockText.length ? rawFullText : blockText;
+  normalized.full_text = [primaryText, fieldText].filter(Boolean).join("\n");
 
   // 3. Normalize tables: clean header cells and trim values
   if (docling.tables && docling.tables.length > 0) {
@@ -237,6 +244,7 @@ export async function runExtractionPipeline(
   }
 
   const moduleType: ModuleType = input.moduleType;
+  const isLeaseLikeModule = ["lease", "leases"].includes(String(moduleType));
 
   // ── STEP 0: Normalize ────────────────────────────────────────────────────
   log.step(0, "Normalization", `text_blocks=${rawDocling.text_blocks?.length ?? 0}, tables=${rawDocling.tables?.length ?? 0}`);
@@ -248,7 +256,7 @@ export async function runExtractionPipeline(
   const fileBase64Available = Boolean(input.fileBase64);
   const LEASE_SHALLOW_TEXT_THRESHOLD = 2500;
   const shallowLeaseTextDetected =
-    moduleType === "lease" &&
+    isLeaseLikeModule &&
     fileBase64Available &&
     embeddedTextChars > 0 &&
     embeddedTextChars < LEASE_SHALLOW_TEXT_THRESHOLD;
