@@ -20,8 +20,8 @@ const FIELD_ALIASES = {
   suite_number: ["suite_number", "suite", "unit", "premises", "premises_suite", "unit_number", "space_number"],
   floor: ["floor", "floor_number"],
   square_footage: ["square_footage", "rentable_square_feet", "tenant_rsf", "tenant_rentable_area", "rsf", "premises_rsf", "rentable_area", "rentable_area_sqft", "leased_premises_area", "square_feet"],
-  building_rsf: ["building_rsf", "building_rentable_area"],
-  tenant_pro_rata_share: ["tenant_pro_rata_share", "pro_rata_share", "tenant_share_percent", "tenant_share"],
+  building_rsf: ["building_rsf", "building_rentable_area", "building_rentable_area_sf", "property_rentable_area_sf"],
+  tenant_pro_rata_share: ["tenant_pro_rata_share", "pro_rata_share", "tenant_share_percent", "tenant_share", "tenant_pro_rata_share_building", "tenant_pro_rata_share_property"],
   premises_use: ["premises_use", "permitted_use", "use"],
   permitted_use: ["permitted_use", "premises_use", "use_clause", "use", "use_of_premises"],
 
@@ -80,7 +80,8 @@ const FIELD_ALIASES = {
 
   // Legal / Notices
   late_fee_percent: ["late_fee_percent", "late_fee", "late_charge_percent"],
-  default_interest_percent: ["default_interest_percent", "default_interest", "default_rate"]
+  default_interest_percent: ["default_interest_percent", "default_interest", "default_rate"],
+  assignment_rights: ["assignment_rights", "assignment_provisions", "landlord_consent"]
 };
 
 export function getFieldAliases(fieldKey) {
