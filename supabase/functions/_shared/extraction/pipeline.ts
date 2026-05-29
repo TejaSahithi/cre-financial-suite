@@ -168,6 +168,21 @@ function getAllExtractableFieldNames(moduleType: ModuleType): string[] {
     .map(([name]) => name);
 }
 
+function snapshotFieldMap(records: any[]): Record<string, Record<string, unknown>> {
+  const first = records?.[0]?.fields ?? {};
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [field, entry] of Object.entries(first)) {
+    out[field] = {
+      value: (entry as any)?.value ?? null,
+      source: (entry as any)?.source ?? null,
+      confidence: (entry as any)?.confidence ?? null,
+      source_text: (entry as any)?.sourceText ?? (entry as any)?.source_text ?? null,
+      source_page: (entry as any)?.sourcePage ?? (entry as any)?.source_page ?? null,
+    };
+  }
+  return out;
+}
+
 // ── Main pipeline ────────────────────────────────────────────────────────────
 
 /**
@@ -358,7 +373,27 @@ export async function runExtractionPipeline(
 
   // ── STEP 5: Validate ─────────────────────────────────────────────────────
   log.step(5, "Validation");
+  const preValidationFields = snapshotFieldMap(merged.records as any[]);
   const validated = validateRecords(merged.records, moduleType);
+  const postValidationFields = snapshotFieldMap(validated.records as any[]);
+  const validatorFieldStatus: Record<string, string> = {};
+  const validatorRejectionReasons: Record<string, string> = {};
+  for (const field of new Set([...Object.keys(preValidationFields), ...Object.keys(postValidationFields)])) {
+    const before = preValidationFields[field];
+    const after = postValidationFields[field];
+    if (!before) {
+      validatorFieldStatus[field] = "not_seen";
+      continue;
+    }
+    if (before.value != null && after?.value == null) {
+      validatorFieldStatus[field] = "rejected";
+      validatorRejectionReasons[field] =
+        validated.errors.find((error) => error.field === field && error.receivedValue != null)?.message
+        ?? "Value was present before validation but null after validation.";
+      continue;
+    }
+    validatorFieldStatus[field] = after?.value != null ? "accepted" : "not_seen";
+  }
 
   if (validated.errors.length > 0) {
     log.warn(`${validated.errors.length} validation error(s):`);
@@ -543,6 +578,15 @@ export async function runExtractionPipeline(
         fields_rejected_by_validator_count: validated.errors.filter(
           (e) => e.receivedValue !== null && e.receivedValue !== undefined,
         ).length,
+        validator_field_status: validatorFieldStatus,
+        validator_rejection_reasons: validatorRejectionReasons,
+        merged_field_sources: preValidationFields,
+        validated_field_values: postValidationFields,
+        rejected_fields_with_reasons: Object.entries(validatorRejectionReasons).map(([field, reason]) => ({
+          field,
+          reason,
+          received_value: preValidationFields[field]?.value ?? null,
+        })),
         first_rejection_reasons: validated.errors
           .filter((e) => e.receivedValue !== null && e.receivedValue !== undefined)
           .slice(0, 5)

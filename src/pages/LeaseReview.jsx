@@ -2622,8 +2622,60 @@ export default function LeaseReview() {
         }
       }
 
+      const sourceExtractionDebug =
+        latestFile?.ui_review_payload?.metadata?.extraction_debug
+        || latestFile?.ui_review_payload?.metadata?.extractionDebug
+        || latestFile?.normalized_output?.metadata?.extraction_debug
+        || latestFile?.normalized_output?.metadata?.extractionDebug
+        || {};
+      const sourceFieldTrace = Array.isArray(sourceExtractionDebug.field_trace)
+        ? sourceExtractionDebug.field_trace
+        : [];
+      const enrichedFieldTrace = sourceFieldTrace.map((trace) => {
+        const aliases = trace.expected_aliases?.length ? trace.expected_aliases : getFieldAliases(trace.field_key);
+        const persistedKey = aliases.find((alias) => mergedFields[alias]?.value != null && mergedFields[alias]?.value !== "");
+        const persisted = persistedKey ? mergedFields[persistedKey] : null;
+        const resolverFound = Boolean(persisted);
+        const nextTrace = {
+          ...trace,
+          expected_aliases: aliases,
+          persisted_to_extraction_data: resolverFound,
+          persisted_value: persisted?.value ?? null,
+          resolver_found_value: resolverFound,
+          resolver_value: persisted?.value ?? null,
+          resolver_status: persisted?.extraction_status ?? trace.resolver_status ?? null,
+          rendered_in_tab: LEASE_REVIEW_FIELDS.some((field) => field.key === trace.field_key),
+        };
+        if (!nextTrace.resolver_found_value && nextTrace.persisted_to_extraction_data) {
+          nextTrace.final_blank_reason = "resolver_alias_missing";
+        } else if (!nextTrace.rendered_in_tab) {
+          nextTrace.final_blank_reason = "dynamic_row_filter_hidden";
+        } else if (nextTrace.resolver_status === "missing_source_evidence") {
+          nextTrace.final_blank_reason = "missing_source_evidence";
+        } else if (nextTrace.resolver_found_value && nextTrace.final_blank_reason === "llm_did_not_return") {
+          nextTrace.final_blank_reason = null;
+        }
+        return nextTrace;
+      });
+      const missingTraceRows = enrichedFieldTrace.filter((trace) => trace.final_blank_reason);
+      const missingByReason = missingTraceRows.reduce((acc, trace) => {
+        acc[trace.final_blank_reason] = (acc[trace.final_blank_reason] || 0) + 1;
+        return acc;
+      }, {});
+
       const extractionDebug = {
         ...(lease.extraction_data?.extraction_debug || {}),
+        ...sourceExtractionDebug,
+        ...(enrichedFieldTrace.length ? {
+          field_trace: enrichedFieldTrace,
+          missing_fields_count: missingTraceRows.length,
+          missing_by_reason: missingByReason,
+          top_20_missing_fields: missingTraceRows.slice(0, 20).map((trace) => ({
+            field_key: trace.field_key,
+            display_label: trace.display_label,
+            reason: trace.final_blank_reason,
+          })),
+        } : {}),
         last_reextract_at: new Date().toISOString(),
         last_reextract_source_file_id: sourceFileId,
         previous_source_backed_fields_count: previousSourceBackedCount,

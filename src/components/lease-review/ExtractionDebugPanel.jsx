@@ -336,6 +336,36 @@ export default function ExtractionDebugPanel({ lease }) {
     })
   ).length;
   debugSummary.accept_blocked_missing_source_count = missingEvidence.filter((row) => row.required).length;
+  const rawFieldTrace = Array.isArray(debugRead("field_trace")) ? debugRead("field_trace") : [];
+  const fieldTraceRows = rawFieldTrace.map((trace) => {
+    const rendered = reviewTableRows.find((row) => row.key === trace.field_key);
+    const resolverFound = rendered ? rendered.value != null && rendered.value !== "" : Boolean(trace.resolver_found_value);
+    const resolverStatus = rendered?.status ?? trace.resolver_status ?? null;
+    let finalReason = trace.final_blank_reason ?? null;
+    if (!rendered) finalReason = finalReason || "dynamic_row_filter_hidden";
+    else if (resolverFound && resolverStatus === "missing_source_evidence") finalReason = "missing_source_evidence";
+    else if (resolverFound && finalReason === "llm_did_not_return") finalReason = null;
+    return {
+      ...trace,
+      resolver_found_value: resolverFound,
+      resolver_value: rendered?.value ?? trace.resolver_value ?? null,
+      resolver_status: resolverStatus,
+      rendered_in_tab: Boolean(rendered),
+      final_blank_reason: finalReason,
+    };
+  });
+  const missingTraceRows = fieldTraceRows.filter((trace) => trace.final_blank_reason);
+  const missingTraceByReason = missingTraceRows.reduce((acc, trace) => {
+    acc[trace.final_blank_reason] = (acc[trace.final_blank_reason] || 0) + 1;
+    return acc;
+  }, {});
+  debugSummary.missing_fields_count = missingTraceRows.length || debugRead("missing_fields_count") || 0;
+  debugSummary.missing_by_reason = JSON.stringify(
+    Object.keys(missingTraceByReason).length ? missingTraceByReason : (debugRead("missing_by_reason") || {}),
+  );
+  debugSummary.unmapped_llm_keys = JSON.stringify(debugRead("unmapped_llm_keys") || []);
+  debugSummary.rejected_fields_with_reasons = JSON.stringify(debugRead("rejected_fields_with_reasons") || []);
+  debugSummary.persisted_but_not_rendered_fields = JSON.stringify(debugRead("persisted_but_not_rendered_fields") || []);
 
   // ── Actions ──────────────────────────────────────────────────────────
 
@@ -595,6 +625,67 @@ export default function ExtractionDebugPanel({ lease }) {
             </div>
           ))}
         </div>
+      </Section>
+
+      <Section
+        title="Field-Level Missing Trace"
+        count={`${missingTraceRows.length} missing / blocked`}
+        badge={`${fieldTraceRows.length} traced`}
+      >
+        {fieldTraceRows.length === 0 ? (
+          <p className="text-slate-500">No field_trace is stored yet. Re-run extraction to populate field-level trace.</p>
+        ) : (
+          <>
+            <div className="grid gap-2 md:grid-cols-3">
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Missing Fields</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{missingTraceRows.length}</div>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Missing By Reason</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(missingTraceByReason, 1000)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Unmapped LLM Keys</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(debugRead("unmapped_llm_keys") || [], 1000)}</pre>
+              </div>
+            </div>
+            <div className="max-h-80 overflow-auto rounded border border-slate-200">
+              <table className="w-full text-[11px]">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Field</th>
+                    <th className="px-2 py-1 text-left">Reason</th>
+                    <th className="px-2 py-1 text-left">Requested</th>
+                    <th className="px-2 py-1 text-left">LLM Returned</th>
+                    <th className="px-2 py-1 text-left">Validator</th>
+                    <th className="px-2 py-1 text-left">Workflow</th>
+                    <th className="px-2 py-1 text-left">Persisted</th>
+                    <th className="px-2 py-1 text-left">Rendered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fieldTraceRows.slice(0, 80).map((trace) => (
+                    <tr key={trace.field_key} className="border-t border-slate-100">
+                      <td className="px-2 py-1 font-medium text-slate-700" title={trace.expected_aliases?.join(", ")}>
+                        {trace.display_label || trace.field_key}
+                      </td>
+                      <td className="px-2 py-1 text-amber-700">{trace.final_blank_reason || "ok"}</td>
+                      <td className="px-2 py-1 text-slate-600">{trace.requested_from_llm ? "yes" : "no"}</td>
+                      <td className="max-w-[180px] truncate px-2 py-1 text-slate-600" title={trace.llm_source_text || ""}>
+                        {trace.llm_returned_aliases?.length ? trace.llm_returned_aliases.join(", ") : "—"}
+                      </td>
+                      <td className="px-2 py-1 text-slate-600" title={trace.validator_rejection_reason || ""}>{trace.validator_status || "—"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.workflow_value ?? "—"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.persisted_value ?? "—"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.resolver_value ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </Section>
 
       <Section

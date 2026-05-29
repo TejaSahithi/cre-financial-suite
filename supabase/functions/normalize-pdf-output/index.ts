@@ -24,7 +24,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
-import { getSchema } from "../_shared/extraction/schemas.ts";
+import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
@@ -171,6 +171,135 @@ function workflowFieldFor(fieldKey: string, leaseFields: Record<string, any> = {
     if (leaseFields?.[key]) return leaseFields[key];
   }
   return leaseFields?.[fieldKey] ?? null;
+}
+
+function expectedAliasesForTrace(fieldKey: string): string[] {
+  const aliases: Record<string, string[]> = {
+    base_rent_per_sf_year: ["rent_per_sf", "base_rent_per_sf_year", "tenant_rent_per_rsf"],
+    rent_per_sf: ["rent_per_sf", "base_rent_per_sf_year", "tenant_rent_per_rsf"],
+    responsibility_taxes: ["responsibility_taxes", "tax_responsibility", "taxes_responsibility"],
+    taxes_responsibility: ["responsibility_taxes", "tax_responsibility", "taxes_responsibility"],
+    responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
+    insurance_responsibility: ["responsibility_insurance", "insurance_responsibility"],
+    responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
+    utilities_responsibility: ["responsibility_utilities", "utilities_responsibility"],
+    responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility", "repairs_maintenance_responsibility"],
+    repairs_maintenance_responsibility: ["responsibility_repairs", "maintenance_responsibility", "repairs_maintenance_responsibility"],
+    monthly_rent: ["monthly_rent", "base_rent_monthly"],
+    annual_rent: ["annual_rent", "base_rent_annual", "amended_base_rent_for_additional_year"],
+    billing_frequency: ["billing_frequency", "rent_frequency"],
+    lease_type: ["lease_type", "expense_structure", "lease_structure"],
+    cam_cap_pct: ["cam_cap_pct", "cam_cap_percent", "cap_percent"],
+    admin_fee_pct: ["admin_fee_pct", "admin_fee_percent"],
+    gross_up_enabled: ["gross_up_enabled", "gross_up_applicable", "gross_up_allowed"],
+    gross_up_threshold: ["gross_up_threshold", "gross_up_percent", "gross_up_target_occupancy_pct"],
+  };
+  return [...new Set([fieldKey, ...(aliases[fieldKey] || [])])];
+}
+
+function groupForTrace(fieldKey: string, moduleType: string): string | null {
+  const normalized = toExtractionModuleType(moduleType);
+  for (const group of getFieldGroups(normalized)) {
+    if (group.fields.includes(fieldKey)) return group.name;
+    if (expectedAliasesForTrace(fieldKey).some((alias) => group.fields.includes(alias))) return group.name;
+  }
+  return null;
+}
+
+function getByAliases(map: Record<string, any> | null | undefined, aliases: string[]) {
+  if (!map || typeof map !== "object") return { key: null, value: null };
+  for (const alias of aliases) {
+    if (map[alias] !== undefined && map[alias] !== null) return { key: alias, value: map[alias] };
+  }
+  return { key: null, value: null };
+}
+
+function deriveTraceBlankReason(trace: Record<string, any>) {
+  if (!trace.rendered_in_tab) return "dynamic_row_filter_hidden";
+  if (trace.resolver_found_value) {
+    if (trace.resolver_status === "missing_source_evidence") return "missing_source_evidence";
+    if (trace.resolver_status === "calculated") return "calculated_but_not_allowed";
+    return null;
+  }
+  if (!trace.requested_from_llm) return "not_requested_from_llm";
+  if (!trace.llm_returned_aliases?.length) return "llm_did_not_return";
+  if (trace.validator_status === "rejected") return "validator_rejected";
+  if (trace.llm_returned_aliases?.length && !trace.mapped_to_workflow_field) return "returned_under_unmapped_alias";
+  if (trace.mapped_to_workflow_field && !trace.persisted_to_extraction_data) return "persisted_under_wrong_key";
+  if (trace.persisted_to_extraction_data && !trace.resolver_found_value) return "resolver_alias_missing";
+  return "unknown";
+}
+
+function buildFieldTraceForRecord({
+  standardFields,
+  workflowOutput,
+  pipelineDebug,
+  moduleType,
+}: {
+  standardFields: any[];
+  workflowOutput: any;
+  pipelineDebug: Record<string, any>;
+  moduleType: string;
+}) {
+  const requested = new Set(pipelineDebug.llm_requested_fields || []);
+  const llmDetails = pipelineDebug.llm_returned_field_details || {};
+  const validatorStatus = pipelineDebug.validator_field_status || {};
+  const validatorReasons = pipelineDebug.validator_rejection_reasons || {};
+  const leaseFields = workflowOutput?.lease_fields || {};
+  const persistedFields = Object.fromEntries((standardFields || []).map((field) => [field.field_key, field]));
+
+  return (standardFields || []).map((field) => {
+    const aliases = expectedAliasesForTrace(field.field_key);
+    const llmMatches = aliases.filter((alias) => llmDetails[alias] && llmDetails[alias].value != null);
+    const llmFirst = llmMatches.length ? llmDetails[llmMatches[0]] : null;
+    const workflowMatch = getByAliases(leaseFields, aliases);
+    const persistedMatch = getByAliases(persistedFields, aliases);
+    const persistedField = persistedMatch.value;
+    const trace = {
+      field_key: field.field_key,
+      display_label: field.label || humanizeFieldName(field.field_key),
+      group: groupForTrace(field.field_key, moduleType),
+      expected_aliases: aliases,
+      requested_from_llm: aliases.some((alias) => requested.has(alias)),
+      llm_returned_aliases: llmMatches,
+      llm_raw_value: llmFirst?.value ?? null,
+      llm_source_text: llmFirst?.source_text ?? null,
+      llm_source_page: llmFirst?.source_page ?? null,
+      validator_status: getByAliases(validatorStatus, aliases).value || "not_seen",
+      validator_rejection_reason: getByAliases(validatorReasons, aliases).value || null,
+      mapped_to_workflow_field: Boolean(workflowMatch.value && workflowMatch.value.value != null),
+      workflow_value: workflowMatch.value?.value ?? null,
+      workflow_source_text: workflowMatch.value?.source_clause ?? workflowMatch.value?.source_text ?? null,
+      workflow_source_page: workflowMatch.value?.source_page ?? null,
+      persisted_to_extraction_data: Boolean(persistedField && persistedField.value != null),
+      persisted_value: persistedField?.value ?? null,
+      resolver_found_value: Boolean(field.value != null && field.value !== ""),
+      resolver_value: field.value ?? null,
+      resolver_status: field.status ?? field.extraction_status ?? null,
+      rendered_in_tab: true,
+      final_blank_reason: null,
+    };
+    trace.final_blank_reason = deriveTraceBlankReason(trace);
+    return trace;
+  });
+}
+
+function summarizeFieldTrace(fieldTrace: any[]) {
+  const missing = fieldTrace.filter((trace) => trace.final_blank_reason);
+  const missingByReason = missing.reduce((acc: Record<string, number>, trace) => {
+    acc[trace.final_blank_reason] = (acc[trace.final_blank_reason] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    field_trace: fieldTrace,
+    missing_fields_count: missing.length,
+    missing_by_reason: missingByReason,
+    top_20_missing_fields: missing.slice(0, 20).map((trace) => ({
+      field_key: trace.field_key,
+      display_label: trace.display_label,
+      reason: trace.final_blank_reason,
+    })),
+  };
 }
 
 /**
@@ -973,8 +1102,20 @@ Deno.serve(async (req: Request) => {
             ? "no_text_extracted"
             : (wfSummary.mapping_failure_reason as string | null) ?? null;
         const coreMappingFailed = Boolean(wfSummary.core_mapping_failed) || mappingFailureReason != null;
+        const fieldTrace = firstRecord
+          ? buildFieldTraceForRecord({
+              standardFields: (firstRecord as any).standard_fields || [],
+              workflowOutput: wf,
+              pipelineDebug,
+              moduleType,
+            })
+          : [];
+        const fieldTraceSummary = summarizeFieldTrace(fieldTrace);
         const consolidated = {
           ...pipelineDebug,
+          ...fieldTraceSummary,
+          unmapped_llm_keys: pipelineDebug.unmapped_llm_keys ?? [],
+          rejected_fields_with_reasons: pipelineDebug.rejected_fields_with_reasons ?? [],
           // Document classification
           document_profile: wf?.document_profile ?? wfSummary.document_profile ?? null,
           selected_document_profile: wf?.selected_document_profile ?? wfSummary.selected_document_profile ?? null,
@@ -994,6 +1135,9 @@ Deno.serve(async (req: Request) => {
           value_only_fields_count: wfSummary.value_only_fields_count ?? 0,
           fields_rejected_missing_source_count: wfSummary.fields_rejected_missing_source_count ?? 0,
           fields_rejected_generic_source_count: wfSummary.fields_rejected_generic_source_count ?? pipelineDebug.rejected_generic_source_count ?? 0,
+          persisted_but_not_rendered_fields: fieldTrace
+            .filter((trace: any) => trace.persisted_to_extraction_data && !trace.rendered_in_tab)
+            .map((trace: any) => trace.field_key),
           // Expense-rule generation
           expense_rules_generated_count: wfSummary.expense_rules_generated_count ?? wfSummary.expense_rule_count ?? 0,
           real_expense_rules_count: wfSummary.real_expense_rules_count ?? 0,

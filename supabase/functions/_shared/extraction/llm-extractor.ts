@@ -309,8 +309,39 @@ function makeDiag(input: ExtractionInput, missingVars: string[]) {
     groups_attempted: 0,
     groups_succeeded: 0,
     groups_failed: [] as string[],
+    llm_requested_fields: [] as string[],
+    llm_returned_fields: [] as string[],
+    llm_returned_field_details: {} as Record<string, Record<string, unknown>>,
+    unmapped_llm_keys: [] as string[],
     call_errors: [] as string[],
   };
+}
+
+function recordLlmFieldTrace(
+  diag: ReturnType<typeof makeDiag>,
+  raw: unknown,
+  expectedFields: string[],
+) {
+  const rows = Array.isArray(raw) ? raw : [raw];
+  const expected = new Set(expectedFields);
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+      if (!expected.has(key) && !diag.unmapped_llm_keys.includes(key)) {
+        diag.unmapped_llm_keys.push(key);
+      }
+      const evidence = normalizeLlmEvidence(value);
+      if (evidence.value != null && !diag.llm_returned_fields.includes(key)) {
+        diag.llm_returned_fields.push(key);
+      }
+      diag.llm_returned_field_details[key] = {
+        value: evidence.value ?? null,
+        source_text: evidence.sourceText ?? null,
+        source_page: evidence.sourcePage ?? null,
+        confidence: evidence.confidence ?? null,
+      };
+    }
+  }
 }
 
 // ── Diagnostic-aware Vertex call + JSON parse ─────────────────────────────────
@@ -477,6 +508,7 @@ export async function extractWithLLM(
     diag.llm_empty_response_reason = "no_field_groups_match";
     return { records: [], warnings: ["No field groups match missing fields"], diagnostics: diag };
   }
+  diag.llm_requested_fields = [...new Set(relevantGroups.flatMap((group) => group.fields))];
 
   // Determine extraction strategy:
   // - If we have existing multi-row records from tables → fill in missing fields per-group
@@ -540,6 +572,7 @@ async function fillMissingFieldsForRecords(
         diag.groups_failed.push(group.name);
         continue;
       }
+      recordLlmFieldTrace(diag, result, group.fields);
 
       const parsed = parseLLMArrayResponse(result, group.fields);
 
@@ -628,6 +661,7 @@ async function extractFieldGroups(
         diag.groups_failed.push(group.name);
         continue;
       }
+      recordLlmFieldTrace(diag, result, group.fields);
 
       const parsed = parseLLMResponse(result, group.fields);
       if (!parsed) {
