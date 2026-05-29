@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import {
   me,
   login as authLogin,
@@ -23,9 +23,15 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [appPublicSettings, setAppPublicSettings] = useState(null);
+  const profileFetchRef = useRef(null);
 
   // Fetch the user profile from auth service
   const fetchProfile = useCallback(async (showLoading = true) => {
+    if (profileFetchRef.current) {
+      return profileFetchRef.current;
+    }
+
+    const request = (async () => {
     try {
       if (showLoading) setIsLoadingAuth(true);
       const currentUser = await me();
@@ -71,6 +77,16 @@ export const AuthProvider = ({ children }) => {
     } finally {
       if (showLoading) setIsLoadingAuth(false);
     }
+    })();
+
+    profileFetchRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (profileFetchRef.current === request) {
+        profileFetchRef.current = null;
+      }
+    }
   }, []);
 
 
@@ -83,7 +99,7 @@ export const AuthProvider = ({ children }) => {
     const unsubscribe = onAuthStateChange((event, session) => {
       console.log('[AuthContext] Auth event:', event);
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        resetProfileCache();
+        resetProfileCache({ preserveInFlight: true });
         resetOrgIdCache();
         clearCache();
         fetchProfile(false); // ← false: don't set isLoadingAuth=true for subsequent sign-ins

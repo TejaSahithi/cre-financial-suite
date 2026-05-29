@@ -102,6 +102,7 @@ const DEV_USER = {
 
 // ─── Profile cache ───────────────────────────────────────────
 let _cachedProfile = null;
+let _profilePromise = null;
 
 // ─── Role priority for resolving effective role ──────────────
 const ROLE_PRIORITY = ['super_admin', 'org_admin', 'manager', 'editor', 'viewer'];
@@ -444,12 +445,21 @@ export async function me() {
 
   // Return in-memory cache to avoid redundant DB calls during a session
   if (_cachedProfile) return _cachedProfile;
+  if (_profilePromise) return _profilePromise;
 
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) throw error || new Error('Not authenticated');
+  _profilePromise = (async () => {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) throw error || new Error('Not authenticated');
 
-  _cachedProfile = await buildUserObject(user);
-  return _cachedProfile;
+    _cachedProfile = await buildUserObject(user);
+    return _cachedProfile;
+  })();
+
+  try {
+    return await _profilePromise;
+  } finally {
+    _profilePromise = null;
+  }
 }
 
 /**
@@ -558,8 +568,11 @@ export function redirectToLogin(returnUrl) {
  * Reset the in-memory profile cache.
  * Call after role/membership changes.
  */
-export function resetProfileCache() {
+export function resetProfileCache(options = {}) {
   _cachedProfile = null;
+  if (!options?.preserveInFlight) {
+    _profilePromise = null;
+  }
 }
 
 /**
