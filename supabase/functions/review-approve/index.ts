@@ -1,5 +1,5 @@
 // @ts-nocheck
-// v3 — fix isBaseYear for Modified Gross+Base Year; remove broken FIELD_SPEC patterns
+// v4 — lease_date in dates group; monthly_rent min=1; lease_type enum description
 /**
  * review-approve
  *

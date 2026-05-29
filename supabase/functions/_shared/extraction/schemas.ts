@@ -207,6 +207,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
     patterns: [/(?:Suite|Unit|Space)\s+([\w\-]+)/i],
     description: "Unit, suite, or space identifier",
   },
+  lease_date: {
+    type: "date",
+    labels: ["lease date", "effective date", "date of lease", "date signed", "execution date"],
+    tableHeaders: ["lease_date", "date", "effective date", "execution date"],
+    description:
+      "The date the lease was signed or executed (YYYY-MM-DD). " +
+      "Look for 'made and entered into as of [DATE]', 'Effective Date: [DATE]', 'dated [DATE]', " +
+      "or the date in the opening recital. This is BEFORE commencement_date.",
+  },
   start_date: {
     type: "date",
     required: true,
@@ -226,7 +235,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   },
   monthly_rent: {
     type: "number",
-    min: 0,
+    min: 1,   // reject $0 — free-rent periods show $0 in the schedule; $0 is never the real rent
     labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent"],
     tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent"],
     patterns: [
@@ -245,7 +254,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
   },
   annual_rent: {
     type: "number",
-    min: 0,
+    min: 1,   // same reason as monthly_rent — reject $0 annualized rows from free-rent periods
     labels: ["annual rent", "yearly rent", "annual base rent", "base annual rent", "rent per year", "base rent additional year", "additional year base rent"],
     tableHeaders: ["annual_rent", "annual rent", "yearly rent", "annual base rent"],
     patterns: [
@@ -291,7 +300,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:gross\s+lease|full[\s-]service)/i,
       /(?:modified[\s-]gross)/i,
     ],
-    description: "One of: nnn, gross, modified_gross, nn, net",
+    description:
+      "Return EXACTLY one of: nnn | gross | modified_gross | nn | net. " +
+      "Map long descriptions to the correct key: " +
+      "'Modified Gross Lease' or 'Modified Gross Lease with Base Year' → modified_gross. " +
+      "'Triple Net' or 'NNN' → nnn. " +
+      "'Full Service' or 'Gross Lease' → gross. " +
+      "Do NOT return the full phrase — return only the key.",
   },
   permitted_use: {
     type: "string",
@@ -1299,13 +1314,16 @@ const LEASE_GROUPS: FieldGroup[] = [
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address", "assignment_consideration", "all_other_terms_remain_same"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, notice address, explicit consideration, and all-other-terms language. Do not infer expense terms from assignment language." },
   {
     name: "dates",
-    fields: ["start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
+    fields: ["lease_date", "start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
     hint:
-      "Find lease term dates. commencement_date and expiration_date are the term start/end. " +
+      "Find lease term dates. " +
+      "lease_date is the date the lease was signed / executed — look for 'made and entered into as of [DATE]', " +
+      "'Effective Date: [DATE]', or 'dated [DATE]' in the opening paragraph. " +
+      "commencement_date and expiration_date are the term start/end. " +
       "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
       "If only month/day is given for expiration (e.g. 'January 31 of each year'), use commencement_year + 1. " +
       "rent_commencement_date is when rent payments start (may differ from term commencement when free-rent applies). " +
-      "Renewal/termination notice = how many months notice required.",
+      "Renewal/termination notice = how many months notice required. All dates → YYYY-MM-DD.",
   },
   {
     name: "financial",
