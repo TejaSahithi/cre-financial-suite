@@ -123,10 +123,11 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: userPrompt,
       temperature: 0.1, // Keep it deterministic
+      maxOutputTokens: 8192,
     });
 
     if (!result) {
-      throw new Error("Failed to extract rules from AI.");
+      throw new Error("Failed to extract rules from AI. The model may have truncated the response or failed JSON parsing.");
     }
 
     const resultAny = result as any;
