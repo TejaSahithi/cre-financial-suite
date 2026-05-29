@@ -167,7 +167,7 @@ export default function ExpenseReview() {
 
   const reviewRows = useMemo(() => {
     return scopedClassifications
-      .filter((row) => row.actual_expense_id || row.expense_id)
+      .filter((row) => (row.actual_expense_id || row.expense_id) && row.row_type !== "rule_missing_actual")
       .map((row) => {
         const expenseId = row.actual_expense_id || row.expense_id;
         return {
@@ -291,6 +291,7 @@ export default function ExpenseReview() {
   // Each row is one decision the reviewer must make.
   const exceptionRows = useMemo(() => {
     return scopedClassifications.filter((row) => {
+      if (row.row_type === "rule_missing_actual") return false;
       const status = String(row?.classification_status || "").toLowerCase();
       const recoverability = String(row?.recoverability_result || row?.recovery_status || "").toLowerCase();
       const exceptionType = String(row?.exception_type || "").toLowerCase();

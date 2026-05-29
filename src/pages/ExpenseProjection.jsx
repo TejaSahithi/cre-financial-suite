@@ -77,7 +77,11 @@ export default function ExpenseProjection() {
       const rows = await expenseService.listExpenseClassificationsForScope({
         property_id: selectedPropertyId || "all",
       });
-      return rows.filter((row) => normalizeProjectionText(row.classification_status) === "finalized");
+      return rows.filter(
+        (row) =>
+          normalizeProjectionText(row.classification_status) === "finalized" &&
+          row.row_type !== "rule_missing_actual"
+      );
     },
   });
 

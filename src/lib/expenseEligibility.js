@@ -209,7 +209,13 @@ function getRuleClassificationExclusionReason(rule = {}, { scopeMatch = true } =
   if (recoverable === "no") return "non_recoverable";
   if (!["yes", "conditional"].includes(recoverable)) return "needs_review";
   if (camEligible === "no") return "non_cam";
-  if (!["yes", "conditional"].includes(camEligible)) return "needs_review";
+  // Blank/unset cam_eligible is NOT the same as cam_eligible=no.
+  // When recoverable=yes and cam_eligible is simply unset, the rule is
+  // classification-eligible (treated as conditional/under-review) but is NOT
+  // yet CAM-ready. The CAM gate (getRuleCamExclusionReason) still requires
+  // cam_eligible=yes + published_to_cam=true, so blank never reaches CAM.
+  // Only explicit cam_eligible=no (handled above) blocks classification.
+  // If cam_eligible is conditional, allow through (still needs human review).
 
   return null;
 }
@@ -258,7 +264,7 @@ function getActualClassificationExclusionReason(actual = {}, { scopeMatch = true
   if ([approval, review, status, rowStatus].includes("rejected")) return "rejected";
   if ([approval, review, status, rowStatus].includes("draft")) return "draft";
   if ([approval, review].includes("needs_review")) return "needs_review";
-  if (![approval, review, status].some((value) => ["approved", "finalized"].includes(value))) return "not_approved";
+  if (![approval, review, status].some((value) => ["approved", "finalized", "active", "executed"].includes(value))) return "not_approved";
 
   const amount = asNumber(actual.amount);
   if (amount === null || amount === 0) return "missing_amount";

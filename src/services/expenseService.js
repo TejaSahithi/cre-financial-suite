@@ -501,6 +501,12 @@ function isApprovedExpenseRecord(expense, classification = null) {
   if (approval === "approved") return true;
   if (review === "approved") return true;
   if (status === "approved" || status === "finalized") return true;
+  // "active" and "executed" are the standard lifecycle states for expenses
+  // that have been entered and confirmed in the system but may not have an
+  // explicit approval_status field set. Treat them as approved for
+  // classification eligibility — consistent with how the workflow summary
+  // and lease module treat these statuses.
+  if (status === "active" || status === "executed") return true;
 
   return false;
 }
@@ -2677,16 +2683,11 @@ export const expenseService = {
       } else {
         classificationStatus = "matched";
       }
-      // Auto-promote to finalized only when the matched rule is itself
-      // approved AND the recovery decision is unambiguous. Anything else
-      // stays in matched/conditional/exception until a human confirms.
-      if (
-        (preserveManualReview || matchedRule) &&
-        (preserveManualReview || matchedRule.approval_status === "approved") &&
-        recoveryStatus === "recoverable" &&
-        (preserveManualReview || confidenceScore >= 0.82) &&
-        !isConditional
-      ) {
+      // Auto-promote to finalized has been REMOVED per business rules.
+      // Do not auto-approve anything extracted by AI. The classification
+      // should land in matched (for human to finalize).
+      // Only preserve finalized state if it's a manual override.
+      if (preserveManualReview && existingClassification?.classification_status === "finalized") {
         classificationStatus = "finalized";
       }
 
@@ -3488,7 +3489,12 @@ export const expenseService = {
       rulesByLease: summarizeApprovedRulesBy(eligibleRules, "lease_id"),
       rulesByTenant: summarizeApprovedRulesBy(eligibleRules, "tenant_id"),
     });
-    return { rules: eligibleRules, exclusions, rawApprovedCount: approvedRules.length };
+    return {
+      rules: eligibleRules,
+      exclusions,
+      rawApprovedCount: approvedRules.length,
+      classificationEligibleCount: eligibleRules.length,
+    };
   },
 
   async loadApprovedActualExpenses(scope = {}) {
@@ -3523,6 +3529,13 @@ export const expenseService = {
       }
     }
 
+    console.log("[Classification approvedActuals]", {
+      scope: normalizedScope,
+      approvedActualsCount: approvedExpenses.length,
+      rawApprovedCount,
+      excludedByEligibility: rawApprovedCount - approvedExpenses.length,
+      eligibilityExclusions: exclusions,
+    });
     return { actuals: approvedExpenses, exclusions, rawApprovedCount };
   },
 
@@ -3561,6 +3574,10 @@ export const expenseService = {
     const rawApprovedRulesCount = Array.isArray(rulesResult) ? approvedRules.length : rulesResult.rawApprovedCount;
     const rawApprovedActualsCount = Array.isArray(actualsResult) ? approvedActuals.length : actualsResult.rawApprovedCount;
 
+    const classificationEligibleCount = Array.isArray(rulesResult)
+      ? approvedRules.length
+      : (rulesResult.classificationEligibleCount ?? approvedRules.length);
+
     return {
       approvedRules,
       approvedActuals,
@@ -3569,6 +3586,7 @@ export const expenseService = {
       actualExclusions,
       summary: {
         rulesCount: approvedRules.length,
+        classificationEligibleCount,
         actualsCount: approvedActuals.length,
         classificationsCount: existingClassifications.length,
         rawApprovedRulesCount,

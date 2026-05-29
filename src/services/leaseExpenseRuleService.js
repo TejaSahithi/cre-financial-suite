@@ -695,7 +695,13 @@ function isWeakSourceText(text) {
 }
 
 function hasStrongRuleEvidence(rule) {
-  return Number.isFinite(Number(deriveRuleSourcePage(rule))) && !isWeakSourceText(deriveRuleExactSourceText(rule));
+  const text = deriveRuleExactSourceText(rule);
+  if (isWeakSourceText(text)) return false;
+
+  const hasPage = Number.isFinite(Number(deriveRuleSourcePage(rule)));
+  const textIsLongEnough = String(text || "").trim().length > 30;
+
+  return hasPage || textIsLongEnough;
 }
 
 function isRuleResponsibilityKnown(rule) {
