@@ -329,6 +329,7 @@ function buildReviewPayload(opts: {
   const schemaEntries = Object.entries(schema)
     .filter(([, def]) => !def.derived);
   const schemaKeys = new Set(schemaEntries.map(([key]) => key));
+  const standardAliases = buildStandardAliases(schema);
   const requiredFields = schemaEntries
     .filter(([, def]) => def.required)
     .map(([key]) => key);
@@ -424,7 +425,17 @@ function buildReviewPayload(opts: {
       });
     });
     const customFieldsFromRows = Object.entries(values)
-      .filter(([key]) => !schemaKeys.has(key) && !isInternalReviewKey(key))
+      .filter(([key, val]) => {
+        if (schemaKeys.has(key)) return false;
+        if (isInternalReviewKey(key)) return false;
+        
+        const normalized = normalizeKey(key);
+        if (standardAliases.has(normalized)) return false;
+        if (duplicatesStandardValue(key, val, values)) return false;
+        if (looksLikeNoise(key, val)) return false;
+        
+        return true;
+      })
       .map(([fieldKey, value]) =>
         buildReviewField({
           recordIndex: index,
@@ -724,6 +735,9 @@ function normalizeComparableValue(value: unknown): string {
 function looksLikeNoise(key: string, value: unknown): boolean {
   const normalized = normalizeKey(key);
   if (!normalized || normalized.length < 4) return true;
+  if (/\$[0-9]/.test(key)) return true;
+  if (/(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec).*?\d{4}/i.test(key)) return true;
+  if (/[0-9]+\.[0-9]+\s*\/?sf/i.test(key)) return true;
   if (/^https?$/.test(normalized)) return true;
   if (/^(before|after|the|and|or|with|without)_/.test(normalized)) return true;
   if (/^(signature|name|date)_[a-z0-9_]+$/.test(normalized)) return true;
