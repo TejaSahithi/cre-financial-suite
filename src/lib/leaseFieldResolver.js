@@ -34,6 +34,7 @@ const FIELD_ALIASES = {
   lease_type: ["lease_type", "expense_structure", "lease_structure", "rent_structure"],
   monthly_rent: ["monthly_rent", "base_rent_monthly", "monthly_base_rent", "current_monthly_rent", "base_rent"],
   annual_rent: ["annual_rent", "base_rent_annual", "annual_base_rent", "yearly_rent"],
+  billing_frequency: ["billing_frequency", "rent_frequency", "payment_frequency"],
   security_deposit: ["security_deposit", "security_deposit_amount", "deposit"],
   free_rent_months: ["free_rent_months", "free_rent", "rent_abatement_months", "abated_rent_months"],
   escalation_rate: ["escalation_rate", "escalation_percent", "rent_escalation_percent", "annual_increase_percent"],
@@ -44,10 +45,14 @@ const FIELD_ALIASES = {
 
   // CAM / Expenses / Base year / Caps / Exclusions
   admin_fee_percent: ["admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent", "adminFeePercent", "administrative fee", "admin fee", "administrative expenses not exceeding"],
+  admin_fee_pct: ["admin_fee_pct", "admin_fee_percent", "administrative_fee_percent", "cam_admin_fee_percent"],
   management_fee_percent: ["management_fee_percent", "mgmt_fee_percent", "property_management_fee_percent", "management_fee_pct"],
   gross_up_percent: ["gross_up_percent", "gross_up_threshold_percent", "gross_up_threshold", "grossUpPercent", "gross-up", "gross up"],
+  gross_up_threshold: ["gross_up_threshold", "gross_up_percent", "gross_up_threshold_percent", "gross_up_target_occupancy_pct"],
+  gross_up_enabled: ["gross_up_enabled", "gross_up_applicable", "gross_up_allowed"],
   gross_up_clause: ["gross_up_clause", "gross_up", "gross_up_applicable"],
   cap_percent: ["cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent", "controllable cap", "controllable expense cap"],
+  cam_cap_pct: ["cam_cap_pct", "cam_cap_percent", "cap_percent", "controllable_cap_percent", "controllable_cam_cap_percent"],
   cam_cap_type: ["cam_cap_type", "cap_type", "expense_cap_type"],
   base_year: ["base_year", "expense_base_year", "tax_base_year", "operating_expense_base_year"],
   base_year_amount: ["base_year_amount", "base_year_stop", "operating_expense_base_amount"],
@@ -63,6 +68,10 @@ const FIELD_ALIASES = {
   estimated_monthly_amount: ["estimated_monthly_cam", "cam_estimate_monthly", "estimated_monthly_amount", "monthly_cam_estimate", "estimated monthly cam", "monthly_additional_rent", "estimated monthly additional rent"],
   reconciliation_required: ["reconciliation_required", "cam_reconciliation_required", "reconciliation"],
   reconciliation_frequency: ["reconciliation_frequency", "cam_reconciliation_frequency"],
+  responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
+  responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
+  responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
+  responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
 
   // Insurance
   commercial_general_liability: ["commercial_general_liability", "cgl", "general_liability"],

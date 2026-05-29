@@ -499,17 +499,6 @@ function detectDocumentProfile({ lease, sourceText }) {
   ].some((pattern) => pattern.test(text));
   const hintedAssignment = profileHint.includes("assignment") || nameLower.includes("assignment");
   const hintedAmendment = profileHint.includes("amendment") || nameLower.includes("amend");
-  const documentType = hintedAssignment
-    ? "assignment"
-    : hintedAmendment
-      ? "amendment"
-      : assignmentSignals >= 2
-    ? "assignment"
-    : amendmentSignals >= 2
-      ? "amendment"
-      : "full_lease";
-  const assignmentOrAmendmentOnly =
-    ["assignment", "amendment"].includes(documentType) && !hasExplicitExpenseRecoveryClause;
   const leaseStructure = /modified\s+gross|base\s+year|expense\s+stop/i.test(combined)
     ? "modified_gross_base_year"
     : /full[-\s]?service|gross\s+lease/i.test(combined)
@@ -517,6 +506,30 @@ function detectDocumentProfile({ lease, sourceText }) {
       : /triple\s+net|\bnnn\b|net\s+lease/i.test(combined)
         ? "nnn"
         : "unknown";
+  const strongFullLeaseSignals =
+    hasExplicitExpenseRecoveryClause ||
+    expenseSignals >= 2 ||
+    leaseStructure !== "unknown" ||
+    /(?:lease\s+agreement|standard\s+form\s+lease|premises|commencement\s+date|expiration\s+date|base\s+rent|rent\s+schedule)/i.test(combined);
+  const profileHintIsStale =
+    (hintedAssignment || hintedAmendment) &&
+    strongFullLeaseSignals &&
+    assignmentSignals < 2;
+  const documentType = profileHintIsStale
+    ? "full_lease"
+    : hintedAssignment && !strongFullLeaseSignals
+      ? "assignment"
+      : hintedAmendment && !strongFullLeaseSignals
+        ? "amendment"
+        : assignmentSignals >= 2 && !strongFullLeaseSignals
+          ? "assignment"
+          : amendmentSignals >= 2 && !strongFullLeaseSignals
+            ? "amendment"
+            : "full_lease";
+  const assignmentOrAmendmentOnly =
+    ["assignment", "amendment"].includes(documentType) &&
+    !hasExplicitExpenseRecoveryClause &&
+    !strongFullLeaseSignals;
 
   return {
     documentType,
@@ -526,6 +539,8 @@ function detectDocumentProfile({ lease, sourceText }) {
     hasExplicitExpenseRecoveryClause,
     assignmentSignals,
     amendmentSignals,
+    strongFullLeaseSignals,
+    profileHintIsStale,
   };
 }
 

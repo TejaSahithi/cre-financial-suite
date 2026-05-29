@@ -907,25 +907,45 @@ function detectDocumentProfileSignals(
   // at least one of these, the soft "amendment" / "modification" mentions
   // are treated as passing clause text rather than the document's own type.
   const hasStrongAmendmentContext = isStrongAmendmentSignal(fullText, documentSubtype);
+  const explicitLeaseExpenseSignals = [
+    /\b(?:common\s+area\s+maintenance|cam|operating\s+expenses?)\b/i,
+    /\b(?:real\s+estate\s+taxes|property\s+taxes|tax\s+escalation|expense\s+stop|base\s+year)\b/i,
+    /\b(?:property\s+insurance|insurance\s+premiums?|commercial\s+general\s+liability)\b/i,
+    /\b(?:utilities|electricity|water|sewer|gas|janitorial|trash|security|landscap|snow\s+removal)\b/i,
+    /\b(?:gross[\s-]?up|controllable\s+expense\s+cap|management\s+fee|administrative\s+fee|reconciliation)\b/i,
+  ].filter((pattern) => pattern.test(context)).length;
+  const fullLeaseSignals = [
+    /\blease\s+agreement\b|\bstandard\s+form\s+lease\b|\bthis\s+lease\b/i,
+    /\bpremises\b|\bdemised\s+premises\b|\bleased\s+premises\b/i,
+    /\bcommencement\s+date\b|\bexpiration\s+date\b|\bterm\b/i,
+    /\bbase\s+rent\b|\brent\s+schedule\b|\bmonthly\s+rent\b|\bannual\s+rent\b/i,
+  ].filter((pattern) => pattern.test(context)).length;
+  const strongFullLeaseSignals = explicitLeaseExpenseSignals >= 1 || fullLeaseSignals >= 3;
   let selectedDocumentProfile = "full_lease";
 
   if (/abstract|summary/.test(subtype)) selectedDocumentProfile = "abstract";
   else if (/addendum/.test(subtype)) selectedDocumentProfile = "addendum";
   else if (/exhibit/.test(subtype)) selectedDocumentProfile = "exhibit";
-  else if (assignmentSignalCount >= 2 && amendmentSignalCount >= 1 && hasStrongAmendmentContext) selectedDocumentProfile = "assignment_amendment";
-  else if (assignmentSignalCount >= 2) selectedDocumentProfile = "assignment";
-  else if (amendmentSignalCount >= 2 && hasStrongAmendmentContext) selectedDocumentProfile = "amendment";
+  else if (!strongFullLeaseSignals && assignmentSignalCount >= 2 && amendmentSignalCount >= 1 && hasStrongAmendmentContext) selectedDocumentProfile = "assignment_amendment";
+  else if (!strongFullLeaseSignals && assignmentSignalCount >= 2) selectedDocumentProfile = "assignment";
+  else if (!strongFullLeaseSignals && amendmentSignalCount >= 2 && hasStrongAmendmentContext) selectedDocumentProfile = "amendment";
 
   return {
     selected_document_profile: selectedDocumentProfile,
     assignment_signal_count: assignmentSignalCount,
     amendment_signal_count: amendmentSignalCount,
     has_strong_amendment_context: hasStrongAmendmentContext,
+    explicit_lease_expense_signal_count: explicitLeaseExpenseSignals,
+    full_lease_signal_count: fullLeaseSignals,
+    strong_full_lease_signals: strongFullLeaseSignals,
     profile_detection_signals: {
       document_subtype: documentSubtype || null,
       assignment: assignmentSignals,
       amendment: amendmentSignals,
       strong_amendment_context: hasStrongAmendmentContext,
+      explicit_lease_expense_signal_count: explicitLeaseExpenseSignals,
+      full_lease_signal_count: fullLeaseSignals,
+      strong_full_lease_signals: strongFullLeaseSignals,
       context_text_chars: context.length,
     },
   };

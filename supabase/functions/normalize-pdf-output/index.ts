@@ -152,8 +152,20 @@ function workflowFieldFor(fieldKey: string, leaseFields: Record<string, any> = {
     property_address: ["property_address", "premises_address"],
     square_footage: ["square_footage", "rentable_area_sqft", "tenant_rsf"],
     tenant_name: ["tenant_name", "assignee_name"],
+    commencement_date: ["commencement_date", "start_date"],
+    start_date: ["start_date", "commencement_date"],
     annual_rent: ["annual_rent", "amended_base_rent_for_additional_year"],
-    expiration_date: ["expiration_date", "amended_expiration_date"],
+    monthly_rent: ["monthly_rent", "base_rent_monthly"],
+    billing_frequency: ["billing_frequency", "rent_frequency"],
+    expiration_date: ["expiration_date", "end_date", "amended_expiration_date"],
+    end_date: ["end_date", "expiration_date", "amended_expiration_date"],
+    admin_fee_pct: ["admin_fee_pct", "admin_fee_percent"],
+    gross_up_threshold: ["gross_up_threshold", "gross_up_percent", "gross_up_target_occupancy_pct"],
+    cam_cap_pct: ["cam_cap_pct", "cam_cap_percent", "cap_percent"],
+    responsibility_taxes: ["responsibility_taxes", "tax_responsibility"],
+    responsibility_insurance: ["responsibility_insurance", "insurance_responsibility"],
+    responsibility_utilities: ["responsibility_utilities", "utilities_responsibility"],
+    responsibility_repairs: ["responsibility_repairs", "maintenance_responsibility"],
   };
   for (const key of aliases[fieldKey] || [fieldKey]) {
     if (leaseFields?.[key]) return leaseFields[key];

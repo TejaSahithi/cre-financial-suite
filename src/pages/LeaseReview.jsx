@@ -2493,6 +2493,24 @@ export default function LeaseReview() {
       if (!fieldsWithEvidence.premises_address && fieldsWithEvidence.property_address) {
         upsertFieldEvidence("premises_address", fieldsWithEvidence.property_address);
       }
+      for (const reviewField of LEASE_REVIEW_FIELDS) {
+        const targetKey = reviewField.key;
+        const targetEntry = fieldsWithEvidence[targetKey];
+        const targetHasSource = hasValidSourceEvidence({
+          sourcePage: targetEntry?.source_page,
+          sourceText: targetEntry?.source_text,
+        });
+        if (targetEntry?.value != null && targetEntry.value !== "" && targetHasSource) continue;
+
+        const aliasEntry = getFieldAliases(targetKey)
+          .filter((alias) => alias !== targetKey)
+          .map((alias) => fieldsWithEvidence[alias])
+          .find((entry) => entry?.value != null && entry.value !== "" && hasValidSourceEvidence({
+            sourcePage: entry.source_page,
+            sourceText: entry.source_text,
+          }));
+        if (aliasEntry) upsertFieldEvidence(targetKey, aliasEntry);
+      }
       // Re-extract overrides prior data. Strip stale sentinel/junk evidence
       // (e.g. raw_value="unknown" or source_text="renewal_options") that the
       // old extractor or the old text-matching backfill stamped. Otherwise

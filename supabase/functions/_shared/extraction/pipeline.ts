@@ -32,6 +32,7 @@ import { mergeResults, findMissingFields } from "./merger.ts";
 import { validateRecords, flattenRecords } from "./validator.ts";
 import { computeDerivedFields } from "./calculator.ts";
 import { parseDocument } from "./parser.ts";
+import { getSchema } from "./schemas.ts";
 
 // ── Step 0: Normalize Docling output ─────────────────────────────────────────
 
@@ -161,6 +162,12 @@ function addWarnings(target: string[], warnings: string[]) {
   }
 }
 
+function getAllExtractableFieldNames(moduleType: ModuleType): string[] {
+  return Object.entries(getSchema(moduleType))
+    .filter(([, def]) => !def.derived)
+    .map(([name]) => name);
+}
+
 // ── Main pipeline ────────────────────────────────────────────────────────────
 
 /**
@@ -222,6 +229,14 @@ export async function runExtractionPipeline(
 
   const fullText = docling.full_text ?? "";
   const hasStructuredFields = (docling.fields?.length ?? 0) > 0;
+  const embeddedTextChars = fullText.length;
+  const fileBase64Available = Boolean(input.fileBase64);
+  const LEASE_SHALLOW_TEXT_THRESHOLD = 2500;
+  const shallowLeaseTextDetected =
+    moduleType === "lease" &&
+    fileBase64Available &&
+    embeddedTextChars > 0 &&
+    embeddedTextChars < LEASE_SHALLOW_TEXT_THRESHOLD;
   log.info(`Normalized: ${fullText.length} chars, ${docling.text_blocks?.length ?? 0} blocks, ${docling.tables?.length ?? 0} tables`);
 
   if (fullText.trim().length < 10 && !input.fileBase64 && !hasStructuredFields) {
@@ -275,8 +290,16 @@ export async function runExtractionPipeline(
   let chunksProcessed = 0;
 
   if (!skipLLM) {
-    const missingFields = findMissingFields(ruleResult, tableResult, moduleType);
-    log.step(3, "LLM Extraction (fallback)", `missing=${missingFields.length} fields: [${missingFields.join(", ")}]`);
+    const initialMissingFields = findMissingFields(ruleResult, tableResult, moduleType);
+    const missingFields = shallowLeaseTextDetected
+      ? [...new Set([...initialMissingFields, ...getAllExtractableFieldNames(moduleType)])]
+      : initialMissingFields;
+    log.step(
+      3,
+      "LLM Extraction (fallback)",
+      `missing=${missingFields.length} fields: [${missingFields.join(", ")}]` +
+        (shallowLeaseTextDetected ? " (full lease field pass because parser text is shallow)" : ""),
+    );
 
     if (missingFields.length > 0) {
       // Merge existing records for context
@@ -406,9 +429,7 @@ export async function runExtractionPipeline(
     }
   }
 
-  const embeddedTextChars = fullText.length;
   const weakTextDetected = embeddedTextChars < WEAK_TEXT_THRESHOLD;
-  const fileBase64Available = Boolean(input.fileBase64);
   // Vision fallback "triggered" means the LLM step ran in file mode. The
   // llm-extractor only switches to callVertexAIFileJSON when input.fileBase64
   // is truthy; if any LLM fields were produced under that condition we
@@ -417,9 +438,9 @@ export async function runExtractionPipeline(
   const visionFallbackTriggered = fileBase64Available && llmFieldCount > 0;
   const visionFallbackSkippedReason = !fileBase64Available && weakTextDetected
     ? "file_bytes_not_provided"
-    : (fileBase64Available && llmFieldCount === 0 && weakTextDetected)
+    : (fileBase64Available && llmFieldCount === 0 && (weakTextDetected || shallowLeaseTextDetected))
       ? "llm_returned_zero_fields"
-      : (!weakTextDetected ? "parser_text_sufficient" : null);
+      : (!weakTextDetected && !shallowLeaseTextDetected ? "parser_text_sufficient" : null);
 
   // ── Stage 1: Vision-as-parser diagnostics ─────────────────────────────
   // The parser's extraction_method (set by parser.ts tag()) records which
@@ -476,6 +497,9 @@ export async function runExtractionPipeline(
       extractionDebug: {
         embedded_text_chars_total: embeddedTextChars,
         normalized_text_chars_total: embeddedTextChars,
+        shallow_lease_text_detected: shallowLeaseTextDetected,
+        shallow_lease_text_threshold: LEASE_SHALLOW_TEXT_THRESHOLD,
+        llm_all_fields_due_to_shallow_text: shallowLeaseTextDetected,
         weak_text_detected: weakTextDetected,
         weak_text_threshold: WEAK_TEXT_THRESHOLD,
         fileBase64_available: fileBase64Available,
@@ -496,7 +520,7 @@ export async function runExtractionPipeline(
           ? null
           : (!fileBase64Available
             ? "file_bytes_unavailable"
-            : (!weakTextDetected
+            : (!weakTextDetected && !shallowLeaseTextDetected
               ? "parser_text_sufficient"
               : (llmFieldCount === 0 ? "llm_returned_zero_fields" : null))),
         vision_field_extraction_fields_count: llmFieldCount,
