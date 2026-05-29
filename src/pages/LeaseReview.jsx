@@ -1536,7 +1536,7 @@ export default function LeaseReview() {
     (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
     !approvedRuleSet;
 
-  const bulkEvaluation = useMemo(() => {
+  const bulkEvaluation = (() => {
     const allKnownKeys = new Set();
     Object.values(fieldsForTab).flat().forEach((f) => {
       if (f.key) allKnownKeys.add(f.key);
@@ -1630,7 +1630,7 @@ export default function LeaseReview() {
     });
 
     return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails };
-  }, [fieldsForTab, fieldReviews, lease]);
+  })();
 
   const acceptedNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
     const review = fieldReviews[key];
