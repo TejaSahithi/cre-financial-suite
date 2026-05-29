@@ -11,8 +11,11 @@ Deno.test("pipeline-status allows the documented happy-path transitions", () => 
     ["parsing", "review_required"],
     ["pdf_parsed", "validating"],
     ["pdf_parsed", "review_required"],
+    ["validating", "review_required"],
+    ["validating", "validated"],
     ["validated", "review_required"],
     ["validated", "storing"],
+    ["review_required", "validated"],
     ["review_required", "approved"],
     ["review_required", "parsing"],
     ["approved", "validating"],
@@ -39,7 +42,6 @@ Deno.test("pipeline-status rejects invalid regressions and review bypasses", () 
     ["parsed", "stored"],
     ["pdf_parsed", "stored"],
     ["review_required", "stored"],
-    ["review_required", "validated"],
     ["approved", "completed"],
     ["stored", "validated"],
     ["completed", "parsing"],
@@ -53,4 +55,3 @@ Deno.test("pipeline-status rejects invalid regressions and review bypasses", () 
     );
   }
 });
-

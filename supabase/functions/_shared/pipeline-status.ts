@@ -50,11 +50,11 @@ export const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[
   parsing:          ["parsed", "pdf_parsed", "review_required", "failed"],
   parsed:           ["validating", "failed"],
   pdf_parsed:       ["validating", "review_required", "failed"],
-  validating:       ["validated", "failed"],
+  validating:       ["validated", "review_required", "failed"],
   // After validation we either park for review or go straight to storing.
   validated:        ["validating", "review_required", "storing", "failed"],
   // Reviewer either approves (→ approved → storing) or rejects (→ failed).
-  review_required:  ["parsing", "approved", "failed"],
+  review_required:  ["parsing", "validated", "approved", "failed"],
   approved:         ["validating", "storing", "failed"],
   storing:          ["stored", "failed"],
   stored:           ["computing", "failed"],
@@ -65,6 +65,7 @@ export const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[
 };
 
 const REVIEW_PIPELINE_COLUMNS = new Set([
+  "processing_status",
   "extraction_method",
   "document_subtype",
   "normalized_output",
@@ -81,6 +82,26 @@ const REVIEW_PIPELINE_COLUMNS = new Set([
   "parent_file_id",
 ]);
 
+const TRANSITION_DIAGNOSTIC_EXTRA_KEYS = new Set([
+  "transition_source",
+  "fallback_reason",
+]);
+
+function splitTransitionExtras(extra: Record<string, unknown>) {
+  const diagnostics: Record<string, unknown> = {};
+  const persisted: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (TRANSITION_DIAGNOSTIC_EXTRA_KEYS.has(key)) {
+      diagnostics[key] = value;
+    } else {
+      persisted[key] = value;
+    }
+  }
+
+  return { diagnostics, persisted };
+}
+
 function looksLikeMissingOptionalColumn(error: any): boolean {
   const message = String(error?.message || error?.details || "");
   const code = String(error?.code || "");
@@ -93,6 +114,20 @@ function looksLikeMissingOptionalColumn(error: any): boolean {
 
 function stripReviewPipelineColumns(patch: Record<string, unknown>): Record<string, unknown> {
   const next = { ...patch };
+  const message = String((patch as any).__missing_column_error || "");
+  let removedMentionedColumn = false;
+
+  if (message) {
+    for (const column of REVIEW_PIPELINE_COLUMNS) {
+      if (message.includes(column)) {
+        delete next[column];
+        removedMentionedColumn = true;
+      }
+    }
+    delete next.__missing_column_error;
+    if (removedMentionedColumn) return next;
+  }
+
   for (const column of REVIEW_PIPELINE_COLUMNS) {
     delete next[column];
   }
@@ -118,6 +153,27 @@ function buildInvalidTransitionError(fileId: string, fromStatus: PipelineStatus,
   return error;
 }
 
+function buildTransitionDiagnostics(opts: {
+  fileId: string;
+  previousStatus: PipelineStatus | null;
+  requestedNextStatus: PipelineStatus;
+  diagnostics?: Record<string, unknown>;
+}) {
+  const allowedNextStatuses = opts.previousStatus
+    ? ALLOWED_TRANSITIONS[opts.previousStatus] ?? []
+    : [];
+
+  return {
+    file_id: opts.fileId,
+    previous_status: opts.previousStatus,
+    requested_next_status: opts.requestedNextStatus,
+    allowed_next_statuses: allowedNextStatuses,
+    transition_source: opts.diagnostics?.transition_source ?? "pipeline-status.setStatus",
+    function_name: opts.diagnostics?.transition_source ?? "pipeline-status.setStatus",
+    fallback_reason: opts.diagnostics?.fallback_reason ?? null,
+  };
+}
+
 export function isAllowedTransition(
   fromStatus: PipelineStatus | null | undefined,
   toStatus: PipelineStatus,
@@ -139,6 +195,7 @@ export async function setStatus(
 ): Promise<{ error: any }> {
   const now = new Date().toISOString();
   const progress = STATUS_PROGRESS[status];
+  const { diagnostics, persisted } = splitTransitionExtras(extra);
 
   const currentLookup = await supabaseAdmin
     .from("uploaded_files")
@@ -157,9 +214,20 @@ export async function setStatus(
   }
 
   const currentStatus = currentRecord.status as PipelineStatus | null;
+  const transitionDiagnostics = buildTransitionDiagnostics({
+    fileId,
+    previousStatus: currentStatus,
+    requestedNextStatus: status,
+    diagnostics,
+  });
+  console.log("[pipeline-status] status transition requested:", transitionDiagnostics);
+
   if (!isAllowedTransition(currentStatus, status)) {
     const error = buildInvalidTransitionError(fileId, currentStatus as PipelineStatus, status);
-    console.error(`[pipeline-status] Rejected invalid transition for file ${fileId}:`, error.details);
+    console.error(`[pipeline-status] Rejected invalid transition for file ${fileId}:`, {
+      ...transitionDiagnostics,
+      error_details: error.details,
+    });
     return { error };
   }
 
@@ -167,7 +235,7 @@ export async function setStatus(
     status,
     progress_percentage: progress,
     updated_at: now,
-    ...extra,
+    ...persisted,
   };
 
   // Set processing_started_at on the first active step
@@ -179,6 +247,7 @@ export async function setStatus(
   if (status === "review_required") {
     patch.review_required = true;
     patch.review_status = patch.review_status ?? "pending";
+    patch.processing_status = patch.processing_status ?? "review_required";
   }
   if (status === "approved") {
     patch.review_status = "approved";
@@ -204,7 +273,10 @@ export async function setStatus(
     );
     const retry = await supabaseAdmin
       .from("uploaded_files")
-      .update(stripReviewPipelineColumns(patch))
+      .update(stripReviewPipelineColumns({
+        ...patch,
+        __missing_column_error: String(error?.message || error?.details || ""),
+      }))
       .eq("id", fileId)
       .select("id, status")
       .maybeSingle();

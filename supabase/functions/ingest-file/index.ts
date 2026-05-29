@@ -9,7 +9,7 @@ import {
   type ModuleType,
   type DocumentSubtype,
 } from "../_shared/file-detector.ts";
-import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
+import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-status.ts";
 
 /**
  * ingest-file — Unified File Ingestion Router
@@ -271,6 +271,37 @@ function buildManualReviewPayload(opts: {
   };
 }
 
+async function buildManualReviewTransitionDiagnostics(args: {
+  supabaseAdmin: any;
+  fileId: string;
+  reason: string;
+}) {
+  const currentLookup = await args.supabaseAdmin
+    .from("uploaded_files")
+    .select("status, processing_status")
+    .eq("id", args.fileId)
+    .maybeSingle();
+
+  if (currentLookup.error) {
+    console.warn("[ingest-file] Could not read status before manual review fallback:", currentLookup.error);
+  }
+
+  const previousStatus = currentLookup.data?.status ?? null;
+  const allowedNextStatuses = previousStatus
+    ? ALLOWED_TRANSITIONS[previousStatus] ?? []
+    : [];
+
+  return {
+    previous_status: previousStatus,
+    previous_processing_status: currentLookup.data?.processing_status ?? null,
+    requested_next_status: "review_required",
+    allowed_next_statuses: allowedNextStatuses,
+    transition_source: "ingest-file.parkForManualReview",
+    function_name: "ingest-file.parkForManualReview",
+    fallback_reason: args.reason,
+  };
+}
+
 async function parkForManualReview(args: {
   supabaseAdmin: any;
   fileId: string;
@@ -288,10 +319,29 @@ async function parkForManualReview(args: {
     extractionMethod: args.extractionMethod,
     reason: args.reason,
   });
+  const transitionDiagnostics = await buildManualReviewTransitionDiagnostics({
+    supabaseAdmin: args.supabaseAdmin,
+    fileId: args.fileId,
+    reason: args.reason,
+  });
+  const extractionDebug = {
+    mapping_failed: true,
+    manual_review_fallback: true,
+    ...transitionDiagnostics,
+  };
+
+  payload.metadata = {
+    ...payload.metadata,
+    mapping_failed: true,
+    fallback_reason: args.reason,
+    extraction_debug: extractionDebug,
+  };
+  payload.diagnostics = extractionDebug;
 
   const { error } = await setStatus(args.supabaseAdmin, args.fileId, "review_required", {
     review_required: true,
     review_status: "pending",
+    processing_status: "review_required",
     extraction_method: args.extractionMethod,
     ui_review_payload: payload,
     normalized_output: {
@@ -299,15 +349,19 @@ async function parkForManualReview(args: {
       rows: payload.rows.map((row: any) => row.values),
       warnings: payload.global_warnings,
       validationErrors: [],
+      mapping_failed: true,
+      extraction_debug: extractionDebug,
       metadata: payload.metadata,
     },
     parsed_data: payload.rows.map((row: any) => row.values),
     row_count: 1,
     valid_count: 0,
     error_count: 0,
-    error_message: null,
+    error_message: args.reason,
     failed_step: null,
     processing_completed_at: new Date().toISOString(),
+    transition_source: "ingest-file.parkForManualReview",
+    fallback_reason: args.reason,
   });
 
   if (error) {
