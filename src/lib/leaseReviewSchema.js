@@ -73,10 +73,23 @@ export const LEASE_REVIEW_TABS = [
 export const LEASE_REVIEW_FIELDS = [
   // Parties & Premises
   { key: "tenant_name",        label: "Tenant Name",                  tab: "parties_premises", required: true,  allowNA: false, type: "text" },
+  { key: "tenant_signatory_name", label: "Tenant Signatory",          tab: "parties_premises", type: "text" },
   { key: "landlord_name",      label: "Landlord Name",                tab: "parties_premises", type: "text" },
+  { key: "landlord_signatory_name", label: "Landlord Signatory",      tab: "parties_premises", type: "text" },
+  { key: "property_name",      label: "Property Name",                tab: "parties_premises", type: "text" },
+  { key: "building_name",      label: "Building Name",                tab: "parties_premises", type: "text" },
   { key: "premises_address",   label: "Premises Address",             tab: "parties_premises", type: "text" },
+  { key: "suite_number",       label: "Suite Number",                 tab: "parties_premises", type: "text" },
+  { key: "unit_number",        label: "Unit Number",                  tab: "parties_premises", type: "text" },
+  { key: "floor",              label: "Floor",                        tab: "parties_premises", type: "text" },
   { key: "square_footage",     label: "Square Footage (RSF)",         tab: "parties_premises", required: true,  allowNA: false, type: "number" },
+  { key: "building_rsf",       label: "Building RSF",                 tab: "parties_premises", type: "number" },
+  { key: "tenant_rsf",         label: "Tenant RSF",                   tab: "parties_premises", type: "number" },
+  { key: "rentable_area_sqft", label: "Rentable Area (SQFT)",         tab: "parties_premises", type: "number" },
   { key: "premises_use",       label: "Permitted Use",                tab: "parties_premises", type: "text" },
+  { key: "broker_name",        label: "Broker Name",                  tab: "parties_premises", type: "text" },
+  { key: "parking_rights",     label: "Parking Rights",               tab: "parties_premises", type: "text" },
+  { key: "common_area_description", label: "Common Area Description", tab: "parties_premises", type: "text" },
 
   // Dates & Term — Lease Date (signing), Commencement Date (term start),
   // and Expiration Date are explicitly distinct. Commencement/expiration are
@@ -102,6 +115,9 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "free_rent_months",    label: "Free Rent (months)",      tab: "rent_charges", type: "number" },
   { key: "ti_allowance",        label: "TI Allowance",            tab: "rent_charges", type: "currency" },
   { key: "security_deposit",    label: "Security Deposit",        tab: "rent_charges", type: "currency" },
+  { key: "late_fee_grace_days", label: "Late Fee Grace Days",     tab: "rent_charges", type: "number" },
+  { key: "late_fee_percent",    label: "Late Fee (%)",            tab: "rent_charges", type: "number" },
+  { key: "default_interest_rate_formula", label: "Default Interest Rate", tab: "rent_charges", type: "text" },
 
   // Expenses / Recoveries
   { key: "lease_type",                 label: "Lease Type (Expense Structure)", tab: "expenses_recoveries", required: true, allowNA: false, type: "select", options: "lease_type" },
@@ -109,6 +125,7 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "responsibility_insurance",   label: "Insurance Responsibility",        tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
   { key: "responsibility_utilities",   label: "Utilities Responsibility",        tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
   { key: "responsibility_repairs",     label: "Repairs & Maintenance",           tab: "expenses_recoveries", type: "select", options: "hvac_responsibility" },
+  { key: "tenant_pro_rata_share",      label: "Tenant Pro Rata Share (%)",       tab: "expenses_recoveries", type: "number" },
   { key: "base_year",                  label: "Base Year",                       tab: "expenses_recoveries", type: "number", allowCalculatedAccept: true },
   { key: "expense_stop",               label: "Expense Stop ($)",                tab: "expenses_recoveries", type: "currency", allowCalculatedAccept: true },
 
@@ -131,10 +148,20 @@ export const LEASE_REVIEW_FIELDS = [
   // Legal / Options
   { key: "renewal_type",            label: "Renewal Type",             tab: "legal_options", type: "select", options: "renewal_type" },
   { key: "renewal_options",         label: "Renewal Options",          tab: "legal_options", type: "select", options: "renewal_options" },
+  { key: "renewal_option",          label: "Renewal Option",           tab: "legal_options", type: "boolean" },
   { key: "right_of_first_refusal",  label: "Right of First Refusal",   tab: "legal_options", type: "boolean" },
   { key: "early_termination_option", label: "Early Termination Option", tab: "legal_options", type: "boolean" },
+  { key: "termination_option",      label: "Termination Option",       tab: "legal_options", type: "boolean" },
   { key: "assignment_provisions",   label: "Assignment Provisions",    tab: "legal_options", type: "text" },
+  { key: "assignment_rights",       label: "Assignment Rights",        tab: "legal_options", type: "text" },
+  { key: "sublease_rights",         label: "Sublease Rights",          tab: "legal_options", type: "text" },
   { key: "default_cure_period",     label: "Default Cure Period (days)", tab: "legal_options", type: "number" },
+  { key: "holdover_rent_multiplier",label: "Holdover Rent Multiplier", tab: "legal_options", type: "number" },
+
+  // Documents / Exhibits
+  { key: "floor_plan_reference",    label: "Floor Plan Reference",    tab: "documents_exhibits", type: "text" },
+  { key: "exhibit_reference",       label: "Exhibit Reference",       tab: "documents_exhibits", type: "text" },
+  { key: "guaranty_reference",      label: "Guaranty Reference",      tab: "documents_exhibits", type: "text" },
 ];
 
 export const FIELDS_BY_TAB = LEASE_REVIEW_TABS.reduce((acc, tab) => {

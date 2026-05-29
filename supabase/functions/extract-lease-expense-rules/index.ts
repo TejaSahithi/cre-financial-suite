@@ -9,7 +9,7 @@ You will map the findings against standard expense categories.
 
 STRICT RULES:
 - Do NOT invent rules. Only emit a rule for a category if the lease text contains a specific clause referring to that category.
-- If a category in the input list is not mentioned in the lease text, return it with row_status="not_mentioned", recoverable_from_tenant="needs_review", cam_eligible="needs_review", and exact_source_text=null.
+- OMIT categories that are not explicitly mentioned in the lease text. Do NOT emit "not_mentioned" or boilerplate rows for unmentioned categories. This is critical to save output tokens.
 - Never set recoverable_from_tenant="yes" or cam_eligible="yes" unless the exact_source_text quotes the clause that supports it. If you cannot quote a specific clause, use "conditional" or "needs_review".
 - Generic NNN/Gross/Full-Service assumptions are not evidence. The clause must mention the specific category (or a broad operating-expense clause that explicitly enumerates it).
 - Missing amount alone is NOT a reason to mark a rule as needs_review/conditional. Classify treatment based on the clause language, even when no dollar figure is present:
@@ -28,8 +28,8 @@ STRICT RULES:
 - Administrative fees require the administrative-fee clause and must not be inferred from general CAM language.
 - Vacant-unit/gross-up language controls gross_up_allowed/gross_up_applicable; if vacant units remain in denominator and landlord absorbs vacant share, gross-up is not permitted.
 
-For each of the categories provided in the JSON input, determine the following:
-- row_status: "not_mentioned", "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" — the rule IS still valid and MUST be emitted. Amount is OPTIONAL: a clause that describes an obligation, exclusion, cap, base year, reimbursement method, included-in-rent term, or tenant-direct responsibility is enough to create a rule, even with no dollar amount.
+For each of the categories provided in the JSON input that are ACTUALLY mentioned in the lease text, determine the following:
+- row_status: "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" — the rule IS still valid and MUST be emitted. Amount is OPTIONAL: a clause that describes an obligation, exclusion, cap, base year, reimbursement method, included-in-rent term, or tenant-direct responsibility is enough to create a rule, even with no dollar amount.
 - mentioned_in_lease: boolean (is this category specifically mentioned?)
 - is_recoverable: boolean (can the landlord recover this expense?)
 - is_excluded: boolean (is this explicitly excluded from recovery?)
@@ -71,7 +71,7 @@ For each of the categories provided in the JSON input, determine the following:
 - source: string (the exact lease clause text snippet justifying this rule)
 
 Document-type rules:
-- If the document is only an assignment, assumption, consent to assignment, term amendment, rent amendment, estoppel, or abstract summary and does not include expense recovery clauses, return only not_mentioned/needs_review rows with reasoning "original_lease_required". Do not infer CAM/taxes/insurance/utilities from assignment or amendment language.
+- If the document is only an assignment, assumption, consent to assignment, term amendment, rent amendment, estoppel, or abstract summary and does not include expense recovery clauses, return an empty JSON array []. Do not infer CAM/taxes/insurance/utilities from assignment or amendment language.
 - Assignment clauses, assumption by assignee, landlord consent, term extension, and base-rent-only amendments do not support lease expense rules.
 - For full-service/gross leases, mark expenses included in base rent only when the lease text clearly says base rent includes those expenses.
 - For modified gross/base-year leases, extract base_year, base_year_amount, operating_expense_base_amount, tax_base_amount, insurance_base_amount, tenant_share_percent, gross_up_percent, and caps only from explicit clauses.
@@ -126,7 +126,8 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       throw new Error("Failed to extract rules from AI.");
     }
 
-    const rules = (Array.isArray(result) ? result : result?.rules || []).map((rule: Record<string, unknown>) => {
+    const resultAny = result as any;
+    const rules = (Array.isArray(result) ? result : resultAny?.rules || []).map((rule: Record<string, unknown>) => {
       const normalizedRecoverable = normalizeDecision(rule.recoverable_from_tenant, rule.is_recoverable === true ? "yes" : "no");
       const paymentTreatmentText = normalizeText(rule.payment_treatment);
       // cam_eligible may only default to "no" when there is an EXPLICIT exclusion
@@ -172,7 +173,8 @@ Extract the expense classification rules${categories.length > 0 ? " for the cate
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
-  } catch (error) {
+  } catch (err) {
+    const error = err as Error;
     console.error("[extract-lease-expense-rules] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

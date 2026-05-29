@@ -171,7 +171,15 @@ ${textSnippet || noTextFallback}
 ───────────────────────────
 
 ${importantNote}
-Return ONLY a JSON object with the field keys above. Nothing else.`;
+For each field, return a JSON object with this EXACT shape:
+{
+  "value": <extracted value or null>,
+  "source_text": "<exact quote from the lease text. Mandatory if value is found.>",
+  "source_page": <page number or null>,
+  "confidence": <0.0 to 1.0>
+}
+If you cannot find the exact source quote, return value as null. DO NOT paraphrase.
+Return ONLY a JSON object with the field keys above mapped to these evidence objects. Nothing else.`;
 }
 
 
@@ -212,7 +220,16 @@ ${textSnippet}
 ───────────────────────────
 
 IMPORTANT: The text snippet may come from OCR and contain fragments or misread characters. Carefully reconstruct the records from the fragments.
-Return ONLY the JSON array. Nothing else.`;
+
+For each field in a record, return a JSON object with this EXACT shape:
+{
+  "value": <extracted value or null>,
+  "source_text": "<exact quote from the lease text. Mandatory if value is found.>",
+  "source_page": <page number or null>,
+  "confidence": <0.0 to 1.0>
+}
+If you cannot find the exact source quote, return value as null. DO NOT paraphrase.
+Return ONLY the JSON array of objects. Nothing else.`;
 }
 
 

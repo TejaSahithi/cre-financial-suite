@@ -380,13 +380,15 @@ function buildReviewPayload(opts: {
         const matchedPage = findPageForSnippet(doclingRaw, mergedSourceText);
         if (matchedPage != null) mergedSourcePage = matchedPage;
       }
-      const hasEvidence = mergedSourcePage != null || (typeof mergedSourceText === "string" && mergedSourceText.length > 0);
+      const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0;
       const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
       let inferredStatus = value == null || value === ""
         ? "missing"
-        : hasEvidence
-          ? (workflowField?.extraction_status === "calculated" ? "calculated" : "extracted")
-          : "missing_source_evidence";
+        : workflowField?.extraction_status === "calculated"
+          ? "calculated"
+          : hasEvidence
+            ? "extracted"
+            : "missing_source_evidence";
       // Low-confidence gate: never present a low-confidence value as a
       // confirmed extraction. Downgrade to needs_review so the UI shows the
       // value as a reviewer candidate, not a green Extracted badge.
