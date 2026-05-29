@@ -78,8 +78,7 @@ export async function parseDocument(
       const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
       const nativeLooksComplete =
         nativeTextChars >= MIN_NATIVE_PDF_TEXT_CHARS ||
-        nativeBlockCount >= MIN_DIGITAL_BLOCKS ||
-        ((estimatedPageCount ?? 1) <= 1 && nativeTextChars >= 800);
+        (estimatedPageCount === 1 && nativeTextChars >= 800 && nativeBlockCount >= MIN_DIGITAL_BLOCKS);
 
       if (nativeLooksComplete) {
         console.log(
