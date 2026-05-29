@@ -1535,25 +1535,107 @@ export default function LeaseReview() {
     ruleSetSummary.ruleSet &&
     (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
     !approvedRuleSet;
-  // Source-evidence gate. Two separate buckets:
-  //  - pendingNoEvidence: required field, never reviewed, no docling/extractor
-  //    evidence. Reviewer hasn't taken responsibility; would be auto-accepted
-  //    silently without this gate.
-  //  - acceptedNoEvidence: required field that IS marked accepted/edited but
-  //    has no source page/text/raw — the reviewer eyeballed it but didn't
-  //    record where the value came from. The screenshot bug. To approve, they
-  //    must either (a) provide an override reason on the field, or (b) edit
-  //    & re-confirm so evidence is set, or (c) mark Manual Required / N/A.
-  const pendingNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
-    if (isResolvedReview(fieldReviews[key])) return false;
-    const evidence = readFieldEvidence(lease, key);
-    return !hasValidSourceEvidence(evidence);
-  });
+
+  const bulkEvaluation = useMemo(() => {
+    const allKnownKeys = new Set();
+    Object.values(fieldsForTab).flat().forEach((f) => {
+      if (f.key) allKnownKeys.add(f.key);
+      if (f.field_key) allKnownKeys.add(f.field_key);
+    });
+
+    const eligibleFields = [];
+    const requiredBlockers = [];
+    const optionalUnresolved = [];
+    const requiredBlockerDetails = [];
+
+    allKnownKeys.forEach((key) => {
+      const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
+      const isRequired = REQUIRED_FIELD_KEYS.includes(key);
+      const isDynamic = !fieldDef.key;
+      
+      const review = fieldReviews[key];
+      const reviewStatus = review?.status || "pending";
+      
+      if (['accepted', 'approved'].includes(reviewStatus)) {
+        return; // already approved, not eligible for *bulk* action, but doesn't block
+      }
+      
+      if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) {
+        if (isRequired) {
+          requiredBlockers.push(key);
+          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Manual Review Required" });
+        } else {
+          optionalUnresolved.push(key);
+        }
+        return;
+      }
+
+      if (isRequired && lease?.extraction_data?.conflicts?.[key] && !isResolvedReview(review)) {
+        requiredBlockers.push(key);
+        requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Unresolved Conflict" });
+        return;
+      }
+      
+      const value = readFieldValue(lease, key);
+      const evidence = readFieldEvidence(lease, key);
+      const extractionStatus = resolveExtractionStatus(reviewStatus, evidence?.extractionStatus || "pending");
+      
+      const hasValue = value != null && value !== "";
+      const hasValidSource = hasValidSourceEvidence({ 
+        sourceText: evidence?.sourceText || evidence?.exact_source_text || evidence?.source_text, 
+        sourcePage: evidence?.sourcePage || evidence?.source_page
+      });
+
+      let eligible = false;
+      let reason = "";
+
+      if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', 'n_a'].includes(reviewStatus)) {
+        eligible = true;
+      } else if (['extracted', 'extracted_no_confidence'].includes(extractionStatus)) {
+        if (hasValue && hasValidSource) {
+          eligible = true;
+        } else if (!hasValue) {
+          reason = "Missing Value";
+        } else {
+          reason = "Missing Source Evidence";
+        }
+      } else if (extractionStatus === 'calculated') {
+        if (canAcceptCalculatedReviewField(key)) {
+          eligible = true;
+        } else {
+          reason = "Calculated field not allowed for bulk approval";
+        }
+      } else if (extractionStatus === 'not_found' || extractionStatus === 'pending') {
+        reason = "Not Found";
+      } else if (extractionStatus === 'rejected' || reviewStatus === 'rejected') {
+        reason = "Rejected";
+      } else if (isDynamic && !hasValidSource) {
+        reason = "Dynamic Row Missing Source Evidence";
+      }
+
+      if (isDynamic && !eligible) {
+        reason = reason || "Missing Source Evidence";
+      }
+
+      if (eligible) {
+        eligibleFields.push(key);
+      } else {
+        if (isRequired) {
+          requiredBlockers.push(key);
+          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: reason || "Needs Review" });
+        } else {
+          optionalUnresolved.push(key);
+        }
+      }
+    });
+
+    return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails };
+  }, [fieldsForTab, fieldReviews, lease]);
+
   const acceptedNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
     const review = fieldReviews[key];
     if (!review) return false;
     const status = review.status;
-    // N/A and Manual Required are intentional decisions — no evidence required.
     if (status === REVIEW_STATUSES.N_A || status === REVIEW_STATUSES.MANUAL_REQUIRED) return false;
     if (!isResolvedReview(review)) return false;
     if (hasEvidenceOverride(review)) return false;
@@ -1562,29 +1644,12 @@ export default function LeaseReview() {
   });
 
   const approvalBlockers = [];
-  if (requiredPendingKeys.length > 0) {
+  if (bulkEvaluation.requiredBlockers.length > 0) {
     approvalBlockers.push({
       kind: "required_pending",
-      title: `${requiredPendingKeys.length} required field(s) pending review`,
-      detail: requiredPendingKeys
-        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
-        .join(", "),
-    });
-  }
-  if (conflicts.length > 0) {
-    approvalBlockers.push({
-      kind: "conflicts",
-      title: `${conflicts.length} unresolved conflict(s)`,
-      detail: conflicts.map((c) => c.label).join(" • "),
-    });
-  }
-  // Removed expenseCamUnreviewed from approvalBlockers per user request.
-  if (pendingNoEvidence.length > 0) {
-    approvalBlockers.push({
-      kind: "pending_no_evidence",
-      title: `${pendingNoEvidence.length} required field(s) pending without source evidence`,
-      detail: pendingNoEvidence
-        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
+      title: `${bulkEvaluation.requiredBlockers.length} required field(s) block approval`,
+      detail: bulkEvaluation.requiredBlockerDetails
+        .map((b) => `${b.label} (${b.reason})`)
         .join(", "),
     });
   }
@@ -1597,6 +1662,7 @@ export default function LeaseReview() {
         .join(", "),
     });
   }
+
   const canApprove = approvalBlockers.length === 0;
   const blockerMessage = canApprove
     ? "All checks passed. You can approve the lease abstract."
@@ -1851,6 +1917,47 @@ export default function LeaseReview() {
 
     setApproving(true);
     try {
+      // --- Bulk Approval Pre-pass ---
+      const { eligibleFields } = bulkEvaluation;
+      let nextFieldReviews = { ...fieldReviews };
+      const auditLogPromises = [];
+      const nowIso = new Date().toISOString();
+      const signedBy = approvalSignedBy || lease?.signed_by;
+
+      for (const key of eligibleFields) {
+        nextFieldReviews[key] = {
+          ...(fieldReviews[key] || {}),
+          status: REVIEW_STATUSES.ACCEPTED,
+          reviewed_at: nowIso,
+        };
+        const prevReview = fieldReviews[key];
+        const prevStatus = prevReview?.status;
+        const evidence = readFieldEvidence(lease, key);
+        auditLogPromises.push(
+          logAudit({
+            entityType: "LeaseFieldReview",
+            entityId: lease.id,
+            action: "field_bulk_accepted",
+            orgId: lease.org_id,
+            details: {
+              field_key: key,
+              previous_review_status: prevStatus,
+              new_review_status: REVIEW_STATUSES.ACCEPTED,
+              approved_by: signedBy,
+              approved_at: nowIso,
+              approval_method: "bulk_lease_approval",
+              value: readFieldValue(lease, key),
+              source_page: evidence?.sourcePage || evidence?.source_page,
+              source_text: evidence?.sourceText || evidence?.exact_source_text || evidence?.source_text,
+            }
+          }).catch((err) => {
+            console.warn(`[LeaseReview] Bulk audit failed for ${key}:`, err);
+          })
+        );
+      }
+
+      await Promise.allSettled(auditLogPromises);
+
       let resolvedDocumentUrl = approvalDocumentUrl || null;
       if (!resolvedDocumentUrl && supabase) {
         const uploadedFile = await findUploadedFileForLease(lease);
@@ -1859,7 +1966,7 @@ export default function LeaseReview() {
 
       const approvedLease = await approveLeaseAbstract({
         lease,
-        fieldReviews,
+        fieldReviews: nextFieldReviews,
         approvedBy: approvalSignedBy,
         signedAt: approvalSignedAt,
         comments: approvalComments,
@@ -3803,11 +3910,27 @@ export default function LeaseReview() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Approve Lease Abstract</DialogTitle>
+            <DialogDescription asChild>
+              <div>
+                {bulkEvaluation.eligibleFields.length > 0 && (
+                  <div className="mb-4 mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900 shadow-sm border border-blue-100 text-left">
+                    <p className="font-semibold mb-1">Bulk Approval Summary</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li><strong>{bulkEvaluation.eligibleFields.length}</strong> eligible fields will be bulk-approved.</li>
+                      {bulkEvaluation.optionalUnresolved.length > 0 && (
+                        <li><strong>{bulkEvaluation.optionalUnresolved.length}</strong> optional fields remain unresolved (Needs Review / Not Found).</li>
+                      )}
+                      <li>Lease Expense Rules approval remains separate (CAM/Expenses are blocked until approved).</li>
+                    </ul>
+                  </div>
+                )}
+                <p className="mb-2 text-sm text-slate-500 text-left">
+                  Approval converts this draft into the official lease abstract. Downstream modules 
+                  (Expenses, CAM, Budget, Billing) will only read from the approved abstract.
+                </p>
+              </div>
+            </DialogDescription>
           </DialogHeader>
-          <p className="mb-2 text-sm text-slate-500">
-            Approval converts this draft into the official lease abstract. Downstream modules
-            (Expenses, CAM, Budget, Billing) will only read from the approved abstract.
-          </p>
           <div className="mb-3 rounded-lg bg-slate-50 p-3">
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
             <p className="text-xs text-slate-500">
