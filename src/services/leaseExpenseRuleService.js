@@ -2587,100 +2587,87 @@ export const leaseExpenseRuleService = {
   // a last-resort fallback when workflow_output is empty AND extractDraftRuleSet
   // (LLM + deterministic) returned nothing.
   buildTextFallbackRules(sourceText) {
-    const text = String(sourceText || "").toLowerCase();
+    const text = String(sourceText || "");
     if (!text) return [];
-    // Each entry: [canonical_key, [phrase aliases]]. Cover the spec category list.
-    const SCANS = [
-      ["common_area_maintenance", ["common area maintenance", "cam charge", "cam expense", " cam "]],
-      ["operating_expenses",      ["operating expenses", "operating costs", "opex"]],
-      ["real_estate_taxes",       ["real estate tax", "property tax", "taxes and assessments", "ad valorem"]],
-      ["property_insurance",      ["property insurance", "casualty insurance", "fire insurance", "all-risk insurance"]],
-      ["utilities",               ["utilities", "utility service", "utility charge"]],
-      ["electricity",             ["electricity", " electric ", "electrical service"]],
-      ["water",                   [" water ", "water service", "potable water"]],
-      ["sewer",                   ["sewer", "sewage"]],
-      ["gas",                     ["natural gas", " gas service", " gas "]],
-      ["hvac",                    [" hvac", "heating, ventilation", "air conditioning", "air-conditioning"]],
-      ["janitorial",              ["janitorial", "cleaning service"]],
-      ["trash_removal",           ["trash removal", "garbage", "refuse"]],
-      ["security",                ["security service", "security guard"]],
-      ["landscaping",             ["landscaping", "landscape maintenance"]],
-      ["snow_removal",            ["snow removal", "snow plow"]],
-      ["parking",                 ["parking lot", "parking area", "parking maintenance"]],
-      ["repairs_maintenance",     ["repairs and maintenance", "repair and maintenance"]],
-      ["roof_structure",          [" roof ", "roof and structure"]],
-      ["foundation_structure",    ["foundation", "structural component"]],
-      ["capital_expenditures",    ["capital expenditure", "capital improvement", "capex"]],
-      ["management_fees",         ["management fee", "property management"]],
-      ["administrative_fees",     ["administrative fee", "admin fee", "administration fee"]],
-      ["tenant_insurance",        ["tenant insurance", "tenant's insurance", "liability insurance"]],
-      ["tenant_improvements",     ["tenant improvement", "ti allowance", "buildout"]],
-      ["alterations",             ["alterations", "tenant alteration"]],
-      ["tenant_caused_damage",    ["caused by tenant", "tenant-caused", "tenant caused damage"]],
-      ["separately_metered_charges", ["separately metered", "separate meter", "submetered"]],
-      ["excess_usage",            ["excess use", "excess utility", "over and above"]],
-      ["legal_enforcement_fees",  ["attorneys' fees", "attorney's fees", "legal fee", "enforcement"]],
-      ["late_fees",               ["late fee", "late charge"]],
-      ["interest",                ["interest at", "interest rate", "prime rate"]],
+
+    const SECTIONS = [
+      { name: "Recoverable Expenses", regex: /(?:recoverable\s+expenses?|common\s+area\s+maintenance|operating\s+expenses?)(?:[\s\S]{0,1000})/i },
+      { name: "Excluded Expenses", regex: /(?:excluded\s+expenses?|exclusions\s+from\s+operating\s+expenses?|exclusions\s+from\s+cam)(?:[\s\S]{0,1000})/i },
+      { name: "Capital Expenditures", regex: /(?:capital\s+expenditures?|capital\s+improvements?|amorti[zs]ation)(?:[\s\S]{0,1000})/i },
+      { name: "Gross-Up", regex: /(?:gross[-\s]?up)(?:[\s\S]{0,1000})/i },
+      { name: "Controllable Expense Cap", regex: /(?:controllable\s+expense\s+cap|expense\s+cap)(?:[\s\S]{0,1000})/i },
+      { name: "Estimated Additional Rent", regex: /(?:estimated\s+(?:annual\s+)?additional\s+rent|estimated\s+cam)(?:[\s\S]{0,1000})/i },
+      { name: "Utilities and After-Hours HVAC", regex: /(?:utilities|after[-\s]?hours\s+hvac)(?:[\s\S]{0,1000})/i },
+      { name: "Insurance Requirements", regex: /(?:insurance\s+requirements?|tenant\s+insurance)(?:[\s\S]{0,1000})/i },
+      { name: "Default, Late Charges, and Interest", regex: /(?:default|late\s+charges?|late\s+fees?|interest)(?:[\s\S]{0,1000})/i },
+      { name: "Holdover", regex: /(?:holdover|holding\s+over)(?:[\s\S]{0,1000})/i },
+      { name: "Parking", regex: /(?:parking)(?:[\s\S]{0,1000})/i },
+      { name: "Tenant Improvements", regex: /(?:tenant\s+improvements?|ti\s+allowance)(?:[\s\S]{0,1000})/i }
     ];
+
     const rules = [];
-    for (const [key, phrases] of SCANS) {
-      let matchedPhrase = null;
-      for (const phrase of phrases) {
-        if (text.includes(phrase)) {
-          matchedPhrase = phrase.trim();
-          break;
-        }
-      }
-      if (!matchedPhrase) continue;
+    const lines = text.split(/\r?\n/);
+    
+    // We will do a line-by-line scan. If we are in a section, we look for bullet items.
+    let currentSection = null;
+    let sectionTextAccumulator = "";
 
-      // Extract a window of surrounding text (~200 chars) as evidence
-      const idx = text.indexOf(matchedPhrase);
-      const start = Math.max(0, idx - 80);
-      const end = Math.min(text.length, idx + matchedPhrase.length + 200);
-      const snippet = sourceText.substring(start, end).trim();
+    const flushBullet = (bulletText, sectionName) => {
+       const snippet = bulletText.trim().slice(0, 1000);
+       if (snippet.length < 15) return;
+       
+       let key = sectionName.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+       
+       rules.push({
+         expense_category: key,
+         normalized_key: key,
+         category_name: sectionName,
+         responsibility: /tenant/i.test(snippet) ? "tenant" : "unknown",
+         recoverable_from_tenant: sectionName === "Excluded Expenses" ? "no" : "needs_review",
+         cam_eligible: sectionName === "Excluded Expenses" ? "no" : "needs_review",
+         included_in_base_rent: false,
+         recovery_method: "manual_review",
+         exact_source_text: snippet,
+         source_clause: snippet,
+         confidence_score: 0.65,
+         extraction_status: "inferred",
+         status: "needs_review",
+         review_status: "needs_review",
+         approval_status: "draft",
+         published_to_cam: false,
+         generation_source: "text_fallback_section",
+         mentioned_in_lease: true,
+         notes: `Extracted from ${sectionName} bullet item.`,
+       });
+    };
 
-      // Light heuristic: is responsibility hinted near the match?
-      const window = text.substring(Math.max(0, idx - 200), Math.min(text.length, idx + matchedPhrase.length + 400));
-      let responsibility = "unknown";
-      if (/\btenant\b.{0,80}\b(?:pay|reimburse|responsible)/.test(window)) responsibility = "tenant";
-      else if (/\blandlord\b.{0,80}\b(?:pay|provide|responsible)/.test(window)) responsibility = "landlord";
-      else if (/\bshared\b|\bpro rata\b|\bapportioned\b/.test(window)) responsibility = "shared";
-
-      const includedInRent = /\bincluded in (?:base )?rent\b|\bfull[-\s]?service\b|\bgross lease\b/.test(window);
-
-      // Keyword-only matches cannot reliably distinguish "tenant pays base
-      // rent" from "tenant reimburses operating expenses". Per the
-      // lease-derivation rule, the fallback must never assert
-      // recoverable_from_tenant=yes from a heuristic — only the explicit
-      // "included in base rent" clause is strong enough to assert "no".
-      // Everything else lands as Needs Review for a human to confirm.
-      const recoverableFromTenant = includedInRent ? "no" : "needs_review";
-      const camEligibleFallback = includedInRent ? "no" : "needs_review";
-
-      rules.push({
-        expense_category: key,
-        normalized_key: key,
-        category_name: humanizeLabel(key),
-        responsibility,
-        recoverable_from_tenant: recoverableFromTenant,
-        cam_eligible: camEligibleFallback,
-        included_in_base_rent: includedInRent,
-        recovery_method: includedInRent ? "included_in_rent" : "manual_review",
-        exact_source_text: snippet,
-        source_clause: snippet,
-
-        confidence_score: 0.55,
-        extraction_status: "inferred",
-        status: "needs_review",
-        review_status: "needs_review",
-        approval_status: "draft",
-        published_to_cam: false,
-        generation_source: "text_fallback_keyword",
-        mentioned_in_lease: true,
-        notes: `Inferred from lease language matching keyword "${matchedPhrase}"`,
-      });
+    for (let i = 0; i < lines.length; i++) {
+       const line = lines[i].trim();
+       if (!line) continue;
+       
+       // Check if line looks like a section header from our list
+       let foundNewSection = false;
+       for (const sec of SECTIONS) {
+          if (sec.regex.test(line) && line.length < 100) {
+             currentSection = sec.name;
+             foundNewSection = true;
+             break;
+          }
+       }
+       
+       if (currentSection) {
+          // Check if line is a bullet
+          if (/^(?:[\u2022\-\*]|\([a-z0-9]+\)|\d+\.)\s+(.+)/i.test(line)) {
+             flushBullet(line, currentSection);
+          } else {
+             // Not a bullet, could just be a paragraph in the section
+             if (!foundNewSection && line.length > 50) {
+                flushBullet(line, currentSection);
+             }
+          }
+       }
     }
+    
     return rules;
   },
 

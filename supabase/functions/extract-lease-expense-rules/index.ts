@@ -25,26 +25,34 @@ STRICT RULES:
 - Exclusions such as mortgage interest, depreciation, leasing commissions, vacant-space marketing, TI allowances, reimbursed costs, fines, income/franchise taxes, sale/financing costs, owner overhead, political contributions, tenant-dispute legal fees, and costs for another tenant's premises must be recoverable_from_tenant="no" and cam_eligible="no".
 - Capital expenditures are conditional only when the lease allows legally required or cost-saving improvements amortized over useful life; structural/major replacements are generally excluded or needs_review.
 - Management fees are not CAM eligible unless the lease says law requires them or tenant gave written approval.
-- Administrative fees require the administrative-fee clause and must not be inferred from general CAM language.
-- Vacant-unit/gross-up language controls gross_up_allowed/gross_up_applicable; if vacant units remain in denominator and landlord absorbs vacant share, gross-up is not permitted.
+- Administrative fees require the administrative-fee clause and must not be inferred from general CA- Vacant-unit/gross-up language controls gross_up_allowed/gross_up_applicable; if vacant units remain in denominator and landlord absorbs vacant share, gross-up is not permitted.
 
-For each of the categories provided in the JSON input that are ACTUALLY mentioned in the lease text, determine the following:
-- row_status: "uncertain", "unmapped", "mapped", or "missing_value". If an expense is explicitly mentioned and has rules (e.g. capped, recoverable) but NO explicit dollar value or percentage is found in the lease text, you MUST set row_status to "missing_value" — the rule IS still valid and MUST be emitted. Amount is OPTIONAL: a clause that describes an obligation, exclusion, cap, base year, reimbursement method, included-in-rent term, or tenant-direct responsibility is enough to create a rule, even with no dollar amount.
-- mentioned_in_lease: boolean (is this category specifically mentioned?)
-- is_recoverable: boolean (can the landlord recover this expense?)
-- is_excluded: boolean (is this explicitly excluded from recovery?)
+EXTRACTION INSTRUCTIONS:
+A. Return only explicitly mentioned rules. Do not output not_mentioned or checklist/template rows. If no expense clauses are present, return [].
+B. Split lists into individual rules. If a clause contains a bulleted or comma-separated list of recoverable expenses, excluded expenses, tenant-direct charges, included services, caps, or fees, emit ONE rule PER listed item. Example: "Recoverable expenses include common area utilities, janitorial, landscaping, security, and trash." -> Return FIVE rules.
+C. Extract all expense-related terms, not only CAM. Extract: recoverable expense categories, exclusions, tenant-direct charges, included-in-base-rent services, modified gross/base-year provisions, tax/insurance/operating expense base amounts, gross-up, caps, admin/management fees, estimated additional rent, utilities/after-hours HVAC, tenant insurance, late fees/default interest, holdover, parking/EV charging, TI allowance/excess costs, legal/enforcement fees, surrender/restoration costs.
+D. Every returned rule must include its category, exact_source_text, and a review_status of "needs_review".
+E. Source evidence is mandatory. If exact_source_text is not available, do not return the rule. Do not use premises/address/square-footage text as evidence. Do not paraphrase source text.
+F. Base-year/modified gross instructions: For modified gross/base-year clauses, emit separate rules for: expense structure, base year, operating expense base amount, tax base amount, insurance base amount, tenant share, allocation basis, expenses over base year, caps/gross-up/admin/management fees.
+
+Map each rule to the most appropriate standard expense category. If none fit perfectly, create a descriptive name. Determine:
+- category_name: string (e.g. "Taxes", "Janitorial", "Holdover", "Base Year Structure")
+- row_status: "missing_value" if no explicit dollar value/percentage but term exists. Otherwise "mapped".
+- mentioned_in_lease: true
+- is_recoverable: boolean (can landlord recover?)
+- is_excluded: boolean (explicitly excluded?)
 - recoverable_from_tenant: "yes", "no", or "conditional"
-- cam_eligible: "yes", "no", or "conditional". Use "no" when included in base rent, tenant direct contract, excluded, or not recoverable. Use "conditional" when tenant reimbursement depends on a threshold, base year, cap, audit, exception, or ambiguous clause.
+- cam_eligible: "yes", "no", or "conditional"
 - payment_treatment: "included_in_base_rent", "separately_billed", "tenant_direct_contract", "reimbursable", or "not_applicable"
-- recovery_method: "not_applicable", "pass_through", "pro_rata_share", "fixed_amount", "capped_amount", "included_in_base_rent", "base_year", or "tenant_direct_contract"
+- recovery_method: "not_applicable", "pass_through", "pro_rata_share", "fixed_amount", "capped_amount", "included_in_base_rent", "base_year", "tenant_direct_contract", or "amortized_capital"
 - allocation_basis: "pro_rata_share", "square_footage", "usage", "fixed", "direct", or null
 - included_in_base_rent: boolean
-- is_controllable: boolean (is this a controllable expense?)
-- is_subject_to_cap: boolean (is there a cap on this expense?)
+- is_controllable: boolean
+- is_subject_to_cap: boolean
 - cap_type: string (e.g., "cumulative", "non_cumulative", "fixed") or null
 - cap_percent: number or null
 - cap_value: number (percentage or flat amount) or null
-- has_base_year: boolean (is there a base year for this expense?)
+- has_base_year: boolean
 - base_year: string or number or null
 - base_year_type: string (e.g., "calendar", "fiscal", "expense") or null
 - gross_up_allowed: boolean
@@ -58,24 +66,17 @@ For each of the categories provided in the JSON input that are ACTUALLY mentione
 - tax_base_amount: number or null
 - insurance_base_amount: number or null
 - source_page: number or null
-- exact_source_text: exact lease text supporting the rule, or null
+- exact_source_text: MUST contain the exact text supporting the rule. MANDATORY.
 - confidence_score: number from 0.0 to 1.0
 - reasoning_summary: concise explanation
-- review_status: always "needs_review" for AI-extracted rules
-- approval_status: always "draft" for AI-extracted rules
-- published_to_cam: always false for AI-extracted rules
-- extracted_value: number or null (the explicit dollar amount mentioned for this expense, if any)
+- review_status: "needs_review"
+- approval_status: "draft"
+- published_to_cam: false
+- extracted_value: number or null
 - frequency: string ("yearly", "monthly", "quarterly") or null
-- notes: string (a brief explanation of your reasoning)
+- notes: string
 - confidence: number (0.0 to 1.0)
-- source: string (the exact lease clause text snippet justifying this rule)
-
-Document-type rules:
-- If the document is only an assignment, assumption, consent to assignment, term amendment, rent amendment, estoppel, or abstract summary and does not include expense recovery clauses, return an empty JSON array []. Do not infer CAM/taxes/insurance/utilities from assignment or amendment language.
-- Assignment clauses, assumption by assignee, landlord consent, term extension, and base-rent-only amendments do not support lease expense rules.
-- For full-service/gross leases, mark expenses included in base rent only when the lease text clearly says base rent includes those expenses.
-- For modified gross/base-year leases, extract base_year, base_year_amount, operating_expense_base_amount, tax_base_amount, insurance_base_amount, tenant_share_percent, gross_up_percent, and caps only from explicit clauses.
-- Do not output base_year_amount as 0 unless the lease explicitly states zero.
+- source: exact lease clause text snippet
 
 Return a JSON array of objects representing these rules. The output MUST be valid JSON.
 Format:
@@ -84,7 +85,9 @@ Format:
     "category_name": "Taxes",
     "row_status": "mapped",
     "mentioned_in_lease": true,
-    ...
+    "exact_source_text": "Tenant shall pay its pro rata share of real estate taxes...",
+    "review_status": "needs_review",
+    "approval_status": "draft"
   }
 ]`;
 
