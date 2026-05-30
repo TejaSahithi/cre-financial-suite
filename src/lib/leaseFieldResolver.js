@@ -218,7 +218,40 @@ function isFallbackPlaceholderValue(value) {
   return FALLBACK_VALUE_SENTINELS.has(lower);
 }
 
-function buildResolverOutput(rawResult, sourcePath) {
+const ENTITY_FIELDS = new Set([
+  "tenant_name", "landlord_name", "assignor_name", "assignee_name", 
+  "guarantor_name", "owner_name", "property_manager", 
+  "tenant_contact_name", "landlord_contact_name", 
+  "tenant_signatory_name", "landlord_signatory_name"
+]);
+
+function isValidEntityField(fieldKey, value, sourceText) {
+  if (!fieldKey || !ENTITY_FIELDS.has(normalizeLeaseFieldKey(fieldKey))) return true;
+  
+  const valStr = String(value || "").trim();
+  if (!valStr) return false;
+  
+  const srcStr = String(sourceText || "").toLowerCase();
+  const valLower = valStr.toLowerCase();
+
+  // 1. Plausible name checks on the value itself
+  if (valStr.length > 120) return false;
+  if (/^(or\s+|and\s+)/i.test(valStr)) return false;
+  if (/^(tenant|landlord|assignee|assignor|subtenant|guarantor|owner|manager)$/i.test(valStr)) return false;
+  if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet)\b/i.test(valLower)) return false;
+  if (/[.?!](?:\s|$)|(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return false;
+
+  // 2. Reject if source text or value contains clause/action language
+  const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium)\b/i;
+  
+  if (clausePattern.test(srcStr) || clausePattern.test(valLower)) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildResolverOutput(rawResult, sourcePath, fieldKey) {
   if (rawResult === null || rawResult === undefined || rawResult === "") {
     return null;
   }
@@ -303,6 +336,11 @@ function buildResolverOutput(rawResult, sourcePath) {
      return null;
   }
 
+  // Enforce entity field validation
+  if (!isValidEntityField(fieldKey, output.value, output.exactSourceText || output.rawValue)) {
+    return null;
+  }
+
   return output;
 }
 
@@ -315,6 +353,12 @@ function buildResolverOutput(rawResult, sourcePath) {
 export function resolveLeaseField(lease, fieldKey, options = {}) {
   const mode = options.mode || "display";
   const aliases = getFieldAliases(fieldKey);
+
+  // If this is a full lease (not an assignment), suppress dynamic assignee rows unless source is an explicit label
+  if (fieldKey === "assignee_name" && String(lease?.document_subtype || "").toLowerCase() !== "assignment") {
+      // We will rely on isValidEntityField to aggressively drop clause language, 
+      // but we can also add a runtime check here if we needed to fully drop the fallback search.
+  }
 
   const fallbackHierarchy = [];
 
@@ -362,7 +406,7 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
   for (const { path, data } of fallbackHierarchy) {
     if (!data) continue;
     const rawResult = extractValueFromSource(data, aliases);
-    const output = buildResolverOutput(rawResult, path);
+    const output = buildResolverOutput(rawResult, path, fieldKey);
     if (output && output.found) {
       const hasRealEvidence = Boolean(output.exactSourceText || output.sourcePage);
       if (hasRealEvidence) return output;

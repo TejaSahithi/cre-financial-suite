@@ -141,7 +141,7 @@ export function validateRecords(
       if (!def) continue; // unmapped field, skip validation
 
       if (moduleType === "lease") {
-        extracted.value = sanitizeLeaseFieldValue(fieldName, extracted.value);
+        extracted.value = sanitizeLeaseFieldValue(fieldName, extracted);
       }
       const validated = validateField(extracted.value, def);
 
@@ -181,11 +181,37 @@ export function validateRecords(
   return { records, errors };
 }
 
-function sanitizeLeaseFieldValue(fieldName: string, value: unknown): unknown {
+function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
+  const value = field.value;
   if (value === null || value === undefined) return value;
 
-  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name"].includes(fieldName)) {
-    return cleanPartyName(value);
+  const ENTITY_FIELDS = new Set([
+    "tenant_name", "landlord_name", "assignor_name", "assignee_name", 
+    "guarantor_name", "owner_name", "property_manager", 
+    "tenant_contact_name", "landlord_contact_name", 
+    "tenant_signatory_name", "landlord_signatory_name"
+  ]);
+
+  if (ENTITY_FIELDS.has(fieldName)) {
+    const valStr = String(value || "").trim();
+    if (!valStr) return null;
+    
+    const srcStr = String(field.sourceText || field.source_text || "").toLowerCase();
+    const valLower = valStr.toLowerCase();
+
+    if (valStr.length > 120) return null;
+    if (/^(or\s+|and\s+)/i.test(valStr)) return null;
+    if (/^(tenant|landlord|assignee|assignor|subtenant|guarantor|owner|manager)$/i.test(valStr)) return null;
+    if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet)\b/i.test(valLower)) return null;
+    if (/[.?!](?:\s|$)|(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return null;
+
+    const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium)\b/i;
+    
+    if (clausePattern.test(srcStr) || clausePattern.test(valLower)) {
+      return null;
+    }
+
+    return cleanPartyName(valStr);
   }
 
   if (fieldName === "property_address") {
