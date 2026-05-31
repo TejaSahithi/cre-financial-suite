@@ -6,12 +6,14 @@ export function useMfaStatus({ isAuthenticated, user, refreshProfile }) {
   const [mfaChecked, setMfaChecked] = useState(false);
   const [mfaNeedsEnroll, setMfaNeedsEnroll] = useState(false);
   const [mfaVerifiedThisSession, setMfaVerifiedThisSession] = useState(false);
+  const [mfaError, setMfaError] = useState(null);
 
   useEffect(() => {
     const checkMFA = async () => {
       if (!isAuthenticated) {
         setMfaRequired(false);
         setMfaNeedsEnroll(false);
+        setMfaError(null);
         setMfaChecked(true);
         return;
       }
@@ -19,6 +21,13 @@ export function useMfaStatus({ isAuthenticated, user, refreshProfile }) {
       if (mfaVerifiedThisSession) {
         setMfaRequired(false);
         setMfaNeedsEnroll(false);
+        setMfaError(null);
+        setMfaChecked(true);
+        return;
+      }
+
+      if (!supabase) {
+        setMfaError(new Error("Database client unavailable."));
         setMfaChecked(true);
         return;
       }
@@ -62,8 +71,8 @@ export function useMfaStatus({ isAuthenticated, user, refreshProfile }) {
         }
       } catch(e) {
         console.warn('[useMfaStatus] MFA check error:', e);
-        setMfaRequired(false);
-        setMfaNeedsEnroll(false);
+        setMfaRequired(true);
+        setMfaError(e);
       }
       setMfaChecked(true);
     };
@@ -74,14 +83,20 @@ export function useMfaStatus({ isAuthenticated, user, refreshProfile }) {
     setMfaVerifiedThisSession(true);
     setMfaRequired(false);
     setMfaNeedsEnroll(false);
+    setMfaError(null);
     setMfaChecked(true);
-    await refreshProfile(false);
+    try {
+      await refreshProfile(false);
+    } catch(e) {
+      console.warn('[useMfaStatus] profile refresh failed after MFA verification:', e);
+    }
   };
 
   return {
     mfaRequired,
     mfaChecked,
     mfaNeedsEnroll,
+    mfaError,
     handleMfaVerified
   };
 }

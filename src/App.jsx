@@ -63,7 +63,7 @@ const AuthenticatedApp = () => {
   }, [navigateToLogin]);
 
   // ─── Extracted State Hooks ──────────────────────────────────────────────
-  const { mfaRequired, mfaChecked, mfaNeedsEnroll, handleMfaVerified } = useMfaStatus({
+  const { mfaRequired, mfaChecked, mfaNeedsEnroll, mfaError, handleMfaVerified } = useMfaStatus({
     isAuthenticated,
     user,
     refreshProfile
@@ -92,6 +92,28 @@ const AuthenticatedApp = () => {
   }
 
   // ─── MFA Guard ──────────────────────────────────────────────────────────
+  if (isAuthenticated && mfaError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-red-200 shadow-sm p-8 text-center">
+          <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-600 text-2xl">
+            🔒
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Security Verification Failed</h2>
+          <p className="text-sm text-slate-500 mb-6">
+            We could not verify your security status. Please refresh the page to try again.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full h-11 bg-[#1a2744] hover:bg-[#243b67] text-white font-semibold rounded-xl transition-colors"
+          >
+            Refresh Page
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const mfaBypassPages = ["AcceptInvite", "PendingApproval", "ResetPassword", "SecurityQuestionsSetup"];
   const isMfaBypassPage = mfaBypassPages.includes(currentPath);
 

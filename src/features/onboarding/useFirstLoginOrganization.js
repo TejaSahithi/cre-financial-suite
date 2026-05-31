@@ -23,6 +23,10 @@ export function useFirstLoginOrganization({ user, mfaChecked, mfaRequired, refre
       !mfaRequired
     ) {
       const initOrg = async () => {
+        if (!supabase) {
+          console.warn('[useFirstLoginOrganization] no supabase client');
+          return;
+        }
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) {
           console.warn('[useFirstLoginOrganization] no valid session yet, skipping');
