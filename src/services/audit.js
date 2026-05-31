@@ -115,12 +115,17 @@ export async function logAudit(entry) {
   }
 
   const context = await resolveAuditContext(entry);
+
+  // Do NOT silently drop audit logs when orgId is null.
+  // Super-admin actions (user approvals, org creation) have no acting org but must
+  // still be recorded. We proceed with org_id = null and let the DB decide.
+  // If the audit_logs table requires org_id to be non-null, run:
+  //   ALTER TABLE audit_logs ALTER COLUMN org_id DROP NOT NULL;
   if (!context.orgId) {
-    console.debug('[audit] Skipped audit log without valid org context:', {
+    console.warn('[audit] Writing audit log with null org_id — super-admin or pre-org action:', {
       entity_type: inferEntityType(entry),
       action: entry.action,
     });
-    return;
   }
 
   const optionalDetails = serializeAuditValue(

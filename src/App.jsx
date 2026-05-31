@@ -186,11 +186,20 @@ const AuthenticatedApp = () => {
         const { data: { session } } = await supabase.auth.getSession();
         const provider = session?.user?.app_metadata?.provider || 'email';
 
-        if (provider === 'google') {
-          setMfaRequired(false);
-          setMfaNeedsEnroll(false);
-          setMfaChecked(true);
-          return;
+        // OAuth providers (Google, Microsoft): apply MFA only for privileged roles.
+        // Admins and managers must enroll/verify Supabase TOTP regardless of provider.
+        // Viewers and editors on OAuth are exempted — their IdP handles 2FA.
+        const isOAuthProvider = provider === 'google' || provider === 'azure';
+        if (isOAuthProvider) {
+          const rawRole = user?._raw_role || user?.role || '';
+          const requiresMfaByRole = ['super_admin', 'org_admin', 'admin', 'manager'].includes(rawRole);
+          if (!requiresMfaByRole) {
+            setMfaRequired(false);
+            setMfaNeedsEnroll(false);
+            setMfaChecked(true);
+            return;
+          }
+          // Privileged OAuth users fall through to the standard TOTP check below.
         }
 
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();

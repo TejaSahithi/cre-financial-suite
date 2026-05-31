@@ -77,8 +77,11 @@ export async function checkGoogleUserApproval(authUser) {
     // if they have no valid profile or memberships.
     return { approved: true };
   } catch (err) {
-    console.error('[auth] checkGoogleUserApproval error:', err);
-    return { approved: true }; // Fail open on network error
+    // Fail CLOSED: deny access on any unexpected error rather than granting it.
+    // A transient Supabase outage should not admit unapproved users into the platform.
+    // The caller (App.jsx) will surface an appropriate "try again" prompt.
+    console.error('[auth] checkGoogleUserApproval error — denying access until check succeeds:', err);
+    return { approved: false, reason: 'network_error' };
   }
 }
 

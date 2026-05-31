@@ -370,7 +370,7 @@ function shouldUpdateExpense(existingExpense, payload) {
     "allocation_method",
     "is_controllable",
     "description",
-    "approved_status",
+    "approval_status",
     "confidence_score",
     "evidence_text",
     "evidence_page_number",
