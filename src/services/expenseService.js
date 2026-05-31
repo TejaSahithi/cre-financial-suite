@@ -3236,7 +3236,7 @@ export const expenseService = {
       const resolution = resolveTenantForExpense(expense, {
         leases: tenantLeases,
         units: [], // unit-side lookup not available server-side; the resolver
-                   // still resolves via expense.tenant_name / tenant_id / lease.
+        // still resolves via expense.tenant_name / tenant_id / lease.
         tenants: [],
       });
       if (!resolution.tenant?.name && !resolution.tenant?.id) {
