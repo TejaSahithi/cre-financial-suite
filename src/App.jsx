@@ -22,16 +22,16 @@ const mainPageKey = mainPage ?? Object.keys(Pages)[0];
 const publicPages = [...PUBLIC_PAGES, "AcceptInvite"];
 
 const AuthenticatedApp = () => {
-  const { 
-    user, 
-    isLoadingAuth, 
-    isLoadingPublicSettings, 
-    authError, 
-    navigateToLogin, 
-    isAuthenticated, 
-    refreshProfile 
+  const {
+    user,
+    isLoadingAuth,
+    isLoadingPublicSettings,
+    authError,
+    navigateToLogin,
+    isAuthenticated,
+    refreshProfile
   } = useAuth();
-  
+
   const location = useLocation();
   const currentPath = location.pathname.substring(1);
   const isPublicPage = publicPages.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
