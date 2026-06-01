@@ -2,6 +2,11 @@ import { supabase } from "@/services/supabaseClient";
 import leaseExpenseRuleService from "./leaseExpenseRuleService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 
+const devLog = (...args) => { if (import.meta.env.DEV) devLog(...args); };
+const devWarn = (...args) => { if (import.meta.env.DEV) devWarn(...args); };
+const devTable = (...args) => { if (import.meta.env.DEV) devTable(...args); };
+
+
 // Per-field whitelists. A given structured-terms field is meaningful only
 // on these canonical categories; for all others it must be null to avoid
 // global leakage. Update if you add new categories that legitimately carry
@@ -701,7 +706,7 @@ function applyLeaseEvidenceRules(rule, sourceText) {
 // ... Wait, I should fetch the lease first
 export const leaseRulePipelineService = {
   async generateLeaseExpenseRulesForLease({ leaseId, force = false, source = "manual_extract" }) {
-    console.log("[NEW PIPELINE CALLED]", { leaseId, force, source });
+    devLog("[NEW PIPELINE CALLED]", { leaseId, force, source });
     if (!leaseId) throw new Error("leaseId is required");
 
     let diagnostics = {
@@ -739,17 +744,17 @@ export const leaseRulePipelineService = {
     // 2. Side-load related rows separately only if IDs exist
     if (lease.unit_id) {
       const { data: unit, error: unitErr } = await supabase.from("units").select("*").eq("id", lease.unit_id).maybeSingle();
-      if (unitErr) console.warn("[PIPELINE SIDELOAD WARNING] unit fetch failed:", unitErr);
+      if (unitErr) devWarn("[PIPELINE SIDELOAD WARNING] unit fetch failed:", unitErr);
       lease.unit = unit || null;
     }
     if (lease.property_id) {
       const { data: property, error: propErr } = await supabase.from("properties").select("*").eq("id", lease.property_id).maybeSingle();
-      if (propErr) console.warn("[PIPELINE SIDELOAD WARNING] property fetch failed:", propErr);
+      if (propErr) devWarn("[PIPELINE SIDELOAD WARNING] property fetch failed:", propErr);
       lease.property = property || null;
     }
     if (lease.building_id) {
       const { data: building, error: buildErr } = await supabase.from("buildings").select("*").eq("id", lease.building_id).maybeSingle();
-      if (buildErr) console.warn("[PIPELINE SIDELOAD WARNING] building fetch failed:", buildErr);
+      if (buildErr) devWarn("[PIPELINE SIDELOAD WARNING] building fetch failed:", buildErr);
       lease.building = building || null;
     }
 
@@ -836,7 +841,7 @@ export const leaseRulePipelineService = {
           || /\.(pdf|png|jpe?g|tiff?|webp|heic)$/i.test(fname);
         if (!sourceText && looksLikeScannable) {
           try {
-            console.log("Triggering OCR Vision Fallback...");
+            devLog("Triggering OCR Vision Fallback...");
             const { data: ocrData } = await supabase.functions.invoke("ocr-vision-extract", { body: { fileId } });
             if (ocrData?.text) {
               sourceText = ocrData.text;
@@ -845,7 +850,7 @@ export const leaseRulePipelineService = {
               }).eq("id", fileId);
             }
           } catch (ocrErr) {
-             console.warn("OCR fallback failed:", ocrErr);
+             devWarn("OCR fallback failed:", ocrErr);
           }
         }
       }
@@ -867,7 +872,7 @@ export const leaseRulePipelineService = {
 
 
 
-    console.log("[PIPELINE INPUT]", {
+    devLog("[PIPELINE INPUT]", {
       leaseId,
       sourceFileId: diagnostics.sourceFileId,
       sourceTextLength: diagnostics.sourceTextLength,
@@ -882,7 +887,7 @@ export const leaseRulePipelineService = {
     });
 
     if (documentProfile.assignmentOrAmendmentOnly) {
-      console.log("[PIPELINE DOCUMENT PROFILE] original lease required for expense rules", documentProfile);
+      devLog("[PIPELINE DOCUMENT PROFILE] original lease required for expense rules", documentProfile);
       const saved = await leaseExpenseRuleService.saveRuleSet({
         lease,
         rules: [originalLeaseRequiredRule(lease.id, documentProfile.documentType)],
@@ -898,7 +903,7 @@ export const leaseRulePipelineService = {
     // Force reruns should only replace unresolved extraction output. Human-approved
     // rows are the durable approval record and must survive regeneration.
     if (force) {
-      console.log("[FORCE REEXTRACT] destructive delete skipped; saveRuleSet will supersede stale unresolved rows", { leaseId, force });
+      devLog("[FORCE REEXTRACT] destructive delete skipped; saveRuleSet will supersede stale unresolved rows", { leaseId, force });
     }
 
     // 5. Collect Candidates
@@ -962,7 +967,7 @@ export const leaseRulePipelineService = {
     const merged = this.mergeAndScoreCandidates(candidates);
     diagnostics.mergedRulesCount = merged.length;
 
-    console.log("[PIPELINE CANDIDATES]", {
+    devLog("[PIPELINE CANDIDATES]", {
       workflowRulesCount: diagnostics.workflowRulesCount,
       structuredTermRulesCount: diagnostics.structuredTermRulesCount,
       deterministicRulesCount: diagnostics.deterministicRulesCount,
@@ -1027,8 +1032,8 @@ export const leaseRulePipelineService = {
 
     // Diagnostics Payload Output
     if (finalRules.length > 0) {
-      console.log(`[FINAL PAYLOAD BEFORE SAVE] Lease ${leaseId}:`);
-      console.table(finalRules.map(p => ({
+      devLog(`[FINAL PAYLOAD BEFORE SAVE] Lease ${leaseId}:`);
+      devTable(finalRules.map(p => ({
         lease_id: lease.id,
         rule_key: p.rule_key,
         rule_type: p.rule_type,
@@ -1061,7 +1066,7 @@ export const leaseRulePipelineService = {
     const capRows = finalRules
       .filter((r) => r.cap_percent != null || r.is_subject_to_cap)
       .map((r) => ({ key: r.normalized_key, cap_percent: r.cap_percent, is_subject_to_cap: r.is_subject_to_cap }));
-    console.log("[PIPELINE SUMMARY]", {
+    devLog("[PIPELINE SUMMARY]", {
       leaseId,
       generated_total: finalRules.length,
       by_generation_source: summaryBySource,
@@ -1083,7 +1088,7 @@ export const leaseRulePipelineService = {
       .select("id", { count: "exact", head: true })
       .eq("lease_id", leaseId);
 
-    console.log("[POST UPSERT RULE COUNT]", {
+    devLog("[POST UPSERT RULE COUNT]", {
       leaseId,
       count,
       countError,

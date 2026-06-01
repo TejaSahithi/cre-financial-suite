@@ -2,6 +2,11 @@ import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
+
+const devLog = (...args) => { if (import.meta.env.DEV) devLog(...args); };
+const devWarn = (...args) => { if (import.meta.env.DEV) devWarn(...args); };
+const devTable = (...args) => { if (import.meta.env.DEV) devTable(...args); };
+
 import {
   getEffectiveApprovalStatus,
   getEffectiveReviewStatus,
@@ -1101,7 +1106,7 @@ async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionV
     return { superseded: 0, deleted: deletedRows?.length || targetIds.length, droppedColumns: [] };
   }
 
-  console.warn(
+  devWarn(
     "[leaseExpenseRuleService] supersedeUnresolvedRules DELETE failed; falling back to marker update.",
     {
       code: deleteError.code,
@@ -1145,7 +1150,7 @@ async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionV
   }
 
   if (result.droppedColumns.length > 0) {
-    console.warn("[leaseExpenseRuleService] supersedeUnresolvedRules marker UPDATE stripped unsupported columns:", result.droppedColumns);
+    devWarn("[leaseExpenseRuleService] supersedeUnresolvedRules marker UPDATE stripped unsupported columns:", result.droppedColumns);
   }
   return { superseded: result.data?.length || targetIds.length, deleted: 0, droppedColumns: result.droppedColumns };
 }
@@ -1334,7 +1339,7 @@ async function ensurePersistentCategories({ orgId, categories = [], rules = [] }
           /row-level security/i.test(message) ||
           /permission denied/i.test(message);
         if (isRlsDenial) {
-          console.warn(
+          devWarn(
             `[leaseExpenseRuleService] expense_categories INSERT denied by RLS for ${insertPayload.length} key(s) — using existing seeded categories. Missing keys:`,
             insertPayload.map((p) => p.normalized_key),
           );
@@ -2239,7 +2244,7 @@ export const leaseExpenseRuleService = {
   async loadRuleSets(leaseIds = []) {
     const tag = `[loadRuleSets leaseIds=${leaseIds?.length || 0}]`;
     if (!supabase || !Array.isArray(leaseIds) || leaseIds.length === 0) {
-      console.log(`${tag} early return — no leaseIds`);
+      devLog(`${tag} early return — no leaseIds`);
       return [];
     }
 
@@ -2255,7 +2260,7 @@ export const leaseExpenseRuleService = {
         console.error(`${tag} rule_sets query failed:`, error);
         throw error;
       }
-      console.log(`${tag} rule_sets read: ${ruleSets?.length || 0}`, ruleSets?.map((s) => ({ id: s.id?.slice(0, 8), lease: s.lease_id?.slice(0, 8), v: s.version, status: s.status })));
+      devLog(`${tag} rule_sets read: ${ruleSets?.length || 0}`, ruleSets?.map((s) => ({ id: s.id?.slice(0, 8), lease: s.lease_id?.slice(0, 8), v: s.version, status: s.status })));
 
       const ruleSetsByLeaseId = new Map();
       for (const ruleSet of ruleSets || []) {
@@ -2278,7 +2283,7 @@ export const leaseExpenseRuleService = {
         console.error(`${tag} rules query failed:`, rulesError);
         throw rulesError;
       }
-      console.log(`${tag} rules read: ${allRules?.length || 0} for ${allRuleSetIds.length} rule_set(s)`);
+      devLog(`${tag} rules read: ${allRules?.length || 0} for ${allRuleSetIds.length} rule_set(s)`);
 
       const rulesBySet = new Map();
       for (const rule of allRules || []) {
@@ -2323,14 +2328,14 @@ export const leaseExpenseRuleService = {
         const rulesForSet = (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id);
         const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
         const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft");
-        console.log(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
+        devLog(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
         return {
           leaseId: ruleSet.lease_id,
           ruleSet,
           rules: finalizedRules,
         };
       });
-      console.log(`${tag} returning ${persistedEntries.length} entries`);
+      devLog(`${tag} returning ${persistedEntries.length} entries`);
 
       return persistedEntries;
     } catch (error) {
@@ -2411,7 +2416,7 @@ export const leaseExpenseRuleService = {
           }
         }
       } catch (err) {
-        console.warn("[diagnose] uploaded_files lookup failed:", err?.message || err);
+        devWarn("[diagnose] uploaded_files lookup failed:", err?.message || err);
       }
     }
 
@@ -2434,7 +2439,7 @@ export const leaseExpenseRuleService = {
         existingRules = rules.data || [];
       }
     } catch (err) {
-      console.warn("[diagnose] rule lookup failed:", err?.message || err);
+      devWarn("[diagnose] rule lookup failed:", err?.message || err);
     }
 
     return {
@@ -2487,14 +2492,14 @@ export const leaseExpenseRuleService = {
   } = {}) {
     const tag = `[persistExpenseRulesFromWorkflow lease=${lease?.id}]`;
     if (!supabase || !lease?.id) {
-      console.warn(`${tag} skipped: no supabase or no lease.id`);
+      devWarn(`${tag} skipped: no supabase or no lease.id`);
       return { ruleSet: null, rules: [] };
     }
     const workflowRules = getLeaseWorkflowExpenseRules(lease);
-    console.log(`${tag} workflow_rules received: ${workflowRules.length}`);
+    devLog(`${tag} workflow_rules received: ${workflowRules.length}`);
     if (workflowRules.length === 0) {
       const wfOut = lease?.extraction_data?.workflow_output;
-      console.warn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(lease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
+      devWarn(`${tag} no workflow expense_rules. extraction_data keys=`, Object.keys(lease?.extraction_data || {}), "workflow_output keys=", wfOut ? Object.keys(wfOut) : null);
       return { ruleSet: null, rules: [] };
     }
 
@@ -2505,7 +2510,7 @@ export const leaseExpenseRuleService = {
       const key = String(r?.expense_category || r?.normalized_key || "").toLowerCase();
       return !BASE_RENT_KEYS.has(key);
     });
-    console.log(`${tag} after base-rent strip: ${filtered.length} rules; categories=`, filtered.map((r) => r?.expense_category));
+    devLog(`${tag} after base-rent strip: ${filtered.length} rules; categories=`, filtered.map((r) => r?.expense_category));
 
     // Reshape workflow rule → the shape saveRuleSet expects. Most fields
     // are passed through; we just bridge a few aliases the persister reads.
@@ -2548,17 +2553,17 @@ export const leaseExpenseRuleService = {
             !latest.extraction_version || latest.extraction_version === EXTRACTION_VERSION_FOR_LOOKUP;
           if (latest.status !== "approved" || sameExtractionVersion) {
             targetRuleSetId = latest.id;
-            console.log(
+            devLog(
               `${tag} reusing existing rule_set ${latest.id} (v${latest.version}, status=${latest.status}, ev=${latest.extraction_version || "—"})`,
             );
           } else {
-            console.log(
+            devLog(
               `${tag} latest rule_set is approved with different extraction_version (${latest.extraction_version}) — creating a new draft for ${EXTRACTION_VERSION_FOR_LOOKUP}`,
             );
           }
         }
       } catch (err) {
-        console.warn(`${tag} existing rule_set lookup failed:`, err?.message || err);
+        devWarn(`${tag} existing rule_set lookup failed:`, err?.message || err);
       }
     }
 
@@ -2573,7 +2578,7 @@ export const leaseExpenseRuleService = {
         createdFrom,
         approver,
       });
-      console.log(`${tag} saveRuleSet returned ${result?.rules?.length || 0} persisted rules; ruleSet=`, result?.ruleSet?.id);
+      devLog(`${tag} saveRuleSet returned ${result?.rules?.length || 0} persisted rules; ruleSet=`, result?.ruleSet?.id);
     } catch (err) {
       console.error(`${tag} saveRuleSet THREW:`, err?.message || err, err?.details || "", err?.code || "");
       throw err;
@@ -2700,16 +2705,16 @@ export const leaseExpenseRuleService = {
         approver,
       });
     } catch (err) {
-      console.warn(`${tag} workflow path failed:`, err?.message || err);
+      devWarn(`${tag} workflow path failed:`, err?.message || err);
     }
     if (result?.rules?.length > 0) {
-      console.log(`${tag} ✓ Phase 1 (workflow) produced ${result.rules.length} rules`);
+      devLog(`${tag} ✓ Phase 1 (workflow) produced ${result.rules.length} rules`);
       return result;
     }
 
     // Phase 2: workflow gave us nothing. Run the full extractor pipeline
     // (LLM call + deterministic fallback).
-    console.log(`${tag} Phase 1 produced 0 rules → trying Phase 2 (extractDraftRuleSet)`);
+    devLog(`${tag} Phase 1 produced 0 rules → trying Phase 2 (extractDraftRuleSet)`);
     try {
       const fallback = await this.extractDraftRuleSet({
         lease,
@@ -2718,29 +2723,29 @@ export const leaseExpenseRuleService = {
         existingRules: [],
       });
       if (fallback?.rules?.length > 0) {
-        console.log(`${tag} ✓ Phase 2 (LLM/deterministic) produced ${fallback.rules.length} rules`);
+        devLog(`${tag} ✓ Phase 2 (LLM/deterministic) produced ${fallback.rules.length} rules`);
         return fallback;
       }
       result = fallback || result;
     } catch (err) {
-      console.warn(`${tag} Phase 2 failed:`, err?.message || err);
+      devWarn(`${tag} Phase 2 failed:`, err?.message || err);
     }
 
     // Phase 3: keyword scan on raw text. Last-resort — guarantees rules
     // exist for any lease that mentions any of the canonical category
     // vocabulary, even when nothing else worked.
-    console.log(`${tag} Phase 2 produced 0 rules → trying Phase 3 (text fallback)`);
+    devLog(`${tag} Phase 2 produced 0 rules → trying Phase 3 (text fallback)`);
     try {
       const sourceText = await this.getLeaseSourceText(
         lease.id,
         lease?.extraction_data?.source_file_id || null,
       );
       if (!sourceText) {
-        console.warn(`${tag} Phase 3 skipped — no source text available`);
+        devWarn(`${tag} Phase 3 skipped — no source text available`);
         return result;
       }
       const textRules = this.buildTextFallbackRules(sourceText);
-      console.log(`${tag} Phase 3 keyword scan found ${textRules.length} category matches`);
+      devLog(`${tag} Phase 3 keyword scan found ${textRules.length} category matches`);
       if (textRules.length === 0) return result;
       const saved = await this.saveRuleSet({
         lease,
@@ -2751,10 +2756,10 @@ export const leaseExpenseRuleService = {
         createdFrom: "text_fallback",
         approver,
       });
-      console.log(`${tag} ✓ Phase 3 persisted ${saved?.rules?.length || 0} rules`);
+      devLog(`${tag} ✓ Phase 3 persisted ${saved?.rules?.length || 0} rules`);
       return saved;
     } catch (err) {
-      console.warn("[leaseExpenseRuleService] ensureLeaseExpenseRules: fallback extract failed:", err?.message || err);
+      devWarn("[leaseExpenseRuleService] ensureLeaseExpenseRules: fallback extract failed:", err?.message || err);
       return result;
     }
   },
@@ -2792,11 +2797,11 @@ export const leaseExpenseRuleService = {
         if (error) throw error;
         mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] AI rule extraction fallback:", error);
+        devWarn("[leaseExpenseRuleService] AI rule extraction fallback:", error);
         mappedRules = [];
       }
     } else {
-      console.warn(
+      devWarn(
         "[leaseExpenseRuleService] extractDraftRuleSet: no source text found; skipping LLM extract and falling back to deterministic builder",
       );
     }
@@ -2811,7 +2816,7 @@ export const leaseExpenseRuleService = {
     }
 
     if (mappedRules.length === 0) {
-      console.warn(
+      devWarn(
         "[leaseExpenseRuleService] extractDraftRuleSet: produced 0 rules (no source text AND no workflow output). Returning empty result for lease",
         lease.id,
       );
@@ -2897,7 +2902,7 @@ export const leaseExpenseRuleService = {
           if (rowsError) throw rowsError;
           latestRows = rows || [];
         } catch (error) {
-          console.warn(`${tag} latest rule_set child lookup skipped:`, error?.message || error);
+          devWarn(`${tag} latest rule_set child lookup skipped:`, error?.message || error);
         }
 
         const latestHasProtectedRows = latestRows.some(isProtectedHumanRule);
@@ -2922,7 +2927,7 @@ export const leaseExpenseRuleService = {
             .single();
           if (createRuleSetError) throw createRuleSetError;
           ruleSetId = createdRuleSet.id;
-          console.log(`${tag} created v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
+          devLog(`${tag} created v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
         } else {
           ruleSetId = latestSet.id;
           currentVersion = latestVersion;
@@ -2937,7 +2942,7 @@ export const leaseExpenseRuleService = {
             .eq("id", ruleSetId)
             .eq("org_id", orgId);
           if (updateExistingSetError) throw updateExistingSetError;
-          console.log(`${tag} reusing rule_set ${ruleSetId} (v${currentVersion}) for ${incomingExtractionVersion}`);
+          devLog(`${tag} reusing rule_set ${ruleSetId} (v${currentVersion}) for ${incomingExtractionVersion}`);
         }
       } else {
         currentVersion = 1;
@@ -2989,7 +2994,7 @@ export const leaseExpenseRuleService = {
     });
     const unmappedCount = finalized.length - savableRules.length;
     if (unmappedCount > 0) {
-      console.warn(`[leaseExpenseRuleService] saveRuleSet: ${unmappedCount} rules dropped (no canonical category)`);
+      devWarn(`[leaseExpenseRuleService] saveRuleSet: ${unmappedCount} rules dropped (no canonical category)`);
     }
     const approvedAtIso = status === "approved" ? now : null;
     const computeRuleKey = (ruleObj) => {
@@ -3125,7 +3130,7 @@ export const leaseExpenseRuleService = {
           }
         }
       } catch (err) {
-        console.warn(`${tag} existing-rule pre-fetch skipped:`, err?.message || err);
+        devWarn(`${tag} existing-rule pre-fetch skipped:`, err?.message || err);
       }
     }
 
@@ -3145,7 +3150,7 @@ export const leaseExpenseRuleService = {
         if (protectedRow.notes && !payload.notes) payload.notes = protectedRow.notes;
       }
       if (canonicalMergedCount > 0) {
-        console.log(`[leaseExpenseRuleService] saveRuleSet merged ${canonicalMergedCount} v3 candidate(s) into existing protected human rule(s)`);
+        devLog(`[leaseExpenseRuleService] saveRuleSet merged ${canonicalMergedCount} v3 candidate(s) into existing protected human rule(s)`);
       }
     }
 
@@ -3195,7 +3200,7 @@ export const leaseExpenseRuleService = {
         }
       }
       if (preservedApprovedCount > 0) {
-        console.log(`[leaseExpenseRuleService] saveRuleSet preserved approval on ${preservedApprovedCount} existing rule(s)`);
+        devLog(`[leaseExpenseRuleService] saveRuleSet preserved approval on ${preservedApprovedCount} existing rule(s)`);
       }
     }
 
@@ -3208,13 +3213,13 @@ export const leaseExpenseRuleService = {
           extractionVersion: incomingExtractionVersion,
         });
         if (supersedeResult.superseded || supersedeResult.deleted) {
-          console.log(
+          devLog(
             `[leaseExpenseRuleService] saveRuleSet ${supersedeResult.superseded ? "superseded" : "deleted"} ` +
             `${supersedeResult.superseded || supersedeResult.deleted} stale unresolved rule(s) before v3 upsert`,
           );
         }
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] stale rule supersede warning:", error?.message || error);
+        devWarn("[leaseExpenseRuleService] stale rule supersede warning:", error?.message || error);
       }
     }
 
@@ -3233,8 +3238,8 @@ export const leaseExpenseRuleService = {
       while (attemptsRemaining > 0) {
         // Conflict target = (rule_set_id, rule_key). This is what makes
         // re-extraction deterministic: clicking Extract twice with the
-        console.log(`[SAVE PAYLOAD BEFORE UPSERT] Lease ${payloadsForUpsert[0]?.lease_id}:`);
-        console.table(payloadsForUpsert.map(p => ({
+        devLog(`[SAVE PAYLOAD BEFORE UPSERT] Lease ${payloadsForUpsert[0]?.lease_id}:`);
+        devTable(payloadsForUpsert.map(p => ({
           lease_id: p.lease_id,
           tenant_id: p.tenant_id,
           rule_key: p.rule_key,
@@ -3255,7 +3260,7 @@ export const leaseExpenseRuleService = {
             ignoreDuplicates: false,
           })
           .select("*");
-        console.log("[UPSERT RESULT]", { data, error: ruleError });
+        devLog("[UPSERT RESULT]", { data, error: ruleError });
         if (!ruleError) {
           savedRules = data || [];
           break;
@@ -3277,7 +3282,7 @@ export const leaseExpenseRuleService = {
         attemptsRemaining -= 1;
       }
       if (droppedColumns.length > 0) {
-        console.warn(
+        devWarn(
           `[leaseExpenseRuleService] saveRuleSet: dropped ${droppedColumns.length} missing column(s) before insert succeeded — apply latest migration to capture these fields:`,
           droppedColumns,
         );
@@ -3323,7 +3328,7 @@ export const leaseExpenseRuleService = {
           if (valuesError) throw valuesError;
         }
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] value persistence warning:", error);
+        devWarn("[leaseExpenseRuleService] value persistence warning:", error);
       }
 
       try {
@@ -3333,14 +3338,14 @@ export const leaseExpenseRuleService = {
           if (clausesError) throw clausesError;
         }
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] clause persistence warning:", error);
+        devWarn("[leaseExpenseRuleService] clause persistence warning:", error);
       }
     }
 
     try {
       await this.recalculateRuleSetStatus(ruleSetId);
     } catch (error) {
-      console.warn("[leaseExpenseRuleService] rule set status recalculation warning:", error?.message || error);
+      devWarn("[leaseExpenseRuleService] rule set status recalculation warning:", error?.message || error);
     }
 
     const persisted = await this.loadRuleSet(lease.id);
@@ -3348,7 +3353,7 @@ export const leaseExpenseRuleService = {
       try {
         await saveLeaseConfig(lease.id, buildLeaseConfigFromRules(lease, persisted.rules, categoriesById));
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] lease config sync warning:", error);
+        devWarn("[leaseExpenseRuleService] lease config sync warning:", error);
       }
     }
 
@@ -3442,7 +3447,7 @@ export const leaseExpenseRuleService = {
         if (error) throw error;
         resolvedCategories = data || [];
       } catch (error) {
-        console.warn("[leaseExpenseRuleService] category bootstrap fallback:", error?.message || error);
+        devWarn("[leaseExpenseRuleService] category bootstrap fallback:", error?.message || error);
         resolvedCategories = this.buildFallbackCategories({ lease, rules });
       }
     }
