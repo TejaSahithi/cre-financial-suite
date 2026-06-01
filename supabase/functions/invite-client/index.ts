@@ -144,7 +144,7 @@ Deno.serve(async (req: Request) => {
 
     const frontendUrl = Deno.env.get("FRONTEND_URL") || Deno.env.get("SITE_URL") || "http://localhost:5173";
     const loginLink = `${frontendUrl}/signin`;
-    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
+    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 
     if (RESEND_API_KEY) {
       try {
