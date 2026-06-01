@@ -354,7 +354,7 @@ Deno.serve(async (req: Request) => {
     if (inviteLogErr) console.error("[invite-user] invitation log err:", inviteLogErr);
 
     // ── Send Branded Email via Resend ──────────────────────────────────────────
-    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("VITE_RESEND_API_KEY");
+    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
     if (RESEND_API_KEY) {
       try {
         const roleLabel = formatRoleLabel(displayRole);

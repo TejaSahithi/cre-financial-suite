@@ -132,7 +132,10 @@ Deno.serve(async (req) => {
         "CRE Suite - We've received your access request",
         'Thanks for exploring CRE Platform',
         'Thanks for exploring CRE Suite',
-      ].some((allowedSubject) => subject.includes(allowedSubject));
+        // Admin notifications sent from RequestAccess / RequestDemo pages (anon context)
+        '[New Request] Access:',
+        '[New Request] Demo:',
+      ].some((allowedSubject) => subject.startsWith(allowedSubject) || subject.includes(allowedSubject));
       
       if (!allInternal && !isAutoReply) {
          return new Response(JSON.stringify({ error: 'Unauthorized email payload for anonymous key.' }), {

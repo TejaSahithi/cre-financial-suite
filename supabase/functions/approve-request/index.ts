@@ -7,6 +7,47 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+/** Wraps HTML content in the standard CRE Platform branded email shell. */
+const emailWrapper = (content: string) => `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>CRE Platform</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; margin:0; padding:0; background:#f8fafc; }
+    .wrapper { max-width:600px; margin:40px auto; background:#fff; border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; }
+    .header { background:linear-gradient(135deg,#1a2744 0%,#2d4a8a 100%); padding:32px 40px; }
+    .logo { display:flex; align-items:center; gap:10px; }
+    .logo-icon { width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center; }
+    .logo-text { color:#fff; font-size:18px; font-weight:700; letter-spacing:-0.3px; }
+    .body { padding:36px 40px; color:#475569; font-size:15px; line-height:1.6; }
+    h1 { font-size:24px; font-weight:700; color:#0f172a; margin:0 0 8px; }
+    p { margin:0 0 16px; }
+    .cta { display:inline-block; background:#1a2744; color:#fff !important; padding:14px 28px; border-radius:10px; text-decoration:none; font-weight:600; font-size:15px; margin:8px 0 24px; }
+    .info-box { background:#f1f5f9; border-radius:10px; padding:16px 20px; margin:20px 0; border-left:4px solid #3b82f6; }
+    .divider { border:none; border-top:1px solid #e2e8f0; margin:24px 0; }
+    .footer { background:#f8fafc; padding:20px 40px; text-align:center; border-top:1px solid #e2e8f0; }
+    .footer p { color:#94a3b8; font-size:12px; margin:0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a2744" stroke-width="2.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        </div>
+        <span class="logo-text">CRE Platform</span>
+      </div>
+    </div>
+    <div class="body">${content}</div>
+    <div class="footer"><p>CRE Platform &middot; support@cresuite.org &middot; &copy; ${new Date().getFullYear()} All rights reserved</p></div>
+  </div>
+</body>
+</html>
+`;
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -294,30 +335,43 @@ Deno.serve(async (req: Request) => {
     }
 
     // REJECTED path
+    // Read optional reason from request body (already parsed above)
+    const rejectionReason = body.reason || null;
+
     if (RESEND_API_KEY) {
-      const rejRes = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          from: 'CRE Platform <support@cresuite.org>',
-          to: accessRequest.email,
-          subject: 'Update on your CRE Platform Access Request',
-          html: `
-            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-              <h1 style="color: #1e293b;">Hi ${accessRequest.full_name},</h1>
-              <p>Sorry, your access to CRE Platform has been revoked due to security reasons.</p>
-              <p>Please contact support if you have any questions or believe this is a mistake.</p>
-              <hr style="border-color: #e2e8f0; margin: 24px 0;" />
-              <p style="color: #94a3b8; font-size: 12px;">CRE Platform · onboarding@cresuite.com</p>
-            </div>
-          `
-        })
-      });
-      if (!rejRes.ok) {
-        console.error(`[approve-request] Resend REJECT Error:`, await rejRes.text());
-        throw new Error("Failed to send rejection email via Resend.");
+      try {
+        const rejHtml = emailWrapper(`
+          <h1 style="margin:0 0 12px;color:#0f172a;font-size:22px;">Update on Your Access Request</h1>
+          <p>Hi ${accessRequest.full_name},</p>
+          <p>Thank you for your interest in CRE Platform. After reviewing your request for <strong>${accessRequest.company_name || 'your organization'}</strong>, we are unable to approve access at this time.</p>
+          ${rejectionReason ? `<div class="info-box"><p><strong>Reason:</strong> ${rejectionReason}</p></div>` : ''}
+          <p>If you believe this is an error or would like to discuss further, please reply to this email or contact us at <a href="mailto:support@cresuite.org">support@cresuite.org</a>.</p>
+          <p style="margin-bottom:0;">Thank you for your understanding.<br/>The CRE Platform Team</p>
+        `);
+
+        const rejRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: 'CRE Platform <support@cresuite.org>',
+            to: accessRequest.email,
+            subject: 'Update on Your CRE Platform Access Request',
+            html: rejHtml,
+          }),
+        });
+
+        if (!rejRes.ok) {
+          // Log but do not fail the rejection operation itself
+          console.error(`[approve-request] Rejection email send failed (${rejRes.status}):`, await rejRes.text());
+        } else {
+          console.log(`[approve-request] Rejection email sent to ${accessRequest.email}`);
+        }
+      } catch (emailErr) {
+        // Email failure must not block the DB rejection
+        console.error('[approve-request] Rejection email error (non-fatal):', emailErr.message);
       }
-      console.log(`[approve-request] Rejection email status=${rejRes.status}`);
+    } else {
+      console.warn('[approve-request] RESEND_API_KEY not set — rejection email skipped.');
     }
 
     await supabaseAdmin.from('audit_logs').insert({
