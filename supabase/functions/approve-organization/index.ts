@@ -55,13 +55,13 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[approve-org] Approving organization: ${orgId}`);
 
-    // 4. Mark Organization Active
+    // 4. Mark Organization Active — also fetch welcome_email_sent_at for dedup guard
     const { data: orgs, error: orgError } = await supabaseAdmin
       .from('organizations')
       .update({ status: 'active', updated_at: new Date().toISOString() })
       .eq('id', orgId)
       .in('status', ['under_review', 'pending_approval', 'onboarding'])
-      .select();
+      .select('*, welcome_email_sent_at');
 
     if (orgError) throw new Error(`DB Error updating org: ${orgError.message}`);
     if (!orgs || orgs.length === 0) {
@@ -98,11 +98,18 @@ Deno.serve(async (req: Request) => {
     }
 
     const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    const frontendUrl = Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'https://cre-financial-suite-n9be.vercel.app';
-    
+    // Normalize to strip any trailing slash so CTA URLs never have double slashes
+    const frontendUrl = (Deno.env.get('FRONTEND_URL') || Deno.env.get('SITE_URL') || 'https://cre-financial-suite.vercel.app').replace(/\/$/, '');
+    const welcomeUrl = `${frontendUrl}/WelcomeAboard`;
+
     let emailWarning = null;
-    if (RESEND_API_KEY && org.primary_contact_email) {
-      const loginLink = `${frontendUrl}/signin`;
+
+    // ── Duplicate-prevention guard ──────────────────────────────────────────────
+    // welcome_email_sent_at is NULL until a welcome email is successfully sent.
+    // If it is already set, the org admin has already been welcomed — skip silently.
+    if (org.welcome_email_sent_at) {
+      console.log(`[approve-org] Welcome email already sent at ${org.welcome_email_sent_at} — skipping duplicate.`);
+    } else if (RESEND_API_KEY && org.primary_contact_email) {
       const html = `
       <!DOCTYPE html>
       <html lang="en">
@@ -131,9 +138,9 @@ Deno.serve(async (req: Request) => {
             <h1>Welcome Aboard! 🎉</h1>
             <p>Hi there,</p>
             <p>Great news! Your organization <strong>${org.name}</strong> has been approved and activated by our team.</p>
-            <p>Your subscription is now active, and you have full access to the CRE Financial Suite platform. You can now invite your team, manage portfolios, and run advanced CAM reconciliations.</p>
+            <p>Your subscription is now active and you have full access to the CRE Financial Suite platform. You can now invite your team, manage portfolios, and run advanced CAM reconciliations.</p>
             <div style="text-align: center;">
-              <a href="${loginLink}" class="cta">Go to Your Dashboard →</a>
+              <a href="${welcomeUrl}" class="cta">Go to Your Dashboard →</a>
             </div>
             <p style="margin-bottom:0;">Welcome to the future of Commercial Real Estate Management.</p>
           </div>
@@ -150,25 +157,36 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({
             from: 'CRE Platform <support@cresuite.org>',
             to: org.primary_contact_email,
-            subject: 'Welcome to CRE Platform! Your account is active!',
-            html: html
-          })
+            subject: 'Welcome to CRE Platform! Your account is now active 🎉',
+            html,
+          }),
         });
-        
+
         if (!emailRes.ok) {
+          // Log warning — do NOT set sentinel so a retry is possible on next approval call
           const errorText = await emailRes.text();
-          console.error(`[approve-org] Resend Error:`, errorText);
+          console.error(`[approve-org] Resend error (${emailRes.status}):`, errorText);
           emailWarning = `Activation succeeded, but welcome email failed to send: ${errorText}`;
         } else {
-          console.log(`[approve-org] Welcome email sent to ${org.primary_contact_email}`);
+          // Only mark as sent after confirmed delivery
+          const { error: sentinelErr } = await supabaseAdmin
+            .from('organizations')
+            .update({ welcome_email_sent_at: new Date().toISOString() })
+            .eq('id', orgId);
+          if (sentinelErr) {
+            console.error('[approve-org] Failed to write welcome_email_sent_at sentinel:', sentinelErr.message);
+          } else {
+            console.log(`[approve-org] Welcome email sent and sentinel set for org ${orgId}`);
+          }
         }
       } catch (err) {
-        console.error('[approve-org] Failed to send welcome email:', err);
-        emailWarning = `Activation succeeded, but welcome email failed: ${err.message}`;
+        // Email failure must never block the DB activation — log and continue
+        console.error('[approve-org] Welcome email send error (non-fatal):', err.message);
+        emailWarning = `Activation succeeded, but welcome email threw an error: ${err.message}`;
       }
     } else {
       console.warn('[approve-org] Email skipped: RESEND_API_KEY or primary_contact_email missing');
-      emailWarning = 'Activation succeeded, but welcome email was skipped (check config).';
+      emailWarning = 'Activation succeeded, but welcome email was skipped (check RESEND_API_KEY and primary_contact_email).';
     }
 
     return new Response(JSON.stringify({ success: true, message: 'Organization approved and activated', warning: emailWarning }), {
