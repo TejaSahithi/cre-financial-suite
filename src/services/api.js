@@ -1143,7 +1143,7 @@ export function createEntityService(entityName) {
           }
           if (error) throw error;
           const normalized = normalizeFromDb(data || []);
-          const accessScope = await getCurrentAccessScope(orgId);
+          const accessScope = await getCurrentAccessScope(scopeObj.orgId);
           const result = filterRecordsByAccessScope(entityName, normalized, accessScope);
           setCached(cacheKey, result);
           return result;
