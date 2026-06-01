@@ -154,7 +154,7 @@ export function ModuleAccessProvider({ children }) {
 
       setLoading(false);
     })();
-  }, [user]);
+  }, [user?.id, user?.activeOrg?.id, user?.org_id]);
 
   const isModuleEnabled = (moduleKey) => {
     if (isAdmin) return true;
