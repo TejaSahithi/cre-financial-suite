@@ -77,6 +77,33 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    const PLATFORM_ASSIGNABLE_ROLES = ["super_admin", "org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor"];
+    const ORG_ASSIGNABLE_ROLES = ["org_admin", "admin", "manager", "editor", "viewer", "finance", "auditor"];
+
+    if (callerMembership.role === "org_admin" && !ORG_ASSIGNABLE_ROLES.includes(role)) {
+      if (role === "super_admin") {
+        await adminClient.from("audit_logs").insert({
+          org_id: org_id || null,
+          user_id: caller.id,
+          action: "privilege_escalation_blocked",
+          entity_type: "membership",
+          entity_id: null,
+          new_value: JSON.stringify({ requested_role: role, email }),
+          status: "error",
+          error_details: "Forbidden: org_admin attempted to assign super_admin"
+        });
+      }
+      return new Response(JSON.stringify({ error: "Forbidden: role not assignable by org_admin" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (callerMembership.role === "super_admin" && !PLATFORM_ASSIGNABLE_ROLES.includes(role)) {
+      return new Response(JSON.stringify({ error: "Forbidden: invalid role" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const targetOnboardingType = onboarding_type || "invited";
 
     if (role !== "super_admin" && targetOnboardingType === "invited" && !org_id) {
