@@ -4,6 +4,7 @@ import { AccessRequestService, OrganizationService } from "@/services/api";
 import { useAuth } from "@/lib/AuthContext";
 
 import { supabase } from "@/services/supabaseClient";
+import { isSuperAdmin } from "@/lib/rbac";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -112,7 +113,7 @@ export default function SuperAdmin() {
       if (error) throw error;
       return data || [];
     },
-    enabled: authChecked && user?.role === 'admin',
+    enabled: authChecked && isSuperAdmin(user),
     refetchOnWindowFocus: false,
   });
 
@@ -130,7 +131,7 @@ export default function SuperAdmin() {
         company_name: request.company_name || '—',
       }));
     },
-    enabled: authChecked && user?.role === 'admin',
+    enabled: authChecked && isSuperAdmin(user),
     refetchOnWindowFocus: false,
   });
 
@@ -145,7 +146,7 @@ export default function SuperAdmin() {
       if (error) throw error;
       return data || [];
     },
-    enabled: authChecked && user?.role === 'admin',
+    enabled: authChecked && isSuperAdmin(user),
     refetchOnWindowFocus: false,
   });
 
@@ -215,7 +216,7 @@ export default function SuperAdmin() {
         };
       });
     },
-    enabled: authChecked && user?.role === 'admin',
+    enabled: authChecked && isSuperAdmin(user),
   });
 
   const updateRequest = useMutation({

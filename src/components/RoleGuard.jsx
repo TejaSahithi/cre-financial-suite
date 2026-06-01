@@ -1,6 +1,7 @@
 import React from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { Lock, Eye } from "lucide-react";
+import { isSuperAdmin, getActiveRole } from "@/lib/rbac";
 
 /**
  * RoleGuard - Wraps UI elements to enforce role-based visibility and interactivity.
@@ -13,10 +14,10 @@ import { Lock, Eye } from "lucide-react";
  */
 export default function RoleGuard({ allowedRoles = [], mode = "hide", children, fallback }) {
   const { user } = useAuth();
-  const role = user?.role;
+  const role = getActiveRole(user);
 
   // Admin and Super Admin always have full access
-  if (role === "admin" || role === "super_admin") return children;
+  if (isSuperAdmin(user)) return children;
 
   const hasAccess = allowedRoles.includes(role);
 

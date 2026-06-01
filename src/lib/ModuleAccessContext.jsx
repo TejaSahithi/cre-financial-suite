@@ -2,8 +2,8 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { OrganizationService } from "@/services/api";
 import { MODULE_DEFINITIONS, getModuleForPage } from "./moduleConfig";
-import { MANDATORY_SETUP_PAGES } from "./rbac";
-import { getActiveMembershipForUser, getPageAccessLevel as resolveUserPageAccessLevel, normalizeAccessLevel } from "./userPermissions";
+import { MANDATORY_SETUP_PAGES, isSuperAdmin, getActiveMembership } from "./rbac";
+import { getPageAccessLevel as resolveUserPageAccessLevel, normalizeAccessLevel } from "./userPermissions";
 
 const ModuleAccessContext = createContext({
   enabledModules: [],
@@ -79,7 +79,7 @@ export function ModuleAccessProvider({ children }) {
           return;
         }
 
-        if (user.role === "admin" || user._raw_role === "super_admin") {
+        if (isSuperAdmin(user)) {
           setIsAdmin(true);
           setEnabledModules([]);
           setAssignedPagesByModule({});
@@ -92,7 +92,7 @@ export function ModuleAccessProvider({ children }) {
 
         setIsAdmin(false);
 
-        const membership = getActiveMembershipForUser(user);
+        const membership = getActiveMembership(user);
         setActiveMembership(membership);
 
         let orgEnabledModules = [];

@@ -1,7 +1,7 @@
 // User Management v2 — Permission System Constants & Helpers
 // Role = default template, Access = override layer
 
-import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess } from "@/lib/rbac";
+import { canAccess, getAllowedPagesForRole, getPermissions, resolveRoleForAccess, isSuperAdmin, getActiveMembership, getActiveRole } from "@/lib/rbac";
 import { MODULE_DEFINITIONS, getModuleForPage } from "@/lib/moduleConfig";
 
 // ── 6 core roles (v1 lightweight) ────────────────────────────────────────────
@@ -243,21 +243,8 @@ export function getCurrentPageName(pathname = typeof window !== "undefined" ? wi
 }
 
 export function getActiveMembershipForUser(user) {
-  const memberships = Array.isArray(user?.memberships) ? user.memberships : [];
-  if (memberships.length === 0) return null;
-
-  const preferredOrgId = user?.activeOrg?.id || user?.org_id || null;
-  const activeMemberships = memberships.filter((membership) =>
-    ["active", "owner", "invited"].includes(membership?.status || "active")
-  );
-  const candidates = activeMemberships.length > 0 ? activeMemberships : memberships;
-
-  if (preferredOrgId) {
-    const preferredMembership = candidates.find((membership) => membership?.org_id === preferredOrgId);
-    if (preferredMembership) return preferredMembership;
-  }
-
-  return candidates[0];
+  // Retained for backward compatibility with UserManagement.jsx
+  return getActiveMembership(user);
 }
 
 function getRoleDefaultPageAccessLevel(role, pageName) {
@@ -302,11 +289,12 @@ function getLowerAccessLevel(left, right) {
 export function getPageAccessLevel(user, pageName) {
   if (!user || !pageName) return "none";
 
-  const rawRole = user._raw_role || user.role;
-  const resolvedRole = resolveRoleForAccess(rawRole);
-  if (["admin", "super_admin"].includes(resolvedRole)) return "admin";
+  if (isSuperAdmin(user)) return "admin";
 
-  const membership = getActiveMembershipForUser(user);
+  const rawRole = getActiveRole(user);
+  const resolvedRole = resolveRoleForAccess(rawRole);
+
+  const membership = getActiveMembership(user);
   if (!membership) return "none";
 
   const moduleLevel = getModuleAccessLevel(user, membership, pageName);

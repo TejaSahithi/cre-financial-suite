@@ -1,5 +1,7 @@
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from "react-router-dom";
 import { me } from '@/services/auth';
+import { useAuth } from "@/lib/AuthContext";
+import { isSuperAdmin } from "@/lib/rbac";
 import { useQuery } from '@tanstack/react-query';
 
 
@@ -40,7 +42,7 @@ export default function PageNotFound({}) {
                     </div>
                     
                     {/* Admin Note */}
-                    {isFetched && authData.isAuthenticated && authData.user?.role === 'admin' && (
+                    {isFetched && authData.isAuthenticated && isSuperAdmin(authData.user) && (
                         <div className="mt-8 p-4 bg-slate-100 rounded-lg border border-slate-200">
                             <div className="flex items-start space-x-3">
                                 <div className="flex-shrink-0 w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center mt-0.5">

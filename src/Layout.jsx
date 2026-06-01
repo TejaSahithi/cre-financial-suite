@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
-import { filterNavForAllowedPages, filterNavForRole, LAYOUT_EXEMPT_PAGES } from "@/lib/rbac";
+import { filterNavForAllowedPages, filterNavForRole, LAYOUT_EXEMPT_PAGES, isSuperAdmin } from "@/lib/rbac";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { filterNavForModules } from "@/lib/moduleConfig";
 import {
@@ -240,7 +240,7 @@ export default function Layout({ children, currentPageName }) {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-white text-sm font-medium truncate">{user?.full_name || "User"}</p>
-                <p className="text-white/40 text-xs truncate capitalize">{user?.role === "admin" ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
+                <p className="text-white/40 text-xs truncate capitalize">{isSuperAdmin(user) ? "SuperAdmin" : (user?.role || "User").replace("_", " ")}</p>
               </div>
               <button onClick={() => authContextLogout(true)} className="text-white/30 hover:text-white" title="Logout">
                 <LogOut className="w-4 h-4" />

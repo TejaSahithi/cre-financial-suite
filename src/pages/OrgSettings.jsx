@@ -284,9 +284,11 @@ export default function OrgSettings() {
                           <p className="text-xs text-slate-400">{u.email}</p>
                         </div>
                       </div>
-                      <Badge className={`text-[10px] capitalize ${u.role === 'admin' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
-                        {u.role === 'admin' ? 'SuperAdmin' : (u.role || 'user').replace('_', ' ')}
-                      </Badge>
+                      <div className="flex flex-col gap-1 items-end">
+                        <Badge className={`text-[10px] capitalize ${(u._raw_role === 'super_admin' || u.role === 'super_admin') ? 'bg-amber-100 text-amber-700' : (u.role === 'org_admin' || u.role === 'admin') ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>
+                          {(u._raw_role === 'super_admin' || u.role === 'super_admin') ? 'SuperAdmin' : (u.role === 'org_admin' || u.role === 'admin') ? 'Org Admin' : (u.role || 'user').replace('_', ' ')}
+                        </Badge>
+                      </div>
                     </div>
                   ))}
                   {users.length > 0 && (
