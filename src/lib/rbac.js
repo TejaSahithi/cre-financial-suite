@@ -276,8 +276,7 @@ export function getDataScope(user, options = {}) {
     const hasMembership = user?.memberships?.some(
       (m) =>
         m?.org_id === explicitOrgId &&
-        // TODO: Once all memberships have status populated, remove the "active" fallback.
-        ["active", "owner"].includes(m?.status || "active")
+        ["active", "owner"].includes(m?.status)
     );
     if (hasMembership) {
       return { scope: "org", orgId: explicitOrgId };
@@ -300,8 +299,7 @@ export function getActiveMembership(user) {
     user?.memberships?.find(
       (membership) =>
         membership?.org_id === activeOrgId &&
-        // TODO: Once all memberships have status populated, remove the "active" fallback.
-        ["active", "owner"].includes(membership?.status || "active")
+        ["active", "owner"].includes(membership?.status)
     ) || null
   );
 }
