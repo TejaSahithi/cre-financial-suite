@@ -118,38 +118,24 @@ export default function RequestDemo() {
         try {
           await sendEmail({
             to: "sales@cresuite.org",
-            subject: `[New Demo Request] ${form.full_name} (${form.company_name})`,
-            body: `
-              A new demo request has been submitted.
-              
-              Name: ${form.full_name}
-              Email: ${form.email}
-              Company: ${form.company_name}
-              Role: ${isOtherRole ? form.customRole : form.role}
-              Plan Interest: ${form.plan}
-              Notes: ${form.notes || "None"}
-            `
+            templateId: 'request_demo_admin_notification',
+            variables: {
+              name: form.full_name,
+              email: form.email,
+              company: form.company_name,
+              role: isOtherRole ? form.customRole : form.role,
+              message: `Plan: ${form.plan}, Notes: ${form.notes || "None"}`
+            }
           });
         } catch (e) { console.error("Admin notification fail:", e); }
 
         try {
           await sendEmail({
             to: form.email,
-            subject: "CRE Platform - Your Demo Access",
-            html: `
-              <div style="font-family: sans-serif; max-w: 600px; margin: 0 auto; color: #334155;">
-                <h2 style="color: #1a2744;">Hi ${form.full_name.split(' ')[0]},</h2>
-                <p>Thank you for requesting a demo of CRE Platform.</p>
-                <p>You can now access our exclusive end-to-end platform demonstration and slide deck using the links below:</p>
-                <ul>
-                  <li><strong>Demo Video:</strong> <a href="https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/End-to-End_CRE_Budgeting_%26_CAM.mp4">Watch Here</a></li>
-                  <li><strong>Slide Deck:</strong> <a href="https://cjwdwuqqdokblakheyjb.supabase.co/storage/v1/object/public/Slide-deck/Automated_CRE_Financial_Intelligence.pptx">Download Deck</a></li>
-                </ul>
-                <p>Someone from our sales team will also reach out shortly to discuss your specific needs.</p>
-                <br/>
-                <p>Best regards,<br/>The CRE Platform Team</p>
-              </div>
-            `
+            templateId: 'request_demo_autoreply',
+            variables: {
+              name: form.full_name.split(' ')[0]
+            }
           });
         } catch (e) { console.error("Auto-reply fail:", e); }
       })();

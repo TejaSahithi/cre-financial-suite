@@ -2931,12 +2931,11 @@ export default function LeaseReview() {
       });
       await invokeEdgeFunction("send-email", {
         to: recipient.email,
-        subject: `[Signature Requested] ${lease.tenant_name || "Lease"}`,
-        html: `<h2>Lease Signature Requested</h2>
-          <p>You have been asked to review and sign a lease.</p>
-          <p><strong>Tenant:</strong> ${lease.tenant_name || "Unknown"}</p>
-          ${signatureMessage ? `<p><strong>Message:</strong> ${signatureMessage}</p>` : ""}
-          <p><a href="${reviewUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:12px;">Open Signature Request</a></p>`,
+        templateId: 'generic_internal_notification',
+        variables: {
+          subject: `[Signature Requested] ${lease.tenant_name || "Lease"}`,
+          message: `You have been asked to review and sign a lease for ${lease.tenant_name || "Unknown"}. ${signatureMessage ? `Message: ${signatureMessage}. ` : ""}Please open the lease review dashboard to sign.`
+        }
       });
       toast.success(`Signature request sent to ${recipient.name} <${recipient.email}>`);
       setShowSignature(false);

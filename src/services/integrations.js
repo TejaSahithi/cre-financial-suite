@@ -95,22 +95,17 @@ export async function uploadFile(params) {
 
 /**
  * Send an email using Supabase Edge Functions mapping to Resend.
- * @param {object} params - { to, subject, body, html }
+ * @param {object} params - { to, templateId, variables }
  * @returns {Promise<{success: boolean}>}
  */
 export async function sendEmail(params) {
   try {
-    const brandedHtml = params.html
-      ? (params.html.includes("<html") ? params.html : withCrePlatformBranding(params.html))
-      : undefined;
-
     const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke('send-email', {
       body: {
         to: params.to,
-        subject: params.subject,
-        text: params.body,
-        html: brandedHtml
+        templateId: params.templateId,
+        variables: params.variables
       },
       headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     });

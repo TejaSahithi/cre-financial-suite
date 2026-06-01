@@ -105,59 +105,7 @@ async function invokeFunctionWithFreshSession(fnName, body) {
   return invokeEdgeFunction(fnName, body);
 }
 
-function buildBudgetEmailHtml({ budget, scopeLabel, customMessage, downloadUrl }) {
-  const revenue = toNumber(budget?.total_revenue);
-  const expenses = toNumber(budget?.total_expenses);
-  const cam = toNumber(budget?.cam_total);
-  const noi = toNumber(budget?.noi);
-  const expenseRatio = revenue > 0 ? expenses / revenue : 0;
-  const camShare = revenue > 0 ? cam / revenue : 0;
-
-  return `
-    <h1 style="margin-bottom: 8px;">${escapeHtml(budget?.name || "Budget Review")}</h1>
-    <p style="margin: 0 0 20px; color: #64748b;">
-      ${escapeHtml(scopeLabel)} budget update for FY ${escapeHtml(getBudgetYear(budget))}.
-    </p>
-    ${
-      customMessage
-        ? `<div style="margin-bottom: 20px; padding: 16px; border-radius: 12px; background: #eff6ff; color: #1e3a8a;"><strong>Message</strong><br/>${escapeHtml(customMessage).replace(/\n/g, "<br/>")}</div>`
-        : ""
-    }
-    <table style="width: 100%; border-collapse: collapse; margin: 0 0 24px;">
-      <tr>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">Total Revenue</td>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700;">${formatCurrency(revenue)}</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">Total Expenses</td>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #dc2626;">${formatCurrency(expenses)}</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">CAM</td>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #2563eb;">${formatCurrency(cam)}</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">NOI</td>
-        <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #059669;">${formatCurrency(noi)}</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px 0; color: #64748b;">Expense Ratio / CAM Share</td>
-        <td style="padding: 12px 0; text-align: right; font-weight: 600;">${formatPercent(expenseRatio)} / ${formatPercent(camShare)}</td>
-      </tr>
-    </table>
-    ${
-      downloadUrl
-        ? `<p style="margin: 0 0 8px;">A detailed export with budget summary, expense detail, revenue detail, lease schedules, and CAM support is ready for download.</p>
-           <p style="margin: 0 0 24px;"><a href="${escapeHtml(downloadUrl)}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600;">Open Detailed Export</a></p>`
-        : ""
-    }
-    ${
-      budget?.ai_insights
-        ? `<div style="padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0;"><strong>AI Insight</strong><br/>${escapeHtml(budget.ai_insights)}</div>`
-        : ""
-    }
-  `;
-}
+// buildBudgetEmailHtml is now handled by the send-email edge function template
 
 function getBudgetScopeLabel(budget, scope) {
   const property = budget?.property_id ? scope.propertyById.get(budget.property_id) ?? null : null;
@@ -514,18 +462,30 @@ export default function BudgetDashboard() {
       });
 
       const downloadUrl = exportData?.download_url || "";
-      const subject = `${budget.name} - FY ${getBudgetYear(budget)} Budget Review`;
-      const html = buildBudgetEmailHtml({
-        budget,
-        scopeLabel: getBudgetScopeLabel(budget, scope),
-        customMessage: message,
-        downloadUrl,
-      });
+      const revenue = toNumber(budget?.total_revenue);
+      const expenses = toNumber(budget?.total_expenses);
+      const cam = toNumber(budget?.cam_total);
+      const noi = toNumber(budget?.noi);
+      const expenseRatio = revenue > 0 ? expenses / revenue : 0;
+      const camShare = revenue > 0 ? cam / revenue : 0;
 
       await invokeFunctionWithFreshSession("send-email", {
         to: recipients,
-        subject,
-        html,
+        templateId: 'budget_approval_notification',
+        variables: {
+          budgetName: budget.name,
+          scopeLabel: getBudgetScopeLabel(budget, scope),
+          budgetYear: getBudgetYear(budget),
+          message: message,
+          revenue: formatCurrency(revenue),
+          expenses: formatCurrency(expenses),
+          cam: formatCurrency(cam),
+          noi: formatCurrency(noi),
+          expenseRatio: formatPercent(expenseRatio),
+          camShare: formatPercent(camShare),
+          downloadUrl,
+          aiInsights: budget.ai_insights
+        }
       });
 
       toast.success(`Budget review sent to ${recipients.length} stakeholder${recipients.length === 1 ? "" : "s"}`, { id: toastId });

@@ -326,18 +326,11 @@ export default function CreateBudget() {
     const emailPromise = recipients.length > 0
       ? invokeEdgeFunction("send-email", {
           to: recipients,
-          subject: `${budget?.name || "Budget"} requires rework`,
-          html: `
-            <h1 style="margin-bottom: 8px;">Budget Rework Requested</h1>
-            <p style="margin: 0 0 16px; color: #475569;">
-              ${escapeHtml(propertyName)} budget for FY ${escapeHtml(budget?.budget_year || budget?.fiscal_year || "current")} needs updates before approval.
-            </p>
-            <div style="margin: 0 0 20px; padding: 16px; border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;">
-              <strong>Reviewer comments</strong><br />
-              ${escapeHtml(comment).replace(/\n/g, "<br />")}
-            </div>
-            ${actionUrl ? `<p style="margin: 0;"><a href="${escapeHtml(actionUrl)}" style="color: #1d4ed8; font-weight: 600;">Open Budget Studio</a></p>` : ""}
-          `,
+          templateId: 'generic_internal_notification',
+          variables: {
+            subject: `${budget?.name || "Budget"} requires rework`,
+            message: `Budget "${budget?.name}" (FY ${budget?.budget_year || budget?.fiscal_year || "current"}) needs updates before approval. Reviewer comments: ${comment}. Open Budget Studio to view details.`
+          }
         })
       : Promise.resolve();
 

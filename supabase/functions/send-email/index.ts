@@ -2,11 +2,11 @@
 /**
  * send-email — Supabase Edge Function
  *
- * Proxies email sending via the Resend API.
+ * Proxies email sending via the Resend API using strict template mapping.
  * The Resend API key stays server-side — never exposed to the browser.
  *
- * SECURITY: Requires a valid JWT. Only authenticated users can send emails.
- * Rate limiting should be configured at the Supabase project level.
+ * SECURITY: verify_jwt is temporarily false for public flows, but we enforce
+ * strict template IDs and variables. No arbitrary HTML/Subject/From.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.40.0";
@@ -15,8 +15,6 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 
 const getCorsHeaders = (origin: string | null) => {
   return {
-    // Dynamically allow the request's origin (Vercel previews, localhost, etc)
-    // Security relies on the backend payload checks (`isAnon`, `allInternal`, `isAutoReply`), not CORS.
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -57,6 +55,133 @@ const withCrePlatformBranding = (content: string) => `<!DOCTYPE html>
 </body>
 </html>`;
 
+const PUBLIC_TEMPLATES = [
+  'request_access_autoreply',
+  'request_access_admin_notification',
+  'request_demo_autoreply',
+  'request_demo_admin_notification',
+  'contact_autoreply',
+  'contact_admin_notification'
+];
+
+const AUTHENTICATED_TEMPLATES = [
+  'budget_approval_notification',
+  'lease_review_summary',
+  'generic_internal_notification'
+];
+
+function getTemplateData(templateId: string, variables: any) {
+  const adminEmail = 'support@cresuite.org';
+  const fromDefault = 'CRE Platform <support@cresuite.org>';
+  
+  switch(templateId) {
+    case 'request_access_autoreply':
+      return {
+        from: fromDefault,
+        subject: "CRE Platform - We've received your access request",
+        html: `
+          <h1>Thanks for requesting access, ${variables.name || 'there'}!</h1>
+          <p>We've received your access request and our team is currently reviewing it.</p>
+          <p>We will be in touch shortly.</p>
+        `
+      };
+    case 'request_access_admin_notification':
+      return {
+        from: fromDefault,
+        to: adminEmail,
+        subject: `[New Request] Access: ${variables.name} (${variables.company || 'N/A'})`,
+        html: `
+          <h2>New Access Request</h2>
+          <p><strong>Name:</strong> ${variables.name}</p>
+          <p><strong>Email:</strong> ${variables.email}</p>
+          <p><strong>Company:</strong> ${variables.company || 'N/A'}</p>
+          <p><strong>Role:</strong> ${variables.role || 'N/A'}</p>
+        `
+      };
+    case 'request_demo_autoreply':
+    case 'contact_autoreply':
+      return {
+        from: fromDefault,
+        subject: "CRE Platform - Thanks for reaching out",
+        html: `
+          <h1>Thanks for reaching out, ${variables.name || 'there'}!</h1>
+          <p>We've received your message and our team will get back to you shortly.</p>
+        `
+      };
+    case 'request_demo_admin_notification':
+    case 'contact_admin_notification':
+      return {
+        from: fromDefault,
+        to: adminEmail,
+        subject: `[New Request] Contact/Demo: ${variables.name} (${variables.company || 'N/A'})`,
+        html: `
+          <h2>New Contact/Demo Request</h2>
+          <p><strong>Name:</strong> ${variables.name}</p>
+          <p><strong>Email:</strong> ${variables.email}</p>
+          <p><strong>Message:</strong> ${variables.message || ''}</p>
+        `
+      };
+    case 'budget_approval_notification':
+      return {
+        from: fromDefault,
+        subject: `Budget Ready for Review: ${variables.budgetName || 'New Budget'}`,
+        html: `
+          <h1 style="margin-bottom: 8px;">${variables.budgetName || 'Budget Review'}</h1>
+          <p style="margin: 0 0 20px; color: #64748b;">
+            ${variables.scopeLabel || ''} budget update for FY ${variables.budgetYear || ''}.
+          </p>
+          ${variables.message ? `<div style="margin-bottom: 20px; padding: 16px; border-radius: 12px; background: #eff6ff; color: #1e3a8a;"><strong>Message</strong><br/>${variables.message}</div>` : ''}
+          <table style="width: 100%; border-collapse: collapse; margin: 0 0 24px;">
+            <tr>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">Total Revenue</td>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700;">${variables.revenue || '$0'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">Total Expenses</td>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #dc2626;">${variables.expenses || '$0'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">CAM</td>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #2563eb;">${variables.cam || '$0'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; color: #64748b;">NOI</td>
+              <td style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #059669;">${variables.noi || '$0'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; color: #64748b;">Expense Ratio / CAM Share</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600;">${variables.expenseRatio || '0%'} / ${variables.camShare || '0%'}</td>
+            </tr>
+          </table>
+          ${variables.downloadUrl ? `<p style="margin: 0 0 8px;">A detailed export with budget summary, expense detail, revenue detail, lease schedules, and CAM support is ready for download.</p>
+                 <p style="margin: 0 0 24px;"><a href="${variables.downloadUrl}" style="display: inline-block; padding: 12px 18px; border-radius: 10px; background: #1d4ed8; color: #ffffff; text-decoration: none; font-weight: 600;">Open Detailed Export</a></p>` : ''}
+          ${variables.aiInsights ? `<div style="padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0;"><strong>AI Insight</strong><br/>${variables.aiInsights}</div>` : ''}
+        `
+      };
+    case 'lease_review_summary':
+      return {
+        from: fromDefault,
+        subject: `Lease Review Completed: ${variables.tenantName || 'Tenant'}`,
+        html: `
+          <h1>Lease Review Summary</h1>
+          <p>The lease review for <strong>${variables.tenantName || 'Tenant'}</strong> has been completed.</p>
+          <p>You can view the summary in the lease review dashboard.</p>
+        `
+      };
+    case 'generic_internal_notification':
+      return {
+        from: fromDefault,
+        subject: `CRE Platform Notification: ${variables.subject || 'Update'}`,
+        html: `
+          <h1>Platform Notification</h1>
+          <p>${variables.message || 'You have a new notification.'}</p>
+        `
+      };
+    default:
+      return null;
+  }
+}
+
 Deno.serve(async (req) => {
   const origin = req.headers.get('Origin');
   const corsHeaders = getCorsHeaders(origin);
@@ -72,37 +197,36 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // ── 1. Verify caller is authenticated ──
     const authorization = req.headers.get("Authorization");
-    if (!authorization) {
-      return new Response(JSON.stringify({ error: 'Authorization required' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
-
-    const token = authorization.replace(/^[Bb]earer\s+/, "");
     
-    // We use getUser to determine if it's a real user.
-    // However, if the JWT is just the anonymous anon key, getUser will return an error (since there's no user).
-    // Let's decode the JWT first to see its role.
-    const tokenData = JSON.parse(atob(token.split('.')[1] || ""));
-    const isAnon = tokenData.role === 'anon';
+    // We expect token for authenticated templates. For public, anon token might be passed or none.
+    const token = authorization ? authorization.replace(/^[Bb]earer\s+/, "") : null;
+    let isAnon = true;
+    let user = null;
 
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (token) {
+      try {
+        const tokenData = JSON.parse(atob(token.split('.')[1] || ""));
+        isAnon = tokenData.role === 'anon';
+      } catch (e) {
+        // ignore parsing error
+      }
 
-    if (!user && !isAnon) {
-      return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      );
+      
+      const { data: authData } = await supabaseAdmin.auth.getUser(token);
+      if (authData?.user) {
+        user = authData.user;
+        isAnon = false; // Override anon if getUser succeeds
+      }
+    } else {
+      isAnon = true;
     }
 
-    // ── 2. Validate Resend config ──
     if (!RESEND_API_KEY) {
       console.error('[send-email] RESEND_API_KEY is not configured');
       return new Response(JSON.stringify({ error: 'Email service not configured' }), {
@@ -110,44 +234,73 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ── 3. Parse and validate request body ──
-    const { to, subject, html, text, from = "CRE Platform <support@cresuite.org>" } = await req.json();
+    const body = await req.json();
+    const { templateId, variables = {}, to, html, subject, from } = body;
 
-    if (!to || !subject || (!html && !text)) {
-      return new Response(JSON.stringify({ error: 'Missing required fields: to, subject, and html or text' }), {
+    if (html || subject || from) {
+       return new Response(JSON.stringify({ error: 'Arbitrary html, subject, and from are not allowed. Please use templateId and variables.' }), {
+         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+       });
+    }
+
+    if (!templateId) {
+      return new Response(JSON.stringify({ error: 'Missing required field: templateId' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    if (isAnon) {
-      // Prevent open relay abuse by public users
-      const toAddresses = Array.isArray(to) ? to : [to];
+    // ── 1. Validate template access ──
+    const isPublicTemplate = PUBLIC_TEMPLATES.includes(templateId);
+    const isAuthTemplate = AUTHENTICATED_TEMPLATES.includes(templateId);
+
+    if (!isPublicTemplate && !isAuthTemplate) {
+      return new Response(JSON.stringify({ error: 'Invalid templateId' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (isAnon && !isPublicTemplate) {
+      return new Response(JSON.stringify({ error: 'Unauthorized email template for anonymous access.' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    // For authenticated templates, user must be logged in (not anon)
+    if (isAuthTemplate && (!authorization || isAnon || !user)) {
+      return new Response(JSON.stringify({ error: 'Authorization required for this template.' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ── 2. Construct Template ──
+    const templateData = getTemplateData(templateId, variables);
+    if (!templateData) {
+      return new Response(JSON.stringify({ error: 'Template construction failed' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // If template specifies a 'to' address (e.g., admin notifications), use it. Otherwise use the client's 'to'.
+    const finalTo = templateData.to || to;
+    if (!finalTo) {
+      return new Response(JSON.stringify({ error: 'Missing required field: to' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // For generic_internal_notification, enforce strict recipient domains
+    if (templateId === 'generic_internal_notification') {
+      const toAddresses = Array.isArray(finalTo) ? finalTo : [finalTo];
       const allInternal = toAddresses.every((email: string) => email.endsWith('@cresuite.com') || email.endsWith('@cresuite.org'));
-      const isAutoReply = [
-        'CRE Platform - Your Demo Access',
-        'CRE Suite - Your Demo Access',
-        'CRE Platform - Access Request Received',
-        'CRE Suite - Access Request Received',
-        "CRE Platform - We've received your access request",
-        "CRE Suite - We've received your access request",
-        'Thanks for exploring CRE Platform',
-        'Thanks for exploring CRE Suite',
-        // Admin notifications sent from RequestAccess / RequestDemo pages (anon context)
-        '[New Request] Access:',
-        '[New Request] Demo:',
-      ].some((allowedSubject) => subject.startsWith(allowedSubject) || subject.includes(allowedSubject));
-      
-      if (!allInternal && !isAutoReply) {
-         return new Response(JSON.stringify({ error: 'Unauthorized email payload for anonymous key.' }), {
-           status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-         });
+      if (!allInternal) {
+        return new Response(JSON.stringify({ error: 'Internal notifications must be sent to internal domains.' }), {
+          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
     }
 
-    // ── 4. Send via Resend ──
-    const brandedHtml = html
-      ? (html.includes('<html') ? html : withCrePlatformBranding(html))
-      : undefined;
+    // ── 3. Send via Resend ──
+    const brandedHtml = withCrePlatformBranding(templateData.html);
 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -156,11 +309,10 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from,
-        to: Array.isArray(to) ? to : [to],
-        subject,
+        from: templateData.from,
+        to: Array.isArray(finalTo) ? finalTo : [finalTo],
+        subject: templateData.subject,
         html: brandedHtml,
-        text: text || undefined,
       }),
     });
 
@@ -173,7 +325,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`[send-email] Email sent to ${to} by ${user?.email || 'anon'}`);
+    console.log(`[send-email] Template ${templateId} sent to ${finalTo} by ${user?.email || 'anon'}`);
 
     return new Response(JSON.stringify({ success: true, id: data.id }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

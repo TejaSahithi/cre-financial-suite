@@ -172,35 +172,23 @@ export default function RequestAccess() {
         try {
           await sendEmail({
             to: "sales@cresuite.org",
-            subject: `[New Request] Access: ${form.full_name} (${form.company_name})`,
-            body: `
-              A new access request has been submitted.
-              
-              Name: ${form.full_name}
-              Email: ${form.email}
-              Company: ${form.company_name}
-              Role: ${isOtherRole ? form.customRole : form.role}
-              Plan: ${form.plan}
-              Billing: ${form.billing_cycle}
-              Portfolios: ${form.portfolios_count}
-              Properties: ${form.properties_count}
-            `
+            templateId: 'request_access_admin_notification',
+            variables: {
+              name: form.full_name,
+              email: form.email,
+              company: form.company_name,
+              role: isOtherRole ? form.customRole : form.role
+            }
           });
         } catch (e) { console.error("Admin notification fail:", e); }
 
         try {
           await sendEmail({
             to: form.email,
-            subject: "CRE Platform - We've received your access request",
-            html: `
-              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #334155;">
-                <h2 style="color: #1a2744;">Hi ${form.full_name.split(' ')[0]},</h2>
-                <p>Thank you for your interest in CRE Platform. We've received your request for platform access for <strong>${form.company_name}</strong>.</p>
-                <p>Our team is currently reviewing your organization. You can expect to hear from us within 24-48 hours with the next steps.</p>
-                <br/>
-                <p>Best regards,<br/>The CRE Platform Team</p>
-              </div>
-            `
+            templateId: 'request_access_autoreply',
+            variables: {
+              name: form.full_name.split(' ')[0]
+            }
           });
         } catch (e) { console.error("Auto-reply fail:", e); }
       })();
