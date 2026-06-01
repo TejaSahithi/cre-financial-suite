@@ -23,7 +23,8 @@ export function getUserRoutingState(u, p, org, members) {
 
   // INVITED / AWAITING ROLE
   const hasOrgRole = members?.some((m) => m.role && m.role !== null && m.role !== "pending");
-  if (!hasOrgRole && !isSuperAdmin(u)) return "AwaitingRole";
+  const hasLegacyRole = p.role && p.role !== "pending";
+  if (!hasOrgRole && !hasLegacyRole && !isSuperAdmin(u)) return "AwaitingRole";
 
   // WELCOME ABOARD
   if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {

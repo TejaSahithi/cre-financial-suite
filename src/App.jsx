@@ -16,6 +16,7 @@ import LoadingScreen from '@/app/LoadingScreen';
 import { useMfaStatus } from '@/features/auth/useMfaStatus';
 import { useFirstLoginOrganization } from '@/features/onboarding/useFirstLoginOrganization';
 import { getUserRoutingState } from '@/features/auth/getUserRoutingState';
+import { isSuperAdmin } from '@/lib/rbac';
 
 const { mainPage, Pages } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -139,9 +140,11 @@ const AuthenticatedApp = () => {
 
     const targetRoute = getUserRoutingState(user, profile, activeOrg, memberships);
     const isEntryPage = currentPath === 'Login' || currentPath === 'RequestAccess' || currentPath === '';
-    const isSuperAdmin = memberships?.some(m => m.role === 'super_admin');
+    
+    // Check if the user is a super_admin using the centralized helper
+    const isSuperAdminUser = isSuperAdmin(user);
 
-    if ((isSuperAdmin || targetRoute === 'Dashboard') && !isEntryPage) {
+    if ((isSuperAdminUser || targetRoute === 'Dashboard') && !isEntryPage) {
       return <AppRoutes />;
     }
 
