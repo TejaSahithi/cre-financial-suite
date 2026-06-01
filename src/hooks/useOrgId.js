@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { OrganizationService } from "@/services/api";
-import { resolveReadableOrgIdForUser } from "@/lib/orgUtils";
+import { resolveReadableOrgScopeForUser } from "@/lib/orgUtils";
 import { subscribeToActingOrgChanges } from "@/lib/actingOrg";
+import { isSuperAdmin } from "@/lib/rbac";
 
 /**
  * Hook that returns the current org context used by shared CRUD reads/writes.
  * Super-admins only receive an org_id when they have explicitly selected an
- * acting org, unless allowSuperAdminGlobal is opted in by the caller.
+ * acting org. Otherwise, their scope is "platform" and orgId is null.
  */
 export default function useOrgId(options = {}) {
   const { user } = useAuth();
@@ -29,33 +30,35 @@ export default function useOrgId(options = {}) {
           return;
         }
 
-        const adminUser = user.role === "admin" || user._raw_role === "super_admin";
-        const resolvedOrgId = resolveReadableOrgIdForUser(user, {
-          allowSuperAdminGlobal: options.allowSuperAdminGlobal === true,
-        });
+        const scopeObj = resolveReadableOrgScopeForUser(user, options);
 
         if (cancelled) return;
 
-        setIsAdmin(adminUser);
-        setOrgId(resolvedOrgId);
+        // "isAdmin" conceptually maps to platform scope visibility here.
+        const hasPlatformScope = scopeObj.scope === "platform";
+        setIsAdmin(hasPlatformScope || isSuperAdmin(user));
+        
+        const finalOrgId = scopeObj.scope === "none" ? "__none__" : scopeObj.orgId;
+        setOrgId(finalOrgId);
 
-        if (!resolvedOrgId || resolvedOrgId === "__none__") {
-          setOrgName(adminUser ? "Select Organization" : "");
+        if (scopeObj.scope === "none" || finalOrgId === "__none__") {
+          setOrgName(hasPlatformScope ? "Select Organization" : "");
           return;
         }
 
-        if (adminUser && resolvedOrgId === null) {
+        if (hasPlatformScope && finalOrgId === null) {
           setOrgName("SuperAdmin");
           return;
         }
 
-        if (user.activeOrg?.id === resolvedOrgId && user.activeOrg?.name) {
+        if (user.activeOrg?.id === finalOrgId && user.activeOrg?.name) {
           setOrgName(user.activeOrg.name);
           return;
         }
 
         try {
-          const orgs = await OrganizationService.filter({ id: resolvedOrgId });
+          // Temporarily disable tracking during this fetch
+          const orgs = await OrganizationService.filter({ id: finalOrgId });
           if (!cancelled) {
             setOrgName(orgs.length > 0 ? orgs[0].name : "");
           }

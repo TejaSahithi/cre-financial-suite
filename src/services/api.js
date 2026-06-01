@@ -15,8 +15,9 @@ import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
 import { normalizeImportedDateFields } from '@/lib/importDates';
 import { getStoredActingOrgId } from '@/lib/actingOrg';
-import { resolveReadableOrgIdForUser, resolveWritableOrgIdForUser } from '@/lib/orgUtils';
+import { resolveReadableOrgScopeForUser, resolveWritableOrgScopeForUser } from '@/lib/orgUtils';
 import { assertCanWritePage, canWritePage, isPagePermissionError } from '@/lib/userPermissions';
+import { isSuperAdmin } from '@/lib/rbac';
 
 // ─── In-memory store (used when Supabase is unavailable) ───────────────
 const memoryStore = new Map();
@@ -37,23 +38,16 @@ function seedMemoryStore() {
   }
   console.log('[api] In-memory store seeded with demo data');
 }
-let _cachedOrgResolution = null;
+let _cachedOrgScope = null;
 
-/**
- * Get the current user's org_id for multi-tenant filtering.
- *
- * Reads org_id from the user's resolved membership object (set in auth.js),
- * not from email-based lookups. Super-admins get null (see all). Regular users
- * get their org_id from their primary membership. '__none__' means no org found.
- */
-export async function getCurrentOrgId(options = {}) {
+export async function getCurrentOrgScope(options = {}) {
   try {
     const { me } = await import('@/services/auth');
     const user = await me();
 
     if (!user) {
-      _cachedOrgResolution = { key: 'anon', orgId: '__none__' };
-      return '__none__';
+      _cachedOrgScope = { key: 'anon', scope: { scope: 'none', orgId: null } };
+      return _cachedOrgScope.scope;
     }
 
     const cacheKey = [
@@ -64,19 +58,26 @@ export async function getCurrentOrgId(options = {}) {
       options.allowSuperAdminGlobal === true ? 'global' : 'scoped',
     ].join(':');
 
-    if (_cachedOrgResolution?.key === cacheKey) {
-      return _cachedOrgResolution.orgId;
+    if (_cachedOrgScope?.key === cacheKey) {
+      return _cachedOrgScope.scope;
     }
 
-    const orgId = resolveReadableOrgIdForUser(user, {
-      allowSuperAdminGlobal: options.allowSuperAdminGlobal === true,
-    });
-    _cachedOrgResolution = { key: cacheKey, orgId };
-    return orgId;
+    const scopeObj = resolveReadableOrgScopeForUser(user, options);
+    _cachedOrgScope = { key: cacheKey, scope: scopeObj };
+    return scopeObj;
   } catch {
-    _cachedOrgResolution = { key: 'error', orgId: '__none__' };
-    return '__none__';
+    _cachedOrgScope = { key: 'error', scope: { scope: 'none', orgId: null } };
+    return _cachedOrgScope.scope;
   }
+}
+
+/**
+ * Legacy wrapper for feature modules. Returns orgId or null/__none__.
+ */
+export async function getCurrentOrgId(options = {}) {
+  const scopeObj = await getCurrentOrgScope(options);
+  if (scopeObj.scope === 'platform') return null;
+  return scopeObj.orgId || '__none__';
 }
 
 const ACCESS_CACHE_PREFIX = '__access_scope__';
@@ -134,10 +135,11 @@ async function getCurrentCacheScopeKey() {
   try {
     const { me } = await import('@/services/auth');
     const user = await me();
-    const orgId = await getCurrentOrgId();
+    const scopeObj = await getCurrentOrgScope();
 
     if (!user) return 'anon';
-    return `user:${user.id}:role:${user._raw_role || user.role || 'unknown'}:org:${orgId === null ? '__all__' : (orgId || '__none__')}:acting:${getStoredActingOrgId() || '__none__'}`;
+    const orgIdStr = scopeObj.scope === 'none' ? '__none__' : (scopeObj.orgId || '__all__');
+    return `user:${user.id}:role:${user._raw_role || user.role || 'unknown'}:org:${orgIdStr}:acting:${getStoredActingOrgId() || '__none__'}`;
   } catch {
     return 'anon';
   }
@@ -163,7 +165,7 @@ async function getCurrentAccessScope(orgId) {
     const user = await me();
 
     if (!user) return null;
-    if (user.role === 'admin' || user._raw_role === 'super_admin') {
+    if (isSuperAdmin(user)) {
       return { unrestricted: true, userId: user.id, orgId };
     }
 
@@ -722,13 +724,19 @@ async function getCurrentUserForCrud() {
 
 async function resolveMutationOrgId(entityName, explicitOrgId = null) {
   const user = await getCurrentUserForCrud();
-  const resolvedOrgId = resolveWritableOrgIdForUser(user, { currentOrgId: explicitOrgId });
-  if (resolvedOrgId) return resolvedOrgId;
+  const scopeObj = resolveWritableOrgScopeForUser(user, { currentOrgId: explicitOrgId });
+  
+  if (scopeObj.scope === 'platform') {
+    const isOrgExempt = ORG_EXEMPT_TABLES.has(resolveTableName(entityName));
+    if (isOrgExempt) return null;
 
-  if (user?.role === 'admin' || user?._raw_role === 'super_admin') {
     throw new Error(
       `${entityName} requires an explicit org_id. Super-admins must select an organization before writing data.`
     );
+  }
+
+  if (scopeObj.scope === 'org' && scopeObj.orgId) {
+    return scopeObj.orgId;
   }
 
   throw new Error(`${entityName} requires a valid active organization context before writing data.`);
@@ -744,18 +752,21 @@ export function createEntityService(entityName) {
   const isOrgExempt = ORG_EXEMPT_TABLES.has(tableName);
   const allowedColumns = ALLOWED_COLUMNS[entityName] || null;
 
-  /**
-   * Apply org_id scoping to a Supabase query unless exempt.
-   * Super-admins (orgId === null) bypass the filter.
-   */
   async function applyOrgScope(query) {
     if (!query) return { query };
     if (isOrgExempt) return { query };
-    const orgId = await getCurrentOrgId();
-    if (orgId && orgId !== '__none__') {
-      return { query: query.eq('org_id', orgId), orgId };
+    const scopeObj = await getCurrentOrgScope();
+    
+    if (scopeObj.scope === 'none' || (scopeObj.scope === 'org' && scopeObj.orgId === '__none__')) {
+      return { query: query.eq('org_id', '__none__'), orgId: '__none__' };
     }
-    return { query, orgId };
+    
+    if (scopeObj.scope === 'org' && scopeObj.orgId) {
+      return { query: query.eq('org_id', scopeObj.orgId), orgId: scopeObj.orgId };
+    }
+    
+    // scope === 'platform' -> no filter
+    return { query, orgId: null };
   }
 
   /**
@@ -1013,7 +1024,7 @@ export function createEntityService(entityName) {
      */
     async get(id) {
       if (!id) return null;
-      const orgId = isOrgExempt ? null : await getCurrentOrgId();
+      const scopeObj = isOrgExempt ? { scope: 'platform', orgId: null } : await getCurrentOrgScope();
       const cacheScopeKey = await getCurrentCacheScopeKey();
       const cacheKey = `${cacheScopeKey}:${entityName}:get:${id}`;
       const cached = getCached(cacheKey);
@@ -1021,14 +1032,14 @@ export function createEntityService(entityName) {
 
       try {
         if (supabase) {
-          if (!isOrgExempt && orgId === '__none__') {
+          if (!isOrgExempt && scopeObj.scope === 'none') {
             setCached(cacheKey, null);
             return null;
           }
 
           let query = supabase.from(tableName).select('*').eq('id', id);
-          if (orgId && orgId !== '__none__') {
-            query = query.eq('org_id', orgId);
+          if (!isOrgExempt && scopeObj.scope === 'org' && scopeObj.orgId) {
+            query = query.eq('org_id', scopeObj.orgId);
           }
 
           const { data, error } = await query.single();
@@ -1037,7 +1048,7 @@ export function createEntityService(entityName) {
             throw error;
           }
           const normalized = normalizeFromDb(data);
-          const accessScope = await getCurrentAccessScope(orgId);
+          const accessScope = await getCurrentAccessScope(scopeObj.orgId);
           const filtered = filterRecordsByAccessScope(entityName, normalized ? [normalized] : [], accessScope);
           const finalRecord = filtered[0] || null;
           setCached(cacheKey, finalRecord);
@@ -1068,7 +1079,7 @@ export function createEntityService(entityName) {
      * @returns {Promise<Array>}
      */
     async list(sortField, limit) {
-      const orgId = isOrgExempt ? null : await getCurrentOrgId();
+      const scopeObj = isOrgExempt ? { scope: 'platform', orgId: null } : await getCurrentOrgScope();
       const cacheScopeKey = await getCurrentCacheScopeKey();
       const cacheKey = `${cacheScopeKey}:${entityName}:list:${sortField || ''}:${limit || ''}`;
       const cached = getCached(cacheKey);
@@ -1076,15 +1087,15 @@ export function createEntityService(entityName) {
 
       try {
         if (supabase) {
-          if (!isOrgExempt && orgId === '__none__') {
+          if (!isOrgExempt && scopeObj.scope === 'none') {
             setCached(cacheKey, []);
             return [];
           }
 
           let query = supabase.from(tableName).select('*');
 
-          if (orgId && orgId !== '__none__') {
-            query = query.eq('org_id', orgId);
+          if (!isOrgExempt && scopeObj.scope === 'org' && scopeObj.orgId) {
+            query = query.eq('org_id', scopeObj.orgId);
           }
 
           if (sortField) {
@@ -1100,8 +1111,8 @@ export function createEntityService(entityName) {
               ? null
               : '-created_at';
             let retry = supabase.from(tableName).select('*');
-            if (orgId && orgId !== '__none__') {
-              retry = retry.eq('org_id', orgId);
+            if (!isOrgExempt && scopeObj.scope === 'org' && scopeObj.orgId) {
+              retry = retry.eq('org_id', scopeObj.orgId);
             }
             if (fallbackSort) {
               const desc = fallbackSort.startsWith('-');

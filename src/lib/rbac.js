@@ -246,4 +246,76 @@ export function filterNavForAllowedPages(navSections, allowedPages) {
     .filter(Boolean);
 }
 
+export function isSuperAdmin(user) {
+  return (
+    user?._raw_role === "super_admin" ||
+    user?.memberships?.some((membership) => membership?.role === "super_admin")
+  );
+}
+
+export function canAccessPlatformData(user) {
+  return isSuperAdmin(user);
+}
+
+export function getActiveOrgId(user) {
+  return user?.activeOrg?.id || user?.org_id || null;
+}
+
+export function getDataScope(user, options = {}) {
+  const explicitOrgId = options.currentOrgId || null;
+  const isSuperAdminUser = isSuperAdmin(user);
+
+  if (isSuperAdminUser) {
+    if (explicitOrgId) {
+      return { scope: "org", orgId: explicitOrgId };
+    }
+    return { scope: "platform", orgId: null };
+  }
+
+  if (explicitOrgId) {
+    const hasMembership = user?.memberships?.some(
+      (m) =>
+        m?.org_id === explicitOrgId &&
+        // TODO: Once all memberships have status populated, remove the "active" fallback.
+        ["active", "owner"].includes(m?.status || "active")
+    );
+    if (hasMembership) {
+      return { scope: "org", orgId: explicitOrgId };
+    }
+  }
+
+  const activeOrgId = getActiveOrgId(user);
+  if (activeOrgId) {
+    return { scope: "org", orgId: activeOrgId };
+  }
+
+  return { scope: "none", orgId: null };
+}
+
+export function getActiveMembership(user) {
+  const activeOrgId = getActiveOrgId(user);
+  if (!activeOrgId) return null;
+
+  return (
+    user?.memberships?.find(
+      (membership) =>
+        membership?.org_id === activeOrgId &&
+        // TODO: Once all memberships have status populated, remove the "active" fallback.
+        ["active", "owner"].includes(membership?.status || "active")
+    ) || null
+  );
+}
+
+export function getActiveRole(user) {
+  if (isSuperAdmin(user)) return "super_admin";
+
+  const activeMembership = getActiveMembership(user);
+  return activeMembership?.role || user?._raw_role || user?.role || "viewer";
+}
+
+export function isOrgAdmin(user) {
+  const role = getActiveRole(user);
+  return role === "org_admin" || role === "admin";
+}
+
 export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, ROLE_ALIASES, MANDATORY_SETUP_PAGES, MFA_BYPASS_PAGES, LAYOUT_EXEMPT_PAGES };
