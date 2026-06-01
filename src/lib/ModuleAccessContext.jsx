@@ -17,6 +17,7 @@ const ModuleAccessContext = createContext({
   isModuleEnabled: () => true,
   isPageEnabled: () => true,
   loading: true,
+  permissionError: null,
 });
 
 function coerceToObject(value) {
@@ -64,17 +65,20 @@ export function ModuleAccessProvider({ children }) {
   const [activeMembership, setActiveMembership] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasModuleRestrictions, setHasModuleRestrictions] = useState(false);
+  const [permissionError, setPermissionError] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
+        setPermissionError(null);
         if (!user) {
           setEnabledModules([]);
           setAssignedPagesByModule({});
           setPageAccess({});
           setActiveMembership(null);
           setHasModuleRestrictions(false);
+          setPermissionError(null);
           setLoading(false);
           return;
         }
@@ -86,6 +90,7 @@ export function ModuleAccessProvider({ children }) {
           setPageAccess({});
           setActiveMembership(null);
           setHasModuleRestrictions(false);
+          setPermissionError(null);
           setLoading(false);
           return;
         }
@@ -143,7 +148,8 @@ export function ModuleAccessProvider({ children }) {
         setAssignedPagesByModule({});
         setPageAccess({});
         setActiveMembership(null);
-        setHasModuleRestrictions(false);
+        setHasModuleRestrictions(true);
+        setPermissionError("Unable to verify module access. Please refresh or contact support.");
       }
 
       setLoading(false);
@@ -152,6 +158,7 @@ export function ModuleAccessProvider({ children }) {
 
   const isModuleEnabled = (moduleKey) => {
     if (isAdmin) return true;
+    if (permissionError) return false;
     if (!hasModuleRestrictions) return true;
     return enabledModules.includes(moduleKey);
   };
@@ -159,6 +166,7 @@ export function ModuleAccessProvider({ children }) {
   const getPageAccessLevel = (pageName) => {
     if (isAdmin) return "admin";
     if (MANDATORY_SETUP_PAGES.includes(pageName)) return "admin";
+    if (permissionError) return "none";
     return resolveUserPageAccessLevel(user, pageName);
   };
 
@@ -189,6 +197,7 @@ export function ModuleAccessProvider({ children }) {
         isModuleEnabled,
         isPageEnabled,
         loading,
+        permissionError,
       }}
     >
       {children}
