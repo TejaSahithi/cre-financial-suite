@@ -50,6 +50,15 @@ export async function getCurrentOrgScope(options = {}) {
       return _cachedOrgScope.scope;
     }
 
+    const { isSuperAdmin, getDataScope } = await import('@/lib/rbac');
+    console.log(`[DEV-LOG] getCurrentOrgScope -> user details:`, {
+      role: user.role,
+      _raw_role: user._raw_role,
+      memberships: user.memberships,
+      isSuperAdmin: isSuperAdmin(user),
+      getDataScope: getDataScope(user, options),
+    });
+
     const cacheKey = [
       user.id,
       user._raw_role || user.role || 'unknown',
@@ -62,10 +71,15 @@ export async function getCurrentOrgScope(options = {}) {
       return _cachedOrgScope.scope;
     }
 
+    const { resolveReadableOrgScopeForUser } = await import('@/lib/orgUtils');
     const scopeObj = resolveReadableOrgScopeForUser(user, options);
+    
+    console.log(`[DEV-LOG] getCurrentOrgScope -> generated scopeObj:`, scopeObj);
+    
     _cachedOrgScope = { key: cacheKey, scope: scopeObj };
     return scopeObj;
-  } catch {
+  } catch (error) {
+    console.error('[DEV-LOG] getCurrentOrgScope error:', error);
     _cachedOrgScope = { key: 'error', scope: { scope: 'none', orgId: null } };
     return _cachedOrgScope.scope;
   }
@@ -322,7 +336,7 @@ function filterRecordsByAccessScope(entityName, records, accessScope) {
 
 /** Reset the cached org ID (e.g. after login/logout). */
 export function resetOrgIdCache() {
-  _cachedOrgResolution = null;
+  _cachedOrgScope = null;
 }
 
 // ─── Simple TTL cache ──────────────────────────────────────────────────
@@ -757,15 +771,20 @@ export function createEntityService(entityName) {
     if (isOrgExempt) return { query };
     const scopeObj = await getCurrentOrgScope();
     
+    console.log(`[DEV-LOG] applyOrgScope for ${entityName}:`, { isOrgExempt, scopeObj });
+    
     if (scopeObj.scope === 'none' || (scopeObj.scope === 'org' && scopeObj.orgId === '__none__')) {
+      console.log(`[DEV-LOG] applyOrgScope -> applying '__none__' filter`);
       return { query: query.eq('org_id', '__none__'), orgId: '__none__' };
     }
     
     if (scopeObj.scope === 'org' && scopeObj.orgId) {
+      console.log(`[DEV-LOG] applyOrgScope -> applying org_id: ${scopeObj.orgId}`);
       return { query: query.eq('org_id', scopeObj.orgId), orgId: scopeObj.orgId };
     }
     
     // scope === 'platform' -> no filter
+    console.log(`[DEV-LOG] applyOrgScope -> NO FILTER (platform scope)`);
     return { query, orgId: null };
   }
 

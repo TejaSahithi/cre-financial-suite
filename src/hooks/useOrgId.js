@@ -32,6 +32,8 @@ export default function useOrgId(options = {}) {
 
         const scopeObj = resolveReadableOrgScopeForUser(user, options);
 
+        console.log(`[DEV-LOG] useOrgId syncOrgState -> scopeObj:`, scopeObj);
+
         if (cancelled) return;
 
         // "isAdmin" conceptually maps to platform scope visibility here.
@@ -39,6 +41,7 @@ export default function useOrgId(options = {}) {
         setIsAdmin(hasPlatformScope || isSuperAdmin(user));
         
         const finalOrgId = scopeObj.scope === "none" ? "__none__" : scopeObj.orgId;
+        console.log(`[DEV-LOG] useOrgId syncOrgState -> setting orgId:`, finalOrgId);
         setOrgId(finalOrgId);
 
         if (scopeObj.scope === "none" || finalOrgId === "__none__") {
