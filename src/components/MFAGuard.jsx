@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle, QrCode, ChevronDown, ChevronUp } from "lucide-react";
+import { Building2, Shield, Loader2, RefreshCw, Smartphone, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -104,30 +104,8 @@ export default function MFAGuard({ onVerified }) {
             setPhase("challenge");
             return;
           }
-          // No verified factor visible at aal1 but max is reached — force reset via edge fn
-          const { data: { session } } = await supabase.auth.getSession();
-          const { data: resetData, error: resetErr } = await supabase.functions.invoke("reset-mfa", {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-          });
-          if (resetErr?.message?.includes('401') || resetErr?.status === 401) {
-            // Session invalid — redirect to login
-            setPhase("session_error");
-            return;
-          }
-          if (!resetErr && resetData?.success) {
-            await supabase.auth.refreshSession();
-            // Retry enrollment once after reset
-            const { data: retryData, error: retryErr } = await supabase.auth.mfa.enroll({
-              factorType: "totp", issuer: "CRE Suite",
-              friendlyName: `Auth_${Date.now().toString().slice(-4)}`
-            });
-            if (!retryErr) {
-              setFactorId(retryData.id);
-              setQrCode(retryData.totp.qr_code);
-              setSecret(retryData.totp.secret);
-              return;
-            }
-          }
+          // No verified factor visible at aal1 but max is reached
+          throw new Error("Maximum number of factors reached but none are verified. Please contact support to reset your 2FA.");
         }
         throw error;
       }
@@ -140,47 +118,6 @@ export default function MFAGuard({ onVerified }) {
       setError(err.message || "Enrollment failed. Please refresh.");
     } finally {
       setEnrolling(false);
-    }
-  };
-
-  /** Unenroll existing verified factor and re-generate a fresh QR for re-scanning */
-  const handleResetAndShowQR = async () => {
-    setResetting(true);
-    setError("");
-    try {
-      if (import.meta.env.DEV) console.log("[MFAGuard] Attempting MFA reset via Edge Function...");
-      // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa", {
-        method: 'POST', // Explicitly use POST
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-      });
-
-      if (invokeErr) {
-        if (import.meta.env.DEV) console.error("[MFAGuard] Edge function invocation error:", invokeErr);
-        throw new Error("Unable to reach security service. Please contact support@cresuite.org to manually reset your 2FA.");
-      }
-
-      if (!data?.success) {
-        throw new Error(data?.error || "Failed to reset MFA. Please ensure you are logged in correctly.");
-      }
-
-      if (import.meta.env.DEV) console.log("[MFAGuard] MFA reset successful, refreshing session...");
-      // Refresh session so local client clears the previous AAL requirement cache
-      await supabase.auth.refreshSession();
-
-      // Switch to enroll mode with fresh QR
-      setQrCode(null);
-      setSecret(null);
-      setCode("");
-      setPhase("enroll");
-      await startEnrollment();
-      setShowQrOnChallenge(false);
-    } catch (err) {
-      if (import.meta.env.DEV) console.error("[MFAGuard] reset error:", err);
-      setError(err.message || "Failed to reset 2FA. Our team has been notified.");
-    } finally {
-      setResetting(false);
     }
   };
 
@@ -437,40 +374,11 @@ export default function MFAGuard({ onVerified }) {
                   {verifying ? "Verifying..." : "Verify & Sign In"}
                 </Button>
 
-                {/* ── Re-scan QR accordion ── */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setShowQrOnChallenge(v => !v)}
-                    className="w-full flex items-center justify-between px-4 py-3 text-sm text-slate-600 hover:bg-slate-50 transition-colors"
-                  >
-                    <span className="flex items-center gap-2">
-                      <QrCode className="w-4 h-4 text-slate-400" />
-                      Can't access your Authenticator app?
-                    </span>
-                    {showQrOnChallenge ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                  </button>
-
-                  {showQrOnChallenge && (
-                    <div className="px-4 pb-4 border-t border-slate-100 bg-slate-50/50">
-                      <p className="text-xs text-slate-500 mt-3 mb-3">
-                        If you've lost access to your authenticator app, you can reset your 2FA and scan a new QR code to re-link your account.
-                      </p>
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-                        <p className="text-xs text-amber-700 font-medium">⚠️ This will unlink your current authenticator app. You'll need to scan a new QR code.</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleResetAndShowQR}
-                        disabled={resetting}
-                        className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
-                      >
-                        {resetting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <QrCode className="w-3.5 h-3.5 mr-2" />}
-                        {resetting ? "Resetting..." : "Reset 2FA & Show New QR Code"}
-                      </Button>
-                    </div>
-                  )}
+                <div className="mt-6 text-center">
+                  <p className="text-sm text-slate-500">
+                    Can’t access your authenticator? <br />
+                    Contact your administrator or support to reset MFA.
+                  </p>
                 </div>
               </div>
             )}
