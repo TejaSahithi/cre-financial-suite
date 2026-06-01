@@ -5,7 +5,7 @@ import { redirectToLogin } from "@/services/auth";
 import { ensureOnboardingOrganization } from "@/services/onboardingService";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/services/supabaseClient";
-import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Clock, Shield, AlertCircle, RefreshCw } from "lucide-react";
+import { Building2, CheckCircle2, ArrowRight, ArrowLeft, Loader2, CreditCard, FileText, Lock, Shield, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -332,43 +332,7 @@ export default function Onboarding() {
       setSaving(false);
     }
   };
-  // Called when the final step (Confirmation) is reached
-  const completeOnboarding = async () => {
-    try {
-      // Advance step visually
-      if (org) {
-        await OrganizationService.update(org.id, { onboarding_step: 4 });
-      }
 
-      console.log('[Onboarding] Triggering complete-onboarding Edge Function');
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-      });
-
-      if (error || data?.error) {
-        throw new Error(error?.message || data?.error || 'Failed to complete onboarding');
-      }
-
-      // Audit log â€” onboarding completion
-      await logAudit({
-        entityType: 'Profile',
-        entityId: authUser?.id,
-        action: 'update',
-        fieldChanged: 'onboarding_status',
-        oldValue: 'onboarding',
-        newValue: 'under_review',
-        orgId: org?.id,
-        userId: authUser?.id,
-        userEmail: authUser?.email,
-      }).catch(() => { });
-
-      // Refresh the auth context so App.jsx picks up `under_review`
-      await refreshProfile();
-    } catch (e) {
-      console.error('[Onboarding] complete error:', e);
-    }
-  };
 
   if (loading) {
     return (
@@ -554,42 +518,7 @@ export default function Onboarding() {
 
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-right-4 duration-500">
-              <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onComplete={async (billingCycle, paymentInfo) => {
-                setSaving(true);
-                const numericAmount = typeof paymentInfo.displayPrice === 'string'
-                  ? parseFloat(paymentInfo.displayPrice.replace(/[^0-9.]/g, ''))
-                  : paymentInfo.displayPrice;
-
-                try {
-                  const plan = paymentInfo.plan || form.plan;
-                  const orgName = org?.name || form.name || '';
-                  
-                  const { data: { session } } = await supabase.auth.getSession();
-                  const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-                    body: { plan, billingCycle, amount: numericAmount, orgName },
-                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-                  });
-                  
-                  if (error || data?.error) throw new Error(error?.message || data?.error);
-
-                  navigate('/PaymentSuccess', {
-                    replace: true,
-                    state: {
-                      plan,
-                      billing_cycle: billingCycle,
-                      org_name: orgName,
-                    }
-                  });
-                  refreshProfile().catch(() => {});
-                } catch (e) {
-                  console.error('[Onboarding] Setup completion failed:', e);
-                  const { toast } = await import("sonner");
-                  toast.error("Setup failed. Please try again or contact support.", { description: e.message });
-                  throw e;
-                } finally {
-                  setSaving(false);
-                }
-              }} onBack={() => setStep(2)} />
+              <PaymentStep org={org} user={authUser} form={form} setForm={setForm} onBack={() => setStep(2)} />
             </div>
           )}
 
@@ -780,27 +709,11 @@ DATE:         ${today}
   );
 }
 
-// â”€â”€â”€ Payment Step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function PaymentStep({ user, form, setForm, onComplete, onBack }) {
+// ─── Payment Step ──────────────────────────────────────────────
+function PaymentStep({ user, form, setForm, org, onBack }) {
   const [processing, setProcessing] = useState(false);
-  const [validatingAddress, setValidatingAddress] = useState(false);
-  const [cardName, setCardName] = useState(user?.full_name || "");
-  const [cardNumber, setCardNumber] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [cvc, setCvc] = useState("");
   const [error, setError] = useState("");
   const [billingCycle, setBillingCycle] = useState("monthly");
-
-  // Billing address
-  const [billingAddress, setBillingAddress] = useState("");
-  const [billingCity, setBillingCity] = useState("");
-  const [billingState, setBillingState] = useState("");
-  const [billingZip, setBillingZip] = useState("");
-  const [billingCountry, setBillingCountry] = useState("US");
-  const [addressCandidates, setAddressCandidates] = useState([]);
-  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState("");
-  const [addressValidated, setAddressValidated] = useState(false);
-  const [addressValidationMessage, setAddressValidationMessage] = useState("");
 
   const YEARLY_DISCOUNT = 0.25;
 
@@ -820,102 +733,31 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
   const displayPrice = getPrice(selectedPlan.price);
   const yearlyTotal = displayPrice * 12;
 
-  const resetAddressValidation = () => {
-    setAddressValidated(false);
-    setAddressCandidates([]);
-    setSelectedCandidateIndex("");
-    setAddressValidationMessage("");
-  };
-
-  const updateAddressField = (setter, value) => {
-    setter(value);
-    setError("");
-    resetAddressValidation();
-  };
-
-  const applyAddressCandidate = (candidate, message) => {
-    setBillingAddress(candidate.addressLine1 || "");
-    setBillingCity(candidate.city || "");
-    setBillingState(candidate.state || "");
-    setBillingZip(candidate.postalCode || "");
-    setBillingCountry(candidate.countryCode || "US");
-    setAddressValidated(true);
-    setAddressCandidates([]);
-    setSelectedCandidateIndex("");
-    setAddressValidationMessage(message);
-  };
-
-  const runAddressValidation = async ({ autoApplySingle = true } = {}) => {
-    if (!billingAddress.trim() || !billingCity.trim() || !billingState.trim() || !billingZip.trim()) {
-      const message = "Enter the street address, city, state, and ZIP code before continuing.";
-      setAddressValidated(false);
-      setAddressValidationMessage(message);
-      return { ok: false, requiresSelection: false, message };
-    }
-
-    // TODO: Replace with real UPS credentials when available
-    setAddressValidated(true);
-    setAddressCandidates([]);
-    setSelectedCandidateIndex("");
-    setAddressValidationMessage("Address accepted.");
-    return { ok: true, requiresSelection: false };
-  };
-
-  const validatePaymentFields = () => {
-    if (!cardName.trim()) return "Cardholder name is required.";
-    if (cardNumber.length < 13) return "Enter a valid card number.";
-    if (!/^\d{2}\s*\/\s*\d{2}$/.test(expiry)) return "Enter a valid expiration date in MM / YY format.";
-    if (cvc.length < 3) return "Enter a valid CVC.";
-    if (!billingAddress.trim() || !billingCity.trim() || !billingState.trim() || !billingZip.trim()) {
-      return "Complete the billing address before submitting payment.";
-    }
-    if (billingCountry === "US" && !US_ZIP_REGEX.test(billingZip.trim())) {
-      return "Enter a valid US ZIP code.";
-    }
-    if (billingCountry === "CA" && !CA_POSTAL_REGEX.test(billingZip.trim())) {
-      return "Enter a valid Canadian postal code.";
-    }
-    return "";
-  };
-
   const handlePayment = async (e) => {
     e.preventDefault();
     setError("");
-
-    const fieldError = validatePaymentFields();
-    if (fieldError) {
-      setError(fieldError);
-      return;
-    }
-
     setProcessing(true);
+
     try {
-      const validationResult = addressValidated
-        ? { ok: true, requiresSelection: false }
-        : await runAddressValidation({ autoApplySingle: true });
+      const planKey = selectedPlan.key;
+      const orgId = org?.id;
 
-      if (!validationResult.ok) {
-        setError(validationResult.requiresSelection
-          ? "Select one of the validated billing addresses to continue."
-          : validationResult.message || "Please validate the billing address before continuing.");
-        return;
-      }
-
-      await new Promise(r => setTimeout(r, 1200));
-      await onComplete(billingCycle, {
-        cardName, plan: selectedPlan.name, displayPrice, billingCycle,
-        billingAddress: formatBillingAddress({
-          addressLine1: billingAddress,
-          city: billingCity,
-          state: billingState,
-          postalCode: billingZip,
-          countryCode: billingCountry,
-        }),
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data, error: fnError } = await supabase.functions.invoke('create-checkout-session', {
+        body: { planKey, billingCycle, orgId },
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
+      
+      if (fnError || data?.error) throw new Error(fnError?.message || data?.error || 'Failed to create checkout session');
+
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error('No checkout URL returned from server.');
+      }
     } catch (err) {
-      console.error('[Payment] onComplete callback failed:', err);
-      setError(err.message || "An unexpected error occurred. Your payment was not processed, please try again.");
-    } finally {
+      console.error('[Payment] create-checkout-session failed:', err);
+      setError(err.message || "An unexpected error occurred. Please try again.");
       setProcessing(false);
     }
   };
@@ -924,7 +766,7 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
     <div>
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-slate-900 mb-1">Activate Subscription</h2>
-        <p className="text-slate-500 text-sm">Select a plan and billing cycle to secure your instance.</p>
+        <p className="text-slate-500 text-sm">Select a plan and billing cycle to proceed to secure checkout.</p>
       </div>
 
       {/* Billing Toggle */}
@@ -954,7 +796,7 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
               {p.price ? (
                 <div>
                   <p className="text-xl font-black text-[#1a2744]">${price}<span className="text-[10px] uppercase font-bold text-slate-400 ml-1">/mo</span></p>
-                  {billingCycle === "yearly" && <p className="text-[9px] text-emerald-600 font-bold mt-0.5">${p.price}/mo â†’ Save ${p.price - price}/mo</p>}
+                  {billingCycle === "yearly" && <p className="text-[9px] text-emerald-600 font-bold mt-0.5">${p.price}/mo → Save ${p.price - price}/mo</p>}
                 </div>
               ) : <p className="text-xl font-black text-[#1a2744]">Custom</p>}
             </button>
@@ -976,310 +818,21 @@ function PaymentStep({ user, form, setForm, onComplete, onBack }) {
       )}
 
       <form onSubmit={handlePayment} className="space-y-4">
-        {/* Card Details */}
-        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Card Details</p>
-          <div>
-            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Cardholder Name</Label>
-            <Input value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Full Name" className="bg-white border-slate-200 h-11" required />
-          </div>
-          <div>
-            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Card Number</Label>
-            <div className="relative">
-              <Input value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').substring(0, 16))}
-                placeholder="0000 0000 0000 0000" className="bg-white border-slate-200 h-11 pl-11 font-mono tracking-widest" required />
-              <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Expiration</Label>
-              <Input value={expiry} onChange={e => setExpiry(e.target.value.substring(0, 5))} placeholder="MM / YY" className="bg-white border-slate-200 h-11 text-center" required />
-            </div>
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">CVC</Label>
-              <Input value={cvc} onChange={e => setCvc(e.target.value.replace(/\D/g, '').substring(0, 4))} placeholder="123" className="bg-white border-slate-200 h-11 text-center" required />
-            </div>
-          </div>
-        </div>
-
-        {/* Billing Address */}
-        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billing Address</p>
-          <div>
-            <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Street Address</Label>
-            <Input value={billingAddress} onChange={e => updateAddressField(setBillingAddress, e.target.value)} placeholder="123 Main St" className="bg-white border-slate-200 h-11" required />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">City</Label>
-              <Input value={billingCity} onChange={e => updateAddressField(setBillingCity, e.target.value)} placeholder="New York" className="bg-white border-slate-200 h-11" required />
-            </div>
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">State</Label>
-              {billingCountry === "US" ? (
-                <Select value={billingState} onValueChange={(value) => updateAddressField(setBillingState, value)}>
-                  <SelectTrigger className="bg-white border-slate-200 h-11">
-                    <SelectValue placeholder="Select state" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATE_OPTIONS.map((state) => (
-                      <SelectItem key={state.value} value={state.value}>{state.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input value={billingState} onChange={e => updateAddressField(setBillingState, e.target.value)} placeholder="Province / State" className="bg-white border-slate-200 h-11" required />
-              )}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">ZIP / Postal Code</Label>
-              <Input value={billingZip} onChange={e => updateAddressField(setBillingZip, e.target.value.toUpperCase())} placeholder={billingCountry === "CA" ? "A1A 1A1" : "10001"} className="bg-white border-slate-200 h-11" required />
-            </div>
-            <div>
-              <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5 block">Country</Label>
-              <Select value={billingCountry} onValueChange={(value) => updateAddressField(setBillingCountry, value)}>
-                <SelectTrigger className="bg-white border-slate-200 h-11">
-                  <SelectValue placeholder="Select country" />
-                </SelectTrigger>
-                <SelectContent>
-                  {COUNTRY_OPTIONS.map((country) => (
-                    <SelectItem key={country.value} value={country.value}>{country.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-        </div>
-
         {error && <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 flex items-center gap-2"><AlertCircle className="w-3.5 h-3.5" /> {error}</div>}
 
         <div className="flex gap-4">
           <Button type="button" variant="outline" onClick={onBack} className="h-12 w-32 rounded-xl text-slate-500">Back</Button>
           <Button type="submit" disabled={processing} className="flex-1 bg-[#1a2744] hover:bg-[#243b67] h-12 rounded-xl text-base font-bold shadow-lg">
             {processing ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
-            {processing ? "Processing Securely..." : selectedPlan.price ? `Pay $${displayPrice} & Finalize Setup` : "Request Enterprise Access"}
+            {processing ? "Preparing Secure Checkout..." : selectedPlan.price ? `Proceed to Checkout` : "Request Enterprise Access"}
           </Button>
         </div>
         <p className="text-center text-[10px] text-slate-400 flex items-center justify-center gap-1">
-          <Lock className="w-3 h-3" /> 256-bit SSL encryption · PCI DSS compliant
+          <Lock className="w-3 h-3" /> Secure payment via Stripe
         </p>
       </form>
     </div>
   );
 }
 
-// ─── Confirmation Step ──────────────────────────────────────────
-function ConfirmationStep({ org, user, plan, paymentInfo }) {
-  const [dbInvoice, setDbInvoice] = useState(null);
 
-  useEffect(() => {
-    async function fetchInvoice() {
-      if (!paymentInfo) {
-        try {
-          const { supabase } = await import('@/services/supabaseClient');
-          const { data, error } = await supabase.from('invoices').select('*').eq('org_id', org?.id).order('created_at', { ascending: false }).limit(1).single();
-          if (error) {
-            console.error('[Onboarding] Error fetching invoice for confirmation:', error);
-            // Fallback UI data if DB fetch fails (e.g. 406 Not Acceptable)
-            setDbInvoice({
-              displayPrice: "...",
-              plan: org?.plan || plan || "Professional",
-              billingCycle: org?.billing_cycle || "monthly",
-              billingAddress: "Pending review"
-            });
-          } else if (data) {
-            setDbInvoice({
-              displayPrice: data.amount,
-              plan: org?.plan || plan || "Professional",
-              billingCycle: org?.billing_cycle || "monthly",
-              billingAddress: "—" // Fetched from db invoice implies address wasn't saved to profile, but payment was successful
-            });
-          }
-        } catch (e) { console.error(e); }
-      }
-    }
-    fetchInvoice();
-  }, [org?.id, paymentInfo, org?.plan, org?.billing_cycle, plan]);
-
-  const info = paymentInfo || dbInvoice;
-
-  const handleDownloadInvoice = async () => {
-    const { toast } = await import("sonner");
-    try {
-      console.log("[Onboarding] Starting invoice download...", { info, plan });
-      const { jsPDF } = await import('jspdf');
-      if (!jsPDF) throw new Error("jsPDF library failed to load");
-
-      const doc = new jsPDF();
-
-      const invoiceId = `INV-${Date.now().toString(36).toUpperCase()}`;
-      const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-      const planName = info?.plan || plan || "Professional";
-      const price = info?.displayPrice || "0";
-      const cycle = info?.billingCycle || "monthly";
-      const totalDue = cycle === "yearly" ? price * 12 : price;
-
-      // Colors
-      const primaryColor = '#1a2744';
-      const secondaryColor = '#64748b';
-
-      // Header
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(24);
-      doc.setTextColor(primaryColor);
-      doc.text("CRE PLATFORM", 20, 30);
-
-      doc.setFontSize(10);
-      doc.setTextColor(secondaryColor);
-      doc.text("support@cresuite.org", 20, 38);
-
-      // INVOICE Title
-      doc.setFontSize(20);
-      doc.setTextColor(primaryColor);
-      doc.text("INVOICE", 150, 30, { align: "center" });
-
-      // Invoice Details
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "normal");
-      doc.text(`Invoice Number: ${invoiceId}`, 150, 45, { align: "center" });
-      doc.text(`Date: ${today}`, 150, 52, { align: "center" });
-      doc.text(`Status: PENDING ACTIVATION`, 150, 59, { align: "center" });
-
-      // Line
-      doc.setDrawColor(200, 200, 200);
-      doc.line(20, 65, 190, 65);
-
-      // Billed To
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(primaryColor);
-      doc.text("Billed To:", 20, 80);
-
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(secondaryColor);
-      doc.text(user?.full_name || "—", 20, 88);
-      doc.text(user?.email || "—", 20, 95);
-      doc.text(org?.name || "—", 20, 102);
-      if (info?.billingAddress) {
-        doc.text(info.billingAddress, 20, 109);
-      }
-
-      // Subscription Details Table Header
-      doc.setFillColor(248, 250, 252);
-      doc.rect(20, 125, 170, 10, 'F');
-
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(primaryColor);
-      doc.text("Description", 25, 132);
-      doc.text("Billing Cycle", 100, 132);
-      doc.text("Amount", 170, 132, { align: "right" });
-
-      // Subscription Details Table Row
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(secondaryColor);
-      doc.text(`CRE Platform ${planName.charAt(0).toUpperCase() + planName.slice(1)} Plan`, 25, 145);
-      doc.text(cycle === "yearly" ? "Annual" : "Monthly", 100, 145);
-      doc.text(`$${price}${cycle === "yearly" ? "/mo" : ""}`, 170, 145, { align: "right" });
-
-      // Line
-      doc.line(20, 152, 190, 152);
-
-      // Totals
-      doc.text("Subtotal:", 130, 165);
-      doc.text(`$${price}`, 170, 165, { align: "right" });
-
-      doc.text("Discount:", 130, 175);
-      doc.text(cycle === "yearly" ? "25% Annual" : "None", 170, 175, { align: "right" });
-
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(primaryColor);
-      doc.text("Total Due:", 130, 185);
-      doc.text(`$${totalDue}`, 170, 185, { align: "right" });
-
-      // Footer
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(secondaryColor);
-      doc.text("Payment processed securely. Account is pending SuperAdmin activation.", 105, 270, { align: "center" });
-      doc.text(`© ${new Date().getFullYear()} CRE Platform. All rights reserved.`, 105, 275, { align: "center" });
-
-      const pdfBlob = doc.output('blob');
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${invoiceId}_CRE_Platform.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success("Invoice downloaded successfully!");
-    } catch (err) {
-      console.error("Failed to generate PDF", err);
-      toast.error("Failed to generate invoice: " + err.message);
-    }
-  };
-
-  return (
-    <div className="text-center py-4">
-      {/* Pending Animation */}
-      <div className="relative w-24 h-24 mx-auto mb-6">
-        <div className="absolute inset-0 bg-amber-100 rounded-full animate-ping opacity-20" />
-        <div className="relative w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center">
-          <Clock className="w-12 h-12 text-amber-500" />
-        </div>
-      </div>
-
-      <h2 className="text-2xl font-bold text-emerald-600 mb-2">Payment Successful</h2>
-      <p className="text-slate-600 font-semibold mb-1 max-w-md mx-auto">
-        Your payment was received successfully! Our team is now reviewing your organization.
-      </p>
-      <p className="text-slate-400 text-xs mb-6 max-w-sm mx-auto">
-        Thank you for choosing CRE Platform, <strong>{user?.full_name}</strong>. We are processing <strong>{org?.name}</strong> and you will receive a welcome email once your account is activated.
-      </p>
-
-      {/* Payment Summary */}
-      {info && (
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 max-w-sm mx-auto text-left">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Payment Summary</p>
-          <div className="space-y-1.5 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-500">Plan</span>
-              <span className="font-semibold text-slate-900">{info.plan || plan}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Billing</span>
-              <span className="font-semibold text-slate-900 capitalize">{info.billingCycle || "monthly"}</span>
-            </div>
-            <div className="flex justify-between border-t border-slate-200 pt-2 mt-2">
-              <span className="font-semibold text-slate-700">Amount</span>
-              <span className="font-black text-[#1a2744]">${info.displayPrice || "0"}/mo</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Action Buttons */}
-      <div className="flex flex-col gap-3 max-w-sm mx-auto">
-        <Button
-          onClick={handleDownloadInvoice}
-          variant="outline"
-          className="h-11 rounded-xl font-semibold gap-2 border-slate-300"
-        >
-          <FileText className="w-4 h-4" /> Download Invoice
-        </Button>
-        <Button
-          onClick={() => {
-            refreshProfile();
-            import("sonner").then(({ toast }) => toast.info("Checking status..."));
-          }}
-          className="h-11 rounded-xl font-bold bg-[#1a2744] hover:bg-[#243b67]"
-        >
-          <RefreshCw className="w-4 h-4 mr-2" /> Refresh Status
-        </Button>
-      </div>
-    </div>
-  );
-}
