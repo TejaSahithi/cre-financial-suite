@@ -52,7 +52,7 @@ export default function MFAGuard({ onVerified }) {
       const verifiedFactor = totpFactors.find(f => f.status === "verified");
       const unverifiedFactors = totpFactors.filter(f => f.status === "unverified");
 
-      console.log("[MFAGuard] Initializing factors:", { verified: !!verifiedFactor, unverifiedCount: unverifiedFactors.length });
+      if (import.meta.env.DEV) console.log("[MFAGuard] Initializing factors:", { verified: !!verifiedFactor, unverifiedCount: unverifiedFactors.length });
 
       if (verifiedFactor) {
         setFactorId(verifiedFactor.id);
@@ -66,7 +66,7 @@ export default function MFAGuard({ onVerified }) {
         await startEnrollment();
       }
     } catch (err) {
-      console.error("[MFAGuard] initialize error:", err);
+      if (import.meta.env.DEV) console.error("[MFAGuard] initialize error:", err);
       setError(err.message || "Failed to initialize security.");
     } finally {
       isInitializing.current = false;
@@ -74,11 +74,11 @@ export default function MFAGuard({ onVerified }) {
   };
 
   const cleanupUnverifiedFactors = async (factors) => {
-    console.log(`[MFAGuard] Cleaning up ${factors.length} unverified factors...`);
+    if (import.meta.env.DEV) console.log(`[MFAGuard] Cleaning up ${factors.length} unverified factors...`);
     for (const f of factors) {
-      await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e =>
-        console.warn("[MFAGuard] Cleanup failed for:", f.id, e)
-      );
+      await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(e => {
+        if (import.meta.env.DEV) console.warn("[MFAGuard] Cleanup failed for:", f.id, e);
+      });
     }
     // Small delay to ensure Supabase DB propagates the deletions
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -136,7 +136,7 @@ export default function MFAGuard({ onVerified }) {
       setQrCode(data.totp.qr_code);
       setSecret(data.totp.secret);
     } catch (err) {
-      console.error("[MFAGuard] Enrollment error:", err);
+      if (import.meta.env.DEV) console.error("[MFAGuard] Enrollment error:", err);
       setError(err.message || "Enrollment failed. Please refresh.");
     } finally {
       setEnrolling(false);
@@ -148,7 +148,7 @@ export default function MFAGuard({ onVerified }) {
     setResetting(true);
     setError("");
     try {
-      console.log("[MFAGuard] Attempting MFA reset via Edge Function...");
+      if (import.meta.env.DEV) console.log("[MFAGuard] Attempting MFA reset via Edge Function...");
       // Unenroll the current verified factor using the edge function (bypasses AAL2 lock)
       const { data: { session } } = await supabase.auth.getSession();
       const { data, error: invokeErr } = await supabase.functions.invoke("reset-mfa", {
@@ -157,7 +157,7 @@ export default function MFAGuard({ onVerified }) {
       });
 
       if (invokeErr) {
-        console.error("[MFAGuard] Edge function invocation error:", invokeErr);
+        if (import.meta.env.DEV) console.error("[MFAGuard] Edge function invocation error:", invokeErr);
         throw new Error("Unable to reach security service. Please contact support@cresuite.org to manually reset your 2FA.");
       }
 
@@ -165,7 +165,7 @@ export default function MFAGuard({ onVerified }) {
         throw new Error(data?.error || "Failed to reset MFA. Please ensure you are logged in correctly.");
       }
 
-      console.log("[MFAGuard] MFA reset successful, refreshing session...");
+      if (import.meta.env.DEV) console.log("[MFAGuard] MFA reset successful, refreshing session...");
       // Refresh session so local client clears the previous AAL requirement cache
       await supabase.auth.refreshSession();
 
@@ -177,7 +177,7 @@ export default function MFAGuard({ onVerified }) {
       await startEnrollment();
       setShowQrOnChallenge(false);
     } catch (err) {
-      console.error("[MFAGuard] reset error:", err);
+      if (import.meta.env.DEV) console.error("[MFAGuard] reset error:", err);
       setError(err.message || "Failed to reset 2FA. Our team has been notified.");
     } finally {
       setResetting(false);
@@ -194,25 +194,39 @@ export default function MFAGuard({ onVerified }) {
     setError("");
 
     try {
-      const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
-      if (challengeError) throw challengeError;
-
-      const { error: verifyError } = await supabase.auth.mfa.verify({
+      if (!factorId) {
+        throw new Error("Factor ID is missing. Please refresh the page.");
+      }
+      
+      const { data, error } = await supabase.auth.mfa.challengeAndVerify({
         factorId,
-        challengeId: challengeData.id,
         code,
       });
-      if (verifyError) throw verifyError;
+      
+      if (error) {
+        throw error;
+      }
 
       // Refresh session to get aal2
       await supabase.auth.refreshSession();
       if (onVerified) onVerified();
     } catch (err) {
-      console.error("[MFAGuard] verify error:", err);
-      setError(err.message === "Invalid TOTP code entered"
+      if (import.meta.env.DEV) console.error("[MFAGuard] verify error:", err);
+      setError(err.message === "Invalid TOTP code entered" || err.message?.includes("TOTP code")
         ? "Incorrect code. Please check your Authenticator app."
         : err.message || "Verification failed. Please try again.");
-      setCode("");
+      
+      // Auto-recover if the factor was mysteriously lost or expired
+      if (err.message?.includes("Factor not found") || err.status === 404) {
+        if (import.meta.env.DEV) console.warn("[MFAGuard] Factor not found! Auto-generating a new QR code...");
+        setError("Your setup session expired. Generating a new QR code...");
+        setFactorId(null);
+        setQrCode(null);
+        setPhase("enroll");
+        startEnrollment();
+      } else {
+        setCode("");
+      }
     } finally {
       setVerifying(false);
     }
