@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { redirectToLogin } from "@/services/auth";
 import { useAuth } from "@/lib/AuthContext";
-import { filterNavForAllowedPages, filterNavForRole, PUBLIC_PAGES } from "@/lib/rbac";
+import { filterNavForAllowedPages, filterNavForRole, LAYOUT_EXEMPT_PAGES } from "@/lib/rbac";
 import { useModuleAccess } from "@/lib/ModuleAccessContext";
 import { filterNavForModules } from "@/lib/moduleConfig";
 import {
@@ -14,8 +14,6 @@ import {
   Search, User, Layers, ArrowLeftRight
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-
-const publicPages = PUBLIC_PAGES;
 
 const navSections = [
   { label: "Dashboard", icon: LayoutDashboard, page: "Dashboard" },
@@ -191,13 +189,13 @@ export default function Layout({ children, currentPageName }) {
   // Handle unauthenticated state if on a protected page
   useEffect(() => {
     if (!user) {
-      if (!publicPages.includes(currentPageName)) {
+      if (!LAYOUT_EXEMPT_PAGES.includes(currentPageName)) {
         redirectToLogin(window.location.href);
       }
     }
   }, [user, currentPageName]);
 
-  if (publicPages.includes(currentPageName) || currentPageName === "Onboarding" || currentPageName === "Landing") {
+  if (LAYOUT_EXEMPT_PAGES.includes(currentPageName)) {
     return <>{children}</>;
   }
 

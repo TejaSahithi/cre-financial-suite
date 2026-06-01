@@ -133,10 +133,16 @@ const ROLE_ALIASES = {
 };
 
 // Pages that don't require auth / are public
-const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "PendingApproval", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "AwaitingRole"];
+const PUBLIC_PAGES = ["Landing", "Pricing", "ContactUs", "RequestAccess", "RequestDemo", "Login", "DemoExperience", "AcceptInvite", "ResetPassword"];
 
 // Mandatory setup pages (require auth but accessible to all roles)
-const MANDATORY_SETUP_PAGES = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess"];
+const MANDATORY_SETUP_PAGES = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess", "PendingApproval", "AwaitingRole", "SecurityQuestionsSetup"];
+
+// Pages that bypass MFA when authenticated
+const MFA_BYPASS_PAGES = ["AcceptInvite", "PendingApproval", "ResetPassword", "SecurityQuestionsSetup"];
+
+// Pages exempt from the main authenticated layout
+const LAYOUT_EXEMPT_PAGES = [...PUBLIC_PAGES, ...MANDATORY_SETUP_PAGES];
 
 // SuperAdmin-only pages
 const ADMIN_ONLY_PAGES = ["SuperAdmin", "Stakeholders"];
@@ -240,4 +246,4 @@ export function filterNavForAllowedPages(navSections, allowedPages) {
     .filter(Boolean);
 }
 
-export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, ROLE_ALIASES, MANDATORY_SETUP_PAGES };
+export { PUBLIC_PAGES, ADMIN_ONLY_PAGES, ROLE_PAGES, ROLE_ALIASES, MANDATORY_SETUP_PAGES, MFA_BYPASS_PAGES, LAYOUT_EXEMPT_PAGES };

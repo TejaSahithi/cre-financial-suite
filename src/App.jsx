@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { PUBLIC_PAGES } from '@/lib/rbac';
+import { PUBLIC_PAGES, MFA_BYPASS_PAGES } from '@/lib/rbac';
 import DevModeBanner from '@/components/DevModeBanner';
 import MFAGuard from '@/components/MFAGuard';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
@@ -19,7 +19,6 @@ import { getUserRoutingState } from '@/features/auth/getUserRoutingState';
 
 const { mainPage, Pages } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
-const publicPages = [...PUBLIC_PAGES, "AcceptInvite"];
 
 const AuthenticatedApp = () => {
   const {
@@ -34,7 +33,7 @@ const AuthenticatedApp = () => {
 
   const location = useLocation();
   const currentPath = location.pathname.substring(1);
-  const isPublicPage = publicPages.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
+  const isPublicPage = PUBLIC_PAGES.includes(currentPath) || currentPath === "" || currentPath === mainPageKey;
 
   // ─── Supabase Hash Error Interceptor ────────────────────────────────────
   useEffect(() => {
@@ -114,8 +113,7 @@ const AuthenticatedApp = () => {
     );
   }
 
-  const mfaBypassPages = ["AcceptInvite", "PendingApproval", "ResetPassword", "SecurityQuestionsSetup"];
-  const isMfaBypassPage = mfaBypassPages.includes(currentPath);
+  const isMfaBypassPage = MFA_BYPASS_PAGES.includes(currentPath);
 
   if (isAuthenticated && mfaRequired && !isPublicPage && !isMfaBypassPage) {
     return <MFAGuard onVerified={handleMfaVerified} needsEnroll={mfaNeedsEnroll} />;
@@ -161,20 +159,6 @@ const AuthenticatedApp = () => {
     }
 
     if (isEntryPage) {
-      return <Navigate to={`/${targetRoute}`} replace />;
-    }
-
-    const criticalLockStates = ['Onboarding', 'PaymentSuccess', 'PendingApproval', 'Welcome', 'AwaitingRole'];
-    if (criticalLockStates.includes(targetRoute) && currentPath !== targetRoute) {
-      console.log(`[App] Guard intercepted: Forcing target route /${targetRoute}`);
-      return <Navigate to={`/${targetRoute}`} replace />;
-    }
-    if (isEntryPage && currentPath !== targetRoute) {
-      console.log(`[App] Guard intercepted from entry: Redirecting to /${targetRoute}`);
-      return <Navigate to={`/${targetRoute}`} replace />;
-    }
-    if (!isPublicPage && currentPath !== targetRoute) {
-      console.log(`[App] Invalid protected access. Redirecting to /${targetRoute}`);
       return <Navigate to={`/${targetRoute}`} replace />;
     }
   }

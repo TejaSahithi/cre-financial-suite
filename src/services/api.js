@@ -766,7 +766,7 @@ export function createEntityService(entityName) {
   function translateToDbSchema(data) {
     if (!data || typeof data !== 'object') return data;
     const clean = normalizeImportedDateFields({ ...data });
-    
+
     // 1. Generic field translation (Total SF)
     if (clean.total_sf !== undefined) {
       if (['Property', 'Building'].includes(entityName)) {
@@ -892,9 +892,9 @@ export function createEntityService(entityName) {
   function normalizeFromDb(data) {
     if (!data) return data;
     if (Array.isArray(data)) return data.map(item => normalizeFromDb(item));
-    
+
     const normalized = { ...data };
-    
+
     // 1. Map specialized SQFT keys back to UI-standard 'total_sf'
     if (normalized.total_sqft !== undefined) {
       normalized.total_sf = normalized.total_sqft;
@@ -1000,7 +1000,7 @@ export function createEntityService(entityName) {
         normalized.allocation_method = normalized.allocation_type;
       }
     }
-    
+
     return normalized;
   }
 
@@ -1082,7 +1082,7 @@ export function createEntityService(entityName) {
           }
 
           let query = supabase.from(tableName).select('*');
-          
+
           if (orgId && orgId !== '__none__') {
             query = query.eq('org_id', orgId);
           }
@@ -1093,7 +1093,7 @@ export function createEntityService(entityName) {
             query = query.order(field, { ascending: !desc });
           }
           if (limit) query = query.limit(limit);
-          
+
           let { data, error } = await query;
           if (error && sortField && isMissingColumnError(error)) {
             const fallbackSort = ['created_at', 'updated_at'].includes(sortField.replace(/^-/, ''))
@@ -1184,7 +1184,7 @@ export function createEntityService(entityName) {
           // constraints still make it into the final query.
           const scoped = await applyOrgScope(baseQuery);
           let query = scoped.query;
-          
+
           if (filters && typeof filters === 'object') {
             for (const [key, value] of Object.entries(filters)) {
               if (query && typeof query.eq === 'function') {
@@ -1295,7 +1295,7 @@ export function createEntityService(entityName) {
             entityId: finalRecord.id,
             action: 'create',
             orgId: finalRecord.org_id,
-          }).catch(() => {});
+          }).catch(() => { });
 
           invalidateEntity(entityName);
           return finalRecord;
@@ -1312,7 +1312,7 @@ export function createEntityService(entityName) {
           entityId: newRecord.id,
           action: 'create',
           orgId: newRecord.org_id,
-        }).catch(() => {});
+        }).catch(() => { });
 
         invalidateEntity(entityName);
         return newRecord;
@@ -1381,7 +1381,7 @@ export function createEntityService(entityName) {
             entityId: finalRecord?.id || 'upserted',
             action: 'upsert',
             orgId: finalRecord?.org_id || enriched.org_id || null,
-          }).catch(() => {});
+          }).catch(() => { });
 
           invalidateEntity(entityName);
           return finalRecord;
@@ -1424,7 +1424,7 @@ export function createEntityService(entityName) {
 
           while (true) {
             let query = supabase.from(tableName).update(payload).eq('id', id);
-            
+
             if (orgId && orgId !== '__none__') {
               query = query.eq('org_id', orgId);
             }
@@ -1458,7 +1458,7 @@ export function createEntityService(entityName) {
             entityId: id,
             action: 'update',
             orgId: updated.org_id,
-          }).catch(() => {});
+          }).catch(() => { });
 
           invalidateEntity(entityName);
           return updated;
@@ -1478,7 +1478,7 @@ export function createEntityService(entityName) {
           entityType: entityName,
           entityId: id,
           action: 'update',
-        }).catch(() => {});
+        }).catch(() => { });
 
         invalidateEntity(entityName);
         return updated;
@@ -1511,7 +1511,7 @@ export function createEntityService(entityName) {
         if (supabase) {
           const orgId = isOrgExempt ? null : await resolveMutationOrgId(`${entityName}.delete()`);
           let query = supabase.from(tableName).delete().eq('id', id);
-          
+
           if (orgId && orgId !== '__none__') {
             query = query.eq('org_id', orgId);
           }
@@ -1523,7 +1523,7 @@ export function createEntityService(entityName) {
             entityType: entityName,
             entityId: id,
             action: 'delete',
-          }).catch(() => {});
+          }).catch(() => { });
 
           invalidateEntity(entityName);
           return true;
@@ -1540,7 +1540,7 @@ export function createEntityService(entityName) {
           entityType: entityName,
           entityId: id,
           action: 'delete',
-        }).catch(() => {});
+        }).catch(() => { });
 
         invalidateEntity(entityName);
         return true;
@@ -1563,36 +1563,36 @@ export function createEntityService(entityName) {
 }
 
 // ─── Pre-built Entity Services ─────────────────────────────────────────
-export const PropertyService           = createEntityService('Property');
-export const BuildingService           = createEntityService('Building');
-export const UnitService               = createEntityService('Unit');
-export const LeaseService              = createEntityService('Lease');
-export const TenantService             = createEntityService('Tenant');
-export const ExpenseService            = createEntityService('Expense');
-export const BudgetService             = createEntityService('Budget');
-export const VendorService             = createEntityService('Vendor');
-export const CAMCalculationService     = createEntityService('CAMCalculation');
-export const GLAccountService          = createEntityService('GLAccount');
-export const DocumentService           = createEntityService('Document');
-export const OrganizationService       = createEntityService('Organization');
-export const NotificationService       = createEntityService('Notification');
-export const AuditLogService           = createEntityService('AuditLog');
-export const AccessRequestService      = createEntityService('AccessRequest');
-export const PortfolioService          = createEntityService('Portfolio');
-export const InvoiceService            = createEntityService('Invoice');
-export const ReconciliationService     = createEntityService('Reconciliation');
-export const RevenueService            = createEntityService('Revenue');
-export const ActualService             = createEntityService('Actual');
-export const VarianceService           = createEntityService('Variance');
-export const WorkflowService           = createEntityService('Workflow');
-export const StakeholderService        = createEntityService('Stakeholder');
-export const IntegrationConfigService  = createEntityService('IntegrationConfig');
-export const BillingEntityService      = createEntityService('Billing');
-export const RentProjectionService     = createEntityService('RentProjection');
-export const ExpenseProjectionService  = createEntityService('ExpenseProjection');
-export const UserService               = createEntityService('User');
-export const DemoRequestService        = createEntityService('DemoRequest');
-export const UploadedFileService       = createEntityService('UploadedFile');
+export const PropertyService = createEntityService('Property');
+export const BuildingService = createEntityService('Building');
+export const UnitService = createEntityService('Unit');
+export const LeaseService = createEntityService('Lease');
+export const TenantService = createEntityService('Tenant');
+export const ExpenseService = createEntityService('Expense');
+export const BudgetService = createEntityService('Budget');
+export const VendorService = createEntityService('Vendor');
+export const CAMCalculationService = createEntityService('CAMCalculation');
+export const GLAccountService = createEntityService('GLAccount');
+export const DocumentService = createEntityService('Document');
+export const OrganizationService = createEntityService('Organization');
+export const NotificationService = createEntityService('Notification');
+export const AuditLogService = createEntityService('AuditLog');
+export const AccessRequestService = createEntityService('AccessRequest');
+export const PortfolioService = createEntityService('Portfolio');
+export const InvoiceService = createEntityService('Invoice');
+export const ReconciliationService = createEntityService('Reconciliation');
+export const RevenueService = createEntityService('Revenue');
+export const ActualService = createEntityService('Actual');
+export const VarianceService = createEntityService('Variance');
+export const WorkflowService = createEntityService('Workflow');
+export const StakeholderService = createEntityService('Stakeholder');
+export const IntegrationConfigService = createEntityService('IntegrationConfig');
+export const BillingEntityService = createEntityService('Billing');
+export const RentProjectionService = createEntityService('RentProjection');
+export const ExpenseProjectionService = createEntityService('ExpenseProjection');
+export const UserService = createEntityService('User');
+export const DemoRequestService = createEntityService('DemoRequest');
+export const UploadedFileService = createEntityService('UploadedFile');
 export const ComputationSnapshotService = createEntityService('ComputationSnapshot');
 
 /**
@@ -1603,18 +1603,18 @@ export const ComputationSnapshotService = createEntityService('ComputationSnapsh
 export async function submitPublicAccessRequest(payload) {
   // Strict: ONLY inserts into access_requests. Never touches demo_requests.
   const requestPayload = {
-    full_name:        payload.full_name,
-    email:            payload.email,
-    phone:            payload.phone || null,
-    company_name:     payload.company_name,
-    role:             payload.role,
-    portfolios:       payload.portfolios || null,
+    full_name: payload.full_name,
+    email: payload.email,
+    phone: payload.phone || null,
+    company_name: payload.company_name,
+    role: payload.role,
+    portfolios: payload.portfolios || null,
     properties_count: payload.properties_count || null,
-    plan:             payload.plan || null,
-    billing_cycle:    payload.billing_cycle || 'monthly',
-    request_type:     'access', // Always 'access' for SuperAdmin visibility
-    status:           'pending_approval',
-    updated_at:       new Date().toISOString(),
+    plan: payload.plan || null,
+    billing_cycle: payload.billing_cycle || 'monthly',
+    request_type: 'access', // Always 'access' for SuperAdmin visibility
+    status: 'pending_approval',
+    updated_at: new Date().toISOString(),
   };
 
   if (!supabase) {
@@ -1649,16 +1649,16 @@ export async function submitPublicAccessRequest(payload) {
  */
 export async function submitPublicDemoRequest(payload) {
   const requestPayload = {
-    full_name:    payload.full_name,
-    email:        payload.email,
-    phone:        payload.phone || null,
+    full_name: payload.full_name,
+    email: payload.email,
+    phone: payload.phone || null,
     company_name: payload.company_name || null,
-    role:         payload.role || null,
-    plan:         payload.plan || null,
-    notes:        payload.notes || null,
-    demo_viewed:  false,
-    status:       'new', 
-    updated_at:   new Date().toISOString(),
+    role: payload.role || null,
+    plan: payload.plan || null,
+    notes: payload.notes || null,
+    demo_viewed: false,
+    status: 'new',
+    updated_at: new Date().toISOString(),
   };
 
   if (!supabase) {
@@ -1744,7 +1744,7 @@ export async function getExistingRequest(email, type = 'access') {
       .select('status, company_name, created_at')
       .eq('email', email)
       .maybeSingle();
-      
+
     if (error) throw error;
     return data;
   } catch (err) {

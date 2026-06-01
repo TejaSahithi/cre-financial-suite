@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { pagesConfig } from '@/pages.config';
 import PageNotFound from '@/lib/PageNotFound';
 import RbacGuard from '@/features/access-control/RbacGuard';
+import { MANDATORY_SETUP_PAGES } from '@/lib/rbac';
 import LayoutWrapper from './LayoutWrapper';
 
 const { Pages, mainPage } = pagesConfig;
@@ -19,7 +20,7 @@ export default function AppRoutes() {
       } />
       <Route path="/signin" element={<Navigate to="/Login" replace />} />
       {Object.entries(Pages).map(([path, Page]) => {
-        const isMandatorySetup = ["Onboarding", "Welcome", "WelcomeAboard", "PaymentSuccess"].includes(path);
+        const isMandatorySetup = MANDATORY_SETUP_PAGES.includes(path);
         return (
           <Route
             key={path}

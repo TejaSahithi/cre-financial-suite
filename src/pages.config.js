@@ -117,6 +117,8 @@ import FileHistoryPage from './pages/FileHistoryPage';
 import PipelineUpload from './pages/PipelineUpload';
 import LeaseExpenseClassification from './pages/LeaseExpenseClassification';
 import LeaseExpenseRules from './pages/LeaseExpenseRules';
+import ResetPassword from './pages/ResetPassword';
+import SecurityQuestionsSetup from './pages/SecurityQuestionsSetup';
 
 import __Layout from './Layout.jsx';
 
@@ -192,6 +194,8 @@ export const PAGES = {
     "PipelineUpload": PipelineUpload,
     "LeaseExpenseClassification": LeaseExpenseClassification,
     "LeaseExpenseRules": LeaseExpenseRules,
+    "ResetPassword": ResetPassword,
+    "SecurityQuestionsSetup": SecurityQuestionsSetup,
 }
 
 export const pagesConfig = {

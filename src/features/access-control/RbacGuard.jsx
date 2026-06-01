@@ -1,18 +1,20 @@
 import React from 'react';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import { useModuleAccess } from '@/lib/ModuleAccessContext';
 import { canAccess, PUBLIC_PAGES } from '@/lib/rbac';
 import AccessDenied from '@/components/AccessDenied';
 import LayoutWrapper from '@/app/LayoutWrapper';
 
-const publicPages = [...PUBLIC_PAGES, "AcceptInvite"];
-
 export default function RbacGuard({ pageName, children }) {
   const { user } = useAuth();
   const { isPageEnabled, pageAccess } = useModuleAccess();
 
-  // Public pages and loading states — allow through
-  if (publicPages.includes(pageName) || !user) return children;
+  if (PUBLIC_PAGES.includes(pageName)) return children;
+
+  if (!user) {
+    return <Navigate to="/Login" replace />;
+  }
 
   const hasExplicitPagePermissions = Object.keys(pageAccess || {}).length > 0;
   const roleAllowsPage = hasExplicitPagePermissions 
