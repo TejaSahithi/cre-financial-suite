@@ -1,84 +1,84 @@
 
 [functions.save-security-questions]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/save-security-questions/deno.json"
 entrypoint = "./functions/save-security-questions/index.ts"
 
 [functions.invite-user]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 # Engine & Computation Functions (Internal Auth)
 [functions.compute-lease]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.compute-expense]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.compute-cam]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.compute-budget]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.compute-revenue]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.compute-reconciliation]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 # Data & Export Functions (Internal Auth)
 [functions.export-data]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.pipeline-status]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.validate-data]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.upload-handler]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.store-data]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.ingest-file]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.parse-file]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.parse-pdf-docling]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.normalize-pdf-output]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.review-approve]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 # Onboarding & Auth Functions
 [functions.first-login]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.signup]
 enabled = true
@@ -86,32 +86,35 @@ verify_jwt = false
 
 [functions.complete-onboarding]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 # Admin & Management Functions
 [functions.approve-organization]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.approve-request]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.invite-client]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.send-invite]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
+# TODO: Refactor send-email into two functions:
+# 1. public-email-events (verify_jwt=false)
+# 2. internal-email (verify_jwt=true)
 [functions.send-email]
 enabled = true
 verify_jwt = false
 
 [functions.reset-mfa]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 # External Integrations & Data
 [functions.submit-contact]
@@ -120,7 +123,7 @@ verify_jwt = false
 
 [functions.validate-address-ups]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.extract-document-fields]
 enabled = true
@@ -128,11 +131,11 @@ verify_jwt = false
 
 [functions.generate-budget]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.debug-user]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 
 [functions.extract-lease-expense-rules]
 enabled = true
@@ -144,3 +147,6 @@ entrypoint = "./functions/extract-lease-expense-rules/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/extract-lease-expense-rules/*.html" ]
+
+[functions.accept-invite]
+verify_jwt = true
