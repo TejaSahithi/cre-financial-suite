@@ -59,9 +59,9 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[complete-onboarding] Processing ${orgName || orgId} for user ${user.id}`);
 
-    // 3. Transact: update org and profile to 'under_review'
+    // 3. Transact: update org and profile to 'pending_payment'
     const orgUpdate: Record<string, unknown> = {
-      status: 'under_review',
+      status: 'pending_payment',
       onboarding_step: 4,
       plan: plan || 'professional',
       billing_cycle: billingCycle || 'monthly',
@@ -78,17 +78,17 @@ Deno.serve(async (req: Request) => {
 
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
-      .update({ status: 'under_review', updated_at: new Date().toISOString() })
+      .update({ status: 'pending_payment', updated_at: new Date().toISOString() })
       .eq('id', user.id);
     if (profileError) throw new Error(`DB Layout Error (profile): ${profileError.message}`);
 
-    // 4. Create invoice record
+    // 4. Create invoice record as pending_payment
     const { error: invoiceError } = await supabaseAdmin
       .from('invoices')
       .insert({
         org_id: orgId,
         amount: numericAmount,
-        status: 'paid',
+        status: 'pending_payment',
         issued_date: new Date().toISOString().split('T')[0]
       });
     if (invoiceError) throw new Error(`DB Layout Error (invoice): ${invoiceError.message}`);

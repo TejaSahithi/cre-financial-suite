@@ -563,70 +563,28 @@ export default function Onboarding() {
                 try {
                   const plan = paymentInfo.plan || form.plan;
                   const orgName = org?.name || form.name || '';
-                  const now = new Date().toISOString();
+                  
+                  const { data: { session } } = await supabase.auth.getSession();
+                  const { data, error } = await supabase.functions.invoke('complete-onboarding', {
+                    body: { plan, billingCycle, amount: numericAmount, orgName },
+                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+                  });
+                  
+                  if (error || data?.error) throw new Error(error?.message || data?.error);
 
-                  // 1. Try edge function (best effort — never blocks navigation)
-                  try {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    const { data, error } = await supabase.functions.invoke('complete-onboarding', {
-                      body: { plan, billingCycle, amount: numericAmount, orgName },
-                      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-                    });
-                    if (error || data?.error) throw new Error(error?.message || data?.error);
-                  } catch (fnErr) {
-                    console.warn('[Onboarding] Edge fn unavailable, trying direct DB:', fnErr.message);
-                    // 2. Fallback: direct DB writes (best effort — never blocks navigation)
-                    try {
-                      if (supabase && org?.id) {
-                        await supabase.from('organizations')
-                          .update({
-                            name: orgName || org.name,
-                            status: 'under_review',
-                            onboarding_step: 4,
-                            plan,
-                            billing_cycle: billingCycle,
-                            primary_contact_email: authUser?.email || org.primary_contact_email,
-                            address: paymentInfo.billingAddress || form.address || org.address,
-                            updated_at: now,
-                          })
-                          .eq('id', org.id);
-                        if (authUser?.id) {
-                          await supabase.from('profiles')
-                            .update({
-                              status: 'under_review',
-                              full_name: authUser.full_name || authUser.profile?.full_name,
-                              updated_at: now,
-                            })
-                            .eq('id', authUser.id);
-                        }
-                        await supabase.from('invoices').insert({
-                          org_id: org.id, amount: numericAmount || 0, status: 'paid',
-                          issued_date: now.split('T')[0],
-                        }).then(() => {}).catch(() => {});
-                      }
-                    } catch (dbErr) {
-                      // Log only — still navigate so the user isn't stuck
-                      console.warn('[Onboarding] Direct DB fallback failed:', dbErr.message);
-                    }
-                  }
-
-                  // 3. Always navigate to PaymentSuccess regardless of DB outcome.
-                  // Navigate BEFORE refreshProfile so App.jsx doesn't redirect without state.
                   navigate('/PaymentSuccess', {
                     replace: true,
                     state: {
                       plan,
                       billing_cycle: billingCycle,
-                      amount: numericAmount,
                       org_name: orgName,
-                      billingAddress: paymentInfo.billingAddress,
                     }
                   });
                   refreshProfile().catch(() => {});
                 } catch (e) {
-                  console.error('[Onboarding] Payment completion failed:', e);
+                  console.error('[Onboarding] Setup completion failed:', e);
                   const { toast } = await import("sonner");
-                  toast.error("Something went wrong. Please try again.", { description: e.message });
+                  toast.error("Setup failed. Please try again or contact support.", { description: e.message });
                   throw e;
                 } finally {
                   setSaving(false);

@@ -60,7 +60,7 @@ Deno.serve(async (req: Request) => {
       .from('organizations')
       .update({ status: 'active', updated_at: new Date().toISOString() })
       .eq('id', orgId)
-      .in('status', ['under_review', 'pending_approval', 'onboarding'])
+      .in('status', ['under_review', 'pending_approval', 'onboarding', 'pending_payment'])
       .select('*, welcome_email_sent_at');
 
     if (orgError) throw new Error(`DB Error updating org: ${orgError.message}`);
