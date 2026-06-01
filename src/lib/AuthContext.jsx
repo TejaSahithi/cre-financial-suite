@@ -97,7 +97,7 @@ export const AuthProvider = ({ children }) => {
     // Listen for auth state changes (sign in, sign out, token refresh)
     // Use showLoading=false so subsequent auth events don't trigger the full-page spinner
     const unsubscribe = onAuthStateChange((event, session) => {
-      console.log('[AuthContext] Auth event:', event);
+      if (import.meta.env.DEV) console.log('[AuthContext] Auth event:', event);
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         resetProfileCache({ preserveInFlight: true });
         resetOrgIdCache();

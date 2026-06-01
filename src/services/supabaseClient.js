@@ -39,8 +39,8 @@ function getOrCreateSupabaseClient() {
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
     if (supabaseUrl && supabaseKey) {
-      console.log('[supabase] Initializing client with URL:', supabaseUrl);
-      console.log('[supabase] Key presence check:', {
+      if (import.meta.env.DEV) console.log('[supabase] Initializing client with URL:', supabaseUrl);
+      if (import.meta.env.DEV) console.log('[supabase] Key presence check:', {
         url: !!supabaseUrl,
         key: !!supabaseKey,
         keyPrefix: supabaseKey.substring(0, 10) + '...',
@@ -52,13 +52,13 @@ function getOrCreateSupabaseClient() {
           detectSessionInUrl: true,
         },
       });
-      console.log('[supabase] Client initialized successfully');
+      if (import.meta.env.DEV) console.log('[supabase] Client initialized successfully');
     } else {
       console.warn('[supabase] Missing credentials — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
-      console.log('[supabase] Running in-memory mode');
+      if (import.meta.env.DEV) console.log('[supabase] Running in-memory mode');
     }
   } catch {
-    console.log('[supabase] Client unavailable — running in-memory mode');
+    if (import.meta.env.DEV) console.log('[supabase] Client unavailable — running in-memory mode');
   }
 
   globalScope[GLOBAL_SINGLETON_KEY] = client;
