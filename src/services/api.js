@@ -15,7 +15,7 @@ import { ALL_SEED_DATA } from '@/services/seedData';
 import { supabase } from '@/services/supabaseClient';
 import { normalizeImportedDateFields } from '@/lib/importDates';
 import { getStoredActingOrgId } from '@/lib/actingOrg';
-import { resolveReadableOrgScopeForUser, resolveWritableOrgScopeForUser } from '@/lib/orgUtils';
+import { resolveWritableOrgScopeForUser } from '@/lib/orgUtils';
 import { assertCanWritePage, canWritePage, isPagePermissionError } from '@/lib/userPermissions';
 import { isSuperAdmin } from '@/lib/rbac';
 

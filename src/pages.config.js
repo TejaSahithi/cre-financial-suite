@@ -48,7 +48,6 @@
  * The mainPage value must match a key in the PAGES object exactly.
  */
 import AcceptInvite from './pages/AcceptInvite';
-import AwaitingRole from './pages/AwaitingRole';
 import AddExpense from './pages/AddExpense';
 import AuditLog from './pages/AuditLog';
 import ApprovalWorkflows from './pages/ApprovalWorkflows';
@@ -125,7 +124,6 @@ import __Layout from './Layout.jsx';
 
 export const PAGES = {
     "AcceptInvite": AcceptInvite,
-    "AwaitingRole": AwaitingRole,
     "AddExpense": AddExpense,
     "AuditLog": AuditLog,
     "ApprovalWorkflows": ApprovalWorkflows,

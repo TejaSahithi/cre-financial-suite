@@ -21,10 +21,7 @@ export function getUserRoutingState(u, p, org, members) {
     }
   }
 
-  // INVITED / AWAITING ROLE
-  const hasOrgRole = members?.some((m) => m.role && m.role !== null && m.role !== "pending");
-  const hasLegacyRole = p.role && p.role !== "pending";
-  if (!hasOrgRole && !hasLegacyRole && !isSuperAdmin(u)) return "AwaitingRole";
+
 
   // WELCOME ABOARD
   if (org?.status === 'active' && p.status === 'active' && !p.dashboard_viewed) {
@@ -37,6 +34,6 @@ export function getUserRoutingState(u, p, org, members) {
   // DASHBOARD
   if (p.status === 'active' && org?.status === 'active') return 'Dashboard';
 
-  // FALLBACK (Safety fix: default to AwaitingRole instead of Dashboard)
-  return 'AwaitingRole';
+  // FALLBACK (Default to Dashboard)
+  return 'Dashboard';
 }
