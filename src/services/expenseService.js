@@ -1,3 +1,24 @@
+import {
+  toNumber,
+  asNumberOrNull,
+  normalizeText,
+  cleanUuid,
+  normalizeDateCandidate,
+  normalizeLeaseStatus,
+  normalizeRuleStatus,
+  normalizeSourceType,
+  leaseOverlapsFiscalYear,
+  deriveLeaseExpenseFiscalYear,
+  deriveLeaseExpenseDate,
+  expenseServiceDate,
+  compactDefined,
+  buildLeaseLookup,
+  isMissingExpenseRuleTable,
+  extractMissingColumn,
+  isMissingColumnError,
+  isSchemaCompatibilityError
+} from "./utils/expenseParsers";
+
 import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
@@ -95,84 +116,21 @@ const LEASE_DERIVED_EXPENSES = [
 const SYNCABLE_LEASE_STATUSES = new Set(["active", "approved", "budget_ready", "executed"]);
 const CONDITIONAL_KEYWORDS = ["subject to", "provided that", "unless", "if ", "condition", "gross-up", "base year", "cap"];
 
-function toNumber(value) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : 0;
-}
 
-function asNumberOrNull(value) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : null;
-}
 
-function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
-}
 
-function normalizeLeaseStatus(status) {
-  return normalizeText(status);
-}
 
-function normalizeRuleStatus(rule) {
-  return normalizeText(rule?.row_status);
-}
 
 function normalizeRecoveryStatus(rule) {
   return leaseExpenseRuleService.normalizeRecoveryStatus(rule);
 }
 
-function leaseOverlapsFiscalYear(lease, fiscalYear) {
-  if (!fiscalYear) return true;
 
-  const start = lease?.start_date ? new Date(`${lease.start_date}T00:00:00`) : null;
-  const end = lease?.end_date ? new Date(`${lease.end_date}T23:59:59`) : null;
-  const yearStart = new Date(fiscalYear, 0, 1);
-  const yearEnd = new Date(fiscalYear, 11, 31, 23, 59, 59);
 
-  if (start && Number.isNaN(start.getTime())) return true;
-  if (end && Number.isNaN(end.getTime())) return true;
-  if (start && start > yearEnd) return false;
-  if (end && end < yearStart) return false;
-  return true;
-}
 
-function deriveLeaseExpenseFiscalYear(lease) {
-  const currentYear = new Date().getFullYear();
-  if (leaseOverlapsFiscalYear(lease, currentYear)) return currentYear;
 
-  const startYear = lease?.start_date ? new Date(`${lease.start_date}T00:00:00`).getFullYear() : null;
-  if (Number.isFinite(startYear)) return startYear;
 
-  const endYear = lease?.end_date ? new Date(`${lease.end_date}T00:00:00`).getFullYear() : null;
-  if (Number.isFinite(endYear)) return endYear;
 
-  return currentYear;
-}
-
-function deriveLeaseExpenseDate(lease, fiscalYear) {
-  const startDate = typeof lease?.start_date === "string" ? lease.start_date : "";
-  if (startDate && startDate.startsWith(`${fiscalYear}-`)) {
-    return startDate;
-  }
-  return `${fiscalYear}-01-01`;
-}
-
-function expenseSyncKey({ lease_id, category, fiscal_year, source_type }) {
-  return [lease_id || "", category || "", fiscal_year || "", source_type || ""].join("::");
-}
-
-function buildPropertyLookup(properties = []) {
-  if (properties instanceof Map) return properties;
-  return new Map((properties || []).map((property) => [property.id, property]));
-}
-
-function buildLeaseLookup(leases = []) {
-  return new Map((leases || []).map((lease) => [lease.id, lease]));
-}
-
-function normalizeSourceType(expense) {
-  return expense?.source_type || expense?.source || "manual";
-}
 
 function getLeaseExtractedValue(lease, fieldName) {
   if (!lease || !fieldName) return null;
@@ -668,25 +626,7 @@ function ruleMatchesScope(rule, lease, scope = {}) {
   return true;
 }
 
-function normalizeDateCandidate(value) {
-  if (!value) return null;
-  const raw = String(value);
-  const parsed = raw.length === 10
-    ? new Date(`${raw}T00:00:00`)
-    : new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
 
-function expenseServiceDate(expense) {
-  return (
-    expense?.expense_date ||
-    expense?.date ||
-    expense?.service_period_start ||
-    expense?.billing_period_start ||
-    expense?.period ||
-    null
-  );
-}
 
 function approvedLeaseForExpenseLink(lease) {
   return ["approved", "active", "executed", "budget_ready"].includes(normalizeLeaseStatus(lease?.status));
@@ -938,68 +878,12 @@ function canSendClassificationToCam({ classification, expense, rule, manualReaso
 // as "no rules" rather than throwing — this code runs on every lease save
 // and approval, and a missing optional table shouldn't break the user's
 // happy path.
-function isMissingExpenseRuleTable(error) {
-  if (!error) return false;
 
-  const code = String(error.code || "").toUpperCase();
-  if (code === "PGRST205" || code === "42P01" || code === "404") return true;
 
-  const text = [error.message, error.details, error.hint]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
 
-  return (
-    /relation .* does not exist/.test(text) ||
-    /table .* does not exist/.test(text) ||
-    text.includes("could not find the table")
-  );
-}
 
-function extractMissingColumn(error) {
-  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ");
-  if (!text) return null;
 
-  let match = text.match(/Could not find the '([^']+)' column/i);
-  if (match?.[1]) return match[1];
 
-  match = text.match(/column\s+["']?([a-zA-Z0-9_.]+)["']?/i);
-  if (match?.[1]) {
-    return String(match[1]).split(".").pop();
-  }
-
-  match = text.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
-  if (match?.[1]) return match[1];
-
-  return null;
-}
-
-function isMissingColumnError(error) {
-  return (
-    error?.code === "PGRST204" ||
-    error?.code === "42703" ||
-    Boolean(extractMissingColumn(error))
-  );
-}
-
-function isSchemaCompatibilityError(error) {
-  const text = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ").toLowerCase();
-  return isMissingColumnError(error) || text.includes("schema mismatch");
-}
-
-function isUuidLike(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
-}
-
-function cleanUuid(value) {
-  return isUuidLike(value) ? value : null;
-}
-
-function compactDefined(row = {}) {
-  return Object.fromEntries(
-    Object.entries(row).filter(([, value]) => value !== undefined)
-  );
-}
 
 const EXPENSE_CLASSIFICATION_UUID_COLUMNS = new Set([
   "id",
