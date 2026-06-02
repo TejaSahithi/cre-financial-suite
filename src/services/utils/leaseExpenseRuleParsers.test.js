@@ -2,13 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   asNumber,
   asArray,
-  normalizeFrequency,
-  normalizeCategoryKey,
   humanizeLabel,
   normalizeText,
-  isUuid,
   firstPresent,
-  isLlmGeneratedRule,
   isApprovedWorkflowStatus
 } from './leaseExpenseRuleParsers';
 

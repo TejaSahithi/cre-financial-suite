@@ -5,8 +5,7 @@ import {
   firstPresent,
   asNumber,
   normalizeKey,
-  compactSnippet,
-  sectionRegex
+  compactSnippet
 } from './leaseRulePipelineText';
 
 describe('leaseRulePipelineText', () => {

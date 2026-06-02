@@ -780,7 +780,6 @@ function isClassificationSentToCam(classification = {}) {
   return Boolean(
     classification?.sent_to_cam ||
     normalizeText(classification?.cam_status) === "sent" ||
-    normalizeText(classification?.cam_status) === "cam_ready" ||
     classification?.sent_to_cam_at ||
     normalizeText(classification?.next_step) === "sent to cam"
   );

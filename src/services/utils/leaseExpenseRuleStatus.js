@@ -5,7 +5,10 @@ import {
   getRawReviewStatus,
   getEffectiveRowStatus
 } from "@/lib/ruleStatus";
-import { deriveRuleRecoverableFromTenant, deriveRuleCamEligible } from "../leaseExpenseRuleService";
+import {
+  deriveRuleCamEligible,
+  deriveRuleRecoverableFromTenant,
+} from "./leaseExpenseRuleDecisions";
 
 export function isRuleSuperseded(rule) {
   return [rule?.row_status, rule?.status, rule?.extraction_status]
@@ -77,4 +80,3 @@ export function deriveRuleSetStatusFromRules(rules = []) {
   }
   return "draft";
 }
-

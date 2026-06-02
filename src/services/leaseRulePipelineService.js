@@ -18,10 +18,7 @@ import {
 import { supabase } from "@/services/supabaseClient";
 import leaseExpenseRuleService from "./leaseExpenseRuleService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
-
-const devLog = (...args) => { if (import.meta.env.DEV) devLog(...args); };
-const devWarn = (...args) => { if (import.meta.env.DEV) devWarn(...args); };
-const devTable = (...args) => { if (import.meta.env.DEV) devTable(...args); };
+import { devLog, devTable, devWarn } from "./utils/logger";
 
 
 // Per-field whitelists. A given structured-terms field is meaningful only
@@ -76,6 +73,30 @@ function nonCamObligationRule(rule, evidence, reason, treatment = "not_applicabl
     is_recoverable: false,
     is_excluded: treatment !== "tenant_direct_contract",
     row_status: "mapped",
+    extraction_status: "extracted",
+    review_status: "needs_review",
+    approval_status: "draft",
+    published_to_cam: false,
+    mentioned_in_lease: true,
+    confidence_score: Math.max(Number(rule?.confidence_score || rule?.confidence || 0.72), 0.72),
+    notes: reason,
+  };
+}
+
+function explicitlyExcludedRule(rule, evidence, reason) {
+  const snippet = compactSnippet(evidence);
+  return {
+    ...rule,
+    exact_source_text: snippet,
+    source_clause: snippet,
+    recoverable_from_tenant: "no",
+    cam_eligible: "no",
+    payment_treatment: "not_applicable",
+    recovery_method: "not_applicable",
+    allocation_basis: null,
+    is_recoverable: false,
+    is_excluded: true,
+    row_status: "not_applicable",
     extraction_status: "extracted",
     review_status: "needs_review",
     approval_status: "draft",
@@ -199,10 +220,16 @@ function applyLeaseEvidenceRules(rule, sourceText) {
   };
 
   const existingEvidence = String(firstPresent(rule?.exact_source_text, rule?.source_clause, rule?.source_text, rule?.source) || "");
-  const existingLower = existingEvidence.toLowerCase();
-  
   if (!existingEvidence) {
     return notFoundRule(normalizedRule, "Missing source evidence.");
+  }
+
+  const isExplicitExclusionTerm =
+    rule?.is_excluded === true ||
+    /excluded\s+from\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)|not\s+included\s+in\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)/i.test(existingEvidence);
+
+  if (isExplicitExclusionTerm) {
+    return explicitlyExcludedRule(normalizedRule, existingEvidence, "Expense-related term is explicitly excluded from CAM/operating expense recovery.");
   }
 
   const existingEvidenceSupportsCategory = evidenceSupportsCategory(canonicalKey, existingEvidence);
@@ -224,20 +251,12 @@ function applyLeaseEvidenceRules(rule, sourceText) {
     /tenant\s+(?:shall|must|will|agrees\s+to)\s+(?:maintain|repair|provide|carry|obtain|contract)/i.test(existingEvidence) ||
     /separately\s+metered|direct(?:ly)?\s+to\s+(?:the\s+)?utility|at\s+tenant'?s\s+(?:sole\s+)?(?:cost|expense)/i.test(existingEvidence);
 
-  const isExplicitExclusionTerm =
-    rule?.is_excluded === true ||
-    /excluded\s+from\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)|not\s+included\s+in\s+(?:cam|common\s+area\s+maintenance|operating\s+expenses?)/i.test(existingEvidence);
-
   if (isIncludedInRentTerm) {
     return includedInBaseRentRule(normalizedRule, existingEvidence, "Expense-related lease term is included in base rent/full-service treatment.");
   }
 
   if (isTenantDirectTerm) {
     return nonCamObligationRule(normalizedRule, existingEvidence, "Tenant direct obligation found in lease; not CAM recoverable.", "tenant_direct_contract");
-  }
-
-  if (isExplicitExclusionTerm) {
-    return nonCamObligationRule(normalizedRule, existingEvidence, "Expense-related term is explicitly excluded from CAM/operating expense recovery.");
   }
 
   if (canonicalKey === "percentage_rent") {
