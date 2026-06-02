@@ -1,7 +1,7 @@
 /**
  * pages.config.js - Page routing configuration
  * 
- * This file is AUTO-GENERATED. Do not add imports or modify PAGES manually.
+ * This file is AUTO-GENERATED. Do not modify PAGES manually.
  * Pages are auto-registered when you create files in the ./pages/ folder.
  * 
  * THE ONLY EDITABLE VALUE: mainPage
@@ -9,9 +9,9 @@
  * 
  * Example file structure:
  * 
- *   import HomePage from './pages/HomePage';
- *   import Dashboard from './pages/Dashboard';
- *   import Settings from './pages/Settings';
+ *   const HomePage = lazy(() => import('./pages/HomePage'));
+ *   const Dashboard = lazy(() => import('./pages/Dashboard'));
+ *   const Settings = lazy(() => import('./pages/Settings'));
  *   
  *   export const PAGES = {
  *       "HomePage": HomePage,
@@ -47,79 +47,81 @@
  *
  * The mainPage value must match a key in the PAGES object exactly.
  */
-import AcceptInvite from './pages/AcceptInvite';
-import AddExpense from './pages/AddExpense';
-import AuditLog from './pages/AuditLog';
-import ApprovalWorkflows from './pages/ApprovalWorkflows';
-import FieldMappingRules from './pages/FieldMappingRules';
-import BudgetDashboard from './pages/BudgetDashboard';
-import BudgetReview from './pages/BudgetReview';
-import Buildings from './pages/Buildings';
-import BuildingsUnits from './pages/BuildingsUnits';
-import BulkImport from './pages/BulkImport';
-import CAMCalculation from './pages/CAMCalculation';
-import CAMDashboard from './pages/CAMDashboard';
-import CAMSetup from './pages/CAMSetup';
-import ContactUs from './pages/ContactUs';
-import CreateBudget from './pages/CreateBudget';
-import Dashboard from './pages/Dashboard';
-import ExpenseDashboard from './pages/ExpenseDashboard';
-import Expenses from './pages/Expenses';
-import ExpenseReview from './pages/ExpenseReview';
-import Landing from './pages/Landing';
-import LeaseReview from './pages/LeaseReview';
-import LeaseUpload from './pages/LeaseUpload';
-import Leases from './pages/Leases';
-import LeaseDetail from './pages/LeaseDetail';
-import CriticalDates from './pages/CriticalDates';
-import Notifications from './pages/Notifications';
-import Onboarding from './pages/Onboarding';
-import OrgSettings from './pages/OrgSettings';
-import PendingApproval from './pages/PendingApproval';
-import Portfolios from './pages/Portfolios';
-import Properties from './pages/Properties';
-import PropertyDetail from './pages/PropertyDetail';
-import Reconciliation from './pages/Reconciliation';
-import RentProjection from './pages/RentProjection';
-import Reports from './pages/Reports';
-import AnalyticsReports from './pages/AnalyticsReports';
-import ActualsVariance from './pages/ActualsVariance';
-import Stakeholders from './pages/Stakeholders';
-import SuperAdmin from './pages/SuperAdmin';
-import ExpenseProjection from './pages/ExpenseProjection';
-import Tenants from './pages/Tenants';
-import TenantDetail from './pages/TenantDetail';
-import Units from './pages/Units';
-import Revenue from './pages/Revenue';
-import Actuals from './pages/Actuals';
-import Variance from './pages/Variance';
-import Analytics from './pages/Analytics';
-import Workflows from './pages/Workflows';
-import Documents from './pages/Documents';
-import Integrations from './pages/Integrations';
-import Pricing from './pages/Pricing';
-import Comparison from './pages/Comparison';
-import ChartOfAccounts from './pages/ChartOfAccounts';
-import Billing from './pages/Billing';
-import Vendors from './pages/Vendors';
-import VendorProfile from './pages/VendorProfile';
-import PortfolioInsights from './pages/PortfolioInsights';
-import RequestAccess from './pages/RequestAccess';
-import Login from './pages/Login';
-import Welcome from './pages/Welcome';
-import WelcomeAboard from './pages/WelcomeAboard';
-import UserManagement from './pages/UserManagement';
-import DemoExperience from './pages/DemoExperience';
-import RequestDemo from './pages/RequestDemo';
-import PaymentSuccess from './pages/PaymentSuccess';
-import FileHistoryPage from './pages/FileHistoryPage';
-import PipelineUpload from './pages/PipelineUpload';
-import LeaseExpenseClassification from './pages/LeaseExpenseClassification';
-import LeaseExpenseRules from './pages/LeaseExpenseRules';
-import ResetPassword from './pages/ResetPassword';
-import SecurityQuestionsSetup from './pages/SecurityQuestionsSetup';
+import { lazy } from 'react';
 
 import __Layout from './Layout.jsx';
+
+const AcceptInvite = lazy(() => import('./pages/AcceptInvite'));
+const AddExpense = lazy(() => import('./pages/AddExpense'));
+const AuditLog = lazy(() => import('./pages/AuditLog'));
+const ApprovalWorkflows = lazy(() => import('./pages/ApprovalWorkflows'));
+const FieldMappingRules = lazy(() => import('./pages/FieldMappingRules'));
+const BudgetDashboard = lazy(() => import('./pages/BudgetDashboard'));
+const BudgetReview = lazy(() => import('./pages/BudgetReview'));
+const Buildings = lazy(() => import('./pages/Buildings'));
+const BuildingsUnits = lazy(() => import('./pages/BuildingsUnits'));
+const BulkImport = lazy(() => import('./pages/BulkImport'));
+const CAMCalculation = lazy(() => import('./pages/CAMCalculation'));
+const CAMDashboard = lazy(() => import('./pages/CAMDashboard'));
+const CAMSetup = lazy(() => import('./pages/CAMSetup'));
+const ContactUs = lazy(() => import('./pages/ContactUs'));
+const CreateBudget = lazy(() => import('./pages/CreateBudget'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const ExpenseDashboard = lazy(() => import('./pages/ExpenseDashboard'));
+const Expenses = lazy(() => import('./pages/Expenses'));
+const ExpenseReview = lazy(() => import('./pages/ExpenseReview'));
+const Landing = lazy(() => import('./pages/Landing'));
+const LeaseReview = lazy(() => import('./pages/LeaseReview'));
+const LeaseUpload = lazy(() => import('./pages/LeaseUpload'));
+const Leases = lazy(() => import('./pages/Leases'));
+const LeaseDetail = lazy(() => import('./pages/LeaseDetail'));
+const CriticalDates = lazy(() => import('./pages/CriticalDates'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const Onboarding = lazy(() => import('./pages/Onboarding'));
+const OrgSettings = lazy(() => import('./pages/OrgSettings'));
+const PendingApproval = lazy(() => import('./pages/PendingApproval'));
+const Portfolios = lazy(() => import('./pages/Portfolios'));
+const Properties = lazy(() => import('./pages/Properties'));
+const PropertyDetail = lazy(() => import('./pages/PropertyDetail'));
+const Reconciliation = lazy(() => import('./pages/Reconciliation'));
+const RentProjection = lazy(() => import('./pages/RentProjection'));
+const Reports = lazy(() => import('./pages/Reports'));
+const AnalyticsReports = lazy(() => import('./pages/AnalyticsReports'));
+const ActualsVariance = lazy(() => import('./pages/ActualsVariance'));
+const Stakeholders = lazy(() => import('./pages/Stakeholders'));
+const SuperAdmin = lazy(() => import('./pages/SuperAdmin'));
+const ExpenseProjection = lazy(() => import('./pages/ExpenseProjection'));
+const Tenants = lazy(() => import('./pages/Tenants'));
+const TenantDetail = lazy(() => import('./pages/TenantDetail'));
+const Units = lazy(() => import('./pages/Units'));
+const Revenue = lazy(() => import('./pages/Revenue'));
+const Actuals = lazy(() => import('./pages/Actuals'));
+const Variance = lazy(() => import('./pages/Variance'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const Workflows = lazy(() => import('./pages/Workflows'));
+const Documents = lazy(() => import('./pages/Documents'));
+const Integrations = lazy(() => import('./pages/Integrations'));
+const Pricing = lazy(() => import('./pages/Pricing'));
+const Comparison = lazy(() => import('./pages/Comparison'));
+const ChartOfAccounts = lazy(() => import('./pages/ChartOfAccounts'));
+const Billing = lazy(() => import('./pages/Billing'));
+const Vendors = lazy(() => import('./pages/Vendors'));
+const VendorProfile = lazy(() => import('./pages/VendorProfile'));
+const PortfolioInsights = lazy(() => import('./pages/PortfolioInsights'));
+const RequestAccess = lazy(() => import('./pages/RequestAccess'));
+const Login = lazy(() => import('./pages/Login'));
+const Welcome = lazy(() => import('./pages/Welcome'));
+const WelcomeAboard = lazy(() => import('./pages/WelcomeAboard'));
+const UserManagement = lazy(() => import('./pages/UserManagement'));
+const DemoExperience = lazy(() => import('./pages/DemoExperience'));
+const RequestDemo = lazy(() => import('./pages/RequestDemo'));
+const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'));
+const FileHistoryPage = lazy(() => import('./pages/FileHistoryPage'));
+const PipelineUpload = lazy(() => import('./pages/PipelineUpload'));
+const LeaseExpenseClassification = lazy(() => import('./pages/LeaseExpenseClassification'));
+const LeaseExpenseRules = lazy(() => import('./pages/LeaseExpenseRules'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const SecurityQuestionsSetup = lazy(() => import('./pages/SecurityQuestionsSetup'));
 
 
 export const PAGES = {
