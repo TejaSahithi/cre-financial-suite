@@ -1,3 +1,21 @@
+import {
+  asNumber,
+  asArray,
+  normalizeFrequency,
+  normalizeRuleSource,
+  normalizeCategoryToken,
+  normalizeCategoryKey,
+  humanizeLabel,
+  normalizeText,
+  isUuid,
+  firstPresent,
+  isLlmGeneratedRule,
+  isApprovedWorkflowStatus,
+  isEvidenceAlignedVersion,
+  EVIDENCE_ALIGNED_EXTRACTION_VERSION,
+  LEGACY_EXTRACTION_VERSION
+} from "./utils/leaseExpenseRuleParsers";
+
 import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
@@ -14,90 +32,19 @@ import {
   getEffectiveRowStatus,
 } from "@/lib/ruleStatus";
 
-const EVIDENCE_ALIGNED_EXTRACTION_VERSION = "lease_rule_pipeline_v3_evidence_aligned";
-const LEGACY_EXTRACTION_VERSION = "v1.2026.05.19";
 
-function asNumber(val) {
-  if (val === null || val === undefined || val === "") return null;
-  if (typeof val === 'number') return val;
-  const str = String(val).replace(/[^0-9.-]/g, '');
-  if (!str) return null;
-  const num = Number(str);
-  return isNaN(num) ? null : num;
-}
 
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
-}
 
-function normalizeFrequency(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (["monthly", "quarterly", "yearly"].includes(raw)) return raw;
-  return "yearly";
-}
 
-function normalizeRuleSource(value) {
-  const raw = String(value || "").trim();
-  return raw || null;
-}
 
-function normalizeCategoryToken(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
 
-function normalizeCategoryKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
 
-function humanizeLabel(value) {
-  const text = String(value || "")
-    .replace(/[_-]+/g, " ")
-    .trim();
-  if (!text) return "Uncategorized";
-  return text.replace(/\b\w/g, (char) => char.toUpperCase());
-}
 
-function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
-}
 
-function isUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
-}
 
-function firstPresent(...values) {
-  for (const value of values) {
-    if (value === null || value === undefined) continue;
-    if (typeof value === "string" && value.trim() === "") continue;
-    return value;
-  }
-  return null;
-}
 
-function isLlmGeneratedRule(rule) {
-  return [
-    rule?.source_type,
-    rule?.generation_source,
-    rule?.created_from,
-    rule?.extraction_source,
-  ].some((value) => normalizeText(value).includes("llm"));
-}
 
-function isApprovedWorkflowStatus(value) {
-  return normalizeText(value) === "approved";
-}
 
-function isEvidenceAlignedVersion(value) {
-  return normalizeText(value) === EVIDENCE_ALIGNED_EXTRACTION_VERSION;
-}
 
 function isRuleSuperseded(rule) {
   return [rule?.row_status, rule?.status, rule?.extraction_status]
