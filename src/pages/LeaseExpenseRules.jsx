@@ -18,6 +18,7 @@ import {
   Receipt,
   X,
 } from "lucide-react";
+import EditRuleModal from "@/components/lease-expense/EditRuleModal";
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -30,15 +31,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,25 +50,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+
+
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { supabase } from "@/services/supabaseClient";
 import { logAudit } from "@/services/audit";
 import { createPageUrl } from "@/utils";
 
 import {
-  PAYMENT_TREATMENT_OPTIONS,
-  TRI_STATE_OPTIONS,
-  RECOVERY_METHOD_OPTIONS,
-  ALLOCATION_OPTIONS,
   toNullableNumber,
   fromBooleanString,
   buildRuleEditForm,
@@ -1010,233 +994,14 @@ export default function LeaseExpenseRules() {
         <Link to={createPageUrl("Expenses")} className="underline">Actual Expenses</Link>.
       </p>
 
-      <Dialog open={!!editingRuleContext} onOpenChange={(open) => { if (!open) closeRuleEditor(); }}>
-        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Edit Rule Details</DialogTitle>
-            <DialogDescription>
-              Update the selected lease expense rule in place. This edits the specific row you clicked from the action menu.
-            </DialogDescription>
-          </DialogHeader>
-
-          {editingRuleContext?.rule && editForm ? (
-            <div className="space-y-5">
-              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tenant / Lease</p>
-                  <p className="mt-1 font-medium text-slate-900">{editingRuleContext.lease?.tenant_name || editingRuleContext.lease?.id || "-"}</p>
-                  <p className="text-xs text-slate-500">Rule set v{editingRuleContext.ruleSet?.version || "-"}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Property</p>
-                  <p className="mt-1 font-medium text-slate-900">{editingRuleContext.property?.name || "-"}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Review Status</p>
-                  <p className="mt-1 font-medium text-slate-900">{humanizeToken(editingRuleContext.rule.review_status || editingRuleContext.rule.row_status || "-")}</p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Category</Label>
-                  <Input
-                    value={editForm.category_name}
-                    onChange={(event) => setEditForm((current) => ({ ...current, category_name: event.target.value }))}
-                    placeholder="Normalized category"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Subcategory</Label>
-                  <Input
-                    value={editForm.expense_subcategory}
-                    onChange={(event) => setEditForm((current) => ({ ...current, expense_subcategory: event.target.value }))}
-                    placeholder="Normalized subcategory"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Included In Rent</Label>
-                  <Select value={editForm.included_in_base_rent} onValueChange={(value) => setEditForm((current) => ({ ...current, included_in_base_rent: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="yes">Yes</SelectItem>
-                      <SelectItem value="no">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Responsibility</Label>
-                  <Input
-                    value={editForm.responsibility}
-                    onChange={(event) => setEditForm((current) => ({ ...current, responsibility: event.target.value }))}
-                    placeholder="Operational responsibility"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Payment Treatment</Label>
-                  <Select value={editForm.payment_treatment} onValueChange={(value) => setEditForm((current) => ({ ...current, payment_treatment: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {PAYMENT_TREATMENT_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Recoverable From Tenant</Label>
-                  <Select value={editForm.recoverable_from_tenant} onValueChange={(value) => setEditForm((current) => ({ ...current, recoverable_from_tenant: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {TRI_STATE_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>CAM Eligible</Label>
-                  <Select value={editForm.cam_eligible} onValueChange={(value) => setEditForm((current) => ({ ...current, cam_eligible: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {TRI_STATE_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Recovery Method</Label>
-                  <Select value={editForm.recovery_method} onValueChange={(value) => setEditForm((current) => ({ ...current, recovery_method: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {RECOVERY_METHOD_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Allocation Basis</Label>
-                  <Select value={editForm.allocation_basis} onValueChange={(value) => setEditForm((current) => ({ ...current, allocation_basis: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {ALLOCATION_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>{humanizeToken(option)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Cap Type</Label>
-                  <Input
-                    value={editForm.cap_type}
-                    onChange={(event) => setEditForm((current) => ({ ...current, cap_type: event.target.value }))}
-                    placeholder="Percent, amount, fixed..."
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Cap Percent</Label>
-                  <Input
-                    type="number"
-                    value={editForm.cap_percent}
-                    onChange={(event) => setEditForm((current) => ({ ...current, cap_percent: event.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Cap Amount</Label>
-                  <Input
-                    type="number"
-                    value={editForm.cap_amount}
-                    onChange={(event) => setEditForm((current) => ({ ...current, cap_amount: event.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Admin Fee Applies</Label>
-                  <Select value={editForm.admin_fee_applicable} onValueChange={(value) => setEditForm((current) => ({ ...current, admin_fee_applicable: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="yes">Yes</SelectItem>
-                      <SelectItem value="no">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Admin Fee Percent</Label>
-                  <Input
-                    type="number"
-                    value={editForm.admin_fee_percent}
-                    onChange={(event) => setEditForm((current) => ({ ...current, admin_fee_percent: event.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Gross-Up Applies</Label>
-                  <Select value={editForm.gross_up_applicable} onValueChange={(value) => setEditForm((current) => ({ ...current, gross_up_applicable: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="yes">Yes</SelectItem>
-                      <SelectItem value="no">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Gross-Up Percent</Label>
-                  <Input
-                    type="number"
-                    value={editForm.gross_up_percent}
-                    onChange={(event) => setEditForm((current) => ({ ...current, gross_up_percent: event.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Reconciliation Required</Label>
-                  <Select value={editForm.reconciliation_required} onValueChange={(value) => setEditForm((current) => ({ ...current, reconciliation_required: value }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="yes">Yes</SelectItem>
-                      <SelectItem value="no">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Source Evidence</Label>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <p><span className="font-medium text-slate-900">Source page:</span> {(() => {
-                    const sp = getSourcePage(editingRuleContext.rule);
-                    return sp != null && sp !== "" && Number(sp) > 0 ? `p. ${Number(sp)}` : "—";
-                  })()}</p>
-                  <p className="mt-2"><span className="font-medium text-slate-900">Exact source text:</span> {getExactSourceText(editingRuleContext.rule) || "-"}</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Notes</Label>
-                <Textarea
-                  value={editForm.notes}
-                  onChange={(event) => setEditForm((current) => ({ ...current, notes: event.target.value }))}
-                  placeholder="Add rule notes or override context..."
-                  rows={4}
-                />
-              </div>
-            </div>
-          ) : null}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={closeRuleEditor} disabled={updateRuleMutation.isPending}>
-              Cancel
-            </Button>
-            <Button onClick={saveRuleEdits} disabled={updateRuleMutation.isPending || !editForm} className="bg-blue-600 hover:bg-blue-700">
-              {updateRuleMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Save rule
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EditRuleModal
+        context={editingRuleContext}
+        form={editForm}
+        setForm={setEditForm}
+        isSaving={updateRuleMutation.isPending}
+        onClose={closeRuleEditor}
+        onSave={saveRuleEdits}
+      />
     </div>
   );
 }
