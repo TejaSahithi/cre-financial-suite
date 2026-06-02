@@ -75,12 +75,14 @@ Deno.serve(async (req: Request) => {
     if (targetUserId === caller.id) {
       // Self-service reset requires aal2
       if (aal !== "aal2") {
-        await adminClient.from("audit_logs").insert({
-          user_id: caller.id,
+        const { error: auditErr } = await adminClient.from("audit_logs").insert({
+          actor_user_id: caller.id,
           action: "mfa_reset_blocked",
-          status: "error",
-          error_details: "AAL1 self-service reset attempt blocked"
+          severity: "error",
+          source: "edge_function",
+          error_message: "AAL1 self-service reset attempt blocked"
         });
+        if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
         return new Response(JSON.stringify({ error: "Forbidden: aal2 required for self-service MFA reset" }), {
           status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -88,13 +90,15 @@ Deno.serve(async (req: Request) => {
     } else {
       // Admin recovery requires super_admin
       if (!isSuperAdmin) {
-        await adminClient.from("audit_logs").insert({
-          user_id: caller.id,
+        const { error: auditErr } = await adminClient.from("audit_logs").insert({
+          actor_user_id: caller.id,
+          target_user_id: targetUserId,
           action: "mfa_reset_blocked",
-          status: "error",
-          new_value: JSON.stringify({ targetUserId }),
-          error_details: "Unauthorized admin recovery attempt"
+          severity: "error",
+          source: "edge_function",
+          error_message: "Unauthorized admin recovery attempt"
         });
+        if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
         return new Response(JSON.stringify({ error: "Forbidden: super_admin required for admin recovery" }), {
           status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -130,12 +134,15 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[reset-mfa] Successfully deleted ${deletedCount} factors`);
 
-    await adminClient.from("audit_logs").insert({
-      user_id: caller.id,
+    const { error: auditErr } = await adminClient.from("audit_logs").insert({
+      actor_user_id: caller.id,
+      target_user_id: targetUserId,
       action: "mfa_reset_success",
-      status: "success",
-      new_value: JSON.stringify({ targetUserId, deletedCount, isAdminRecovery })
+      severity: "info",
+      source: "edge_function",
+      metadata: { deletedCount, isAdminRecovery }
     });
+    if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
 
     return new Response(JSON.stringify({ success: true, deletedCount }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -156,12 +163,14 @@ Deno.serve(async (req: Request) => {
         const token = authorization.replace("Bearer ", "");
         const { data: { user: caller } } = await adminClient.auth.getUser(token);
         if (caller) {
-          await adminClient.from("audit_logs").insert({
-            user_id: caller.id,
+          const { error: auditErr } = await adminClient.from("audit_logs").insert({
+            actor_user_id: caller.id,
             action: "mfa_reset_error",
-            status: "error",
-            error_details: err.message
+            severity: "error",
+            source: "edge_function",
+            error_message: err.message
           });
+          if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
         }
       }
     } catch(e) {}

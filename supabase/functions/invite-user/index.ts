@@ -132,16 +132,18 @@ Deno.serve(async (req: Request) => {
 
     if (callerMembership.role === "org_admin" && !ORG_ASSIGNABLE_ROLES.includes(role)) {
       if (role === "super_admin") {
-        await adminClient.from("audit_logs").insert({
+        const { error: auditErr } = await adminClient.from("audit_logs").insert({
           org_id: org_id || null,
-          user_id: caller.id,
+          actor_user_id: caller.id,
           action: "privilege_escalation_blocked",
           entity_type: "membership",
           entity_id: null,
-          new_value: JSON.stringify({ requested_role: role, email }),
-          status: "error",
-          error_details: "Forbidden: org_admin attempted to assign super_admin"
+          metadata: { requested_role: role, email },
+          severity: "critical",
+          source: "edge_function",
+          error_message: "Forbidden: org_admin attempted to assign super_admin"
         });
+        if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
       }
       return new Response(JSON.stringify({ error: "Forbidden: role not assignable by org_admin" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },

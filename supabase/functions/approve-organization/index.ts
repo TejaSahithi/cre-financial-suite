@@ -71,6 +71,24 @@ Deno.serve(async (req: Request) => {
     }
     const org = orgs[0];
 
+    const { error: auditErr } = await supabaseAdmin.from('audit_logs').insert({
+      org_id: orgId,
+      actor_user_id: user.id,
+      actor_email: user.email,
+      actor_role: 'super_admin',
+      entity_type: 'Organization',
+      entity_id: orgId,
+      action: 'approve',
+      source: 'edge_function',
+      severity: 'info',
+      after: { status: 'active' }
+    });
+    if (auditErr) {
+      // Revert org update on audit failure
+      await supabaseAdmin.from('organizations').update({ status: 'under_review' }).eq('id', orgId);
+      throw new Error(`Audit log failed: ${auditErr.message}`);
+    }
+
     // 5. Find all users associated with this org to update their profiles
     const { data: orgUsers, error: usersError } = await supabaseAdmin
       .from('memberships')

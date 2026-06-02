@@ -96,6 +96,7 @@ async function resolveAuditContext(entry) {
       })[0];
 
       resolved.orgId = cleanUuid(prioritizedMembership?.org_id);
+      resolved.role = prioritizedMembership?.role || null;
     }
   } catch (err) {
     console.warn('[audit] Unable to resolve audit context:', err?.message || err);
@@ -128,14 +129,24 @@ export async function logAudit(entry) {
     });
   }
 
-  const optionalDetails = serializeAuditValue(
-    entry.newValue ?? entry.new_value ?? entry.details ?? null,
-  );
+  const optionalDetails = entry.metadata ?? entry.details ?? null;
+  const optionalBefore = entry.before ?? entry.oldValue ?? entry.old_value ?? null;
+  const optionalAfter = entry.after ?? entry.newValue ?? entry.new_value ?? null;
+
   const row = {
-    entity_type:   inferEntityType(entry),
-    entity_id:     cleanUuid(inferEntityId(entry)),
-    action:        entry.action,
-    org_id:        context.orgId,
+    entity_type:    inferEntityType(entry),
+    entity_id:      cleanUuid(inferEntityId(entry)),
+    action:         entry.action,
+    org_id:         context.orgId,
+    actor_user_id:  context.userId,
+    actor_email:    context.userEmail,
+    actor_role:     entry.actor_role || context.role || null,
+    target_user_id: cleanUuid(entry.target_user_id || entry.targetUserId || null),
+    severity:       entry.severity || 'info',
+    source:         'frontend',
+    before:         optionalBefore,
+    after:          optionalAfter,
+    metadata:       optionalDetails,
   };
 
   try {
@@ -143,14 +154,18 @@ export async function logAudit(entry) {
       const { error } = await supabase.from('audit_logs').insert(row);
       if (error) throw error;
     } else {
-      console.log('[audit]', { ...row, details: optionalDetails });
+      console.log('[audit]', row);
     }
   } catch (err) {
-    // Audit logging should never crash the caller
-    console.warn('[audit] Failed to write audit log:', {
+    console.error('[audit] Failed to write audit log:', {
       error: err?.message || err,
       row,
     });
+    // For critical frontend events, we must not silently swallow.
+    // We throw the error so the calling critical operation fails.
+    if (row.severity === 'critical' || row.severity === 'error') {
+      throw err;
+    }
   }
 }
 

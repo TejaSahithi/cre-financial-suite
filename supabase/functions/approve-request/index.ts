@@ -323,10 +323,12 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      await supabaseAdmin.from('audit_logs').insert({
+      const { error: auditErr } = await supabaseAdmin.from('audit_logs').insert({
         entity_type: 'AccessRequest', entity_id: requestId,
-        action: 'approve', user_id: user.id, user_email: user.email, new_value: newStatus,
-      }).catch((e: any) => console.warn('[approve-request] audit log failed:', e.message));
+        action: 'approve', actor_user_id: user.id, actor_email: user.email, 
+        after: { status: newStatus }, severity: 'info', source: 'edge_function',
+      });
+      if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
 
       return new Response(JSON.stringify({ 
         success: true, status: newStatus,
@@ -374,10 +376,12 @@ Deno.serve(async (req: Request) => {
       console.warn('[approve-request] RESEND_API_KEY not set — rejection email skipped.');
     }
 
-    await supabaseAdmin.from('audit_logs').insert({
+    const { error: auditErr } = await supabaseAdmin.from('audit_logs').insert({
       entity_type: 'AccessRequest', entity_id: requestId,
-      action: 'reject', user_id: user.id, user_email: user.email, new_value: newStatus,
-    }).catch((e: any) => console.warn('[approve-request] audit log failed:', e.message));
+      action: 'reject', actor_user_id: user.id, actor_email: user.email, 
+      after: { status: newStatus }, severity: 'info', source: 'edge_function',
+    });
+    if (auditErr) throw new Error(`Audit log failed: ${auditErr.message}`);
 
     return new Response(JSON.stringify({ 
       success: true, status: newStatus,
