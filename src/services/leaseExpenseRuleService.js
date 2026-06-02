@@ -59,9 +59,11 @@ import { saveLeaseConfig } from "@/services/camConfig";
 import { devLog, devTable, devWarn } from "./utils/logger";
 
 import {
-  getEffectiveApprovalStatus,
   getEffectiveReviewStatus,
 } from "@/lib/ruleStatus";
+import {
+  derivePublishToCamEligibility,
+} from "./utils/ruleDecisionEngine";
 
 
 
@@ -87,54 +89,13 @@ import {
 
 
 function isRuleCamPublishable(rule) {
-  const reviewStatus = getEffectiveReviewStatus(rule);
-  const approvalStatus = getEffectiveApprovalStatus(rule);
-  const recoverableFromTenant = deriveRuleRecoverableFromTenant(rule);
-  const camEligible = deriveRuleCamEligible(rule);
-  const paymentTreatment = deriveRulePaymentTreatment(rule);
-  const rowStatus = normalizeText(rule?.row_status || rule?.status);
-  const extractionStatus = normalizeText(rule?.extraction_status);
-  const generationSource = normalizeText(rule?.generation_source);
-  const sourceType = normalizeText(rule?.source_type);
-
-  // Lease-derivation gate: a rule may publish to CAM only when there is
-  // either real lease clause evidence (non-weak exact_source_text) OR an
-  // explicit human manual-override with a written note. Template/checklist/
-  // amount-only/keyword-fallback rules persist with no evidence and thus
-  // cannot reach CAM, even if a reviewer flips the workflow flags.
-  const exactSourceText = String(deriveRuleExactSourceText(rule) || "").trim();
-  const hasLeaseEvidence = exactSourceText.length > 0 && !isWeakSourceText(exactSourceText);
-  const createdFrom = normalizeText(rule?.created_from);
-  const isManualOverride =
-    createdFrom === "manual" ||
-    createdFrom === "user_override" ||
-    generationSource === "manual" ||
-    generationSource === "user_override" ||
-    normalizeText(rule?.row_status) === "manually_added";
-  const overrideNote = String(rule?.notes || "").trim();
-  const hasEvidenceOrOverride = hasLeaseEvidence || (isManualOverride && overrideNote.length > 0);
-  const weakOrFallback =
-    ["weak_evidence", "not_found", "not_mentioned", "inferred", "missing_source_evidence"].includes(extractionStatus) ||
-    ["template_checklist", "amount_only_gap", "text_fallback_keyword", "original_lease_required"].includes(generationSource) ||
-    ["deterministic_template", "text_fallback", "document_profile"].includes(sourceType);
-  const weakRowAllowedByManualOverride = weakOrFallback && isManualOverride && overrideNote.length > 0;
-  if (weakOrFallback && !weakRowAllowedByManualOverride) return false;
-
-  return reviewStatus === "approved" &&
-    approvalStatus === "approved" &&
-    recoverableFromTenant === "yes" &&
-    camEligible === "yes" &&
-    !deriveRuleIncludedInBaseRent(rule) &&
-    paymentTreatment !== "included_in_base_rent" &&
-    paymentTreatment !== "tenant_direct_contract" &&
-    !rule?.is_excluded &&
-    !["unmapped", "not_found", "not_mentioned", "not_applicable", "rejected"].includes(rowStatus) &&
-    hasEvidenceOrOverride;
+  return derivePublishToCamEligibility(rule).status === "eligible";
 }
 
 function derivePublishedToCam(rule) {
   if (isRuleNotApplicable(rule) || isRuleRejected(rule)) return false;
-  return isRuleCamPublishable(rule);
+  const eligibility = derivePublishToCamEligibility(rule);
+  return eligibility.status === "eligible" || eligibility.status === "already_published";
 }
 
 function pickPreferredRuleSetWithApprovedChildren(ruleSets = [], rulesBySet = new Map()) {
@@ -399,7 +360,8 @@ function getRuleValidation(rule) {
   const approvalStatus = normalizeText(rule?.approval_status || deriveRuleApprovalStatus(rule));
   const sourcePage = deriveRuleSourcePage(rule);
   const exactSourceText = deriveRuleExactSourceText(rule);
-  const alreadyPublished = Boolean(rule?.published_to_cam);
+  const publishEligibility = derivePublishToCamEligibility(rule);
+  const alreadyPublished = publishEligibility.status === "already_published";
   const hasValidSourcePage = Number.isFinite(Number(sourcePage)) && Number(sourcePage) > 0;
   const hasLeaseSourceText = Boolean(String(exactSourceText || "").trim());
   const strongSourceText = hasLeaseSourceText && !isWeakSourceText(exactSourceText);
@@ -449,32 +411,24 @@ function getRuleValidation(rule) {
     if (hasLeaseSourceText && !strongSourceText) warnings.push("Source text too weak");
   }
 
-  const publishBlockers = [];
-  publishBlockers.push(...approvalBlockers);
-  if (reviewStatus !== "approved") publishBlockers.push("Not reviewed");
-  if (approvalStatus !== "approved") publishBlockers.push("Not approved");
-  if (recoverableFromTenant !== "yes") publishBlockers.push("Not recoverable");
-  if (camEligible !== "yes") publishBlockers.push("Not CAM eligible");
-  if (includedInBaseRent) publishBlockers.push("Included in rent");
-  if (paymentTreatment === "included_in_base_rent") publishBlockers.push("Included in rent");
-  if (paymentTreatment === "tenant_direct_contract") publishBlockers.push("Tenant direct contract");
-  if (rule?.is_excluded) publishBlockers.push("Excluded");
-  if (alreadyPublished) publishBlockers.push("Already published");
-  // Lease-evidence / manual-override gate (mirrors isRuleCamPublishable).
-  const createdFromForBlocker = normalizeText(rule?.created_from);
-  const generationSourceForBlocker = normalizeText(rule?.generation_source);
-  const isManualOverrideForBlocker =
-    createdFromForBlocker === "manual" ||
-    createdFromForBlocker === "user_override" ||
-    generationSourceForBlocker === "manual" ||
-    generationSourceForBlocker === "user_override" ||
-    normalizeText(rule?.row_status) === "manually_added";
-  const noteForBlocker = String(rule?.notes || "").trim();
-  const hasLeaseEvidenceForBlocker = hasLeaseSourceText && strongSourceText;
-  if (!hasLeaseEvidenceForBlocker && !(isManualOverrideForBlocker && noteForBlocker.length > 0)) {
-    publishBlockers.push("Missing lease evidence");
-  }
-  publishBlockers.push(...issues);
+  const publishBlockerLabels = {
+    already_published: "Already published",
+    conditional_unresolved: "Conditional rule",
+    explicit_exclusion: "Excluded",
+    included_in_base_rent: "Included in rent",
+    missing_lease_evidence: "Missing lease evidence",
+    needs_review: "Not reviewed",
+    not_approved: "Not approved",
+    not_cam_eligible: "Not CAM eligible",
+    not_recoverable: "Not recoverable",
+    tenant_direct: "Tenant direct contract",
+    weak_fallback: "Missing lease evidence",
+  };
+  const publishBlockers = [
+    ...approvalBlockers,
+    ...publishEligibility.blockingReasons.map((reason) => publishBlockerLabels[reason] || reason),
+    ...issues,
+  ];
 
   return {
     includedInBaseRent,
@@ -492,7 +446,7 @@ function getRuleValidation(rule) {
     warnings,
     publishBlockers,
     canApprove: approvalBlockers.length === 0,
-    canPublishToCam: publishBlockers.length === 0,
+    canPublishToCam: publishEligibility.status === "eligible" && issues.length === 0 && approvalBlockers.length === 0,
     publishedToCam: alreadyPublished,
   };
 }

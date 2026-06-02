@@ -57,3 +57,18 @@ Run these steps after commit through durable jobs:
 - Does not duplicate side effects when retried with the same idempotency key.
 - Does not publish excluded or not-applicable rules to CAM.
 - Creates downstream workflow jobs only after the lease approval transaction succeeds.
+
+## Implementation Status
+
+First hardening cut implemented:
+
+- `approve-lease-workflow` Edge Function validates/authenticates requests and calls the transactional RPC.
+- `public.approve_lease_workflow` owns lease approval, abstract snapshot persistence, field review mirror writes, document creation, notification creation, audit logging, critical-date upsert, and idempotent workflow-run recording.
+- `LeaseReview.jsx` now calls the server workflow for the core approval write path.
+
+Still intentionally deferred:
+
+- Server-side rule generation.
+- Server-side lease-derived expense sync.
+- Server-side expense classification.
+- Server-side compute orchestration.

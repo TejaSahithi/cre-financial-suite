@@ -42,8 +42,13 @@ import {
 
 
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import {
+  approveLeaseExpenseRule,
+  createRuleReviewIdempotencyKey,
+  markLeaseExpenseRuleNotApplicable,
+  rejectLeaseExpenseRule,
+} from "@/services/leaseExpenseRuleWorkflowService";
 import { supabase } from "@/services/supabaseClient";
-import { logAudit } from "@/services/audit";
 import { createPageUrl } from "@/utils";
 
 import {
@@ -56,7 +61,6 @@ import {
   isLeaseDerivedRule,
   isCoverageGapRule,
   getRuleValidation,
-  buildRuleWorkflowPatch,
   buildRuleHierarchyPatch,
   pickPreferredRuleSet,
   getLeaseBuildingId,
@@ -343,6 +347,29 @@ export default function LeaseExpenseRules() {
     onError: (error) => toast.error(error?.message || "Could not update rule"),
   });
 
+  const invalidateRuleWorkflowQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets"] });
+    queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-classification-rule-sets"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-workspace"] });
+    queryClient.invalidateQueries({ queryKey: ["expense-recoverability-diagnostics"] });
+  };
+
+  const ruleReviewMutation = useMutation({
+    mutationFn: async ({ action, ruleId, reason }) => {
+      const idempotencyKey = createRuleReviewIdempotencyKey(ruleId, action);
+      if (action === "approve") {
+        return approveLeaseExpenseRule({ ruleId, reason, idempotencyKey });
+      }
+      if (action === "reject") {
+        return rejectLeaseExpenseRule({ ruleId, reason, idempotencyKey });
+      }
+      return markLeaseExpenseRuleNotApplicable({ ruleId, reason, idempotencyKey });
+    },
+    onSuccess: invalidateRuleWorkflowQueries,
+    onError: (error) => toast.error(error?.message || "Could not review rule"),
+  });
+
   const ensurePersistedRule = async (rule, lease) => {
     if (!rule._is_fallback && isUuid(rule.id) && !String(rule.id).startsWith("workflow-rule-")) {
       return rule;
@@ -401,15 +428,12 @@ export default function LeaseExpenseRules() {
       return;
     }
 
-
-    const authResult = await supabase.auth.getUser();
-    const userId = authResult?.data?.user?.id || null;
     const now = new Date().toISOString();
     const approvalPreview = {
       ...rule,
       review_status: "approved",
       approval_status: "approved",
-      approved_by: userId,
+      approved_by: rule.approved_by || null,
       approved_at: now,
       updated_at: now,
     };
@@ -419,46 +443,11 @@ export default function LeaseExpenseRules() {
       return;
     }
     console.log("[Approve Rule clicked]", rule.id);
-
-    const patch = buildRuleWorkflowPatch(approvalPreview, validation, {
-      ...buildRuleHierarchyPatch(lease),
-      review_status: "approved",
-      approval_status: "approved",
-      approved_by: userId,
-      approved_at: now,
-      updated_at: now,
-      is_recoverable: validation.recoverableFromTenant === "yes" || validation.recoverableFromTenant === "conditional",
-      is_excluded: Boolean(rule.is_excluded),
+    await ruleReviewMutation.mutateAsync({
+      action: "approve",
+      ruleId: rule.id,
+      reason: "Approved from Lease Expense Rules review",
     });
-    patch.published_to_cam = leaseExpenseRuleService.derivePublishedToCam({ ...rule, ...patch });
-    console.log("[Approve Rule update payload]", patch);
-    
-    let approvedRule;
-    try {
-      approvedRule = await updateRuleMutation.mutateAsync({
-        ruleId: rule.id,
-        patch,
-      });
-      console.log("[Approve Rule update result]", approvedRule);
-    } catch (err) {
-      return;
-    }
-
-    try {
-      await logAudit({
-        entityType: "LeaseExpenseRule",
-        entityId: rule.id,
-        action: "approve_rule",
-        orgId: lease?.org_id || rule?.org_id || null,
-        userId,
-        fieldChanged: "review_status",
-        oldValue: rule.review_status || null,
-        newValue: "approved",
-      });
-    } catch (auditErr) {
-      console.warn("[approveRule] audit log failed:", auditErr?.message || auditErr);
-    }
-
     toast.success("Rule approved");
   };
 
@@ -469,40 +458,11 @@ export default function LeaseExpenseRules() {
     } catch {
       return;
     }
-    const now = new Date().toISOString();
-    const validation = getRuleValidation(rule);
-    return updateRuleMutation.mutateAsync({
+    return ruleReviewMutation.mutateAsync({
+      action: "reject",
       ruleId: rule.id,
-      patch: buildRuleWorkflowPatch(rule, validation, {
-        ...buildRuleHierarchyPatch(lease),
-        row_status: "rejected",
-        review_status: "rejected",
-        approval_status: "rejected",
-        approved_by: null,
-        approved_at: null,
-        updated_at: now,
-        recoverable_from_tenant: "no",
-        cam_eligible: "no",
-        published_to_cam: false,
-        recovery_method: "not_applicable",
-        allocation_basis: null,
-        is_recoverable: false,
-        is_excluded: true,
-      }),
-    }).then(async () => {
-      try {
-        await logAudit({
-          entityType: "LeaseExpenseRule",
-          entityId: rule.id,
-          action: "reject_rule",
-          orgId: lease?.org_id || rule?.org_id || null,
-          fieldChanged: "review_status",
-          oldValue: rule.review_status || null,
-          newValue: "rejected",
-        });
-      } catch (auditErr) {
-        console.warn("[rejectRule] audit log failed:", auditErr?.message || auditErr);
-      }
+      reason: "Rejected from Lease Expense Rules review",
+    }).then(() => {
       toast.success("Rule rejected");
     });
   };
@@ -514,29 +474,10 @@ export default function LeaseExpenseRules() {
     } catch {
       return;
     }
-    const authResult = await supabase.auth.getUser();
-    const userId = authResult?.data?.user?.id || null;
-    const now = new Date().toISOString();
-    const validation = getRuleValidation(rule);
-    return updateRuleMutation.mutateAsync({
+    return ruleReviewMutation.mutateAsync({
+      action: "not_applicable",
       ruleId: rule.id,
-      patch: buildRuleWorkflowPatch(rule, validation, {
-        ...buildRuleHierarchyPatch(lease),
-        row_status: "unmapped",
-        review_status: "approved",
-        approval_status: "approved",
-        approved_by: userId,
-        approved_at: now,
-        updated_at: now,
-        payment_treatment: validation.includedInBaseRent ? "included_in_base_rent" : "not_applicable",
-        recoverable_from_tenant: "no",
-        cam_eligible: "no",
-        published_to_cam: false,
-        recovery_method: validation.includedInBaseRent ? "included_in_base_rent" : "not_applicable",
-        allocation_basis: null,
-        is_excluded: true,
-        is_recoverable: false,
-      }),
+      reason: "Marked not applicable from Lease Expense Rules review",
     }).then(() => toast.success("Rule marked N/A"));
   };
 
@@ -564,10 +505,6 @@ export default function LeaseExpenseRules() {
       notes: editForm.notes || null,
       updated_at: new Date().toISOString(),
     };
-    patch.published_to_cam = leaseExpenseRuleService.derivePublishedToCam({
-      ...editingRuleContext.rule,
-      ...patch,
-    });
     await updateRuleMutation.mutateAsync({
       ruleId: editingRuleContext.rule.id,
       patch,

@@ -22,6 +22,10 @@ import {
 import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import {
+  createRuleReviewIdempotencyKey,
+  publishLeaseExpenseRuleToCam,
+} from "@/services/leaseExpenseRuleWorkflowService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveTableName } from "@/types";
 import {
@@ -2685,16 +2689,8 @@ export const expenseService = {
     const amountBuckets = buildAmountBuckets(numericAmount, "recoverable");
 
     if (rule.published_to_cam !== true) {
-      try {
-        const { error: publishError } = await supabase
-          .from("lease_expense_rules")
-          .update({ published_to_cam: true, updated_at: now })
-          .eq("id", rule.id);
-        if (publishError) throw publishError;
-        rule.published_to_cam = true;
-      } catch (error) {
-        console.warn("[expenseService] unable to publish CAM-eligible rule before saving amount; continuing with classification amount:", error);
-      }
+      const publishResult = await this.publishRuleToCamSetup(rule.id);
+      rule.published_to_cam = publishResult?.rule?.published_to_cam === true;
     }
 
     const existingClassifications = await selectExpenseClassifications({
@@ -3201,25 +3197,19 @@ export const expenseService = {
     if (fetchError) {
       throw new Error("Failed to load rule before publishing to CAM setup");
     }
+    if (rule?.published_to_cam === true) {
+      return { rule, already_published: true };
+    }
     if (!leaseExpenseRuleService.isRuleCamPublishable(rule)) {
-      const { error: unpublishError } = await supabase
-        .from("lease_expense_rules")
-        .update({ published_to_cam: false })
-        .eq("id", ruleId);
-      if (unpublishError) throw new Error("Failed to update rule CAM publish state");
       throw new Error("Only approved, recoverable, CAM-eligible rules can be published to CAM setup.");
     }
 
-    const { error } = await supabase
-      .from("lease_expense_rules")
-      .update({ published_to_cam: true })
-      .eq("id", ruleId);
-
-    if (error) {
-      throw new Error("Failed to publish rule to CAM setup");
-    }
-    console.log(`[Diagnostics] Published rule ${ruleId} to CAM setup (published_to_cam=true)`);
-    return true;
+    const result = await publishLeaseExpenseRuleToCam({
+      ruleId,
+      idempotencyKey: createRuleReviewIdempotencyKey(ruleId, "publish_to_cam"),
+    });
+    console.log(`[Diagnostics] Published rule ${ruleId} to CAM setup via server workflow`);
+    return result;
   },
 
   async getWorkflowSummary({ propertyId = null, buildingId = null, unitId = null, fiscalYear = null } = {}) {

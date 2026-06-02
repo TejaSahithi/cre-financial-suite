@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { leaseService } from "@/services/leaseService";
-import { NotificationService, createEntityService } from "@/services/api";
+import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
@@ -77,10 +77,13 @@ import { createPageUrl } from "@/utils";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { supabase } from "@/services/supabaseClient";
 import {
-  approveLeaseAbstract,
   saveAbstractDraft,
   rejectLeaseAbstract,
 } from "@/services/leaseAbstractService";
+import {
+  approveLeaseWorkflow,
+  createLeaseApprovalIdempotencyKey,
+} from "@/services/leaseApprovalWorkflowService";
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
@@ -103,11 +106,9 @@ import {
   detectFieldConflicts,
 } from "@/components/lease-review/utils/validation";
 import { updateLeaseQueryCache } from "@/components/lease-review/utils/leaseQueryUtils";
-import { buildCriticalDateRows } from "@/components/lease-review/utils/criticalDates";
 import { matchBuildingAndUnit } from "@/components/lease-review/utils/buildingUnitMatcher";
 import { calculateSnapshotFiscalYears } from "@/components/lease-review/utils/projectionUtils";
 import { buildBulkApprovalState } from "@/components/lease-review/utils/bulkApproval";
-import { buildPostApprovalPayloads } from "@/components/lease-review/utils/postApprovalPayloads";
 
 import {
   RentScheduleTable,
@@ -117,8 +118,6 @@ import {
   ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
-
-const documentService = createEntityService("Document");
 
 export default function LeaseReview() {
   const location = useLocation();
@@ -1373,14 +1372,16 @@ export default function LeaseReview() {
         resolvedDocumentUrl = await resolveUploadedFileUrl(uploadedFile);
       }
 
-      const approvedLease = await approveLeaseAbstract({
-        lease,
-        fieldReviews: nextFieldReviews,
-        approvedBy: approvalSignedBy,
+      const approvalResult = await approveLeaseWorkflow({
+        leaseId: lease.id,
+        signedBy: approvalSignedBy,
         signedAt: approvalSignedAt,
-        comments: approvalComments,
-        documentUrl: resolvedDocumentUrl,
+        approvalComments,
+        approvalDocumentUrl: resolvedDocumentUrl,
+        fieldReviews: nextFieldReviews,
+        idempotencyKey: createLeaseApprovalIdempotencyKey(lease.id),
       });
+      const approvedLease = approvalResult.lease;
 
       updateLeaseQueryCache(queryClient, leaseId, approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
@@ -1459,32 +1460,7 @@ export default function LeaseReview() {
         queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
       }
 
-      // Auto-populate lease_critical_dates from the approved abstract.
-      // Same shape the migration backfill uses, but for new approvals
-      // going forward. Idempotent via ON CONFLICT (lease_id, date_type,
-      // due_date). Failures degrade silently if the table isn't there.
-      //
-      // Format-agnostic: any date string ("2024-02-01", "02/01/2024",
-      // "February 1, 2024", ISO with time, etc.) is coerced to YYYY-MM-DD.
-      // Renewal notice accepts numeric days/months OR text like
-      // "90 days" / "3 months" / "6-month notice". Falls back through
-      // every known alias so leases from different document templates work.
-      try {
-        const rows = buildCriticalDateRows(approvedLease);
-        if (rows.length > 0 && supabase) {
-          const { error: criticalErr } = await supabase
-            .from("lease_critical_dates")
-            .upsert(rows, { onConflict: "lease_id,date_type,due_date", ignoreDuplicates: true });
-          if (criticalErr) {
-            console.warn("[LeaseReview] lease_critical_dates upsert skipped:", criticalErr.message);
-          } else {
-            console.log(`[LeaseReview] inserted/refreshed ${rows.length} lease_critical_dates rows`);
-            queryClient.invalidateQueries({ queryKey: ["lease_critical_dates"] });
-          }
-        }
-      } catch (datesErr) {
-        console.warn("[LeaseReview] critical dates auto-insert skipped:", datesErr?.message || datesErr);
-      }
+      queryClient.invalidateQueries({ queryKey: ["lease_critical_dates"] });
 
       let approvedExpenseRuleSet = null;
       // Persist expense rules using the new leaseRulePipelineService
@@ -1517,34 +1493,6 @@ export default function LeaseReview() {
         }
       }
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
-
-      const { documentPayload, notificationPayload, auditPayload } = buildPostApprovalPayloads({
-        lease,
-        approvedLease,
-        approvalSignedBy,
-        approvalSignedAt,
-        approvalComments,
-        resolvedDocumentUrl,
-        reviewLink: createPageUrl("LeaseReview", { id: lease.id }),
-      });
-
-      try {
-        await documentService.create(documentPayload);
-      } catch (docErr) {
-        console.warn("[LeaseReview] Failed to save to documents:", docErr);
-      }
-
-      try {
-        await NotificationService.create(notificationPayload);
-      } catch {
-        /* non-fatal */
-      }
-
-      try {
-        await logAudit(auditPayload);
-      } catch (auditErr) {
-        console.warn("[LeaseReview] approval audit log failed:", auditErr);
-      }
 
       toast.success(`Lease abstract approved (v${approvedLease.abstract_version || 1})`);
       setShowApproval(false);

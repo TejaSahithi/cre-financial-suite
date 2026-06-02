@@ -32,6 +32,7 @@ Routing now lazy-loads page modules through `src/pages.config.js`, with `src/app
 ## Next Refactor Targets
 
 - Move lease approval into the server workflow described in `docs/lease-approval-server-workflow.md`.
+- Canonicalize rule/CAM financial decisions before serverizing approve/reject or publish-to-CAM workflows, as described in `docs/rule-cam-hardening-plan.md`.
 - Split finance services by bounded context: lease rules, actual expense classification, CAM publication, audit events, and notifications.
 - Replace root-level scratch/test scripts with either committed tests under `src/**/__tests__` or ignored local tooling.
 - Add CI gates for `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run build`.
