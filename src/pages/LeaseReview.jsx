@@ -106,6 +106,8 @@ import { updateLeaseQueryCache } from "@/components/lease-review/utils/leaseQuer
 import { buildCriticalDateRows } from "@/components/lease-review/utils/criticalDates";
 import { matchBuildingAndUnit } from "@/components/lease-review/utils/buildingUnitMatcher";
 import { calculateSnapshotFiscalYears } from "@/components/lease-review/utils/projectionUtils";
+import { buildBulkApprovalState } from "@/components/lease-review/utils/bulkApproval";
+
 import {
   RentScheduleTable,
   ExpenseRulesTable,
@@ -1338,42 +1340,29 @@ export default function LeaseReview() {
     try {
       // --- Bulk Approval Pre-pass ---
       const { eligibleFields } = bulkEvaluation;
-      let nextFieldReviews = { ...fieldReviews };
-      const auditLogPromises = [];
       const nowIso = new Date().toISOString();
       const signedBy = approvalSignedBy || lease?.signed_by;
 
-      for (const key of eligibleFields) {
-        nextFieldReviews[key] = {
-          ...(fieldReviews[key] || {}),
-          status: REVIEW_STATUSES.ACCEPTED,
-          reviewed_at: nowIso,
-        };
-        const prevReview = fieldReviews[key];
-        const prevStatus = prevReview?.status;
-        const evidence = readFieldEvidence(lease, key);
-        auditLogPromises.push(
-          logAudit({
-            entityType: "LeaseFieldReview",
-            entityId: lease.id,
-            action: "field_bulk_accepted",
-            orgId: lease.org_id,
-            details: {
-              field_key: key,
-              previous_review_status: prevStatus,
-              new_review_status: REVIEW_STATUSES.ACCEPTED,
-              approved_by: signedBy,
-              approved_at: nowIso,
-              approval_method: "bulk_lease_approval",
-              value: readFieldValue(lease, key),
-              source_page: evidence?.sourcePage || evidence?.source_page,
-              source_text: evidence?.sourceText || evidence?.exact_source_text || evidence?.source_text,
-            }
-          }).catch((err) => {
-            console.warn(`[LeaseReview] Bulk audit failed for ${key}:`, err);
-          })
-        );
-      }
+      const { nextFieldReviews, auditDetails } = buildBulkApprovalState({
+        eligibleFields,
+        fieldReviews,
+        lease,
+        signedBy,
+        nowIso,
+        reviewStatuses: REVIEW_STATUSES,
+      });
+
+      const auditLogPromises = auditDetails.map((details) =>
+        logAudit({
+          entityType: "LeaseFieldReview",
+          entityId: lease.id,
+          action: "field_bulk_accepted",
+          orgId: lease.org_id,
+          details,
+        }).catch((err) => {
+          console.warn(`[LeaseReview] Bulk audit failed for ${details.field_key}:`, err);
+        })
+      );
 
       await Promise.allSettled(auditLogPromises);
 
