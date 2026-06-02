@@ -107,6 +107,7 @@ import { buildCriticalDateRows } from "@/components/lease-review/utils/criticalD
 import { matchBuildingAndUnit } from "@/components/lease-review/utils/buildingUnitMatcher";
 import { calculateSnapshotFiscalYears } from "@/components/lease-review/utils/projectionUtils";
 import { buildBulkApprovalState } from "@/components/lease-review/utils/bulkApproval";
+import { buildPostApprovalPayloads } from "@/components/lease-review/utils/postApprovalPayloads";
 
 import {
   RentScheduleTable,
@@ -1517,49 +1518,30 @@ export default function LeaseReview() {
       }
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
 
+      const { documentPayload, notificationPayload, auditPayload } = buildPostApprovalPayloads({
+        lease,
+        approvedLease,
+        approvalSignedBy,
+        approvalSignedAt,
+        approvalComments,
+        resolvedDocumentUrl,
+        reviewLink: createPageUrl("LeaseReview", { id: lease.id }),
+      });
+
       try {
-        await documentService.create({
-          org_id: lease.org_id,
-          property_id: lease.property_id,
-          lease_id: lease.id,
-          type: "lease",
-          name: `Lease — ${lease.tenant_name || "Unknown tenant"}`,
-          status: "approved",
-          signed_by: approvalSignedBy,
-          signed_at: approvalSignedAt,
-          comments: approvalComments,
-          document_url: resolvedDocumentUrl,
-        });
+        await documentService.create(documentPayload);
       } catch (docErr) {
         console.warn("[LeaseReview] Failed to save to documents:", docErr);
       }
 
       try {
-        await NotificationService.create({
-          org_id: lease.org_id,
-          type: "lease_approved",
-          title: "Lease Abstract Approved",
-          message: `Lease abstract v${approvedLease.abstract_version || 1} for ${lease.tenant_name || "tenant"} approved. Signed by ${approvalSignedBy}.`,
-          link: createPageUrl("LeaseReview", { id: lease.id }),
-          priority: "normal",
-        });
+        await NotificationService.create(notificationPayload);
       } catch {
         /* non-fatal */
       }
 
       try {
-        await logAudit({
-          entityType: "Lease",
-          entityId: lease.id,
-          action: "lease_abstract_approved",
-          orgId: lease.org_id,
-          newValue: {
-            abstract_version: approvedLease.abstract_version || 1,
-            signed_by: approvalSignedBy,
-            signed_at: approvalSignedAt,
-          },
-          propertyId: lease.property_id || null,
-        });
+        await logAudit(auditPayload);
       } catch (auditErr) {
         console.warn("[LeaseReview] approval audit log failed:", auditErr);
       }
