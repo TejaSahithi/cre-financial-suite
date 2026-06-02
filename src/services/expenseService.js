@@ -3642,4 +3642,6 @@ export const expenseService = {
   },
 };
 
+// Named export for golden regression tests; keep service facade unchanged.
+export { scoreRuleMatch, buildAmountBuckets, canSendClassificationToCam };
 export default expenseService;

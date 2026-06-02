@@ -931,4 +931,6 @@ export const leaseRulePipelineService = {
   }
 };
 
+// Named export for golden regression tests; keep service facade unchanged.
+export { applyLeaseEvidenceRules };
 export default leaseRulePipelineService;
