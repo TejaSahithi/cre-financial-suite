@@ -482,3 +482,56 @@ export function getLeaseBuildingId(lease, scope) {
   const unit = lease?.unit_id ? scope.unitById.get(lease.unit_id) ?? null : null;
   return lease?.building_id || unit?.building_id || null;
 }
+
+export function buildDisplayRows(ruleSetsByLease, leaseById, categoryById, scopePropertyById) {
+  const rows = [];
+  for (const entry of ruleSetsByLease) {
+    const lease = leaseById.get(entry.leaseId);
+    const property = lease?.property_id ? scopePropertyById.get(lease.property_id) ?? null : null;
+    for (const rule of entry.rules || []) {
+      if (isSupersededRule(rule)) continue;
+      rows.push({
+        rule,
+        ruleSet: entry.ruleSet,
+        lease,
+        property,
+        category: rule.expense_category_id ? categoryById.get(rule.expense_category_id) : null,
+      });
+    }
+  }
+  return rows;
+}
+
+export function dedupeDisplayRows(rows) {
+  const dedupedRows = new Map();
+  for (const row of rows) {
+    const key = displayDedupeKey(row);
+    const existing = dedupedRows.get(key);
+    if (!existing || scoreDisplayRow(row) >= scoreDisplayRow(existing)) {
+      dedupedRows.set(key, row);
+    }
+  }
+  return [...dedupedRows.values()];
+}
+
+export function calculateRuleCounts(flattenedRows) {
+  const summary = {
+    all: flattenedRows.length,
+    recoverable: 0,
+    non_recoverable: 0,
+    conditional: 0,
+    needs_review: 0,
+    approved: 0,
+  };
+
+  for (const { rule } of flattenedRows) {
+    const decision = getRecoverableDecision(rule);
+    if (decision === "yes" && !rule.is_excluded) summary.recoverable += 1;
+    if (decision === "no" || rule.is_excluded) summary.non_recoverable += 1;
+    if (decision === "conditional" && !rule.is_excluded) summary.conditional += 1;
+    if (needsReviewRule(rule)) summary.needs_review += 1;
+    if (isApprovedRule(rule)) summary.approved += 1;
+  }
+
+  return summary;
+}

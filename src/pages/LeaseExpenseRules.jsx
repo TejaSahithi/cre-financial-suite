@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import EditRuleModal from "@/components/lease-expense/EditRuleModal";
 import RuleTableRow from "@/components/lease-expense/RuleTableRow";
+import StatCard from "@/components/lease-expense/StatCard";
 import PageHeader from "@/components/PageHeader";
 import ScopeSelector from "@/components/ScopeSelector";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -52,9 +53,6 @@ import {
   isApprovedRule,
   needsReviewRule,
   getRecoverableDecision,
-  isSupersededRule,
-  displayDedupeKey,
-  scoreDisplayRow,
   isLeaseDerivedRule,
   isCoverageGapRule,
   getRuleValidation,
@@ -226,36 +224,10 @@ export default function LeaseExpenseRules() {
     return map;
   }, [categories]);
 
-  const allDisplayRows = useMemo(() => {
-    const rows = [];
-    for (const entry of ruleSetsByLease) {
-      const lease = leaseById.get(entry.leaseId);
-      const property = lease?.property_id ? scope.propertyById.get(lease.property_id) ?? null : null;
-      for (const rule of entry.rules || []) {
-        if (isSupersededRule(rule)) continue;
-        rows.push({
-          rule,
-          ruleSet: entry.ruleSet,
-          lease,
-          property,
-          category: rule.expense_category_id ? categoryById.get(rule.expense_category_id) : null,
-        });
-      }
-    }
-    return rows;
-  }, [ruleSetsByLease, leaseById, categoryById, scope]);
-
-  const dedupeDisplayRows = (rows) => {
-    const dedupedRows = new Map();
-    for (const row of rows) {
-      const key = displayDedupeKey(row);
-      const existing = dedupedRows.get(key);
-      if (!existing || scoreDisplayRow(row) >= scoreDisplayRow(existing)) {
-        dedupedRows.set(key, row);
-      }
-    }
-    return [...dedupedRows.values()];
-  };
+  const allDisplayRows = useMemo(
+    () => buildDisplayRows(ruleSetsByLease, leaseById, categoryById, scope.propertyById),
+    [ruleSetsByLease, leaseById, categoryById, scope]
+  );
 
   const leaseDerivedRows = useMemo(
     () => dedupeDisplayRows(allDisplayRows.filter(({ rule }) => isLeaseDerivedRule(rule))),
@@ -332,27 +304,7 @@ export default function LeaseExpenseRules() {
     return true;
   });
 
-  const counts = useMemo(() => {
-    const summary = {
-      all: flattenedRows.length,
-      recoverable: 0,
-      non_recoverable: 0,
-      conditional: 0,
-      needs_review: 0,
-      approved: 0,
-    };
-
-    for (const { rule } of flattenedRows) {
-      const decision = getRecoverableDecision(rule);
-      if (decision === "yes" && !rule.is_excluded) summary.recoverable += 1;
-      if (decision === "no" || rule.is_excluded) summary.non_recoverable += 1;
-      if (decision === "conditional" && !rule.is_excluded) summary.conditional += 1;
-      if (needsReviewRule(rule)) summary.needs_review += 1;
-      if (isApprovedRule(rule)) summary.approved += 1;
-    }
-
-    return summary;
-  }, [flattenedRows]);
+  const counts = useMemo(() => calculateRuleCounts(flattenedRows), [flattenedRows]);
 
   const openRuleEditor = (context) => {
     setEditingRuleContext(context);
@@ -788,16 +740,5 @@ export default function LeaseExpenseRules() {
         onSave={saveRuleEdits}
       />
     </div>
-  );
-}
-
-function StatCard({ label, value, accent }) {
-  return (
-    <Card className={accent ? `border-l-4 ${accent}` : ""}>
-      <CardContent className="p-4">
-        <p className="text-2xl font-bold text-slate-900">{value}</p>
-        <p className="text-xs font-medium text-slate-500">{label}</p>
-      </CardContent>
-    </Card>
   );
 }
