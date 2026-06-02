@@ -91,12 +91,10 @@ import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
 import {
   buildSearchBlocksFromSources,
   findEvidenceForValue,
-  numericValue,
+  buildCalculatedSupportingEvidence,
 } from "@/components/lease-review/utils/evidenceResolver";
 import {
   entryValue,
-  getEvidenceRecordForKey,
-  validEvidenceRecord,
 } from "@/components/lease-review/utils/fieldExtractors";
 import {
   buildDynamicDocumentFieldsByTab,
@@ -104,6 +102,7 @@ import {
 import {
   detectFieldConflicts,
 } from "@/components/lease-review/utils/validation";
+import { updateLeaseQueryCache } from "@/components/lease-review/utils/leaseQueryUtils";
 import {
   RentScheduleTable,
   ExpenseRulesTable,
@@ -114,97 +113,6 @@ import {
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 
 const documentService = createEntityService("Document");
-
-const confidenceColor = (score) => {
-  const bucket = classifyConfidence(score);
-  if (bucket === "high") return "bg-emerald-100 text-emerald-700";
-  if (bucket === "medium") return "bg-amber-100 text-amber-700";
-  if (bucket === "low") return "bg-red-100 text-red-700";
-  return "bg-slate-100 text-slate-500";
-};
-
-// ── Text-matching evidence synthesizer ──────────────────────────────────
-// Given a docling-shaped object ({text_blocks, full_text}) and a field
-// value, find the verbatim snippet in the document and return
-// { raw, text, page }. Lets us populate Raw / Page / Source Text even when
-// the original extractor stamped no evidence on the field.
-
-function buildCalculatedSupportingEvidence({ key, value, lease, ed, fieldEvidence, fieldsWithEvidence }) {
-  const monthly = numericValue(value);
-  const annual = numericValue(readFieldValue(lease, "annual_rent") ?? entryValue(ed?.fields?.annual_rent));
-  const squareFeet = numericValue(readFieldValue(lease, "square_footage") ?? entryValue(ed?.fields?.square_footage));
-  const sourceForAnnual = validEvidenceRecord(
-    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "annual_rent")
-      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "base_rent_annual"),
-  );
-  const sourceForMonthly = validEvidenceRecord(
-    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "monthly_rent")
-      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "base_rent_monthly"),
-  );
-  const sourceForSqft = validEvidenceRecord(
-    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "square_footage")
-      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "rentable_area_sqft")
-      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "tenant_rsf"),
-  );
-
-  if ((key === "monthly_rent" || key === "base_rent_monthly") && monthly && annual && Math.abs((annual / 12) - monthly) < 1) {
-    const supporting = sourceForAnnual || sourceForMonthly;
-    if (supporting) {
-      return {
-        raw_value: supporting.raw_value ?? String(annual),
-        source_page: supporting.source_page,
-        source_text: supporting.source_text,
-        extraction_status: "calculated",
-      };
-    }
-  }
-
-  if ((key === "rent_per_sf" || key === "tenant_rent_per_rsf") && monthly && annual && squareFeet) {
-    const expected = annual / squareFeet;
-    if (Math.abs(expected - monthly) < 0.25) {
-      const supporting = sourceForAnnual || sourceForSqft;
-      if (supporting) {
-        return {
-          raw_value: supporting.raw_value ?? String(annual),
-          source_page: supporting.source_page,
-          source_text: supporting.source_text,
-          extraction_status: "calculated",
-        };
-      }
-    }
-  }
-
-  if ((key === "annual_rent" || key === "base_rent_annual") && monthly && sourceForMonthly) {
-    const monthlyRent = numericValue(readFieldValue(lease, "monthly_rent") ?? entryValue(ed?.fields?.monthly_rent));
-    if (monthlyRent && Math.abs((monthlyRent * 12) - monthly) < 1) {
-      return {
-        raw_value: sourceForMonthly.raw_value ?? String(monthlyRent),
-        source_page: sourceForMonthly.source_page,
-        source_text: sourceForMonthly.source_text,
-        extraction_status: "calculated",
-      };
-    }
-  }
-
-  return null;
-}
-
-function updateLeaseQueryCache(queryClient, leaseId, updater) {
-  queryClient.setQueryData(["lease", leaseId], (prev) => {
-    const applyUpdate = (row) => {
-      const next = typeof updater === "function" ? updater(row) : updater;
-      return { ...(row || {}), ...(next || {}) };
-    };
-
-    if (Array.isArray(prev)) {
-      return prev.map((row) => (row?.id === leaseId ? applyUpdate(row) : row));
-    }
-    if (prev?.id === leaseId) {
-      return applyUpdate(prev);
-    }
-    return prev;
-  });
-}
 
 export default function LeaseReview() {
   const location = useLocation();

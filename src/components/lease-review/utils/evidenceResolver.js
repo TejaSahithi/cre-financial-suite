@@ -1,3 +1,10 @@
+import { readFieldValue } from "@/lib/leaseReviewSchema";
+import {
+  entryValue,
+  getEvidenceRecordForKey,
+  validEvidenceRecord,
+} from "./fieldExtractors";
+
 export function buildSearchBlocks(docling) {
   const blocks = [];
   const raw = Array.isArray(docling?.text_blocks) ? docling.text_blocks : [];
@@ -200,4 +207,64 @@ export function findEvidenceForValue(blocks, value, field) {
 export function numericValue(value) {
   const n = Number(String(value ?? "").replace(/[$,%\s,]/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+export function buildCalculatedSupportingEvidence({ key, value, lease, ed, fieldEvidence, fieldsWithEvidence }) {
+  const monthly = numericValue(value);
+  const annual = numericValue(readFieldValue(lease, "annual_rent") ?? entryValue(ed?.fields?.annual_rent));
+  const squareFeet = numericValue(readFieldValue(lease, "square_footage") ?? entryValue(ed?.fields?.square_footage));
+  const sourceForAnnual = validEvidenceRecord(
+    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "annual_rent")
+      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "base_rent_annual"),
+  );
+  const sourceForMonthly = validEvidenceRecord(
+    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "monthly_rent")
+      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "base_rent_monthly"),
+  );
+  const sourceForSqft = validEvidenceRecord(
+    getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "square_footage")
+      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "rentable_area_sqft")
+      || getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, "tenant_rsf"),
+  );
+
+  if ((key === "monthly_rent" || key === "base_rent_monthly") && monthly && annual && Math.abs((annual / 12) - monthly) < 1) {
+    const supporting = sourceForAnnual || sourceForMonthly;
+    if (supporting) {
+      return {
+        raw_value: supporting.raw_value ?? String(annual),
+        source_page: supporting.source_page,
+        source_text: supporting.source_text,
+        extraction_status: "calculated",
+      };
+    }
+  }
+
+  if ((key === "rent_per_sf" || key === "tenant_rent_per_rsf") && monthly && annual && squareFeet) {
+    const expected = annual / squareFeet;
+    if (Math.abs(expected - monthly) < 0.25) {
+      const supporting = sourceForAnnual || sourceForSqft;
+      if (supporting) {
+        return {
+          raw_value: supporting.raw_value ?? String(annual),
+          source_page: supporting.source_page,
+          source_text: supporting.source_text,
+          extraction_status: "calculated",
+        };
+      }
+    }
+  }
+
+  if ((key === "annual_rent" || key === "base_rent_annual") && monthly && sourceForMonthly) {
+    const monthlyRent = numericValue(readFieldValue(lease, "monthly_rent") ?? entryValue(ed?.fields?.monthly_rent));
+    if (monthlyRent && Math.abs((monthlyRent * 12) - monthly) < 1) {
+      return {
+        raw_value: sourceForMonthly.raw_value ?? String(monthlyRent),
+        source_page: sourceForMonthly.source_page,
+        source_text: sourceForMonthly.source_text,
+        extraction_status: "calculated",
+      };
+    }
+  }
+
+  return null;
 }
