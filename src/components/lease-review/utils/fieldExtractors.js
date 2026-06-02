@@ -1,4 +1,4 @@
-import { cleanExtractedSourceText } from "@/pages/LeaseReview";
+import { cleanExtractedSourceText } from "@/components/lease-review/utils/dynamicFields";
 
 export function entryValue(entry) {
   if (entry == null) return null;
