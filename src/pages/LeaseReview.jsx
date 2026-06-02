@@ -5,22 +5,14 @@ import {
   AlertTriangle,
   ArrowLeft,
   Ban,
-  ChevronDown,
-  Check,
   CheckCircle2,
-  ExternalLink,
   FileText,
   FileX,
-  Gavel,
-  HelpCircle,
   Loader2,
-  MinusCircle,
-  Pencil,
   Printer,
   RefreshCw,
   Send,
   Undo2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { leaseService } from "@/services/leaseService";
@@ -51,13 +43,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+
+
 import {
   LEASE_FIELD_OPTIONS,
   getLeaseFieldLabel,
@@ -70,7 +57,6 @@ import {
   REQUIRED_FIELD_KEYS,
   REVIEW_STATUSES,
   REVIEW_STATUS_LABELS,
-  REVIEW_STATUS_STYLES,
   NUMERIC_REVIEW_FIELDS,
   readFieldValue,
   readFieldEvidence,
@@ -98,6 +84,9 @@ import {
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
+import { SummaryStat } from "@/components/lease-review/SummaryStat";
+import { SourceFileLink } from "@/components/lease-review/SourceFileLink";
+import { BudgetPreviewCard } from "@/components/lease-review/BudgetPreviewCard";
 import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
 import {
   RentScheduleTable,
@@ -4158,346 +4147,5 @@ export default function LeaseReview() {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-// --- Sub-components ------------------------------------------------------
-
-function SummaryStat({ label, value }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-medium text-slate-900">{value}</p>
-    </div>
-  );
-}
-
-function FieldReviewRow({
-  field,
-  lease,
-  review,
-  onAccept,
-  onEdit,
-  onReject,
-  onMarkNA,
-  onNeedsLegal,
-  onMarkManualRequired,
-  onReset,
-  onViewInDocument,
-}) {
-  const value = readFieldValue(lease, field.key);
-  const display =
-    value == null || value === ""
-      ? "—"
-      : field.type === "currency" && !isNaN(Number(value))
-      ? `$${Number(value).toLocaleString()}`
-      : field.type === "select" && hasLeaseFieldOptions(field.options || field.key)
-      ? getLeaseFieldLabel(field.options || field.key, value) || String(value)
-      : field.type === "boolean"
-      ? value === true || value === "true" || value === "yes"
-        ? "Yes"
-        : "No"
-      : String(value);
-
-  const { rawValue, sourcePage, sourceText, extractionStatus } = readFieldEvidence(lease, field.key);
-  const confidence = readFieldConfidence(lease, field.key);
-  const status = review?.status || REVIEW_STATUSES.PENDING;
-  const required = field.required;
-  const allowNA = field.allowNA !== false;
-  const actionLabel = REVIEW_STATUS_LABELS[status] || "Review Action";
-  const confidenceBucket = classifyConfidence(confidence);
-  const confidenceLabel =
-    confidenceBucket === "unknown"
-      ? "Unknown Confidence"
-      : `${Math.round(confidence)}%`;
-
-  const inferredExtractionStatus =
-    resolveExtractionStatus(lease, field.key, {
-      value,
-      confidence,
-      evidence: { rawValue, sourcePage, sourceText, extractionStatus },
-    });
-
-  return (
-    <Card className={status === REVIEW_STATUSES.PENDING && required ? "border-amber-200" : ""}>
-      <CardContent className="space-y-3 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                {field.label}
-                {required && <span className="ml-1 text-red-500">*</span>}
-              </p>
-              <Badge className={`text-[10px] ${confidenceColor(confidence)}`}>{confidenceLabel}</Badge>
-              <Badge className={`text-[10px] ${REVIEW_STATUS_STYLES[status]}`}>
-                {REVIEW_STATUS_LABELS[status]}
-              </Badge>
-              <Badge className="bg-slate-50 text-[10px] text-slate-600">{inferredExtractionStatus}</Badge>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div>
-                <p className="text-[10px] font-semibold uppercase text-slate-400">Normalized Value</p>
-                <p className="text-sm font-medium text-slate-900">{display}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase text-slate-400">Raw Extracted</p>
-                <p className="truncate text-sm text-slate-600" title={rawValue ?? ""}>{rawValue ?? "—"}</p>
-              </div>
-            </div>
-            <details className="text-xs text-slate-500">
-              <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
-                Source &amp; review metadata
-              </summary>
-              <div className="mt-2 space-y-1 rounded bg-slate-50 p-2">
-                <p>
-                  <span className="font-semibold text-slate-600">Source Page:</span>{" "}
-                  <span className="text-slate-700">{sourcePage ?? "—"}</span>
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-600">Exact Source Text:</span>{" "}
-                  <span className="italic text-slate-700">{sourceText || "No source text captured."}</span>
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-600">Confidence Score:</span>{" "}
-                  <span className="text-slate-700">{typeof confidence === "number" ? `${Math.round(confidence)}%` : "Unknown"}</span>
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-600">Extraction Status:</span>{" "}
-                  <span className="text-slate-700">{inferredExtractionStatus}</span>
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-600">Review Status:</span>{" "}
-                  <span className="text-slate-700">{REVIEW_STATUS_LABELS[status]}</span>
-                </p>
-                {review?.reviewer && (
-                  <p>
-                    <span className="font-semibold text-slate-600">Reviewer:</span>{" "}
-                    <span className="text-slate-700">{review.reviewer}</span>
-                  </p>
-                )}
-                {review?.reviewed_at && (
-                  <p>
-                    <span className="font-semibold text-slate-600">Reviewed At:</span>{" "}
-                    <span className="text-slate-700">{new Date(review.reviewed_at).toLocaleString()}</span>
-                  </p>
-                )}
-              </div>
-            </details>
-            <Button variant="outline" size="sm" onClick={onViewInDocument}>
-              <ExternalLink className="mr-1 h-3.5 w-3.5" />
-              View in Document
-            </Button>
-          </div>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="min-w-[170px] justify-between text-xs">
-                {actionLabel}
-                <ChevronDown className="ml-2 h-3.5 w-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={onAccept}>
-                <Check className="h-4 w-4 text-emerald-600" />
-                Accept
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onEdit}>
-                <Pencil className="h-4 w-4 text-blue-600" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onReject}>
-                <X className="h-4 w-4 text-red-600" />
-                Reject
-              </DropdownMenuItem>
-              {allowNA && (
-                <DropdownMenuItem onClick={onMarkNA}>
-                  <MinusCircle className="h-4 w-4 text-slate-600" />
-                  Mark N/A
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={onMarkManualRequired}>
-                <HelpCircle className="h-4 w-4 text-amber-600" />
-                Mark Manual Required
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onNeedsLegal}>
-                <Gavel className="h-4 w-4 text-purple-600" />
-                Needs Legal Review
-              </DropdownMenuItem>
-              {status !== REVIEW_STATUSES.PENDING && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={onReset}>
-                    <Undo2 className="h-4 w-4 text-slate-500" />
-                    Reset
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SourceFileLink({ lease }) {
-  const { data } = useQuery({
-    queryKey: ["uploaded-file-url", lease?.id, lease?.extraction_data?.source_file_id],
-    queryFn: async () => {
-      if (!lease) return null;
-      const row = await findUploadedFileForLease(lease);
-      if (!row) return null;
-      const resolvedUrl = await resolveUploadedFileUrl(row);
-      return { ...row, file_url: resolvedUrl || row.file_url };
-    },
-    enabled: !!lease,
-  });
-  if (!lease) return <p className="text-xs text-slate-500">No source file linked.</p>;
-  if (!data?.file_url) return <p className="text-xs text-slate-500">Source file URL is unavailable.</p>;
-  return (
-    <a
-      href={data.file_url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
-    >
-      <FileText className="h-4 w-4" />
-      {data.file_name || "Original upload"}
-    </a>
-  );
-}
-
-async function findUploadedFileForLease(lease) {
-  if (!lease || !supabase) return null;
-
-  const sourceFileId = lease.extraction_data?.source_file_id || null;
-  if (sourceFileId) {
-    const { data } = await supabase
-      .from("uploaded_files")
-      .select("id, org_id, file_url, file_name")
-      .eq("id", sourceFileId)
-      .maybeSingle();
-    if (data) return data;
-  }
-
-  if (!lease.id) return null;
-
-  let query = supabase
-    .from("uploaded_files")
-    .select("id, org_id, file_url, file_name")
-    .contains("reviewed_output", { lease_review_ids: [lease.id] })
-    .order("updated_at", { ascending: false })
-    .limit(1);
-
-  if (lease.org_id) {
-    query = query.eq("org_id", lease.org_id);
-  }
-
-  const { data } = await query.maybeSingle();
-  return data || null;
-}
-
-async function resolveUploadedFileUrl(fileRecord) {
-  if (!fileRecord) return null;
-
-  const storagePath = deriveFinancialUploadPath(fileRecord);
-  if (storagePath) {
-    const { data, error } = await supabase.storage
-      .from("financial-uploads")
-      .createSignedUrl(storagePath, 60 * 60);
-
-    if (!error && data?.signedUrl) {
-      return data.signedUrl;
-    }
-  }
-
-  return fileRecord.file_url || null;
-}
-
-function deriveFinancialUploadPath(fileRecord) {
-  const rawUrl = String(fileRecord?.file_url || "");
-  const publicPrefix = "/storage/v1/object/public/financial-uploads/";
-  const signPrefix = "/storage/v1/object/sign/financial-uploads/";
-
-  const publicIndex = rawUrl.indexOf(publicPrefix);
-  if (publicIndex >= 0) {
-    return rawUrl.slice(publicIndex + publicPrefix.length).split("?")[0];
-  }
-
-  const signIndex = rawUrl.indexOf(signPrefix);
-  if (signIndex >= 0) {
-    return rawUrl.slice(signIndex + signPrefix.length).split("?")[0];
-  }
-
-  if (fileRecord?.org_id && fileRecord?.id) {
-    return `${fileRecord.org_id}/${fileRecord.id}`;
-  }
-
-  return null;
-}
-
-function BudgetPreviewCard({ lease }) {
-  const monthly = useMemo(() => {
-    const v = Number(lease.monthly_rent || (lease.annual_rent ? lease.annual_rent / 12 : 0));
-    return Number.isFinite(v) ? v : 0;
-  }, [lease.monthly_rent, lease.annual_rent]);
-
-  const startBasis = lease.commencement_date || lease.start_date;
-
-  const months = useMemo(() => {
-    const out = [];
-    if (!startBasis) return out;
-    const start = new Date(startBasis);
-    const escalation = Number(lease.escalation_rate || 0) / 100;
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
-      const yearsIn = Math.floor(i / 12);
-      const stepRent = monthly * Math.pow(1 + escalation, yearsIn);
-      out.push({ label: d.toLocaleDateString(undefined, { year: "numeric", month: "short" }), amount: stepRent });
-    }
-    return out;
-  }, [startBasis, lease.escalation_rate, monthly]);
-
-  if (!startBasis || !monthly) {
-    return (
-      <Card>
-        <CardContent className="p-4 text-sm text-slate-500">
-          Budget preview requires a commencement date and monthly rent. Complete those fields to see
-          the next 12 months of base rent projected from the approved lease terms.
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">Next 12 Months — Base Rent Preview</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <p className="text-xs text-slate-500">
-          This is a read-only preview from the lease abstract under review. Approved lease data feeds
-          Revenue Budget and Charge Schedule in downstream modules.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-500">
-                <th className="py-2">Month</th>
-                <th className="py-2 text-right">Base Rent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {months.map((m) => (
-                <tr key={m.label} className="border-b border-slate-100">
-                  <td className="py-1.5 text-slate-700">{m.label}</td>
-                  <td className="py-1.5 text-right text-slate-900">${m.amount.toFixed(0)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
