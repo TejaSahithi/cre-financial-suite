@@ -1,4 +1,13 @@
 import {
+  isRuleSuperseded,
+  isRuleApproved,
+  isProtectedHumanRule,
+  isRuleRejected,
+  isRuleNotApplicable,
+  deriveRuleSetStatusFromRules
+} from "./utils/leaseExpenseRuleStatus";
+
+import {
   asNumber,
   asArray,
   normalizeFrequency,
@@ -28,8 +37,6 @@ const devTable = (...args) => { if (import.meta.env.DEV) devTable(...args); };
 import {
   getEffectiveApprovalStatus,
   getEffectiveReviewStatus,
-  getRawReviewStatus,
-  getEffectiveRowStatus,
 } from "@/lib/ruleStatus";
 
 
@@ -46,76 +53,14 @@ import {
 
 
 
-function isRuleSuperseded(rule) {
-  return [rule?.row_status, rule?.status, rule?.extraction_status]
-    .some((value) => normalizeText(value) === "superseded");
-}
 
-function isRuleApproved(rule) {
-  // Logic-preserving migration to the central helper. See src/lib/ruleStatus.js.
-  return getEffectiveReviewStatus(rule) === "approved"
-    && getEffectiveApprovalStatus(rule) === "approved";
-}
 
-function isManualOverrideRule(rule) {
-  return [
-    rule?.created_from,
-    rule?.generation_source,
-    rule?.source_type,
-  ].some((value) => ["manual", "manual_override", "user_override"].includes(normalizeText(value))) ||
-    normalizeText(rule?.row_status) === "manually_added";
-}
 
-function isProtectedHumanRule(rule) {
-  return isRuleApproved(rule) ||
-    Boolean(rule?.published_to_cam) ||
-    isManualOverrideRule(rule);
-}
 
-function isRuleRejected(rule) {
-  // Bare review_status read (no "reviewed" → "approved" promotion) preserves
-  // original semantics from before the helper consolidation.
-  const rowStatus = normalizeText(rule?.row_status || rule?.status);
-  return getRawReviewStatus(rule) === "rejected"
-    || getEffectiveApprovalStatus(rule) === "rejected"
-    || rowStatus === "rejected";
-}
 
-function isRuleNotApplicable(rule) {
-  const rowStatus = normalizeText(rule?.row_status || rule?.status || rule?.extraction_status);
-  if (["unmapped", "not_found", "not_mentioned", "not_applicable", "na", "n/a"].includes(rowStatus)) return true;
-  return Boolean(rule?.is_excluded) &&
-    deriveRuleRecoverableFromTenant(rule) === "no" &&
-    deriveRuleCamEligible(rule) === "no" &&
-    ["approved", "rejected"].includes(normalizeText(rule?.approval_status));
-}
 
-function isRuleActiveForRuleSetStatus(rule) {
-  if (isRuleSuperseded(rule)) return false;
-  const rowStatus = normalizeText(rule?.row_status || rule?.status);
-  return !["archived", "deleted", "void", "voided", "superseded"].includes(rowStatus);
-}
 
-function isRuleResolvedForRuleSetStatus(rule) {
-  return isRuleApproved(rule) || isRuleRejected(rule) || isRuleNotApplicable(rule);
-}
 
-function deriveRuleSetStatusFromRules(rules = []) {
-  const activeRules = (rules || []).filter(isRuleActiveForRuleSetStatus);
-  if (activeRules.length === 0) return "draft";
-  if (activeRules.every(isRuleResolvedForRuleSetStatus)) return "approved";
-  if (activeRules.some((rule) => {
-    const rowStatus = getEffectiveRowStatus(rule);
-    return getRawReviewStatus(rule) === "needs_review" ||
-      getEffectiveApprovalStatus(rule) === "needs_review" ||
-      rowStatus === "needs_review" ||
-      rowStatus === "uncertain" ||
-      rowStatus === "missing_value";
-  })) {
-    return "needs_review";
-  }
-  return "draft";
-}
 
 function isRuleCamPublishable(rule) {
   const reviewStatus = getEffectiveReviewStatus(rule);
@@ -302,7 +247,7 @@ function deriveRulePaymentTreatment(rule) {
   return "not_applicable";
 }
 
-function deriveRuleRecoverableFromTenant(rule) {
+export function deriveRuleRecoverableFromTenant(rule) {
   const explicit = normalizeTriStateDecision(rule?.recoverable_from_tenant);
   if (explicit) return explicit;
   if (typeof rule?.recoverable_flag === "boolean") return rule.recoverable_flag ? "yes" : "no";
@@ -320,7 +265,7 @@ function deriveRuleResponsibility(rule) {
   return deriveRuleOperationalResponsibility(rule);
 }
 
-function deriveRuleCamEligible(rule) {
+export function deriveRuleCamEligible(rule) {
   const paymentTreatment = deriveRulePaymentTreatment(rule);
   const recoverable = deriveRuleRecoverableFromTenant(rule);
 
