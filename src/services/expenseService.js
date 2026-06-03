@@ -18,6 +18,20 @@ import {
   isMissingColumnError,
   isSchemaCompatibilityError
 } from "./utils/expenseParsers";
+import {
+  bumpExclusion,
+  EMPTY_ACTUAL_EXCLUSIONS,
+  EMPTY_RULE_EXCLUSIONS,
+} from "./utils/expenseClassificationExclusions";
+import {
+  canSendClassificationToCam,
+  hasExplicitCamExclusion,
+  isClassificationSentToCam,
+} from "./utils/expenseCamEligibility";
+import {
+  CamEligibilityError,
+  ClassificationEligibilityError,
+} from "./utils/expenseWorkflowErrors";
 
 import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
@@ -41,25 +55,6 @@ import {
   isRuleClassificationEligible,
 } from "@/lib/expenseEligibility";
 
-// Typed errors so UI handlers can render a specific reason rather than a
-// generic "operation failed" toast. Batch D wires the LeaseExpenseClassification
-// page to surface error.message verbatim; the `.reason` property is available
-// for analytics/logging.
-class ClassificationEligibilityError extends Error {
-  constructor(message, { reason } = {}) {
-    super(message);
-    this.name = "ClassificationEligibilityError";
-    this.reason = reason || null;
-  }
-}
-
-class CamEligibilityError extends Error {
-  constructor(message, { reason } = {}) {
-    super(message);
-    this.name = "CamEligibilityError";
-    this.reason = reason || null;
-  }
-}
 import {
   getEffectiveApprovalStatus,
   getRawReviewStatus,
@@ -69,59 +64,9 @@ import {
   ruleRequiresPerTenantAllocation,
 } from "@/lib/tenantResolver";
 
-// Histogram buckets surfaced in the Classification debug panel (Batch B). Every
-// reason returned by getRuleClassificationExclusionReason / getActualClassificationExclusionReason
-// must have a slot here so the panel doesn't silently drop rows.
-const EMPTY_RULE_EXCLUSIONS = Object.freeze({
-  superseded: 0,
-  not_approved: 0,
-  original_lease_required: 0,
-  coverage_gap: 0,
-  weak_fallback: 0,
-  missing_source: 0,
-  missing_category: 0,
-  included_in_base_rent: 0,
-  tenant_direct: 0,
-  explicit_exclusion: 0,
-  non_recoverable: 0,
-  non_cam: 0,
-  needs_review: 0,
-  wrong_scope: 0,
-});
-
-const EMPTY_ACTUAL_EXCLUSIONS = Object.freeze({
-  wrong_scope: 0,
-  not_actual_expense: 0,
-  original_lease_required: 0,
-  coverage_gap: 0,
-  superseded: 0,
-  rejected: 0,
-  draft: 0,
-  needs_review: 0,
-  not_approved: 0,
-  missing_amount: 0,
-});
-
-function bumpExclusion(target, reason) {
-  if (!reason) return;
-  target[reason] = (target[reason] ?? 0) + 1;
-}
-
 const baseExpenseService = createEntityService("Expense");
 const baseLeaseService = createEntityService("Lease");
 
-const LEASE_DERIVED_EXPENSES = [
-  { field: "cam_amount", category: "cam", label: "CAM" },
-  { field: "nnn_amount", category: "nnn", label: "NNN" },
-  { field: "insurance_reimbursement_amount", category: "insurance", label: "Insurance Reimbursement" },
-  { field: "tax_reimbursement_amount", category: "taxes", label: "Tax Reimbursement" },
-  { field: "utility_reimbursement_amount", category: "utilities", label: "Utility Reimbursement" },
-  { field: "water_sewer_reimbursement_amount", category: "utilities", label: "Water / Sewer Reimbursement" },
-  { field: "pet_rent_amount", category: "pet_rent", label: "Pet Rent" },
-  { field: "parking_fee_amount", category: "parking", label: "Parking Fee" },
-];
-
-const SYNCABLE_LEASE_STATUSES = new Set(["active", "approved", "budget_ready", "executed"]);
 const CONDITIONAL_KEYWORDS = ["subject to", "provided that", "unless", "if ", "condition", "gross-up", "base year", "cap"];
 
 
@@ -139,94 +84,6 @@ function normalizeRecoveryStatus(rule) {
 
 
 
-
-function getLeaseExtractedValue(lease, fieldName) {
-  if (!lease || !fieldName) return null;
-  if (lease[fieldName] != null && lease[fieldName] !== "") return lease[fieldName];
-
-  const extractedFields = lease?.extracted_fields && typeof lease.extracted_fields === "object"
-    ? lease.extracted_fields
-    : lease?.extraction_data?.extracted_fields && typeof lease.extraction_data.extracted_fields === "object"
-      ? lease.extraction_data.extracted_fields
-      : null;
-
-  if (extractedFields && extractedFields[fieldName] != null && extractedFields[fieldName] !== "") {
-    return extractedFields[fieldName];
-  }
-
-  const customFields = Array.isArray(lease?.extraction_data?.custom_fields)
-    ? lease.extraction_data.custom_fields
-    : [];
-
-  const matchingCustomField = customFields.find((field) => field?.field_key === fieldName && field?.value != null && field?.value !== "");
-  return matchingCustomField?.value ?? null;
-}
-
-function buildCoreLeaseDerivedPayloads(lease, propertyById) {
-  const status = normalizeLeaseStatus(lease?.status);
-  if (!SYNCABLE_LEASE_STATUSES.has(status)) return [];
-  if (!lease?.id || !lease?.property_id) return [];
-
-  const fiscalYear = deriveLeaseExpenseFiscalYear(lease);
-  const expenseDate = deriveLeaseExpenseDate(lease, fiscalYear);
-  const month = Number(expenseDate.slice(5, 7)) || 1;
-  const tenantName = String(lease.tenant_name || "Lease");
-  const property = propertyById.get(lease.property_id) || null;
-  const extractedAmounts = Object.fromEntries(
-    LEASE_DERIVED_EXPENSES.map((definition) => [
-      definition.field,
-      toNumber(getLeaseExtractedValue(lease, definition.field)),
-    ]),
-  );
-  const suppressGenericUtilityCharge =
-    extractedAmounts.utility_reimbursement_amount > 0 &&
-    extractedAmounts.utility_reimbursement_amount === extractedAmounts.water_sewer_reimbursement_amount;
-
-  return LEASE_DERIVED_EXPENSES.flatMap((definition) => {
-    if (definition.field === "utility_reimbursement_amount" && suppressGenericUtilityCharge) {
-      return [];
-    }
-
-    const amount = extractedAmounts[definition.field] ?? 0;
-    if (amount <= 0) return [];
-
-    return [{
-      org_id: lease.org_id,
-      portfolio_id: property?.portfolio_id || null,
-      property_id: lease.property_id,
-      building_id: lease.building_id || null,
-      unit_id: lease.unit_id || null,
-      lease_id: lease.id,
-      tenant_id: lease.tenant_id || null,
-      tenant_name: tenantName,
-      category: definition.category,
-      expense_subcategory: null,
-      amount,
-      classification: "recoverable",
-      recovery_status: "recoverable",
-      vendor: tenantName,
-      vendor_name: tenantName,
-      fiscal_year: fiscalYear,
-      month,
-      date: expenseDate,
-      expense_date: expenseDate,
-      source: "lease_import",
-      source_type: "lease_import",
-      rule_source: "lease",
-      allocation_type: "direct",
-      allocation_method: "direct",
-      is_controllable: true,
-      approval_status: "approved",
-      review_status: "approved",
-      confidence_score: 1,
-      description: `${definition.label} imported from lease for ${tenantName}`,
-      evidence_text: `Derived from ${definition.field}`,
-      classification_updated_at: new Date().toISOString(),
-      billing_period_start: lease.start_date || expenseDate,
-      billing_period_end: lease.end_date || null,
-    }];
-  });
-}
 
 function buildApprovedRuleLookups(ruleRows = [], categories = []) {
   const categoriesById = new Map((categories || []).map((category) => [category.id, category]));
@@ -784,15 +641,6 @@ function buildClassificationNextStep({
   return "Finalize row";
 }
 
-function isClassificationSentToCam(classification = {}) {
-  return Boolean(
-    classification?.sent_to_cam ||
-    normalizeText(classification?.cam_status) === "sent" ||
-    classification?.sent_to_cam_at ||
-    normalizeText(classification?.next_step) === "sent to cam"
-  );
-}
-
 function classificationSortTime(row) {
   return Date.parse(
     row?.sent_to_cam_at ||
@@ -820,66 +668,6 @@ function preferExpenseClassificationRecord(current, candidate) {
   if (!Number.isFinite(candidateTime)) return current;
   return candidateTime >= currentTime ? candidate : current;
 }
-
-function hasExplicitCamExclusion({ classification = {}, expense = {}, rule = null } = {}) {
-  const recoverability = normalizeText(
-    rule
-      ? leaseExpenseRuleService.getRecoverableDecision(rule)
-      : classification?.recoverability_result ||
-      classification?.recovery_status ||
-      expense?.recoverability_result ||
-      expense?.recovery_status
-  );
-  const camEligible = normalizeText(
-    rule
-      ? leaseExpenseRuleService.getCamEligibleDecision(rule)
-      : classification?.cam_eligible ||
-      expense?.cam_eligible
-  );
-  const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
-
-  return recoverability === "no" ||
-    recoverability === "non_recoverable" ||
-    recoverability === "excluded" ||
-    (Boolean(rule) && camEligible === "no") ||
-    Boolean(rule?.included_in_base_rent) ||
-    paymentTreatment === "included_in_base_rent" ||
-    paymentTreatment === "tenant_direct_contract" ||
-    Boolean(rule?.is_excluded) ||
-    Boolean(classification?.exclusion_applied);
-}
-
-function canSendClassificationToCam({ classification, expense, rule, manualReason = "" }) {
-  const amount = toNumber(classification?.amount ?? expense?.amount);
-  const recoverabilityResult = normalizeText(classification?.recoverability_result || classification?.recovery_status);
-  const camEligible = normalizeText(classification?.cam_eligible);
-  const paymentTreatment = normalizeText(leaseExpenseRuleService.getPaymentTreatment(rule));
-  const hasActual = Boolean(classification?.actual_expense_id || classification?.expense_id);
-  const hasRule = Boolean(classification?.lease_expense_rule_id || classification?.linked_expense_rule_id);
-  const hasManualReason = Boolean(String(manualReason || "").trim());
-  const explicitExclusion = hasExplicitCamExclusion({ classification, expense, rule });
-
-  const automaticActualPath =
-    hasActual &&
-    hasRule &&
-    recoverabilityResult === "recoverable" &&
-    camEligible === "yes" &&
-    rule?.published_to_cam === true &&
-    amount > 0 &&
-    !isClassificationSentToCam(classification) &&
-    paymentTreatment !== "included_in_base_rent" &&
-    paymentTreatment !== "tenant_direct_contract";
-
-  const manualActualPath =
-    hasActual &&
-    hasManualReason &&
-    amount > 0 &&
-    !isClassificationSentToCam(classification) &&
-    !explicitExclusion;
-
-  return automaticActualPath || manualActualPath;
-}
-
 
 // Treat any of the lease-expense-rule supporting tables not being deployed
 // as "no rules" rather than throwing — this code runs on every lease save
