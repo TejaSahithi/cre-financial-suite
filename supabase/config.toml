@@ -75,6 +75,30 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+[functions.approve-lease-workflow]
+enabled = true
+verify_jwt = true
+
+[functions.approve-lease-expense-rule]
+enabled = true
+verify_jwt = true
+
+[functions.reject-lease-expense-rule]
+enabled = true
+verify_jwt = true
+
+[functions.mark-lease-expense-rule-not-applicable]
+enabled = true
+verify_jwt = true
+
+[functions.publish-lease-expense-rule-to-cam]
+enabled = true
+verify_jwt = true
+
+[functions.send-expense-classification-to-cam]
+enabled = true
+verify_jwt = true
+
 # Onboarding & Auth Functions
 [functions.first-login]
 enabled = true

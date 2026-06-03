@@ -26,6 +26,10 @@ import {
   createRuleReviewIdempotencyKey,
   publishLeaseExpenseRuleToCam,
 } from "@/services/leaseExpenseRuleWorkflowService";
+import {
+  createExpenseClassificationCamSendIdempotencyKey,
+  sendExpenseClassificationToCam,
+} from "@/services/expenseClassificationWorkflowService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveTableName } from "@/types";
 import {
@@ -1410,105 +1414,6 @@ async function updateExpenseClassificationRecord(classificationId, patch = {}) {
   return null;
 }
 
-async function upsertCamExpenseInput(payload = {}, { onConflict = "classification_result_id" } = {}) {
-  if (!supabase) return null;
-  let attemptPayload = compactDefined(payload);
-
-  const tryUpsert = async () => {
-    const { data, error } = await supabase
-      .from("cam_expense_inputs")
-      .upsert(attemptPayload, { onConflict })
-      .select("*")
-      .maybeSingle();
-    return { data, error };
-  };
-
-  while (Object.keys(attemptPayload).length > 0) {
-    const { data, error } = await tryUpsert();
-    if (!error) return data;
-    if (isMissingExpenseRuleTable(error)) {
-      console.warn("[expenseService] cam_expense_inputs table missing; saved classification without CAM input row.");
-      return null;
-    }
-
-    const conflictError = String(error?.message || error?.details || "").toLowerCase();
-    if (
-      error?.code === "42P10" ||
-      conflictError.includes("no unique") ||
-      conflictError.includes("no constraint")
-    ) {
-      break;
-    }
-
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
-      throw error;
-    }
-    delete attemptPayload[missingColumn];
-  }
-
-  const existingId =
-    attemptPayload.classification_result_id
-      ? await supabase
-        .from("cam_expense_inputs")
-        .select("id")
-        .eq("classification_result_id", attemptPayload.classification_result_id)
-        .limit(1)
-        .then(({ data, error }) => {
-          if (error && isMissingExpenseRuleTable(error)) return null;
-          if (error) throw error;
-          return data?.[0]?.id || null;
-        })
-      : attemptPayload.lease_expense_rule_id
-        ? await supabase
-          .from("cam_expense_inputs")
-          .select("id")
-          .eq("lease_expense_rule_id", attemptPayload.lease_expense_rule_id)
-          .eq("source", attemptPayload.source || "lease_rule_amount")
-          .limit(1)
-          .then(({ data, error }) => {
-            if (error && isMissingExpenseRuleTable(error)) return null;
-            if (error) throw error;
-            return data?.[0]?.id || null;
-          })
-        : null;
-
-  if (existingId) {
-    while (Object.keys(attemptPayload).length > 0) {
-      const { data, error } = await supabase
-        .from("cam_expense_inputs")
-        .update(attemptPayload)
-        .eq("id", existingId)
-        .select("*")
-        .maybeSingle();
-      if (!error) return data;
-      if (isMissingExpenseRuleTable(error)) return null;
-      const missingColumn = extractMissingColumn(error);
-      if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
-        throw error;
-      }
-      delete attemptPayload[missingColumn];
-    }
-    return null;
-  }
-
-  while (Object.keys(attemptPayload).length > 0) {
-    const { data, error } = await supabase
-      .from("cam_expense_inputs")
-      .insert(attemptPayload)
-      .select("*")
-      .maybeSingle();
-    if (!error) return data;
-    if (isMissingExpenseRuleTable(error)) return null;
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in attemptPayload)) {
-      throw error;
-    }
-    delete attemptPayload[missingColumn];
-  }
-  return null;
-}
-
 async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
   if (!supabase || !expenseId) {
     throw new Error("Expense record not found");
@@ -2730,9 +2635,9 @@ export const expenseService = {
       classification_status: "finalized",
       approved_status: "approved",
       row_type: "rule_missing_actual",
-      sent_to_cam: true,
-      sent_to_cam_at: now,
-      sent_to_cam_by: userId,
+      sent_to_cam: false,
+      sent_to_cam_at: null,
+      sent_to_cam_by: null,
       finalized_at: now,
       reviewed_at: now,
       reviewed_by: userId,
@@ -2764,35 +2669,15 @@ export const expenseService = {
       console.warn("[expenseService] lease rule amount persistence warning:", error);
     }
 
-    const camInput = await upsertCamExpenseInput({
-      org_id: rule.org_id || orgId,
-      property_id: rule.property_id || rule.rule_set?.property_id || null,
-      building_id: rule.building_id || rule.rule_set?.building_id || null,
-      unit_id: rule.unit_id || rule.rule_set?.unit_id || null,
-      lease_id: leaseId,
-      tenant_id: tenantId,
-      actual_expense_id: null,
-      classification_result_id: classification?.id || null,
-      lease_expense_rule_id: rule.id,
-      category: rule.expense_category || rule.category_name || null,
-      amount: numericAmount,
-      recovery_method: rule.recovery_method || null,
-      allocation_basis: rule.allocation_basis || rule.recovery_method || null,
-      source: "lease_rule_amount",
-      status: "cam_ready",
-      cam_source: "lease_rule_amount",
-      cam_input_type: "lease_rule_amount",
-      manual_cam_reviewed: true,
-      manual_cam_reason: "CAM rule amount entered by reviewer",
-      fiscal_year: fiscalYear,
-      sent_to_cam_at: now,
-      sent_to_cam_by: userId,
-      updated_at: now,
-    }, {
-      onConflict: "lease_expense_rule_id,fiscal_year",
-    });
+    const camSendResult = classification?.id
+      ? await sendExpenseClassificationToCam({
+        classificationId: classification.id,
+        reason: "CAM rule amount entered by reviewer",
+        idempotencyKey: createExpenseClassificationCamSendIdempotencyKey(classification.id),
+      })
+      : null;
 
-    return camInput || classification || { lease_expense_rule_id: rule.id, amount: numericAmount };
+    return camSendResult || classification || { lease_expense_rule_id: rule.id, amount: numericAmount };
   },
 
   async createActualExpenseFromCoverageGap(rule, amount, currentYear) {
@@ -3063,9 +2948,8 @@ export const expenseService = {
       classification.lease_expense_rule_id ||
       classification.linked_expense_rule_id ||
       null;
-    const [expense, authResult, ruleResult] = await Promise.all([
+    const [expense, ruleResult] = await Promise.all([
       expenseId ? baseExpenseService.get(expenseId) : Promise.resolve(null),
-      supabase?.auth?.getUser?.() || Promise.resolve(null),
       ruleId
         ? supabase.from("lease_expense_rules").select("*").eq("id", ruleId).single()
         : Promise.resolve({ data: null, error: null }),
@@ -3139,52 +3023,13 @@ export const expenseService = {
       throw new Error("Only CAM-ready actual expense rows can be sent to CAM.");
     }
 
-    const now = new Date().toISOString();
-    const userId = authResult?.data?.user?.id || null;
-    const camSource = isAutomatic ? "lease_rule" : "manual_review";
-    const inputPayload = {
-      org_id: classification.org_id || expense?.org_id || null,
-      property_id: classification.property_id || expense?.property_id || null,
-      building_id: classification.building_id || expense?.building_id || null,
-      unit_id: classification.unit_id || expense?.unit_id || null,
-      lease_id: classification.lease_id || expense?.lease_id || null,
-      tenant_id: classification.tenant_id || expense?.tenant_id || null,
-      actual_expense_id: expenseId,
-      classification_result_id: classification.id,
-      lease_expense_rule_id: ruleId,
-      category: classification.category || expense?.category || null,
-      amount: toNumber(classification.amount ?? expense?.amount),
-      recovery_method: classification.recovery_method || null,
-      allocation_basis: classification.allocation_basis || null,
-      source: camSource,
-      status: "cam_ready",
-      cam_source: camSource,
-      cam_input_type: "actual_expense",
-      manual_cam_reviewed: !isAutomatic,
-      manual_cam_reason: manualReason || null,
-      sent_to_cam_at: now,
-      sent_to_cam_by: userId,
-      updated_at: now,
-    };
-
-    await upsertCamExpenseInput(inputPayload, { onConflict: "classification_result_id" });
-
-    const result = await updateExpenseClassificationRecord(classification.id, {
-      sent_to_cam: true,
-      sent_to_cam_at: now,
-      sent_to_cam_by: userId,
-      cam_status: "cam_ready",
-      cam_eligible: "yes",
-      cam_source: camSource,
-      cam_input_type: "actual_expense",
-      manual_cam_reviewed: !isAutomatic,
-      manual_cam_reason: manualReason || null,
-      manual_cam_reviewed_by: !isAutomatic ? userId : null,
-      manual_cam_reviewed_at: !isAutomatic ? now : null,
-      next_step: "CAM Ready",
+    const result = await sendExpenseClassificationToCam({
+      classificationId: classification.id,
+      reason: manualReason || null,
+      idempotencyKey: createExpenseClassificationCamSendIdempotencyKey(classification.id),
     });
-    console.log(`[Diagnostics] Marked classification ${classification.id} CAM ready`);
-    return result;
+    console.log(`[Diagnostics] Sent classification ${classification.id} to CAM via server workflow`);
+    return result?.classification || result;
   },
 
   async publishRuleToCamSetup(ruleId) {

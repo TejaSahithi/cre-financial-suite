@@ -47,6 +47,7 @@ __pycache__/
 *.pyc
 *.bak
 supabase/functions/debug-*
+scratch/root-artifacts/
 
 /mingit/
 *.log

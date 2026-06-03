@@ -1,3 +1,0 @@
-﻿// Historical local smoke-test placeholder.
-// Keep this file valid so project lint/build checks are not blocked by a corrupted scratch script.
-console.log("test-scope.js placeholder: run app flows or targeted service tests instead.");
