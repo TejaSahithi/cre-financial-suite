@@ -87,6 +87,7 @@ import {
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
+import RequiredReviewQueue from "@/components/lease-review/RequiredReviewQueue";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import { SourceFileLink } from "@/components/lease-review/SourceFileLink";
 import { BudgetPreviewCard } from "@/components/lease-review/BudgetPreviewCard";
@@ -2322,19 +2323,25 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Rule readiness banner */}
-      <div
-        className={`rounded-xl border px-4 py-3 text-sm ${
-          isAssignmentOnlyDocument
-            ? "border-slate-200 bg-slate-50 text-slate-700"
-            : approvedRuleSet
+      {/* Assignment / amendment document notice */}
+      {isAssignmentOnlyDocument && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <p className="font-semibold mb-1">This document is an Assignment / Amendment / Consent — not the full original lease.</p>
+          <p>Assignment terms have been extracted and are ready to review. CAM, insurance, expense recovery, and operating expense fields require the original lease document.</p>
+          <p className="mt-1 text-xs text-blue-600">Upload the original lease to complete the full abstract and unlock CAM/expense approval.</p>
+        </div>
+      )}
+
+      {/* Rule readiness banner — only for full leases */}
+      {!isAssignmentOnlyDocument && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            approvedRuleSet
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-amber-200 bg-amber-50 text-amber-800"
-        }`}
-      >
-        {isAssignmentOnlyDocument
-          ? "No lease expense recovery clauses found in this document — it appears to be an assignment / amendment / consent. The original lease is required for CAM and expense recovery rules."
-          : approvedRuleSet
+          }`}
+        >
+          {approvedRuleSet
             ? "Lease expense rules are approved. Approving the lease abstract will refresh lease-derived charges and CAM readiness."
             : (
               <span>
@@ -2344,7 +2351,23 @@ export default function LeaseReview() {
                 </Link>
               </span>
             )}
-      </div>
+        </div>
+      )}
+
+      {/* Required review queue — only shown when required fields are still pending */}
+      <RequiredReviewQueue
+        pendingKeys={requiredPendingKeys}
+        leaseFull={leaseFull}
+        onJumpToTab={setActiveTab}
+        onAccept={(key) => {
+          const meta = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
+          if (meta) handleAccept(meta);
+        }}
+        onEdit={(key) => {
+          const meta = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
+          if (meta) openDrawer(meta, "edit");
+        }}
+      />
 
       {/* Confidence summary — 6 cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -2405,10 +2428,28 @@ export default function LeaseReview() {
               if (!f.required) return false;
               return !isResolvedReview(fieldReviews[f.key]);
             }).length;
+            // Flag tabs that are inapplicable for assignment/amendment docs.
+            // A tab is "not in this document" when: we're in assignment mode AND
+            // every standard field in the tab is empty (no extracted value).
+            const FULL_LEASE_ONLY_TABS = new Set(["cam_rules", "insurance", "expenses_recoveries"]);
+            const tabHasAnyValue = tabFields.some((f) => {
+              const v = readFieldValue(leaseFull, f.key);
+              return v !== null && v !== undefined && v !== "";
+            });
+            const notInThisDoc = isAssignmentOnlyDocument && FULL_LEASE_ONLY_TABS.has(tab.key) && !tabHasAnyValue;
+
             return (
-              <TabsTrigger key={tab.key} value={tab.key} className="text-xs">
+              <TabsTrigger
+                key={tab.key}
+                value={tab.key}
+                className={`text-xs ${notInThisDoc ? "opacity-50" : ""}`}
+                title={notInThisDoc ? "Fields in this section require the original lease" : undefined}
+              >
                 {tab.label}
-                {pendingInTab > 0 && (
+                {notInThisDoc && (
+                  <span className="ml-1 text-[9px] text-slate-400">–</span>
+                )}
+                {pendingInTab > 0 && !notInThisDoc && (
                   <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-200 px-1 text-[10px] font-semibold text-amber-900">
                     {pendingInTab}
                   </span>

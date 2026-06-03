@@ -158,15 +158,15 @@ export function inferDynamicItemTab(item, key) {
   ]);
   if (knownTabs.has(businessArea)) return businessArea;
   if (businessArea === "critical_dates") return "dates_term";
-  if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|signatory|contact|building)/i.test(key)) return "parties_premises";
-  if (/(date|term|expiration|commencement|effective|start|end|renewal_notice|signature)/i.test(key)) return "dates_term";
-  if (/(rent|fee|deposit|allowance|charge|amount|payment|holdover|interest|premium|breakpoint|percentage)/i.test(key)) return "rent_charges";
-  if (/(tax|insurance|utilit|maintenance|repair|expense|cam|gross_up|cap|base_year|reconciliation|deductible)/i.test(key)) {
-    if (/(gross_up|cam_|cap|admin|management|base_year|reconciliation)/i.test(key)) return "cam_rules";
+  if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|square|footage|signatory|contact|building|use_permitted|permitted_use)/i.test(key)) return "parties_premises";
+  if (/(date|term|expiration|commencement|effective|start_date|end_date|renewal_notice|signature|lease_date)/i.test(key)) return "dates_term";
+  if (/(rent|fee|deposit|allowance|charge|amount|payment|holdover|interest|premium|breakpoint|percentage|consideration|security)/i.test(key)) return "rent_charges";
+  if (/(tax|insurance|utilit|maintenance|repair|expense|cam|gross_up|cap|base_year|reconciliation|deductible|operating)/i.test(key)) {
+    if (/(gross_up|cam_|^clause_cap|admin|management|base_year|reconciliation)/i.test(key)) return "cam_rules";
     if (/(insurance|insured|deductible|liability|subrogation)/i.test(key)) return "insurance";
     return "expenses_recoveries";
   }
-  if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|broker|estoppel|subordination|notice|rofr|termination)/i.test(key)) return "legal_options";
+  if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|broker|estoppel|subordination|notice|rofr|termination|exclusive|noncompete|non_compete|co_tenancy|relocation)/i.test(key)) return "legal_options";
   return null;
 }
 

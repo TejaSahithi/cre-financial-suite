@@ -102,6 +102,11 @@ export default function FieldReviewTable({
                   <div className="flex items-center gap-1 font-medium text-slate-700">
                     {field.label}
                     {required && <span className="text-red-500">*</span>}
+                    {field.dynamic_document_item && (
+                      <span className="ml-0.5 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-700">
+                        AI
+                      </span>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="text-xs">
