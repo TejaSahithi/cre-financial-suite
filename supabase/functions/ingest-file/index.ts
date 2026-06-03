@@ -41,16 +41,25 @@ import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-s
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Enhanced Edge Function caller with retry logic and better error handling */
+/** Enhanced Edge Function caller with retry logic and better error handling.
+ *
+ * Timeout budget: Supabase Edge Functions have a 150 s hard wall.  With two
+ * downstream calls (parse-pdf-docling + normalize-pdf-output) plus overhead,
+ * each call must complete within ~55 s so the orchestrator can still call
+ * parkForManualReview and return a clean HTTP response before the hard limit.
+ *
+ * Do NOT raise timeoutMs above 55 000 without also reducing retries or
+ * splitting the pipeline into async/queue steps.
+ */
 async function callEdgeFunction(
   supabaseUrl: string,
   functionName: string,
   body: Record<string, unknown>,
   authToken: string,
   actingOrgId?: string | null,
-  retries = 3,
-  timeoutMs = 120000,
-): Promise<{ ok: boolean; status: number; data: unknown; error?: string }> {
+  retries = 2,
+  timeoutMs = 55000,
+): Promise<{ ok: boolean; status: number; data: unknown; error?: string; timedOut?: boolean }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
   const authorization = authToken.match(/^Bearer\s+/i) ? authToken : `Bearer ${authToken}`;
   
@@ -104,24 +113,35 @@ async function callEdgeFunction(
       };
       
     } catch (err) {
-      console.error(`[ingest-file] ${functionName} attempt ${attempt} failed:`, err.message);
-      
-      if (attempt < retries) {
+      const isTimeout = err?.name === "TimeoutError" || err?.name === "AbortError" ||
+        String(err?.message || "").toLowerCase().includes("timeout");
+
+      console.error(
+        `[ingest-file] ${functionName} attempt ${attempt} failed${isTimeout ? " (timeout)" : ""}:`,
+        err.message,
+      );
+
+      // Do not retry on timeout — each retry burns the same budget and the
+      // orchestrator needs remaining time to call parkForManualReview.
+      if (!isTimeout && attempt < retries) {
         const delay = Math.pow(2, attempt - 1) * 1000;
         console.log(`[ingest-file] Retrying ${functionName} in ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      
-      return { 
-        ok: false, 
-        status: 500, 
-        data: {}, 
-        error: `Network error after ${retries} attempts: ${err.message}` 
+
+      return {
+        ok: false,
+        status: isTimeout ? 504 : 500,
+        data: {},
+        timedOut: isTimeout,
+        error: isTimeout
+          ? `${functionName} did not respond within ${timeoutMs / 1000}s — PDF may be too large or complex. Try re-extracting.`
+          : `Network error after ${retries} attempts: ${err.message}`,
       };
     }
   }
-  
+
   return { ok: false, status: 500, data: {}, error: "Unexpected retry loop exit" };
 }
 
@@ -669,7 +689,9 @@ Deno.serve(async (req: Request) => {
       if (!doclingResult.ok) {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
 
-        const reason = `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
+        const reason = (doclingResult as any).timedOut
+          ? `Extraction timed out after ${55}s — the PDF may be too large or scanned at very high resolution. Click Re-extract Lease to retry, or upload a smaller/optimised PDF.`
+          : `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
         const payload = await parkForManualReview({
           supabaseAdmin,
           fileId: file_id,
@@ -710,7 +732,9 @@ Deno.serve(async (req: Request) => {
       if (!normalizeResult.ok) {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
 
-        const reason = `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
+        const reason = (normalizeResult as any).timedOut
+          ? `Normalization timed out after ${55}s — click Re-extract Lease to retry.`
+          : `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
         const payload = await parkForManualReview({
           supabaseAdmin,
           fileId: file_id,

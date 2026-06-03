@@ -150,7 +150,38 @@ export async function logAudit(entry) {
   try {
     if (supabase) {
       const { error } = await supabase.from('audit_logs').insert(row);
-      if (error) throw error;
+      if (error) {
+        // Schema-compat fallback: staging/production may not yet have the
+        // audit_logging_hardening migration applied. If the insert fails because
+        // enhanced columns (actor_user_id, severity, before, after, metadata,
+        // source, target_user_id) are absent, retry with only the core columns
+        // that exist in every deployment.
+        const isSchemaError =
+          error.code === 'PGRST204' ||   // PostgREST: column not in schema cache
+          error.code === 'PGRST200' ||   // PostgREST: ambiguous column
+          error.code === '42703' ||       // PostgreSQL: undefined_column
+          error.code === '42P01' ||       // PostgreSQL: undefined_table
+          /column|schema cache|does not exist/i.test(error.message || '');
+
+        if (isSchemaError) {
+          console.warn(
+            '[audit] Enhanced audit_logs columns unavailable — falling back to core schema. ' +
+            'Apply 20260602004050_audit_logging_hardening.sql to production to resolve.',
+            error.message,
+          );
+          const coreRow = {
+            entity_type: row.entity_type,
+            entity_id:   row.entity_id,
+            action:      row.action,
+            org_id:      row.org_id,
+          };
+          const { error: coreErr } = await supabase.from('audit_logs').insert(coreRow);
+          if (coreErr) throw coreErr;
+          return; // core insert succeeded
+        }
+
+        throw error;
+      }
     } else {
       console.log('[audit]', row);
     }

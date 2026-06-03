@@ -1700,7 +1700,7 @@ export default function LeaseReview() {
       };
       const upsertFieldEvidence = (fieldKey, payload = {}) => {
         if (!fieldKey) return;
-        const sourceText = cleanSourceEvidenceText(cleanExtractedSourceText(payload.source_text ?? payload.source_clause));
+        const sourceText = cleanSourceEvidenceText(payload.source_text ?? payload.source_clause);
         const sourcePage = payload.source_page ?? payload.page_number ?? null;
         const value = payload.value ?? null;
         const confidence = typeof payload.confidence === "number" ? payload.confidence : fieldsWithEvidence[fieldKey]?.confidence ?? null;

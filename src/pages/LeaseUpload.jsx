@@ -23,6 +23,7 @@ import { leaseService } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { cleanSourceEvidenceText } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 
 // Statuses that still need polling because a backend stage is in flight.
@@ -1152,15 +1153,9 @@ function buildFieldEvidenceMap(payload) {
   return out;
 }
 
-function cleanExtractedSourceText(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-  const lower = text.toLowerCase();
-  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return null;
-  if (lower.includes("derived from")) return null;
-  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
-  return text;
-}
+// Delegate to the canonical implementation in leaseReviewSchema so all callers
+// use identical filtering logic and there is only one definition to maintain.
+const cleanExtractedSourceText = cleanSourceEvidenceText;
 
 // The normalize-pdf-output edge function stores the per-row workflow output
 // (lease_fields, expense_rules, cam_profile, lease_clauses) under

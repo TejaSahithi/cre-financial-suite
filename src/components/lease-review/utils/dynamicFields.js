@@ -34,7 +34,22 @@ export function normalizeDynamicKey(value) {
 }
 
 export function collectExtractedDocumentItems(lease) {
-  const workflowOutput = lease?.extraction_data?.workflow_output || {};
+  // Primary source: extraction_data.workflow_output (post-backfill / post-approve).
+  // Fallback: ui_review_payload.metadata.workflow_output from the most recently
+  // uploaded file — available immediately after extraction, before any backfill
+  // or approval has written workflow data back onto the lease row.
+  const ufPayload =
+    lease?.uploaded_files?.ui_review_payload ||
+    lease?.uploaded_file?.ui_review_payload;
+  const ufWfMeta = ufPayload?.metadata?.workflow_output;
+  const ufWfRecord = (ufPayload?.records || ufPayload?.rows || [])[0]?.workflow_output;
+  const ufWf = ufWfRecord || ufWfMeta || {};
+
+  const workflowOutput = (
+    Object.keys(lease?.extraction_data?.workflow_output || {}).length > 0
+      ? lease.extraction_data.workflow_output
+      : ufWf
+  );
   const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
   const fieldMapItems = [];
   const addFieldMapItems = (map, sourceName) => {
@@ -126,6 +141,14 @@ export function collectExtractedDocumentItems(lease) {
   addLeaseClauses(recordOutput.lease_clauses, "workflow_record_lease_clauses");
   addLeaseClauses(lease?.extraction_data?.lease_clauses, "extraction_data_lease_clauses");
 
+  // Supplement from ui_review_payload when it contains a different workflow
+  // output than extraction_data (i.e. backfill hasn't run yet). This ensures
+  // non-standard fields are visible as dynamic rows immediately after upload.
+  if (ufWf && ufWf !== workflowOutput) {
+    addFieldMapItems(ufWf?.lease_fields, "uf_payload_lease_fields");
+    addLeaseClauses(ufWf?.lease_clauses, "uf_payload_lease_clauses");
+  }
+
   const sources = [
     workflowOutput.extracted_document_items,
     workflowOutput.clause_records,
@@ -201,8 +224,12 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
     if (!key || !createsDynamicRow || seen.has(key)) continue;
-    const tab = inferDynamicItemTab(item, key);
-    if (!tab || tab === "clause_records") continue;
+    // Fall back to legal_options for any item inferDynamicItemTab can't route.
+    // This prevents extracted fields (e.g. force_majeure, jury_trial_waiver,
+    // attorneys_fees) from being silently dropped — every extracted item with
+    // a value or source text must be visible somewhere.
+    const tab = inferDynamicItemTab(item, key) || "legal_options";
+    if (tab === "clause_records") continue;
     seen.add(key);
     if (!byTab[tab]) byTab[tab] = [];
     byTab[tab].push({
