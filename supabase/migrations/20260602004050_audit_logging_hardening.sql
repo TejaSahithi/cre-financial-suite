@@ -1,4 +1,4 @@
-﻿-- 1. Add missing columns to audit_logs
+-- 1. Add missing columns to audit_logs
 ALTER TABLE public.audit_logs
   ADD COLUMN IF NOT EXISTS actor_user_id UUID REFERENCES auth.users(id),
   ADD COLUMN IF NOT EXISTS actor_email TEXT,
@@ -15,9 +15,9 @@ ALTER TABLE public.audit_logs
 
 -- 2. Add CHECK constraints
 ALTER TABLE public.audit_logs
-  ADD CONSTRAINT audit_logs_severity_check 
+  ADD CONSTRAINT audit_logs_severity_check
   CHECK (severity IN ('debug', 'info', 'warning', 'error', 'critical')),
-  ADD CONSTRAINT audit_logs_source_check 
+  ADD CONSTRAINT audit_logs_source_check
   CHECK (source IN ('frontend', 'edge_function', 'webhook', 'system'));
 
 -- 3. Update RLS read policy (super_admin all, org_admin own org, regular users none)
@@ -29,8 +29,8 @@ CREATE POLICY "audit_logs_select" ON public.audit_logs
 FOR SELECT USING (
     public.is_super_admin()
     OR EXISTS (
-        SELECT 1 FROM public.memberships m 
-        WHERE m.user_id = auth.uid() 
+        SELECT 1 FROM public.memberships m
+        WHERE m.user_id = auth.uid()
         AND m.org_id = audit_logs.org_id
         AND m.role = 'org_admin'
     )

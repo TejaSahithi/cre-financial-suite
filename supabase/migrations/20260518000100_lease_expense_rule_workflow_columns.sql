@@ -3,6 +3,7 @@
 -- scope filtering, CAM publishing, and approved-abstract handoff.
 
 ALTER TABLE public.lease_expense_rules
+  ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS lease_id UUID,
   ADD COLUMN IF NOT EXISTS tenant_id UUID,
   ADD COLUMN IF NOT EXISTS property_id UUID,
@@ -34,6 +35,7 @@ ALTER TABLE public.lease_expense_rules
 
 UPDATE public.lease_expense_rules AS rules
 SET
+  org_id = COALESCE(rules.org_id, rule_sets.org_id),
   lease_id = COALESCE(rules.lease_id, rule_sets.lease_id),
   property_id = COALESCE(rules.property_id, rule_sets.property_id),
   recoverable_from_tenant = COALESCE(rules.recoverable_from_tenant, rules.is_recoverable, false),

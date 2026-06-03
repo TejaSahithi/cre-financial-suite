@@ -1,4 +1,4 @@
--- Migration: 20260601_superadmin_platform_reads.sql
+-- Migration: 20260601000000_superadmin_platform_reads.sql
 -- Description: Adds SELECT-only RLS bypass policies for platform-level super_admin
 --              to ensure super_admin can read all data across all organizations
 --              without needing a direct org membership row in each org.

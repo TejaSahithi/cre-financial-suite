@@ -1,6 +1,7 @@
 -- Migration: Add extra detail columns to lease_expense_rules
 
 ALTER TABLE lease_expense_rules
+  ADD COLUMN IF NOT EXISTS rule_key text,
   ADD COLUMN IF NOT EXISTS rule_type text,
   ADD COLUMN IF NOT EXISTS estimated_annual_amount numeric,
   ADD COLUMN IF NOT EXISTS estimated_monthly_amount numeric,

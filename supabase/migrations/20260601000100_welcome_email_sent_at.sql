@@ -1,4 +1,4 @@
--- Migration: 20260601_welcome_email_sent_at.sql
+-- Migration: 20260601000100_welcome_email_sent_at.sql
 -- Description: Adds a one-time sentinel column to organizations to prevent
 --              duplicate Welcome Aboard emails when approve-organization fires.
 --

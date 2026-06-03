@@ -159,10 +159,6 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
-[functions.debug-user]
-enabled = true
-verify_jwt = true
-
 [functions.extract-lease-expense-rules]
 enabled = true
 verify_jwt = true

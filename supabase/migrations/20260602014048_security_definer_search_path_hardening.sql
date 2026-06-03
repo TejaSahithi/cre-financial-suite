@@ -1,12 +1,23 @@
 -- 1. Fix get_my_org_ids
 CREATE OR REPLACE FUNCTION public.get_my_org_ids()
- RETURNS uuid[]
+ RETURNS SETOF uuid
  LANGUAGE sql
  STABLE SECURITY DEFINER
  SET search_path = public, pg_temp
 AS $function$
-  SELECT COALESCE(array_agg(org_id), '{}'::uuid[]) FROM public.memberships
-  WHERE user_id = auth.uid() AND org_id IS NOT NULL;
+  SELECT id
+  FROM public.organizations
+  WHERE EXISTS (
+    SELECT 1
+    FROM public.memberships
+    WHERE user_id = auth.uid()
+      AND role = 'super_admin'
+  )
+  UNION
+  SELECT org_id
+  FROM public.memberships
+  WHERE user_id = auth.uid()
+    AND org_id IS NOT NULL;
 $function$;
 
 -- 2. Fix is_org_admin

@@ -15,6 +15,12 @@ ALTER TABLE public.expenses
 ALTER TABLE public.expense_classifications
   ADD COLUMN IF NOT EXISTS row_type TEXT;
 
+-- Clean resets reach this migration before the later rule-review hardening
+-- columns are present. Keep the backfill below safe and reproducible.
+ALTER TABLE public.lease_expense_rules
+  ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
 -- 2. Backfill expenses.tenant_id from leases
 UPDATE public.expenses e
 SET tenant_id = l.tenant_id

@@ -5,7 +5,9 @@ DROP POLICY IF EXISTS "invoices_delete" ON public.invoices;
 DROP POLICY IF EXISTS "invoices_all" ON public.invoices;
 
 -- Re-establish read access
-CREATE POLICY "invoices_select_org" ON public.invoices FOR SELECT TO authenticated USING (org_id = ANY (get_my_org_ids()));
+CREATE POLICY "invoices_select_org" ON public.invoices
+  FOR SELECT TO authenticated
+  USING (org_id IN (SELECT public.get_my_org_ids()));
 
 -- Secure organizations.status column via trigger
 CREATE OR REPLACE FUNCTION prevent_org_status_update()

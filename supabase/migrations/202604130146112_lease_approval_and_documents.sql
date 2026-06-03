@@ -26,6 +26,18 @@ CREATE TABLE IF NOT EXISTS documents (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.documents
+  ADD COLUMN IF NOT EXISTS property_id UUID REFERENCES public.properties(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS lease_id UUID REFERENCES public.leases(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'lease',
+  ADD COLUMN IF NOT EXISTS name TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft',
+  ADD COLUMN IF NOT EXISTS signed_by TEXT,
+  ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS comments TEXT,
+  ADD COLUMN IF NOT EXISTS document_url TEXT,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_documents_org_id ON documents(org_id);
 CREATE INDEX IF NOT EXISTS idx_documents_property_id ON documents(property_id);
