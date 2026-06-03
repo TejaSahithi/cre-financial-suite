@@ -87,7 +87,6 @@ import {
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
-import RequiredReviewQueue from "@/components/lease-review/RequiredReviewQueue";
 import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import { SourceFileLink } from "@/components/lease-review/SourceFileLink";
@@ -2359,21 +2358,6 @@ export default function LeaseReview() {
             )}
         </div>
       )}
-
-      {/* Required review queue — only shown when required fields are still pending */}
-      <RequiredReviewQueue
-        pendingKeys={requiredPendingKeys}
-        leaseFull={leaseFull}
-        onJumpToTab={setActiveTab}
-        onAccept={(key) => {
-          const meta = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
-          if (meta) handleAccept(meta);
-        }}
-        onEdit={(key) => {
-          const meta = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
-          if (meta) openDrawer(meta, "edit");
-        }}
-      />
 
       {/* Confidence summary — 6 cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
