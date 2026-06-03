@@ -203,7 +203,12 @@ function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
     if (/^(or\s+|and\s+)/i.test(valStr)) return null;
     if (/^(tenant|landlord|assignee|assignor|subtenant|guarantor|owner|manager)$/i.test(valStr)) return null;
     if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet)\b/i.test(valLower)) return null;
-    if (/[.?!](?:\s|$)|(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return null;
+    // Reject prose sentences but allow name initials like "John C. Cooley".
+    // A sentence boundary is: period/question/exclamation followed by space+uppercase,
+    // OR period followed by end-of-string when not preceded by a single capital letter.
+    if (/[?!](?:\s|$)/.test(valStr)) return null;
+    if (/\.\s+[A-Z]/.test(valStr) && !/\b[A-Z]\.\s+[A-Z]/.test(valStr)) return null;
+    if (/(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return null;
 
     const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium)\b/i;
     
@@ -295,35 +300,53 @@ function applyLeaseCrossFieldSanity(record: ExtractedRecord): void {
   }
 
   // Tenant name vs signatory detection: if tenant_name looks like a person
-  // (all caps, no entity suffix, ≤4 words), demote it to tenant_contact_name.
+  // AND the source text indicates it came from a "By:" / signature line OR
+  // there is already a different tenant_signatory_name extracted, demote it.
+  // Individuals (sole proprietors, professionals) legitimately lease commercial
+  // space, so we must not clear tenant_name solely because it has no entity
+  // suffix — we need explicit evidence that it is a signatory, not the tenant.
   const tenantName = String(fields.tenant_name?.value ?? "").trim();
   if (tenantName && looksLikePersonNotEntity(tenantName)) {
-    if (!fields.tenant_contact_name?.value) {
-      fields.tenant_contact_name = {
-        value: tenantName,
-        source: fields.tenant_name?.source ?? "llm",
-        confidence: fields.tenant_name?.confidence ?? 0.6,
-        sourceText: fields.tenant_name?.sourceText ?? "Reassigned from tenant_name (looked like a person)",
-        sourcePage: fields.tenant_name?.sourcePage ?? null,
+    const tenantSourceText = String(fields.tenant_name?.sourceText ?? "").toLowerCase();
+    const isSignatoryLine = /\bby[:\s]|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits[:\s]|\btitle[:\s]/.test(tenantSourceText);
+    const hasDifferentSignatory =
+      !!fields.tenant_signatory_name?.value &&
+      String(fields.tenant_signatory_name.value).trim().toLowerCase() !== tenantName.toLowerCase();
+    if (isSignatoryLine || hasDifferentSignatory) {
+      if (!fields.tenant_contact_name?.value) {
+        fields.tenant_contact_name = {
+          value: tenantName,
+          source: fields.tenant_name?.source ?? "llm",
+          confidence: fields.tenant_name?.confidence ?? 0.6,
+          sourceText: fields.tenant_name?.sourceText ?? "Reassigned from tenant_name (looked like a signatory line)",
+          sourcePage: fields.tenant_name?.sourcePage ?? null,
+        };
+      }
+      fields.tenant_name = {
+        value: null,
+        source: fields.tenant_name?.source ?? "rule",
+        confidence: 0,
+        sourceText: "Cleared by cross-field sanity check (value appeared on a signatory line)",
       };
     }
-    fields.tenant_name = {
-      value: null,
-      source: fields.tenant_name?.source ?? "rule",
-      confidence: 0,
-      sourceText: "Cleared by cross-field sanity check (value looked like a signatory)",
-    };
   }
 
-  // Same for landlord_name.
+  // Same for landlord_name: only clear if there is clear signatory-line evidence.
   const landlordName = String(fields.landlord_name?.value ?? "").trim();
   if (landlordName && looksLikePersonNotEntity(landlordName)) {
-    fields.landlord_name = {
-      value: null,
-      source: fields.landlord_name?.source ?? "rule",
-      confidence: 0,
-      sourceText: "Cleared by cross-field sanity check (value looked like a signatory)",
-    };
+    const landlordSourceText = String(fields.landlord_name?.sourceText ?? "").toLowerCase();
+    const isLandlordSignatoryLine = /\bby[:\s]|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits[:\s]|\btitle[:\s]/.test(landlordSourceText);
+    const hasDifferentLandlordSignatory =
+      !!fields.landlord_signatory_name?.value &&
+      String(fields.landlord_signatory_name.value).trim().toLowerCase() !== landlordName.toLowerCase();
+    if (isLandlordSignatoryLine || hasDifferentLandlordSignatory) {
+      fields.landlord_name = {
+        value: null,
+        source: fields.landlord_name?.source ?? "rule",
+        confidence: 0,
+        sourceText: "Cleared by cross-field sanity check (value appeared on a signatory line)",
+      };
+    }
   }
 }
 

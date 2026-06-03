@@ -7,7 +7,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,25 +27,10 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
-  REVIEW_STATUS_LABELS,
-  REVIEW_STATUS_STYLES,
-  EXTRACTION_STATUS_LABELS,
-  EXTRACTION_STATUS_STYLES,
-  classifyConfidence,
-  readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
-  resolveExtractionStatus,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
-
-const confidenceClass = (score) => {
-  const bucket = classifyConfidence(score);
-  if (bucket === "high") return "bg-emerald-100 text-emerald-700";
-  if (bucket === "medium") return "bg-amber-100 text-amber-700";
-  if (bucket === "low") return "bg-red-100 text-red-700";
-  return "bg-slate-100 text-slate-500";
-};
 
 const displayValue = (field, value) => {
   if (value == null || value === "") return "—";
@@ -62,7 +46,7 @@ const displayValue = (field, value) => {
   return String(value);
 };
 
-function truncate(text, max = 80) {
+function truncate(text, max = 120) {
   if (!text) return "—";
   const flat = String(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -89,13 +73,8 @@ export default function FieldReviewTable({
         <TableHeader>
           <TableRow>
             <TableHead className="w-[200px] text-xs">Field</TableHead>
-            <TableHead className="text-xs">Normalized</TableHead>
-            <TableHead className="text-xs">Raw Extracted</TableHead>
-            <TableHead className="w-[60px] text-xs">Page</TableHead>
+            <TableHead className="w-[200px] text-xs">Normalized</TableHead>
             <TableHead className="text-xs">Exact Source Text</TableHead>
-            <TableHead className="w-[100px] text-xs">Confidence</TableHead>
-            <TableHead className="w-[110px] text-xs">Extraction</TableHead>
-            <TableHead className="w-[110px] text-xs">Review</TableHead>
             <TableHead className="w-[180px] text-xs text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -105,26 +84,7 @@ export default function FieldReviewTable({
             const status = review?.status || REVIEW_STATUSES.PENDING;
             const value = readFieldValue(lease, field.key);
             const evidence = readFieldEvidence(lease, field.key);
-            const { rawValue, sourcePage, sourceText } = evidence;
-            const confidence = readFieldConfidence(lease, field.key);
-            const confidenceLabel = classifyConfidence(confidence) === "unknown" ? "Unknown" : `${Math.round(confidence)}%`;
-            // Always render the extracted value in bold. Source-evidence
-            // status is communicated separately via the Extraction column
-            // badge (Extracted / Missing Source Evidence / Not Found) and
-            // via the bottom approval-blockers bar.
-            const hasEvidence = Boolean(
-              evidence?.sourcePage
-              || (typeof evidence?.sourceText === "string" && evidence.sourceText.length > 0)
-              || evidence?.rawValue,
-            );
-            // Honor backend-stamped status; otherwise derive from value/confidence.
-            const inferredExtractionStatus = resolveExtractionStatus(lease, field.key, {
-              value,
-              confidence,
-              evidence,
-            });
-            const extractionStatusLabel = EXTRACTION_STATUS_LABELS[inferredExtractionStatus] || inferredExtractionStatus;
-            const extractionStatusClass = EXTRACTION_STATUS_STYLES[inferredExtractionStatus] || "bg-slate-100 text-slate-700";
+            const { sourceText } = evidence;
             const required = field.required;
             const rowClass = status === REVIEW_STATUSES.PENDING && required
               ? "bg-amber-50/40 hover:bg-amber-50/70"
@@ -151,25 +111,8 @@ export default function FieldReviewTable({
                     <span className="font-semibold text-slate-900">{displayValue(field, value)}</span>
                   )}
                 </TableCell>
-                <TableCell className="text-xs text-slate-600" title={rawValue ?? ""}>
-                  {truncate(rawValue, 40)}
-                </TableCell>
-                <TableCell className="text-xs text-slate-600">{sourcePage ?? "—"}</TableCell>
                 <TableCell className="text-xs italic text-slate-500" title={sourceText ?? ""}>
-                  {truncate(sourceText, 60)}
-                </TableCell>
-                <TableCell>
-                  <Badge className={`text-[10px] ${confidenceClass(confidence)}`}>{confidenceLabel}</Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge className={`text-[10px] ${extractionStatusClass}`} title={inferredExtractionStatus}>
-                    {extractionStatusLabel}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge className={`text-[10px] ${REVIEW_STATUS_STYLES[status] || "bg-slate-100 text-slate-700"}`}>
-                    {REVIEW_STATUS_LABELS[status]}
-                  </Badge>
+                  {truncate(sourceText, 120)}
                 </TableCell>
                 <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
