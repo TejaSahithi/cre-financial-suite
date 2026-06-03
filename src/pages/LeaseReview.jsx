@@ -179,7 +179,36 @@ export default function LeaseReview() {
     select: (data) => data?.[0],
   });
 
-  const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(lease), [lease]);
+  // Fetch the source uploaded_file so readFieldValue can resolve extraction
+  // data from ui_review_payload (the pipeline stores extracted fields there,
+  // not on lease.extraction_data, until the abstract is approved).
+  const { data: uploadedFile } = useQuery({
+    queryKey: ["uploaded_file_for_lease", lease?.source_file_id],
+    queryFn: async () => {
+      if (!lease?.source_file_id) return null;
+      const { data, error } = await supabase
+        .from("uploaded_files")
+        .select("id, ui_review_payload, reviewed_output, normalized_output")
+        .eq("id", lease.source_file_id)
+        .single();
+      if (error) {
+        console.warn("[LeaseReview] uploaded_files fetch error:", error.message);
+        return null;
+      }
+      return data;
+    },
+    enabled: !!lease?.source_file_id,
+  });
+
+  // Merged lease object used for display only (FieldReviewTable, summary stats).
+  // Mutation logic (save, approve, edit) continues to use the raw `lease`.
+  const leaseFull = useMemo(() => {
+    if (!lease) return lease;
+    if (!uploadedFile) return lease;
+    return { ...lease, uploaded_files: uploadedFile, uploaded_file: uploadedFile };
+  }, [lease, uploadedFile]);
+
+  const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
     const merged = {};
     for (const tab of LEASE_REVIEW_TABS) {
@@ -2511,7 +2540,7 @@ export default function LeaseReview() {
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <FieldReviewTable
                 fields={fieldsForTab[tab.key] || []}
-                lease={lease}
+                lease={leaseFull}
                 fieldReviews={fieldReviews}
                 onOpenDetail={(field) => openDrawer(field, "view")}
                 onQuickAction={(field, action) => {
@@ -2533,7 +2562,7 @@ export default function LeaseReview() {
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
           <FieldReviewTable
             fields={fieldsForTab.rent_charges || []}
-            lease={lease}
+            lease={leaseFull}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
@@ -2551,7 +2580,7 @@ export default function LeaseReview() {
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
           <FieldReviewTable
             fields={fieldsForTab.expenses_recoveries || []}
-            lease={lease}
+            lease={leaseFull}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
@@ -2569,7 +2598,7 @@ export default function LeaseReview() {
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
           <FieldReviewTable
             fields={fieldsForTab.cam_rules || []}
-            lease={lease}
+            lease={leaseFull}
             fieldReviews={fieldReviews}
             onOpenDetail={(field) => openDrawer(field, "view")}
             onQuickAction={(field, action) => {
