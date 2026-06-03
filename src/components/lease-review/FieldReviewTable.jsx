@@ -56,38 +56,14 @@ function truncate(text, max = 120) {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-// ── Status computation ────────────────────────────────────────────────────────
+// ── Source quality badge ──────────────────────────────────────────────────────
 
 const SOURCE_QUALITY_BADGE = {
-  exact:   { label: "Exact",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  partial: { label: "Partial",  cls: "bg-amber-50 text-amber-700 border-amber-200" },
-  derived: { label: "Derived",  cls: "bg-blue-50 text-blue-700 border-blue-200" },
-  missing: { label: "No source",cls: "bg-red-50 text-red-600 border-red-200" },
+  exact:   { label: "Exact",     cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  partial: { label: "Partial",   cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  derived: { label: "Derived",   cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  missing: { label: "No source", cls: "bg-red-50 text-red-600 border-red-200" },
 };
-
-const ROW_STATUS = {
-  accepted:    { label: "Accepted",        cls: "bg-emerald-100 text-emerald-800" },
-  rejected:    { label: "Rejected",        cls: "bg-red-100 text-red-800" },
-  n_a:         { label: "N/A",             cls: "bg-slate-100 text-slate-500" },
-  manual:      { label: "Manual",          cls: "bg-purple-100 text-purple-800" },
-  missing:     { label: "Missing",         cls: "bg-red-50 text-red-600" },
-  no_source:   { label: "No Source",       cls: "bg-orange-100 text-orange-800" },
-  invalid:     { label: "Invalid",         cls: "bg-red-200 text-red-900" },
-  dynamic:     { label: "Dynamic Clause",  cls: "bg-violet-100 text-violet-800" },
-  pending:     { label: "Needs Review",    cls: "bg-amber-100 text-amber-800" },
-};
-
-function computeRowStatus(field, value, sourceText, extractionStatus, reviewStatus, validationResult) {
-  if (!validationResult.valid) return "invalid";
-  if (reviewStatus === REVIEW_STATUSES.ACCEPTED || reviewStatus === REVIEW_STATUSES.EDITED) return "accepted";
-  if (reviewStatus === REVIEW_STATUSES.N_A) return "n_a";
-  if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED || reviewStatus === REVIEW_STATUSES.NEEDS_LEGAL) return "manual";
-  if (reviewStatus === REVIEW_STATUSES.REJECTED) return "rejected";
-  const hasValue = value !== null && value !== undefined && value !== "";
-  if (!hasValue) return "missing";
-  if (!sourceText) return "no_source";
-  return "pending";
-}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -129,9 +105,8 @@ export default function FieldReviewTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[180px] text-xs">Field</TableHead>
-            <TableHead className="w-[100px] text-xs">Status</TableHead>
-            <TableHead className="w-[190px] text-xs">Normalized</TableHead>
+            <TableHead className="w-[200px] text-xs">Field</TableHead>
+            <TableHead className="w-[200px] text-xs">Normalized</TableHead>
             <TableHead className="text-xs">Exact Source Text</TableHead>
             <TableHead className="w-[170px] text-xs text-right">Actions</TableHead>
           </TableRow>
@@ -145,15 +120,13 @@ export default function FieldReviewTable({
             const { sourceText, extractionStatus } = evidence;
             const required = field.required;
             const validationResult = validateFieldValue(field.key, value);
-            const rowStatusKey = computeRowStatus(field, value, sourceText, extractionStatus, reviewStatus, validationResult);
             const sourceQualityKey = computeSourceQuality(value, sourceText, extractionStatus);
             const sqBadge = SOURCE_QUALITY_BADGE[sourceQualityKey];
-            const statusBadge = ROW_STATUS[rowStatusKey];
-
             const isConflict = conflictKeys?.has(field.key);
+
             const rowClass = isConflict
               ? "bg-red-50/40 hover:bg-red-50/70"
-              : rowStatusKey === "invalid"
+              : !validationResult.valid
                 ? "bg-red-50/30 hover:bg-red-50/60"
                 : reviewStatus === REVIEW_STATUSES.PENDING && required
                   ? "bg-amber-50/40 hover:bg-amber-50/70"
@@ -183,13 +156,6 @@ export default function FieldReviewTable({
                       </span>
                     )}
                   </div>
-                </TableCell>
-
-                {/* Status */}
-                <TableCell className="text-xs">
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge.cls}`}>
-                    {statusBadge.label}
-                  </span>
                   {!validationResult.valid && (
                     <p className="mt-0.5 text-[9px] text-red-600 leading-tight">{validationResult.reason}</p>
                   )}
