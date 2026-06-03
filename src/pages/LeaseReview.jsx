@@ -88,6 +88,7 @@ import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import RequiredReviewQueue from "@/components/lease-review/RequiredReviewQueue";
+import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import { SourceFileLink } from "@/components/lease-review/SourceFileLink";
 import { BudgetPreviewCard } from "@/components/lease-review/BudgetPreviewCard";
@@ -217,6 +218,10 @@ export default function LeaseReview() {
     () => detectDocumentMismatch(lease, uploadedFile),
     [lease, uploadedFile],
   );
+
+  // Per-tab active filter state. Must be declared here (before any early
+  // returns) so React hooks always execute in the same order.
+  const [tabFilters, setTabFilters] = useState({});
 
   const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
@@ -920,6 +925,7 @@ export default function LeaseReview() {
     (r) => r?.status === REVIEW_STATUSES.MANUAL_REQUIRED || r?.status === REVIEW_STATUSES.NEEDS_LEGAL,
   ).length;
   const conflicts = detectFieldConflicts(lease);
+  const conflictKeySet = new Set(conflicts.map((c) => c.field_key));
 
   // Core mapping failure: expense terms can be keyword-detected even when no
   // standard lease field was mapped from the document. When that happens we
@@ -2606,6 +2612,14 @@ export default function LeaseReview() {
           .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
+              <FieldTableFilter
+                fields={fieldsForTab[tab.key] || []}
+                lease={leaseFull}
+                fieldReviews={fieldReviews}
+                conflictKeys={conflictKeySet}
+                activeFilter={tabFilters[tab.key] || "all"}
+                onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, [tab.key]: f }))}
+              />
               <FieldReviewTable
                 fields={fieldsForTab[tab.key] || []}
                 lease={leaseFull}
@@ -2619,6 +2633,8 @@ export default function LeaseReview() {
                   else if (action === "legal") handleNeedsLegal(field);
                   else if (action === "manual") handleMarkManualRequired(field);
                 }}
+                tableFilter={tabFilters[tab.key] || "all"}
+                conflictKeys={conflictKeySet}
               />
             </TabsContent>
           ))}
@@ -2628,6 +2644,14 @@ export default function LeaseReview() {
             billing, etc. read from it); we just surface the rows here so
             reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
+          <FieldTableFilter
+            fields={fieldsForTab.rent_charges || []}
+            lease={leaseFull}
+            fieldReviews={fieldReviews}
+            conflictKeys={conflictKeySet}
+            activeFilter={tabFilters.rent_charges || "all"}
+            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, rent_charges: f }))}
+          />
           <FieldReviewTable
             fields={fieldsForTab.rent_charges || []}
             lease={leaseFull}
@@ -2640,12 +2664,22 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
+            tableFilter={tabFilters.rent_charges || "all"}
+            conflictKeys={conflictKeySet}
           />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
+          <FieldTableFilter
+            fields={fieldsForTab.expenses_recoveries || []}
+            lease={leaseFull}
+            fieldReviews={fieldReviews}
+            conflictKeys={conflictKeySet}
+            activeFilter={tabFilters.expenses_recoveries || "all"}
+            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, expenses_recoveries: f }))}
+          />
           <FieldReviewTable
             fields={fieldsForTab.expenses_recoveries || []}
             lease={leaseFull}
@@ -2658,12 +2692,22 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
+            tableFilter={tabFilters.expenses_recoveries || "all"}
+            conflictKeys={conflictKeySet}
           />
           <ExpenseRulesTable leaseId={lease.id} />
         </TabsContent>
 
         {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
+          <FieldTableFilter
+            fields={fieldsForTab.cam_rules || []}
+            lease={leaseFull}
+            fieldReviews={fieldReviews}
+            conflictKeys={conflictKeySet}
+            activeFilter={tabFilters.cam_rules || "all"}
+            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, cam_rules: f }))}
+          />
           <FieldReviewTable
             fields={fieldsForTab.cam_rules || []}
             lease={leaseFull}
@@ -2676,6 +2720,8 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
+            tableFilter={tabFilters.cam_rules || "all"}
+            conflictKeys={conflictKeySet}
           />
           <CamRulesTable leaseId={lease.id} />
         </TabsContent>

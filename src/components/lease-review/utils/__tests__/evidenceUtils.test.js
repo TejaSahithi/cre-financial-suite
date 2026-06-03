@@ -8,6 +8,10 @@ vi.mock("@/lib/leaseReviewSchema", () => ({
   isCalculatedExtractionStatus: (s) => s === "calculated",
   isManualExtractionStatus: (s) => s === "manual_required",
   canAcceptCalculatedReviewField: () => false,
+  isResolvedReview: (review) => review && ["accepted","edited","n_a","manual_required"].includes(review.status),
+  readFieldValue: vi.fn(() => null),
+  readFieldEvidence: vi.fn(() => ({ sourceText: null, sourcePage: null, extractionStatus: null })),
+  REVIEW_STATUSES: { PENDING: "pending", ACCEPTED: "accepted", EDITED: "edited", N_A: "n_a", MANUAL_REQUIRED: "manual_required" },
   cleanSourceEvidenceText: (value) => {
     const text = String(value ?? "").trim();
     if (!text) return null;
@@ -59,6 +63,8 @@ import {
 } from "../dynamicFields";
 
 import { detectDocumentMismatch, detectFieldConflicts } from "../validation";
+import { expandToSentenceBoundary } from "../evidenceResolver";
+import { fieldMatchesFilter } from "../../FieldTableFilter";
 
 // ── 1. cleanExtractedSourceText ───────────────────────────────────────────────
 
@@ -294,7 +300,80 @@ describe("detectDocumentMismatch", () => {
   });
 });
 
-// ── 8. detectFieldConflicts (existing, regression guard) ────────────────────
+// ── 8. expandToSentenceBoundary ──────────────────────────────────────────────
+
+describe("expandToSentenceBoundary", () => {
+  it("returns the whole block when it is a labeled row", () => {
+    const text = "Tenant: Mindful Tech Solutions, Inc.";
+    const hit = text.indexOf("Mindful");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "Mindful".length);
+    expect(snippet).toBe(text);
+    expect(source_quality).toBe("exact");
+  });
+
+  it("expands to the surrounding sentence ending with a period", () => {
+    const text = "The parties agree. The Premises contain 4,200 rentable square feet. Tenant shall pay rent.";
+    const hit = text.indexOf("4,200");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "4,200".length);
+    expect(snippet).toContain("4,200");
+    expect(snippet.startsWith("The Premises")).toBe(true);
+    expect(source_quality).toBe("exact");
+  });
+
+  it("marks mid-sentence fragments as partial", () => {
+    // No sentence boundaries around the match
+    const text = "approximately 4200 rentable square feet located at the building";
+    const hit = text.indexOf("4200");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "4200".length);
+    expect(snippet).toContain("4200");
+    expect(source_quality).toBe("partial");
+  });
+
+  it("does not blow up on empty text", () => {
+    const { snippet, source_quality } = expandToSentenceBoundary("", 0, 0);
+    expect(snippet).toBe("");
+    expect(source_quality).toBe("partial");
+  });
+});
+
+// ── 9. fieldMatchesFilter ────────────────────────────────────────────────────
+
+describe("fieldMatchesFilter", () => {
+  const makeField = (overrides) => ({ key: "test", required: false, dynamic_document_item: false, ...overrides });
+
+  it("'all' matches every field", () => {
+    expect(fieldMatchesFilter(makeField(), "all", null, null, null, new Set())).toBe(true);
+  });
+
+  it("'required' matches only required fields", () => {
+    expect(fieldMatchesFilter(makeField({ required: true }),  "required", "v", "s", null, new Set())).toBe(true);
+    expect(fieldMatchesFilter(makeField({ required: false }), "required", "v", "s", null, new Set())).toBe(false);
+  });
+
+  it("'missing' matches fields with no value", () => {
+    expect(fieldMatchesFilter(makeField(), "missing", null, null, null, new Set())).toBe(true);
+    expect(fieldMatchesFilter(makeField(), "missing", "value", null, null, new Set())).toBe(false);
+  });
+
+  it("'no_source' matches fields that have a value but no source text", () => {
+    expect(fieldMatchesFilter(makeField(), "no_source", "value", null, null, new Set())).toBe(true);
+    expect(fieldMatchesFilter(makeField(), "no_source", "value", "some text", null, new Set())).toBe(false);
+    expect(fieldMatchesFilter(makeField(), "no_source", null, null, null, new Set())).toBe(false);
+  });
+
+  it("'dynamic' matches only dynamic_document_item fields", () => {
+    expect(fieldMatchesFilter(makeField({ dynamic_document_item: true }),  "dynamic", "v", "s", null, new Set())).toBe(true);
+    expect(fieldMatchesFilter(makeField({ dynamic_document_item: false }), "dynamic", "v", "s", null, new Set())).toBe(false);
+  });
+
+  it("'conflicts' matches fields in the conflict set", () => {
+    const keys = new Set(["monthly_rent"]);
+    expect(fieldMatchesFilter(makeField({ key: "monthly_rent" }), "conflicts", "v", "s", null, keys)).toBe(true);
+    expect(fieldMatchesFilter(makeField({ key: "tenant_name" }),  "conflicts", "v", "s", null, keys)).toBe(false);
+  });
+});
+
+// ── 11. detectFieldConflicts (existing, regression guard) ───────────────────
 
 describe("detectFieldConflicts", () => {
   it("flags monthly × 12 ≠ annual", () => {

@@ -176,6 +176,62 @@ export function candidateNeedles(value, field) {
   return needles;
 }
 
+/**
+ * Expand a match offset to the nearest sentence or labeled-row boundary.
+ *
+ * Priority:
+ *   1. If the block looks like a labeled summary row ("Label: value"), return
+ *      the whole row — that is the strongest evidence span.
+ *   2. Otherwise walk backward to the nearest period/newline and forward to
+ *      the next period/newline so reviewers see a complete thought.
+ *   3. Hard-cap at 240 chars in each direction to prevent bloated snippets.
+ *
+ * Returns `{ snippet, source_quality }` where source_quality is:
+ *   "exact"   — labeled row or complete sentence ending with punctuation
+ *   "partial" — sentence boundary not found; snippet is a fragment
+ */
+export function expandToSentenceBoundary(text, matchStart, matchLength) {
+  // 1. Check if the entire block is a labeled row (short, one line).
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  if (singleLine.length < 300 && /^[A-Za-z][^:\n]{0,80}:\s\S/.test(singleLine)) {
+    return { snippet: singleLine, source_quality: "exact" };
+  }
+
+  const LOOKBACK = 160;
+  const LOOKAHEAD = 160;
+
+  // 2. Walk backward for sentence start.
+  let start = matchStart;
+  for (let i = matchStart - 1; i >= Math.max(0, matchStart - LOOKBACK); i--) {
+    const c = text[i];
+    if (c === "\n") { start = i + 1; break; }
+    // Period followed by space = sentence boundary
+    if (c === "." && i + 1 < text.length && text[i + 1] === " ") { start = i + 2; break; }
+    if (i === Math.max(0, matchStart - LOOKBACK)) start = i;
+  }
+
+  // 3. Walk forward for sentence end.
+  let end = matchStart + matchLength;
+  for (let i = end; i < Math.min(text.length, matchStart + matchLength + LOOKAHEAD); i++) {
+    const c = text[i];
+    if (c === "\n" || c === "!") { end = i + 1; break; }
+    if (c === "." && (i + 1 >= text.length || text[i + 1] === " " || text[i + 1] === "\n")) {
+      end = i + 1;
+      break;
+    }
+    if (i === Math.min(text.length, matchStart + matchLength + LOOKAHEAD) - 1) end = i + 1;
+  }
+
+  const snippet = text.slice(start, end).replace(/\s+/g, " ").trim();
+
+  // 4. Determine quality.
+  const isLabeledRow = /^[A-Za-z][^:\n]{0,80}:\s\S/.test(snippet);
+  const endsWithPunct = /[.!?]["']?\s*$/.test(snippet);
+  const source_quality = isLabeledRow || endsWithPunct ? "exact" : "partial";
+
+  return { snippet, source_quality };
+}
+
 export function findEvidenceForValue(blocks, value, field) {
   const needles = candidateNeedles(value, field);
   if (needles.length === 0) return null;
@@ -190,14 +246,12 @@ export function findEvidenceForValue(blocks, value, field) {
       const after = block.lowered[hit + loweredNeedle.length] || "";
       const isWordChar = (c) => /[a-z0-9]/.test(c);
       if (isWordChar(before) && isWordChar(after)) continue;
-      // Pull a ~160-char window centered on the match.
-      const start = Math.max(0, hit - 60);
-      const end = Math.min(block.text.length, hit + needle.length + 100);
-      const snippet = block.text.slice(start, end).replace(/\s+/g, " ").trim();
+      const { snippet, source_quality } = expandToSentenceBoundary(block.text, hit, needle.length);
       return {
         raw: block.text.slice(hit, hit + needle.length),
         text: snippet,
         page: block.page,
+        source_quality,
       };
     }
   }
