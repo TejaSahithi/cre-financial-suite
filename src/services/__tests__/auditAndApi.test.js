@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { supabase } from '@/services/supabaseClient';
 import { logAudit } from '@/services/audit';
 import { PropertyService } from '@/services/api';
-import * as authService from '@/services/auth';
 
 // Mocks
 vi.mock('@/services/supabaseClient', () => {

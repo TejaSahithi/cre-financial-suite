@@ -4,24 +4,17 @@ import {
   isCalculatedExtractionStatus,
   isManualExtractionStatus,
   canAcceptCalculatedReviewField,
+  cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
 import { entryValue, entrySourceText, entrySourcePage } from "@/components/lease-review/utils/fieldExtractors";
 
-export function isGenericExtractedSourceText(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return true;
-  const lower = text.toLowerCase();
-  if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
-  if (lower.includes("derived from")) return true;
-  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
-  if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
-  return false;
-}
+// Single canonical implementation — delegates to leaseReviewSchema so both
+// call sites (dynamicFields and LeaseReview) use identical filtering logic.
+export const cleanExtractedSourceText = cleanSourceEvidenceText;
 
-export function cleanExtractedSourceText(value) {
-  const text = String(value ?? "").trim();
-  return isGenericExtractedSourceText(text) ? null : text;
+export function isGenericExtractedSourceText(value) {
+  return cleanSourceEvidenceText(value) === null;
 }
 
 export function titleizeFieldKey(value) {
@@ -91,6 +84,48 @@ export function collectExtractedDocumentItems(lease) {
   addFieldMapItems(recordOutput.lease_fields, "workflow_record_lease_fields");
   addFieldMapItems(lease?.extraction_data?.fields, "extraction_data_fields");
   addFieldMapItems(lease?.extraction_data?.field_evidence, "extraction_data_field_evidence");
+
+  // Map lease_clauses arrays to dynamic document items. Each clause becomes a
+  // reviewable row with its own source text and tab assignment.
+  const addLeaseClauses = (clauses, sourceName) => {
+    if (!Array.isArray(clauses)) return;
+    for (const clause of clauses) {
+      const clauseType = String(clause?.clause_type || clause?.type || "").trim();
+      if (!clauseType) continue;
+      // Prefix with "clause_" so static field keys are never accidentally
+      // overwritten (e.g. "landlord_consent" exists as a standard field).
+      const key = `clause_${normalizeDynamicKey(clauseType)}`;
+      const value = clause?.value ?? clause?.clause_text ?? null;
+      const sourceText = entrySourceText(clause);
+      const sourcePage = entrySourcePage(clause);
+      if ((value === null || value === undefined || value === "") && !sourceText) continue;
+      const category = String(clause?.category || clause?.business_area || "").toLowerCase();
+      fieldMapItems.push({
+        item_id: `${sourceName}:${key}`,
+        label: clause?.label || clause?.clause_label || titleizeFieldKey(clauseType),
+        item_type: clauseType,
+        field_key: key,
+        business_area: category,
+        display_tab: inferDynamicItemTab({ business_area: category }, clauseType) || "legal_options",
+        value,
+        normalized_value: value,
+        raw_value: clause?.raw_value ?? value,
+        source_text: sourceText,
+        source_page: sourcePage,
+        confidence: typeof clause?.confidence === "number" ? clause.confidence : null,
+        extraction_method: sourceName,
+        extraction_status: sourceText ? "extracted" : "missing_source_evidence",
+        maps_to_existing_field: false,
+        maps_to_fixed_field: false,
+        creates_dynamic_row: true,
+        review_status: "pending",
+      });
+    }
+  };
+  addLeaseClauses(workflowOutput.lease_clauses, "workflow_lease_clauses");
+  addLeaseClauses(recordOutput.lease_clauses, "workflow_record_lease_clauses");
+  addLeaseClauses(lease?.extraction_data?.lease_clauses, "extraction_data_lease_clauses");
+
   const sources = [
     workflowOutput.extracted_document_items,
     workflowOutput.clause_records,

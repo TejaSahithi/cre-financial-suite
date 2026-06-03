@@ -101,9 +101,11 @@ import {
 } from "@/components/lease-review/utils/fieldExtractors";
 import {
   buildDynamicDocumentFieldsByTab,
+  inferDynamicItemType,
 } from "@/components/lease-review/utils/dynamicFields";
 import {
   detectFieldConflicts,
+  detectDocumentMismatch,
 } from "@/components/lease-review/utils/validation";
 import { updateLeaseQueryCache } from "@/components/lease-review/utils/leaseQueryUtils";
 import { matchBuildingAndUnit } from "@/components/lease-review/utils/buildingUnitMatcher";
@@ -207,6 +209,13 @@ export default function LeaseReview() {
     if (!uploadedFile) return lease;
     return { ...lease, uploaded_files: uploadedFile, uploaded_file: uploadedFile };
   }, [lease, uploadedFile]);
+
+  // Detect cases where the uploaded document's extracted fields contradict the
+  // stored lease values — usually signals the wrong PDF was linked.
+  const documentMismatches = useMemo(
+    () => detectDocumentMismatch(lease, uploadedFile),
+    [lease, uploadedFile],
+  );
 
   const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
@@ -467,8 +476,9 @@ export default function LeaseReview() {
   useEffect(() => {
     if (!lease?.id || !supabase) return;
     const ed = lease.extraction_data || {};
-    const evidenceMap = ed.field_evidence || {};
-    const sourceFileId = ed.source_file_id;
+    // source_file_id lives on the top-level lease row in production; the
+    // extraction_data path is a legacy fallback from older pipeline versions.
+    const sourceFileId = lease.source_file_id ?? ed.source_file_id;
     if (!sourceFileId) return;
 
     const reviewFieldKeys = LEASE_REVIEW_FIELDS.map((field) => field.key);
@@ -503,7 +513,7 @@ export default function LeaseReview() {
           ];
           for (const field of allFields) {
             if (!field?.field_key) continue;
-            const sourceText = cleanExtractedSourceText(field.evidence?.source_clause ?? field.evidence?.source_text);
+            const sourceText = cleanSourceEvidenceText(field.evidence?.source_clause ?? field.evidence?.source_text);
             fieldsWithEvidence[field.field_key] = {
               value: field.value ?? null,
               confidence: typeof field.confidence === "number" ? field.confidence : null,
@@ -537,35 +547,39 @@ export default function LeaseReview() {
         if (blocks.length > 0) {
           const fieldByKey = new Map(LEASE_REVIEW_FIELDS.map((field) => [field.key, field]));
           for (const key of candidateKeys) {
-            const field = fieldByKey.get(key) || {
-              key,
-              type: inferDynamicItemType(ed.fields?.[key], key),
-            };
-            const value = readFieldValue(lease, key) ?? entryValue(ed.fields?.[key]);
-            if (value == null || value === "") continue;
-            // Don't overwrite real source text we already have. If a row has
-            // only a page or only a raw value, still try to attach the quote.
-            const existing = fieldEvidence[key] || ed.field_evidence?.[key];
-            if (existing?.source_text) continue;
-            const hit = findEvidenceForValue(blocks, value, field);
-            if (!hit) continue;
-            const sourcePage = hit.page ?? existing?.source_page ?? existing?.page_number ?? null;
-            fieldEvidence[key] = {
-              ...(existing || {}),
-              raw_value: existing?.raw_value ?? hit.raw,
-              source_page: sourcePage,
-              source_text: hit.text,
-              extraction_status: "extracted_text_match",
-            };
-            fieldsWithEvidence[key] = {
-              ...(fieldsWithEvidence[key] || {}),
-              ...(ed.fields?.[key] || {}),
-              value,
-              raw_value: ed.fields?.[key]?.raw_value ?? hit.raw,
-              source_page: sourcePage,
-              source_text: hit.text,
-              extraction_status: "extracted_text_match",
-            };
+            try {
+              const field = fieldByKey.get(key) || {
+                key,
+                type: inferDynamicItemType(ed.fields?.[key], key),
+              };
+              const value = readFieldValue(lease, key) ?? entryValue(ed.fields?.[key]);
+              if (value == null || value === "") continue;
+              // Don't overwrite real source text we already have. If a row has
+              // only a page or only a raw value, still try to attach the quote.
+              const existing = fieldEvidence[key] || ed.field_evidence?.[key];
+              if (existing?.source_text) continue;
+              const hit = findEvidenceForValue(blocks, value, field);
+              if (!hit) continue;
+              const sourcePage = hit.page ?? existing?.source_page ?? existing?.page_number ?? null;
+              fieldEvidence[key] = {
+                ...(existing || {}),
+                raw_value: existing?.raw_value ?? hit.raw,
+                source_page: sourcePage,
+                source_text: hit.text,
+                extraction_status: "extracted_text_match",
+              };
+              fieldsWithEvidence[key] = {
+                ...(fieldsWithEvidence[key] || {}),
+                ...(ed.fields?.[key] || {}),
+                value,
+                raw_value: ed.fields?.[key]?.raw_value ?? hit.raw,
+                source_page: sourcePage,
+                source_text: hit.text,
+                extraction_status: "extracted_text_match",
+              };
+            } catch (fieldErr) {
+              console.warn(`[LeaseReview] evidence backfill: field "${key}" threw:`, fieldErr?.message);
+            }
           }
         }
 
@@ -2292,6 +2306,19 @@ export default function LeaseReview() {
           >
             Or paste a UUID manually (Extraction Debug)
           </Button>
+        </div>
+      )}
+
+      {/* Document mismatch warning — shown when extracted fields conflict with stored lease data */}
+      {documentMismatches.length > 0 && (
+        <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+          <p className="font-semibold mb-1">⚠ Possible document mismatch — the uploaded file may not match this lease record.</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {documentMismatches.map((m) => (
+              <li key={m.field}>{m.detail}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-orange-600">Verify the correct document is linked before approving. Use <em>Re-link Source Document</em> if needed.</p>
         </div>
       )}
 
