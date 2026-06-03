@@ -31,7 +31,6 @@ import {
   readFieldValue,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
-import { fieldMatchesFilter } from "@/components/lease-review/FieldTableFilter";
 import { validateFieldValue, computeSourceQuality } from "@/components/lease-review/utils/fieldValidator";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -50,7 +49,7 @@ const displayValue = (field, value) => {
   return String(value);
 };
 
-function truncate(text, max = 120) {
+function truncate(text, max = 140) {
   if (!text) return "—";
   const flat = String(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -73,7 +72,7 @@ export default function FieldReviewTable({
   fieldReviews,
   onOpenDetail,
   onQuickAction,
-  tableFilter = "all",
+  showMissing = false,
   conflictKeys,
 }) {
   if (!fields || fields.length === 0) {
@@ -85,17 +84,18 @@ export default function FieldReviewTable({
   }
 
   const visibleFields = fields.filter((field) => {
-    if (tableFilter === "all") return true;
+    if (showMissing) return true;
     const value = readFieldValue(lease, field.key);
     const { sourceText } = readFieldEvidence(lease, field.key);
-    const review = fieldReviews?.[field.key];
-    return fieldMatchesFilter(field, tableFilter, value, sourceText, review, conflictKeys);
+    const hasValue = value !== null && value !== undefined && value !== "";
+    const hasSource = Boolean(sourceText);
+    return hasValue || hasSource;
   });
 
   if (visibleFields.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-        No fields match the current filter.
+        No extracted fields in this section. Toggle "Show missing fields" to see all.
       </div>
     );
   }
@@ -106,7 +106,8 @@ export default function FieldReviewTable({
         <TableHeader>
           <TableRow>
             <TableHead className="w-[200px] text-xs">Field</TableHead>
-            <TableHead className="w-[200px] text-xs">Normalized</TableHead>
+            <TableHead className="w-[200px] text-xs">Normalized Value</TableHead>
+            <TableHead className="w-[60px] text-xs text-center">Page</TableHead>
             <TableHead className="text-xs">Exact Source Text</TableHead>
             <TableHead className="w-[170px] text-xs text-right">Actions</TableHead>
           </TableRow>
@@ -117,7 +118,7 @@ export default function FieldReviewTable({
             const reviewStatus = review?.status || REVIEW_STATUSES.PENDING;
             const value = readFieldValue(lease, field.key);
             const evidence = readFieldEvidence(lease, field.key);
-            const { sourceText, extractionStatus } = evidence;
+            const { sourceText, extractionStatus, sourcePage } = evidence;
             const required = field.required;
             const validationResult = validateFieldValue(field.key, value);
             const sourceQualityKey = computeSourceQuality(value, sourceText, extractionStatus);
@@ -172,11 +173,16 @@ export default function FieldReviewTable({
                   )}
                 </TableCell>
 
+                {/* Page number */}
+                <TableCell className="text-xs text-center text-slate-500">
+                  {sourcePage != null ? sourcePage : "—"}
+                </TableCell>
+
                 {/* Source text + quality badge */}
                 <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
                     <p className="italic text-slate-500 leading-snug" title={sourceText ?? ""}>
-                      {truncate(sourceText, 120)}
+                      {truncate(sourceText, 140)}
                     </p>
                     {sqBadge && (
                       <span className={`self-start inline-flex items-center rounded border px-1 py-0 text-[9px] font-medium ${sqBadge.cls}`}>

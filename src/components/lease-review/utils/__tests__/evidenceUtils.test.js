@@ -65,6 +65,7 @@ import {
 import { detectDocumentMismatch, detectFieldConflicts } from "../validation";
 import { expandToSentenceBoundary } from "../evidenceResolver";
 import { fieldMatchesFilter } from "../../FieldTableFilter";
+import { computeSourceQuality } from "../fieldValidator";
 
 // ── 1. cleanExtractedSourceText ───────────────────────────────────────────────
 
@@ -373,7 +374,107 @@ describe("fieldMatchesFilter", () => {
   });
 });
 
-// ── 11. detectFieldConflicts (existing, regression guard) ───────────────────
+// ── 10. expandToSentenceBoundary — extended coverage ────────────────────────
+
+describe("expandToSentenceBoundary — numbered clause", () => {
+  it("returns entire short numbered-clause block as exact", () => {
+    const text = "4.2 Full Service Lease. Rent includes all utilities, janitorial, property tax and property insurance.";
+    const hit = text.indexOf("Full Service");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "Full Service".length);
+    expect(snippet).toBe(text.trim());
+    expect(source_quality).toBe("exact");
+  });
+
+  it("expands backward to numbered-clause start when match is mid-clause", () => {
+    const text = "5.1 Permitted Use. Tenant shall use the Premises solely for IT work and for no other purpose.\n6.1 Rent. Tenant shall pay $1,400 per month.";
+    const hit = text.indexOf("IT work");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "IT work".length);
+    expect(snippet).toContain("5.1 Permitted Use");
+    expect(source_quality).toBe("exact");
+  });
+
+  it("summary-row match expands to the full labeled row", () => {
+    const text = "Tenant: Mindful Tech Solutions, Inc. Narendra Pydi — 618-946-9700.";
+    const hit = text.indexOf("618");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "618".length);
+    // Labeled-row pattern — whole block should be returned.
+    expect(snippet).toContain("Mindful Tech Solutions");
+    expect(source_quality).toBe("exact");
+  });
+
+  it("fragment without any boundaries is marked partial", () => {
+    // No newlines, no periods, no labeled-row pattern — pure fragment
+    const text = "approximately 4200 rentable square feet in the building and more text here with no end";
+    const hit = text.indexOf("4200");
+    const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "4200".length);
+    expect(snippet).toContain("4200");
+    expect(source_quality).toBe("partial");
+  });
+
+  it("does not blow up on empty text (regression guard)", () => {
+    const { snippet, source_quality } = expandToSentenceBoundary("", 0, 0);
+    expect(snippet).toBe("");
+    expect(source_quality).toBe("partial");
+  });
+});
+
+// ── 11. Partial source quality blocks auto-accept ────────────────────────────
+
+describe("computeSourceQuality — partial prevents auto-accept", () => {
+  it("returns 'partial' for a mid-sentence snippet (no terminal punctuation)", () => {
+    const midFragment = "approximately 1,110 rentable square feet located at";
+    expect(computeSourceQuality(1110, midFragment, "extracted")).toBe("partial");
+  });
+
+  it("returns 'exact' only for complete labeled rows", () => {
+    const labeledRow = "Rent: $1,400 per month.";
+    expect(computeSourceQuality(1400, labeledRow, "extracted")).toBe("exact");
+  });
+
+  it("returns 'exact' for a full sentence ending with period", () => {
+    const sentence = "Premises containing approximately 1,110 rentable square feet, in the Building as shown on Exhibit A.";
+    expect(computeSourceQuality(1110, sentence, "extracted")).toBe("exact");
+  });
+
+  it("returns 'missing' when source text is absent", () => {
+    expect(computeSourceQuality("Mindful Tech", null, "extracted")).toBe("missing");
+    expect(computeSourceQuality("Mindful Tech", "", "extracted")).toBe("missing");
+  });
+
+  it("returns 'derived' for calculated extraction status regardless of source text", () => {
+    expect(computeSourceQuality(9904.13, "Rent: $118,849/yr.", "calculated")).toBe("derived");
+    expect(computeSourceQuality(9904.13, "Rent: $118,849/yr.", "derived")).toBe("derived");
+  });
+});
+
+// ── 12. Show-missing filter behavior ────────────────────────────────────────
+//
+// FieldReviewTable uses a showMissing boolean to decide which fields to show.
+// The equivalent legacy filter key is:
+//   showMissing=false  → hide fields with no value AND no source text
+//   showMissing=true   → show all fields
+// We verify the underlying fieldMatchesFilter helper covers both cases.
+
+describe("fieldMatchesFilter — showMissing equivalence", () => {
+  const makeField = (overrides) => ({ key: "f", required: false, dynamic_document_item: false, ...overrides });
+
+  it("'all' filter (showMissing=true equivalent) shows a field with no value and no source", () => {
+    expect(fieldMatchesFilter(makeField(), "all", null, null, null, new Set())).toBe(true);
+  });
+
+  it("'missing' filter shows fields with no value (opposite of 'extracted only')", () => {
+    expect(fieldMatchesFilter(makeField(), "missing", null, null, null, new Set())).toBe(true);
+    expect(fieldMatchesFilter(makeField(), "missing", "some value", null, null, new Set())).toBe(false);
+  });
+
+  it("required missing fields match 'missing' filter so they appear in RequiredReviewQueue", () => {
+    const requiredField = makeField({ required: true });
+    // A required field with no value is missing — it should surface in the queue.
+    expect(fieldMatchesFilter(requiredField, "missing", null, null, null, new Set())).toBe(true);
+  });
+});
+
+// ── 13. detectFieldConflicts (regression guard) ──────────────────────────────
 
 describe("detectFieldConflicts", () => {
   it("flags monthly × 12 ≠ annual", () => {

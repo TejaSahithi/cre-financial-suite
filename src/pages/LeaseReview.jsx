@@ -218,9 +218,10 @@ export default function LeaseReview() {
     [lease, uploadedFile],
   );
 
-  // Per-tab active filter state. Must be declared here (before any early
-  // returns) so React hooks always execute in the same order.
-  const [tabFilters, setTabFilters] = useState({});
+  // Per-tab "show missing fields" toggle. false = extracted only (default).
+  // Must be declared here (before any early returns) so hooks always execute
+  // in the same order.
+  const [showMissingByTab, setShowMissingByTab] = useState({});
 
   const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
@@ -2597,12 +2598,8 @@ export default function LeaseReview() {
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
               <FieldTableFilter
-                fields={fieldsForTab[tab.key] || []}
-                lease={leaseFull}
-                fieldReviews={fieldReviews}
-                conflictKeys={conflictKeySet}
-                activeFilter={tabFilters[tab.key] || "all"}
-                onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, [tab.key]: f }))}
+                showMissing={showMissingByTab[tab.key] || false}
+                onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, [tab.key]: val }))}
               />
               <FieldReviewTable
                 fields={fieldsForTab[tab.key] || []}
@@ -2617,7 +2614,7 @@ export default function LeaseReview() {
                   else if (action === "legal") handleNeedsLegal(field);
                   else if (action === "manual") handleMarkManualRequired(field);
                 }}
-                tableFilter={tabFilters[tab.key] || "all"}
+                showMissing={showMissingByTab[tab.key] || false}
                 conflictKeys={conflictKeySet}
               />
             </TabsContent>
@@ -2629,12 +2626,8 @@ export default function LeaseReview() {
             reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
           <FieldTableFilter
-            fields={fieldsForTab.rent_charges || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            conflictKeys={conflictKeySet}
-            activeFilter={tabFilters.rent_charges || "all"}
-            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, rent_charges: f }))}
+            showMissing={showMissingByTab.rent_charges || false}
+            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, rent_charges: val }))}
           />
           <FieldReviewTable
             fields={fieldsForTab.rent_charges || []}
@@ -2648,7 +2641,7 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
-            tableFilter={tabFilters.rent_charges || "all"}
+            showMissing={showMissingByTab.rent_charges || false}
             conflictKeys={conflictKeySet}
           />
           <RentScheduleTable leaseId={lease.id} />
@@ -2657,12 +2650,8 @@ export default function LeaseReview() {
         {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
           <FieldTableFilter
-            fields={fieldsForTab.expenses_recoveries || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            conflictKeys={conflictKeySet}
-            activeFilter={tabFilters.expenses_recoveries || "all"}
-            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, expenses_recoveries: f }))}
+            showMissing={showMissingByTab.expenses_recoveries || false}
+            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, expenses_recoveries: val }))}
           />
           <FieldReviewTable
             fields={fieldsForTab.expenses_recoveries || []}
@@ -2676,7 +2665,7 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
-            tableFilter={tabFilters.expenses_recoveries || "all"}
+            showMissing={showMissingByTab.expenses_recoveries || false}
             conflictKeys={conflictKeySet}
           />
           <ExpenseRulesTable leaseId={lease.id} />
@@ -2685,12 +2674,8 @@ export default function LeaseReview() {
         {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
           <FieldTableFilter
-            fields={fieldsForTab.cam_rules || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            conflictKeys={conflictKeySet}
-            activeFilter={tabFilters.cam_rules || "all"}
-            onFilterChange={(f) => setTabFilters((prev) => ({ ...prev, cam_rules: f }))}
+            showMissing={showMissingByTab.cam_rules || false}
+            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, cam_rules: val }))}
           />
           <FieldReviewTable
             fields={fieldsForTab.cam_rules || []}
@@ -2704,7 +2689,7 @@ export default function LeaseReview() {
               else if (action === "na") handleMarkNA(field);
               else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
             }}
-            tableFilter={tabFilters.cam_rules || "all"}
+            showMissing={showMissingByTab.cam_rules || false}
             conflictKeys={conflictKeySet}
           />
           <CamRulesTable leaseId={lease.id} />

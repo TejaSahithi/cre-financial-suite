@@ -177,57 +177,90 @@ export function candidateNeedles(value, field) {
 }
 
 /**
- * Expand a match offset to the nearest sentence or labeled-row boundary.
+ * Expand a match offset to the nearest complete sentence, labeled-row, or
+ * numbered-clause boundary so reviewers always see a full, readable snippet.
  *
  * Priority:
- *   1. If the block looks like a labeled summary row ("Label: value"), return
- *      the whole row — that is the strongest evidence span.
- *   2. Otherwise walk backward to the nearest period/newline and forward to
- *      the next period/newline so reviewers see a complete thought.
- *   3. Hard-cap at 240 chars in each direction to prevent bloated snippets.
+ *   1. Entire block is a short labeled row ("Label: value") → return the
+ *      whole row, quality = "exact".
+ *   2. Entire block starts with a numbered section ("4.2 Full Service…") and
+ *      is short enough to quote in full → return the whole block, quality = "exact".
+ *   3. Otherwise walk backward to the nearest newline / sentence-start and
+ *      forward to the next sentence-end (period + space/newline).
+ *      - If the found start itself begins a numbered clause, extend forward
+ *        to the next numbered-clause boundary (next "N. " or "N.N ").
+ *   4. Hard-cap LOOKBACK/LOOKAHEAD at 300 chars each direction.
  *
  * Returns `{ snippet, source_quality }` where source_quality is:
- *   "exact"   — labeled row or complete sentence ending with punctuation
- *   "partial" — sentence boundary not found; snippet is a fragment
+ *   "exact"   — labeled row, numbered clause, or sentence ending with punctuation
+ *   "partial" — boundary not found; snippet is a mid-sentence fragment
  */
 export function expandToSentenceBoundary(text, matchStart, matchLength) {
-  // 1. Check if the entire block is a labeled row (short, one line).
+  if (!text) return { snippet: "", source_quality: "partial" };
+
+  // 1. Short labeled row — return the whole cleaned block.
   const singleLine = text.replace(/\s+/g, " ").trim();
-  if (singleLine.length < 300 && /^[A-Za-z][^:\n]{0,80}:\s\S/.test(singleLine)) {
+  if (singleLine.length < 400 && /^[A-Za-z][^:\n]{0,80}:\s\S/.test(singleLine)) {
     return { snippet: singleLine, source_quality: "exact" };
   }
 
-  const LOOKBACK = 160;
-  const LOOKAHEAD = 160;
+  // 2. Short numbered clause block (e.g., "4.2 Full Service Lease. …").
+  if (singleLine.length < 600 && /^\d+(?:\.\d+)*\s+[A-Z]/.test(singleLine)) {
+    return { snippet: singleLine, source_quality: "exact" };
+  }
 
-  // 2. Walk backward for sentence start.
+  const LOOKBACK = 300;
+  const LOOKAHEAD = 300;
+
+  // 3. Walk backward to sentence / row start.
   let start = matchStart;
   for (let i = matchStart - 1; i >= Math.max(0, matchStart - LOOKBACK); i--) {
     const c = text[i];
     if (c === "\n") { start = i + 1; break; }
-    // Period followed by space = sentence boundary
     if (c === "." && i + 1 < text.length && text[i + 1] === " ") { start = i + 2; break; }
-    if (i === Math.max(0, matchStart - LOOKBACK)) start = i;
+    if (i === Math.max(0, matchStart - LOOKBACK)) { start = i; break; }
   }
 
-  // 3. Walk forward for sentence end.
+  // 3a. If the found start begins a numbered clause, walk forward to the next
+  //     numbered-clause header ("\n1." / "\n4.2 ") or to a double-newline so
+  //     we capture the full clause rather than just one sentence.
+  const fromStart = text.slice(start);
+  const startsWithNumberedClause = /^\d+(?:\.\d+)*\s+[A-Z]/.test(fromStart);
+
   let end = matchStart + matchLength;
-  for (let i = end; i < Math.min(text.length, matchStart + matchLength + LOOKAHEAD); i++) {
-    const c = text[i];
-    if (c === "\n" || c === "!") { end = i + 1; break; }
-    if (c === "." && (i + 1 >= text.length || text[i + 1] === " " || text[i + 1] === "\n")) {
-      end = i + 1;
-      break;
+  if (startsWithNumberedClause) {
+    // Find next numbered-clause boundary — a newline followed by digits+dot.
+    const nextClauseRel = fromStart.slice(1).search(/\n\d+(?:\.\d+)*\s/);
+    if (nextClauseRel > 0 && nextClauseRel < 500) {
+      end = start + 1 + nextClauseRel;
+    } else {
+      // No next clause found; just take the rest of the block up to 500 chars.
+      end = Math.min(text.length, start + 500);
     }
-    if (i === Math.min(text.length, matchStart + matchLength + LOOKAHEAD) - 1) end = i + 1;
+  } else {
+    // 4. Walk forward to nearest sentence end (period + space/newline/EOS).
+    for (let i = end; i < Math.min(text.length, matchStart + matchLength + LOOKAHEAD); i++) {
+      const c = text[i];
+      if (c === "\n") { end = i + 1; break; }
+      if (c === "!") { end = i + 1; break; }
+      if (c === "." && (i + 1 >= text.length || text[i + 1] === " " || text[i + 1] === "\n")) {
+        end = i + 1;
+        break;
+      }
+      if (i === Math.min(text.length, matchStart + matchLength + LOOKAHEAD) - 1) {
+        end = i + 1;
+        break;
+      }
+    }
   }
 
   const snippet = text.slice(start, end).replace(/\s+/g, " ").trim();
 
-  // 4. Determine quality.
+  // 5. Determine quality.
   const isLabeledRow = /^[A-Za-z][^:\n]{0,80}:\s\S/.test(snippet);
+  const isNumberedClause = /^\d+(?:\.\d+)*\s+[A-Z]/.test(snippet);
   const endsWithPunct = /[.!?]["']?\s*$/.test(snippet);
-  const source_quality = isLabeledRow || endsWithPunct ? "exact" : "partial";
+  const source_quality = isLabeledRow || isNumberedClause || endsWithPunct ? "exact" : "partial";
 
   return { snippet, source_quality };
 }
