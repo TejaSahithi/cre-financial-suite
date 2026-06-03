@@ -35,7 +35,7 @@ function serializeAuditValue(value) {
 }
 
 function isUuidLike(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(String(value || ''));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
 }
 
 function cleanUuid(value) {
@@ -139,8 +139,6 @@ export async function logAudit(entry) {
     action:         entry.action,
     org_id:         context.orgId,
     actor_user_id:  context.userId,
-    actor_email:    context.userEmail,
-    actor_role:     entry.actor_role || context.role || null,
     target_user_id: cleanUuid(entry.target_user_id || entry.targetUserId || null),
     severity:       entry.severity || 'info',
     source:         'frontend',

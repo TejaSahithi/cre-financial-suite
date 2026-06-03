@@ -264,7 +264,7 @@ async function buildUserObject(authUser) {
     .from('profiles')
     .select('*')
     .eq('id', authUser.id)
-    .single();
+    .maybeSingle();
 
   // Resolve role — always from memberships, never hardcoded
   let { role, org_id, memberships } = await resolveMembership(authUser.id);

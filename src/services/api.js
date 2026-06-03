@@ -1309,7 +1309,7 @@ export function createEntityService(entityName) {
             entityType: entityName,
             entityId: finalRecord.id,
             action: 'create',
-            orgId: finalRecord.org_id,
+            orgId: finalRecord.org_id || enriched.org_id,
           }).catch(() => { });
 
           invalidateEntity(entityName);
@@ -1326,7 +1326,7 @@ export function createEntityService(entityName) {
           entityType: entityName,
           entityId: newRecord.id,
           action: 'create',
-          orgId: newRecord.org_id,
+          orgId: newRecord.org_id || enriched.org_id,
         }).catch(() => { });
 
         invalidateEntity(entityName);
