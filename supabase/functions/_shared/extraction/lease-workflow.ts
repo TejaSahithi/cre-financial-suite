@@ -394,12 +394,26 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     const blockText = cleanText(textBlocks[index]?.text || "");
     const haystack = blockText.toLowerCase();
     if (!blockText) continue;
-    if (!loweredKeywords.some((keyword) => haystack.includes(keyword))) continue;
+    const matchedKeyword = loweredKeywords.find((keyword) => haystack.includes(keyword));
+    if (!matchedKeyword) continue;
 
-    const snippet = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
-      .filter(Boolean)
-      .join(" ")
-      .slice(0, maxChars);
+    // When the matching block is large (e.g. a full summary section that
+    // contains many numbered items), return only the sentence/line that
+    // contains the keyword rather than the whole block + next 2 blocks.
+    // This prevents the generic "SUMMARY OF BASIC LEASE INFORMATION…"
+    // prefix from appearing as the source text for unrelated fields.
+    let snippet: string;
+    if (blockText.length > maxChars) {
+      const idx = haystack.indexOf(matchedKeyword);
+      const start = Math.max(0, idx - 60);
+      const end = Math.min(blockText.length, idx + maxChars - 60);
+      snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim();
+    } else {
+      snippet = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, maxChars);
+    }
     return {
       clause_text: snippet || null,
       source_page: Number.isFinite(Number(textBlocks[index]?.page)) ? Number(textBlocks[index].page) : null,
@@ -459,9 +473,22 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
 
   const directBlock = textBlocks.find((block) => comparableValue && cleanText(block?.text || "").includes(comparableValue));
   if (directBlock) {
+    const blockText = cleanText(directBlock?.text || "");
+    // When the block is large (e.g. a full summary section), extract just the
+    // sentence or line that contains the value instead of truncating the whole block.
+    // This gives a precise verbatim snippet rather than a broad context dump.
+    let snippet = blockText.slice(0, 320);
+    if (blockText.length > 320 && comparableValue) {
+      const idx = blockText.indexOf(comparableValue);
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 80);
+        const end = Math.min(blockText.length, idx + comparableValue.length + 80);
+        snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim() + (end < blockText.length ? "…" : "");
+      }
+    }
     return {
       source_page: sourcePageOf(directBlock),
-      source_clause: cleanText(directBlock?.text || "").slice(0, 260) || null,
+      source_clause: snippet || null,
     };
   }
 

@@ -1305,16 +1305,22 @@ export function getSchema(moduleType: ModuleType): ModuleSchema {
 const LEASE_GROUPS: FieldGroup[] = [
   {
     name: "parties",
-    fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name", "property_name", "property_address", "unit_number"],
+    fields: ["tenant_name", "tenant_signatory_name", "landlord_name", "landlord_signatory_name", "property_name", "property_address", "unit_number", "landlord_address", "tenant_address", "tenant_contact_name", "tenant_contact_phone", "broker_name"],
     hint:
       "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
-      "Also extract property name, premises address, and unit/suite if present.",
+      "Also extract property name, premises address, unit/suite if present. " +
+      "landlord_address: the landlord's mailing or notice address (NOT the premises address). " +
+      "tenant_address: the tenant's mailing or notice address. " +
+      "tenant_contact_name: the individual signing on behalf of the tenant (the 'By:' signer). " +
+      "tenant_contact_phone: the tenant's contact phone number. " +
+      "broker_name: the real estate broker or brokerage firm named in the lease. " +
+      "For ALL fields: source_text MUST be the exact verbatim line or sentence from the document — never paraphrase.",
   },
   { name: "assignment", fields: ["assignor_name", "assignee_name", "assignment_effective_date", "landlord_consent", "assumption_scope", "assignee_notice_address", "assignment_consideration", "all_other_terms_remain_same"], hint: "For assignments, identify assignor, assignee, effective date, consent, assumption language, notice address, explicit consideration, and all-other-terms language. Do not infer expense terms from assignment language." },
   {
     name: "dates",
-    fields: ["lease_date", "start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline"],
+    fields: ["lease_date", "start_date", "end_date", "commencement_date", "expiration_date", "rent_commencement_date", "renewal_notice_months", "termination_notice_months", "option_exercise_deadline", "tenant_signature_date", "landlord_signature_date"],
     hint:
       "Find lease term dates. " +
       "lease_date is the date the lease was signed / executed — look for 'made and entered into as of [DATE]', " +
@@ -1323,7 +1329,10 @@ const LEASE_GROUPS: FieldGroup[] = [
       "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
       "If only month/day is given for expiration (e.g. 'January 31 of each year'), use commencement_year + 1. " +
       "rent_commencement_date is when rent payments start (may differ from term commencement when free-rent applies). " +
-      "Renewal/termination notice = how many months notice required. All dates → YYYY-MM-DD.",
+      "Renewal/termination notice = how many months notice required. All dates → YYYY-MM-DD. " +
+      "tenant_signature_date: the date the tenant signed the lease (look for the tenant signature block). " +
+      "landlord_signature_date: the date the landlord signed the lease (look for the landlord signature block). " +
+      "source_text for each date MUST be the exact verbatim line containing that date.",
   },
   {
     name: "financial",
@@ -1395,13 +1404,15 @@ const LEASE_GROUPS: FieldGroup[] = [
   },
   {
     name: "legal_options",
-    fields: ["right_of_first_refusal", "early_termination_option", "assignment_provisions", "default_cure_period"],
+    fields: ["right_of_first_refusal", "early_termination_option", "assignment_provisions", "default_cure_period", "landlord_consent_for_transfer"],
     hint:
       "Extract tenant options and remedies. " +
       "right_of_first_refusal: true if tenant has ROFR on additional space. " +
       "early_termination_option: true if tenant has an early-out clause. " +
       "assignment_provisions: brief summary (e.g. 'requires landlord consent, not unreasonably withheld'). " +
-      "default_cure_period: days a defaulting party has to cure before remedies (e.g. 30 days for monetary, 60 for non-monetary).",
+      "default_cure_period: days a defaulting party has to cure before remedies (e.g. 30 days for monetary, 60 for non-monetary). " +
+      "landlord_consent_for_transfer: whether landlord consent is required for assignment/transfer (e.g. 'Required', 'Not required', 'Required but not unreasonably withheld'). " +
+      "source_text for each field MUST be the exact verbatim sentence or clause from the document.",
   },
 ];
 
