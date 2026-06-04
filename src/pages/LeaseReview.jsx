@@ -88,6 +88,7 @@ import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
+import { detectDocumentProfile } from "@/lib/documentProfile";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
@@ -745,36 +746,17 @@ export default function LeaseReview() {
 
   // Detect assignment/amendment-only documents so the rule-readiness banner
   // says something accurate. The pipeline tags these docs with
-  // Detect assignment / amendment / consent documents using only the explicit
-  // documentType stamp the extractor sets. The previous "onlyOriginalLeaseRequired"
-  // heuristic (inferred from expense-rule tags) caused false positives on full
-  // service leases where no expense amounts appear and all rules are tagged
-  // coverage_gap — those are full leases, not assignments.
-  //
-  // A reviewer can override a mis-classified document by clicking "This is a
-  // full lease" — that writes document_type_override = "full_lease" into
-  // extraction_data and permanently suppresses the banner.
-  const isAssignmentOnlyDocument = useMemo(() => {
-    if (lease?.extraction_data?.document_type_override === "full_lease") return false;
-    const workflowOutput = lease?.extraction_data?.workflow_output || {};
-    const documentType = String(
-      workflowOutput?.document_profile?.documentType
-        || workflowOutput?.document_profile?.document_type
-        || lease?.extraction_data?.document_profile?.documentType
-        || lease?.extraction_data?.document_profile?.document_type
-        || "",
-    ).toLowerCase();
-    return (
-      documentType.includes("assignment")
-      || documentType.includes("amendment")
-      || documentType.includes("estoppel")
-      || documentType.includes("consent")
-    );
-  }, [
-    lease?.extraction_data?.document_type_override,
-    lease?.extraction_data?.workflow_output,
-    lease?.extraction_data?.document_profile,
-  ]);
+  // Classify the document using leaseFull so uploaded-file payload data
+  // (ui_review_payload.records[0].*) is included in the signal check.
+  // detectDocumentProfile uses full-lease signals (commencement, expiration,
+  // rent) to override an incorrect AI-stamped "assignment" documentType.
+  const isAssignmentOnlyDocument = useMemo(
+    () => {
+      const profile = detectDocumentProfile(leaseFull);
+      return profile === "assignment" || profile === "amendment" || profile === "estoppel" || profile === "consent";
+    },
+    [leaseFull],
+  );
 
   const handleMarkAsFullLease = async () => {
     try {
@@ -2397,7 +2379,29 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Confidence summary — 6 cards */}
+      {/* Extraction-in-progress banner — shown while auto-extract or re-extract is running */}
+      {reextracting && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-sm text-blue-800">
+          <div className="flex items-center gap-3">
+            <Loader2 className="h-5 w-5 shrink-0 animate-spin text-blue-500" />
+            <div>
+              <p className="font-semibold">
+                {reextractStage === "polling"
+                  ? "Reading extracted data from the AI pipeline…"
+                  : reextractStage === "applying"
+                    ? "Applying extracted values to your lease…"
+                    : "Extracting lease data from the uploaded document…"}
+              </p>
+              <p className="mt-0.5 text-xs text-blue-600">
+                This usually takes 30–60 seconds. The page will refresh automatically when complete. You don't need to do anything.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confidence summary — 6 cards (hidden while extracting with no data yet) */}
+      {(!reextracting || confidenceBuckets.high + confidenceBuckets.medium + confidenceBuckets.low + confidenceBuckets.unknown > 0) && (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="p-3">
@@ -2446,6 +2450,7 @@ export default function LeaseReview() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

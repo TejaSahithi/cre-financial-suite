@@ -362,6 +362,13 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
 
   const fallbackHierarchy = [];
 
+  // Resolve the uploaded-file payload once so both mode branches can share it.
+  const ufPayload =
+    lease?.uploaded_files?.ui_review_payload ||
+    lease?.uploaded_file?.ui_review_payload ||
+    null;
+  const ufRecord0 = ufPayload?.records?.[0] ?? null;
+
   if (mode === "display") {
     // Display mode: top-level columns first, then approved/extracted
     fallbackHierarchy.push(
@@ -379,7 +386,15 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.extracted_document_items", data: lease?.extraction_data?.extracted_document_items },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
-      { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload }
+      // ui_review_payload: the extraction pipeline writes into records[0].* so we
+      // must probe each sub-path; checking ui_review_payload as a top-level object
+      // misses all values because they live one level deeper.
+      { path: "uf.records[0].workflow_output.lease_fields", data: ufRecord0?.workflow_output?.lease_fields },
+      { path: "uf.records[0].fields", data: ufRecord0?.fields },
+      { path: "uf.records[0].standard_fields", data: ufRecord0?.standard_fields },
+      { path: "uf.records[0].custom_fields", data: ufRecord0?.custom_fields },
+      { path: "uf.records[0]", data: ufRecord0 },
+      { path: "uploaded_files.ui_review_payload", data: ufPayload },
     );
   } else {
     // Canonical mode: approved snapshot first, then extracted workflow, then top-level
@@ -397,8 +412,13 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "lease.extraction_data.extracted_document_items", data: lease?.extraction_data?.extracted_document_items },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
       { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
-      { path: "uploaded_files.ui_review_payload", data: lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload },
-      { path: "lease (top-level)", data: lease }
+      { path: "uf.records[0].workflow_output.lease_fields", data: ufRecord0?.workflow_output?.lease_fields },
+      { path: "uf.records[0].fields", data: ufRecord0?.fields },
+      { path: "uf.records[0].standard_fields", data: ufRecord0?.standard_fields },
+      { path: "uf.records[0].custom_fields", data: ufRecord0?.custom_fields },
+      { path: "uf.records[0]", data: ufRecord0 },
+      { path: "uploaded_files.ui_review_payload", data: ufPayload },
+      { path: "lease (top-level)", data: lease },
     );
   }
 

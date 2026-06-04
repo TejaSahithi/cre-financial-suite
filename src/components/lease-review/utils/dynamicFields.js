@@ -183,12 +183,17 @@ export function inferDynamicItemTab(item, key) {
   if (businessArea === "critical_dates") return "dates_term";
   if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|square|footage|signatory|contact|building|use_permitted|permitted_use)/i.test(key)) return "parties_premises";
   if (/(date|term|expiration|commencement|effective|start_date|end_date|renewal_notice|signature|lease_date)/i.test(key)) return "dates_term";
+  // Insurance — must come before rent_charges so "liability" and "certificate"
+  // are not swallowed by the generic "fee/charge" pattern.
+  if (/(insurance|insured|deductible|liability|subrogation|waiver_of_sub|additional_insured|certificate)/i.test(key)) return "insurance";
+  // CAM — must come before rent_charges so "admin_fee" / "management_fee" /
+  // "gross_up" are not swallowed by the generic "fee/percent" pattern.
+  if (/(gross_up|cam_|admin_fee|management_fee|base_year|reconciliation|controllable|cam.cap|cam.pool)/i.test(key)) return "cam_rules";
+  // Rent & charges: rent, deposit, allowance, late fees, holdover, etc.
   if (/(rent|fee|deposit|allowance|charge|amount|payment|holdover|interest|premium|breakpoint|percentage|consideration|security)/i.test(key)) return "rent_charges";
-  if (/(tax|insurance|utilit|maintenance|repair|expense|cam|gross_up|cap|base_year|reconciliation|deductible|operating)/i.test(key)) {
-    if (/(gross_up|cam_|^clause_cap|admin|management|base_year|reconciliation)/i.test(key)) return "cam_rules";
-    if (/(insurance|insured|deductible|liability|subrogation)/i.test(key)) return "insurance";
-    return "expenses_recoveries";
-  }
+  // Expense / recovery terms: taxes, utilities, maintenance, repairs, janitorial,
+  // full-service/gross/NNN/net lease structure, operating expenses, reimbursements.
+  if (/(tax|utilit|maintenance|repair|expense|operating|reimburs|recovery|recoveries|janitorial|cleaning|sanitation|full.service|gross.lease|full_service|nnn|triple.net|net.lease|modified.gross|lease.structure|lease.type|expense.structure|responsibility)/i.test(key)) return "expenses_recoveries";
   if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|broker|estoppel|subordination|notice|rofr|termination|exclusive|noncompete|non_compete|co_tenancy|relocation)/i.test(key)) return "legal_options";
   return null;
 }

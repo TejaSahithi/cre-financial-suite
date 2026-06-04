@@ -199,7 +199,7 @@ describe("collectExtractedDocumentItems — lease_clauses", () => {
 
 // ── 5. Clause tab routing ─────────────────────────────────────────────────────
 
-describe("inferDynamicItemTab — clause routing", () => {
+describe("inferDynamicItemTab — clause routing (core)", () => {
   const cases = [
     ["grease_trap_payment", "rent_charges"],
     ["cam_cap_pct", "cam_rules"],
@@ -213,6 +213,65 @@ describe("inferDynamicItemTab — clause routing", () => {
   for (const [key, expectedTab] of cases) {
     it(`maps "${key}" → "${expectedTab}"`, () => {
       expect(inferDynamicItemTab({}, key)).toBe(expectedTab);
+    });
+  }
+});
+
+describe("inferDynamicItemTab — expense/CAM/insurance patterns (spec additions)", () => {
+  // Expense / recovery terms that must route to expenses_recoveries
+  const expenseCases = [
+    "full_service_lease",
+    "gross_lease",
+    "nnn_lease",
+    "triple_net",
+    "net_lease",
+    "modified_gross",
+    "lease_structure",
+    "expense_structure",
+    "janitorial_services",
+    "cleaning_services",
+    "sanitation",
+    "tax_responsibility",
+    "utilities_responsibility",
+    "maintenance_responsibility",
+    "repair_responsibility",
+    "reimbursement_clause",
+    "expense_recovery",
+  ];
+  for (const key of expenseCases) {
+    it(`expense key "${key}" → "expenses_recoveries"`, () => {
+      expect(inferDynamicItemTab({}, key)).toBe("expenses_recoveries");
+    });
+  }
+
+  // Insurance terms
+  const insuranceCases = [
+    "waiver_of_subrogation",
+    "additional_insured",
+    "certificate_of_insurance",
+    "liability_insurance",
+    "general_liability",
+    "deductible_limit",
+  ];
+  for (const key of insuranceCases) {
+    it(`insurance key "${key}" → "insurance"`, () => {
+      expect(inferDynamicItemTab({}, key)).toBe("insurance");
+    });
+  }
+
+  // CAM terms
+  const camCases = [
+    "cam_cap_type",
+    "gross_up_provision",
+    "admin_fee_percent",
+    "management_fee_percent",
+    "cam_reconciliation",
+    "base_year_stop",
+    "controllable_expenses",
+  ];
+  for (const key of camCases) {
+    it(`CAM key "${key}" → "cam_rules"`, () => {
+      expect(inferDynamicItemTab({}, key)).toBe("cam_rules");
     });
   }
 });
