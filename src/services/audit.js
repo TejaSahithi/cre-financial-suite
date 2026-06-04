@@ -168,28 +168,32 @@ export async function logAudit(entry) {
 
   try {
     if (supabase) {
-      // Skip the enhanced insert when we already know it will fail — avoids a
-      // 400 network request on every action once the schema mismatch is known.
-      if (_enhancedSchemaAvailable !== false) {
+      // Strategy: use core schema by default (always safe). Only attempt the
+      // enhanced insert when we have CONFIRMED the migration is applied in this
+      // session (_enhancedSchemaAvailable === true). This eliminates the 400
+      // network error that appeared on every page because the first enhanced
+      // attempt always failed before the cache kicked in.
+      // To upgrade permanently, apply 20260602004050_audit_logging_hardening.sql.
+      if (_enhancedSchemaAvailable === true) {
         const { error } = await supabase.from('audit_logs').insert(row);
-        if (!error) {
-          _enhancedSchemaAvailable = true;
-          return;
-        }
+        if (!error) return;
         if (isSchemaError(error)) {
           _enhancedSchemaAvailable = false;
-          console.warn(
-            '[audit] Enhanced audit_logs columns unavailable — using core schema. ' +
-            'Apply 20260602004050_audit_logging_hardening.sql to resolve.',
-            error.message,
-          );
         } else {
           throw error;
         }
       }
-      // Core schema fallback (always succeeds after migration is absent).
+
+      // Core schema — works on every deployment.
       const { error: coreErr } = await supabase.from('audit_logs').insert(coreRow);
-      if (coreErr) throw coreErr;
+      if (coreErr) {
+        if (isSchemaError(coreErr)) {
+          // Even core columns missing — table may not exist yet.
+          console.debug('[audit] audit_logs table unavailable, skipping audit entry.');
+          return;
+        }
+        throw coreErr;
+      }
     } else {
       console.log('[audit]', row);
     }

@@ -82,6 +82,10 @@ async function deleteLeaseCascadeFallback(id) {
   if (error) throw error;
 }
 
+// Module-level cache: once we learn the RPC doesn't exist, skip the network
+// call entirely on subsequent deletes so no 404 appears in DevTools.
+let _cascadeRpcAvailable = null; // null=unknown, true=yes, false=no
+
 export const leaseService = {
   ...baseService,
   async delete(id) {
@@ -90,17 +94,23 @@ export const leaseService = {
       // 1. Fetch lease to know its org_id for the audit log
       const lease = await baseService.get(id);
 
-      // 2. Prefer the transactional cascade RPC. Older deployments may not
-      // have the migration yet, so fall back to the same ordered cleanup client-side.
-      const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
-      if (error) {
-        if (isMissingSchemaError(error)) {
-          console.warn(`[leaseService] delete_lease_cascade RPC missing; using client fallback for lease ${id}.`);
+      // 2. Prefer the transactional cascade RPC only when it is known to exist.
+      //    If unknown, try once. On a 404/schema error, cache the failure so
+      //    subsequent deletes skip the failing network call entirely.
+      if (_cascadeRpcAvailable !== false) {
+        const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
+        if (!error) {
+          _cascadeRpcAvailable = true;
+        } else if (isMissingSchemaError(error)) {
+          _cascadeRpcAvailable = false;
+          console.debug(`[leaseService] delete_lease_cascade RPC not available; using client fallback.`);
           await deleteLeaseCascadeFallback(id);
         } else {
           console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
           throw error;
         }
+      } else {
+        await deleteLeaseCascadeFallback(id);
       }
 
       // 3. Log the audit manually since we bypassed baseService.delete
