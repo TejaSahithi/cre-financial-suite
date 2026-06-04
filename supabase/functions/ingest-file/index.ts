@@ -399,6 +399,11 @@ async function parkForManualReview(args: {
   });
 
   if (error) {
+    // File record is gone (deleted between dispatch and execution) — nothing to update.
+    if (error.code === "NO_ROW_UPDATED") {
+      console.warn(`[ingest-file] parkForManualReview: file ${args.fileId} no longer exists, skipping status update`);
+      return payload;
+    }
     throw new Error(`Manual review fallback failed: ${error.message}`);
   }
 

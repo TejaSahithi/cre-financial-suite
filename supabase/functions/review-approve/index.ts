@@ -175,6 +175,7 @@ Deno.serve(async (req: Request) => {
         finalRows,
         reviewedOutput,
         user,
+        true,
       );
 
       const { error: prepareErr } = await supabaseAdmin
@@ -357,6 +358,7 @@ Deno.serve(async (req: Request) => {
         finalRows,
         reviewedOutput,
         user,
+        true,
       );
 
       const { error: storingStatusError } = await setStatus(supabaseAdmin, file_id, "storing");
@@ -776,6 +778,7 @@ async function ensureLeaseReviewDrafts(
   rows: Record<string, unknown>[],
   reviewedOutput: any,
   user: any,
+  allowUpdate = false,
 ) {
   const now = new Date().toISOString();
   const existingIds = Array.isArray(reviewedOutput?.lease_review_ids)
@@ -800,6 +803,19 @@ async function ensureLeaseReviewDrafts(
     const row = finalRows[rowIndex];
     const existingLeaseId = await findExistingLeaseDraft(supabaseAdmin, fileRecord, row);
     if (existingLeaseId) {
+      if (allowUpdate) {
+        // Re-run scenario: overwrite the stale draft's extracted fields with
+        // the fresh pipeline output, but only while the lease is still "draft"
+        // (i.e. the reviewer hasn't approved/rejected it yet).
+        const fullPayload = buildLeaseReviewDraftPayload(fileRecord, row, reviewedOutput, user, now, rowIndex);
+        const { org_id: _o, created_by: _cb, created_at: _ca, status: _s, ...patchFields } = fullPayload as any;
+        await supabaseAdmin
+          .from("leases")
+          .update({ ...patchFields, updated_at: now })
+          .eq("id", existingLeaseId)
+          .eq("status", "draft");
+        console.log(`[review-approve] Updated existing draft lease ${existingLeaseId} with fresh extraction data`);
+      }
       await syncLeaseWorkflowArtifacts(
         supabaseAdmin,
         fileRecord.org_id,
