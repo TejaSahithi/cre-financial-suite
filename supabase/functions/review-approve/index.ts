@@ -955,6 +955,7 @@ function buildLeaseReviewDraftPayload(
 
   return stripUndefined({
     org_id: fileRecord.org_id,
+    source_file_id: fileRecord.id ?? null,
     property_id: row.property_id ?? fileRecord.property_id ?? null,
     building_id: row.building_id ?? fileRecord.building_id ?? null,
     unit_id: row.unit_id ?? fileRecord.unit_id ?? null,

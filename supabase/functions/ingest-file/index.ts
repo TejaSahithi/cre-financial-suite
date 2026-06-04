@@ -68,6 +68,7 @@ async function callEdgeFunction(
   actingOrgId?: string | null,
   retries = 1,
   timeoutMs = 45000,
+  discardSuccessBody = false,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string; timedOut?: boolean }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
   const authorization = authToken.match(/^Bearer\s+/i) ? authToken : `Bearer ${authToken}`;
@@ -88,12 +89,22 @@ async function callEdgeFunction(
         signal: AbortSignal.timeout(timeoutMs),
       });
 
-      const data = await res.json().catch(() => ({}));
-
       if (res.ok) {
         console.log(`[ingest-file] ${functionName} succeeded on attempt ${attempt}`);
+        // When the caller doesn't need the response body (e.g. the downstream
+        // function writes its output directly to the DB), discard the body
+        // rather than buffering it in ingest-file's heap. Large payloads from
+        // parse-pdf-docling / normalize-pdf-output (field traces, docling_raw)
+        // are the primary cause of ingest-file hitting the 546 memory limit.
+        if (discardSuccessBody) {
+          await res.body?.cancel().catch(() => undefined);
+          return { ok: true, status: res.status, data: null };
+        }
+        const data = await res.json().catch(() => ({}));
         return { ok: true, status: res.status, data };
       }
+
+      const data = await res.json().catch(() => ({}));
 
       // Resource-exhaustion responses from Supabase — never retry.
       // Retrying burns the remaining wall-time budget and causes the
@@ -697,12 +708,18 @@ Deno.serve(async (req: Request) => {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
 
       // Step 1: Docling extraction with enhanced error handling
+      // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
+      // to the DB. Buffering its response in ingest-file's heap (docling_raw
+      // can be several MB) is the primary cause of the 546 memory-limit error.
       const doclingResult = await callEdgeFunction(
         supabaseUrl,
         "parse-pdf-docling",
         { file_id },
         downstreamAuthToken,
         actingOrgId,
+        1,
+        45000,
+        !defer_store,
       );
 
       if (!doclingResult.ok) {
@@ -740,12 +757,21 @@ Deno.serve(async (req: Request) => {
       console.log(`[ingest-file] Docling extraction succeeded, starting normalization`);
       
       // Step 2: Normalization with enhanced error handling
+      // discardSuccessBody=true: normalize-pdf-output writes normalized_output
+      // + ui_review_payload directly to the DB. Its success response includes
+      // metadata.extractionDebug (field traces for every field) which can be
+      // 2-3 MB — holding that alongside the earlier docling response is what
+      // pushes ingest-file past the 546 memory ceiling.
+      // After success we read review_required directly from the DB (below).
       const normalizeResult = await callEdgeFunction(
         supabaseUrl,
         "normalize-pdf-output",
         { file_id },
         downstreamAuthToken,
         actingOrgId,
+        1,
+        45000,
+        !defer_store,
       );
       
       if (!normalizeResult.ok) {
@@ -799,8 +825,8 @@ Deno.serve(async (req: Request) => {
             detection: detectionSummary,
             routing: { routed_to: routing.route, reason: routing.reason },
             steps: {
-              extraction: { success: doclingResult.ok, data: doclingResult.data, error: doclingResult.error },
-              normalization: { success: normalizeResult.ok, data: normalizeResult.data, error: normalizeResult.error },
+              extraction: { success: doclingResult.ok, error: doclingResult.error },
+              normalization: { success: normalizeResult.ok, error: normalizeResult.error },
               validation: { success: false, skipped: true, reason: "defer_store=true" },
               storage: { success: false, skipped: true, reason: "defer_store=true" },
             },
@@ -809,7 +835,19 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      if (normalizeResult.ok && !(normalizeResult.data as any)?.review_required) {
+      // Read review_required from the DB — the success response body was
+      // discarded to avoid ingest-file hitting the 546 memory ceiling.
+      let normalizeReviewRequired = false;
+      if (normalizeResult.ok) {
+        const { data: fileStatusRow } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("review_required")
+          .eq("id", file_id)
+          .maybeSingle();
+        normalizeReviewRequired = fileStatusRow?.review_required === true;
+      }
+
+      if (normalizeResult.ok && !normalizeReviewRequired) {
         console.log("[ingest-file] Normalization succeeded; running validate-data then store-data");
         const validateResult = await callEdgeFunction(
           supabaseUrl,
@@ -835,10 +873,10 @@ Deno.serve(async (req: Request) => {
             detection: detectionSummary,
             routing: { routed_to: routing.route, reason: routing.reason },
             steps: {
-              extraction: { success: doclingResult.ok, data: doclingResult.data, error: doclingResult.error },
-              normalization: { success: normalizeResult.ok, data: normalizeResult.data, error: normalizeResult.error },
-              validation: { success: validateResult.ok, data: validateResult.data, error: validateResult.error },
-              storage: { success: storeResult.ok, data: storeResult.data, error: storeResult.error },
+              extraction: { success: doclingResult.ok, error: doclingResult.error },
+              normalization: { success: normalizeResult.ok, error: normalizeResult.error },
+              validation: { success: validateResult.ok, error: validateResult.error },
+              storage: { success: storeResult.ok, error: storeResult.error },
             },
           }),
           { status: storeResult.ok ? 200 : storeResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -851,17 +889,9 @@ Deno.serve(async (req: Request) => {
           file_id,
           detection: detectionSummary,
           routing: { routed_to: routing.route, reason: routing.reason },
-          steps: { 
-            extraction: { 
-              success: doclingResult.ok, 
-              data: doclingResult.data,
-              error: doclingResult.error 
-            }, 
-            normalization: { 
-              success: normalizeResult.ok, 
-              data: normalizeResult.data,
-              error: normalizeResult.error 
-            } 
+          steps: {
+            extraction: { success: doclingResult.ok, error: doclingResult.error },
+            normalization: { success: normalizeResult.ok, error: normalizeResult.error },
           },
         }),
         { status: normalizeResult.ok ? 200 : normalizeResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },

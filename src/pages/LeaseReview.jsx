@@ -189,14 +189,15 @@ export default function LeaseReview() {
   // Fetch the source uploaded_file so readFieldValue can resolve extraction
   // data from ui_review_payload (the pipeline stores extracted fields there,
   // not on lease.extraction_data, until the abstract is approved).
+  const resolvedSourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
   const { data: uploadedFile } = useQuery({
-    queryKey: ["uploaded_file_for_lease", lease?.source_file_id],
+    queryKey: ["uploaded_file_for_lease", resolvedSourceFileId],
     queryFn: async () => {
-      if (!lease?.source_file_id) return null;
+      if (!resolvedSourceFileId) return null;
       const { data, error } = await supabase
         .from("uploaded_files")
         .select("id, ui_review_payload, reviewed_output, normalized_output")
-        .eq("id", lease.source_file_id)
+        .eq("id", resolvedSourceFileId)
         .single();
       if (error) {
         console.warn("[LeaseReview] uploaded_files fetch error:", error.message);
@@ -204,7 +205,7 @@ export default function LeaseReview() {
       }
       return data;
     },
-    enabled: !!lease?.source_file_id,
+    enabled: !!resolvedSourceFileId,
   });
 
   // Merged lease object used for display only (FieldReviewTable, summary stats).
@@ -906,8 +907,8 @@ export default function LeaseReview() {
     //    data. After the leaseFieldResolver records[0] fix the UI can read it
     //    directly — a full re-extraction is not needed and would just waste
     //    compute and loop on failure.
-    const ufRecord0 =
-      (uploadedFile?.ui_review_payload?.records?.[0]) ?? null;
+    const uiPayload = uploadedFile?.ui_review_payload;
+    const ufRecord0 = (uiPayload?.records?.[0]) ?? null;
     const ufFieldMap =
       ufRecord0?.workflow_output?.lease_fields ||
       ufRecord0?.fields ||
@@ -919,6 +920,23 @@ export default function LeaseReview() {
       Object.keys(ufFieldMap).length > 2;
     if (hasUploadedFileData) {
       console.log("[LeaseReview] auto-extract: skip — uploaded file already has extracted field data in ui_review_payload");
+      done(); return;
+    }
+
+    // 3b. The pipeline ran but mapped zero fields (e.g. missing API keys,
+    //     scanned PDF with no text). The payload exists but has mapping_failed
+    //     set. Auto-extracting again will produce the same empty result.
+    //     Surface the warning and let the user decide — don't loop.
+    if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
+      console.log("[LeaseReview] auto-extract: skip — pipeline ran but core mapping failed (likely missing API keys or scanned PDF)");
+      done(); return;
+    }
+
+    // 3c. If the uploaded file has a ui_review_payload at all (even with all-null
+    //     fields from a manual-review fallback), the pipeline already ran.
+    //     Retrying won't help without fixing the underlying cause. Skip.
+    if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0) {
+      console.log("[LeaseReview] auto-extract: skip — ui_review_payload present (pipeline ran, all fields null)");
       done(); return;
     }
 
