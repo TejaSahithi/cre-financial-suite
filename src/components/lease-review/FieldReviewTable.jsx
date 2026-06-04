@@ -162,13 +162,13 @@ export default function FieldReviewTable({
                   )}
                 </TableCell>
 
-                {/* Normalized value — suppressed when validation fails to avoid
-                    misleading reviewers with clearly-wrong extracted text. */}
+                {/* Normalized value — shown in red when validation fails so
+                    reviewers can see what was extracted and decide to edit. */}
                 <TableCell className="text-xs">
-                  {value == null || value === "" || !validationResult.valid ? (
+                  {value == null || value === "" ? (
                     <span className="text-slate-400">—</span>
                   ) : (
-                    <span className="font-semibold text-slate-900">
+                    <span className={`font-semibold ${!validationResult.valid ? "text-red-700" : "text-slate-900"}`}>
                       {displayValue(field, value)}
                     </span>
                   )}
