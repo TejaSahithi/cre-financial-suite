@@ -162,6 +162,31 @@ describe("validateFieldValue — address field concatenation", () => {
   });
 });
 
+describe("validateFieldValue — suite_number word-fragment rejection", () => {
+  it("rejects 'in' as a suite number (common extraction artifact)", () => {
+    const result = validateFieldValue("suite_number", "in");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/word fragment/i);
+  });
+
+  it("rejects other prepositions as suite numbers", () => {
+    for (const word of ["at", "of", "the", "on", "a", "an"]) {
+      expect(validateFieldValue("suite_number", word).valid).toBe(false);
+    }
+  });
+
+  it("accepts a real suite number string", () => {
+    expect(validateFieldValue("suite_number", "212").valid).toBe(true);
+    expect(validateFieldValue("suite_number", "#211").valid).toBe(true);
+    expect(validateFieldValue("suite_number", "Suite 300").valid).toBe(true);
+  });
+
+  it("also rejects prepositions in the floor field", () => {
+    expect(validateFieldValue("floor", "in").valid).toBe(false);
+    expect(validateFieldValue("floor", "2").valid).toBe(true);
+  });
+});
+
 describe("validateFieldValue — null/empty values are always valid", () => {
   it("treats null as valid (absence is a missing-field concern, not invalid)", () => {
     expect(validateFieldValue("property_name", null).valid).toBe(true);

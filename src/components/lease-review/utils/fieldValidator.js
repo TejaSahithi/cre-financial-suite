@@ -144,6 +144,21 @@ export function validateFieldValue(fieldKey, value) {
     };
   }
 
+  // ── Suite / floor fields: reject common word fragments ───────────────────────
+  // The extractor sometimes grabs the word following "Suite" or "Floor" in a
+  // sentence — e.g. "space in the Building" → suite_number = "in". These are
+  // confirmed extraction failure modes observed in production leases.
+  const ARTICLE_PREPOSITIONS = new Set([
+    "in", "at", "of", "the", "a", "an", "on", "by", "to", "for",
+    "with", "and", "or", "is", "as", "be", "not", "no",
+  ]);
+  if ((fieldKey === "suite_number" || fieldKey === "floor") && ARTICLE_PREPOSITIONS.has(lower)) {
+    return {
+      valid: false,
+      reason: `"${str}" is not a valid ${fieldKey.replace(/_/g, " ")} — looks like a word fragment from surrounding lease text. Edit with the correct value.`,
+    };
+  }
+
   // ── Numeric keys ─────────────────────────────────────────────────────────────
   if (NUMERIC_KEYS.has(fieldKey)) {
     const n = Number(String(value));

@@ -2100,7 +2100,12 @@ export default function LeaseReview() {
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseId] });
     } catch (err) {
       console.error("[LeaseReview] re-extract failed:", err);
-      toast.error(err?.message || "Could not re-extract lease");
+      const isOverload = /compute resources|resources exhausted|504|timed out|timeout/i.test(err?.message || "");
+      toast.error(
+        isOverload
+          ? "Extraction server is temporarily overloaded. Use 'Re-extract Lease' to retry manually when ready."
+          : (err?.message || "Could not re-extract lease"),
+      );
       // Record the failure so the auto-extract effect doesn't immediately
       // retry on the next page load. The user can trigger Re-extract Lease
       // manually once backend resources are available.

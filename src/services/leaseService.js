@@ -25,7 +25,11 @@ async function ignoreMissingSchema(label, operation) {
   const { error } = await operation();
   if (error) {
     if (isMissingSchemaError(error)) {
-      console.warn(`[leaseService] ${label} skipped: ${error.message}`);
+      // Schema-cache misses are expected in environments where optional
+      // migrations haven't been applied yet. Log at debug level — the
+      // operation is already skipped gracefully so this is informational,
+      // not a warning that requires developer action on every page load.
+      console.debug(`[leaseService] ${label} skipped: ${error.message}`);
       return false;
     }
     throw error;
