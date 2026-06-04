@@ -196,7 +196,7 @@ export default function LeaseReview() {
       if (!resolvedSourceFileId) return null;
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("id, ui_review_payload, reviewed_output, normalized_output")
+        .select("id, status, ui_review_payload, reviewed_output, normalized_output")
         .eq("id", resolvedSourceFileId)
         .single();
       if (error) {
@@ -897,6 +897,34 @@ export default function LeaseReview() {
     // 1. Pipeline already finalized this lease.
     if (lease?.extraction_data?.evidence_refreshed_at) { done(); return; }
 
+    // 1b. Lease top-level columns have meaningful values — extraction already ran.
+    const leaseHasTopLevel = !!(
+      lease?.tenant_name || lease?.monthly_rent || lease?.start_date ||
+      lease?.end_date || lease?.commencement_date || lease?.expiration_date
+    );
+    if (leaseHasTopLevel) {
+      console.log("[LeaseReview] auto-extract: skip — lease top-level columns have meaningful values");
+      done(); return;
+    }
+
+    // 1c. extraction_data.fields has at least one non-null value.
+    const edFields = lease?.extraction_data?.fields;
+    const hasEdFields = edFields && typeof edFields === "object" &&
+      Object.values(edFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
+    if (hasEdFields) {
+      console.log("[LeaseReview] auto-extract: skip — extraction_data.fields has meaningful values");
+      done(); return;
+    }
+
+    // 1d. workflow_output.lease_fields has at least one non-null value.
+    const wfLeaseFields = lease?.extraction_data?.workflow_output?.lease_fields;
+    const hasWfFields = wfLeaseFields && typeof wfLeaseFields === "object" &&
+      Object.values(wfLeaseFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
+    if (hasWfFields) {
+      console.log("[LeaseReview] auto-extract: skip — workflow_output.lease_fields has meaningful values");
+      done(); return;
+    }
+
     // 2. Lease already has per-field evidence stored (pre-evidence_refreshed_at
     //    leases that were reviewed before the flag was introduced).
     const fieldEvidence = lease?.extraction_data?.field_evidence;
@@ -911,10 +939,7 @@ export default function LeaseReview() {
       done(); return;
     }
 
-    // 3. The uploaded file's ui_review_payload already contains extracted field
-    //    data. After the leaseFieldResolver records[0] fix the UI can read it
-    //    directly — a full re-extraction is not needed and would just waste
-    //    compute and loop on failure.
+    // 3. The uploaded file's ui_review_payload already contains extracted field data.
     const uiPayload = uploadedFile?.ui_review_payload;
     const ufRecord0 = (uiPayload?.records?.[0]) ?? null;
     const ufFieldMap =
@@ -931,20 +956,22 @@ export default function LeaseReview() {
       done(); return;
     }
 
-    // 3b. The pipeline ran but mapped zero fields (e.g. missing API keys,
-    //     scanned PDF with no text). The payload exists but has mapping_failed
-    //     set. Auto-extracting again will produce the same empty result.
-    //     Surface the warning and let the user decide — don't loop.
+    // 3b. Pipeline ran but core mapping failed — retrying won't help.
     if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
       console.log("[LeaseReview] auto-extract: skip — pipeline ran but core mapping failed (likely missing API keys or scanned PDF)");
       done(); return;
     }
 
-    // 3c. If the uploaded file has a ui_review_payload at all (even with all-null
-    //     fields from a manual-review fallback), the pipeline already ran.
-    //     Retrying won't help without fixing the underlying cause. Skip.
+    // 3c. ui_review_payload.records exists — pipeline ran (even if all-null).
     if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0) {
       console.log("[LeaseReview] auto-extract: skip — ui_review_payload present (pipeline ran, all fields null)");
+      done(); return;
+    }
+
+    // 3d. Uploaded file already has a terminal or review status — pipeline ran.
+    const ufStatus = uploadedFile?.status ?? uploadedFile?.processing_status ?? null;
+    if (ufStatus && ["review_required", "validated", "approved", "completed", "failed", "stored"].includes(String(ufStatus))) {
+      console.log(`[LeaseReview] auto-extract: skip — uploaded file status=${ufStatus} (pipeline already ran)`);
       done(); return;
     }
 

@@ -503,6 +503,64 @@ function containsAny(text: string, phrases: string[]) {
   return phrases.some((phrase) => haystack.includes(normalizeToken(phrase)));
 }
 
+/**
+ * Returns true when the source text is contextually relevant to the field.
+ * Prevents unrelated text blocks from being attached as source evidence.
+ * A field with a good value but irrelevant source_clause will have its
+ * source_clause cleared to null (shows "No source") instead of showing
+ * a misleading snippet.
+ */
+function isSourceRelevantToField(fieldKey: string, sourceText: string | null): boolean {
+  if (!sourceText || sourceText.trim().length < 4) return false;
+  const haystack = sourceText.toLowerCase();
+
+  const FIELD_KEYWORDS: Record<string, string[]> = {
+    tenant_name:           ["tenant", "lessee", "occupant", "assignee"],
+    tenant_signatory_name: ["tenant", "lessee", "by:", "signed by", "authorized signer"],
+    landlord_name:         ["landlord", "lessor", "owner", "licensor"],
+    landlord_signatory_name: ["landlord", "lessor", "by:", "signed by"],
+    property_name:         ["property", "building", "premises", "project", "development"],
+    property_address:      ["premises", "property", "building", "located at", "address of"],
+    premises_address:      ["premises", "property", "building", "located at", "address of"],
+    landlord_address:      ["landlord", "lessor", "address of landlord", "landlord's address"],
+    tenant_address:        ["tenant", "lessee", "address of tenant", "tenant's address"],
+    permitted_use:         ["use", "permitted use", "use of premises", "purpose"],
+    square_footage:        ["square feet", "sq ft", "sf", "rsf", "rentable", "premises", "approximately"],
+    rentable_area_sqft:    ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
+    tenant_rsf:            ["square feet", "sf", "rsf", "rentable", "tenant"],
+    monthly_rent:          ["rent", "base rent", "monthly rent", "monthly base rent", "per month"],
+    annual_rent:           ["rent", "annual rent", "per year", "yearly"],
+    rent_per_sf:           ["rent", "per square", "per sf", "per rsf", "$/sf"],
+    billing_frequency:     ["monthly", "quarterly", "annual", "rent", "payment"],
+    escalation_rate:       ["escalat", "increase", "percent", "annual", "rent"],
+    security_deposit:      ["security deposit", "deposit", "security"],
+    lease_type:            ["full service", "gross", "triple net", "nnn", "modified gross", "net lease", "expense structure", "base year", "full service gross"],
+    responsibility_taxes:  ["tax", "real estate tax", "property tax", "assessment"],
+    responsibility_insurance: ["insurance", "liability", "coverage", "property insurance"],
+    responsibility_utilities: ["utilities", "utility", "electric", "gas", "water", "hvac"],
+    responsibility_repairs:   ["repairs", "maintenance", "repair", "maintain"],
+    cam_cap_pct:           ["cam", "common area", "cap", "controllable", "operating expenses"],
+    cam_cap_type:          ["cam", "common area", "cap", "cumulative", "non-cumulative"],
+    admin_fee_pct:         ["admin", "administrative fee", "management fee", "percent"],
+    hvac_responsibility:   ["hvac", "heating", "cooling", "air conditioning"],
+    gross_up_enabled:      ["gross up", "gross-up", "occupancy"],
+    general_liability_min: ["insurance", "liability", "coverage", "commercial general"],
+    waiver_of_subrogation: ["waiver", "subrogation", "insurance"],
+    additional_insureds_required: ["additional insured", "insured", "insurance"],
+    tenant_insurance_required:    ["insurance", "liability", "coverage", "tenant shall maintain"],
+    property_insurance_responsibility: ["property insurance", "insurance", "landlord", "tenant"],
+    right_of_first_refusal: ["first refusal", "rofr", "right of first"],
+    early_termination_option: ["early termination", "terminate", "termination option"],
+    assignment_provisions:  ["assignment", "assign", "transfer"],
+    landlord_consent_for_transfer: ["assignment", "assign", "transfer", "consent"],
+    default_cure_period:   ["default", "cure", "notice", "days"],
+  };
+
+  const required = FIELD_KEYWORDS[fieldKey];
+  if (!required) return true; // no constraint for this field — accept any source
+  return required.some((kw) => haystack.includes(kw.toLowerCase()));
+}
+
 function excerptForKeywords(textBlocks: any[], fullText: string, keywords: string[]) {
   // Returns the actual document snippet containing one of the keywords, or
   // null if no real text matched. Previously fell back to `keywords[0]`
@@ -1324,11 +1382,19 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       ? { source_page: null as number | null, source_clause: null as string | null }
       : findEvidenceForValue(doclingRaw, spec.key, value, relatedClause?.clause_title || null);
 
+    const resolvedSourceClause = relatedClause?.clause_text ?? llmEvidence?.source_text ?? textMatchEvidence.source_clause;
+    // Only attach source_clause when it is contextually relevant to the field.
+    // An irrelevant block (e.g. a transferee financial-worth paragraph used as
+    // source for tenant_name) shows "No source" instead of misleading "Exact".
+    const relevantSourceClause = resolvedSourceClause && isSourceRelevantToField(spec.key, resolvedSourceClause)
+      ? resolvedSourceClause
+      : null;
+
     fieldMap[spec.key] = {
       key: spec.key,
       value: normalizeWorkflowFieldValue(spec.key, value),
-      source_page: relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page,
-      source_clause: relatedClause?.clause_text ?? llmEvidence?.source_text ?? textMatchEvidence.source_clause,
+      source_page: relevantSourceClause ? (relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page) : null,
+      source_clause: relevantSourceClause,
       confidence_score: extractionStatus === "not_found" || extractionStatus === "manual_required" ? null : round2(confidenceScore),
       extraction_status: extractionStatus,
       editable: true,
@@ -1415,6 +1481,112 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       fieldMap.lease_type = {
         ...fieldMap.lease_type,
         extraction_status: "conflict_detected",
+      };
+    }
+  }
+
+  // ── Task 4: Derive expense/CAM/insurance rows for Full Service leases ────────
+  // When the lease is Full Service and responsibility fields were not explicitly
+  // extracted, populate them as "calculated" rows so the Expenses/Recoveries,
+  // CAM, and Insurance tabs show meaningful content instead of all-blank rows.
+  if (classifiedLeaseType && /full service|gross lease/i.test(String(classifiedLeaseType))) {
+    const leaseTypeSource = fieldMap.lease_type?.source_clause || null;
+    const leaseTypePage = fieldMap.lease_type?.source_page ?? null;
+    const deriveResponsibility = (key: string, value: string) => {
+      if (!isBlank(fieldMap[key]?.value)) return;
+      fieldMap[key] = {
+        key,
+        value,
+        source_page: leaseTypePage,
+        source_clause: leaseTypeSource,
+        confidence_score: 0.70,
+        extraction_status: "calculated",
+        editable: true,
+        field_group: "expense_terms",
+      };
+    };
+    deriveResponsibility("responsibility_taxes", "landlord");
+    deriveResponsibility("responsibility_insurance", "landlord");
+    deriveResponsibility("responsibility_utilities", "landlord");
+    deriveResponsibility("responsibility_repairs", "landlord");
+    // Full Service → no separate CAM recovery
+    if (isBlank(fieldMap.cam_amount?.value)) {
+      fieldMap.cam_amount = {
+        key: "cam_amount",
+        value: 0,
+        source_page: leaseTypePage,
+        source_clause: leaseTypeSource,
+        confidence_score: 0.70,
+        extraction_status: "calculated",
+        editable: true,
+        field_group: "expense_terms",
+      };
+    }
+  }
+
+  // ── Task 3: Normalization hardening ─────────────────────────────────────────
+
+  // property_name must not be a boolean sentinel
+  if (!isBlank(fieldMap.property_name?.value)) {
+    const pn = String(fieldMap.property_name.value).trim();
+    if (/^(yes|no|true|false|none|n\/a|na|unknown)$/i.test(pn)) {
+      fieldMap.property_name = { ...(fieldMap.property_name as any), value: null, extraction_status: "not_found" };
+    }
+  }
+
+  // Party signatory names must not contain trailing "Date" or signature labels
+  for (const key of ["tenant_signatory_name", "landlord_signatory_name", "tenant_contact_name"]) {
+    if (!isBlank(fieldMap[key]?.value)) {
+      const raw = String(fieldMap[key].value).trim();
+      // Strip trailing "Date", "By:", date strings, or address lines
+      const cleaned = raw
+        .replace(/\s+(Date|By:|Signed:|Date:|[\d]{1,2}[-/][\d]{1,2}[-/][\d]{2,4}).*/i, "")
+        .replace(/\s+(January|February|March|April|May|June|July|August|September|October|November|December).*/i, "")
+        .trim();
+      if (cleaned !== raw && cleaned.length > 2) {
+        fieldMap[key] = { ...(fieldMap[key] as any), value: cleaned };
+      }
+    }
+  }
+
+  // Address fields must not combine multiple unrelated rows (multiple company
+  // names, phone numbers, or addresses from different parties)
+  for (const key of ["landlord_address", "tenant_address"]) {
+    if (!isBlank(fieldMap[key]?.value)) {
+      const v = String(fieldMap[key].value);
+      const phoneCount = (v.match(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g) || []).length;
+      const entityCount = (v.match(/\b(?:LLC|Inc\.|Corp\.|Ltd\.|L\.L\.C\.|L\.P\.)\b/gi) || []).length;
+      const lineCount = v.split(/\n/).filter((l) => l.trim().length > 3).length;
+      if (phoneCount > 1 || entityCount > 2 || lineCount > 5) {
+        // Value is a multi-party block — not a clean single address
+        fieldMap[key] = { ...(fieldMap[key] as any), value: null, source_clause: null, extraction_status: "not_found" };
+      }
+    }
+  }
+
+  // Generic single-word sentinels that are not meaningful normalized values
+  const GENERIC_VALUE_PATTERN = /^(default|insurance|tenant|landlord|property|lease|required|transfer|assignee|assignment|unknown|n\/a|na|none|yes|no|true|false)$/i;
+  const GENERIC_SENTINEL_FIELDS = [
+    "landlord_consent_for_transfer", "assignment_rights", "assignment_provisions",
+    "sublease_rights", "early_termination_option", "right_of_first_refusal",
+    "default_cure_period",
+  ];
+  for (const key of GENERIC_SENTINEL_FIELDS) {
+    if (!isBlank(fieldMap[key]?.value) && typeof fieldMap[key].value === "string") {
+      if (GENERIC_VALUE_PATTERN.test(String(fieldMap[key].value).trim())) {
+        fieldMap[key] = { ...(fieldMap[key] as any), value: null, extraction_status: "not_found" };
+      }
+    }
+  }
+
+  // Humanize landlord_consent_for_transfer — raw key-like text → readable
+  if (!isBlank(fieldMap.landlord_consent_for_transfer?.value)) {
+    const v = String(fieldMap.landlord_consent_for_transfer.value).trim();
+    const lower = v.toLowerCase();
+    if (lower === "required" || lower === "landlord consent required" || /required.*transfer/i.test(v)) {
+      fieldMap.landlord_consent_for_transfer = {
+        ...(fieldMap.landlord_consent_for_transfer as any),
+        value: "Landlord consent required for assignment or transfer",
       };
     }
   }
