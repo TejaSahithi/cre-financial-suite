@@ -745,12 +745,17 @@ export default function LeaseReview() {
 
   // Detect assignment/amendment-only documents so the rule-readiness banner
   // says something accurate. The pipeline tags these docs with
-  // document_profile.documentType ∈ {assignment, amendment, ...} or by
-  // emitting a single coverage rule with rule_type / generation_source =
-  // "original_lease_required". For those docs, "Lease expense rules
-  // approved" is misleading — there are no real recovery clauses to
-  // approve; the original lease is required for CAM/expense rules.
+  // Detect assignment / amendment / consent documents using only the explicit
+  // documentType stamp the extractor sets. The previous "onlyOriginalLeaseRequired"
+  // heuristic (inferred from expense-rule tags) caused false positives on full
+  // service leases where no expense amounts appear and all rules are tagged
+  // coverage_gap — those are full leases, not assignments.
+  //
+  // A reviewer can override a mis-classified document by clicking "This is a
+  // full lease" — that writes document_type_override = "full_lease" into
+  // extraction_data and permanently suppresses the banner.
   const isAssignmentOnlyDocument = useMemo(() => {
+    if (lease?.extraction_data?.document_type_override === "full_lease") return false;
     const workflowOutput = lease?.extraction_data?.workflow_output || {};
     const documentType = String(
       workflowOutput?.document_profile?.documentType
@@ -759,20 +764,34 @@ export default function LeaseReview() {
         || lease?.extraction_data?.document_profile?.document_type
         || "",
     ).toLowerCase();
-    const isAssignmentDoc =
+    return (
       documentType.includes("assignment")
       || documentType.includes("amendment")
       || documentType.includes("estoppel")
-      || documentType.includes("consent");
-    const expenseRules = Array.isArray(workflowOutput?.expense_rules) ? workflowOutput.expense_rules : [];
-    const onlyOriginalLeaseRequired =
-      expenseRules.length > 0
-      && expenseRules.every((r) => {
-        const tag = String(r?.rule_type || r?.generation_source || r?.source_field_key || "").toLowerCase();
-        return tag.includes("original_lease_required") || tag === "coverage_gap";
+      || documentType.includes("consent")
+    );
+  }, [
+    lease?.extraction_data?.document_type_override,
+    lease?.extraction_data?.workflow_output,
+    lease?.extraction_data?.document_profile,
+  ]);
+
+  const handleMarkAsFullLease = async () => {
+    try {
+      await updateLeaseMutation.mutateAsync({
+        id: lease.id,
+        data: {
+          extraction_data: {
+            ...(lease.extraction_data || {}),
+            document_type_override: "full_lease",
+          },
+        },
       });
-    return isAssignmentDoc || onlyOriginalLeaseRequired;
-  }, [lease?.extraction_data?.workflow_output, lease?.extraction_data?.document_profile]);
+      toast.success("Marked as full lease — banner dismissed.");
+    } catch {
+      toast.error("Could not save override. Try again.");
+    }
+  };
 
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => leaseService.update(id, data),
@@ -2337,9 +2356,22 @@ export default function LeaseReview() {
       {/* Assignment / amendment document notice */}
       {isAssignmentOnlyDocument && (
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          <p className="font-semibold mb-1">This document is an Assignment / Amendment / Consent — not the full original lease.</p>
-          <p>Assignment terms have been extracted and are ready to review. CAM, insurance, expense recovery, and operating expense fields require the original lease document.</p>
-          <p className="mt-1 text-xs text-blue-600">Upload the original lease to complete the full abstract and unlock CAM/expense approval.</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold mb-1">This document was detected as an Assignment / Amendment / Consent — not the full original lease.</p>
+              <p>Assignment terms have been extracted and are ready to review. CAM, insurance, expense recovery, and operating expense fields require the original lease document.</p>
+              <p className="mt-1 text-xs text-blue-600">If this is incorrect, click "This is a full lease" to dismiss this notice.</p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-xs"
+              onClick={handleMarkAsFullLease}
+              disabled={updateLeaseMutation.isPending}
+            >
+              This is a full lease
+            </Button>
+          </div>
         </div>
       )}
 

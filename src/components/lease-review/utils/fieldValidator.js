@@ -83,15 +83,26 @@ export function validateFieldValue(fieldKey, value) {
 
   // ── Name fields: reject legal-clause text ────────────────────────────────────
   // The extractor sometimes finds a clause mentioning the concept (e.g. broker
-  // commissions) and returns the clause body instead of the actual name.
+  // commissions, transfer premiums) and returns the clause body instead of the
+  // actual entity name. Two patterns are matched:
+  //   (a) Long strings with legal markers (Article 14.3 "Transfer Premium" text
+  //       showing up as Broker Name is the confirmed example from this codebase)
+  //   (b) Strings that start with a numbered clause reference (e.g. "14.3 ...")
   if (fieldKey.endsWith("_name") && str.length > 80) {
-    const legalClausePattern = /\b(shall not|shall be|without consent|attorneys['']? fees?|compensation|hereinafter|pursuant to|indemnif|subletting|sublease|no Transfer|fair market value)\b/i;
+    const legalClausePattern = /\b(shall not|shall be|without consent|attorneys['']? fees?|compensation|hereinafter|pursuant to|indemnif|subletting|sublease|no Transfer|fair market value|Transfer Premium)\b/i;
     if (legalClausePattern.test(str)) {
       return {
         valid: false,
         reason: `Value looks like extracted clause text, not a name. Edit with the correct value.`,
       };
     }
+  }
+  // Numbered article/clause references are never entity names.
+  if (fieldKey.endsWith("_name") && /^\d+\.\d+\s/.test(str)) {
+    return {
+      valid: false,
+      reason: `Value starts with a clause reference — the extractor matched the wrong section. Edit with the correct value.`,
+    };
   }
 
   // ── Name fields: reject suspiciously long values ──────────────────────────────
