@@ -77,15 +77,16 @@ export function buildSearchBlocksFromSources(...sources) {
     pushDocumentTextBlock(blocks, source.markdown, null);
     pushDocumentTextBlock(blocks, source.body, null);
 
-    // ui_review_payload nests useful fields/records. Visit only likely
-    // payload containers so we do not accidentally index every metadata
-    // value as source text.
+    // Visit likely payload containers. metadata is included because some
+    // pipeline versions store Docling text or page arrays there.
     visit(source.records, depth + 1);
     visit(source.rows, depth + 1);
     visit(source.standard_fields, depth + 1);
     visit(source.custom_fields, depth + 1);
     visit(source.fields, depth + 1);
     visit(source.evidence, depth + 1);
+    visit(source.metadata, depth + 1);
+    visit(source.workflow_output, depth + 1);
   };
 
   for (const source of sources) visit(source);

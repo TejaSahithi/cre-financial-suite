@@ -513,13 +513,24 @@ export default function LeaseReview() {
         if (error || !file || cancelled) return;
 
         // ── Step 1: pull whatever evidence the ui_review_payload already has.
+        //
+        // The extraction pipeline stores field data in two different shapes:
+        //   A) Array format: records[0].standard_fields / .custom_fields
+        //      → each item is { field_key, value, evidence: { source_clause, ... } }
+        //   B) Object map format: records[0].fields / .workflow_output.lease_fields
+        //      → each entry is { field_key: { value, source_text, source_page, ... } }
+        //
+        // We must handle BOTH. Previously only format A was read, causing
+        // source_text from format B to be silently dropped and every such field
+        // to display "No source" even when the pipeline returned a full quote.
         const fieldsWithEvidence = {};
         const fieldEvidence = {};
         const reviewedRow = (file.ui_review_payload?.records || file.ui_review_payload?.rows || [])[0];
         if (reviewedRow) {
+          // ── A) Array format ──────────────────────────────────────────────
           const allFields = [
-            ...(reviewedRow.standard_fields || []),
-            ...(reviewedRow.custom_fields || []),
+            ...(Array.isArray(reviewedRow.standard_fields) ? reviewedRow.standard_fields : []),
+            ...(Array.isArray(reviewedRow.custom_fields) ? reviewedRow.custom_fields : []),
           ];
           for (const field of allFields) {
             if (!field?.field_key) continue;
@@ -541,6 +552,50 @@ export default function LeaseReview() {
                 source_text: sourceText,
                 extraction_status: field.status ?? null,
               };
+            }
+          }
+
+          // ── B) Object map format ─────────────────────────────────────────
+          // Covers records[0].fields, records[0].workflow_output.lease_fields,
+          // and any other object map the pipeline might write.
+          const objectMaps = [
+            reviewedRow.fields,
+            reviewedRow.workflow_output?.lease_fields,
+            reviewedRow.workflow_output?.records?.[0]?.lease_fields,
+          ];
+          for (const map of objectMaps) {
+            if (!map || typeof map !== "object" || Array.isArray(map)) continue;
+            for (const [key, entry] of Object.entries(map)) {
+              if (!key || !entry || typeof entry !== "object") continue;
+              // Don't overwrite a richer record already added from format A.
+              if (fieldEvidence[key]?.source_text) continue;
+              const sourceText = cleanSourceEvidenceText(
+                entry.exact_source_text ?? entry.exactSourceText
+                ?? entry.source_clause ?? entry.source_text ?? entry.snippet
+                ?? entry.evidence?.source_clause ?? entry.evidence?.source_text ?? null,
+              );
+              const sourcePage = entry.source_page ?? entry.sourcePage ?? entry.page_number ?? entry.page
+                ?? entry.evidence?.source_page ?? entry.evidence?.page_number ?? null;
+              const value = entry.normalized_value ?? entry.value ?? entry.raw_value ?? null;
+              if (value == null && !sourceText) continue;
+              fieldsWithEvidence[key] = {
+                ...(fieldsWithEvidence[key] || {}),
+                value,
+                source_page: sourcePage,
+                source_text: sourceText,
+                raw_value: entry.raw_value ?? entry.rawValue ?? value,
+                confidence: typeof entry.confidence_score === "number" ? entry.confidence_score
+                  : typeof entry.confidence === "number" ? entry.confidence : null,
+                extraction_status: entry.extraction_status ?? entry.extractionStatus ?? null,
+              };
+              if (sourceText || sourcePage != null) {
+                fieldEvidence[key] = {
+                  raw_value: entry.raw_value ?? entry.rawValue ?? value,
+                  source_page: sourcePage,
+                  source_text: sourceText,
+                  extraction_status: entry.extraction_status ?? entry.extractionStatus ?? "extracted",
+                };
+              }
             }
           }
         }
