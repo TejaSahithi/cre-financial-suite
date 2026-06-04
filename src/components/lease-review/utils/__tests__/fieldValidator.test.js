@@ -98,6 +98,70 @@ describe("validateFieldValue — date fields", () => {
   });
 });
 
+describe("validateFieldValue — legal-clause text in name fields", () => {
+  it("rejects broker_name that contains legal clause language", () => {
+    const clauseValue = "commissions and reasonable attorneys' fees; and (ii) shall not include any compensation for the fair market value of Tenant's Property nor reasonable compensation";
+    const result = validateFieldValue("broker_name", clauseValue);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/clause text/i);
+  });
+
+  it("accepts a short name that happens to contain common words", () => {
+    // "Jones" is not a clause; short names must pass even if they share a word
+    expect(validateFieldValue("broker_name", "Jones & Associates").valid).toBe(true);
+  });
+
+  it("accepts a real broker company name", () => {
+    expect(validateFieldValue("broker_name", "Cushman & Wakefield").valid).toBe(true);
+  });
+});
+
+describe("validateFieldValue — suspiciously long name values", () => {
+  it("rejects a name field value longer than 120 characters", () => {
+    const longName = "A".repeat(121);
+    const result = validateFieldValue("tenant_name", longName);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/too long/i);
+  });
+
+  it("accepts a name within 120 characters", () => {
+    expect(validateFieldValue("landlord_name", "224 Partners, LLC").valid).toBe(true);
+  });
+});
+
+describe("validateFieldValue — signature-block artifact in name", () => {
+  it("rejects a contact name ending with 'Date'", () => {
+    const result = validateFieldValue("tenant_contact_name", "Narendra Pydi Date");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/Date.*signature/i);
+  });
+
+  it("accepts a name that simply contains the word 'date' mid-string", () => {
+    // "Update" contains "date" but not as a trailing word
+    expect(validateFieldValue("tenant_name", "Mindful Tech Solutions, Inc.").valid).toBe(true);
+  });
+});
+
+describe("validateFieldValue — address field concatenation", () => {
+  it("rejects an address that contains numbered table-row labels", () => {
+    const multiRow = "224 S Peters Road Suite 212 4. Tenant: Mindful Tech Solutions, Inc. 5. Address of Tenant: 1240 Bentley Park lane Knoxville TN 37922";
+    const result = validateFieldValue("landlord_address", multiRow);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/summary-table rows/i);
+  });
+
+  it("rejects an address longer than 200 characters", () => {
+    const longAddr = "224 S Peters Road, Suite 212, Knoxville, TN 37923 ".repeat(5);
+    const result = validateFieldValue("premises_address", longAddr);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/too long/i);
+  });
+
+  it("accepts a normal address", () => {
+    expect(validateFieldValue("premises_address", "224 S Peters Road, Suite 212, Knoxville, TN 37923").valid).toBe(true);
+  });
+});
+
 describe("validateFieldValue — null/empty values are always valid", () => {
   it("treats null as valid (absence is a missing-field concern, not invalid)", () => {
     expect(validateFieldValue("property_name", null).valid).toBe(true);

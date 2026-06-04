@@ -81,6 +81,58 @@ export function validateFieldValue(fieldKey, value) {
     };
   }
 
+  // ── Name fields: reject legal-clause text ────────────────────────────────────
+  // The extractor sometimes finds a clause mentioning the concept (e.g. broker
+  // commissions) and returns the clause body instead of the actual name.
+  if (fieldKey.endsWith("_name") && str.length > 80) {
+    const legalClausePattern = /\b(shall not|shall be|without consent|attorneys['']? fees?|compensation|hereinafter|pursuant to|indemnif|subletting|sublease|no Transfer|fair market value)\b/i;
+    if (legalClausePattern.test(str)) {
+      return {
+        valid: false,
+        reason: `Value looks like extracted clause text, not a name. Edit with the correct value.`,
+      };
+    }
+  }
+
+  // ── Name fields: reject suspiciously long values ──────────────────────────────
+  // Real entity names are short; anything over 120 chars is almost always a
+  // concatenated extraction or a clause fragment.
+  if (fieldKey.endsWith("_name") && str.length > 120) {
+    return {
+      valid: false,
+      reason: `Value is too long (${str.length} chars) for a name — may be a concatenated extraction. Edit with the correct value.`,
+    };
+  }
+
+  // ── Name fields: reject signature-block artifacts ─────────────────────────────
+  // When the extractor reads a signature block like "By: Narendra Pydi  Date"
+  // it sometimes includes " Date" or " By:" as part of the name.
+  if (fieldKey.endsWith("_name") && /\bDate\s*$/.test(str)) {
+    return {
+      valid: false,
+      reason: `Value ends with "Date" — likely a signature-block artifact. Edit with just the name.`,
+    };
+  }
+
+  // ── Address fields: reject numbered-list concatenations ──────────────────────
+  // Summary-table extractions sometimes grab multiple rows: the address row
+  // plus the rows below it (Tenant:, Landlord:, etc.). Detect the numbered
+  // list pattern that appears when this happens.
+  if (fieldKey.endsWith("_address") && /\d+\.\s+(?:Tenant|Landlord|Address|Premises|Lessee|Lessor)\b/i.test(str)) {
+    return {
+      valid: false,
+      reason: `Value appears to contain multiple summary-table rows. Edit with just the address.`,
+    };
+  }
+
+  // ── Address fields: reject suspiciously long values ───────────────────────────
+  if (fieldKey.endsWith("_address") && str.length > 200) {
+    return {
+      valid: false,
+      reason: `Value is too long (${str.length} chars) for an address — may be a multi-row extraction. Edit with the correct value.`,
+    };
+  }
+
   // ── Numeric keys ─────────────────────────────────────────────────────────────
   if (NUMERIC_KEYS.has(fieldKey)) {
     const n = Number(String(value));
