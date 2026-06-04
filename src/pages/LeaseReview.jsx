@@ -117,8 +117,6 @@ import { buildBulkApprovalState } from "@/components/lease-review/utils/bulkAppr
 
 import {
   RentScheduleTable,
-  ExpenseRulesTable,
-  CamRulesTable,
   CriticalDatesTable,
   ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
@@ -2676,7 +2674,6 @@ export default function LeaseReview() {
             showMissing={showMissingByTab.expenses_recoveries || false}
             conflictKeys={conflictKeySet}
           />
-          <ExpenseRulesTable leaseId={lease.id} />
         </TabsContent>
 
         {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
@@ -2700,7 +2697,6 @@ export default function LeaseReview() {
             showMissing={showMissingByTab.cam_rules || false}
             conflictKeys={conflictKeySet}
           />
-          <CamRulesTable leaseId={lease.id} />
         </TabsContent>
 
         {/* Clause Records — all meaningful lease clauses against a predefined checklist. */}
