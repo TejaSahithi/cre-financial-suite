@@ -887,19 +887,37 @@ Deno.serve(async (req: Request) => {
     const extractionModuleType = toExtractionModuleType(moduleType);
     const fileName = fileRecord.file_name ?? "document";
 
-    // Load file bytes from Supabase Storage so the pipeline can fall back
-    // to Gemini Vision when Docling text is weak (scanned / handwritten /
-    // image-only PDFs). pipeline.ts already wires `fileBase64` into the
-    // LLM extractor's file-mode branch — but until now the orchestrator
-    // never passed it, so the Vision path was unreachable for every file.
+    // Load file bytes from Supabase Storage ONLY when Docling text is too
+    // weak for the LLM extractor to work from — i.e. for scanned / image-only
+    // PDFs. For digital PDFs with sufficient extracted text the file bytes are
+    // never used and downloading them wastes 3–8 MB of Edge Function RAM,
+    // which is the primary cause of the 546 "compute resources" error.
+    const doclingTextLength = String((fileRecord.docling_raw as any)?.full_text ?? "").length;
+    const doclingBlockCount = Array.isArray((fileRecord.docling_raw as any)?.text_blocks)
+      ? (fileRecord.docling_raw as any).text_blocks.length
+      : 0;
+    // A document with ≥2 500 chars AND ≥5 text blocks has enough content
+    // for rule/table/LLM extraction without Vision. These thresholds match
+    // the MIN_NATIVE_PDF_TEXT_CHARS and MIN_DIGITAL_BLOCKS constants in
+    // _shared/extraction/parser.ts.
+    const doclingTextIsGood = doclingTextLength >= 2500 && doclingBlockCount >= 5;
+
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
       ?? fileRecord.file_type
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
-    let fileLoadStatus: string = "not_attempted";
+    let fileLoadStatus: string = doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
     let fileLoadError: string | null = null;
     let fileBytesLength = 0;
     let detectedMagic: string | null = null;
+
+    if (doclingTextIsGood) {
+      console.log(
+        `[normalize-pdf-output] docling text is sufficient ` +
+        `(${doclingTextLength} chars, ${doclingBlockCount} blocks) — ` +
+        `skipping file bytes download to conserve memory`,
+      );
+    }
 
     // Detect what was actually downloaded by inspecting the first bytes.
     // If the download silently returned an HTML error page (expired signed
@@ -926,16 +944,15 @@ Deno.serve(async (req: Request) => {
       return null;
     };
 
-    if (fileRecord.file_url) {
+    if (!doclingTextIsGood && fileRecord.file_url) {
       try {
         const storagePath = String(fileRecord.file_url).replace(
           /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
           "",
         );
         console.log(
-          `[normalize-pdf-output] loading file bytes file_id=${file_id} ` +
-          `file_name=${fileRecord.file_name ?? "?"} storage_path=${storagePath} ` +
-          `module=${moduleType}`,
+          `[normalize-pdf-output] loading file bytes (weak docling: ${doclingTextLength} chars, ${doclingBlockCount} blocks) ` +
+          `file_id=${file_id} file_name=${fileRecord.file_name ?? "?"} storage_path=${storagePath}`,
         );
         const { data: fileBlob, error: downloadError } = await supabaseAdmin
           .storage

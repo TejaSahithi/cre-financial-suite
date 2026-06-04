@@ -417,9 +417,13 @@ export default function LeaseUpload() {
     if (!fileId) return;
     setRetryingExtraction(true);
     try {
+      // force_reextract=true resets the file status back to 'uploaded' so the
+      // pipeline FSM accepts the parsing transition even when the file is stuck
+      // at 'validating' or 'parsing' (e.g. after a 546 compute-resource error).
       const data = await invokeEdgeFunction("ingest-file", {
         file_id: fileId,
         module_type: "leases",
+        force_reextract: true,
       });
 
       if (data?.error) {
@@ -572,10 +576,24 @@ export default function LeaseUpload() {
   }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
 
   const { activeIndex, failed } = pipelineProgress(fileRecord?.status);
+
+  // Detect a stuck pipeline: if the file has been in an intermediate active
+  // status for more than 3 minutes without progressing, the backend likely
+  // hit a compute-resource limit and left the status frozen. Show a clear
+  // message and make Re-run visible.
+  const isStuckInPipeline = useMemo(() => {
+    const stuckStatuses = new Set(["parsing", "validating", "validated", "storing"]);
+    if (!stuckStatuses.has(fileRecord?.status)) return false;
+    const updatedAt = fileRecord?.updated_at ? new Date(fileRecord.updated_at).getTime() : 0;
+    if (!updatedAt) return false;
+    return Date.now() - updatedAt > 3 * 60 * 1000; // stuck for > 3 minutes
+  }, [fileRecord?.status, fileRecord?.updated_at]);
+
   // The lease draft can be opened as soon as the file is past extraction.
-  // Including `validated`, `storing`, `stored`, and `computing` lets users
-  // open Lease Review for files that bypassed the review_required gate.
+  // Including `validating` lets users open Lease Review for files stuck there
+  // so they can use its Re-extract button (which already uses force_reextract).
   const canOpenReview = [
+    "validating",
     "validated",
     "review_required",
     "approved",
@@ -789,6 +807,27 @@ export default function LeaseUpload() {
             {failed && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 Pipeline failed. Use Re-run Extraction to retry.
+              </div>
+            )}
+            {isStuckInPipeline && !failed && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <span>
+                  Extraction appears stuck — the AI pipeline may have run out of compute resources.
+                  Click <strong>Re-run Extraction</strong> to reset and retry.
+                </span>
+                <Button
+                  size="sm"
+                  onClick={retryExtraction}
+                  disabled={retryingExtraction}
+                  className="shrink-0 bg-amber-600 text-white hover:bg-amber-700"
+                >
+                  {retryingExtraction ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  Re-run Extraction
+                </Button>
               </div>
             )}
           </CardContent>
