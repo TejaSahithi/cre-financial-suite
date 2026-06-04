@@ -89,7 +89,7 @@ export const leaseService = {
     if (supabase) {
       // 1. Fetch lease to know its org_id for the audit log
       const lease = await baseService.get(id);
-      
+
       // 2. Prefer the transactional cascade RPC. Older deployments may not
       // have the migration yet, so fall back to the same ordered cleanup client-side.
       const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
@@ -102,7 +102,7 @@ export const leaseService = {
           throw error;
         }
       }
-      
+
       // 3. Log the audit manually since we bypassed baseService.delete
       if (lease) {
         logAudit({
@@ -110,12 +110,12 @@ export const leaseService = {
           entityId: id,
           action: 'delete',
           orgId: lease.org_id
-        }).catch(() => {});
+        }).catch(() => { });
       }
-      
+
       return true;
     }
-    
+
     return baseService.delete(id);
   }
 };
@@ -131,7 +131,7 @@ export const leaseService = {
  */
 export async function backfillLeaseSummaryFields({ dryRun = true, force = false, approvedOnly = true } = {}) {
   console.log(`[backfillLeaseSummaryFields] Starting backfill... dryRun=${dryRun}, force=${force}, approvedOnly=${approvedOnly}`);
-  
+
   let query = supabase.from("leases").select("*");
 
   if (approvedOnly) {
@@ -143,17 +143,17 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
     console.error("[backfillLeaseSummaryFields] Failed to fetch leases:", error);
     throw error;
   }
-  
+
   const sourceFileIds = [...new Set(rawData.map(l => l.source_file_id).filter(Boolean))];
   const fileMap = {};
   if (sourceFileIds.length > 0) {
-      const { data: files } = await supabase
-        .from("uploaded_files")
-        .select("id, reviewed_output, ui_review_payload")
-        .in("id", sourceFileIds);
-      if (files) {
-          for (const f of files) fileMap[f.id] = f;
-      }
+    const { data: files } = await supabase
+      .from("uploaded_files")
+      .select("id, reviewed_output, ui_review_payload")
+      .in("id", sourceFileIds);
+    if (files) {
+      for (const f of files) fileMap[f.id] = f;
+    }
   }
 
   const leases = rawData.map(lease => ({
@@ -163,8 +163,8 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
   }));
 
   const summaryKeys = [
-    "tenant_name", "landlord_name", "lease_type", "commencement_date", 
-    "expiration_date", "monthly_rent", "annual_rent", "square_footage", 
+    "tenant_name", "landlord_name", "lease_type", "commencement_date",
+    "expiration_date", "monthly_rent", "annual_rent", "square_footage",
     "total_sf", "property_name"
   ];
 
@@ -197,7 +197,7 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
       const columns = resolveFieldColumns(key);
       for (const column of columns) {
         if (!force && lease[column] != null && lease[column] !== "") continue;
-        
+
         // Skip if the value is essentially the same
         if (lease[column] === value) continue;
 
@@ -216,7 +216,7 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
           .from("leases")
           .update(updates)
           .eq("id", lease.id);
-        
+
         if (updateError) {
           console.error(`[backfillLeaseSummaryFields] Failed to update lease ${lease.id}:`, updateError);
         } else {
@@ -232,6 +232,6 @@ export async function backfillLeaseSummaryFields({ dryRun = true, force = false,
   if (results.changes.length > 0) {
     console.log("[backfillLeaseSummaryFields] Changes detail:", results.changes);
   }
-  
+
   return results;
 }
