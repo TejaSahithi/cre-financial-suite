@@ -86,6 +86,8 @@ import {
 } from "@/services/leaseApprovalWorkflowService";
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
+import { useAuth } from "@/lib/AuthContext";
+import { isSuperAdmin } from "@/lib/rbac";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
@@ -130,6 +132,9 @@ export default function LeaseReview() {
   const leaseId = urlParams.get("id");
 
   const { trigger: triggerCompute } = useComputeTrigger();
+
+  const { user } = useAuth();
+  const isSuperAdminUser = isSuperAdmin(user);
 
   // UI state
   const [activeTab, setActiveTab] = useState("summary");
@@ -2305,14 +2310,16 @@ export default function LeaseReview() {
               No lease uploads found in this org. Upload a lease PDF first on the Upload Lease page, then come back here.
             </p>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="border-red-300 bg-white text-red-700 hover:bg-red-100"
-            onClick={() => setActiveTab("extraction_debug")}
-          >
-            Or paste a UUID manually (Extraction Debug)
-          </Button>
+          {isSuperAdminUser && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-300 bg-white text-red-700 hover:bg-red-100"
+              onClick={() => setActiveTab("extraction_debug")}
+            >
+              Or paste a UUID manually (Extraction Debug)
+            </Button>
+          )}
         </div>
       )}
 
@@ -2414,6 +2421,7 @@ export default function LeaseReview() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
+            if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
             const tabFields = fieldsForTab[tab.key] || [];
             const pendingInTab = tabFields.filter((f) => {
               if (!f.required) return false;
@@ -2733,10 +2741,12 @@ export default function LeaseReview() {
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
-        {/* Extraction Debug tab — diagnose extraction issues. */}
-        <TabsContent value="extraction_debug" className="mt-4 space-y-3">
-          <ExtractionDebugPanel lease={lease} />
-        </TabsContent>
+        {/* Extraction Debug tab — superadmin only. */}
+        {isSuperAdminUser && (
+          <TabsContent value="extraction_debug" className="mt-4 space-y-3">
+            <ExtractionDebugPanel lease={lease} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Side drawer for full field detail. */}
