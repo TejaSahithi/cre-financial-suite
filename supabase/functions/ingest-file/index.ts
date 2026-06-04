@@ -41,15 +41,24 @@ import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-s
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Enhanced Edge Function caller with retry logic and better error handling.
+/** Edge Function caller with selective retry and strict timeout budget.
  *
- * Timeout budget: Supabase Edge Functions have a 150 s hard wall.  With two
+ * Timeout budget: Supabase Edge Functions have a 150 s hard wall. With two
  * downstream calls (parse-pdf-docling + normalize-pdf-output) plus overhead,
- * each call must complete within ~55 s so the orchestrator can still call
- * parkForManualReview and return a clean HTTP response before the hard limit.
+ * each call must complete within 45 s, leaving ≥60 s for parkForManualReview
+ * and the HTTP response before the hard limit.
  *
- * Do NOT raise timeoutMs above 55 000 without also reducing retries or
- * splitting the pipeline into async/queue steps.
+ * Do NOT raise timeoutMs above 45 000 without reducing retries or splitting
+ * the pipeline into async/queue steps.
+ *
+ * Retry policy:
+ *   - 4xx (client errors): never retry.
+ *   - 546 (Supabase resource exhaustion): never retry — the same resource
+ *     pressure will cause the retry to fail and the wasted time will push the
+ *     orchestrator past the 150 s wall, surfacing a second 546 to the user.
+ *   - 529 (Supabase overloaded): never retry for the same reason.
+ *   - 5xx (other transient server errors): retry once with 1 s delay.
+ *   - Network / AbortError (timeout): never retry.
  */
 async function callEdgeFunction(
   supabaseUrl: string,
@@ -57,16 +66,16 @@ async function callEdgeFunction(
   body: Record<string, unknown>,
   authToken: string,
   actingOrgId?: string | null,
-  retries = 2,
-  timeoutMs = 55000,
+  retries = 1,
+  timeoutMs = 45000,
 ): Promise<{ ok: boolean; status: number; data: unknown; error?: string; timedOut?: boolean }> {
   const url = `${supabaseUrl}/functions/v1/${functionName}`;
   const authorization = authToken.match(/^Bearer\s+/i) ? authToken : `Bearer ${authToken}`;
-  
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`[ingest-file] Calling ${functionName} (attempt ${attempt}/${retries})`);
-      
+
       const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -78,42 +87,54 @@ async function callEdgeFunction(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      
+
       const data = await res.json().catch(() => ({}));
-      
+
       if (res.ok) {
         console.log(`[ingest-file] ${functionName} succeeded on attempt ${attempt}`);
         return { ok: true, status: res.status, data };
       }
-      
-      // If it's a client error (4xx), don't retry
+
+      // Resource-exhaustion responses from Supabase — never retry.
+      // Retrying burns the remaining wall-time budget and causes the
+      // orchestrator itself to be killed with 546 before it can park.
+      if (res.status === 546 || res.status === 529) {
+        const message =
+          (data as any)?.message ||
+          "Function ran out of compute resources. The PDF may be too large or complex. Try re-extracting.";
+        console.error(`[ingest-file] ${functionName} hit resource limit (${res.status}), not retrying`);
+        return { ok: false, status: res.status, data, error: message };
+      }
+
+      // Client errors (4xx) — never retry.
       if (res.status >= 400 && res.status < 500) {
-        console.log(`[ingest-file] ${functionName} failed with client error ${res.status}, not retrying`);
         const message =
           (data as any)?.message ||
           (data as any)?.error_details ||
           (data as any)?.error_code ||
           `Client error: ${res.status}`;
+        console.log(`[ingest-file] ${functionName} client error ${res.status}, not retrying`);
         return { ok: false, status: res.status, data, error: message };
       }
-      
-      // Server error (5xx) - retry with exponential backoff
+
+      // Transient 5xx — retry once with a short delay.
       if (attempt < retries) {
-        const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
+        const delay = 1000;
         console.log(`[ingest-file] ${functionName} failed with ${res.status}, retrying in ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
-      
+
       return {
         ok: false,
         status: res.status,
         data,
-        error: (data as any)?.message || (data as any)?.error_details || `Server error after ${retries} attempts`,
+        error: (data as any)?.message || (data as any)?.error_details || `Server error on attempt ${attempt}`,
       };
-      
     } catch (err) {
-      const isTimeout = err?.name === "TimeoutError" || err?.name === "AbortError" ||
+      const isTimeout =
+        err?.name === "TimeoutError" ||
+        err?.name === "AbortError" ||
         String(err?.message || "").toLowerCase().includes("timeout");
 
       console.error(
@@ -121,23 +142,16 @@ async function callEdgeFunction(
         err.message,
       );
 
-      // Do not retry on timeout — each retry burns the same budget and the
-      // orchestrator needs remaining time to call parkForManualReview.
-      if (!isTimeout && attempt < retries) {
-        const delay = Math.pow(2, attempt - 1) * 1000;
-        console.log(`[ingest-file] Retrying ${functionName} in ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-
+      // Never retry on timeout — the next attempt will consume the same
+      // budget and the orchestrator needs the remaining time to park.
       return {
         ok: false,
         status: isTimeout ? 504 : 500,
         data: {},
         timedOut: isTimeout,
         error: isTimeout
-          ? `${functionName} did not respond within ${timeoutMs / 1000}s — PDF may be too large or complex. Try re-extracting.`
-          : `Network error after ${retries} attempts: ${err.message}`,
+          ? `${functionName} timed out after ${timeoutMs / 1000}s — PDF may be too large. Try re-extracting.`
+          : `Network error: ${err.message}`,
       };
     }
   }

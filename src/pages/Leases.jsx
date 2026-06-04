@@ -125,18 +125,21 @@ export default function Leases() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
 
-  const { orgId } = useOrgId();
+  // allowSuperAdminGlobal: true → superadmin with no acting org gets orgId = null
+  // (platform scope = all orgs). Regular users still get their org's ID.
+  const { orgId } = useOrgId({ allowSuperAdminGlobal: true });
   const { data: leases = [], isLoading } = useQuery({
     queryKey: ["LeasesRich", orgId],
-    enabled: !!orgId && orgId !== "__none__",
+    // orgId === null means platform scope (superadmin seeing all orgs) — valid.
+    // orgId === "__none__" means no org resolved yet — skip.
+    enabled: orgId !== "__none__" && orgId !== undefined,
     queryFn: async () => {
-       const { data, error } = await supabase
-         .from("leases")
-         .select("*")
-         .eq("org_id", orgId);
-       
+       let query = supabase.from("leases").select("*");
+       // null orgId = superadmin platform scope → no org filter → all leases.
+       if (orgId !== null) query = query.eq("org_id", orgId);
+       const { data, error } = await query;
        if (error) throw error;
-       
+
        const sourceFileIds = [...new Set(data.map(l => l.source_file_id).filter(Boolean))];
        const fileMap = {};
        if (sourceFileIds.length > 0) {
@@ -156,10 +159,10 @@ export default function Leases() {
        }));
     }
   });
-  const { data: units = [] } = useOrgQuery("Unit");
-  const { data: buildings = [] } = useOrgQuery("Building");
-  const { data: properties = [] } = useOrgQuery("Property");
-  const { data: portfolios = [] } = useOrgQuery("Portfolio");
+  const { data: units = [] } = useOrgQuery("Unit", {}, { allowSuperAdminGlobal: true });
+  const { data: buildings = [] } = useOrgQuery("Building", {}, { allowSuperAdminGlobal: true });
+  const { data: properties = [] } = useOrgQuery("Property", {}, { allowSuperAdminGlobal: true });
+  const { data: portfolios = [] } = useOrgQuery("Portfolio", {}, { allowSuperAdminGlobal: true });
 
   // Approved expense rule sets feed the "Budget Ready" derived status.
   // We scope the query to lease IDs we already have to avoid pulling every
