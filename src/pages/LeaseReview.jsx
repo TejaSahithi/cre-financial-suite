@@ -827,15 +827,14 @@ export default function LeaseReview() {
     const sourceFileId = lease?.extraction_data?.source_file_id;
     if (!sourceFileId) return;
 
-    // If the full pipeline has already finalized this lease, skip.
-    if (lease?.extraction_data?.evidence_refreshed_at) {
-      autoExtractFiredRef.current = lease.id;
-      return;
-    }
+    // Helper: mark this lease as handled so the effect never fires twice.
+    const done = () => { autoExtractFiredRef.current = lease.id; };
 
-    // Back-compat: pre-existing leases (created before evidence_refreshed_at
-    // was tracked) may already have per-field evidence with source pages /
-    // source text. If so, don't disturb them — only re-extract on demand.
+    // 1. Pipeline already finalized this lease.
+    if (lease?.extraction_data?.evidence_refreshed_at) { done(); return; }
+
+    // 2. Lease already has per-field evidence stored (pre-evidence_refreshed_at
+    //    leases that were reviewed before the flag was introduced).
     const fieldEvidence = lease?.extraction_data?.field_evidence;
     const hasPersistedEvidence =
       fieldEvidence &&
@@ -845,15 +844,52 @@ export default function LeaseReview() {
       );
     if (hasPersistedEvidence) {
       console.log("[LeaseReview] auto-extract: skip — lease already has per-field evidence");
-      autoExtractFiredRef.current = lease.id;
-      return;
+      done(); return;
     }
 
-    autoExtractFiredRef.current = lease.id;
-    console.log("[LeaseReview] auto-running re-extract — source linked but full pipeline has not finalized this lease yet (no evidence_refreshed_at)");
+    // 3. The uploaded file's ui_review_payload already contains extracted field
+    //    data. After the leaseFieldResolver records[0] fix the UI can read it
+    //    directly — a full re-extraction is not needed and would just waste
+    //    compute and loop on failure.
+    const ufRecord0 =
+      (uploadedFile?.ui_review_payload?.records?.[0]) ?? null;
+    const ufFieldMap =
+      ufRecord0?.workflow_output?.lease_fields ||
+      ufRecord0?.fields ||
+      ufRecord0?.standard_fields ||
+      null;
+    const hasUploadedFileData =
+      ufFieldMap &&
+      typeof ufFieldMap === "object" &&
+      Object.keys(ufFieldMap).length > 2;
+    if (hasUploadedFileData) {
+      console.log("[LeaseReview] auto-extract: skip — uploaded file already has extracted field data in ui_review_payload");
+      done(); return;
+    }
+
+    // 4. A recent auto-extract failure for this lease was recorded in
+    //    sessionStorage. Don't hammer the edge function; wait for the user to
+    //    manually trigger Re-extract Lease once resources are available.
+    const failureKey = `lease_auto_extract_failed_${lease.id}`;
+    const lastFailedAt = Number(sessionStorage.getItem(failureKey) || 0);
+    const RETRY_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+    if (lastFailedAt && Date.now() - lastFailedAt < RETRY_COOLDOWN_MS) {
+      console.log("[LeaseReview] auto-extract: skip — recent failure recorded, waiting for manual retry");
+      done(); return;
+    }
+
+    done();
+    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted data found yet");
     toast.info("Running full lease extraction in the background…");
     handleReextractLease();
-  }, [lease?.id, lease?.extraction_data?.source_file_id, lease?.extraction_data?.evidence_refreshed_at, lease?.extraction_data?.field_evidence, reextracting]);
+  }, [
+    lease?.id,
+    lease?.extraction_data?.source_file_id,
+    lease?.extraction_data?.evidence_refreshed_at,
+    lease?.extraction_data?.field_evidence,
+    uploadedFile,
+    reextracting,
+  ]);
 
   // --- Early returns -------------------------------------------------------
   if (!leaseId) {
@@ -2065,6 +2101,14 @@ export default function LeaseReview() {
     } catch (err) {
       console.error("[LeaseReview] re-extract failed:", err);
       toast.error(err?.message || "Could not re-extract lease");
+      // Record the failure so the auto-extract effect doesn't immediately
+      // retry on the next page load. The user can trigger Re-extract Lease
+      // manually once backend resources are available.
+      try {
+        sessionStorage.setItem(`lease_auto_extract_failed_${leaseId}`, String(Date.now()));
+      } catch {
+        // sessionStorage may be unavailable in some environments — ignore.
+      }
     } finally {
       setReextracting(false);
       setReextractStage("");
