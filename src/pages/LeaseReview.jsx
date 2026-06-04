@@ -228,6 +228,13 @@ export default function LeaseReview() {
   // in the same order.
   const [showMissingByTab, setShowMissingByTab] = useState({});
 
+  // Custom field add dialog state
+  const [customFieldDialog, setCustomFieldDialog] = useState(null); // { tabKey }
+  const [customFieldForm, setCustomFieldForm] = useState({ label: "", value: "", sourceText: "", sourcePage: "" });
+  const [customFieldSaving, setCustomFieldSaving] = useState(false);
+  // User-added custom fields per tab (survives re-renders within the session)
+  const [userCustomFields, setUserCustomFields] = useState({});
+
   const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
     const merged = {};
@@ -235,10 +242,11 @@ export default function LeaseReview() {
       merged[tab.key] = [
         ...(FIELDS_BY_TAB[tab.key] || []),
         ...(dynamicFieldsByTab[tab.key] || []),
+        ...(userCustomFields[tab.key] || []),
       ];
     }
     return merged;
-  }, [dynamicFieldsByTab]);
+  }, [dynamicFieldsByTab, userCustomFields]);
 
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
@@ -1289,6 +1297,52 @@ export default function LeaseReview() {
       toast.error(err?.message || "Could not save review action");
       // revert
       setFieldReviews(fieldReviews);
+    }
+  };
+
+  const handleAddCustomField = async () => {
+    const { label, value, sourceText, sourcePage } = customFieldForm;
+    if (!label.trim()) { toast.error("Field name is required."); return; }
+    const key = `custom_${label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}_${Date.now()}`;
+    const tabKey = customFieldDialog?.tabKey;
+    const newField = {
+      key,
+      label: label.trim(),
+      type: "text",
+      is_custom: true,
+      dynamic_document_item: false,
+      tab: tabKey,
+    };
+    setCustomFieldSaving(true);
+    try {
+      // Persist value + evidence into extraction_data so readFieldValue picks it up
+      const ed = lease.extraction_data || {};
+      const updatedEd = {
+        ...ed,
+        fields: {
+          ...(ed.fields || {}),
+          [key]: { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true },
+        },
+        field_evidence: {
+          ...(ed.field_evidence || {}),
+          [key]: { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" },
+        },
+      };
+      const { error: saveErr } = await supabase.from("leases").update({ extraction_data: updatedEd }).eq("id", lease.id);
+      if (saveErr) throw saveErr;
+      // Also add to fieldReviews so Accept/Reject work immediately
+      const nextReviews = { ...fieldReviews, [key]: { status: REVIEW_STATUSES.PENDING, value: value.trim() || null, reviewed_at: new Date().toISOString() } };
+      setFieldReviews(nextReviews);
+      // Add to local session fields so table shows it without reload
+      setUserCustomFields((prev) => ({ ...prev, [tabKey]: [...(prev[tabKey] || []), newField] }));
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      setCustomFieldDialog(null);
+      setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" });
+      toast.success("Custom field added.");
+    } catch (err) {
+      toast.error(err?.message || "Could not add custom field.");
+    } finally {
+      setCustomFieldSaving(false);
     }
   };
 
@@ -2762,10 +2816,16 @@ export default function LeaseReview() {
           .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
-              <FieldTableFilter
-                showMissing={showMissingByTab[tab.key] || false}
-                onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, [tab.key]: val }))}
-              />
+              <div className="flex items-center justify-between">
+                <FieldTableFilter
+                  showMissing={showMissingByTab[tab.key] || false}
+                  onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, [tab.key]: val }))}
+                />
+                <Button variant="outline" size="sm" className="h-7 text-xs"
+                  onClick={() => { setCustomFieldDialog({ tabKey: tab.key }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
+                  + Add Custom Field
+                </Button>
+              </div>
               <FieldReviewTable
                 fields={fieldsForTab[tab.key] || []}
                 lease={leaseFull}
@@ -2790,10 +2850,16 @@ export default function LeaseReview() {
             billing, etc. read from it); we just surface the rows here so
             reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
-          <FieldTableFilter
-            showMissing={showMissingByTab.rent_charges || false}
-            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, rent_charges: val }))}
-          />
+          <div className="flex items-center justify-between">
+            <FieldTableFilter
+              showMissing={showMissingByTab.rent_charges || false}
+              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, rent_charges: val }))}
+            />
+            <Button variant="outline" size="sm" className="h-7 text-xs"
+              onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
+              + Add Custom Field
+            </Button>
+          </div>
           <FieldReviewTable
             fields={fieldsForTab.rent_charges || []}
             lease={leaseFull}
@@ -2814,10 +2880,16 @@ export default function LeaseReview() {
 
         {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <FieldTableFilter
-            showMissing={showMissingByTab.expenses_recoveries || false}
-            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, expenses_recoveries: val }))}
-          />
+          <div className="flex items-center justify-between">
+            <FieldTableFilter
+              showMissing={showMissingByTab.expenses_recoveries || false}
+              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, expenses_recoveries: val }))}
+            />
+            <Button variant="outline" size="sm" className="h-7 text-xs"
+              onClick={() => { setCustomFieldDialog({ tabKey: "expenses_recoveries" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
+              + Add Custom Field
+            </Button>
+          </div>
           <FieldReviewTable
             fields={fieldsForTab.expenses_recoveries || []}
             lease={leaseFull}
@@ -2837,10 +2909,16 @@ export default function LeaseReview() {
 
         {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <FieldTableFilter
-            showMissing={showMissingByTab.cam_rules || false}
-            onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, cam_rules: val }))}
-          />
+          <div className="flex items-center justify-between">
+            <FieldTableFilter
+              showMissing={showMissingByTab.cam_rules || false}
+              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, cam_rules: val }))}
+            />
+            <Button variant="outline" size="sm" className="h-7 text-xs"
+              onClick={() => { setCustomFieldDialog({ tabKey: "cam_rules" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
+              + Add Custom Field
+            </Button>
+          </div>
           <FieldReviewTable
             fields={fieldsForTab.cam_rules || []}
             lease={leaseFull}
@@ -2905,6 +2983,46 @@ export default function LeaseReview() {
       </Tabs>
 
       {/* Side drawer for full field detail. */}
+      {/* Add Custom Field dialog */}
+      <Dialog open={!!customFieldDialog} onOpenChange={(open) => { if (!open) setCustomFieldDialog(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Custom Field</DialogTitle>
+            <DialogDescription>Add a field with a value and source reference from the lease document.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs mb-1 block">Field Name *</Label>
+              <Input placeholder="e.g. Parking Spaces" value={customFieldForm.label}
+                onChange={(e) => setCustomFieldForm((f) => ({ ...f, label: e.target.value }))} />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Value</Label>
+              <Input placeholder="e.g. 2 dedicated spaces" value={customFieldForm.value}
+                onChange={(e) => setCustomFieldForm((f) => ({ ...f, value: e.target.value }))} />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Source Text (verbatim from document)</Label>
+              <Textarea placeholder="Paste the exact clause or sentence from the lease document…" rows={3}
+                value={customFieldForm.sourceText}
+                onChange={(e) => setCustomFieldForm((f) => ({ ...f, sourceText: e.target.value }))} />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Page Number</Label>
+              <Input type="number" placeholder="e.g. 4" value={customFieldForm.sourcePage}
+                onChange={(e) => setCustomFieldForm((f) => ({ ...f, sourcePage: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCustomFieldDialog(null)}>Cancel</Button>
+            <Button onClick={handleAddCustomField} disabled={customFieldSaving}>
+              {customFieldSaving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Add Field
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <FieldDetailDrawer
         open={!!drawerField}
         onOpenChange={(open) => {

@@ -50,13 +50,13 @@ async function deleteIfPresent(table, column, value) {
 }
 
 async function deleteLeaseCascadeFallback(id) {
+  // Only update tables/columns that exist in the current schema.
+  // uploaded_files has no lease_id column; expense_classification_templates
+  // and cam_expense_inputs do not exist — omit them to avoid 400/404 noise.
   await updateIfPresent("units", { lease_id: null }, "lease_id", id);
-  await updateIfPresent("uploaded_files", { lease_id: null }, "lease_id", id);
-  await updateIfPresent("expense_classification_templates", { based_on_lease_id: null }, "based_on_lease_id", id);
   await updateIfPresent("documents", { lease_id: null }, "lease_id", id);
 
   const childDeletes = [
-    ["cam_expense_inputs", "lease_id"],
     ["expense_classifications", "lease_id"],
     ["expenses", "lease_id"],
     ["rent_projections", "lease_id"],

@@ -256,7 +256,7 @@ function normalizeLlmEvidence(raw: unknown): LlmFieldEvidence {
     const conf = obj.confidence;
     return {
       value: obj.value ?? null,
-      sourceText: typeof obj.source_text === "string" ? (obj.source_text as string).slice(0, 400) : null,
+      sourceText: typeof obj.source_text === "string" ? (obj.source_text as string).slice(0, 800) : null,
       sourcePage: typeof obj.source_page === "number" && Number.isFinite(obj.source_page) ? Number(obj.source_page) : null,
       confidence: typeof conf === "number" && Number.isFinite(conf) ? Math.max(0, Math.min(1, conf > 1 ? conf / 100 : conf)) : null,
     };

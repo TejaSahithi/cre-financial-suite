@@ -105,6 +105,11 @@ async function resolveAuditContext(entry) {
   return resolved;
 }
 
+// Module-level cache: once we discover the enhanced schema isn't available we
+// skip the first insert attempt on every subsequent call so we never fire a
+// 400 request that we know will fail. Resets to null on page reload.
+let _enhancedSchemaAvailable = null; // null=unknown, true=yes, false=no
+
 /**
  * Record an audit log entry.
  * @param {AuditEntry} entry
@@ -147,41 +152,44 @@ export async function logAudit(entry) {
     metadata:       optionalDetails,
   };
 
+  const coreRow = {
+    entity_type: row.entity_type,
+    entity_id:   row.entity_id,
+    action:      row.action,
+    org_id:      row.org_id,
+  };
+
+  const isSchemaError = (error) =>
+    error.code === 'PGRST204' ||
+    error.code === 'PGRST200' ||
+    error.code === '42703' ||
+    error.code === '42P01' ||
+    /column|schema cache|does not exist/i.test(error.message || '');
+
   try {
     if (supabase) {
-      const { error } = await supabase.from('audit_logs').insert(row);
-      if (error) {
-        // Schema-compat fallback: staging/production may not yet have the
-        // audit_logging_hardening migration applied. If the insert fails because
-        // enhanced columns (actor_user_id, severity, before, after, metadata,
-        // source, target_user_id) are absent, retry with only the core columns
-        // that exist in every deployment.
-        const isSchemaError =
-          error.code === 'PGRST204' ||   // PostgREST: column not in schema cache
-          error.code === 'PGRST200' ||   // PostgREST: ambiguous column
-          error.code === '42703' ||       // PostgreSQL: undefined_column
-          error.code === '42P01' ||       // PostgreSQL: undefined_table
-          /column|schema cache|does not exist/i.test(error.message || '');
-
-        if (isSchemaError) {
+      // Skip the enhanced insert when we already know it will fail — avoids a
+      // 400 network request on every action once the schema mismatch is known.
+      if (_enhancedSchemaAvailable !== false) {
+        const { error } = await supabase.from('audit_logs').insert(row);
+        if (!error) {
+          _enhancedSchemaAvailable = true;
+          return;
+        }
+        if (isSchemaError(error)) {
+          _enhancedSchemaAvailable = false;
           console.warn(
-            '[audit] Enhanced audit_logs columns unavailable — falling back to core schema. ' +
-            'Apply 20260602004050_audit_logging_hardening.sql to production to resolve.',
+            '[audit] Enhanced audit_logs columns unavailable — using core schema. ' +
+            'Apply 20260602004050_audit_logging_hardening.sql to resolve.',
             error.message,
           );
-          const coreRow = {
-            entity_type: row.entity_type,
-            entity_id:   row.entity_id,
-            action:      row.action,
-            org_id:      row.org_id,
-          };
-          const { error: coreErr } = await supabase.from('audit_logs').insert(coreRow);
-          if (coreErr) throw coreErr;
-          return; // core insert succeeded
+        } else {
+          throw error;
         }
-
-        throw error;
       }
+      // Core schema fallback (always succeeds after migration is absent).
+      const { error: coreErr } = await supabase.from('audit_logs').insert(coreRow);
+      if (coreErr) throw coreErr;
     } else {
       console.log('[audit]', row);
     }
@@ -190,8 +198,6 @@ export async function logAudit(entry) {
       error: err?.message || err,
       row,
     });
-    // For critical frontend events, we must not silently swallow.
-    // We throw the error so the calling critical operation fails.
     if (row.severity === 'critical' || row.severity === 'error') {
       throw err;
     }

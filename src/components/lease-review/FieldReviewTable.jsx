@@ -146,11 +146,6 @@ export default function FieldReviewTable({
                   <div className="flex flex-wrap items-center gap-1 font-medium text-slate-700">
                     {field.label}
                     {required && <span className="text-red-500">*</span>}
-                    {field.dynamic_document_item && (
-                      <span className="rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-700">
-                        AI
-                      </span>
-                    )}
                     {isConflict && (
                       <span className="rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide bg-red-100 text-red-700">
                         Conflict
@@ -182,8 +177,8 @@ export default function FieldReviewTable({
                 {/* Source text + quality badge */}
                 <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
-                    <p className="italic text-slate-500 leading-snug" title={sourceText ?? ""}>
-                      {truncate(sourceText, 140)}
+                    <p className="italic text-slate-500 leading-snug whitespace-pre-wrap break-words max-w-xs" title={sourceText ?? ""}>
+                      {truncate(sourceText, 260)}
                     </p>
                     {sqBadge && (
                       <span className={`self-start inline-flex items-center rounded border px-1 py-0 text-[9px] font-medium ${sqBadge.cls}`}>
