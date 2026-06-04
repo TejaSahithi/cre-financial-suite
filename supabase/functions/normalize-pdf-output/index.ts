@@ -841,10 +841,16 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Fetch file record (org_id isolation)
+    // Fetch only the columns this function actually uses.
+    // SELECT * would also load ui_review_payload, normalized_output, parsed_data,
+    // and reviewed_output from previous runs — each can be 1–3 MB — pushing the
+    // Edge Function over the memory limit (546) before extraction even starts.
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("*")
+      .select(
+        "id, org_id, file_name, file_url, mime_type, file_type, module_type, " +
+        "status, review_required, document_subtype, extraction_method, docling_raw",
+      )
       .eq("id", file_id)
       .eq("org_id", orgId)
       .single();
@@ -1040,15 +1046,16 @@ Deno.serve(async (req: Request) => {
           moduleType: extractionModuleType,
           fileName,
           docling: fileRecord.docling_raw,
-          // Pass file bytes + MIME so the LLM extractor can delegate to
-          // Gemini Vision file-mode when embedded text is too weak to
-          // ground a field. Pipeline returns metadata.extractionDebug
-          // describing what happened.
           ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
-          // Conservative defaults — tune per-module if needed later.
-          maxLLMChunks: 6,
+          // maxLLMChunks: 3 — lease metadata (parties, dates, rent) lives in
+          // the first 2–3 chunks of a well-formatted lease. Rule/table
+          // extraction already handles the summary table on page 1; the LLM
+          // only needs the opening pages for edge cases. Keeping this low
+          // prevents the function from accumulating 50+ Gemini response
+          // buffers in memory simultaneously (546 resource-exhaustion error).
+          maxLLMChunks: 3,
           chunkSize: 1500,
           llmTemperature: 0,
         },
