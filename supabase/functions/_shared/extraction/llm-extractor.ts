@@ -789,6 +789,57 @@ async function fillMissingFieldsForRecords(
   return { records, warnings, diagnostics: diag };
 }
 
+// ── Bounded concurrency helper ────────────────────────────────────────────────
+// Runs `worker` for every item in `items`, keeping at most `limit` workers
+// active simultaneously.  Output slots are pre-allocated so results come back
+// in the original item order regardless of completion order.
+
+type SettledResult<R> =
+  | { status: "fulfilled"; value: R }
+  | { status: "rejected"; reason: unknown };
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<Array<SettledResult<R>>> {
+  const results: Array<SettledResult<R>> = new Array(items.length);
+  let cursor = 0;
+
+  async function runLane(): Promise<void> {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      try {
+        results[idx] = { status: "fulfilled", value: await worker(items[idx], idx) };
+      } catch (err) {
+        results[idx] = { status: "rejected", reason: err };
+      }
+    }
+  }
+
+  // Spawn min(limit, items.length) lanes and let them drain the work queue.
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runLane()),
+  );
+  return results;
+}
+
+// ── Concurrency ceiling ───────────────────────────────────────────────────────
+// Hard cap prevents runaway parallelism even if the env var is set higher.
+// Raise the cap here (in code) if you ever have reason to exceed 3.
+const MAX_ALLOWED_CONCURRENCY = 3;
+
+function resolveConcurrencyLimit(): number {
+  const raw = typeof Deno !== "undefined"
+    ? Deno.env.get("LLM_GROUP_CONCURRENCY")
+    : undefined;
+  if (!raw) return MAX_ALLOWED_CONCURRENCY;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return MAX_ALLOWED_CONCURRENCY;
+  return Math.min(parsed, MAX_ALLOWED_CONCURRENCY);
+}
+
 // ── Strategy B: Extract field groups for single-record documents ──────────────
 
 async function extractFieldGroups(
@@ -805,73 +856,152 @@ async function extractFieldGroups(
   useVertex = true,
   useClaude = false,
 ): Promise<StepResult> {
-  const merged: Record<string, ExtractedField> = {};
+  const concurrencyLimit = resolveConcurrencyLimit();
+  const llmStartMs = Date.now();
 
-  for (const group of groups) {
-    // Collect labels for this group's fields
+  console.log(
+    `[llm-extractor] extractFieldGroups: group_count=${groups.length} concurrency=${concurrencyLimit}`,
+  );
+
+  // Pre-build prompts so every group item is self-contained before dispatch.
+  type GroupWork = {
+    group: FieldGroup;
+    prompt: string;
+  };
+
+  const workItems: GroupWork[] = groups.map((group) => {
     const labels: string[] = [];
     for (const f of group.fields) {
       if (schema[f]?.labels) labels.push(...schema[f].labels);
     }
-
-    // Build a focused snippet instead of sending entire chunks
     const snippet = buildRelevantSnippet(docling, labels, 16000);
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType, Boolean(input.fileBase64));
-    diag.groups_attempted += 1;
+    return { group, prompt };
+  });
 
-    try {
-      const result = await callLLMAndParse(
-        input,
-        { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 2048, temperature },
-        diag,
-        useVertex,
-        useClaude,
-      );
+  diag.groups_attempted += workItems.length;
 
-      if (result == null) {
-        warnings.push(
-          `LLM group "${group.name}" returned no parseable result. ` +
-          `Reason: ${diag.llm_empty_response_reason ?? "unknown"}`,
+  // Each worker returns the extracted field map for its group, or null on
+  // failure. Errors are caught here so one group cannot cancel siblings.
+  type GroupOutcome =
+    | { ok: true; groupName: string; fields: Record<string, ExtractedField>; nonNullBefore: number }
+    | { ok: false; groupName: string; warning: string; failTag?: string };
+
+  const settled = await runWithConcurrency<GroupWork, GroupOutcome>(
+    workItems,
+    concurrencyLimit,
+    async ({ group, prompt }, _idx) => {
+      const groupStartMs = Date.now();
+      try {
+        const result = await callLLMAndParse(
+          input,
+          { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 2048, temperature },
+          diag,
+          useVertex,
+          useClaude,
         );
-        diag.groups_failed.push(group.name);
-        continue;
-      }
-      recordLlmFieldTrace(diag, result, group.fields);
 
-      const parsed = parseLLMResponse(result, group.fields);
-      if (!parsed) {
-        warnings.push(`LLM group "${group.name}": response parsed but schema mapping returned null.`);
-        diag.groups_failed.push(group.name);
-        continue;
-      }
+        const groupMs = Date.now() - groupStartMs;
+        console.log(`[llm-extractor] group "${group.name}" done in ${groupMs}ms`);
 
-      // Count non-null fields before the null-value filter below
-      const nonNullBefore = Object.values(parsed).filter((e) => e?.value != null).length;
-      diag.llm_fields_before_filter_count += nonNullBefore;
-      if (nonNullBefore === 0) {
-        warnings.push(`LLM group "${group.name}" parsed successfully but all field values are null.`);
-        diag.groups_failed.push(group.name);
-        continue;
-      }
-      diag.groups_succeeded += 1;
+        if (result == null) {
+          return {
+            ok: false,
+            groupName: group.name,
+            warning:
+              `LLM group "${group.name}" returned no parseable result. ` +
+              `Reason: ${diag.llm_empty_response_reason ?? "unknown"}`,
+          };
+        }
 
-      for (const [field, evidence] of Object.entries(parsed)) {
-        if (evidence?.value == null) continue;
-        if (merged[field]) continue;
-        merged[field] = {
-          value: evidence.value,
-          source: "llm",
-          confidence: evidence.confidence ?? 0.70,
-          sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
-          sourcePage: evidence.sourcePage ?? null,
+        recordLlmFieldTrace(diag, result, group.fields);
+
+        const parsed = parseLLMResponse(result, group.fields);
+        if (!parsed) {
+          return {
+            ok: false,
+            groupName: group.name,
+            warning: `LLM group "${group.name}": response parsed but schema mapping returned null.`,
+          };
+        }
+
+        const nonNullBefore = Object.values(parsed).filter((e) => e?.value != null).length;
+        if (nonNullBefore === 0) {
+          return {
+            ok: false,
+            groupName: group.name,
+            warning: `LLM group "${group.name}" parsed successfully but all field values are null.`,
+          };
+        }
+
+        const fields: Record<string, ExtractedField> = {};
+        for (const [field, evidence] of Object.entries(parsed)) {
+          if (evidence?.value == null) continue;
+          fields[field] = {
+            value: evidence.value,
+            source: "llm",
+            confidence: evidence.confidence ?? 0.70,
+            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+            sourcePage: evidence.sourcePage ?? null,
+          };
+        }
+        return { ok: true, groupName: group.name, fields, nonNullBefore };
+      } catch (err) {
+        const groupMs = Date.now() - groupStartMs;
+        const errMsg = String(err?.message ?? err);
+        // Detect Vertex AI quota exhaustion — do not retry, just tag and continue.
+        const isQuota =
+          errMsg.includes("429") ||
+          /quota|rate.?limit|resource.?exhausted/i.test(errMsg);
+        const failTag = isQuota ? "failed_vertex_quota" : undefined;
+        console.warn(
+          `[llm-extractor] group "${group.name}" ${isQuota ? "quota-exceeded" : "failed"} ` +
+          `after ${groupMs}ms: ${errMsg.slice(0, 120)}`,
+        );
+        return {
+          ok: false,
+          groupName: group.name,
+          warning: `LLM group "${group.name}" ${isQuota ? "[quota exceeded]" : "failed"}: ${errMsg}`,
+          failTag,
         };
       }
-    } catch (err) {
-      const msg = `LLM group "${group.name}" failed: ${err.message}`;
-      warnings.push(msg);
-      diag.groups_failed.push(group.name);
+    },
+  );
+
+  // Merge results in original group order (settled is pre-sorted by runWithConcurrency).
+  const merged: Record<string, ExtractedField> = {};
+
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      // runWithConcurrency catches all errors inside the worker itself, so
+      // this branch is defensive — the worker never throws past its try/catch.
+      const errMsg = String((result.reason as any)?.message ?? result.reason);
+      warnings.push(`LLM group worker threw unexpectedly: ${errMsg}`);
+      continue;
+    }
+    const outcome = result.value;
+    if (!outcome.ok) {
+      warnings.push(outcome.warning);
+      diag.groups_failed.push(
+        outcome.failTag
+          ? `${outcome.groupName}:${outcome.failTag}`
+          : outcome.groupName,
+      );
+      continue;
+    }
+    diag.llm_fields_before_filter_count += outcome.nonNullBefore;
+    diag.groups_succeeded += 1;
+    // First-write wins: earlier groups (higher confidence by ordering) take priority.
+    for (const [field, evidence] of Object.entries(outcome.fields)) {
+      if (!merged[field]) merged[field] = evidence;
     }
   }
+
+  const totalLlmMs = Date.now() - llmStartMs;
+  console.log(
+    `[llm-extractor] LLM extraction complete in ${totalLlmMs}ms ` +
+    `(${diag.groups_succeeded} succeeded, ${diag.groups_failed.length} failed)`,
+  );
 
   if (Object.keys(merged).length === 0) {
     if (diag.llm_empty_response_reason == null) {

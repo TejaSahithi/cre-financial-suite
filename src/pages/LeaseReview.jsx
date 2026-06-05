@@ -63,7 +63,6 @@ import {
   readFieldConfidence,
   isResolvedReview,
   classifyConfidence,
-  hasEvidenceOverride,
   resolveFieldColumns,
   resolveExtractionStatus,
   hasValidSourceEvidence,
