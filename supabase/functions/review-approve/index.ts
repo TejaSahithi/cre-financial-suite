@@ -1651,10 +1651,11 @@ function looksLikeMissingLeaseMetadataColumn(error: any): boolean {
   const code = String(error?.code || "");
   return code === "42703" ||
     code === "PGRST204" ||
-    /extraction_data|confidence_score|low_confidence_fields|extracted_fields|lease_date|property_name|property_address|landlord_address|tenant_contact_name|tenant_address|suite_number|rentable_area_sqft|permitted_use|broker_name|lease_term|commencement_date|rent_commencement_date|expiration_date|renewal_notice_days|renewal_escalation_percent|holdover_rent_multiplier|base_rent_monthly|rent_due_day|rent_frequency|rent_payment_timing|late_fee_grace_days|late_fee_percent|default_interest_rate_formula|building_rsf|tenant_rsf|tenant_pro_rata_share|floor_plan_reference|parking_rights|common_area_description/i.test(message);
+    /source_file_id|extraction_data|confidence_score|low_confidence_fields|extracted_fields|lease_date|property_name|property_address|landlord_address|tenant_contact_name|tenant_address|suite_number|rentable_area_sqft|permitted_use|broker_name|lease_term|commencement_date|rent_commencement_date|expiration_date|renewal_notice_days|renewal_escalation_percent|holdover_rent_multiplier|base_rent_monthly|rent_due_day|rent_frequency|rent_payment_timing|late_fee_grace_days|late_fee_percent|default_interest_rate_formula|building_rsf|tenant_rsf|tenant_pro_rata_share|floor_plan_reference|parking_rights|common_area_description/i.test(message);
 }
 
 const LEASE_WORKFLOW_OPTIONAL_COLUMNS = [
+  "source_file_id",
   "extraction_data",
   "confidence_score",
   "low_confidence_fields",

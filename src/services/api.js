@@ -498,6 +498,8 @@ const COMPATIBILITY_MISSING_COLUMNS = {
     'permitted_use',
     'broker_name',
     'lease_term',
+    // FK to uploaded_files (20260605000000_add_source_file_id_to_leases.sql)
+    'source_file_id',
   ]),
   Document: new Set([
     'lease_id',
