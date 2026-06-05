@@ -537,7 +537,7 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   for (const warning of warnings) {
     const text = String(warning || "");
     if (rowCount > 0 && /no tables found/i.test(text)) continue;
-    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT|Vertex AI|AI fallback/i.test(text)) {
+    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT|Vertex AI|AI fallback|ANTHROPIC_API_KEY|Claude/i.test(text)) {
       continue;
     }
     if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {

@@ -300,6 +300,7 @@ function makeDiag(input: ExtractionInput, missingVars: string[]) {
       (!!Deno.env.get("VERTEX_PROJECT_ID") || !!Deno.env.get("GOOGLE_PROJECT_ID")) &&
       (!!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || (!!Deno.env.get("GOOGLE_CLIENT_EMAIL") && !!Deno.env.get("GOOGLE_PRIVATE_KEY"))),
     vertex_config_missing_vars: missingVars,
+    gemini_api_key_present: !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY")),
     // Presence of each relevant env var (values never logged).
     vertex_env_keys_present: {
       VERTEX_PROJECT_ID: !!Deno.env.get("VERTEX_PROJECT_ID"),
@@ -308,6 +309,7 @@ function makeDiag(input: ExtractionInput, missingVars: string[]) {
       GOOGLE_SERVICE_ACCOUNT_KEY: !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY"),
       GOOGLE_CLIENT_EMAIL: !!Deno.env.get("GOOGLE_CLIENT_EMAIL"),
       GOOGLE_PRIVATE_KEY: !!Deno.env.get("GOOGLE_PRIVATE_KEY"),
+      GEMINI_API_KEY: !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY")),
     },
     model_name: null as string | null,
     llm_call_attempted: false,
@@ -462,6 +464,147 @@ async function callVertexAndParse<T = unknown>(
   }
 }
 
+// ── Claude (Anthropic) API call + JSON parse ──────────────────────────────────
+
+async function callClaudeAndParse<T = unknown>(
+  input: ExtractionInput,
+  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
+  diag: ReturnType<typeof makeDiag>,
+): Promise<T | null> {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+
+  const isFileMode = Boolean(input.fileBase64);
+  diag.llm_call_attempted = true;
+  if (isFileMode) {
+    diag.llm_file_mode_attempted = true;
+  } else {
+    diag.llm_text_mode_attempted = true;
+    diag.text_chars_sent_to_llm += opts.userPrompt.length;
+  }
+
+  const model = "claude-sonnet-4-6";
+
+  // Build message content — text mode or PDF file mode
+  let messageContent: unknown;
+  if (isFileMode && input.fileBase64) {
+    const mimeType = (input.fileMimeType || "application/pdf") as string;
+    if (mimeType.startsWith("application/pdf") || mimeType.startsWith("image/")) {
+      messageContent = [
+        {
+          type: mimeType.startsWith("image/") ? "image" : "document",
+          source: { type: "base64", media_type: mimeType, data: input.fileBase64 },
+        },
+        { type: "text", text: opts.userPrompt },
+      ];
+    } else {
+      // Unsupported file type in file mode — fall back to text-only
+      messageContent = opts.userPrompt;
+    }
+  } else {
+    messageContent = opts.userPrompt;
+  }
+
+  let rawContent: string;
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: opts.maxOutputTokens ?? 2048,
+        temperature: opts.temperature ?? 0,
+        system: opts.systemPrompt,
+        messages: [{ role: "user", content: messageContent }],
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "unknown");
+      throw new Error(`Claude API ${res.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    rawContent = data?.content?.[0]?.text ?? "";
+  } catch (callErr) {
+    const msg = String(callErr?.message ?? callErr);
+    diag.call_errors.push(`claude: ${msg}`);
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `claude_call_error: ${msg.slice(0, 120)}`;
+    throw callErr;
+  }
+
+  if (!diag.model_name) diag.model_name = model;
+
+  let text = rawContent.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  diag.llm_raw_response_chars += text.length;
+
+  if (!text) {
+    diag.llm_json_parse_success = false;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `empty_content_from_claude_${model}`;
+    console.warn(`[llm-extractor] Claude ${isFileMode ? "file" : "text"} mode: empty response`);
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as T;
+    diag.llm_json_parse_success = true;
+    return parsed;
+  } catch (parseErr) {
+    const repaired = repairTruncatedJson(text);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        diag.llm_json_parse_success = true;
+        diag.llm_json_repair_applied = true;
+        console.warn(`[llm-extractor] Claude: repaired truncated JSON (orig ${text.length} chars)`);
+        return parsed;
+      } catch { /* fall through */ }
+    }
+    const preview = text.slice(0, 300);
+    diag.llm_json_parse_success = false;
+    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
+    diag.llm_raw_response_preview = preview;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
+    console.error(`[llm-extractor] Claude JSON parse failed (${text.length} chars). Error: ${parseErr?.message}. Preview: ${preview}`);
+    return null;
+  }
+}
+
+// ── Unified LLM call: Vertex AI only ─────────────────────────────────────────
+
+async function callLLMAndParse<T = unknown>(
+  input: ExtractionInput,
+  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
+  diag: ReturnType<typeof makeDiag>,
+  useVertex: boolean,
+  useClaude: boolean,
+): Promise<T | null> {
+  if (useVertex) {
+    try {
+      return await callVertexAndParse<T>(input, opts, diag);
+    } catch (vertexErr) {
+      if (useClaude) {
+        console.warn(`[llm-extractor] Vertex call failed (${String(vertexErr?.message ?? vertexErr).slice(0, 80)}), falling back to Claude`);
+        return await callClaudeAndParse<T>(input, opts, diag);
+      }
+      throw vertexErr;
+    }
+  }
+  if (useClaude) {
+    return await callClaudeAndParse<T>(input, opts, diag);
+  }
+  return null;
+}
+
 // ── Main: LLM field-wise extraction ──────────────────────────────────────────
 
 /**
@@ -469,6 +612,7 @@ async function callVertexAndParse<T = unknown>(
  *
  * Only extracts fields that are MISSING from previous steps.
  * Uses targeted prompts with relevant text snippets.
+ * Supports Vertex AI (Gemini) and Claude (Anthropic) — whichever is configured.
  * Returns StepResult.diagnostics with full LLM call diagnostics so the
  * pipeline can surface them in extractionDebug.
  */
@@ -485,8 +629,7 @@ export async function extractWithLLM(
   const warnings: string[] = [];
   const { maxChunks = 6, temperature = 0 } = options;
 
-  // Collect which Vertex config vars are missing (regardless of whether
-  // hasVertexAI ends up true, so we always have a diagnostic).
+  // Collect which Vertex config vars are missing.
   const missingVars: string[] = [];
   if (!Deno.env.get("VERTEX_PROJECT_ID") && !Deno.env.get("GOOGLE_PROJECT_ID")) {
     missingVars.push("VERTEX_PROJECT_ID (or GOOGLE_PROJECT_ID)");
@@ -496,16 +639,21 @@ export async function extractWithLLM(
   }
 
   const hasVertexAI = missingVars.length === 0;
+  const hasClaudeAI = !!Deno.env.get("ANTHROPIC_API_KEY");
   const diag = makeDiag(input, missingVars);
 
-  if (!hasVertexAI) {
+  if (!hasVertexAI && !hasClaudeAI) {
     const msg =
-      `Vertex AI not configured — missing env vars: [${missingVars.join(", ")}]. ` +
+      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}] and ANTHROPIC_API_KEY not set. ` +
       `LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);
-    diag.llm_empty_response_reason = "vertex_not_configured";
+    diag.llm_empty_response_reason = "no_llm_configured";
     return { records: [], warnings, diagnostics: diag };
+  }
+
+  if (!hasVertexAI && hasClaudeAI) {
+    console.log(`[llm-extractor] Vertex AI not configured — using Claude (Anthropic) for extraction`);
   }
 
   if (missingFields.length === 0) {
@@ -535,11 +683,13 @@ export async function extractWithLLM(
   if (isMultiRow) {
     return await fillMissingFieldsForRecords(
       input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings, diag,
+      hasVertexAI, hasClaudeAI,
     );
   }
 
   return await extractFieldGroups(
     input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings, diag,
+    hasVertexAI, hasClaudeAI,
   );
 }
 
@@ -555,6 +705,8 @@ async function fillMissingFieldsForRecords(
   temperature: number,
   warnings: string[],
   diag: ReturnType<typeof makeDiag>,
+  useVertex = true,
+  useClaude = false,
 ): Promise<StepResult> {
   const records: ExtractedRecord[] = [];
 
@@ -575,10 +727,12 @@ async function fillMissingFieldsForRecords(
     // rather than repeated here to avoid conflicting instructions.
 
     try {
-      const result = await callVertexAndParse(
+      const result = await callLLMAndParse(
         input,
         { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
         diag,
+        useVertex,
+        useClaude,
       );
 
       if (result == null) {
@@ -648,6 +802,8 @@ async function extractFieldGroups(
   temperature: number,
   warnings: string[],
   diag: ReturnType<typeof makeDiag>,
+  useVertex = true,
+  useClaude = false,
 ): Promise<StepResult> {
   const merged: Record<string, ExtractedField> = {};
 
@@ -664,10 +820,12 @@ async function extractFieldGroups(
     diag.groups_attempted += 1;
 
     try {
-      const result = await callVertexAndParse(
+      const result = await callLLMAndParse(
         input,
         { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 2048, temperature },
         diag,
+        useVertex,
+        useClaude,
       );
 
       if (result == null) {

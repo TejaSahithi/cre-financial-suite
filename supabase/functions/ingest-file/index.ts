@@ -170,14 +170,48 @@ async function callEdgeFunction(
   return { ok: false, status: 500, data: {}, error: "Unexpected retry loop exit" };
 }
 
-/** Download the first N bytes of a file from storage for magic-byte detection */
-async function downloadFilePreview(
-  supabaseAdmin: any,
+/**
+ * Download only the first `maxBytes` bytes of a file using an HTTP Range
+ * request. This avoids loading the entire file into the edge function's heap
+ * just for magic-byte / content-keyword detection, which was a primary cause
+ * of 546 OOM for large PDFs (the two old download helpers each fetched the
+ * whole file, doubling the allocation before any downstream call ran).
+ *
+ * Falls back to a full download if the storage API rejects the Range header
+ * (e.g. an older bucket config that doesn't support partial content).
+ */
+async function downloadPreviewBytes(
+  _supabaseAdmin: any,
   storagePath: string,
-  maxBytes = 8,
+  maxBytes = 2048,
 ): Promise<Uint8Array> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+  if (supabaseUrl && serviceKey) {
+    try {
+      const objectUrl = `${supabaseUrl}/storage/v1/object/financial-uploads/${storagePath}`;
+      const res = await fetch(objectUrl, {
+        headers: {
+          Authorization: `Bearer ${serviceKey}`,
+          apikey: serviceKey,
+          Range: `bytes=0-${maxBytes - 1}`,
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      // 206 Partial Content or 200 (server ignored Range but returned the file)
+      if (res.ok || res.status === 206) {
+        const buf = await res.arrayBuffer();
+        return new Uint8Array(buf.slice(0, maxBytes));
+      }
+    } catch {
+      // fall through to Supabase client fallback
+    }
+  }
+
+  // Fallback: full download via Supabase client (only hits for unusual configs)
   try {
-    const { data, error } = await supabaseAdmin.storage
+    const { data, error } = await _supabaseAdmin.storage
       .from("financial-uploads")
       .download(storagePath);
     if (error || !data) return new Uint8Array(0);
@@ -185,24 +219,6 @@ async function downloadFilePreview(
     return new Uint8Array(buf.slice(0, maxBytes));
   } catch {
     return new Uint8Array(0);
-  }
-}
-
-/** Download a small text preview (first 2KB) for content-keyword detection */
-async function downloadTextPreview(
-  supabaseAdmin: any,
-  storagePath: string,
-): Promise<string> {
-  try {
-    const { data, error } = await supabaseAdmin.storage
-      .from("financial-uploads")
-      .download(storagePath);
-    if (error || !data) return "";
-    const buf = await data.arrayBuffer();
-    const bytes = new Uint8Array(buf.slice(0, 2048));
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  } catch {
-    return "";
   }
 }
 
@@ -574,11 +590,10 @@ Deno.serve(async (req: Request) => {
       "",
     );
 
-    // 5. Download file preview for detection
-    const [fileBytes, contentPreview] = await Promise.all([
-      downloadFilePreview(supabaseAdmin, storagePath, 8),
-      downloadTextPreview(supabaseAdmin, storagePath),
-    ]);
+    // 5. Download first 2 KB for detection (single Range request, not full file)
+    const previewBytes = await downloadPreviewBytes(supabaseAdmin, storagePath, 2048);
+    const fileBytes = previewBytes.slice(0, 8);
+    const contentPreview = new TextDecoder("utf-8", { fatal: false }).decode(previewBytes);
 
     // 6. Detect file format + module type
     const detection = detectFileType({

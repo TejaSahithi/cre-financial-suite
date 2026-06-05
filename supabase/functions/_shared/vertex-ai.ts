@@ -538,6 +538,100 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean).map((value) => String(value).trim()).filter(Boolean))];
 }
 
+// ---------------------------------------------------------------------------
+// Google AI (Gemini API key) — simpler alternative to Vertex AI service account
+// Uses GEMINI_API_KEY or GOOGLE_API_KEY with generativelanguage.googleapis.com
+// No service account or project ID needed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Call Gemini via the Google AI Developer API (api.google.ai / generativelanguage).
+ * Requires GEMINI_API_KEY or GOOGLE_API_KEY secret — no service account needed.
+ */
+export async function callGeminiWithAPIKey(opts: VertexAIOptions): Promise<VertexAIResponse> {
+  const apiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY (or GOOGLE_API_KEY) is not set");
+
+  const model = opts.model ?? DEFAULT_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const requestBody: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: opts.userPrompt }] }],
+    generationConfig: {
+      maxOutputTokens: opts.maxOutputTokens ?? 2048,
+      temperature: opts.temperature ?? 0,
+      responseMimeType: "application/json",
+    },
+  };
+
+  if (opts.systemPrompt) {
+    requestBody.system_instruction = { parts: [{ text: opts.systemPrompt }] };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(45000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text().catch(() => "unknown");
+    throw new Error(`Gemini API ${response.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+  return { content, model, inputTokens, outputTokens };
+}
+
+/**
+ * Call Gemini via the Google AI Developer API with a file (PDF/image).
+ * Requires GEMINI_API_KEY or GOOGLE_API_KEY — no service account needed.
+ */
+export async function callGeminiWithAPIKeyAndFile(opts: VertexAIFileOptions): Promise<VertexAIResponse> {
+  const apiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY (or GOOGLE_API_KEY) is not set");
+
+  const model = opts.model ?? DEFAULT_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const filePart = buildFilePart(opts);
+
+  const parts: unknown[] = [filePart, { text: opts.userPrompt }];
+  const requestBody: Record<string, unknown> = {
+    contents: [{ role: "user", parts }],
+    generationConfig: {
+      maxOutputTokens: opts.maxOutputTokens ?? 4096,
+      temperature: opts.temperature ?? 0,
+    },
+  };
+
+  if (opts.systemPrompt) {
+    requestBody.system_instruction = { parts: [{ text: opts.systemPrompt }] };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(60000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text().catch(() => "unknown");
+    throw new Error(`Gemini API ${response.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+  return { content, model, inputTokens, outputTokens };
+}
+
 /**
  * Call Vertex AI with a file and parse the response as JSON.
  * Matches callVertexAIJSON: strips code fences, applies tryRepairJson on

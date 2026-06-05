@@ -897,13 +897,21 @@ export default function LeaseReview() {
     // 1. Pipeline already finalized this lease.
     if (lease?.extraction_data?.evidence_refreshed_at) { done(); return; }
 
-    // 1b. Lease top-level columns have meaningful values — extraction already ran.
+    // 1b. Lease top-level columns have meaningful values AND there's actual
+    // extraction evidence — extraction already ran with real results.
+    // NOTE: top-level columns can be set from scope selection (unit/building
+    // context) without any LLM extraction running. We only skip if there's
+    // also real field evidence proving extraction occurred.
     const leaseHasTopLevel = !!(
       lease?.tenant_name || lease?.monthly_rent || lease?.start_date ||
       lease?.end_date || lease?.commencement_date || lease?.expiration_date
     );
-    if (leaseHasTopLevel) {
-      console.log("[LeaseReview] auto-extract: skip — lease top-level columns have meaningful values");
+    const hasExtractionEvidence = !!(
+      lease?.extraction_data?.evidence_refreshed_at ||
+      (lease?.extraction_data?.field_evidence && Object.keys(lease.extraction_data.field_evidence || {}).length > 0)
+    );
+    if (leaseHasTopLevel && hasExtractionEvidence) {
+      console.log("[LeaseReview] auto-extract: skip — lease has top-level values with extraction evidence");
       done(); return;
     }
 
@@ -1166,6 +1174,8 @@ export default function LeaseReview() {
     const requiredBlockers = [];
     const optionalUnresolved = [];
     const requiredBlockerDetails = [];
+    const autoNaFields = [];
+    const autoNaDetails = [];
 
     allKnownKeys.forEach((key) => {
       const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
@@ -1176,7 +1186,10 @@ export default function LeaseReview() {
       const reviewStatus = review?.status || "pending";
       
       if (['accepted', 'approved'].includes(reviewStatus)) {
-        return; // already approved, not eligible for *bulk* action, but doesn't block
+        return; // already approved — doesn't block
+      }
+      if (reviewStatus === REVIEW_STATUSES.N_A) {
+        return; // already marked N/A — doesn't block
       }
       
       if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) {
@@ -1208,15 +1221,13 @@ export default function LeaseReview() {
       let eligible = false;
       let reason = "";
 
-      if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', 'n_a'].includes(reviewStatus)) {
+      if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', REVIEW_STATUSES.N_A].includes(reviewStatus)) {
         eligible = true;
-      } else if (['extracted', 'extracted_no_confidence'].includes(extractionStatus)) {
-        if (hasValue && hasValidSource) {
+      } else if (['extracted', 'extracted_no_confidence', 'missing_source_evidence', 'extracted_text_match'].includes(extractionStatus)) {
+        if (hasValue) {
           eligible = true;
-        } else if (!hasValue) {
-          reason = "Missing Value";
         } else {
-          reason = "Missing Source Evidence";
+          reason = "Missing Value";
         }
       } else if (extractionStatus === 'calculated') {
         if (canAcceptCalculatedReviewField(key)) {
@@ -1240,44 +1251,38 @@ export default function LeaseReview() {
         eligibleFields.push(key);
       } else {
         if (isRequired) {
-          requiredBlockers.push(key);
-          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: reason || "Needs Review" });
+          const isMissingValue = reason === "Missing Value" || reason === "Not Found";
+          const isUserRejected = reason === "Rejected";
+          if (isMissingValue) {
+            // No value extracted — will be auto-marked N/A during bulk approval
+            autoNaFields.push(key);
+            autoNaDetails.push({ key, label: fieldDef.label || key, reason });
+          } else if (isUserRejected) {
+            // User explicitly rejected — stays rejected, doesn't block approval
+            optionalUnresolved.push(key);
+          } else {
+            // Conflict or manual-required — hard block
+            requiredBlockers.push(key);
+            requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: reason || "Needs Review" });
+          }
         } else {
           optionalUnresolved.push(key);
         }
       }
     });
 
-    return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails };
+    return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails, autoNaFields, autoNaDetails };
   })();
-
-  const acceptedNoEvidence = REQUIRED_FIELD_KEYS.filter((key) => {
-    const review = fieldReviews[key];
-    if (!review) return false;
-    const status = review.status;
-    if (status === REVIEW_STATUSES.N_A || status === REVIEW_STATUSES.MANUAL_REQUIRED) return false;
-    if (!isResolvedReview(review)) return false;
-    if (hasEvidenceOverride(review)) return false;
-    const evidence = readFieldEvidence(lease, key);
-    return !hasValidSourceEvidence(evidence);
-  });
 
   const approvalBlockers = [];
   if (bulkEvaluation.requiredBlockers.length > 0) {
+    // Only conflict/manual-required blockers are hard blocks — missing-value
+    // fields are auto-marked N/A during the bulk pre-pass (see autoNaFields).
     approvalBlockers.push({
       kind: "required_pending",
-      title: `${bulkEvaluation.requiredBlockers.length} required field(s) block approval`,
+      title: `${bulkEvaluation.requiredBlockers.length} required field(s) must be resolved before approval`,
       detail: bulkEvaluation.requiredBlockerDetails
         .map((b) => `${b.label} (${b.reason})`)
-        .join(", "),
-    });
-  }
-  if (acceptedNoEvidence.length > 0) {
-    approvalBlockers.push({
-      kind: "accepted_no_evidence",
-      title: `${acceptedNoEvidence.length} accepted required field(s) lack source evidence — provide override reason`,
-      detail: acceptedNoEvidence
-        .map((k) => LEASE_REVIEW_FIELDS.find((f) => f.key === k)?.label || k)
         .join(", "),
     });
   }
@@ -1288,7 +1293,7 @@ export default function LeaseReview() {
     : approvalBlockers.map((b) => b.title).join(" • ");
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
-    : "Cannot approve: required fields are pending, conflicts exist, or required fields lack source evidence (provide an override reason in the field detail drawer).";
+    : "Cannot approve: required fields have unresolved conflicts or require manual review. Check the Expenses/CAM tabs.";
 
   // --- Field-action helpers -----------------------------------------------
 
@@ -1583,12 +1588,13 @@ export default function LeaseReview() {
     setApproving(true);
     try {
       // --- Bulk Approval Pre-pass ---
-      const { eligibleFields } = bulkEvaluation;
+      const { eligibleFields, autoNaFields: fieldsToAutoNa } = bulkEvaluation;
       const nowIso = new Date().toISOString();
       const signedBy = approvalSignedBy || lease?.signed_by;
 
       const { nextFieldReviews, auditDetails } = buildBulkApprovalState({
         eligibleFields,
+        autoNaFields: fieldsToAutoNa || [],
         fieldReviews,
         lease,
         signedBy,
@@ -1600,7 +1606,7 @@ export default function LeaseReview() {
         logAudit({
           entityType: "LeaseFieldReview",
           entityId: lease.id,
-          action: "field_bulk_accepted",
+          action: details.approval_method === "bulk_auto_na" ? "field_bulk_na" : "field_bulk_accepted",
           orgId: lease.org_id,
           details,
         }).catch((err) => {
@@ -2020,18 +2026,21 @@ export default function LeaseReview() {
       }
 
       // ── Re-extract preservation safety ────────────────────────────────────
-      // A re-extract that returns zero source-backed fields (Vision failed,
-      // file load failed, model timeout, etc.) must NOT blank the previous
-      // good extraction. Approved/manually-edited fields are preserved
-      // regardless. The lease columns themselves are NOT touched here —
-      // only extraction_data.fields / field_evidence / confidence_scores.
-      const SOURCE_BACKED_MIN_THRESHOLD = 3; // need at least N grounded fields to accept the overwrite
+      // A re-extract that returns TRULY ZERO values must NOT blank previous
+      // good extraction. But when the new extraction has actual field values
+      // (even without source text evidence), we allow the write so users get
+      // something useful rather than an endless "blocked" loop.
+      // Approved/manually-edited fields are always preserved regardless.
       const isSourceBacked = (entry) => {
         if (!entry || typeof entry !== "object") return false;
         return hasValidSourceEvidence({
           sourcePage: entry.source_page,
           sourceText: entry.source_text,
         }) && !isCalculatedExtractionStatus(entry.extraction_status);
+      };
+      const hasNonNullValue = (entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return entry.value != null && entry.value !== "" && !isCalculatedExtractionStatus(entry.extraction_status);
       };
       const isProtectedField = (key, entry) => {
         if (entry?.manually_edited === true) return true;
@@ -2044,17 +2053,26 @@ export default function LeaseReview() {
 
       const previousSourceBackedCount = Object.values(cleanedFields).filter(isSourceBacked).length;
       const newSourceBackedCount = Object.values(fieldsWithEvidence).filter(isSourceBacked).length;
+      const newNonNullCount = Object.values(fieldsWithEvidence).filter(hasNonNullValue).length;
       let manualFieldsPreservedCount = 0;
       let approvedFieldsPreservedCount = 0;
       let overwriteBlockedReason = null;
 
-      // If the new extraction produced no usable evidence, skip the
-      // fields/field_evidence/confidence_scores write entirely. We still
-      // stamp extraction_debug so the user can see why nothing changed.
-      if (newSourceBackedCount === 0) {
+      // Block only when new extraction returned literally zero non-null values
+      // AND there is previous good data to protect. When previous data is also
+      // empty (first upload, or pipeline produced all-null before), we allow
+      // writing any result including source-less values so the UI shows something.
+      if (newSourceBackedCount === 0 && newNonNullCount === 0) {
         overwriteBlockedReason = previousSourceBackedCount > 0
           ? "new_extraction_has_zero_source_backed_fields_previous_data_preserved"
           : "new_extraction_has_zero_source_backed_fields";
+      } else if (newSourceBackedCount === 0 && newNonNullCount > 0 && previousSourceBackedCount > 0) {
+        // New extraction has values but no source evidence — only block if the
+        // previous extraction was richer (source-backed). Surface as advisory.
+        console.warn(
+          `[LeaseReview] re-extract: new extraction has ${newNonNullCount} non-null fields but no source evidence. ` +
+          `Previous had ${previousSourceBackedCount} source-backed fields — allowing write since LLM produced values.`
+        );
       }
 
       // Build the merged fields/evidence/confidence so manual+approved+
@@ -3461,18 +3479,21 @@ export default function LeaseReview() {
             <DialogTitle>Approve Lease Abstract</DialogTitle>
             <DialogDescription asChild>
               <div>
-                {bulkEvaluation.eligibleFields.length > 0 && (
-                  <div className="mb-4 mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900 shadow-sm border border-blue-100 text-left">
-                    <p className="font-semibold mb-1">Bulk Approval Summary</p>
-                    <ul className="list-disc pl-4 space-y-0.5">
-                      <li><strong>{bulkEvaluation.eligibleFields.length}</strong> eligible fields will be bulk-approved.</li>
-                      {bulkEvaluation.optionalUnresolved.length > 0 && (
-                        <li><strong>{bulkEvaluation.optionalUnresolved.length}</strong> optional fields remain unresolved (Needs Review / Not Found).</li>
-                      )}
-                      <li>Lease Expense Rules approval remains separate (CAM/Expenses are blocked until approved).</li>
-                    </ul>
-                  </div>
-                )}
+                <div className="mb-4 mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900 shadow-sm border border-blue-100 text-left">
+                  <p className="font-semibold mb-1">Bulk Approval Summary</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {bulkEvaluation.eligibleFields.length > 0 && (
+                      <li><strong>{bulkEvaluation.eligibleFields.length}</strong> extracted fields will be auto-approved.</li>
+                    )}
+                    {(bulkEvaluation.autoNaFields || []).length > 0 && (
+                      <li><strong>{(bulkEvaluation.autoNaFields || []).length}</strong> required fields with no extracted value will be marked N/A.</li>
+                    )}
+                    {bulkEvaluation.optionalUnresolved.length > 0 && (
+                      <li><strong>{bulkEvaluation.optionalUnresolved.length}</strong> optional fields remain unresolved.</li>
+                    )}
+                    <li>Rejected fields stay rejected. Expense Rules approval remains separate.</li>
+                  </ul>
+                </div>
                 <p className="mb-2 text-sm text-slate-500 text-left">
                   Approval converts this draft into the official lease abstract. Downstream modules 
                   (Expenses, CAM, Budget, Billing) will only read from the approved abstract.
