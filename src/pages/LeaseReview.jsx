@@ -2057,14 +2057,12 @@ export default function LeaseReview() {
       let approvedFieldsPreservedCount = 0;
       let overwriteBlockedReason = null;
 
-      // Block only when new extraction returned literally zero non-null values
-      // AND there is previous good data to protect. When previous data is also
-      // empty (first upload, or pipeline produced all-null before), we allow
-      // writing any result including source-less values so the UI shows something.
-      if (newSourceBackedCount === 0 && newNonNullCount === 0) {
-        overwriteBlockedReason = previousSourceBackedCount > 0
-          ? "new_extraction_has_zero_source_backed_fields_previous_data_preserved"
-          : "new_extraction_has_zero_source_backed_fields";
+      // Block only when new extraction returned zero non-null values AND there
+      // is previous good data to protect. When previous data is also empty we
+      // must still write evidence_refreshed_at so the auto-extract loop stops —
+      // there is nothing to protect and blocking leaves the loop running forever.
+      if (newSourceBackedCount === 0 && newNonNullCount === 0 && previousSourceBackedCount > 0) {
+        overwriteBlockedReason = "new_extraction_has_zero_source_backed_fields_previous_data_preserved";
       } else if (newSourceBackedCount === 0 && newNonNullCount > 0 && previousSourceBackedCount > 0) {
         // New extraction has values but no source evidence — only block if the
         // previous extraction was richer (source-backed). Surface as advisory.
@@ -2263,9 +2261,15 @@ export default function LeaseReview() {
       const preservedSuffix = preservedSummary > 0
         ? ` ${preservedSummary} reviewer-edited field${preservedSummary === 1 ? "" : "s"} preserved.`
         : "";
-      toast.success(
-        `Lease re-extracted. ${newSourceBackedCount} source-backed field${newSourceBackedCount === 1 ? "" : "s"} from this run.${preservedSuffix}`,
-      );
+      if (newSourceBackedCount === 0 && newNonNullCount === 0) {
+        toast.warning(
+          "Extraction returned no field values. AI extraction may not be configured (check Vertex AI keys in Supabase secrets), or the document text is unreadable. You can fill in fields manually.",
+        );
+      } else {
+        toast.success(
+          `Lease re-extracted. ${newSourceBackedCount} source-backed field${newSourceBackedCount === 1 ? "" : "s"} from this run.${preservedSuffix}`,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseId] });

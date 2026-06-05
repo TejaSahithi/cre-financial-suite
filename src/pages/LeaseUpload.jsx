@@ -501,6 +501,9 @@ export default function LeaseUpload() {
     [reviewedRows],
   );
   const fallbackWarnings = reviewPayload?.global_warnings || reviewPayload?.warnings || [];
+  const isVertexNotConfigured = fallbackWarnings.some((w) =>
+    /vertex ai is not fully configured|no llm configured|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT/i.test(String(w)),
+  );
   const isManualReviewFallback =
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
     reviewPayload?.extraction_method === "manual_review_fallback" ||
@@ -856,7 +859,9 @@ export default function LeaseUpload() {
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-amber-800">
             <span>
-              Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or open Lease Review to continue manually.
+              {isVertexNotConfigured
+                ? "AI extraction is unavailable — Vertex AI is not configured. Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in your Supabase project secrets, then retry. You can also open Lease Review to fill fields manually."
+                : "Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or open Lease Review to continue manually."}
             </span>
             <Button
               variant="outline"
