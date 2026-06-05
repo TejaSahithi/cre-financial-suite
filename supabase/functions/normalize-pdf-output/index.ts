@@ -206,6 +206,7 @@ function fieldSourceKeywords(fieldKey: string): string[] {
     tenant_address: ["tenant", "address", "notice"],
     landlord_name: ["landlord", "lessor", "owner", "licensor"],
     landlord_signatory_name: ["landlord", "lessor", "signatory", "by:", "signed"],
+    broker_name: ["broker", "brokerage", "real estate broker", "agent"],
     property_name: ["property", "building", "premises", "project"],
     property_address: ["property", "building", "premises", "address", "located"],
     premises_address: ["property", "building", "premises", "address", "suite", "located"],
@@ -273,6 +274,14 @@ function sourceNeedlesForValue(value: unknown, fieldKey: string, fieldType?: str
   }
 
   return needles;
+}
+
+function sourceTextSupportsValue(sourceText: unknown, value: unknown, fieldKey: string, fieldType?: string) {
+  const haystack = cleanEvidenceSnippet(sourceText).toLowerCase();
+  if (!haystack || isBlank(value)) return false;
+  return sourceNeedlesForValue(value, fieldKey, fieldType).some((needle) =>
+    haystack.includes(needle.toLowerCase()),
+  );
 }
 
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
@@ -597,21 +606,27 @@ function buildReviewPayload(opts: {
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
       const llmEvidence = fieldEvidence[fieldKey];
+      const llmSourceText = usableSourceText(llmEvidence?.source_text);
+      const workflowSourceText = usableSourceText(workflowField?.source_clause);
+      const llmSourceSupportsValue = sourceTextSupportsValue(llmSourceText, value, fieldKey, String(def?.type ?? ""));
+      const workflowSourceSupportsValue = sourceTextSupportsValue(workflowSourceText, value, fieldKey, String(def?.type ?? ""));
       const fallbackEvidence =
         !isBlank(value) &&
-        !usableSourceText(llmEvidence?.source_text) &&
-        !usableSourceText(workflowField?.source_clause)
+        (!llmSourceText && !workflowSourceText || (!llmSourceSupportsValue && !workflowSourceSupportsValue))
           ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
           : null;
+      const fallbackSourceText = usableSourceText(fallbackEvidence?.source_clause);
       let mergedSourcePage =
-        llmEvidence?.source_page
-        ?? workflowField?.source_page
-        ?? fallbackEvidence?.source_page
+        (llmSourceText ? llmEvidence?.source_page : null)
+        ?? (workflowSourceSupportsValue ? workflowField?.source_page : null)
+        ?? (fallbackSourceText ? fallbackEvidence?.source_page : null)
+        ?? (workflowSourceText ? workflowField?.source_page : null)
         ?? null;
       const mergedSourceText =
-        usableSourceText(llmEvidence?.source_text)
-        ?? usableSourceText(workflowField?.source_clause)
-        ?? usableSourceText(fallbackEvidence?.source_clause)
+        llmSourceText
+        ?? (workflowSourceSupportsValue ? workflowSourceText : null)
+        ?? fallbackSourceText
+        ?? workflowSourceText
         ?? null;
       // Page back-fill: when we have a clause snippet but no page number,
       // search docling's per-page text_blocks for the snippet and assign the

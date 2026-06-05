@@ -222,7 +222,7 @@ const ENTITY_FIELDS = new Set([
   "tenant_name", "landlord_name", "assignor_name", "assignee_name", 
   "guarantor_name", "owner_name", "property_manager", 
   "tenant_contact_name", "landlord_contact_name", 
-  "tenant_signatory_name", "landlord_signatory_name"
+  "tenant_signatory_name", "landlord_signatory_name", "broker_name"
 ]);
 
 function isValidEntityField(fieldKey, value, sourceText) {
@@ -233,16 +233,22 @@ function isValidEntityField(fieldKey, value, sourceText) {
   
   const srcStr = String(sourceText || "").toLowerCase();
   const valLower = valStr.toLowerCase();
+  const stopwordNameValues = new Set([
+    "and", "or", "in", "of", "the", "a", "an", "by", "to", "for", "with", "as",
+    "tenant", "landlord", "assignee", "assignor", "subtenant", "guarantor",
+    "owner", "manager", "broker", "agent", "lessor", "lessee",
+  ]);
 
   // 1. Plausible name checks on the value itself
   if (valStr.length > 120) return false;
-  if (/^(or\s+|and\s+)/i.test(valStr)) return false;
-  if (/^(tenant|landlord|assignee|assignor|subtenant|guarantor|owner|manager)$/i.test(valStr)) return false;
-  if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet)\b/i.test(valLower)) return false;
+  if (valStr.length < 2) return false;
+  if (stopwordNameValues.has(valLower)) return false;
+  if (/^(or|and|in|of|the|by)\s+/i.test(valStr)) return false;
+  if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet|warrants?|represents?|connection with|real estate broker|negotiation|brokerage fees?)\b/i.test(valLower)) return false;
   if (/[.?!](?:\s|$)|(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return false;
 
   // 2. Reject if source text or value contains clause/action language
-  const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium)\b/i;
+  const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium|brokerage fees?|real estate broker|negotiation except as set forth)\b/i;
   
   if (clausePattern.test(srcStr) || clausePattern.test(valLower)) {
     return false;
@@ -339,6 +345,16 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
   // Enforce entity field validation
   if (!isValidEntityField(fieldKey, output.value, output.exactSourceText || output.rawValue)) {
     return null;
+  }
+
+  if (["suite_number", "unit_number", "floor"].includes(normalizeLeaseFieldKey(fieldKey))) {
+    const lower = String(output.value || "").trim().toLowerCase();
+    const fragments = new Set([
+      "in", "at", "of", "the", "a", "an", "on", "by", "to", "for",
+      "with", "and", "or", "is", "as", "be", "not", "no", "space",
+      "suite", "unit", "premises",
+    ]);
+    if (fragments.has(lower)) return null;
   }
 
   return output;

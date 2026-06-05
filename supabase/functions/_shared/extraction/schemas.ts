@@ -82,6 +82,17 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "Individual person who signed the lease on behalf of the landlord. " +
       "This is NEVER the landlord entity name.",
   },
+  broker_name: {
+    type: "string",
+    labels: ["broker", "broker name", "brokerage", "brokerage firm", "real estate broker"],
+    tableHeaders: ["broker", "broker_name", "brokerage", "brokerage firm"],
+    patterns: [
+      /(?:broker|brokerage|real\s+estate\s+broker)\s*[:.]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,120}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Brokerage|Realty|Commercial|Partners?))/i,
+    ],
+    description:
+      "Real estate broker or brokerage firm name only. " +
+      "Do NOT return the brokerage-fees clause text. If the lease says no broker, leave null.",
+  },
   property_name: {
     type: "string",
     labels: ["property", "property name", "building", "building name"],
@@ -511,6 +522,20 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["rent_commencement_date", "rent commencement"],
     patterns: [/(?:rent\s+commencement|rent\s+start)\s*(?:date)?\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i],
     description: "Date rent payments begin (may differ from term commencement when free-rent applies)",
+  },
+  tenant_signature_date: {
+    type: "date",
+    labels: ["tenant signature date", "tenant signed date", "tenant date"],
+    tableHeaders: ["tenant_signature_date", "tenant signature date", "tenant date"],
+    patterns: [/(?:tenant|lessee)[^\n]{0,120}?(?:date|dated)\s*[:.]?\s*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})/i],
+    description: "Date the tenant signed the lease, normalized as YYYY-MM-DD.",
+  },
+  landlord_signature_date: {
+    type: "date",
+    labels: ["landlord signature date", "landlord signed date", "landlord date"],
+    tableHeaders: ["landlord_signature_date", "landlord signature date", "landlord date"],
+    patterns: [/(?:landlord|lessor)[^\n]{0,120}?(?:date|dated)\s*[:.]?\s*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})/i],
+    description: "Date the landlord signed the lease, normalized as YYYY-MM-DD.",
   },
   renewal_notice_months: {
     type: "number",
