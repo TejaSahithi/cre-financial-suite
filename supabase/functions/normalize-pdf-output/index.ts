@@ -29,6 +29,10 @@ import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workf
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 
+// Base64 expands PDFs by about 33%, and the intermediate binary string can
+// double memory again. Keep inline Vision fallback below Edge compute limits.
+const MAX_INLINE_VISION_BYTES = 6 * 1024 * 1024;
+
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
     case "leases": return "lease";
@@ -848,7 +852,7 @@ Deno.serve(async (req: Request) => {
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
       .select(
-        "id, org_id, file_name, file_url, mime_type, module_type, " +
+        "id, org_id, file_name, file_url, file_size, mime_type, module_type, " +
         "status, review_required, document_subtype, extraction_method, docling_raw",
       )
       .eq("id", file_id)
@@ -892,6 +896,8 @@ Deno.serve(async (req: Request) => {
     const moduleType = fileRecord.module_type ?? "unknown";
     const extractionModuleType = toExtractionModuleType(moduleType);
     const fileName = fileRecord.file_name ?? "document";
+    const fileSizeBytes = Number(fileRecord.file_size || 0);
+    const fileSizeIsKnown = Number.isFinite(fileSizeBytes) && fileSizeBytes > 0;
 
     // Load file bytes from Supabase Storage ONLY when Docling text is too
     // weak for the LLM extractor to work from — i.e. for scanned / image-only
@@ -907,6 +913,8 @@ Deno.serve(async (req: Request) => {
     // the MIN_NATIVE_PDF_TEXT_CHARS and MIN_DIGITAL_BLOCKS constants in
     // _shared/extraction/parser.ts.
     const doclingTextIsGood = doclingTextLength >= 2500 && doclingBlockCount >= 5;
+    const fileTooLargeForInlineVision =
+      fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
 
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
@@ -949,7 +957,16 @@ Deno.serve(async (req: Request) => {
       return null;
     };
 
-    if (!doclingTextIsGood && fileRecord.file_url) {
+    if (!doclingTextIsGood && fileTooLargeForInlineVision) {
+      fileLoadStatus = "skipped_large_file";
+      fileLoadError =
+        `File is ${(fileSizeBytes / (1024 * 1024)).toFixed(1)} MB; ` +
+        `skipping inline Vision fallback to avoid Edge compute limits.`;
+      console.warn(
+        `[normalize-pdf-output] ${fileLoadError} ` +
+        `file_id=${file_id} max_inline_vision_mb=${(MAX_INLINE_VISION_BYTES / (1024 * 1024)).toFixed(1)}`,
+      );
+    } else if (!doclingTextIsGood && fileRecord.file_url) {
       try {
         const storagePath = String(fileRecord.file_url).replace(
           /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
@@ -972,9 +989,19 @@ Deno.serve(async (req: Request) => {
         } else {
           const bytes = new Uint8Array(await fileBlob.arrayBuffer());
           fileBytesLength = bytes.length;
-          detectedMagic = detectMagic(bytes);
 
-          if (!detectedMagic || detectedMagic === "html_or_xml") {
+          if (bytes.length > MAX_INLINE_VISION_BYTES) {
+            fileLoadStatus = "skipped_large_file_after_download";
+            fileLoadError =
+              `Downloaded file is ${(bytes.length / (1024 * 1024)).toFixed(1)} MB; ` +
+              `skipping inline Vision fallback to avoid Edge compute limits.`;
+            console.warn(
+              `[normalize-pdf-output] ${fileLoadError} file_id=${file_id}`,
+            );
+          } else {
+            detectedMagic = detectMagic(bytes);
+
+            if (!detectedMagic || detectedMagic === "html_or_xml") {
             // Don't send a non-document to Vision. Mark load as failed and
             // let extraction proceed with whatever Docling produced.
             fileLoadStatus = "unexpected_content_type";
@@ -986,7 +1013,7 @@ Deno.serve(async (req: Request) => {
             );
           } else {
             // Deno base64 encoder is available; encode incrementally if large.
-            // For typical lease PDFs (<10MB) the inline conversion is fine.
+            // For typical lease PDFs under the inline limit, conversion is fine.
             let binary = "";
             const CHUNK = 8 * 1024;
             for (let offset = 0; offset < bytes.length; offset += CHUNK) {
@@ -1016,6 +1043,7 @@ Deno.serve(async (req: Request) => {
             );
           }
         }
+        }
       } catch (loadErr: any) {
         fileLoadStatus = "exception";
         fileLoadError = loadErr?.message ?? String(loadErr);
@@ -1023,7 +1051,7 @@ Deno.serve(async (req: Request) => {
           `[normalize-pdf-output] file bytes load exception for file_id=${file_id}: ${fileLoadError}`,
         );
       }
-    } else {
+    } else if (!doclingTextIsGood) {
       fileLoadStatus = "no_file_url";
       console.warn(
         `[normalize-pdf-output] uploaded_files.file_url missing for file_id=${file_id} — Vision fallback disabled`,
@@ -1068,6 +1096,8 @@ Deno.serve(async (req: Request) => {
           file_load_status: fileLoadStatus,
           file_load_error: fileLoadError,
           file_url_present: !!fileRecord.file_url,
+          file_size_bytes: fileSizeIsKnown ? fileSizeBytes : null,
+          max_inline_vision_bytes: MAX_INLINE_VISION_BYTES,
           file_bytes_length: fileBytesLength,
           file_magic_detected: detectedMagic,
           file_name: fileRecord.file_name ?? null,
