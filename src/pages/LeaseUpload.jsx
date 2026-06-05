@@ -861,7 +861,16 @@ export default function LeaseUpload() {
             <span>
               {isVertexNotConfigured
                 ? "AI extraction is unavailable — Vertex AI is not configured. Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in your Supabase project secrets, then retry. You can also open Lease Review to fill fields manually."
-                : "Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or open Lease Review to continue manually."}
+                : isManualReviewFallback
+                  ? (() => {
+                      const reason = fallbackWarnings.find((w) =>
+                        w && !String(w).toLowerCase().includes("automatic extraction did not finish"),
+                      );
+                      return reason
+                        ? `Extraction pipeline failed: ${String(reason).slice(0, 200)}. Check Supabase edge function logs for details, or open Lease Review to fill fields manually.`
+                        : "Extraction pipeline failed. Check Supabase edge function logs, or open Lease Review to fill fields manually.";
+                    })()
+                  : "Automatic extraction did not return mapped values for this file. Retry extraction to use the latest parser fix, or open Lease Review to continue manually."}
             </span>
             <Button
               variant="outline"

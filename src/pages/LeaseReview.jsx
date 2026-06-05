@@ -122,6 +122,10 @@ import {
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 
+// Minimum number of source-backed fields required before a new extraction is
+// considered "richer" than the previous one. Used only for debug diagnostics.
+const SOURCE_BACKED_MIN_THRESHOLD = 1;
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -887,7 +891,7 @@ export default function LeaseReview() {
     if (!lease?.id) return;
     if (autoExtractFiredRef.current === lease.id) return;
     if (reextracting) return;
-    const sourceFileId = lease?.extraction_data?.source_file_id;
+    const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id;
     if (!sourceFileId) return;
 
     // Helper: mark this lease as handled so the effect never fires twice.
@@ -999,6 +1003,7 @@ export default function LeaseReview() {
     handleReextractLease();
   }, [
     lease?.id,
+    lease?.source_file_id,
     lease?.extraction_data?.source_file_id,
     lease?.extraction_data?.evidence_refreshed_at,
     lease?.extraction_data?.field_evidence,
@@ -1785,7 +1790,7 @@ export default function LeaseReview() {
   // onto this lease. Saves the reviewer from the Re-link/Re-run/Apply Latest
   // dance for the common case where source_file_id is already set.
   async function handleReextractLease() {
-    const sourceFileId = lease?.extraction_data?.source_file_id;
+    const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id;
     if (!sourceFileId) {
       toast.error("No source file linked. Use Extraction Debug → Re-link Source Document first.");
       setShowReextractConfirm(false);
@@ -1804,6 +1809,42 @@ export default function LeaseReview() {
       });
       console.log("[Re-extract] ingest-file response:", ingestData);
       if (ingestData?.error) throw new Error(ingestData?.message || "Re-extraction failed");
+
+      // When parse-pdf-docling or normalize-pdf-output fails, ingest-file calls
+      // parkForManualReview and returns { error: false, manual_review: true,
+      // stage: "extraction"|"normalization", error_details: "..." }.
+      // Surface the failure reason immediately instead of silently applying an
+      // empty manual-review payload.
+      if (ingestData?.manual_review === true) {
+        const stage = ingestData?.stage || "extraction";
+        const detail = ingestData?.error_details || "Unknown error";
+        console.warn(`[Re-extract] pipeline fell back to manual review at stage=${stage}:`, detail);
+        const stageLabel = stage === "normalization" ? "normalization" : "document parsing";
+        toast.error(
+          `Re-extraction failed during ${stageLabel}: ${detail.length > 120 ? detail.slice(0, 120) + "…" : detail}. Check edge function logs in Supabase for details.`,
+          { duration: 8000 },
+        );
+        // Still write evidence_refreshed_at so the auto-extract loop stops.
+        try {
+          await supabase.from("leases").update({
+            extraction_data: {
+              ...(lease.extraction_data || {}),
+              evidence_refreshed_at: new Date().toISOString(),
+              extraction_debug: {
+                ...(lease.extraction_data?.extraction_debug || {}),
+                last_reextract_at: new Date().toISOString(),
+                last_reextract_source_file_id: sourceFileId,
+                last_reextract_manual_review_stage: stage,
+                last_reextract_manual_review_reason: detail,
+              },
+            },
+          }).eq("id", lease.id);
+          queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+        } catch (_writeErr) {
+          // Non-fatal — loop will stop on next successful extraction
+        }
+        return;
+      }
 
       // 2. Poll uploaded_files.status. With the expanded LEASE_GROUPS the
       // pipeline now makes ~9 Gemini calls so allow up to 3 minutes total.
