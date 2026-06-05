@@ -141,7 +141,12 @@ function isGenericSourceText(value: unknown): boolean {
   const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
   if (lower.includes("derived from")) return true;
-  if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return true;
+  const structuredFieldMatch = text.match(/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*(.+)$/i);
+  if (structuredFieldMatch) {
+    const valuePart = structuredFieldMatch[1].trim();
+    if (!valuePart || /^(unknown|n\/a|na|null|not found|not specified)$/i.test(valuePart)) return true;
+    return false;
+  }
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return true;
   return false;
 }
@@ -149,6 +154,230 @@ function isGenericSourceText(value: unknown): boolean {
 function usableSourceText(value: unknown): string | null {
   const text = String(value ?? "").trim();
   return isGenericSourceText(text) ? null : text;
+}
+
+function cleanEvidenceSnippet(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | undefined) {
+  const blocks: Array<{ text: string; lowered: string; page: number | null; source: string }> = [];
+  const push = (value: unknown, page: unknown, source: string) => {
+    const text = cleanEvidenceSnippet(value);
+    if (!text) return;
+    const pageNumber = Number(page);
+    blocks.push({
+      text,
+      lowered: text.toLowerCase(),
+      page: Number.isFinite(pageNumber) ? pageNumber : null,
+      source,
+    });
+  };
+
+  for (const block of Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : []) {
+    push(block?.text, block?.page ?? block?.page_number ?? block?.source_page, "text_block");
+  }
+  for (const page of Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : []) {
+    push(page?.text ?? page?.content ?? page?.markdown ?? page?.full_text, page?.page ?? page?.page_number ?? page?.number, "page");
+  }
+  for (const field of Array.isArray((doclingRaw as any)?.fields) ? (doclingRaw as any).fields : []) {
+    const key = cleanEvidenceSnippet(field?.key ?? field?.label);
+    const value = cleanEvidenceSnippet(field?.value ?? field?.text);
+    if (value) push(key ? `${key}: ${value}` : value, field?.page ?? field?.page_number ?? field?.source_page, "docling_field");
+  }
+  if (blocks.length === 0) {
+    push((doclingRaw as any)?.full_text ?? (doclingRaw as any)?.raw_text ?? (doclingRaw as any)?.text, null, "full_text");
+  }
+
+  const seen = new Set<string>();
+  return blocks.filter((block) => {
+    const key = `${block.page ?? ""}|${block.text.slice(0, 240)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function fieldSourceKeywords(fieldKey: string): string[] {
+  const keywords: Record<string, string[]> = {
+    tenant_name: ["tenant", "lessee", "occupant", "assignee"],
+    tenant_signatory_name: ["tenant", "lessee", "signatory", "by:", "signed", "authorized"],
+    tenant_contact_name: ["tenant", "contact", "person", "representative"],
+    tenant_address: ["tenant", "address", "notice"],
+    landlord_name: ["landlord", "lessor", "owner", "licensor"],
+    landlord_signatory_name: ["landlord", "lessor", "signatory", "by:", "signed"],
+    property_name: ["property", "building", "premises", "project"],
+    property_address: ["property", "building", "premises", "address", "located"],
+    premises_address: ["property", "building", "premises", "address", "suite", "located"],
+    suite_number: ["suite", "unit", "premises"],
+    unit_number: ["suite", "unit", "premises"],
+    square_footage: ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
+    rentable_area_sqft: ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
+    tenant_rsf: ["square feet", "sq ft", "sf", "rsf", "rentable", "tenant"],
+    monthly_rent: ["rent", "base rent", "monthly", "per month"],
+    annual_rent: ["rent", "annual", "year"],
+    rent_per_sf: ["rent", "per square", "per sf", "per rsf", "$/sf"],
+    permitted_use: ["use", "permitted use", "purpose"],
+    security_deposit: ["security deposit", "deposit"],
+    commencement_date: ["commencement", "start", "term"],
+    start_date: ["commencement", "start", "term"],
+    expiration_date: ["expiration", "expiry", "expire", "end", "term"],
+    end_date: ["expiration", "expiry", "expire", "end", "term"],
+  };
+  return keywords[fieldKey] || [];
+}
+
+function sourceNeedlesForValue(value: unknown, fieldKey: string, fieldType?: string) {
+  const needles: string[] = [];
+  const push = (candidate: unknown) => {
+    const text = cleanEvidenceSnippet(candidate);
+    if (!text) return;
+    const lower = text.toLowerCase();
+    if (/^(unknown|n\/a|na|none|null|tbd|not specified|not applicable)$/.test(lower)) return;
+    if (/^[a-z]+(?:_[a-z]+)+$/.test(lower)) return;
+    if (!needles.includes(text)) needles.push(text);
+  };
+
+  const raw = cleanEvidenceSnippet(value);
+  push(raw);
+
+  const numeric = Number(raw.replace(/[$,%\s,]/g, ""));
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const allowSmallNumber =
+      ["square_footage", "rentable_area_sqft", "tenant_rsf", "suite_number", "unit_number"].includes(fieldKey);
+    if (numeric >= 1000 || allowSmallNumber) {
+      push(String(numeric));
+      push(numeric.toLocaleString("en-US"));
+      push(`$${numeric.toLocaleString("en-US")}`);
+      push(`$${numeric.toFixed(2)}`);
+      push(`${numeric.toLocaleString("en-US")}.00`);
+    }
+  }
+
+  if ((fieldType === "date" || /date$/.test(fieldKey)) && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const date = new Date(`${raw}T00:00:00Z`);
+    if (!Number.isNaN(date.getTime())) {
+      const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const month = date.getUTCMonth();
+      const day = date.getUTCDate();
+      const year = date.getUTCFullYear();
+      push(`${months[month]} ${day}, ${year}`);
+      push(`${months[month].slice(0, 3)} ${day}, ${year}`);
+      push(`${month + 1}/${day}/${year}`);
+      push(`${String(month + 1).padStart(2, "0")}/${String(day).padStart(2, "0")}/${year}`);
+    }
+  }
+
+  if (typeof value === "string") {
+    push(raw.replace(/[,.]+$/, ""));
+  }
+
+  return needles;
+}
+
+function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
+  const singleLine = cleanEvidenceSnippet(text);
+  if (singleLine.length < 420 && /^[A-Za-z][^:\n]{0,90}:\s\S/.test(singleLine)) {
+    return { snippet: singleLine, quality: "exact" };
+  }
+  if (singleLine.length < 620 && /^\d+(?:\.\d+)*\s+[A-Z]/.test(singleLine)) {
+    return { snippet: singleLine, quality: "exact" };
+  }
+
+  const lookback = 300;
+  const lookahead = 300;
+  let start = matchStart;
+  for (let i = matchStart - 1; i >= Math.max(0, matchStart - lookback); i--) {
+    const char = text[i];
+    if (char === "\n") { start = i + 1; break; }
+    if (char === "." && i + 1 < text.length && text[i + 1] === " ") { start = i + 2; break; }
+    if (i === Math.max(0, matchStart - lookback)) start = i;
+  }
+
+  let end = matchStart + matchLength;
+  const fromStart = text.slice(start);
+  if (/^\d+(?:\.\d+)*\s+[A-Z]/.test(fromStart)) {
+    const nextClause = fromStart.slice(1).search(/\n\d+(?:\.\d+)*\s/);
+    end = nextClause > 0 && nextClause < 500 ? start + 1 + nextClause : Math.min(text.length, start + 500);
+  } else {
+    for (let i = end; i < Math.min(text.length, matchStart + matchLength + lookahead); i++) {
+      const char = text[i];
+      if (char === "\n" || char === "!") { end = i + 1; break; }
+      if (char === "." && (i + 1 >= text.length || text[i + 1] === " " || text[i + 1] === "\n")) {
+        end = i + 1;
+        break;
+      }
+      if (i === Math.min(text.length, matchStart + matchLength + lookahead) - 1) end = i + 1;
+    }
+  }
+
+  const snippet = cleanEvidenceSnippet(text.slice(start, end));
+  const quality =
+    /^[A-Za-z][^:\n]{0,90}:\s\S/.test(snippet) ||
+    /^\d+(?:\.\d+)*\s+[A-Z]/.test(snippet) ||
+    /[.!?]["']?\s*$/.test(snippet)
+      ? "exact"
+      : "partial";
+  return { snippet, quality };
+}
+
+function findSourceEvidenceForField(
+  doclingRaw: Record<string, unknown> | null | undefined,
+  fieldKey: string,
+  value: unknown,
+  fieldDef?: Record<string, unknown>,
+) {
+  if (isBlank(value)) return null;
+  const needles = sourceNeedlesForValue(value, fieldKey, String(fieldDef?.type ?? ""));
+  if (needles.length === 0) return null;
+  const blocks = buildEvidenceSearchBlocks(doclingRaw);
+  const keywords = fieldSourceKeywords(fieldKey);
+  let best: any = null;
+
+  for (const needle of needles) {
+    const loweredNeedle = needle.toLowerCase();
+    for (const block of blocks) {
+      const hit = block.lowered.indexOf(loweredNeedle);
+      if (hit < 0) continue;
+      const before = hit === 0 ? "" : block.lowered[hit - 1];
+      const after = block.lowered[hit + loweredNeedle.length] || "";
+      const isWordChar = (char: string) => /[a-z0-9]/.test(char);
+      if (isWordChar(before) && isWordChar(after)) continue;
+
+      const { snippet, quality } = expandEvidenceSnippet(block.text, hit, needle.length);
+      if (!snippet || isGenericSourceText(snippet)) continue;
+
+      const loweredSnippet = snippet.toLowerCase();
+      const hasKeyword = keywords.length === 0 || keywords.some((keyword) => loweredSnippet.includes(keyword));
+      const needleIsBroadNumber = /^\d{1,4}$/.test(loweredNeedle);
+      if (needleIsBroadNumber && !hasKeyword) continue;
+
+      const score =
+        needle.length +
+        (quality === "exact" ? 30 : 10) +
+        (hasKeyword ? 25 : 0) +
+        (block.page != null ? 10 : 0) +
+        (block.source === "text_block" ? 10 : 0);
+      if (!best || score > best.score) {
+        best = {
+          source_page: block.page,
+          source_clause: snippet.slice(0, 700),
+          source_quality: quality,
+          matched_needle: needle,
+          score,
+        };
+      }
+    }
+  }
+
+  return best
+    ? {
+        source_page: best.source_page,
+        source_clause: best.source_clause,
+        source_quality: best.source_quality,
+        matched_needle: best.matched_needle,
+      }
+    : null;
 }
 
 function workflowFieldFor(fieldKey: string, leaseFields: Record<string, any> = {}) {
@@ -368,13 +597,21 @@ function buildReviewPayload(opts: {
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
       const llmEvidence = fieldEvidence[fieldKey];
+      const fallbackEvidence =
+        !isBlank(value) &&
+        !usableSourceText(llmEvidence?.source_text) &&
+        !usableSourceText(workflowField?.source_clause)
+          ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
+          : null;
       let mergedSourcePage =
         llmEvidence?.source_page
         ?? workflowField?.source_page
+        ?? fallbackEvidence?.source_page
         ?? null;
       const mergedSourceText =
         usableSourceText(llmEvidence?.source_text)
         ?? usableSourceText(workflowField?.source_clause)
+        ?? usableSourceText(fallbackEvidence?.source_clause)
         ?? null;
       // Page back-fill: when we have a clause snippet but no page number,
       // search docling's per-page text_blocks for the snippet and assign the
@@ -425,6 +662,8 @@ function buildReviewPayload(opts: {
         evidence: {
           page_number: mergedSourcePage,
           source_clause: mergedSourceText,
+          source_quality: fallbackEvidence?.source_quality ?? null,
+          matched_needle: fallbackEvidence?.matched_needle ?? null,
         },
         status: finalStatus,
         editable: workflowField?.editable ?? true,
