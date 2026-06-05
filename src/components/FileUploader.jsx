@@ -247,6 +247,12 @@ export default function FileUploader({
                 message: processingError,
               });
               toast.error(`${file.name}: ${processingError}`);
+              onUploadComplete?.({
+                ...data,
+                processing_started: false,
+                processing_error: processingError,
+                ingest_result: ingestData,
+              });
             }
           })
           .catch((ingestError) => {
@@ -256,6 +262,14 @@ export default function FileUploader({
               message: processingError,
             });
             toast.error(`${file.name}: ${processingError}`);
+            onUploadComplete?.({
+              ...data,
+              processing_started: false,
+              processing_error: processingError,
+              ingest_error: {
+                message: ingestError?.message || String(ingestError),
+              },
+            });
           });
       }
 
@@ -264,7 +278,7 @@ export default function FileUploader({
         processing_started: Boolean(data?.file_id),
       };
     },
-    [buildingId, fileType, isAdmin, propertyId, resolvedOrgId, unitId]
+    [buildingId, fileType, isAdmin, onUploadComplete, propertyId, resolvedOrgId, unitId]
   );
 
   const handleUpload = useCallback(async () => {

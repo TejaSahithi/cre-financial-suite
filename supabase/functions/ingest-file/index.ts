@@ -332,6 +332,106 @@ function buildManualReviewPayload(opts: {
   };
 }
 
+function buildStructuredReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string;
+  rows: Record<string, unknown>[];
+}) {
+  const sourceRows = Array.isArray(opts.rows) && opts.rows.length > 0 ? opts.rows : [{}];
+  const defaultFields = MANUAL_REVIEW_FIELDS[opts.moduleType] ?? ["document_notes"];
+
+  const records = sourceRows.map((row, index) => {
+    const rowKeys = Object.keys(row || {});
+    const fieldKeys = rowKeys.length > 0 ? rowKeys : defaultFields;
+    const standardFields = fieldKeys.map((fieldKey) => {
+      const value = row?.[fieldKey] ?? null;
+      const missing = value === null || value === undefined || String(value).trim() === "";
+      return {
+        id: `${index}:standard:${fieldKey}`,
+        field_key: fieldKey,
+        label: humanizeFieldName(fieldKey),
+        value,
+        original_value: value,
+        field_type: inferFieldType(fieldKey),
+        required: ["tenant_name", "start_date", "end_date", "monthly_rent"].includes(fieldKey),
+        is_standard: true,
+        confidence: missing ? 0 : 0.75,
+        source: "structured_parser",
+        evidence: null,
+        status: missing ? "missing" : "needs_review",
+        accepted: false,
+        rejected: false,
+        user_edit: null,
+      };
+    });
+    const values = Object.fromEntries(standardFields.map((field) => [field.field_key, field.value ?? null]));
+    const missingRequired = standardFields
+      .filter((field) => field.required && (field.value === null || field.value === undefined || String(field.value).trim() === ""))
+      .map((field) => field.field_key);
+
+    return {
+      record_index: index,
+      row_index: index,
+      values,
+      fields: Object.fromEntries(
+        standardFields.map((field) => [
+          field.field_key,
+          {
+            value: field.value ?? null,
+            confidence: field.confidence,
+            source: field.source,
+            evidence: null,
+            status: field.status,
+          },
+        ]),
+      ),
+      standard_fields: standardFields,
+      custom_fields: [],
+      rejected_fields: [],
+      missing_required: missingRequired,
+      warnings: [],
+      confidence: averageConfidence(standardFields.map((field) => field.confidence)),
+      notes: null,
+    };
+  });
+
+  return {
+    schema_version: 2,
+    file_id: opts.fileId,
+    file_name: opts.fileName,
+    module_type: opts.moduleType,
+    document_subtype: opts.documentSubtype,
+    extraction_method: "structured_parser",
+    pipeline_method: "structured_review_gate",
+    avg_confidence: averageConfidence(records.flatMap((record: any) => record.standard_fields.map((field: any) => field.confidence))),
+    review_required: true,
+    review_status: "pending",
+    records,
+    rows: records,
+    global_warnings: [
+      "Structured lease import was parsed and is waiting for Lease Review before storage.",
+    ],
+    warnings: [
+      "Structured lease import was parsed and is waiting for Lease Review before storage.",
+    ],
+    validation_errors: [],
+    metadata: {
+      totalRecords: records.length,
+      avgConfidence: averageConfidence(records.flatMap((record: any) => record.standard_fields.map((field: any) => field.confidence))),
+      structuredReviewGate: true,
+    },
+    built_at: new Date().toISOString(),
+  };
+}
+
+function averageConfidence(values: number[]): number {
+  const numeric = values.filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (numeric.length === 0) return 0;
+  return Math.round((numeric.reduce((sum, value) => sum + value, 0) / numeric.length) * 100) / 100;
+}
+
 async function buildManualReviewTransitionDiagnostics(args: {
   supabaseAdmin: any;
   fileId: string;
@@ -948,6 +1048,81 @@ Deno.serve(async (req: Request) => {
           status: downstreamResult.status || 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
+      );
+    } else if (reviewRequired) {
+      console.log("[ingest-file] Structured lease parsing succeeded; parking at review_required");
+
+      const parsedRowsFromResponse = Array.isArray((downstreamResult.data as any)?.parsed_data)
+        ? (downstreamResult.data as any).parsed_data
+        : null;
+      const parsedRows = parsedRowsFromResponse ?? (
+        await supabaseAdmin
+          .from("uploaded_files")
+          .select("parsed_data")
+          .eq("id", file_id)
+          .maybeSingle()
+      ).data?.parsed_data ?? [];
+
+      const uiReviewPayload = buildStructuredReviewPayload({
+        fileId: file_id,
+        fileName: fileRecord.file_name ?? "lease import",
+        moduleType: effectiveModuleType,
+        documentSubtype: subtypeResult.subtype,
+        rows: Array.isArray(parsedRows) ? parsedRows : [],
+      });
+
+      const flatRows = uiReviewPayload.records.map((record: any) => record.values);
+      const { error: validatingStatusError } = await setStatus(supabaseAdmin, file_id, "validating", {
+        parsed_data: flatRows,
+        ui_review_payload: uiReviewPayload,
+        row_count: flatRows.length,
+        valid_count: flatRows.length,
+        validation_errors: [],
+        error_count: 0,
+        error_message: null,
+      });
+      if (validatingStatusError) {
+        throw new Error(`Structured lease review staging failed: ${validatingStatusError.message}`);
+      }
+
+      const { error: reviewStatusError } = await setStatus(supabaseAdmin, file_id, "review_required", {
+        ui_review_payload: uiReviewPayload,
+        normalized_output: {
+          method: "structured_review_gate",
+          rows: flatRows,
+          warnings: uiReviewPayload.global_warnings,
+          validationErrors: [],
+          metadata: uiReviewPayload.metadata,
+        },
+        parsed_data: flatRows,
+        valid_data: flatRows,
+        row_count: flatRows.length,
+        valid_count: flatRows.length,
+        error_count: 0,
+        error_message: null,
+        processing_completed_at: new Date().toISOString(),
+      });
+      if (reviewStatusError) {
+        throw new Error(`Structured lease review transition failed: ${reviewStatusError.message}`);
+      }
+
+      return new Response(
+        JSON.stringify({
+          error: false,
+          file_id,
+          review_required: true,
+          manual_review: true,
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          steps: {
+            parsing: { success: downstreamResult.ok, data: downstreamResult.data, error: downstreamResult.error },
+            review_gate: { success: true, status: "review_required" },
+            validation: { success: false, skipped: true, reason: "lease review_required=true" },
+            storage: { success: false, skipped: true, reason: "lease review_required=true" },
+          },
+          ui_review_payload: uiReviewPayload,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     } else if (defer_store) {
       console.log("[ingest-file] Structured parsing succeeded; defer_store=true so validate-data/store-data are skipped");

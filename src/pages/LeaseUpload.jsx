@@ -30,6 +30,7 @@ import { createPageUrl } from "@/utils";
 const ACTIVE_STATUSES = new Set([
   "uploaded",
   "parsing",
+  "parsed",
   "pdf_parsed",
   "validating",
   "validated",
@@ -55,6 +56,7 @@ function pipelineProgress(status) {
       return { activeIndex: 0, failed: false };
     case "parsing":
       return { activeIndex: 1, failed: false };
+    case "parsed":
     case "pdf_parsed":
       return { activeIndex: 2, failed: false };
     case "validating":
