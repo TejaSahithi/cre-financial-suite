@@ -848,7 +848,7 @@ Deno.serve(async (req: Request) => {
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
       .from("uploaded_files")
       .select(
-        "id, org_id, file_name, file_url, mime_type, file_type, module_type, " +
+        "id, org_id, file_name, file_url, mime_type, module_type, " +
         "status, review_required, document_subtype, extraction_method, docling_raw",
       )
       .eq("id", file_id)
@@ -910,7 +910,6 @@ Deno.serve(async (req: Request) => {
 
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
-      ?? fileRecord.file_type
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
     let fileLoadStatus: string = doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
     let fileLoadError: string | null = null;
