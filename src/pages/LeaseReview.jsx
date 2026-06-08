@@ -197,7 +197,7 @@ export default function LeaseReview() {
   // data from ui_review_payload (the pipeline stores extracted fields there,
   // not on lease.extraction_data, until the abstract is approved).
   const resolvedSourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
-  const { data: uploadedFile } = useQuery({
+  const { data: uploadedFile, isFetching: isUploadedFileFetching } = useQuery({
     queryKey: ["uploaded_file_for_lease", resolvedSourceFileId],
     queryFn: async () => {
       if (!resolvedSourceFileId) return null;
@@ -900,6 +900,12 @@ export default function LeaseReview() {
     const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id;
     if (!sourceFileId) return;
 
+    // Wait until the uploadedFile query has resolved. `uploadedFile` is
+    // `undefined` while the query is in-flight; it becomes null (not found /
+    // error) or a real row once settled. Firing before that means all payload
+    // checks (3b, 3c, 3d) see null and auto-re-extract fires incorrectly.
+    if (isUploadedFileFetching || uploadedFile === undefined) return;
+
     // Helper: mark this lease as handled so the effect never fires twice.
     const done = () => { autoExtractFiredRef.current = lease.id; };
 
@@ -1014,6 +1020,7 @@ export default function LeaseReview() {
     lease?.extraction_data?.evidence_refreshed_at,
     lease?.extraction_data?.field_evidence,
     uploadedFile,
+    isUploadedFileFetching,
     reextracting,
   ]);
 
@@ -2470,13 +2477,13 @@ export default function LeaseReview() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Lease Review</h1>
           <p className="text-sm text-slate-500">
-            {lease.tenant_name || "Unknown tenant"} —{" "}
+            {summaryTenantName || "Unknown tenant"} —{" "}
             {totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} ·{" "}
-            {getLeaseFieldLabel("lease_type", lease.lease_type) || "Unknown type"}
+            {getLeaseFieldLabel("lease_type", summaryLeaseType) || "Unknown type"}
           </p>
           <p className="mt-0.5 text-xs text-slate-400">
             Term: {commencementValue || "—"} → {expirationValue || "—"}
-            {lease.lease_date ? ` · Signed: ${lease.lease_date}` : ""}
+            {summaryLeaseDate ? ` · Signed: ${summaryLeaseDate}` : ""}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge className={leaseStatus === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}>
@@ -2686,6 +2693,26 @@ export default function LeaseReview() {
               </p>
               <p className="mt-0.5 text-xs text-blue-600">
                 This usually takes 30–60 seconds. The page will refresh automatically when complete. You don't need to do anything.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Extraction failed / no-data banner */}
+      {!reextracting &&
+        confidenceBuckets.high + confidenceBuckets.medium + confidenceBuckets.low + confidenceBuckets.unknown === 0 &&
+        resolvedSourceFileId && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <div>
+              <p className="font-semibold">No extracted data — AI pipeline did not complete</p>
+              <p className="mt-1 text-xs text-red-600">
+                The extraction pipeline timed out or ran out of compute resources before it could
+                save any field values. Click <strong>Re-extract Lease</strong> to try again.
+                If this keeps happening, the Supabase edge functions may need to be redeployed
+                with the updated timeout settings.
               </p>
             </div>
           </div>
