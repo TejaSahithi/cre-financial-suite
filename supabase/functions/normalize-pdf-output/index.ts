@@ -103,36 +103,118 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
   }
 }
 
+function positivePageNumber(value: unknown): number | null {
+  const page = Number(value);
+  return Number.isFinite(page) && page > 0 ? page : null;
+}
+
+function normalizeForPageMatch(value: unknown): string {
+  return cleanEvidenceSnippet(value)
+    .toLowerCase()
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactForPageMatch(value: unknown): string {
+  return normalizeForPageMatch(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function buildPageTextCandidates(doclingRaw: Record<string, unknown> | null | undefined) {
+  const candidates: Array<{ text: string; normalized: string; compact: string; page: number; source: string }> = [];
+  const push = (value: unknown, pageValue: unknown, source: string) => {
+    const page = positivePageNumber(pageValue);
+    const text = cleanEvidenceSnippet(value);
+    if (!page || !text) return;
+    candidates.push({
+      text,
+      normalized: normalizeForPageMatch(text),
+      compact: compactForPageMatch(text),
+      page,
+      source,
+    });
+  };
+
+  const pages = Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : [];
+  pages.forEach((page: any, index: number) => {
+    push(
+      page?.text ?? page?.content ?? page?.markdown ?? page?.full_text,
+      page?.page ?? page?.page_number ?? page?.number ?? index + 1,
+      "page",
+    );
+  });
+
+  for (const block of Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : []) {
+    push(block?.text, block?.page ?? block?.page_number ?? block?.source_page, "text_block");
+  }
+
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.page}|${candidate.source}|${candidate.normalized.slice(0, 240)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function pageMatchScore(candidate: { normalized: string; compact: string; source: string }, snippet: string): number {
+  const normalizedSnippet = normalizeForPageMatch(snippet);
+  if (normalizedSnippet.length < 8) return 0;
+  if (candidate.normalized.includes(normalizedSnippet)) return 1000 + Math.min(normalizedSnippet.length, 400);
+
+  const compactSnippet = compactForPageMatch(snippet);
+  if (compactSnippet.length >= 24 && candidate.compact.includes(compactSnippet)) {
+    return 900 + Math.min(compactSnippet.length, 300);
+  }
+
+  const anchors = [
+    normalizedSnippet.slice(0, Math.min(120, normalizedSnippet.length)),
+    normalizedSnippet.slice(Math.max(0, normalizedSnippet.length - 120)),
+  ].filter((anchor) => anchor.length >= 45);
+  for (const anchor of anchors) {
+    if (candidate.normalized.includes(anchor)) return 500 + anchor.length;
+  }
+
+  const tokens = [...new Set(normalizedSnippet.match(/[a-z0-9$%]{4,}/g) || [])]
+    .filter((token) => !["this", "that", "with", "from", "shall", "tenant", "landlord"].includes(token));
+  if (tokens.length < 6) return 0;
+  const matched = tokens.filter((token) => candidate.normalized.includes(token)).length;
+  const ratio = matched / tokens.length;
+  if (matched >= 6 && ratio >= 0.82) return 120 + matched * 8 + (candidate.source === "page" ? 6 : 0);
+  return 0;
+}
+
 /**
- * Find the docling page number that contains a given source snippet. Used
- * to back-fill source_page when an LLM or workflow extractor returned a
- * source_text but did not stamp the page. Returns null if no match.
+ * Find the parsed page containing a source snippet. This only trusts real
+ * page/text blocks, not LLM field metadata, so a default source_page=1 does
+ * not leak into review rows unless the snippet is actually found on page 1.
  */
 function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefined, snippet: string): number | null {
   if (!doclingRaw || !snippet) return null;
-  const trimmed = String(snippet).trim();
-  if (trimmed.length < 8) return null;
-  // Anchor on the first ~60 characters; matching longer substrings is fragile
-  // because the LLM frequently lightly paraphrases or trims whitespace.
-  const probe = trimmed.slice(0, Math.min(80, trimmed.length)).toLowerCase();
-  const blocks = Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : [];
-  for (const block of blocks) {
-    const text = String(block?.text || "").toLowerCase();
-    if (!text) continue;
-    const page = Number(block?.page ?? block?.page_number ?? block?.source_page);
-    if (!Number.isFinite(page)) continue;
-    if (text.includes(probe)) return page;
+  let best: { page: number; score: number } | null = null;
+  for (const candidate of buildPageTextCandidates(doclingRaw)) {
+    const score = pageMatchScore(candidate, snippet);
+    if (score <= 0) continue;
+    if (!best || score > best.score) best = { page: candidate.page, score };
   }
-  // Fall back to docling fields (key/value pairs with page numbers).
-  const fields = Array.isArray((doclingRaw as any)?.fields) ? (doclingRaw as any).fields : [];
-  for (const field of fields) {
-    const value = String(field?.value || field?.text || "").toLowerCase();
-    if (!value) continue;
-    const page = Number(field?.page ?? field?.page_number ?? field?.source_page);
-    if (!Number.isFinite(page)) continue;
-    if (value.includes(probe) || probe.includes(value)) return page;
+  return best?.page ?? null;
+}
+
+function resolveVerifiedSourcePage(
+  doclingRaw: Record<string, unknown> | null | undefined,
+  sourceText: string | null,
+  proposedPage: unknown,
+): number | null {
+  if (sourceText) {
+    const verified = findPageForSnippet(doclingRaw, sourceText);
+    if (verified != null) return verified;
   }
-  return null;
+
+  const page = positivePageNumber(proposedPage);
+  if (!page) return null;
+  const pageNumbers = new Set(buildPageTextCandidates(doclingRaw).map((candidate) => candidate.page));
+  return pageNumbers.size === 1 && pageNumbers.has(page) ? page : null;
 }
 
 function isGenericSourceText(value: unknown): boolean {
@@ -205,7 +287,12 @@ function isCleanSnippetStart(snippet: string) {
 function isShortCompleteSourceRow(snippet: string) {
   if (!snippet || snippet.length > 260) return false;
   if (/\.{3}|…/.test(snippet)) return false;
-  if (!isCleanSnippetStart(snippet)) return false;
+  const isLabeledRow = /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet);
+  const isNumberedRow = /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet);
+  const isShortValueRow =
+    /^(suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet) &&
+    !/[.!?]\s+\S/.test(snippet);
+  if (!isLabeledRow && !isNumberedRow && !isShortValueRow) return false;
   const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
   return partyMarkerCount <= 2;
 }
@@ -309,7 +396,7 @@ function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | 
     blocks.push({
       text,
       lowered: text.toLowerCase(),
-      page: Number.isFinite(pageNumber) ? pageNumber : null,
+      page: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : null,
       source,
     });
   };
@@ -474,16 +561,18 @@ function findSourceEvidenceForField(
       const hasKeyword = keywords.length === 0 || keywords.some((keyword) => loweredSnippet.includes(keyword));
       const needleIsBroadNumber = /^\d{1,4}$/.test(loweredNeedle);
       if (needleIsBroadNumber && !hasKeyword) continue;
+      const verifiedPage = findPageForSnippet(doclingRaw, snippet);
 
       const score =
         needle.length +
         (quality === "exact" ? 30 : 10) +
         (hasKeyword ? 25 : 0) +
-        (block.page != null ? 10 : 0) +
-        (block.source === "text_block" ? 10 : 0);
+        (verifiedPage != null ? 18 : 0) +
+        (block.source === "page" ? 12 : block.source === "text_block" ? 10 : 0) +
+        (block.source === "docling_field" ? -8 : 0);
       if (!best || score > best.score) {
         best = {
-          source_page: block.page,
+          source_page: verifiedPage,
           source_clause: snippet.slice(0, 700),
           source_quality: quality,
           matched_needle: needle,
@@ -725,30 +814,30 @@ function buildReviewPayload(opts: {
       const workflowSourceText = usableSourceText(workflowField?.source_clause);
       const llmSourceSupportsValue = sourceTextSupportsValue(llmSourceText, value, fieldKey, String(def?.type ?? ""));
       const workflowSourceSupportsValue = sourceTextSupportsValue(workflowSourceText, value, fieldKey, String(def?.type ?? ""));
-      const fallbackEvidence =
-        !isBlank(value) &&
-        (!llmSourceText && !workflowSourceText || (!llmSourceSupportsValue && !workflowSourceSupportsValue))
-          ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
-          : null;
+      const fallbackEvidence = !isBlank(value)
+        ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
+        : null;
       const fallbackSourceText = usableSourceText(fallbackEvidence?.source_clause);
-      let mergedSourcePage =
-        (llmSourceSupportsValue ? llmEvidence?.source_page : null)
-        ?? (workflowSourceSupportsValue ? workflowField?.source_page : null)
-        ?? (fallbackSourceText ? fallbackEvidence?.source_page : null)
-        ?? null;
-      const mergedSourceText =
-        (llmSourceSupportsValue ? llmSourceText : null)
-        ?? (workflowSourceSupportsValue ? workflowSourceText : null)
-        ?? fallbackSourceText
-        ?? null;
-      // Page back-fill: when we have a clause snippet but no page number,
-      // search docling's per-page text_blocks for the snippet and assign the
-      // matching page. Prevents Page from being blank when source text is
-      // clearly identifiable in the parsed document.
-      if (mergedSourcePage == null && typeof mergedSourceText === "string" && mergedSourceText.trim().length > 0) {
-        const matchedPage = findPageForSnippet(doclingRaw, mergedSourceText);
-        if (matchedPage != null) mergedSourcePage = matchedPage;
-      }
+      const evidenceCandidates = [
+        { source: "fallback", sourceText: fallbackSourceText, sourcePage: fallbackEvidence?.source_page, supportsValue: !!fallbackSourceText },
+        { source: "workflow", sourceText: workflowSourceText, sourcePage: workflowField?.source_page, supportsValue: workflowSourceSupportsValue },
+        { source: "llm", sourceText: llmSourceText, sourcePage: llmEvidence?.source_page, supportsValue: llmSourceSupportsValue },
+      ]
+        .filter((candidate) => candidate.sourceText && candidate.supportsValue)
+        .map((candidate) => ({
+          ...candidate,
+          verifiedPage: resolveVerifiedSourcePage(doclingRaw, candidate.sourceText, candidate.sourcePage),
+        }))
+        .sort((a, b) => {
+          const score = (candidate: any) =>
+            (candidate.verifiedPage != null ? 100 : 0) +
+            (candidate.source === "fallback" ? 20 : candidate.source === "workflow" ? 10 : 0) +
+            Math.min(String(candidate.sourceText ?? "").length, 240) / 240;
+          return score(b) - score(a);
+        });
+      const selectedEvidence = evidenceCandidates[0] ?? null;
+      const mergedSourceText = selectedEvidence?.sourceText ?? null;
+      const mergedSourcePage = selectedEvidence?.verifiedPage ?? null;
       const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0;
       const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
       let inferredStatus = value == null || value === ""
@@ -790,8 +879,8 @@ function buildReviewPayload(opts: {
         evidence: {
           page_number: mergedSourcePage,
           source_clause: mergedSourceText,
-          source_quality: fallbackEvidence?.source_quality ?? null,
-          matched_needle: fallbackEvidence?.matched_needle ?? null,
+          source_quality: selectedEvidence?.source === "fallback" ? fallbackEvidence?.source_quality ?? null : null,
+          matched_needle: selectedEvidence?.source === "fallback" ? fallbackEvidence?.matched_needle ?? null : null,
         },
         status: finalStatus,
         editable: workflowField?.editable ?? true,

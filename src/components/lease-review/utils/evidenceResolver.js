@@ -15,11 +15,10 @@ export function buildSearchBlocks(docling) {
     blocks.push({
       text,
       lowered: text.toLowerCase(),
-      page: Number.isFinite(Number(explicitPage))
+      page: Number.isFinite(Number(explicitPage)) && Number(explicitPage) > 0
         ? Number(explicitPage)
-        : raw.length === 1
-          ? 1
         : null,
+      source: "text_block",
     });
   }
   // Add full_text as a fallback block with unknown page so single-page
@@ -29,18 +28,20 @@ export function buildSearchBlocks(docling) {
       text: String(docling.full_text),
       lowered: String(docling.full_text).toLowerCase(),
       page: null,
+      source: "full_text",
     });
   }
   return blocks;
 }
 
-export function pushDocumentTextBlock(blocks, text, page = null) {
+export function pushDocumentTextBlock(blocks, text, page = null, source = "text") {
   const cleaned = String(text ?? "").trim();
   if (!cleaned) return;
   blocks.push({
     text: cleaned,
     lowered: cleaned.toLowerCase(),
-    page: Number.isFinite(Number(page)) ? Number(page) : null,
+    page: Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : null,
+    source,
   });
 }
 
@@ -58,24 +59,25 @@ export function buildSearchBlocksFromSources(...sources) {
     }
     if (typeof source !== "object") return;
 
-    for (const block of buildSearchBlocks(source)) {
-      pushDocumentTextBlock(blocks, block.text, block.page);
-    }
     if (Array.isArray(source.pages)) {
       for (const page of source.pages) {
         pushDocumentTextBlock(
           blocks,
           page?.text ?? page?.content ?? page?.markdown ?? page?.full_text,
           page?.page ?? page?.page_number ?? page?.number,
+          "page",
         );
       }
     }
+    for (const block of buildSearchBlocks(source)) {
+      pushDocumentTextBlock(blocks, block.text, block.page, block.source);
+    }
 
-    pushDocumentTextBlock(blocks, source.full_text, null);
-    pushDocumentTextBlock(blocks, source.raw_text, null);
-    pushDocumentTextBlock(blocks, source.text, null);
-    pushDocumentTextBlock(blocks, source.markdown, null);
-    pushDocumentTextBlock(blocks, source.body, null);
+    pushDocumentTextBlock(blocks, source.full_text, null, "full_text");
+    pushDocumentTextBlock(blocks, source.raw_text, null, "raw_text");
+    pushDocumentTextBlock(blocks, source.text, null, "text");
+    pushDocumentTextBlock(blocks, source.markdown, null, "markdown");
+    pushDocumentTextBlock(blocks, source.body, null, "body");
 
     // Visit likely payload containers. metadata is included because some
     // pipeline versions store Docling text or page arrays there.
@@ -226,7 +228,12 @@ function isCleanSnippetStart(snippet) {
 function isShortCompleteSourceRow(snippet) {
   if (!snippet || snippet.length > 260) return false;
   if (/\.{3}|…/.test(snippet)) return false;
-  if (!isCleanSnippetStart(snippet)) return false;
+  const isLabeledRow = /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet);
+  const isNumberedRow = /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet);
+  const isShortValueRow =
+    /^(suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet) &&
+    !/[.!?]\s+\S/.test(snippet);
+  if (!isLabeledRow && !isNumberedRow && !isShortValueRow) return false;
   const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
   return partyMarkerCount <= 2;
 }
@@ -291,7 +298,13 @@ function boundedSourceSnippet(text, matchStart, matchLength) {
  */
 export function expandToSentenceBoundary(text, matchStart, matchLength) {
   const boundedSnippet = boundedSourceSnippet(text, matchStart, matchLength);
-  return { snippet: boundedSnippet, source_quality: boundedSnippet ? "exact" : "partial" };
+  if (boundedSnippet) {
+    const isExact =
+      /^[A-Za-z][^:\n]{0,90}:\s\S/.test(boundedSnippet) ||
+      /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(boundedSnippet) ||
+      /[.!?]["')\]]?$/.test(boundedSnippet);
+    return { snippet: boundedSnippet, source_quality: isExact ? "exact" : "partial" };
+  }
 
   // 1. Short labeled row — return the whole cleaned block.
   const singleLine = text.replace(/\s+/g, " ").trim();
@@ -363,6 +376,7 @@ export function expandToSentenceBoundary(text, matchStart, matchLength) {
 export function findEvidenceForValue(blocks, value, field) {
   const needles = candidateNeedles(value, field);
   if (needles.length === 0) return null;
+  let best = null;
   for (const needle of needles) {
     const loweredNeedle = needle.toLowerCase();
     for (const block of blocks) {
@@ -376,15 +390,31 @@ export function findEvidenceForValue(blocks, value, field) {
       if (isWordChar(before) && isWordChar(after)) continue;
       const { snippet, source_quality } = expandToSentenceBoundary(block.text, hit, needle.length);
       if (!snippet) continue;
-      return {
-        raw: block.text.slice(hit, hit + needle.length),
-        text: snippet,
-        page: block.page,
-        source_quality,
-      };
+      const score =
+        needle.length +
+        (source_quality === "exact" ? 30 : 10) +
+        (block.page != null ? 12 : 0) +
+        (block.source === "page" ? 12 : block.source === "text_block" ? 10 : 0) +
+        (snippet.length <= 260 ? 4 : 0);
+      if (!best || score > best.score) {
+        best = {
+          score,
+          raw: block.text.slice(hit, hit + needle.length),
+          text: snippet,
+          page: block.page,
+          source_quality,
+        };
+      }
     }
   }
-  return null;
+  return best
+    ? {
+        raw: best.raw,
+        text: best.text,
+        page: best.page,
+        source_quality: best.source_quality,
+      }
+    : null;
 }
 
 export function numericValue(value) {
