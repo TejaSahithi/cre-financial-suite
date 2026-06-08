@@ -84,7 +84,13 @@ export async function extractDocumentWithVision(
   fileUri?: string,
 ): Promise<{
   text: string;
-  fields: Array<{ key: string; value: string; confidence?: number; page?: number }>;
+  page_count?: number;
+  pages: Array<{
+    page: number;
+    text: string;
+    fields: Array<{ key: string; value: string; confidence?: number; page?: number; source_text?: string }>;
+  }>;
+  fields: Array<{ key: string; value: string; confidence?: number; page?: number; source_text?: string }>;
   warnings: string[];
 }> {
   console.log(`[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes)`);
@@ -103,17 +109,24 @@ export async function extractDocumentWithVision(
   }
 
   const result = await callVertexAIFileJSON<{
+    page_count?: number;
+    pages?: Array<{
+      page?: number;
+      text?: string;
+      fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number; source_text?: string }>;
+    }>;
     text?: string;
-    fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number }>;
+    fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number; source_text?: string }>;
     warnings?: string[];
   }>({
     systemPrompt: `You extract data from commercial real estate documents for a review UI.
 
 Return JSON only:
-{"text":"important OCR text and clauses", "fields":[{"key":"field_name","value":"field value","confidence":0.0,"page":1}], "warnings":[]}
+{"page_count":1,"pages":[{"page":1,"text":"verbatim text from this page","fields":[{"key":"field_name","value":"field value","source_text":"exact sentence or table row from this same page","confidence":0.0}]}],"warnings":[]}
 
 Rules:
-1. Extract every meaningful field/value pair you can see: parties, tenant, landlord, assignor, assignee, property, premises, address, suite/unit, dates, lease term, rent, annual rent, rent per SF, square footage, security deposit, CAM, options, consent, notices, exhibits, signatures, and notary information.
+1. Preserve page boundaries. For every PDF page you can read, return one pages[] item with its real page number and verbatim page text.
+2. Extract every meaningful field/value pair you can see: parties, tenant, landlord, assignor, assignee, property, premises, address, suite/unit, dates, lease term, rent, annual rent, rent per SF, square footage, security deposit, CAM, options, consent, notices, exhibits, signatures, and notary information.
 2. For standard lease fields, prefer these exact keys whenever applicable:
    tenant_name, landlord_name, property_name, property_address, unit_number,
    start_date, end_date, monthly_rent, annual_rent, rent_per_sf, square_footage,
@@ -121,10 +134,10 @@ Rules:
    ti_allowance, free_rent_months, lease_term_months, status,
    assignor_name, assignee_name, assignment_effective_date, landlord_consent,
    assumption_scope, assignee_notice_address.
-3. For anything useful that is not a standard field, still extract it with a concise snake_case key so it can appear as a custom field.
-4. Do not invent values. If not visible, omit it.
-5. Keep values exact, especially names, dates, addresses, and money.
-6. Put important surrounding lease/assignment clauses in "text"; do not include boilerplate if the output would be too long.
+3. Every field must include source_text copied verbatim from the same page. Use a complete sentence, clause fragment, or table row that supports the value.
+4. For anything useful that is not a standard field, still extract it with a concise snake_case key so it can appear as a custom field.
+5. Do not invent values. If not visible, omit it.
+6. Keep values exact, especially names, dates, addresses, and money.
 7. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all reviewable fields and the important OCR text from this document.",
     fileBytes,
@@ -134,27 +147,57 @@ Rules:
     temperature: 0,
   });
 
-  const fields = Array.isArray(result?.fields) ? result.fields : [];
-  const cleanedFields = fields
+  const cleanedPages = Array.isArray(result?.pages)
+    ? result.pages
+      .map((page, index) => {
+        const pageNumber = Number(page?.page ?? index + 1);
+        const pageFields = Array.isArray(page?.fields) ? page.fields : [];
+        const cleanedPageFields = pageFields
+          .map((field) => ({
+            key: String(field?.key ?? "").trim(),
+            value: String(field?.value ?? "").trim(),
+            confidence: typeof field?.confidence === "number" ? field.confidence : 0.78,
+            page: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined,
+            source_text: String(field?.source_text ?? "").trim() || undefined,
+          }))
+          .filter((field) => field.key.length > 0 && field.value.length > 0)
+          .slice(0, 80);
+        return {
+          page: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : index + 1,
+          text: cleanOCRText(String(page?.text ?? "")),
+          fields: cleanedPageFields,
+        };
+      })
+      .filter((page) => page.text || page.fields.length > 0)
+    : [];
+
+  const flattenedPageFields = cleanedPages.flatMap((page) => page.fields);
+  const legacyFields = Array.isArray(result?.fields) ? result.fields : [];
+  const cleanedLegacyFields = legacyFields
     .map((field) => ({
       key: String(field?.key ?? "").trim(),
       value: String(field?.value ?? "").trim(),
       confidence: typeof field?.confidence === "number" ? field.confidence : 0.78,
       page: typeof field?.page === "number" ? field.page : undefined,
+      source_text: String(field?.source_text ?? "").trim() || undefined,
     }))
     .filter((field) => field.key.length > 0 && field.value.length > 0)
     .slice(0, 200);
 
+  const cleanedFields = flattenedPageFields.length ? flattenedPageFields : cleanedLegacyFields;
   const textFromFields = cleanedFields.map((field) => `${field.key}: ${field.value}`).join("\n");
-  const text = cleanOCRText([result?.text, textFromFields].filter(Boolean).join("\n"));
+  const pageText = cleanedPages.map((page) => page.text).filter(Boolean).join("\n\n");
+  const text = cleanOCRText([pageText, result?.text, textFromFields].filter(Boolean).join("\n\n"));
 
   if (!text && cleanedFields.length === 0) {
     throw new Error("Gemini Vision returned no text or fields.");
   }
 
-  console.log(`[ocr] Combined Gemini extraction complete: ${text.length} chars, ${cleanedFields.length} fields`);
+  console.log(`[ocr] Combined Gemini extraction complete: ${text.length} chars, ${cleanedPages.length} pages, ${cleanedFields.length} fields`);
   return {
     text,
+    page_count: typeof result?.page_count === "number" && result.page_count > 0 ? result.page_count : cleanedPages.length || undefined,
+    pages: cleanedPages,
     fields: cleanedFields,
     warnings: Array.isArray(result?.warnings) ? result.warnings.map(String) : [],
   };

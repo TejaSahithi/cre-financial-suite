@@ -105,10 +105,10 @@ async function resolveAuditContext(entry) {
   return resolved;
 }
 
-// Module-level cache: once we discover the enhanced schema isn't available we
-// skip the first insert attempt on every subsequent call so we never fire a
-// 400 request that we know will fail. Resets to null on page reload.
-let _enhancedSchemaAvailable = null; // null=unknown, true=yes, false=no
+// Module-level cache: the current production schema has the enhanced audit
+// columns. If an older environment is still missing them, the first schema
+// error flips this to false and subsequent calls use the core row only.
+let _enhancedSchemaAvailable = true;
 
 /**
  * Record an audit log entry.
@@ -168,12 +168,9 @@ export async function logAudit(entry) {
 
   try {
     if (supabase) {
-      // Strategy: use core schema by default (always safe). Only attempt the
-      // enhanced insert when we have CONFIRMED the migration is applied in this
-      // session (_enhancedSchemaAvailable === true). This eliminates the 400
-      // network error that appeared on every page because the first enhanced
-      // attempt always failed before the cache kicked in.
-      // To upgrade permanently, apply 20260602004050_audit_logging_hardening.sql.
+      // Strategy: use the enhanced schema now that the audit hardening
+      // migration is part of the live database. Older databases still fall back
+      // to the core insert after one schema-cache/column error.
       if (_enhancedSchemaAvailable === true) {
         const { error } = await supabase.from('audit_logs').insert(row);
         if (!error) return;

@@ -149,6 +149,11 @@ const GENERIC_EXPENSE_RULE_SOURCE_PATTERNS = [
 ];
 
 const CLAUSE_DEFINITIONS = [
+  { type: "rent_escalation", title: "Rent & Escalation", keywords: ["base rent", "monthly rent", "minimum rent", "rent shall", "annual rent", "escalation", "increase"], maxChars: 720 },
+  { type: "security_deposit", title: "Security Deposit", keywords: ["security deposit", "deposit"], maxChars: 520 },
+  { type: "operating_expense_recovery", title: "Operating Expense Recovery", keywords: ["operating expenses", "additional rent", "tenant shall reimburse", "tenant shall pay", "taxes, insurance", "common area maintenance"], maxChars: 820 },
+  { type: "cam_recoveries", title: "CAM / Recoveries", keywords: ["common area maintenance", "cam", "common area expenses"], maxChars: 820 },
+  { type: "taxes", title: "Taxes", keywords: ["real estate taxes", "property taxes", "taxes and assessments"], maxChars: 620 },
   { type: "use_clause", title: "Use Clause", keywords: ["permitted use", "use of premises"], maxChars: 520 },
   { type: "assignment_subletting", title: "Assignment / Subletting", keywords: ["assignment", "subletting", "sublease"], maxChars: 620 },
   { type: "repairs_maintenance", title: "Repairs & Maintenance", keywords: ["repairs", "maintenance", "hvac"], maxChars: 620 },
@@ -159,6 +164,7 @@ const CLAUSE_DEFINITIONS = [
   { type: "remedies", title: "Remedies", keywords: ["remedies", "cumulative remedies"], maxChars: 520 },
   { type: "surrender", title: "Surrender", keywords: ["surrender", "vacate"], maxChars: 520 },
   { type: "holdover", title: "Holdover", keywords: ["holdover"], maxChars: 420 },
+  { type: "renewal_option", title: "Renewal Option", keywords: ["renewal option", "option to renew", "extend the term", "additional term"], maxChars: 720 },
   { type: "notices", title: "Notices", keywords: ["notices", "notice"], maxChars: 620 },
   { type: "subordination_estoppel", title: "Subordination / Estoppel", keywords: ["subordination", "estoppel"], maxChars: 520 },
   { type: "governing_law", title: "Governing Law", keywords: ["governing law"], maxChars: 320 },
@@ -639,7 +645,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     // source_clause MUST be a lease-text snippet, never a field key. Prefer
     // the docling field's text/value (the actual lease language) and never
     // fall back to a key/label identifier string.
-    const directText = cleanText(directField?.text || directField?.value || "");
+    const directText = cleanText(directField?.source_text || directField?.text || directField?.value || "");
     const safeDirectText = cleanSourceText(directText);
     if (safeDirectText) {
       const hit = comparableValue ? safeDirectText.indexOf(comparableValue) : -1;
@@ -755,6 +761,61 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
   const required = FIELD_KEYWORDS[fieldKey];
   if (!required) return true; // no constraint for this field — accept any source
   return required.some((kw) => haystack.includes(kw.toLowerCase()));
+}
+
+function isMoneyLike(text: unknown): boolean {
+  return /\$\s*\d|(?:^|\s)\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd)\b/i.test(cleanText(text));
+}
+
+function normalizeLeaseTypeValue(value: unknown): string | null {
+  const raw = cleanText(value).toLowerCase();
+  if (!raw) return null;
+  if (/\b(?:nnn|triple\s+net|triple-net)\b/.test(raw)) return "nnn";
+  if (/\b(?:full\s+service|full-service|full\s+service\s+gross)\b/.test(raw)) return "full_service";
+  if (/\bmodified\s+gross\b/.test(raw)) return "modified_gross";
+  if (/\bgross\b/.test(raw)) return "gross";
+  return null;
+}
+
+function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: string | null) {
+  const valueText = cleanText(value);
+  const source = cleanText(sourceText).toLowerCase();
+  const combined = `${valueText} ${source}`.toLowerCase();
+  if (!valueText) return null;
+
+  if (fieldKey === "suite_number") {
+    if (/\b(?:per|rent|dollar|square\s+foot|leasable|rsf|sf|monthly|annual)\b/i.test(valueText)) {
+      return "suite_number_not_identifier";
+    }
+    if (!/^(?:suite|unit|space|#)?\s*[A-Za-z0-9-]{1,12}$/i.test(valueText)) {
+      return "suite_number_invalid_format";
+    }
+  }
+
+  if (["base_rent_monthly", "annual_rent", "security_deposit_amount", "ti_allowance"].includes(fieldKey)) {
+    if (!isMoneyLike(valueText) && !isMoneyLike(sourceText)) return "money_field_without_money_evidence";
+    if (fieldKey === "base_rent_monthly" && !/\b(?:rent|monthly|per\s+month|base\s+rent)\b/.test(combined)) {
+      return "monthly_rent_without_rent_context";
+    }
+    if (fieldKey === "security_deposit_amount" && !/\bsecurity\s+deposit\b/.test(combined)) {
+      return "security_deposit_without_deposit_context";
+    }
+    if (fieldKey === "ti_allowance" && !/\b(?:tenant\s+improvement|ti\s+allowance|allowance)\b/.test(combined)) {
+      return "ti_allowance_without_ti_context";
+    }
+  }
+
+  if (["tenant_name", "landlord_name", "broker_name", "tenant_contact_name"].includes(fieldKey)) {
+    if (valueText.length > 90 || /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)) {
+      return "party_name_looks_like_clause_text";
+    }
+  }
+
+  if (fieldKey === "lease_type" && !normalizeLeaseTypeValue(valueText)) {
+    return "lease_type_unknown";
+  }
+
+  return null;
 }
 
 function excerptForKeywords(textBlocks: any[], fullText: string, keywords: string[]) {
@@ -1595,13 +1656,25 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     // Only attach source_clause when it is contextually relevant to the field.
     // An irrelevant block (e.g. a transferee financial-worth paragraph used as
     // source for tenant_name) shows "No source" instead of misleading "Exact".
-    const relevantSourceClause = resolvedSourceClause && isSourceRelevantToField(spec.key, resolvedSourceClause)
+    let relevantSourceClause = resolvedSourceClause && isSourceRelevantToField(spec.key, resolvedSourceClause)
       ? resolvedSourceClause
       : null;
+    let normalizedValue = normalizeWorkflowFieldValue(spec.key, value);
+    const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
+    if (invalidReason) {
+      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "lease_type"].includes(spec.key)) {
+        normalizedValue = null;
+        extractionStatus = spec.manualRequired ? "manual_required" : "not_found";
+      } else if (extractionStatus === "extracted") {
+        extractionStatus = "missing_source_evidence";
+      }
+      relevantSourceClause = null;
+      confidenceScore = Math.min(Number(confidenceScore ?? 0.35), 0.35);
+    }
 
     fieldMap[spec.key] = {
       key: spec.key,
-      value: normalizeWorkflowFieldValue(spec.key, value),
+      value: normalizedValue,
       source_page: relevantSourceClause ? (relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page) : null,
       source_clause: relevantSourceClause,
       confidence_score: extractionStatus === "not_found" || extractionStatus === "manual_required" ? null : round2(confidenceScore),
@@ -1613,7 +1686,14 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
 
   const signals = inferLeaseSignals(fullText, row);
   const classifiedLeaseType = classifyLeaseType(fullText, [], signals);
-  const leaseTypeEvidence = findEvidenceForValue(doclingRaw, "lease_type", classifiedLeaseType, classifiedLeaseType);
+  const existingLeaseType = normalizeLeaseTypeValue(fieldMap.lease_type?.value);
+  const normalizedLeaseType = normalizeLeaseTypeValue(classifiedLeaseType) ?? existingLeaseType;
+  const leaseTypeEvidence = normalizedLeaseType
+    ? findEvidenceForValue(doclingRaw, "lease_type", classifiedLeaseType, classifiedLeaseType)
+    : { source_page: null, source_clause: null };
+  const leaseTypeSource = leaseTypeEvidence.source_clause && isSourceRelevantToField("lease_type", leaseTypeEvidence.source_clause)
+    ? leaseTypeEvidence.source_clause
+    : null;
   fieldMap.lease_type = {
     ...(fieldMap.lease_type || {
       key: "lease_type",
@@ -1625,11 +1705,11 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       editable: true,
       field_group: "lease_header",
     }),
-    value: classifiedLeaseType,
-    source_page: leaseTypeEvidence.source_page,
-    source_clause: leaseTypeEvidence.source_clause || classifiedLeaseType,
-    confidence_score: classifiedLeaseType && classifiedLeaseType !== "Unknown / Manual Review" ? 0.86 : 0.5,
-    extraction_status: classifiedLeaseType === "Unknown / Manual Review" ? "manual_required" : "calculated",
+    value: normalizedLeaseType,
+    source_page: leaseTypeSource ? leaseTypeEvidence.source_page : fieldMap.lease_type?.source_page ?? null,
+    source_clause: leaseTypeSource ?? fieldMap.lease_type?.source_clause ?? null,
+    confidence_score: normalizedLeaseType ? (normalizeLeaseTypeValue(classifiedLeaseType) ? 0.86 : fieldMap.lease_type?.confidence_score ?? 0.72) : 0.5,
+    extraction_status: normalizedLeaseType ? (normalizeLeaseTypeValue(classifiedLeaseType) ? "calculated" : fieldMap.lease_type?.extraction_status ?? "needs_review") : "manual_required",
   };
 
   const tenantRsf = asNumber(fieldMap.tenant_rsf?.value);
@@ -1698,8 +1778,39 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       };
     }
   }
+  if (commencementDate && !toIsoDate(fieldMap.expiration_date?.value)) {
+    const startDate = new Date(`${commencementDate}T00:00:00Z`);
+    const termMonths =
+      parseLeaseTermMonths(row?.lease_term_months) ??
+      parseLeaseTermMonths(fieldMap.lease_term_months?.value) ??
+      parseLeaseTermMonths(fieldMap.lease_term?.value);
+    if (Number.isFinite(startDate.getTime()) && termMonths && termMonths > 0) {
+      const derivedExpiration = new Date(startDate);
+      derivedExpiration.setUTCMonth(derivedExpiration.getUTCMonth() + termMonths);
+      derivedExpiration.setUTCDate(derivedExpiration.getUTCDate() - 1);
+      const termEvidence = extractClauseSnippet(
+        asArray(doclingRaw?.text_blocks),
+        fullText,
+        ["lease term", "term", "commencement date", "expiration date", "months"],
+        420,
+      );
+      fieldMap.expiration_date = {
+        ...(fieldMap.expiration_date || {
+          key: "expiration_date",
+          editable: true,
+          field_group: "lease_term",
+        }),
+        value: derivedExpiration.toISOString().slice(0, 10),
+        source_page: termEvidence.source_page ?? fieldMap.lease_term?.source_page ?? fieldMap.commencement_date?.source_page ?? null,
+        source_clause: termEvidence.clause_text ?? fieldMap.lease_term?.source_clause ?? fieldMap.commencement_date?.source_clause ?? null,
+        confidence_score: 0.72,
+        extraction_status: "needs_review",
+      };
+    }
+  }
 
-  if (classifiedLeaseType && /full service/i.test(classifiedLeaseType)) {
+  const canonicalClassifiedLeaseType = normalizeLeaseTypeValue(classifiedLeaseType);
+  if (canonicalClassifiedLeaseType === "full_service") {
     const explicitRecoverables = [
       asNumber(row?.cam_amount),
       asNumber(row?.nnn_amount),
@@ -1718,33 +1829,34 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
   // When the lease is Full Service and responsibility fields were not explicitly
   // extracted, populate them as "calculated" rows so the Expenses/Recoveries,
   // CAM, and Insurance tabs show meaningful content instead of all-blank rows.
-  if (classifiedLeaseType && /full service|gross lease/i.test(String(classifiedLeaseType))) {
-    const leaseTypeSource = fieldMap.lease_type?.source_clause || null;
-    const leaseTypePage = fieldMap.lease_type?.source_page ?? null;
-    const deriveResponsibility = (key: string, value: string) => {
-      if (!isBlank(fieldMap[key]?.value)) return;
+  if (canonicalClassifiedLeaseType === "full_service" || canonicalClassifiedLeaseType === "gross") {
+    const clauseFor = (...types: string[]) => clauses.find((clause) => types.includes(clause.clause_type) && clause.clause_text);
+    const deriveResponsibility = (key: string, value: string, clauseTypes: string[]) => {
+      const clause = clauseFor(...clauseTypes);
+      if (!isBlank(fieldMap[key]?.value) || !clause) return;
       fieldMap[key] = {
         key,
         value,
-        source_page: leaseTypePage,
-        source_clause: leaseTypeSource,
+        source_page: clause.source_page ?? null,
+        source_clause: clause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
         editable: true,
         field_group: "expense_terms",
       };
     };
-    deriveResponsibility("responsibility_taxes", "landlord");
-    deriveResponsibility("responsibility_insurance", "landlord");
-    deriveResponsibility("responsibility_utilities", "landlord");
-    deriveResponsibility("responsibility_repairs", "landlord");
+    deriveResponsibility("responsibility_taxes", "landlord", ["taxes", "operating_expense_recovery"]);
+    deriveResponsibility("responsibility_insurance", "landlord", ["insurance", "operating_expense_recovery"]);
+    deriveResponsibility("responsibility_utilities", "landlord", ["operating_expense_recovery", "repairs_maintenance"]);
+    deriveResponsibility("responsibility_repairs", "landlord", ["repairs_maintenance", "operating_expense_recovery"]);
     // Full Service → no separate CAM recovery
-    if (isBlank(fieldMap.cam_amount?.value)) {
+    const camClause = clauseFor("cam_recoveries", "operating_expense_recovery");
+    if (isBlank(fieldMap.cam_amount?.value) && camClause) {
       fieldMap.cam_amount = {
         key: "cam_amount",
         value: 0,
-        source_page: leaseTypePage,
-        source_clause: leaseTypeSource,
+        source_page: camClause.source_page ?? null,
+        source_clause: camClause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
         editable: true,
@@ -1978,24 +2090,25 @@ function deriveExpenseRules(
   doclingRaw: any,
 ) {
   const leaseType = cleanText(fieldMap.lease_type?.value || "");
-  const isFullService = /full service|gross lease/.test(leaseType.toLowerCase());
-  const isGross = /gross lease|industrial gross/.test(leaseType.toLowerCase());
-  const isModifiedGross = /modified gross|hybrid/.test(leaseType.toLowerCase());
-  const isTripleNet = /triple net|nnn|absolute net/.test(leaseType.toLowerCase());
-  const isDoubleNet = /double net|nn lease/.test(leaseType.toLowerCase());
-  const isSingleNet = /single net| n /.test(` ${leaseType.toLowerCase()} `);
+  const normalizedLeaseType = leaseType.toLowerCase().replace(/[_-]+/g, " ");
+  const isFullService = /full service|gross lease/.test(normalizedLeaseType);
+  const isGross = /\bgross\b|gross lease|industrial gross/.test(normalizedLeaseType) && !/modified gross/.test(normalizedLeaseType);
+  const isModifiedGross = /modified gross|hybrid/.test(normalizedLeaseType);
+  const isTripleNet = /triple net|nnn|absolute net/.test(normalizedLeaseType);
+  const isDoubleNet = /double net|nn lease/.test(normalizedLeaseType);
+  const isSingleNet = /single net| n /.test(` ${normalizedLeaseType} `);
   // A "Modified Gross with Base Year" lease has leaseType = "Modified Gross"
   // after the classifyLeaseType fix, so /base year/ won't match the type string.
   // Fall back to checking whether the LLM actually extracted a base_year value —
   // if it did, the document has a base year structure regardless of the type label.
-  const isModifiedGrossRaw = /modified gross|hybrid/.test(leaseType.toLowerCase());
-  const isBaseYear = /base year/.test(leaseType.toLowerCase())
+  const isModifiedGrossRaw = /modified gross|hybrid/.test(normalizedLeaseType);
+  const isBaseYear = /base year/.test(normalizedLeaseType)
     || (isModifiedGrossRaw && asNumber(row?.base_year) != null)
     || (isModifiedGrossRaw && asNumber(fieldMap.base_year?.value) != null);
-  const isExpenseStop = /expense stop/.test(leaseType.toLowerCase());
-  const isFixedCam = /fixed cam/.test(leaseType.toLowerCase());
-  const isPercentageRent = /percentage rent/.test(leaseType.toLowerCase());
-  const isGroundLease = /ground lease/.test(leaseType.toLowerCase());
+  const isExpenseStop = /expense stop/.test(normalizedLeaseType);
+  const isFixedCam = /fixed cam/.test(normalizedLeaseType);
+  const isPercentageRent = /percentage rent/.test(normalizedLeaseType);
+  const isGroundLease = /ground lease/.test(normalizedLeaseType);
   const fullText = cleanText(doclingRaw?.full_text || clauses.map((clause) => clause.clause_text || "").join(" "));
   const textBlocks = asArray(doclingRaw?.text_blocks);
   const explicitBaseYear = asNumber(fieldMap.base_year_expense_amount?.value) ?? asNumber(fieldMap.base_year?.value);
@@ -2019,7 +2132,7 @@ function deriveExpenseRules(
     ?? row?.cap_percent,
   );
 
-  return finalizeDerivedExpenseRules(EXPENSE_RULE_BLUEPRINTS.map((blueprint) => {
+  const rules = EXPENSE_RULE_BLUEPRINTS.map((blueprint) => {
     const supportingClause = findSupportingClauseForRule(clauses, textBlocks, fullText, blueprint.keywords);
 
     const mentioned = containsAny(fullText, blueprint.keywords);
@@ -2335,12 +2448,19 @@ function deriveExpenseRules(
         }]
         : [],
     };
-  }));
+  });
+
+  const sourceBackedRules = rules.filter((rule) => {
+    const sourcePage = asNumber(rule.source_page);
+    return Boolean(rule.source_clause) || (sourcePage != null && sourcePage > 0);
+  });
+
+  return finalizeDerivedExpenseRules(sourceBackedRules);
 }
 
 function deriveCamProfile(fieldMap: Record<string, LeaseWorkflowField>, expenseRules: any[]) {
   const leaseType = cleanText(fieldMap.lease_type?.value || "");
-  const normalizedLeaseType = leaseType.toLowerCase();
+  const normalizedLeaseType = leaseType.toLowerCase().replace(/[_-]+/g, " ");
   const tenantRsf = asNumber(fieldMap.tenant_rsf?.value);
   const buildingRsf = asNumber(fieldMap.building_rsf?.value);
   const proRataShare = asNumber(fieldMap.tenant_pro_rata_share?.value);
@@ -2553,7 +2673,8 @@ function deriveBudgetPreview(fieldMap: Record<string, LeaseWorkflowField>, expen
 function buildValidationResults(fieldMap: Record<string, LeaseWorkflowField>, expenseRules: any[], camProfile: any, budgetPreview: any) {
   const results = [];
   const leaseType = cleanText(fieldMap.lease_type?.value || "");
-  const isFullService = /full service|gross/.test(leaseType.toLowerCase());
+  const normalizedLeaseType = leaseType.toLowerCase().replace(/[_-]+/g, " ");
+  const isFullService = /full service|gross/.test(normalizedLeaseType);
 
   if (isFullService) {
     results.push({
@@ -2870,6 +2991,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   let expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   const signals = inferLeaseSignals(fullText, row);
   const finalLeaseType = classifyLeaseType(fullText, expenseRules, signals);
+  const finalLeaseTypeCanonical = normalizeLeaseTypeValue(finalLeaseType);
   // Only apply the computed type when it adds information:
   //   (a) The computed type is a real classification (not the Unknown fallback), OR
   //   (b) The current type is blank/not_found (Unknown is still better than nothing).
@@ -2878,8 +3000,8 @@ export function buildLeaseWorkflowAbstraction(args: {
   // text is too short (page 1 only) to trigger the signal checks.
   const currentLlmType = leaseFields.lease_type?.value;
   const currentIsBlank = isBlank(currentLlmType) || leaseFields.lease_type?.extraction_status === "not_found";
-  const computedIsUnknown = finalLeaseType === "Unknown / Manual Review";
-  const shouldApplyComputed = finalLeaseType && finalLeaseType !== currentLlmType &&
+  const computedIsUnknown = !finalLeaseTypeCanonical;
+  const shouldApplyComputed = (finalLeaseTypeCanonical || currentIsBlank) && finalLeaseTypeCanonical !== currentLlmType &&
     (!computedIsUnknown || currentIsBlank);
   if (shouldApplyComputed) {
     leaseFields.lease_type = {
@@ -2892,9 +3014,9 @@ export function buildLeaseWorkflowAbstraction(args: {
         editable: true,
         field_group: "lease_header",
       }),
-      value: finalLeaseType,
-      extraction_status: finalLeaseType === "Unknown / Manual Review" ? "manual_required" : "calculated",
-      confidence_score: finalLeaseType === "Unknown / Manual Review" ? 0.5 : 0.86,
+      value: finalLeaseTypeCanonical,
+      extraction_status: finalLeaseTypeCanonical ? "calculated" : "manual_required",
+      confidence_score: finalLeaseTypeCanonical ? 0.86 : 0.5,
     };
     expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   }

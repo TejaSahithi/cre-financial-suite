@@ -5,6 +5,7 @@
  */
 
 import { assertEquals, assertExists, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { __test__ as parserTest } from "../_shared/extraction/parser.ts";
 
 // Mock Docling API response
 const mockDoclingResponse = {
@@ -45,6 +46,86 @@ const mockGeminiResponse = {
   ],
   page_count: 1
 };
+
+Deno.test("Page-aware Vision output preserves page numbers and source text", () => {
+  const output = parserTest.visionExtractionToDocling({
+    page_count: 2,
+    pages: [
+      {
+        page: 1,
+        text: "Lease Summary\nTenant: Acme Tenant LLC.",
+        fields: [
+          {
+            key: "tenant_name",
+            value: "Acme Tenant LLC",
+            source_text: "Tenant: Acme Tenant LLC.",
+            confidence: 0.94,
+          },
+        ],
+      },
+      {
+        page: 2,
+        text: "Rent\nMonthly Rent shall be $8,500.00 per month.",
+        fields: [
+          {
+            key: "monthly_rent",
+            value: "$8,500.00",
+            source_text: "Monthly Rent shall be $8,500.00 per month.",
+            confidence: 0.91,
+          },
+        ],
+      },
+    ],
+    warnings: [],
+  }, 2);
+
+  assertEquals(output.page_count, 2);
+  assertEquals(output.pages?.length, 2);
+  assertEquals(output.text_blocks?.map((block) => block.page), [1, 2]);
+  assertEquals(output.fields?.find((field) => field.key === "monthly_rent")?.page, 2);
+  assertEquals(
+    output.fields?.find((field) => field.key === "monthly_rent")?.source_text,
+    "Monthly Rent shall be $8,500.00 per month.",
+  );
+});
+
+Deno.test("Multi-page Vision fallback refuses flat page-one evidence", () => {
+  assertRejects(
+    async () => {
+      parserTest.visionExtractionToDocling({
+      text: "Tenant: Acme Tenant LLC.\nMonthly Rent: $8,500.00",
+      fields: [
+        { key: "tenant_name", value: "Acme Tenant LLC", confidence: 0.9 },
+      ],
+      warnings: [],
+      }, 26);
+    },
+    Error,
+    "did not return page-aware output",
+  );
+});
+
+Deno.test("Vision output refuses partial page evidence for multi-page PDFs", () => {
+  assertRejects(
+    async () => {
+      parserTest.visionExtractionToDocling({
+      page_count: 1,
+      pages: [
+        { page: 1, text: "Only the first page was returned.", fields: [] },
+      ],
+      warnings: [],
+      }, 26);
+    },
+    Error,
+    "returned 1 page(s) for a 26-page PDF",
+  );
+});
+
+Deno.test("PDF page count estimator counts synthetic page objects", () => {
+  const pdfText = `%PDF-1.4\n${Array.from({ length: 26 }, (_, i) => `${i + 1} 0 obj\n<< /Type /Page /Parent 99 0 R >>\nendobj`).join("\n")}`;
+  const bytes = new TextEncoder().encode(pdfText);
+  assertEquals(parserTest.estimatePdfPageCount(bytes), 26);
+});
 
 Deno.test("Docling API Call - Success", async () => {
   // Mock successful Docling API call

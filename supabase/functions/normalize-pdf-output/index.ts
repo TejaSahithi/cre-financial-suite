@@ -842,6 +842,7 @@ function buildReviewPayload(opts: {
           ...candidate,
           verifiedPage: resolveVerifiedSourcePage(doclingRaw, candidate.sourceText, candidate.sourcePage),
         }))
+        .filter((candidate) => candidate.verifiedPage != null)
         .sort((a, b) => {
           const score = (candidate: any) =>
             (candidate.verifiedPage != null ? 100 : 0) +
@@ -852,7 +853,7 @@ function buildReviewPayload(opts: {
       const selectedEvidence = evidenceCandidates[0] ?? null;
       const mergedSourceText = selectedEvidence?.sourceText ?? null;
       const mergedSourcePage = selectedEvidence?.verifiedPage ?? null;
-      const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0;
+      const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0 && mergedSourcePage != null;
       const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
       let inferredStatus = value == null || value === ""
         ? "missing"

@@ -31,6 +31,7 @@ import type {
   DoclingTextBlock,
   DoclingTable,
   DoclingField,
+  DoclingPage,
 } from "./types.ts";
 import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
 
@@ -52,6 +53,7 @@ interface ParseContext {
   hasDocling: boolean;
   hasVision: boolean;
   strategy: Strategy;
+  expectedPageCount?: number | null;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -68,11 +70,11 @@ export async function parseDocument(
     (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
   );
   const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
+  const estimatedPageCount = mimeType.includes("pdf") ? estimatePdfPageCount(fileBytes) : null;
 
   if (!likelyScannedPdf && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
     const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
     if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
-      const estimatedPageCount = estimatePdfPageCount(fileBytes);
       if (estimatedPageCount) nativePdfOutput.page_count = estimatedPageCount;
       const nativeTextChars = nativePdfOutput.full_text?.trim().length ?? 0;
       const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
@@ -119,6 +121,7 @@ export async function parseDocument(
     hasDocling,
     hasVision,
     strategy,
+    expectedPageCount: estimatedPageCount,
   };
 
   console.log(
@@ -288,9 +291,7 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
   }
   try {
     const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
-    const output = ocrTextToDocling(extracted.text);
-    output.fields = extracted.fields;
-    output.warnings = extracted.warnings;
+    const output = visionExtractionToDocling(extracted, ctx.expectedPageCount);
     return tag(output, "gemini_vision");
   } catch (err) {
     console.warn(`[parser] Vision OCR failed: ${err.message}`);
@@ -318,9 +319,7 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
   let visionOutput: DoclingOutput | null = null;
   try {
     const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
-    visionOutput = ocrTextToDocling(extracted.text);
-    visionOutput.fields = extracted.fields;
-    visionOutput.warnings = extracted.warnings;
+    visionOutput = visionExtractionToDocling(extracted, ctx.expectedPageCount);
   } catch (err) {
     console.warn(`[parser] Vision-first OCR failed, falling back to Docling: ${err.message}`);
     if (ctx.hasDocling && canDoclingHandle(ctx.mimeType)) {
@@ -364,10 +363,7 @@ async function runParallel(ctx: ParseContext): Promise<DoclingOutput> {
     canDoclingHandle(ctx.mimeType) ? callDocling(ctx) : Promise.resolve(null),
     canVisionHandle(ctx.mimeType)
       ? extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl).then((extracted) => {
-        const out = ocrTextToDocling(extracted.text);
-        out.fields = extracted.fields;
-        out.warnings = extracted.warnings;
-        return out;
+        return visionExtractionToDocling(extracted, ctx.expectedPageCount);
       })
       : Promise.resolve(null),
   ]);
@@ -469,13 +465,48 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
 // ── Normalisation ───────────────────────────────────────────────────────────
 
 function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {
+  const rawPages = Array.isArray(raw.pages) ? raw.pages : [];
+  const pages: DoclingPage[] = rawPages
+    .map((page: any, index: number) => ({
+      page: Number.isFinite(Number(page?.page ?? page?.page_number)) && Number(page?.page ?? page?.page_number) > 0
+        ? Number(page?.page ?? page?.page_number)
+        : index + 1,
+      text: String(page?.text ?? page?.content ?? page?.markdown ?? "").trim(),
+      fields: Array.isArray(page?.fields)
+        ? page.fields.map((field: any) => ({
+          key: String(field?.key ?? field?.label ?? "").trim(),
+          value: String(field?.value ?? field?.text ?? "").trim(),
+          confidence: field?.confidence ?? field?.score ?? undefined,
+          page: Number.isFinite(Number(page?.page ?? page?.page_number)) && Number(page?.page ?? page?.page_number) > 0
+            ? Number(page?.page ?? page?.page_number)
+            : index + 1,
+          source_text: String(field?.source_text ?? field?.source ?? "").trim() || undefined,
+        })).filter((field: DoclingField) => field.key && field.value)
+        : [],
+    }))
+    .filter((page: DoclingPage) => page.text || (page.fields?.length ?? 0) > 0);
+
   const rawBlocks = raw.blocks ?? raw.paragraphs ?? raw.elements ?? [];
-  const text_blocks: DoclingTextBlock[] = rawBlocks.map((b: any, i: number) => ({
+  let text_blocks: DoclingTextBlock[] = rawBlocks.map((b: any, i: number) => ({
     block_index: i,
     type: b.type ?? b.label ?? "paragraph",
     text: b.text ?? b.content ?? "",
     page: b.page ?? b.page_number ?? undefined,
   }));
+  if (text_blocks.length === 0 && pages.length > 0) {
+    text_blocks = pages.flatMap((page) =>
+      String(page.text || "")
+        .split(/\n\s*\n/)
+        .map((text) => text.trim())
+        .filter(Boolean)
+        .map((text) => ({
+          block_index: 0,
+          type: "paragraph",
+          text,
+          page: page.page,
+        }))
+    ).map((block, index) => ({ ...block, block_index: index }));
+  }
 
   const rawTables = raw.tables ?? [];
   const tables: DoclingTable[] = rawTables.map((t: any, i: number) => {
@@ -498,14 +529,17 @@ function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {
     value: f.value ?? f.text ?? "",
     confidence: f.confidence ?? f.score ?? undefined,
     page: f.page ?? undefined,
-  }));
+    source_text: f.source_text ?? f.source ?? undefined,
+  })).concat(pages.flatMap((page) => page.fields ?? []));
 
+  const pageText = pages.map((page) => `[[PAGE ${page.page}]]\n${page.text}`).join("\n\n");
   const full_text: string =
-    raw.full_text ?? raw.text ?? text_blocks.map((b) => b.text).join("\n");
+    raw.full_text ?? raw.text ?? (pageText || text_blocks.map((b) => b.text).join("\n"));
 
   return {
     model_version: raw.model_version ?? raw.version,
-    page_count: raw.page_count ?? raw.pages ?? 1,
+    page_count: raw.page_count ?? (typeof raw.pages === "number" ? raw.pages : undefined) ?? (pages.length ? Math.max(...pages.map((page) => page.page)) : 1),
+    pages,
     text_blocks,
     tables,
     fields,
@@ -530,6 +564,120 @@ function ocrTextToDocling(ocrText: string): DoclingOutput {
     fields: [],
     full_text: ocrText,
     page_count: 1,
+  };
+}
+
+function visionExtractionToDocling(
+  extracted: {
+    text?: string;
+    page_count?: number;
+    pages?: Array<{
+      page: number;
+      text: string;
+      fields?: Array<{ key: string; value: string; confidence?: number; page?: number; source_text?: string }>;
+    }>;
+    fields?: Array<{ key: string; value: string; confidence?: number; page?: number; source_text?: string }>;
+    warnings?: string[];
+  },
+  expectedPageCount?: number | null,
+): DoclingOutput {
+  const pages = Array.isArray(extracted?.pages)
+    ? extracted.pages
+      .map((page, index) => ({
+        page: Number.isFinite(Number(page?.page)) && Number(page.page) > 0 ? Number(page.page) : index + 1,
+        text: cleanExtractedPdfText(String(page?.text ?? "")),
+        fields: Array.isArray(page?.fields) ? page.fields : [],
+      }))
+      .filter((page) => page.text || page.fields.length > 0)
+    : [];
+
+  if ((expectedPageCount ?? 0) > 1 && pages.length === 0) {
+    throw new Error(
+      `Gemini Vision did not return page-aware output for ${expectedPageCount}-page PDF; refusing to create fake page 1 evidence.`,
+    );
+  }
+
+  if ((expectedPageCount ?? 0) > 1 && pages.length > 0 && pages.length < Number(expectedPageCount)) {
+    throw new Error(
+      `Gemini Vision returned ${pages.length} page(s) for a ${expectedPageCount}-page PDF; refusing partial page evidence.`,
+    );
+  }
+
+  if (pages.length === 0) {
+    const fallback = ocrTextToDocling(String(extracted?.text ?? ""));
+    fallback.fields = (extracted?.fields ?? []).map((field) => ({
+      key: String(field.key ?? ""),
+      value: String(field.value ?? ""),
+      confidence: field.confidence,
+      page: field.page,
+      source_text: field.source_text,
+    }));
+    fallback.warnings = extracted?.warnings ?? [];
+    fallback.page_count = expectedPageCount ?? extracted?.page_count ?? fallback.page_count;
+    return fallback;
+  }
+
+  const textBlocks: DoclingTextBlock[] = [];
+  const fields: DoclingField[] = [];
+  for (const page of pages) {
+    const pageText = cleanExtractedPdfText(page.text);
+    if (pageText) {
+      const blocks = pageText
+        .split(/\n\s*\n/)
+        .map((block) => block.trim())
+        .filter(Boolean);
+      for (const block of blocks) {
+        textBlocks.push({
+          block_index: textBlocks.length,
+          type: "paragraph",
+          text: block,
+          page: page.page,
+        });
+      }
+    }
+
+    for (const field of page.fields ?? []) {
+      const key = String(field?.key ?? "").trim();
+      const value = String(field?.value ?? "").trim();
+      if (!key || !value) continue;
+      fields.push({
+        key,
+        value,
+        confidence: field.confidence,
+        page: page.page,
+        source_text: String(field?.source_text ?? "").trim() || undefined,
+      });
+    }
+  }
+
+  const fullText = cleanExtractedPdfText(
+    pages.map((page) => `[[PAGE ${page.page}]]\n${page.text}`).join("\n\n"),
+  );
+  const pageCount = Math.max(
+    Number(extracted?.page_count) || 0,
+    expectedPageCount || 0,
+    ...pages.map((page) => page.page),
+    pages.length,
+  );
+
+  return {
+    pages: pages.map((page): DoclingPage => ({
+      page: page.page,
+      text: page.text,
+      fields: page.fields?.map((field) => ({
+        key: String(field?.key ?? "").trim(),
+        value: String(field?.value ?? "").trim(),
+        confidence: field.confidence,
+        page: page.page,
+        source_text: String(field?.source_text ?? "").trim() || undefined,
+      })).filter((field) => field.key && field.value),
+    })),
+    text_blocks: textBlocks,
+    tables: [],
+    fields,
+    full_text: fullText || cleanExtractedPdfText(String(extracted?.text ?? "")),
+    page_count: pageCount || undefined,
+    warnings: extracted?.warnings ?? [],
   };
 }
 
@@ -1235,3 +1383,8 @@ function textToDocling(text: string): DoclingOutput {
     page_count: 1,
   };
 }
+
+export const __test__ = {
+  estimatePdfPageCount,
+  visionExtractionToDocling,
+};

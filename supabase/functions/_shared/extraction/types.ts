@@ -65,11 +65,19 @@ export interface DoclingField {
   value: string;
   confidence?: number;
   page?: number;
+  source_text?: string;
+}
+
+export interface DoclingPage {
+  page: number;
+  text: string;
+  fields?: DoclingField[];
 }
 
 export interface DoclingOutput {
   model_version?: string;
   page_count?: number;
+  pages?: DoclingPage[];
   text_blocks: DoclingTextBlock[];
   tables: DoclingTable[];
   fields: DoclingField[];
