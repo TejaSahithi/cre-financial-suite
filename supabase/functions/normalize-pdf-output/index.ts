@@ -1084,7 +1084,7 @@ function buildCustomFieldsFromDocument(args: {
   if (!doclingRaw) return [];
 
   const standardAliases = buildStandardAliases(schema);
-  const candidates: Array<{ key: string; value: unknown; confidence: number; source: string }> = [];
+  const candidates: Array<{ key: string; value: unknown; confidence: number; source: string; sourceText?: string }> = [];
 
   for (const field of Array.isArray((doclingRaw as any).fields) ? (doclingRaw as any).fields : []) {
     const key = String(field?.key ?? field?.label ?? "").trim();
@@ -1095,6 +1095,7 @@ function buildCustomFieldsFromDocument(args: {
       value,
       confidence: normalizeConfidence(field?.confidence) ?? 0.72,
       source: "document",
+      sourceText: key && value != null ? `${key}: ${String(value)}` : undefined,
     });
   }
 
@@ -1105,7 +1106,7 @@ function buildCustomFieldsFromDocument(args: {
     const key = match[1].trim();
     const value = match[2].trim();
     if (!key || isBlank(value)) continue;
-    candidates.push({ key, value, confidence: 0.6, source: "document_text" });
+    candidates.push({ key, value, confidence: 0.6, source: "document_text", sourceText: line.trim() });
   }
 
   const out = [];
@@ -1115,21 +1116,25 @@ function buildCustomFieldsFromDocument(args: {
     if (!normalized || schemaKeys.has(normalized)) continue;
     if (existingKeys.has(normalized) || seen.has(normalized)) continue;
     if (standardAliases.has(normalized)) continue;
-    if (duplicatesStandardValue(candidate.key, candidate.value, standardValues)) continue;
-    if (looksLikeNoise(candidate.key, candidate.value)) continue;
+    const normalizedValue = tryNormalizeDateString(candidate.value, candidate.key);
+    if (duplicatesStandardValue(candidate.key, normalizedValue, standardValues)) continue;
+    if (looksLikeNoise(candidate.key, normalizedValue)) continue;
 
     seen.add(normalized);
     out.push(
       buildReviewField({
         recordIndex,
         fieldKey: normalized,
-        value: candidate.value,
+        value: normalizedValue,
         confidence: candidate.confidence,
         source: candidate.source,
         isStandard: false,
         required: false,
-        fieldType: inferFieldType(candidate.value),
+        fieldType: inferFieldType(normalizedValue),
         description: "Extra field interpreted from the document and available for user approval.",
+        evidence: candidate.sourceText
+          ? { page_number: null, source_clause: candidate.sourceText }
+          : null,
       }),
     );
     if (out.length >= 20) break;
