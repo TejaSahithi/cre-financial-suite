@@ -1199,6 +1199,8 @@ function normalizeComparableValue(value: unknown): string {
 }
 
 function looksLikeNoise(key: string, value: unknown): boolean {
+  // Arrays and objects cannot be meaningfully displayed as scalar custom fields
+  if (Array.isArray(value) || (typeof value === "object" && value !== null)) return true;
   const normalized = normalizeKey(key);
   if (!normalized || normalized.length < 4) return true;
   if (/\$[0-9]/.test(key)) return true;
@@ -1268,6 +1270,45 @@ function inferFieldType(value: unknown): string {
   if (typeof value === "boolean") return "boolean";
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
   return "string";
+}
+
+const MONTH_NAMES: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  jan: 1, feb: 2, mar: 3, apr: 4, jun: 6, jul: 7, aug: 8,
+  sep: 9, oct: 10, nov: 11, dec: 12,
+};
+
+function tryNormalizeDateString(value: unknown, fieldKey: string): unknown {
+  if (typeof value !== "string") return value;
+  if (!/(date|deadline|effective|expir|commence|start|sign)/i.test(fieldKey)) return value;
+  const str = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return value;
+
+  // "Month DD, YYYY" or "Month DD YYYY"
+  const namedMonth = str.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (namedMonth) {
+    const m = MONTH_NAMES[namedMonth[1].toLowerCase()];
+    if (m) {
+      const y = parseInt(namedMonth[3]);
+      const d = parseInt(namedMonth[2]);
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  // "MM/DD/YYYY" or "MM/DD/YY" (US format)
+  const usDate = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (usDate) {
+    let y = parseInt(usDate[3]);
+    if (y < 100) y += 2000;
+    const m = parseInt(usDate[1]);
+    const d = parseInt(usDate[2]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  return value;
 }
 
 function humanizeFieldName(fieldName: string): string {
