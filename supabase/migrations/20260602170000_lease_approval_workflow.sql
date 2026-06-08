@@ -45,6 +45,16 @@ CREATE TRIGGER set_lease_approval_workflow_runs_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.set_workflow_updated_at();
 
+ALTER TABLE public.documents
+  ADD COLUMN IF NOT EXISTS title TEXT;
+
+UPDATE public.documents
+   SET title = COALESCE(NULLIF(title, ''), NULLIF(name, ''), 'Untitled Document')
+ WHERE title IS NULL OR title = '';
+
+ALTER TABLE public.documents
+  ALTER COLUMN title SET NOT NULL;
+
 CREATE OR REPLACE FUNCTION public.approve_lease_workflow(
   p_org_id UUID,
   p_lease_id UUID,
@@ -254,6 +264,7 @@ BEGIN
     property_id,
     lease_id,
     type,
+    title,
     name,
     status,
     signed_by,
@@ -266,6 +277,7 @@ BEGIN
     v_updated_lease.property_id,
     p_lease_id,
     'lease',
+    'Lease - ' || COALESCE(v_updated_lease.tenant_name, 'Unknown tenant'),
     'Lease - ' || COALESCE(v_updated_lease.tenant_name, 'Unknown tenant'),
     'approved',
     p_signed_by,
