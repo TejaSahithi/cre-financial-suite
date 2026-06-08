@@ -197,8 +197,17 @@ function isCleanSnippetStart(snippet: string) {
   return (
     /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
     /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
-    /^[A-Z0-9"'(]/.test(snippet)
+    /^[A-Z0-9"'(]/.test(snippet) ||
+    /^(approximately|suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet)
   );
+}
+
+function isShortCompleteSourceRow(snippet: string) {
+  if (!snippet || snippet.length > 260) return false;
+  if (/\.{3}|…/.test(snippet)) return false;
+  if (!isCleanSnippetStart(snippet)) return false;
+  const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
+  return partyMarkerCount <= 2;
 }
 
 function boundedSourceSnippet(text: string, matchStart: number, matchLength: number) {
@@ -206,6 +215,9 @@ function boundedSourceSnippet(text: string, matchStart: number, matchLength: num
   if (!source) return "";
 
   const singleLine = source;
+  if (isShortCompleteSourceRow(singleLine)) {
+    return singleLine;
+  }
   if (singleLine.length <= SOURCE_SNIPPET_MAX_CHARS && /^[A-Za-z][^:]{0,90}:\s\S/.test(singleLine)) {
     return singleLine;
   }
@@ -242,6 +254,50 @@ function boundedSourceSnippet(text: string, matchStart: number, matchLength: num
   if (!snippet || snippet.length > SOURCE_SNIPPET_MAX_CHARS || !isCleanSnippetStart(snippet)) return "";
   if (!/[.!?]["')\]]?$/.test(snippet) && !/^[A-Za-z][^:]{0,90}:\s\S/.test(snippet)) return "";
   return snippet;
+}
+
+function cleanPartyAddressValue(fieldKey: string, value: unknown) {
+  if (!["landlord_address", "tenant_address"].includes(fieldKey)) return value;
+  let text = cleanEvidenceSnippet(value);
+  if (!text) return value;
+
+  const ownLabel = fieldKey === "landlord_address"
+    ? /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\s*[:;-]?\s*/i
+    : /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i;
+  const ownMatch = text.match(ownLabel);
+  if (ownMatch?.index != null) {
+    text = text.slice(ownMatch.index + ownMatch[0].length).trim();
+  }
+
+  const stopPatterns = fieldKey === "landlord_address"
+    ? [
+        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+        /\b(?:tenant|lessee)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+        /\btenant_contact_/i,
+      ]
+    : [
+        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+        /\b(?:landlord|lessor)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+        /\blandlord_contact_/i,
+      ];
+
+  let stopAt = text.length;
+  for (const pattern of stopPatterns) {
+    const match = text.match(pattern);
+    if (match?.index != null && match.index > 4) stopAt = Math.min(stopAt, match.index);
+  }
+  text = text.slice(0, stopAt).trim();
+  text = text
+    .replace(/^(?:\d+\.\s*)?(?:address\s+of\s+(?:landlord|tenant)|landlord(?:'s)?\s+address|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i, "")
+    .replace(/\s+\d+\.\s*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[;,\s]+$/g, "")
+    .trim();
+
+  if (text.length < 8) return value;
+  return text;
 }
 
 function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | undefined) {
@@ -287,9 +343,13 @@ function fieldSourceKeywords(fieldKey: string): string[] {
     tenant_name: ["tenant", "lessee", "occupant", "assignee"],
     tenant_signatory_name: ["tenant", "lessee", "signatory", "by:", "signed", "authorized"],
     tenant_contact_name: ["tenant", "contact", "person", "representative"],
+    tenant_contact_phone: ["tenant", "phone", "telephone", "contact"],
     tenant_address: ["tenant", "address", "notice"],
+    landlord_address: ["landlord", "lessor", "address", "notice"],
     landlord_name: ["landlord", "lessor", "owner", "licensor"],
     landlord_signatory_name: ["landlord", "lessor", "signatory", "by:", "signed"],
+    tenant_signature_date: ["tenant", "date", "signature", "signed"],
+    landlord_signature_date: ["landlord", "date", "signature", "signed"],
     broker_name: ["broker", "brokerage", "real estate broker", "agent"],
     property_name: ["property", "building", "premises", "project"],
     property_address: ["property", "building", "premises", "address", "located"],
@@ -300,10 +360,20 @@ function fieldSourceKeywords(fieldKey: string): string[] {
     rentable_area_sqft: ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
     tenant_rsf: ["square feet", "sq ft", "sf", "rsf", "rentable", "tenant"],
     monthly_rent: ["rent", "base rent", "monthly", "per month"],
+    base_rent_monthly: ["rent", "base rent", "monthly", "per month"],
     annual_rent: ["rent", "annual", "year"],
+    base_rent_annual: ["rent", "annual", "year"],
     rent_per_sf: ["rent", "per square", "per sf", "per rsf", "$/sf"],
     permitted_use: ["use", "permitted use", "purpose"],
     security_deposit: ["security deposit", "deposit"],
+    cam_amount: ["cam", "common area maintenance", "operating expenses", "additional rent"],
+    fixed_cam_amount: ["fixed cam", "cam", "common area maintenance"],
+    cam_cap_pct: ["cam", "cap", "common area maintenance", "operating expenses", "controllable"],
+    responsibility_insurance: ["insurance", "property insurance", "liability", "coverage"],
+    insurance_responsibility: ["insurance", "property insurance", "liability", "coverage"],
+    property_insurance: ["insurance", "property insurance", "premium", "coverage"],
+    tenant_insurance_required: ["insurance", "tenant", "liability", "coverage"],
+    general_liability_min: ["insurance", "liability", "coverage"],
     commencement_date: ["commencement", "start", "term"],
     start_date: ["commencement", "start", "term"],
     expiration_date: ["expiration", "expiry", "expire", "end", "term"],
@@ -329,7 +399,8 @@ function sourceNeedlesForValue(value: unknown, fieldKey: string, fieldType?: str
   const numeric = Number(raw.replace(/[$,%\s,]/g, ""));
   if (Number.isFinite(numeric) && numeric > 0) {
     const allowSmallNumber =
-      ["square_footage", "rentable_area_sqft", "tenant_rsf", "suite_number", "unit_number"].includes(fieldKey);
+      ["square_footage", "rentable_area_sqft", "tenant_rsf", "suite_number", "unit_number"].includes(fieldKey) ||
+      /(rent|amount|deposit|fee|percent|pct|rate|cap|share|rsf|sqft|sf)/i.test(fieldKey);
     if (numeric >= 1000 || allowSmallNumber) {
       push(String(numeric));
       push(numeric.toLocaleString("en-US"));
@@ -644,7 +715,8 @@ function buildReviewPayload(opts: {
     const workflowOutput = workflowOutputs[index] ?? null;
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
       const workflowField = workflowFieldFor(fieldKey, workflowOutput?.lease_fields ?? {});
-      const value = values[fieldKey] ?? workflowField?.value ?? null;
+      const rawValue = values[fieldKey] ?? workflowField?.value ?? null;
+      const value = cleanPartyAddressValue(fieldKey, rawValue);
       // Prefer evidence produced by the LLM/rule extractor; fall back to the
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
@@ -660,16 +732,14 @@ function buildReviewPayload(opts: {
           : null;
       const fallbackSourceText = usableSourceText(fallbackEvidence?.source_clause);
       let mergedSourcePage =
-        (llmSourceText ? llmEvidence?.source_page : null)
+        (llmSourceSupportsValue ? llmEvidence?.source_page : null)
         ?? (workflowSourceSupportsValue ? workflowField?.source_page : null)
         ?? (fallbackSourceText ? fallbackEvidence?.source_page : null)
-        ?? (workflowSourceText ? workflowField?.source_page : null)
         ?? null;
       const mergedSourceText =
-        llmSourceText
+        (llmSourceSupportsValue ? llmSourceText : null)
         ?? (workflowSourceSupportsValue ? workflowSourceText : null)
         ?? fallbackSourceText
-        ?? workflowSourceText
         ?? null;
       // Page back-fill: when we have a clause snippet but no page number,
       // search docling's per-page text_blocks for the snippet and assign the

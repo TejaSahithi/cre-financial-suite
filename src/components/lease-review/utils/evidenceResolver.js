@@ -218,14 +218,24 @@ function isCleanSnippetStart(snippet) {
   return (
     /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
     /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
-    /^[A-Z0-9"'(]/.test(snippet)
+    /^[A-Z0-9"'(]/.test(snippet) ||
+    /^(approximately|suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet)
   );
+}
+
+function isShortCompleteSourceRow(snippet) {
+  if (!snippet || snippet.length > 260) return false;
+  if (/\.{3}|…/.test(snippet)) return false;
+  if (!isCleanSnippetStart(snippet)) return false;
+  const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
+  return partyMarkerCount <= 2;
 }
 
 function boundedSourceSnippet(text, matchStart, matchLength) {
   const source = cleanSourceSnippet(text);
   if (!source) return "";
 
+  if (isShortCompleteSourceRow(source)) return source;
   if (source.length <= SOURCE_SNIPPET_MAX_CHARS && /^[A-Za-z][^:]{0,90}:\s\S/.test(source)) return source;
   if (source.length <= SOURCE_SNIPPET_MAX_CHARS && /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(source)) return source;
 

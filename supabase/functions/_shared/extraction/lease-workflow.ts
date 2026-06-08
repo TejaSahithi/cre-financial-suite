@@ -345,8 +345,17 @@ function isCleanSnippetStart(snippet: string) {
   return (
     /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
     /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
-    /^[A-Z0-9"'(]/.test(snippet)
+    /^[A-Z0-9"'(]/.test(snippet) ||
+    /^(approximately|suite|unit|space|monthly|annual|base rent|rent|permitted use|broker|address|landlord|tenant)\b/i.test(snippet)
   );
+}
+
+function isShortCompleteSourceRow(snippet: string) {
+  if (!snippet || snippet.length > 260) return false;
+  if (/\.{3}|…/.test(snippet)) return false;
+  if (!isCleanSnippetStart(snippet)) return false;
+  const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
+  return partyMarkerCount <= 2;
 }
 
 function expandSourceSnippetFromMatch(text: string, matchStart: number, matchLength: number, maxChars = SOURCE_SNIPPET_MAX_CHARS) {
@@ -354,6 +363,7 @@ function expandSourceSnippetFromMatch(text: string, matchStart: number, matchLen
   if (!source) return null;
   const limit = Math.max(240, Math.min(maxChars, SOURCE_SNIPPET_MAX_CHARS));
 
+  if (isShortCompleteSourceRow(source)) return source;
   if (source.length <= limit && /^[A-Za-z][^:]{0,90}:\s\S/.test(source)) return source;
   if (source.length <= limit && /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(source)) return source;
 
@@ -386,6 +396,50 @@ function expandSourceSnippetFromMatch(text: string, matchStart: number, matchLen
   if (!snippet || snippet.length > limit || !isCleanSnippetStart(snippet)) return null;
   if (!/[.!?]["')\]]?$/.test(snippet) && !/^[A-Za-z][^:]{0,90}:\s\S/.test(snippet)) return null;
   return snippet;
+}
+
+function cleanPartyAddressValue(fieldKey: string, value: unknown) {
+  if (!["landlord_address", "tenant_address"].includes(fieldKey)) return value;
+  let text = cleanText(value);
+  if (!text) return value;
+
+  const ownLabel = fieldKey === "landlord_address"
+    ? /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\s*[:;-]?\s*/i
+    : /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i;
+  const ownMatch = text.match(ownLabel);
+  if (ownMatch?.index != null) {
+    text = text.slice(ownMatch.index + ownMatch[0].length).trim();
+  }
+
+  const stopPatterns = fieldKey === "landlord_address"
+    ? [
+        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+        /\b(?:tenant|lessee)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+        /\btenant_contact_/i,
+      ]
+    : [
+        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+        /\b(?:landlord|lessor)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+        /\blandlord_contact_/i,
+      ];
+
+  let stopAt = text.length;
+  for (const pattern of stopPatterns) {
+    const match = text.match(pattern);
+    if (match?.index != null && match.index > 4) stopAt = Math.min(stopAt, match.index);
+  }
+  text = text.slice(0, stopAt).trim();
+  text = text
+    .replace(/^(?:\d+\.\s*)?(?:address\s+of\s+(?:landlord|tenant)|landlord(?:'s)?\s+address|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i, "")
+    .replace(/\s+\d+\.\s*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[;,\s]+$/g, "")
+    .trim();
+
+  if (text.length < 8) return value;
+  return text;
 }
 
 function asArray<T>(value: T[] | undefined | null): T[] {
@@ -1463,6 +1517,10 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
 
     if (spec.key === "security_deposit_amount" && isBlank(value)) {
       value = getFirstValue(row, ["security_deposit"]);
+    }
+
+    if (spec.key === "landlord_address" || spec.key === "tenant_address") {
+      value = cleanPartyAddressValue(spec.key, value);
     }
 
     if (isBlank(value)) {

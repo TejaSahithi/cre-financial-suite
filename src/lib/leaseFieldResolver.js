@@ -218,6 +218,49 @@ function isFallbackPlaceholderValue(value) {
   return FALLBACK_VALUE_SENTINELS.has(lower);
 }
 
+function cleanPartyAddressValue(fieldKey, value) {
+  const normalizedKey = normalizeLeaseFieldKey(fieldKey);
+  if (!["landlord_address", "tenant_address"].includes(normalizedKey)) return value;
+  let text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return value;
+
+  const ownLabel = normalizedKey === "landlord_address"
+    ? /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\s*[:;-]?\s*/i
+    : /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i;
+  const ownMatch = text.match(ownLabel);
+  if (ownMatch?.index != null) {
+    text = text.slice(ownMatch.index + ownMatch[0].length).trim();
+  }
+
+  const stopPatterns = normalizedKey === "landlord_address"
+    ? [
+        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+        /\b(?:tenant|lessee)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+        /\btenant_contact_/i,
+      ]
+    : [
+        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+        /\b(?:landlord|lessor)\b\s*[:;-]/i,
+        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+        /\blandlord_contact_/i,
+      ];
+
+  let stopAt = text.length;
+  for (const pattern of stopPatterns) {
+    const match = text.match(pattern);
+    if (match?.index != null && match.index > 4) stopAt = Math.min(stopAt, match.index);
+  }
+
+  text = text.slice(0, stopAt).trim()
+    .replace(/^(?:\d+\.\s*)?(?:address\s+of\s+(?:landlord|tenant)|landlord(?:'s)?\s+address|tenant(?:'s)?\s+address)\s*[:;-]?\s*/i, "")
+    .replace(/\s+\d+\.\s*$/g, "")
+    .replace(/[;,\s]+$/g, "")
+    .trim();
+
+  return text.length >= 8 ? text : value;
+}
+
 const ENTITY_FIELDS = new Set([
   "tenant_name", "landlord_name", "assignor_name", "assignee_name", 
   "guarantor_name", "owner_name", "property_manager", 
@@ -341,6 +384,8 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
   if (output.value === undefined || output.value === null || output.value === "") {
      return null;
   }
+  output.value = cleanPartyAddressValue(fieldKey, output.value);
+  output.rawValue = cleanPartyAddressValue(fieldKey, output.rawValue);
 
   // Enforce entity field validation
   if (!isValidEntityField(fieldKey, output.value, output.exactSourceText || output.rawValue)) {

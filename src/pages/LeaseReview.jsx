@@ -91,7 +91,11 @@ import { detectDocumentProfile } from "@/lib/documentProfile";
 import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
 import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
-import { SourceFileLink } from "@/components/lease-review/SourceFileLink";
+import {
+  SourceFileLink,
+  findUploadedFileForLease,
+  resolveUploadedFileUrl,
+} from "@/components/lease-review/SourceFileLink";
 import { BudgetPreviewCard } from "@/components/lease-review/BudgetPreviewCard";
 import FieldDetailDrawer from "@/components/lease-review/FieldDetailDrawer";
 import {

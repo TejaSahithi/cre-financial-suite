@@ -111,7 +111,7 @@ export default function LeaseDetail() {
       const [{ count: rules }, { count: rent }, { count: dates }] = await Promise.all([
         supabase.from("lease_expense_rules").select("*", { count: "exact", head: true }).eq("lease_id", leaseId),
         supabase.from("rent_schedules").select("*", { count: "exact", head: true }).eq("lease_id", leaseId),
-        supabase.from("critical_dates").select("*", { count: "exact", head: true }).eq("lease_id", leaseId),
+        supabase.from("lease_critical_dates").select("*", { count: "exact", head: true }).eq("lease_id", leaseId),
       ]);
       return {
         rules: rules || 0,

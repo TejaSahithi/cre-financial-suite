@@ -13,7 +13,8 @@ import {
   compactSnippet,
   sectionIncludes,
   detectDocumentProfile,
-  extractDocumentTextCandidate
+  extractDocumentTextCandidate,
+  scrubInapplicableStructuredFields
 } from "./utils/leaseRulePipelineText";
 import { supabase } from "@/services/supabaseClient";
 import leaseExpenseRuleService from "./leaseExpenseRuleService";

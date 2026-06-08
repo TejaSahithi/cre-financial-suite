@@ -91,6 +91,36 @@ Format:
   }
 ]`;
 
+const MAX_EXPENSE_SOURCE_CHARS = 70000;
+const EXPENSE_SOURCE_KEYWORDS =
+  /(cam|common\s+area|operating\s+expenses?|additional\s+rent|reimburs|recover|pro\s*rata|tax(?:es)?|assessment|insurance|premium|utilit|electric|water|sewer|gas|hvac|janitorial|trash|security|landscap|snow|parking|maintenance|repair|capital|management|administrative|gross[-\s]?up|base\s+year|expense\s+stop|cap(?:ped)?|tenant'?s\s+share|landlord'?s\s+cost|directly\s+metered|separately\s+metered)/i;
+
+function normalizePromptText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function buildExpenseFocusedText(sourceText: unknown) {
+  const text = normalizePromptText(sourceText);
+  if (text.length <= MAX_EXPENSE_SOURCE_CHARS) return text;
+
+  const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
+  const selected: string[] = [];
+  const seen = new Set<number>();
+  for (let index = 0; index < sentences.length; index += 1) {
+    if (!EXPENSE_SOURCE_KEYWORDS.test(sentences[index])) continue;
+    for (const nearby of [index - 1, index, index + 1]) {
+      if (nearby < 0 || nearby >= sentences.length || seen.has(nearby)) continue;
+      seen.add(nearby);
+      selected.push(normalizePromptText(sentences[nearby]));
+    }
+  }
+
+  const focused = selected.filter(Boolean).join(" ");
+  return focused.length > 2000
+    ? focused.slice(0, MAX_EXPENSE_SOURCE_CHARS)
+    : text.slice(0, MAX_EXPENSE_SOURCE_CHARS);
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -108,26 +138,47 @@ serve(async (req: Request) => {
       throw new Error("source_text is required.");
     }
 
+    const expenseFocusedText = buildExpenseFocusedText(sourceText);
+
     const userPrompt = `
 Here is the list of expense categories to map:
 ${JSON.stringify(categories, null, 2)}
 
 Here is the lease text to analyze:
 ===================================
-${sourceText}
+${expenseFocusedText}
 ===================================
 
 Extract the expense classification rules${categories.length > 0 ? " for the categories listed above" : ""}.`;
 
-    const result = await callVertexAIJSON({
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: userPrompt,
-      temperature: 0.1, // Keep it deterministic
-      maxOutputTokens: 8192,
-    });
+    let result: unknown = null;
+    try {
+      result = await callVertexAIJSON({
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: userPrompt,
+        temperature: 0.1, // Keep it deterministic
+        maxOutputTokens: 8192,
+      });
+    } catch (aiError) {
+      const message = aiError instanceof Error ? aiError.message : String(aiError);
+      console.error("[extract-lease-expense-rules] AI extraction failed:", message);
+      return new Response(JSON.stringify({
+        rules: [],
+        warning: `AI expense rule extraction failed: ${message}`,
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
 
     if (!result) {
-      throw new Error("Failed to extract rules from AI. The model may have truncated the response or failed JSON parsing.");
+      return new Response(JSON.stringify({
+        rules: [],
+        warning: "AI expense rule extraction returned no rules.",
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
     }
 
     const resultAny = result as any;
