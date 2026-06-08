@@ -46,14 +46,26 @@ CREATE TRIGGER set_lease_approval_workflow_runs_updated_at
   EXECUTE FUNCTION public.set_workflow_updated_at();
 
 ALTER TABLE public.documents
-  ADD COLUMN IF NOT EXISTS title TEXT;
+  ADD COLUMN IF NOT EXISTS title TEXT,
+  ADD COLUMN IF NOT EXISTS file_name TEXT,
+  ADD COLUMN IF NOT EXISTS storage_path TEXT;
 
 UPDATE public.documents
    SET title = COALESCE(NULLIF(title, ''), NULLIF(name, ''), 'Untitled Document')
  WHERE title IS NULL OR title = '';
 
+UPDATE public.documents
+   SET file_name = COALESCE(NULLIF(file_name, ''), NULLIF(name, ''), NULLIF(title, ''), 'document')
+ WHERE file_name IS NULL OR file_name = '';
+
+UPDATE public.documents
+   SET storage_path = COALESCE(NULLIF(storage_path, ''), NULLIF(document_url, ''), NULLIF(file_url, ''), 'documents/' || id::text)
+ WHERE storage_path IS NULL OR storage_path = '';
+
 ALTER TABLE public.documents
-  ALTER COLUMN title SET NOT NULL;
+  ALTER COLUMN title SET NOT NULL,
+  ALTER COLUMN file_name SET NOT NULL,
+  ALTER COLUMN storage_path SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.approve_lease_workflow(
   p_org_id UUID,
@@ -266,6 +278,9 @@ BEGIN
     type,
     title,
     name,
+    file_name,
+    storage_path,
+    file_url,
     status,
     signed_by,
     signed_at,
@@ -279,6 +294,12 @@ BEGIN
     'lease',
     'Lease - ' || COALESCE(v_updated_lease.tenant_name, 'Unknown tenant'),
     'Lease - ' || COALESCE(v_updated_lease.tenant_name, 'Unknown tenant'),
+    'Approved Lease Abstract v' || v_next_version || ' - ' || COALESCE(v_updated_lease.tenant_name, 'Unknown tenant'),
+    COALESCE(
+      NULLIF(p_approval_document_url, ''),
+      'lease-approvals/' || p_org_id::TEXT || '/' || p_lease_id::TEXT || '/abstract-v' || v_next_version || '.json'
+    ),
+    p_approval_document_url,
     'approved',
     p_signed_by,
     p_signed_at,
