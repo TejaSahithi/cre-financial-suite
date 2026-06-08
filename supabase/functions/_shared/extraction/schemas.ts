@@ -689,7 +689,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
     max: 30,
     labels: ["admin fee", "administrative fee", "management fee", "administrative expenses"],
     tableHeaders: ["admin_fee_pct"],
-    patterns: [/(?:admin(?:istrative)?\s+fee|management\s+fee)[^\n]{0,60}?(\d{1,2}(?:\.\d+)?)\s*%/i],
+    // No regex patterns — rule-based extraction is too broad (matches late-charge or
+    // interest-rate "administrative fee" clauses with the same text pattern as the CAM
+    // admin fee). The LLM description below is now specific enough to handle this.
     description:
       "Administrative or management fee percentage on recoverable CAM/operating expenses. " +
       "Typically 3–15%. May be labeled 'administrative expenses not to exceed X% of recoverable expenses', " +

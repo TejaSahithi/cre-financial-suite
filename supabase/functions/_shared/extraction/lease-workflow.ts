@@ -193,7 +193,10 @@ const FIELD_SPECS = [
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
   { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [/\b(?:security\s+deposit|deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
-  { key: "lease_term", group: "lease_term", aliases: ["lease_term", "term"], patterns: [/\blease term\b[:\s-]+([^\n]{2,120})/i] },
+  // lease_term: match only concise label-value forms (e.g. "Lease Term: 86 months" or
+  // "Term: 7 years"). The old [^\n]{2,120} was too greedy and captured entire clause
+  // paragraphs containing unrelated content (grease trap amortization, etc.).
+  { key: "lease_term", group: "lease_term", aliases: ["lease_term", "term"], patterns: [/\blease term\b[:\s-]+(\d[^\n]{1,40})/i] },
   { key: "commencement_date", group: "lease_term", aliases: ["commencement_date", "start_date", "lease_commencement_date", "term_commencement_date", "term_start", "beginning_of_term", "commencement"], patterns: [/\b(?:commencement date|lease commencement|term commencement|commences? on)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { key: "expiration_date", group: "lease_term", aliases: ["expiration_date", "end_date", "lease_expiration_date", "termination_date", "term_end", "end_of_term", "expiry_date"], patterns: [/\b(?:expiration date|lease expiration|termination date|term end|ends? on|expires? on)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { key: "renewal_notice_days", group: "lease_term", aliases: ["renewal_notice_days", "renewal_notice_months"], patterns: [/\bnotice\b[^\n]{0,60}?(\d{1,3})\s+days?/i] },
@@ -1535,8 +1538,17 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       }
     }
 
+    // Only fall back to start_date if it looks like a commencement date (not just
+    // the lease signing date). The LLM schema description already instructs null for
+    // formulaic commencement dates, so start_date here is likely the correct value.
     if (spec.key === "commencement_date" && isBlank(value)) {
-      value = getFirstValue(row, ["start_date"]);
+      const sd = getFirstValue(row, ["start_date"]);
+      // Don't fall back when start_date == lease_date — that means the LLM returned
+      // the signing date, which is not the commencement date.
+      const leaseDate = getFirstValue(row, ["lease_date"]);
+      if (sd && String(sd) !== String(leaseDate)) {
+        value = sd;
+      }
     }
 
     if (spec.key === "expiration_date" && isBlank(value)) {
