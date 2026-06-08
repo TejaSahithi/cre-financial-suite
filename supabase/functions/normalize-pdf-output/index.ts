@@ -528,7 +528,17 @@ function sourceTextSupportsValue(sourceText: unknown, value: unknown, fieldKey: 
 
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
   const snippet = boundedSourceSnippet(text, matchStart, matchLength);
-  return { snippet, quality: snippet ? "exact" : "partial" };
+  if (snippet) return { snippet, quality: "exact" as const };
+  // Fallback: return just the line that contains the matched value. This covers
+  // signature blocks, parties sections, and other label:value rows that don't
+  // end in sentence-boundary punctuation but are still valid source evidence.
+  const lineStart = text.lastIndexOf("\n", matchStart) + 1;
+  const lineEnd = text.indexOf("\n", matchStart + matchLength);
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).trim();
+  if (line && line.length >= 2 && line.length <= 300 && !line.includes("________________")) {
+    return { snippet: line, quality: "partial" as const };
+  }
+  return { snippet: "", quality: "partial" as const };
 }
 
 function findSourceEvidenceForField(
@@ -894,16 +904,15 @@ function buildReviewPayload(opts: {
       .filter(([key, val]) => {
         if (schemaKeys.has(key)) return false;
         if (isInternalReviewKey(key)) return false;
-        
         const normalized = normalizeKey(key);
         if (standardAliases.has(normalized)) return false;
         if (duplicatesStandardValue(key, val, values)) return false;
         if (looksLikeNoise(key, val)) return false;
-        
         return true;
       })
-      .map(([fieldKey, value]) =>
-        buildReviewField({
+      .map(([fieldKey, rawValue]) => {
+        const value = tryNormalizeDateString(rawValue, fieldKey);
+        return buildReviewField({
           recordIndex: index,
           fieldKey,
           value,
@@ -913,8 +922,8 @@ function buildReviewPayload(opts: {
           required: false,
           fieldType: inferFieldType(value),
           description: "Useful extracted content that does not map to a standard field.",
-        })
-      );
+        });
+      });
     const customFieldsFromDocument = buildCustomFieldsFromDocument({
       doclingRaw,
       schema,
