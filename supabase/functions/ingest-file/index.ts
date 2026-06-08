@@ -827,7 +827,8 @@ Deno.serve(async (req: Request) => {
       // remaining ~125 s between the two downstream calls (≤60 s each).
       // If a call times out, its AbortError is caught and parkForManualReview
       // runs in the remaining budget rather than the whole function hitting 504.
-      const STEP_TIMEOUT_MS = 60_000;
+      const PARSE_TIMEOUT_MS = 110_000;
+      const NORMALIZE_TIMEOUT_MS = 45_000;
 
       // Step 1: Docling extraction with enhanced error handling
       // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
@@ -840,7 +841,7 @@ Deno.serve(async (req: Request) => {
         downstreamAuthToken,
         actingOrgId,
         1,
-        STEP_TIMEOUT_MS,
+        PARSE_TIMEOUT_MS,
         !defer_store,
       );
 
@@ -848,7 +849,7 @@ Deno.serve(async (req: Request) => {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
 
         const reason = (doclingResult as any).timedOut
-          ? `Extraction timed out after ${60}s — the PDF may be too large or scanned at very high resolution. Click Re-extract Lease to retry, or upload a smaller/optimised PDF.`
+          ? `Extraction timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s - the PDF may be too large or scanned at very high resolution. Click Re-extract Lease to retry, or upload a smaller/optimized PDF.`
           : `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
         const payload = await parkForManualReview({
           supabaseAdmin,
@@ -892,7 +893,7 @@ Deno.serve(async (req: Request) => {
         downstreamAuthToken,
         actingOrgId,
         1,
-        STEP_TIMEOUT_MS,
+        NORMALIZE_TIMEOUT_MS,
         !defer_store,
       );
       
@@ -900,7 +901,7 @@ Deno.serve(async (req: Request) => {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
 
         const reason = (normalizeResult as any).timedOut
-          ? `Normalization timed out after ${60}s — click Re-extract Lease to retry.`
+          ? `Normalization timed out after ${Math.round(NORMALIZE_TIMEOUT_MS / 1000)}s - click Re-extract Lease to retry.`
           : `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
         const payload = await parkForManualReview({
           supabaseAdmin,

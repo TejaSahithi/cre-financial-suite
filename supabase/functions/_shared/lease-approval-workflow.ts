@@ -184,6 +184,52 @@ export function toNoticeDays(lease: Record<string, unknown>) {
   return null;
 }
 
+function toNumber(value: unknown) {
+  if (value == null || value === "") return null;
+  const parsed = Number(String(value).replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toTermMonths(lease: Record<string, unknown>) {
+  const direct = toNumber(lease?.lease_term_months ?? lease?.term_months);
+  if (direct && direct > 0) return Math.round(direct);
+
+  for (const key of ["lease_term", "term", "initial_term"]) {
+    const raw = String(lease?.[key] || "").toLowerCase();
+    if (!raw) continue;
+    const years = raw.match(/(\d+(?:\.\d+)?)\s*(year|yr)/);
+    if (years) return Math.round(Number(years[1]) * 12);
+    const months = raw.match(/(\d+(?:\.\d+)?)\s*(month|mo)/);
+    if (months) return Math.round(Number(months[1]));
+  }
+
+  return null;
+}
+
+function daysBetween(startIso: string, endIso: string) {
+  const start = new Date(`${startIso}T00:00:00Z`);
+  const end = new Date(`${endIso}T00:00:00Z`);
+  const diff = end.getTime() - start.getTime();
+  return Number.isFinite(diff) ? Math.round(diff / 86_400_000) : null;
+}
+
+function correctSuspiciousExpiration(commencement: string | null, expiration: string | null, lease: Record<string, unknown>) {
+  if (!commencement || !expiration) return expiration;
+  const termMonths = toTermMonths(lease);
+  const actualDays = daysBetween(commencement, expiration);
+  const minimumExpectedDays = termMonths && termMonths >= 6 ? Math.max(45, Math.round(termMonths * 24)) : null;
+  if (!minimumExpectedDays || actualDays == null || actualDays >= minimumExpectedDays) return expiration;
+
+  const start = new Date(`${commencement}T00:00:00Z`);
+  const corrected = new Date(`${expiration}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(corrected.getTime())) return expiration;
+
+  while (corrected <= start || (daysBetween(commencement, corrected.toISOString().slice(0, 10)) ?? 0) < minimumExpectedDays) {
+    corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
+  }
+  return corrected.toISOString().slice(0, 10);
+}
+
 export function buildCriticalDateRows(approvedLease: Record<string, unknown>, today = new Date().toISOString().slice(0, 10)) {
   const commencement = toIsoDate(
     approvedLease.commencement_date ??
@@ -191,12 +237,13 @@ export function buildCriticalDateRows(approvedLease: Record<string, unknown>, to
     approvedLease.lease_start_date ??
     approvedLease.term_start_date,
   );
-  const expiration = toIsoDate(
+  const rawExpiration = toIsoDate(
     approvedLease.expiration_date ??
     approvedLease.end_date ??
     approvedLease.lease_end_date ??
     approvedLease.term_end_date,
   );
+  const expiration = correctSuspiciousExpiration(commencement, rawExpiration, approvedLease);
   const optionDeadline = toIsoDate(
     approvedLease.option_exercise_deadline ??
     approvedLease.renewal_exercise_deadline ??

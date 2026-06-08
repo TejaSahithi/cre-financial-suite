@@ -463,6 +463,34 @@ function toIsoDate(value: unknown): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
+function daysBetween(start: Date, end: Date): number | null {
+  const diff = end.getTime() - start.getTime();
+  if (!Number.isFinite(diff)) return null;
+  return Math.round(diff / 86_400_000);
+}
+
+function parseLeaseTermMonths(value: unknown): number | null {
+  const numeric = asNumber(value);
+  if (numeric && numeric > 0) return Math.round(numeric);
+
+  const text = cleanText(value).toLowerCase();
+  if (!text) return null;
+
+  const yearMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:year|yr)s?/);
+  if (yearMatch) {
+    const years = Number(yearMatch[1]);
+    if (Number.isFinite(years) && years > 0) return Math.round(years * 12);
+  }
+
+  const monthMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:month|mo)s?/);
+  if (monthMatch) {
+    const months = Number(monthMatch[1]);
+    if (Number.isFinite(months) && months > 0) return Math.round(months);
+  }
+
+  return null;
+}
+
 function humanize(key: string) {
   return String(key || "")
     .replace(/_/g, " ")
@@ -1611,13 +1639,33 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
   if (commencementDate && expirationDate) {
     const startDate = new Date(`${commencementDate}T00:00:00Z`);
     const endDate = new Date(`${expirationDate}T00:00:00Z`);
-    if (Number.isFinite(startDate.getTime()) && Number.isFinite(endDate.getTime()) && endDate <= startDate) {
+    const termMonths =
+      parseLeaseTermMonths(row?.lease_term_months) ??
+      parseLeaseTermMonths(fieldMap.lease_term_months?.value) ??
+      parseLeaseTermMonths(fieldMap.lease_term?.value);
+    const actualDays = daysBetween(startDate, endDate);
+    const minimumExpectedDays = termMonths && termMonths >= 6 ? Math.max(45, Math.round(termMonths * 24)) : null;
+    const hasImplausiblyShortTerm =
+      minimumExpectedDays != null &&
+      actualDays != null &&
+      actualDays > 0 &&
+      actualDays < minimumExpectedDays;
+    if (
+      Number.isFinite(startDate.getTime()) &&
+      Number.isFinite(endDate.getTime()) &&
+      (endDate <= startDate || hasImplausiblyShortTerm)
+    ) {
       const corrected = new Date(Date.UTC(
         startDate.getUTCFullYear(),
         endDate.getUTCMonth(),
         endDate.getUTCDate(),
       ));
-      while (corrected <= startDate) corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
+      while (
+        corrected <= startDate ||
+        (minimumExpectedDays != null && (daysBetween(startDate, corrected) ?? 0) < minimumExpectedDays)
+      ) {
+        corrected.setUTCFullYear(corrected.getUTCFullYear() + 1);
+      }
       const expirationEvidence = extractClauseSnippet(
         asArray(doclingRaw?.text_blocks),
         fullText,
@@ -1632,7 +1680,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         }),
         value: corrected.toISOString().slice(0, 10),
         source_page: fieldMap.expiration_date?.source_page ?? expirationEvidence.source_page ?? null,
-        source_clause: fieldMap.expiration_date?.source_clause ?? expirationEvidence.clause_text ?? "Calculated as the next expiration occurrence after commencement date",
+        source_clause: expirationEvidence.clause_text ?? fieldMap.expiration_date?.source_clause ?? "Calculated as the next plausible expiration occurrence after commencement date",
         confidence_score: Math.min(Number(fieldMap.expiration_date?.confidence_score ?? 0.74), 0.82),
         extraction_status: "calculated",
       };
