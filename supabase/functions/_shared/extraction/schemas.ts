@@ -495,8 +495,13 @@ export const LEASE_SCHEMA: ModuleSchema = {
     patterns: [
       /(?:lease\s+term\s+months|term\s+months)[:\s]+(\d{1,3})/i,
       /(?:lease\s+term|term)[:\s]+(\d{1,3})\s*(?:months|mos?\.?)/i,
+      /for\s+a\s+(?:period|term)\s+of\s+[a-z\-]+\s+\((\d{1,3})\)\s*months/i,
+      /(?:initial\s+)?(?:base\s+)?term[:\s]+[a-z\-]+\s+\((\d{1,3})\)\s*(?:months|mos?\.?)/i,
     ],
-    description: "Lease term in months. Can be extracted or computed from start/end dates.",
+    description:
+      "Lease term in months. Can be extracted or computed from start/end dates. " +
+      "Look for numeric forms like '86 months' AND written-out forms like 'eighty-six (86) months' or " +
+      "'for a period of eighty-six (86) months'. Extract the digit inside the parentheses in the latter case.",
   },
   status: {
     type: "enum",
@@ -520,7 +525,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /\d+\s*\.\s*commencement\s+date\s*[:.]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
       /(?:commencement\s+date|term\s+commencement)\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
-    description: "Lease term commencement date in YYYY-MM-DD (often different from lease signing date)",
+    description:
+      "Lease term commencement date in YYYY-MM-DD (often different from lease signing date). " +
+      "IMPORTANT: If the commencement date is defined FORMULAICALLY (e.g. 'one day after four months from the " +
+      "Effective Date', 'upon issuance of a Certificate of Occupancy', or 'the later of X or Y') and no explicit " +
+      "calendar date appears in the document, return null — do NOT substitute the lease_date, signing date, or " +
+      "effective date. Only return a value when a specific calendar date is stated.",
   },
   expiration_date: {
     type: "date",
@@ -676,14 +686,19 @@ export const LEASE_SCHEMA: ModuleSchema = {
   admin_fee_pct: {
     type: "number",
     min: 0,
-    max: 100,
+    max: 30,
     labels: ["admin fee", "administrative fee", "management fee", "administrative expenses"],
     tableHeaders: ["admin_fee_pct"],
-    patterns: [/(?:admin(?:istrative)?\s+fee|management\s+fee)[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i],
+    patterns: [/(?:admin(?:istrative)?\s+fee|management\s+fee)[^\n]{0,60}?(\d{1,2}(?:\.\d+)?)\s*%/i],
     description:
       "Administrative or management fee percentage on recoverable CAM/operating expenses. " +
-      "May be labeled 'administrative expenses not to exceed X% of recoverable expenses', " +
-      "'admin fee X%', or 'management fee not exceeding X%' (e.g. 4 for '4.00% of recoverable expenses').",
+      "Typically 3–15%. May be labeled 'administrative expenses not to exceed X% of recoverable expenses', " +
+      "'admin fee X%', 'management fee not exceeding X%', or 'not to exceed five percent (5%) of Rent collected' " +
+      "(e.g. 5 for 'five percent (5%) of Rent collected', 4 for '4.00% of recoverable expenses'). " +
+      "ONLY extract percentages that directly describe this fee on CAM/operating expenses. " +
+      "Do NOT extract: default interest rates, late charge percentages, profit percentages, " +
+      "revenue shares, escalation rates, or any percentage that is not specifically a property management or " +
+      "administrative fee on CAM recoveries. Written-out forms like 'five percent (5%)' → return 5.",
   },
   management_fee_basis: {
     type: "enum",
@@ -1374,6 +1389,9 @@ const LEASE_GROUPS: FieldGroup[] = [
       "commencement_date and expiration_date are the term start/end. " +
       "Often the lease shows 'Commencement Date: February 1, 2024' and 'Expiration Date: January 31, 2025'. " +
       "If only month/day is given for expiration (e.g. 'January 31 of each year'), use commencement_year + 1. " +
+      "CRITICAL: If commencement_date is defined FORMULAICALLY (e.g. 'one day after four months from the Effective " +
+      "Date', 'upon Certificate of Occupancy', 'the later of X or Y') with NO explicit calendar date, return null " +
+      "for commencement_date — do NOT use the lease_date or signing date as a substitute. " +
       "rent_commencement_date is when rent payments start (may differ from term commencement when free-rent applies). " +
       "Renewal/termination notice = how many months notice required. All dates → YYYY-MM-DD. " +
       "tenant_signature_date: the date the tenant signed the lease (look for the tenant signature block). " +
@@ -1403,7 +1421,10 @@ const LEASE_GROUPS: FieldGroup[] = [
     fields: ["square_footage", "lease_type", "permitted_use", "lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
     hint:
       "Find the LEASED PREMISES square footage (tenant's space, not the whole building), " +
-      "lease type, permitted use (e.g. 'IT work', 'general office'), term length, renewal type/terms, and TI allowance.",
+      "lease type, permitted use (e.g. 'IT work', 'general office'), term length, renewal type/terms, and TI allowance. " +
+      "For lease_term_months: look for both numeric ('86 months') AND written-out forms " +
+      "('eighty-six (86) months', 'for a period of eighty-six (86) months'). " +
+      "Extract the digit inside the parentheses from written-out forms.",
   },
   {
     name: "expense_recovery",

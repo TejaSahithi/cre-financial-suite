@@ -1109,9 +1109,17 @@ export default function LeaseReview() {
   );
 
   // Validation checks (kept for summary panel).
+  // For each field, prefer the stored leases-table column but fall back to
+  // readFieldValue(leaseFull) so the Summary tab shows extraction data even
+  // before the abstract has been approved and columns written.
   const validationChecks = [];
-  const commencementValue = lease.commencement_date || lease.start_date;
-  const expirationValue = lease.expiration_date || lease.end_date;
+  const src = leaseFull ?? lease;
+  const commencementValue =
+    lease.commencement_date || lease.start_date ||
+    readFieldValue(src, "commencement_date") || readFieldValue(src, "start_date");
+  const expirationValue =
+    lease.expiration_date || lease.end_date ||
+    readFieldValue(src, "expiration_date") || readFieldValue(src, "end_date");
   if (commencementValue && expirationValue) {
     const startOk = new Date(commencementValue) < new Date(expirationValue);
     validationChecks.push({
@@ -1122,20 +1130,25 @@ export default function LeaseReview() {
         : "Expiration date is on/before commencement",
     });
   }
-  if (lease.tenant_name) {
-    validationChecks.push({ pass: true, label: "Tenant name present", detail: lease.tenant_name });
+  const summaryTenantName = lease.tenant_name || readFieldValue(src, "tenant_name");
+  const summaryLeaseType = lease.lease_type || readFieldValue(src, "lease_type");
+  const summaryLeaseDate = lease.lease_date || readFieldValue(src, "lease_date");
+  const summaryMonthlyRent = lease.monthly_rent ?? readFieldValue(src, "monthly_rent");
+  const summaryAnnualRent = lease.annual_rent ?? readFieldValue(src, "annual_rent");
+  if (summaryTenantName) {
+    validationChecks.push({ pass: true, label: "Tenant name present", detail: summaryTenantName });
   }
-  if (lease.annual_rent) {
+  if (summaryAnnualRent) {
     validationChecks.push({
-      pass: lease.annual_rent > 0,
+      pass: Number(summaryAnnualRent) > 0,
       label: "Annual rent > $0",
-      detail: `$${Number(lease.annual_rent).toLocaleString()}`,
+      detail: `$${Number(summaryAnnualRent).toLocaleString()}`,
     });
   }
-  const sf = lease.total_sf || lease.square_footage;
+  const sf = lease.total_sf || lease.square_footage || readFieldValue(src, "square_footage");
   if (sf) {
     validationChecks.push({
-      pass: sf > 0,
+      pass: Number(sf) > 0,
       label: "Square footage present",
       detail: `${Number(sf).toLocaleString()} SF`,
     });
@@ -1159,7 +1172,7 @@ export default function LeaseReview() {
   });
   const passCount = validationChecks.filter((v) => v.pass).length;
 
-  const totalSf = lease.total_sf || lease.square_footage;
+  const totalSf = lease.total_sf || lease.square_footage || readFieldValue(src, "square_footage");
 
   const scopedStakeholders = stakeholders.filter(
     (s) => !s.property_id || !lease.property_id || s.property_id === lease.property_id,
@@ -2779,15 +2792,15 @@ export default function LeaseReview() {
               <CardTitle className="text-base">Lease Summary</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <SummaryStat label="Tenant" value={lease.tenant_name || "—"} />
-              <SummaryStat label="Lease Type" value={getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} />
+              <SummaryStat label="Tenant" value={summaryTenantName || "—"} />
+              <SummaryStat label="Lease Type" value={getLeaseFieldLabel("lease_type", summaryLeaseType) || "—"} />
               <SummaryStat
                 label="Term (Commencement → Expiration)"
                 value={`${commencementValue || "—"} → ${expirationValue || "—"}`}
               />
-              <SummaryStat label="Lease Date (signed)" value={lease.lease_date || "—"} />
-              <SummaryStat label="Monthly Rent" value={lease.monthly_rent ? `$${Number(lease.monthly_rent).toLocaleString()}` : "—"} />
-              <SummaryStat label="Annual Rent" value={lease.annual_rent ? `$${Number(lease.annual_rent).toLocaleString()}` : "—"} />
+              <SummaryStat label="Lease Date (signed)" value={summaryLeaseDate || "—"} />
+              <SummaryStat label="Monthly Rent" value={summaryMonthlyRent ? `$${Number(summaryMonthlyRent).toLocaleString()}` : "—"} />
+              <SummaryStat label="Annual Rent" value={summaryAnnualRent ? `$${Number(summaryAnnualRent).toLocaleString()}` : "—"} />
               <SummaryStat label="Square Footage" value={totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} />
             </CardContent>
           </Card>

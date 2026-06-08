@@ -1532,13 +1532,13 @@ Deno.serve(async (req: Request) => {
           ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
-          // maxLLMChunks: 3 — lease metadata (parties, dates, rent) lives in
-          // the first 2–3 chunks of a well-formatted lease. Rule/table
+          // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
+          // the first 1–2 chunks of a well-formatted lease. Rule/table
           // extraction already handles the summary table on page 1; the LLM
-          // only needs the opening pages for edge cases. Keeping this low
-          // prevents the function from accumulating 50+ Gemini response
+          // only needs the opening pages for edge cases. Keeping this at 2
+          // prevents the function from accumulating too many Gemini response
           // buffers in memory simultaneously (546 resource-exhaustion error).
-          maxLLMChunks: 3,
+          maxLLMChunks: 2,
           chunkSize: 1500,
           llmTemperature: 0,
         },

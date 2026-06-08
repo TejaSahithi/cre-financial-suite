@@ -822,13 +822,15 @@ Deno.serve(async (req: Request) => {
     if (routing.route === "parse-pdf-docling") {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
 
-      // Shared deadline: ingest-file has a 150 s wall. Reserve 25 s for
+      // Shared deadline: ingest-file has a 150 s wall. Reserve 10 s for
       // startup, parkForManualReview, and the HTTP response. Split the
-      // remaining ~125 s between the two downstream calls (≤60 s each).
+      // remaining ~140 s between the two downstream calls. parse-pdf-docling
+      // typically finishes in <30 s for most PDFs; normalize-pdf-output makes
+      // several sequential LLM calls (Vertex AI) and needs more headroom.
       // If a call times out, its AbortError is caught and parkForManualReview
       // runs in the remaining budget rather than the whole function hitting 504.
-      const PARSE_TIMEOUT_MS = 110_000;
-      const NORMALIZE_TIMEOUT_MS = 45_000;
+      const PARSE_TIMEOUT_MS = 70_000;
+      const NORMALIZE_TIMEOUT_MS = 70_000;
 
       // Step 1: Docling extraction with enhanced error handling
       // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
