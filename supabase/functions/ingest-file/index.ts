@@ -829,8 +829,12 @@ Deno.serve(async (req: Request) => {
       // several sequential LLM calls (Vertex AI) and needs more headroom.
       // If a call times out, its AbortError is caught and parkForManualReview
       // runs in the remaining budget rather than the whole function hitting 504.
-      const PARSE_TIMEOUT_MS = 70_000;
-      const NORMALIZE_TIMEOUT_MS = 70_000;
+      const PARSE_TIMEOUT_MS = 55_000;
+      // normalize-pdf-output makes several sequential Vertex AI LLM calls which
+      // can take 80-100 s for complex leases. Give it as much headroom as possible.
+      // If it still times out, the fire-and-forget path below lets it finish in
+      // the background without showing a false error to the user.
+      const NORMALIZE_TIMEOUT_MS = 110_000;
 
       // Step 1: Docling extraction with enhanced error handling
       // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
@@ -902,9 +906,34 @@ Deno.serve(async (req: Request) => {
       if (!normalizeResult.ok) {
         console.error(`[ingest-file] Normalization failed:`, normalizeResult.error);
 
-        const reason = (normalizeResult as any).timedOut
-          ? `Normalization timed out after ${Math.round(NORMALIZE_TIMEOUT_MS / 1000)}s - click Re-extract Lease to retry.`
-          : `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
+        // When ingest-file's timeout fires, normalize-pdf-output is still running
+        // as its own Supabase function (AbortSignal only cancels ingest-file's
+        // fetch listener, not the downstream function). Normalize will complete
+        // on its own and write ui_review_payload + set review_required status.
+        // Calling parkForManualReview here would overwrite that with an empty
+        // payload and show a misleading error to the user.
+        // Only park when normalize actually failed (OOM 546, hard error) — not
+        // on a client-side timeout.
+        if ((normalizeResult as any).timedOut) {
+          console.log(
+            `[ingest-file] Normalization timeout — normalize-pdf-output is still running in background. ` +
+            `Skipping parkForManualReview; normalize will set final status itself.`,
+          );
+          return new Response(
+            JSON.stringify({
+              error: false,
+              file_id,
+              detection: detectionSummary,
+              routing: { routed_to: routing.route, reason: routing.reason },
+              stage: "normalization",
+              normalization_in_progress: true,
+              message: "Normalization is running in the background. The lease will appear in Lease Review when complete.",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+
+        const reason = `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
         const payload = await parkForManualReview({
           supabaseAdmin,
           fileId: file_id,
