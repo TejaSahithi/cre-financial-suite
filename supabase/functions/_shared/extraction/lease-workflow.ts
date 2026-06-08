@@ -308,6 +308,86 @@ function cleanSourceText(value: unknown) {
   return isGenericSourceText(text) ? null : text;
 }
 
+const SOURCE_SNIPPET_MAX_CHARS = 900;
+const SOURCE_SNIPPET_LOOKBACK = 450;
+const SOURCE_SNIPPET_LOOKAHEAD = 650;
+const SOURCE_ABBREVIATIONS = new Set([
+  "co", "corp", "inc", "ltd", "llc", "lp", "llp", "mr", "mrs", "ms", "dr",
+  "jr", "sr", "st", "ave", "blvd", "rd", "ste", "suite", "no", "jan", "feb",
+  "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+]);
+
+function skipSourceBoundaryPadding(text: string, index: number) {
+  let cursor = index;
+  while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
+  return cursor;
+}
+
+function isSourceSentenceEnd(text: string, index: number) {
+  const char = text[index];
+  if (!".!?".includes(char)) return false;
+
+  if (char === ".") {
+    const before = text[index - 1] || "";
+    const after = text[index + 1] || "";
+    if (/\d/.test(before) && /\d/.test(after)) return false;
+
+    const wordMatch = text.slice(Math.max(0, index - 16), index).match(/([A-Za-z]+)$/);
+    if (wordMatch && SOURCE_ABBREVIATIONS.has(wordMatch[1].toLowerCase())) return false;
+  }
+
+  let cursor = index + 1;
+  while (cursor < text.length && /["')\]]/.test(text[cursor])) cursor += 1;
+  return cursor >= text.length || /\s/.test(text[cursor]);
+}
+
+function isCleanSnippetStart(snippet: string) {
+  return (
+    /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
+    /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
+    /^[A-Z0-9"'(]/.test(snippet)
+  );
+}
+
+function expandSourceSnippetFromMatch(text: string, matchStart: number, matchLength: number, maxChars = SOURCE_SNIPPET_MAX_CHARS) {
+  const source = cleanText(text);
+  if (!source) return null;
+  const limit = Math.max(240, Math.min(maxChars, SOURCE_SNIPPET_MAX_CHARS));
+
+  if (source.length <= limit && /^[A-Za-z][^:]{0,90}:\s\S/.test(source)) return source;
+  if (source.length <= limit && /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(source)) return source;
+
+  const safeMatchStart = Math.max(0, Math.min(matchStart, source.length));
+  const safeMatchEnd = Math.max(safeMatchStart, Math.min(source.length, safeMatchStart + matchLength));
+  const searchStart = Math.max(0, safeMatchStart - SOURCE_SNIPPET_LOOKBACK);
+  const searchEnd = Math.min(source.length, safeMatchEnd + SOURCE_SNIPPET_LOOKAHEAD);
+
+  let start: number | null = safeMatchStart === 0 ? 0 : null;
+  for (let i = safeMatchStart - 1; i >= searchStart; i -= 1) {
+    if (isSourceSentenceEnd(source, i)) {
+      start = skipSourceBoundaryPadding(source, i + 1);
+      break;
+    }
+  }
+  if (start == null && searchStart === 0) start = 0;
+  if (start == null) return null;
+
+  let end: number | null = null;
+  for (let i = safeMatchEnd; i < searchEnd; i += 1) {
+    if (isSourceSentenceEnd(source, i)) {
+      end = i + 1;
+      break;
+    }
+  }
+  if (end == null && searchEnd === source.length) end = source.length;
+  if (end == null) return null;
+
+  const snippet = cleanText(source.slice(start, end));
+  if (!snippet || snippet.length > limit || !isCleanSnippetStart(snippet)) return null;
+  if (!/[.!?]["')\]]?$/.test(snippet) && !/^[A-Za-z][^:]{0,90}:\s\S/.test(snippet)) return null;
+  return snippet;
+}
+
 function asArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
@@ -402,18 +482,31 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     // contains the keyword rather than the whole block + next 2 blocks.
     // This prevents the generic "SUMMARY OF BASIC LEASE INFORMATION…"
     // prefix from appearing as the source text for unrelated fields.
-    let snippet: string;
+    let snippet: string | null;
     if (blockText.length > maxChars) {
       const idx = haystack.indexOf(matchedKeyword);
-      const start = Math.max(0, idx - 60);
+      const start = idx;
       const end = Math.min(blockText.length, idx + maxChars - 60);
       snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim();
+      snippet = expandSourceSnippetFromMatch(blockText, idx, matchedKeyword.length, Math.max(maxChars, 700));
     } else {
       snippet = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
         .filter(Boolean)
         .join(" ")
         .slice(0, maxChars);
     }
+    if (blockText.length <= maxChars) {
+      const joined = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
+        .filter(Boolean)
+        .join(" ");
+      if (joined.length <= Math.max(maxChars, 700)) {
+        snippet = joined;
+      } else {
+        const idx = joined.toLowerCase().indexOf(matchedKeyword);
+        snippet = expandSourceSnippetFromMatch(joined, idx, matchedKeyword.length, Math.max(maxChars, 700));
+      }
+    }
+    if (!snippet) continue;
     return {
       clause_text: snippet || null,
       source_page: Number.isFinite(Number(textBlocks[index]?.page)) ? Number(textBlocks[index].page) : null,
@@ -425,7 +518,7 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     .map((item) => cleanText(item))
     .find((item) => loweredKeywords.some((keyword) => item.toLowerCase().includes(keyword)));
   if (!sentence) return { clause_text: null, source_page: null };
-  return { clause_text: sentence.slice(0, maxChars), source_page: null };
+  return { clause_text: sentence.length <= Math.max(maxChars, 700) ? sentence : null, source_page: null };
 }
 
 function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown, clauseHint: string | null = null) {
@@ -464,24 +557,42 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     const directText = cleanText(directField?.text || directField?.value || "");
     const safeDirectText = cleanSourceText(directText);
     if (safeDirectText) {
-      return {
-        source_page: sourcePageOf(directField),
-        source_clause: safeDirectText.slice(0, 260),
-      };
+      const hit = comparableValue ? safeDirectText.indexOf(comparableValue) : -1;
+      const snippet = hit >= 0
+        ? expandSourceSnippetFromMatch(safeDirectText, hit, comparableValue.length, 700)
+        : null;
+      if (snippet) {
+        return {
+          source_page: sourcePageOf(directField),
+          source_clause: snippet,
+        };
+      }
     }
   }
 
-  const directBlock = textBlocks.find((block) => comparableValue && cleanText(block?.text || "").includes(comparableValue));
+  for (const block of textBlocks) {
+    const blockText = cleanText(block?.text || "");
+    const hit = comparableValue ? blockText.indexOf(comparableValue) : -1;
+    if (hit < 0) continue;
+    const snippet = expandSourceSnippetFromMatch(blockText, hit, comparableValue.length, 700);
+    if (!snippet) continue;
+    return {
+      source_page: sourcePageOf(block),
+      source_clause: snippet,
+    };
+  }
+
+  const directBlock = null;
   if (directBlock) {
     const blockText = cleanText(directBlock?.text || "");
     // When the block is large (e.g. a full summary section), extract just the
     // sentence or line that contains the value instead of truncating the whole block.
     // This gives a precise verbatim snippet rather than a broad context dump.
-    let snippet = blockText.slice(0, 320);
+    let snippet = null;
     if (blockText.length > 320 && comparableValue) {
       const idx = blockText.indexOf(comparableValue);
       if (idx >= 0) {
-        const start = Math.max(0, idx - 80);
+        const start = idx;
         const end = Math.min(blockText.length, idx + comparableValue.length + 80);
         snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim() + (end < blockText.length ? "…" : "");
       }

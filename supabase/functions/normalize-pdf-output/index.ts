@@ -160,6 +160,90 @@ function cleanEvidenceSnippet(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+const SOURCE_SNIPPET_MAX_CHARS = 900;
+const SOURCE_SNIPPET_LOOKBACK = 450;
+const SOURCE_SNIPPET_LOOKAHEAD = 650;
+const SOURCE_ABBREVIATIONS = new Set([
+  "co", "corp", "inc", "ltd", "llc", "lp", "llp", "mr", "mrs", "ms", "dr",
+  "jr", "sr", "st", "ave", "blvd", "rd", "ste", "suite", "no", "jan", "feb",
+  "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+]);
+
+function skipSourceBoundaryPadding(text: string, index: number) {
+  let cursor = index;
+  while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
+  return cursor;
+}
+
+function isSourceSentenceEnd(text: string, index: number) {
+  const char = text[index];
+  if (!".!?".includes(char)) return false;
+
+  if (char === ".") {
+    const before = text[index - 1] || "";
+    const after = text[index + 1] || "";
+    if (/\d/.test(before) && /\d/.test(after)) return false;
+
+    const wordMatch = text.slice(Math.max(0, index - 16), index).match(/([A-Za-z]+)$/);
+    if (wordMatch && SOURCE_ABBREVIATIONS.has(wordMatch[1].toLowerCase())) return false;
+  }
+
+  let cursor = index + 1;
+  while (cursor < text.length && /["')\]]/.test(text[cursor])) cursor += 1;
+  return cursor >= text.length || /\s/.test(text[cursor]);
+}
+
+function isCleanSnippetStart(snippet: string) {
+  return (
+    /^[A-Za-z][^:]{0,90}:\s\S/.test(snippet) ||
+    /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(snippet) ||
+    /^[A-Z0-9"'(]/.test(snippet)
+  );
+}
+
+function boundedSourceSnippet(text: string, matchStart: number, matchLength: number) {
+  const source = cleanEvidenceSnippet(text);
+  if (!source) return "";
+
+  const singleLine = source;
+  if (singleLine.length <= SOURCE_SNIPPET_MAX_CHARS && /^[A-Za-z][^:]{0,90}:\s\S/.test(singleLine)) {
+    return singleLine;
+  }
+  if (singleLine.length <= SOURCE_SNIPPET_MAX_CHARS && /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(singleLine)) {
+    return singleLine;
+  }
+
+  const safeMatchStart = Math.max(0, Math.min(matchStart, source.length));
+  const safeMatchEnd = Math.max(safeMatchStart, Math.min(source.length, safeMatchStart + matchLength));
+  const searchStart = Math.max(0, safeMatchStart - SOURCE_SNIPPET_LOOKBACK);
+  const searchEnd = Math.min(source.length, safeMatchEnd + SOURCE_SNIPPET_LOOKAHEAD);
+
+  let start: number | null = safeMatchStart === 0 ? 0 : null;
+  for (let i = safeMatchStart - 1; i >= searchStart; i -= 1) {
+    if (isSourceSentenceEnd(source, i)) {
+      start = skipSourceBoundaryPadding(source, i + 1);
+      break;
+    }
+  }
+  if (start == null && searchStart === 0) start = 0;
+  if (start == null) return "";
+
+  let end: number | null = null;
+  for (let i = safeMatchEnd; i < searchEnd; i += 1) {
+    if (isSourceSentenceEnd(source, i)) {
+      end = i + 1;
+      break;
+    }
+  }
+  if (end == null && searchEnd === source.length) end = source.length;
+  if (end == null) return "";
+
+  const snippet = cleanEvidenceSnippet(source.slice(start, end));
+  if (!snippet || snippet.length > SOURCE_SNIPPET_MAX_CHARS || !isCleanSnippetStart(snippet)) return "";
+  if (!/[.!?]["')\]]?$/.test(snippet) && !/^[A-Za-z][^:]{0,90}:\s\S/.test(snippet)) return "";
+  return snippet;
+}
+
 function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | undefined) {
   const blocks: Array<{ text: string; lowered: string; page: number | null; source: string }> = [];
   const push = (value: unknown, page: unknown, source: string) => {
@@ -285,49 +369,8 @@ function sourceTextSupportsValue(sourceText: unknown, value: unknown, fieldKey: 
 }
 
 function expandEvidenceSnippet(text: string, matchStart: number, matchLength: number) {
-  const singleLine = cleanEvidenceSnippet(text);
-  if (singleLine.length < 420 && /^[A-Za-z][^:\n]{0,90}:\s\S/.test(singleLine)) {
-    return { snippet: singleLine, quality: "exact" };
-  }
-  if (singleLine.length < 620 && /^\d+(?:\.\d+)*\s+[A-Z]/.test(singleLine)) {
-    return { snippet: singleLine, quality: "exact" };
-  }
-
-  const lookback = 300;
-  const lookahead = 300;
-  let start = matchStart;
-  for (let i = matchStart - 1; i >= Math.max(0, matchStart - lookback); i--) {
-    const char = text[i];
-    if (char === "\n") { start = i + 1; break; }
-    if (char === "." && i + 1 < text.length && text[i + 1] === " ") { start = i + 2; break; }
-    if (i === Math.max(0, matchStart - lookback)) start = i;
-  }
-
-  let end = matchStart + matchLength;
-  const fromStart = text.slice(start);
-  if (/^\d+(?:\.\d+)*\s+[A-Z]/.test(fromStart)) {
-    const nextClause = fromStart.slice(1).search(/\n\d+(?:\.\d+)*\s/);
-    end = nextClause > 0 && nextClause < 500 ? start + 1 + nextClause : Math.min(text.length, start + 500);
-  } else {
-    for (let i = end; i < Math.min(text.length, matchStart + matchLength + lookahead); i++) {
-      const char = text[i];
-      if (char === "\n" || char === "!") { end = i + 1; break; }
-      if (char === "." && (i + 1 >= text.length || text[i + 1] === " " || text[i + 1] === "\n")) {
-        end = i + 1;
-        break;
-      }
-      if (i === Math.min(text.length, matchStart + matchLength + lookahead) - 1) end = i + 1;
-    }
-  }
-
-  const snippet = cleanEvidenceSnippet(text.slice(start, end));
-  const quality =
-    /^[A-Za-z][^:\n]{0,90}:\s\S/.test(snippet) ||
-    /^\d+(?:\.\d+)*\s+[A-Z]/.test(snippet) ||
-    /[.!?]["']?\s*$/.test(snippet)
-      ? "exact"
-      : "partial";
-  return { snippet, quality };
+  const snippet = boundedSourceSnippet(text, matchStart, matchLength);
+  return { snippet, quality: snippet ? "exact" : "partial" };
 }
 
 function findSourceEvidenceForField(
