@@ -16,7 +16,7 @@ import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { createPageUrl } from "@/utils";
 import { ArrowUpRight, Loader2 } from "lucide-react";
-import { normalizeClauseType } from "@/lib/leaseReviewSchema";
+import { normalizeClauseType, readFieldValue } from "@/lib/leaseReviewSchema";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -567,9 +567,20 @@ export function CriticalDatesTable({ lease }) {
   // Predefined enterprise checklist — every row is always shown. Missing
   // values surface as "Not Found" so reviewers know what's outstanding
   // rather than silently dropping the row.
-  const leaseDate = lease?.lease_date;
-  const commencement = lease?.commencement_date || lease?.start_date;
-  const expiration = lease?.expiration_date || lease?.end_date;
+  //
+  // Use readFieldValue so we always get the latest extracted value from
+  // extraction_data.fields (which is populated during review) rather than
+  // the top-level lease columns (which may be stale or not yet written
+  // until the abstract is approved).
+  const leaseDate = readFieldValue(lease, "lease_date") ?? lease?.lease_date;
+  const commencement =
+    readFieldValue(lease, "commencement_date") ??
+    lease?.commencement_date ??
+    lease?.start_date;
+  const expiration =
+    readFieldValue(lease, "expiration_date") ??
+    lease?.expiration_date ??
+    lease?.end_date;
 
   // Date sanity flags so the table can surface "Conflict" inline rather than
   // showing a green "Captured" badge for an obviously broken date.
@@ -593,11 +604,35 @@ export function CriticalDatesTable({ lease }) {
   const rows = [
     { key: "lease_date", label: "Lease Date (signed)", value: leaseDate },
     { key: "commencement", label: "Commencement Date", value: commencement },
-    { key: "rent_commencement", label: "Rent Commencement Date", value: lease?.rent_commencement_date },
+    {
+      key: "rent_commencement",
+      label: "Rent Commencement Date",
+      value:
+        readFieldValue(lease, "rent_commencement_date") ??
+        lease?.rent_commencement_date,
+    },
     { key: "expiration", label: "Expiration Date", value: expiration },
-    { key: "renewal_notice", label: "Renewal Notice (months)", value: lease?.renewal_notice_months },
-    { key: "termination_notice", label: "Termination Notice (months)", value: lease?.termination_notice_months },
-    { key: "option_exercise", label: "Option Exercise Deadline", value: lease?.option_exercise_deadline },
+    {
+      key: "renewal_notice",
+      label: "Renewal Notice (months)",
+      value:
+        readFieldValue(lease, "renewal_notice_months") ??
+        lease?.renewal_notice_months,
+    },
+    {
+      key: "termination_notice",
+      label: "Termination Notice (months)",
+      value:
+        readFieldValue(lease, "termination_notice_months") ??
+        lease?.termination_notice_months,
+    },
+    {
+      key: "option_exercise",
+      label: "Option Exercise Deadline",
+      value:
+        readFieldValue(lease, "option_exercise_deadline") ??
+        lease?.option_exercise_deadline,
+    },
   ];
   const captured = rows.filter((r) => r.value != null && r.value !== "").length;
 

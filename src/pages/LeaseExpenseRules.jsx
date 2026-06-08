@@ -64,6 +64,8 @@ import {
   buildRuleHierarchyPatch,
   pickPreferredRuleSet,
   getLeaseBuildingId,
+  buildDisplayRows,
+  dedupeDisplayRows,
 } from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
 export default function LeaseExpenseRules() {
   const location = useLocation();

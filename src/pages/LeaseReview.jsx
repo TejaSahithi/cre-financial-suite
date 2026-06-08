@@ -550,7 +550,9 @@ export default function LeaseReview() {
           ];
           for (const field of allFields) {
             if (!field?.field_key) continue;
-            const sourceText = cleanSourceEvidenceText(field.evidence?.source_clause ?? field.evidence?.source_text);
+            const sourceText = cleanSourceEvidenceText(
+              field.evidence?.exact_source_text ?? field.evidence?.source_clause ?? field.evidence?.source_text,
+            );
             fieldsWithEvidence[field.field_key] = {
               value: field.value ?? null,
               confidence: typeof field.confidence === "number" ? field.confidence : null,
@@ -1990,7 +1992,11 @@ export default function LeaseReview() {
             confidence: typeof f.confidence === "number" ? f.confidence : null,
             source: f.source ?? null,
             source_page: f.evidence?.page_number ?? f.evidence?.source_page ?? null,
-            source_text: f.evidence?.source_clause ?? f.evidence?.source_text ?? null,
+            source_text:
+              f.evidence?.exact_source_text ??
+              f.evidence?.source_clause ??
+              f.evidence?.source_text ??
+              null,
             raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
             extraction_status: f.status ?? null,
           });
@@ -2006,7 +2012,11 @@ export default function LeaseReview() {
           value: wfField.value ?? null,
           confidence: wfField.confidence_score ?? null,
           source_page: wfField.source_page ?? null,
-          source_text: wfField.source_clause ?? null,
+          source_text:
+            wfField.exact_source_text ??
+            wfField.source_clause ??
+            wfField.source_text ??
+            null,
           raw_value: wfField.value ?? null,
           extraction_status: wfField.extraction_status ?? null,
         });
