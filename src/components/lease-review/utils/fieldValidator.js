@@ -88,6 +88,17 @@ export function validateFieldValue(fieldKey, value) {
   //   (a) Long strings with legal markers (Article 14.3 "Transfer Premium" text
   //       showing up as Broker Name is the confirmed example from this codebase)
   //   (b) Strings that start with a numbered clause reference (e.g. "14.3 ...")
+  if (fieldKey.endsWith("_name")) {
+    // Short verb-phrase artifacts (e.g. "hereby leases Premises to",
+    // "hereby assigns to") — the extractor grabbed a sentence fragment
+    // near the party definition instead of the entity name itself.
+    if (/\b(hereby leases|hereby assigns|hereby subleases|leases (?:the )?premises to|assigns? (?:the )?lease)\b/i.test(str)) {
+      return {
+        valid: false,
+        reason: `Value looks like a lease-action phrase, not an entity name. Edit with the correct landlord or tenant name.`,
+      };
+    }
+  }
   if (fieldKey.endsWith("_name") && str.length > 80) {
     const legalClausePattern = /\b(shall not|shall be|without consent|attorneys['']? fees?|compensation|hereinafter|pursuant to|indemnif|subletting|sublease|no Transfer|fair market value|Transfer Premium)\b/i;
     if (legalClausePattern.test(str)) {
@@ -146,17 +157,22 @@ export function validateFieldValue(fieldKey, value) {
 
   // ── Suite / floor fields: reject common word fragments ───────────────────────
   // The extractor sometimes grabs the word following "Suite" or "Floor" in a
-  // sentence — e.g. "space in the Building" → suite_number = "in". These are
+  // sentence — e.g. "space in the Building" → suite_number = "in", or
+  // "per leasable square foot" when it hits a rent sentence. These are
   // confirmed extraction failure modes observed in production leases.
   const ARTICLE_PREPOSITIONS = new Set([
     "in", "at", "of", "the", "a", "an", "on", "by", "to", "for",
-    "with", "and", "or", "is", "as", "be", "not", "no",
+    "with", "and", "or", "is", "as", "be", "not", "no", "per",
   ]);
-  if ((fieldKey === "suite_number" || fieldKey === "floor") && ARTICLE_PREPOSITIONS.has(lower)) {
-    return {
-      valid: false,
-      reason: `"${str}" is not a valid ${fieldKey.replace(/_/g, " ")} — looks like a word fragment from surrounding lease text. Edit with the correct value.`,
-    };
+  if (fieldKey === "suite_number" || fieldKey === "floor") {
+    // Check exact match (single word) or first word of multi-word value.
+    const firstWord = lower.split(/\s+/)[0];
+    if (ARTICLE_PREPOSITIONS.has(lower) || ARTICLE_PREPOSITIONS.has(firstWord)) {
+      return {
+        valid: false,
+        reason: `"${str}" is not a valid ${fieldKey.replace(/_/g, " ")} — looks like a word fragment from surrounding lease text. Edit with the correct value.`,
+      };
+    }
   }
 
   // ── Numeric keys ─────────────────────────────────────────────────────────────
@@ -186,17 +202,33 @@ export function validateFieldValue(fieldKey, value) {
 
   // ── Date keys ─────────────────────────────────────────────────────────────────
   if (DATE_KEYS.has(fieldKey) || fieldKey.endsWith("_date")) {
-    // Values from the extraction pipeline are in YYYY-MM-DD format.
-    if (typeof value === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-      return {
-        valid: false,
-        reason: `"${str}" is not a recognized date format (expected YYYY-MM-DD).`,
-      };
-    }
-    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(str)) {
-      const d = new Date(`${str}T00:00:00Z`);
-      if (Number.isNaN(d.getTime())) {
-        return { valid: false, reason: `"${str}" is not a valid calendar date.` };
+    if (typeof value === "string") {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+        // Preferred ISO format — validate it's a real date.
+        const d = new Date(`${str}T00:00:00Z`);
+        if (Number.isNaN(d.getTime())) {
+          return { valid: false, reason: `"${str}" is not a valid calendar date.` };
+        }
+      } else {
+        // Human-readable format (e.g. "September 8, 2020") — check if it
+        // can be parsed at all. If yes, flag as needing normalization but
+        // don't hard-block the review; if it's completely unparseable, reject.
+        const parsed = new Date(str);
+        if (Number.isNaN(parsed.getTime())) {
+          return {
+            valid: false,
+            reason: `"${str}" is not a recognized date format (expected YYYY-MM-DD).`,
+          };
+        }
+        // Parseable but not normalized — warn so the reviewer can save it
+        // in the correct format via Edit.
+        const iso = new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()))
+          .toISOString()
+          .slice(0, 10);
+        return {
+          valid: false,
+          reason: `Date should be in YYYY-MM-DD format — edit to "${iso}".`,
+        };
       }
     }
   }

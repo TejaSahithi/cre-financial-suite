@@ -37,6 +37,14 @@ import { validateFieldValue, computeSourceQuality } from "@/components/lease-rev
 
 const displayValue = (field, value) => {
   if (value == null || value === "") return "—";
+  // Array of objects (e.g. rent_schedule rows) — show a count instead of
+  // the raw "[object Object],[object Object]" toString output.
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
+    const isObjectArray = value.some((v) => v !== null && typeof v === "object");
+    if (isObjectArray) return `${value.length} row${value.length === 1 ? "" : "s"}`;
+    return value.join(", ");
+  }
   if (field.type === "currency" && !Number.isNaN(Number(value))) {
     return `$${Number(value).toLocaleString()}`;
   }

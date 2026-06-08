@@ -58,11 +58,14 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /\d+\s*\.\s*tenant\s*[:.]?\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
       // Plain labeled line: "Tenant: Mindful Tech Solutions, Inc."
       /(?:^|\n)\s*tenant\s*[:.]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Bank|Holdings|Partners?))/i,
+      // Opening-clause format: "by and between [Landlord], and Cress Family Restaurants, LLC, (referred to as "Tenant")"
+      /,\s*and\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+\(?referred\s+to\s+as\s+["']?Tenant["']?\)?/i,
     ],
     description:
       "LEGAL ENTITY name of the tenant ONLY (e.g. 'Mindful Tech Solutions, Inc.'). " +
       "DO NOT use the signatory, signer, contact person, or 'By:' name. " +
-      "If the lease reads 'Tenant: Mindful Tech Solutions, Inc.  By: John Doe', return 'Mindful Tech Solutions, Inc.', NOT 'John Doe'.",
+      "If the lease reads 'Tenant: Mindful Tech Solutions, Inc.  By: John Doe', return 'Mindful Tech Solutions, Inc.', NOT 'John Doe'. " +
+      "Also look for opening-clause format: 'between [Landlord Entity] ... and [Tenant Entity] (referred to as \"Tenant\")'.",
   },
   tenant_signatory_name: {
     type: "string",
@@ -136,13 +139,16 @@ export const LEASE_SCHEMA: ModuleSchema = {
       // Plain labeled line: "Landlord: 224 Partners, LLC"
       /(?:^|\n)\s*landlord\s*[:.]\s*([^\n]{2,120})/i,
       /(?:^|\n)\s*lessor\s*[:.]\s*([^\n]{2,120})/i,
+      // Opening-clause format: "between Markets at Choto, LLC, or its assigns (referred to as 'Landlord')"
+      /\bbetween\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+(?:or\s+its\s+assigns[,\s]+)?\(?referred\s+to\s+as\s+["']?Landlord["']?\)?/i,
       // Legacy variants
       /(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i,
     ],
     description:
       "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. '224 Partners, LLC'). " +
       "DO NOT use the signatory or signer. " +
-      "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'.",
+      "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'. " +
+      "Also look for opening-clause format: 'between [Entity], or its assigns (referred to as \"Landlord\")'.",
   },
   assignor_name: {
     type: "string",
@@ -215,8 +221,16 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: ["unit", "suite", "space", "unit number", "suite number", "space number"],
     tableHeaders: ["unit", "suite", "unit_number", "unit number", "space", "suite #"],
-    patterns: [/(?:Suite|Unit|Space)\s+([\w\-]+)/i],
-    description: "Unit, suite, or space identifier",
+    patterns: [
+      // Plural "Suites 3 and 4" or "Building 9, Suites 3 and 4"
+      /(?:Building\s+[\w\-]+[,\s]+)?Suites?\s+([\w\-]+(?:\s+and\s+[\w\-]+)*)/i,
+      // Singular: "Suite 101", "Unit 2B", "Space 4"
+      /(?:Suite|Unit|Space)\s+([\w\-]+)/i,
+    ],
+    description:
+      "Unit, suite, or space identifier — a short alphanumeric code (e.g. '3', '3 and 4', '101', '2B'). " +
+      "Look in the Premises section (e.g. 'Building 9, Suites 3 and 4'). " +
+      "NEVER return rent-rate language like 'per leasable square foot' or CAM descriptions.",
   },
   lease_date: {
     type: "date",
@@ -261,7 +275,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "extract the FIRST NON-ZERO 'Monthly Base Rent' value — that is the first PAID period, " +
       "skipping any $0 free-rent / rent-abatement period at the start. " +
       "NEVER use annual rent or year totals; if only an annual figure is shown, leave monthly_rent NULL " +
-      "and the calculator will derive it.",
+      "and the calculator will derive it. " +
+      "IMPORTANT: Do NOT extract monthly_rent from the Security Deposit Addendum — dollar amounts there " +
+      "(e.g. 'third month rent plus 86th month rent = $12,908.60') describe the deposit calculation, NOT the rent.",
   },
   annual_rent: {
     type: "number",
@@ -1334,7 +1350,12 @@ const LEASE_GROUPS: FieldGroup[] = [
     hint:
       "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
+      "CRITICAL: Many leases name parties in the opening paragraph using this pattern: " +
+      "'between [LANDLORD ENTITY], or its assigns (referred to as \"Landlord\"), and [TENANT ENTITY] (referred to as \"Tenant\")'. " +
+      "Extract the entity name BEFORE the parenthetical — e.g. 'Markets at Choto, LLC' from 'between Markets at Choto, LLC, or its assigns (referred to as \"Landlord\")'. " +
+      "Do NOT return body-text phrases like 'hereby leases Premises to' — those are clause text, not entity names. " +
       "Also extract property name, premises address, unit/suite if present. " +
+      "unit_number: the suite/unit identifier, typically a short number or code found in the Premises section (e.g. 'Suites 3 and 4'). " +
       "landlord_address: the landlord's mailing or notice address (NOT the premises address). " +
       "tenant_address: the tenant's mailing or notice address. " +
       "tenant_contact_name: the individual signing on behalf of the tenant (the 'By:' signer). " +
