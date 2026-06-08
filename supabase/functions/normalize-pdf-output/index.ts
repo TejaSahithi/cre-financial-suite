@@ -812,16 +812,20 @@ function buildReviewPayload(opts: {
       const llmEvidence = fieldEvidence[fieldKey];
       const llmSourceText = usableSourceText(llmEvidence?.source_text);
       const workflowSourceText = usableSourceText(workflowField?.source_clause);
-      const llmSourceSupportsValue = sourceTextSupportsValue(llmSourceText, value, fieldKey, String(def?.type ?? ""));
-      const workflowSourceSupportsValue = sourceTextSupportsValue(workflowSourceText, value, fieldKey, String(def?.type ?? ""));
       const fallbackEvidence = !isBlank(value)
         ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)
         : null;
       const fallbackSourceText = usableSourceText(fallbackEvidence?.source_clause);
+      // Workflow and LLM source texts are already selected from the actual lease
+      // document (clause extraction / LLM verbatim quote), so trust them directly.
+      // The fallback path uses strict needle-in-haystack search, so it already
+      // verifies relevance. Applying sourceTextSupportsValue to workflow/llm was
+      // discarding valid source snippets whenever the extracted value appeared in
+      // a slightly different form (e.g. "Triple Net" vs "NNN", "five percent" vs "5").
       const evidenceCandidates = [
         { source: "fallback", sourceText: fallbackSourceText, sourcePage: fallbackEvidence?.source_page, supportsValue: !!fallbackSourceText },
-        { source: "workflow", sourceText: workflowSourceText, sourcePage: workflowField?.source_page, supportsValue: workflowSourceSupportsValue },
-        { source: "llm", sourceText: llmSourceText, sourcePage: llmEvidence?.source_page, supportsValue: llmSourceSupportsValue },
+        { source: "workflow", sourceText: workflowSourceText, sourcePage: workflowField?.source_page, supportsValue: !!workflowSourceText },
+        { source: "llm", sourceText: llmSourceText, sourcePage: llmEvidence?.source_page, supportsValue: !!llmSourceText },
       ]
         .filter((candidate) => candidate.sourceText && candidate.supportsValue)
         .map((candidate) => ({

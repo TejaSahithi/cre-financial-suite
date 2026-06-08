@@ -698,6 +698,12 @@ export function readFieldEvidence(lease, key) {
     lease?.extraction_data?.workflow_output?.lease_fields,
     lease?.extraction_data?.workflow_output?.records?.[0]?.lease_fields,
     lease?.abstract_snapshot?.field_evidence,
+    // workflow_output.lease_fields is written into each ui_review_payload record
+    // by normalize-pdf-output and contains source_clause already validated by
+    // isSourceRelevantToField — probe it before the fields entry so existing
+    // leases show source text without requiring re-extraction.
+    lease?.uploaded_files?.ui_review_payload?.records?.[0]?.workflow_output?.lease_fields,
+    lease?.uploaded_file?.ui_review_payload?.records?.[0]?.workflow_output?.lease_fields,
     lease?.uploaded_files?.ui_review_payload?.records?.[0]?.fields,
     lease?.uploaded_files?.ui_review_payload?.records?.[0]?.standard_fields,
     lease?.uploaded_files?.ui_review_payload?.records?.[0]?.custom_fields,
