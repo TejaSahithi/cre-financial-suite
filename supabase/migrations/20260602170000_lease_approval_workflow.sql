@@ -31,7 +31,7 @@ DROP POLICY IF EXISTS "lease_approval_workflow_runs_insert" ON public.lease_appr
 DROP POLICY IF EXISTS "lease_approval_workflow_runs_update" ON public.lease_approval_workflow_runs;
 
 CREATE POLICY "lease_approval_workflow_runs_select" ON public.lease_approval_workflow_runs
-  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
+  FOR SELECT USING (public.is_super_admin() OR org_id = ANY(public.get_my_org_ids()));
 
 CREATE POLICY "lease_approval_workflow_runs_insert" ON public.lease_approval_workflow_runs
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
