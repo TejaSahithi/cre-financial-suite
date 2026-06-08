@@ -54,7 +54,7 @@ export const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[
   // After validation we either park for review or go straight to storing.
   validated:        ["validating", "review_required", "storing", "failed"],
   // Reviewer either approves (→ approved → storing) or rejects (→ failed).
-  review_required:  ["parsing", "validated", "approved", "failed"],
+  review_required:  ["parsing", "pdf_parsed", "validated", "approved", "failed"],
   approved:         ["validating", "storing", "failed"],
   storing:          ["stored", "failed"],
   stored:           ["computing", "failed"],

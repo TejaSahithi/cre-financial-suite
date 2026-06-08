@@ -276,6 +276,7 @@ function buildManualReviewPayload(opts: {
   const missingRequired = standardFields
     .filter((field) => field.required)
     .map((field) => field.field_key);
+  const isManualReviewFallback = opts.extractionMethod === "manual_review_fallback";
   const record = {
     record_index: 0,
     row_index: 0,
@@ -308,7 +309,7 @@ function buildManualReviewPayload(opts: {
     module_type: opts.moduleType,
     document_subtype: opts.documentSubtype,
     extraction_method: opts.extractionMethod,
-    pipeline_method: "manual_review_fallback",
+    pipeline_method: isManualReviewFallback ? "manual_review_fallback" : "timeout_review_pending",
     avg_confidence: 0,
     review_required: true,
     review_status: "pending",
@@ -326,7 +327,8 @@ function buildManualReviewPayload(opts: {
     metadata: {
       totalRecords: 1,
       avgConfidence: 0,
-      manualReviewFallback: true,
+      manualReviewFallback: isManualReviewFallback,
+      timeoutReviewPending: !isManualReviewFallback,
     },
     built_at: new Date().toISOString(),
   };
@@ -486,14 +488,15 @@ async function parkForManualReview(args: {
     reason: args.reason,
   });
   const extractionDebug = {
-    mapping_failed: true,
-    manual_review_fallback: true,
+    mapping_failed: args.extractionMethod === "manual_review_fallback",
+    manual_review_fallback: args.extractionMethod === "manual_review_fallback",
+    timeout_review_pending: args.extractionMethod !== "manual_review_fallback",
     ...transitionDiagnostics,
   };
 
   payload.metadata = {
     ...payload.metadata,
-    mapping_failed: true,
+    mapping_failed: args.extractionMethod === "manual_review_fallback",
     fallback_reason: args.reason,
     extraction_debug: extractionDebug,
   };
@@ -506,11 +509,11 @@ async function parkForManualReview(args: {
     extraction_method: args.extractionMethod,
     ui_review_payload: payload,
     normalized_output: {
-      method: "manual_review_fallback",
+      method: args.extractionMethod === "manual_review_fallback" ? "manual_review_fallback" : "timeout_review_pending",
       rows: payload.rows.map((row: any) => row.values),
       warnings: payload.global_warnings,
       validationErrors: [],
-      mapping_failed: true,
+      mapping_failed: args.extractionMethod === "manual_review_fallback",
       extraction_debug: extractionDebug,
       metadata: payload.metadata,
     },
@@ -863,7 +866,7 @@ Deno.serve(async (req: Request) => {
           fileName: fileRecord.file_name ?? "document",
           moduleType: effectiveModuleType,
           documentSubtype: subtypeResult.subtype,
-          extractionMethod: "manual_review_fallback",
+          extractionMethod: (doclingResult as any).timedOut ? "timeout_review_pending" : "manual_review_fallback",
           reason,
         });
         

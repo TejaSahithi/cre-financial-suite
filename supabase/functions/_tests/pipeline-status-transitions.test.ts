@@ -16,6 +16,7 @@ Deno.test("pipeline-status allows the documented happy-path transitions", () => 
     ["validated", "review_required"],
     ["validated", "storing"],
     ["review_required", "validated"],
+    ["review_required", "pdf_parsed"],
     ["review_required", "approved"],
     ["review_required", "parsing"],
     ["approved", "validating"],

@@ -510,8 +510,16 @@ export default function LeaseUpload() {
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
     reviewPayload?.extraction_method === "manual_review_fallback" ||
     reviewPayload?.metadata?.manualReviewFallback === true;
+  const isTimeoutReviewPending =
+    reviewPayload?.pipeline_method === "timeout_review_pending" ||
+    reviewPayload?.extraction_method === "timeout_review_pending" ||
+    reviewPayload?.metadata?.timeoutReviewPending === true ||
+    fallbackWarnings.some((warning) =>
+      /timed out|timeout|still running|running in the background|timeout_review_pending/i.test(String(warning)),
+    );
   const isEmptyExtractionFallback =
     !hasMeaningfulExtraction &&
+    !isTimeoutReviewPending &&
     (
       isManualReviewFallback ||
       reviewPayload?.extraction_method === "none" ||
