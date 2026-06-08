@@ -333,33 +333,30 @@ BEGIN
     entity_type,
     entity_id,
     action,
-    actor_user_id,
-    actor_email,
-    severity,
-    source,
-    after,
-    metadata,
-    property_id
+    field_changed,
+    old_value,
+    new_value,
+    user_id,
+    user_email,
+    "timestamp"
   )
   VALUES (
     p_org_id,
     'Lease',
     p_lease_id::TEXT,
     'lease_abstract_approved',
-    p_actor_user_id,
-    p_actor_email,
-    'info',
-    'edge_function',
+    'approval_status',
+    NULL,
     jsonb_build_object(
       'abstract_version', v_next_version,
       'signed_by', p_signed_by,
-      'signed_at', p_signed_at
-    ),
-    jsonb_build_object(
+      'signed_at', p_signed_at,
       'workflow_run_id', v_run_id,
       'idempotency_key', p_idempotency_key
-    ),
-    v_updated_lease.property_id
+    )::TEXT,
+    p_actor_user_id,
+    p_actor_email,
+    v_now
   )
   RETURNING id INTO v_audit_log_id;
 
