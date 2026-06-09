@@ -208,6 +208,19 @@ function originalLeaseRequiredRule(leaseId, documentType) {
   };
 }
 
+function hasReadableExpenseRuleText(sourceText) {
+  return typeof sourceText === "string" && sourceText.trim().length >= 500;
+}
+
+function isPersistableExpenseRule(rule) {
+  const isCoverageGap = rule?.rule_type === "coverage_gap" || rule?.generation_source === "original_lease_required";
+  if (isCoverageGap) return true;
+  const status = normalizeKey(rule?.extraction_status);
+  const rowStatus = normalizeKey(rule?.row_status);
+  if (["not_found", "weak_evidence", "inferred", "missing_source_evidence"].includes(status)) return false;
+  if (["not_mentioned", "needs_review"].includes(rowStatus) && !VALID_EVIDENCE(rule?.exact_source_text)) return false;
+  return VALID_EVIDENCE(rule?.exact_source_text);
+}
 
 function applyLeaseEvidenceRules(rule, sourceText) {
   const canonicalKey = canonicalRuleKey(rule);
@@ -491,6 +504,11 @@ export const leaseRulePipelineService = {
       return diagnostics;
     }
 
+    if (!hasReadableExpenseRuleText(sourceText)) {
+      diagnostics.skippedReasons = "insufficient_source_text_for_expense_rules";
+      return diagnostics;
+    }
+
     // Force reruns should only replace unresolved extraction output. Human-approved
     // rows are the durable approval record and must survive regeneration.
     if (force) {
@@ -569,11 +587,12 @@ export const leaseRulePipelineService = {
     });
 
     if (diagnostics.mergedRulesCount === 0) {
-      throw new Error("NEW PIPELINE GENERATED ZERO RULES");
+      diagnostics.skippedReasons = "no_expense_rule_candidates";
+      return diagnostics;
     }
 
     // 7. Evidence Validation & Save
-    const finalRules = merged.map(rule => {
+    const evaluatedRules = merged.map(rule => {
       let r = applyLeaseEvidenceRules({ ...rule }, sourceText);
       let conf = r.confidence_score || r.confidence || 0.8;
       let valid = VALID_EVIDENCE(r.exact_source_text);
@@ -620,6 +639,13 @@ export const leaseRulePipelineService = {
 
       return r;
     }).filter(r => r.normalized_key !== "structured_terms"); // Filter out the dummy row if it wasn't merged away
+
+    const finalRules = evaluatedRules.filter(isPersistableExpenseRule);
+    diagnostics.weakEvidenceCount += evaluatedRules.length - finalRules.length;
+    if (finalRules.length === 0) {
+      diagnostics.skippedReasons = "no_clause_backed_expense_rules";
+      return diagnostics;
+    }
 
     // Diagnostics Payload Output
     if (finalRules.length > 0) {
@@ -952,5 +978,5 @@ export const leaseRulePipelineService = {
 };
 
 // Named export for golden regression tests; keep service facade unchanged.
-export { applyLeaseEvidenceRules };
+export { applyLeaseEvidenceRules, isPersistableExpenseRule };
 export default leaseRulePipelineService;

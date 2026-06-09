@@ -52,7 +52,6 @@ import {
 } from "@/lib/leaseFieldOptions";
 import {
   LEASE_REVIEW_TABS,
-  FIELDS_BY_TAB,
   LEASE_REVIEW_FIELDS,
   REQUIRED_FIELD_KEYS,
   REVIEW_STATUSES,
@@ -107,7 +106,7 @@ import {
   entryValue,
 } from "@/components/lease-review/utils/fieldExtractors";
 import {
-  buildDynamicDocumentFieldsByTab,
+  buildLeaseReviewRowsByTab,
   inferDynamicItemType,
 } from "@/components/lease-review/utils/dynamicFields";
 import {
@@ -242,18 +241,9 @@ export default function LeaseReview() {
   // User-added custom fields per tab (survives re-renders within the session)
   const [userCustomFields, setUserCustomFields] = useState({});
 
-  const dynamicFieldsByTab = useMemo(() => buildDynamicDocumentFieldsByTab(leaseFull), [leaseFull]);
   const fieldsForTab = useMemo(() => {
-    const merged = {};
-    for (const tab of LEASE_REVIEW_TABS) {
-      merged[tab.key] = [
-        ...(FIELDS_BY_TAB[tab.key] || []),
-        ...(dynamicFieldsByTab[tab.key] || []),
-        ...(userCustomFields[tab.key] || []),
-      ];
-    }
-    return merged;
-  }, [dynamicFieldsByTab, userCustomFields]);
+    return buildLeaseReviewRowsByTab(leaseFull, { userCustomFields });
+  }, [leaseFull, userCustomFields]);
 
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
@@ -2786,7 +2776,7 @@ export default function LeaseReview() {
             // every standard field in the tab is empty (no extracted value).
             const FULL_LEASE_ONLY_TABS = new Set(["cam_rules", "insurance", "expenses_recoveries"]);
             const tabHasAnyValue = tabFields.some((f) => {
-              const v = readFieldValue(leaseFull, f.key);
+              const v = f.normalized_value ?? f.value ?? readFieldValue(leaseFull, f.key);
               return v !== null && v !== undefined && v !== "";
             });
             const notInThisDoc = isAssignmentOnlyDocument && FULL_LEASE_ONLY_TABS.has(tab.key) && !tabHasAnyValue;

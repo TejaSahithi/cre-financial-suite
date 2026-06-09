@@ -615,6 +615,23 @@ export function cleanSourceEvidenceText(value) {
   return text;
 }
 
+export function normalizeSourcePage(page) {
+  if (page === null || page === undefined || page === "") return null;
+  const numeric = Number(page);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Number.isInteger(numeric) ? numeric : null;
+}
+
+export function hasNaturalSourceBoundary(value) {
+  const text = cleanSourceEvidenceText(value);
+  if (!text || text.length < 4) return false;
+  if (/^[,.;:)\]}]/.test(text)) return false;
+  if (/^[a-z]/.test(text) && !/^(article|section|exhibit|schedule|paragraph|tenant|landlord|premises|rent|insurance|taxes|utilities|cam|common area|option|renewal|default)\b/i.test(text)) {
+    return false;
+  }
+  return true;
+}
+
 export function isCalculatedExtractionStatus(status) {
   const normalized = String(status || "").trim().toLowerCase();
   return normalized === "calculated" || normalized === "derived" || normalized === "computed";
@@ -654,7 +671,7 @@ export function canAcceptCalculatedReviewField(field) {
 
 export function hasValidSourceEvidence(evidence = {}) {
   const page = evidence?.sourcePage ?? evidence?.source_page ?? evidence?.page_number ?? evidence?.page;
-  const hasPage = page !== null && page !== undefined && page !== "" && Number.isFinite(Number(page));
+  const hasPage = normalizeSourcePage(page) !== null;
   const sourceText = cleanSourceEvidenceText(
     evidence?.sourceText
       ?? evidence?.source_text
@@ -662,7 +679,7 @@ export function hasValidSourceEvidence(evidence = {}) {
       ?? evidence?.source_clause
       ?? evidence?.snippet,
   );
-  return hasPage || Boolean(sourceText);
+  return hasPage && hasNaturalSourceBoundary(sourceText);
 }
 
 export function isSourceBackedField({ value, confidence, evidence, extractionStatus } = {}) {
@@ -753,10 +770,7 @@ export function readFieldEvidence(lease, key) {
 
   return {
     rawValue: evRawValue,
-    sourcePage:
-      evSourcePage !== null && evSourcePage !== undefined && evSourcePage !== ""
-        ? Number(evSourcePage)
-        : null,
+    sourcePage: normalizeSourcePage(evSourcePage),
     sourceText: evSourceText ?? null,
     extractionStatus: evExtractionStatus,
   };

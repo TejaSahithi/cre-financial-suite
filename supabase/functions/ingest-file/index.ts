@@ -10,6 +10,17 @@ import {
   type DocumentSubtype,
 } from "../_shared/file-detector.ts";
 import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
+import {
+  buildBlockedReviewPayload,
+  buildPipelineMetadata,
+  countTextChars,
+  extractPipelineMetadata,
+  isBlockingParserStatus,
+  mergePipelineIntoNormalizedOutput,
+  PARSER_STATUSES,
+  REVIEW_STATUSES,
+} from "../_shared/extraction/pipeline-contract.ts";
 
 /**
  * ingest-file — Unified File Ingestion Router
@@ -540,6 +551,100 @@ async function parkForManualReview(args: {
   return payload;
 }
 
+async function parkForBlockedPipeline(args: {
+  supabaseAdmin: any;
+  logger?: any;
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string;
+  extractionMethod?: string | null;
+  stage: string;
+  parserStatus?: string | null;
+  errorCode: string;
+  reason: string;
+  fullTextChars?: number;
+  pageCount?: number | null;
+}) {
+  const pipeline = buildPipelineMetadata({
+    parser_status: args.parserStatus ?? null,
+    review_status: REVIEW_STATUSES.BLOCKED,
+    error_code: args.errorCode,
+    error_message: args.reason,
+    full_text_chars: args.fullTextChars ?? 0,
+    page_count: args.pageCount ?? null,
+    provider_used: args.extractionMethod ?? null,
+    stage: args.stage,
+  });
+  const payload = buildBlockedReviewPayload({
+    fileId: args.fileId,
+    fileName: args.fileName,
+    moduleType: args.moduleType,
+    documentSubtype: args.documentSubtype,
+    extractionMethod: args.extractionMethod ?? null,
+    message: "The document could not be parsed into readable lease text.",
+    pipeline,
+  });
+
+  const { error } = await setStatus(args.supabaseAdmin, args.fileId, "failed", {
+    review_required: false,
+    review_status: REVIEW_STATUSES.BLOCKED,
+    processing_status: args.parserStatus ?? args.errorCode,
+    extraction_method: args.extractionMethod ?? "none",
+    ui_review_payload: payload,
+    normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
+      method: "blocked_pipeline_failure",
+      rows: [],
+      warnings: payload.global_warnings,
+      validationErrors: [],
+    }),
+    parsed_data: [],
+    row_count: 0,
+    valid_count: 0,
+    error_count: 1,
+    error_message: args.reason,
+    failed_step: args.stage,
+    processing_completed_at: new Date().toISOString(),
+  });
+
+  if (error && error.code !== "NO_ROW_UPDATED") {
+    throw new Error(`Blocked pipeline update failed: ${error.message}`);
+  }
+
+  await args.logger?.event?.(args.stage, "blocked", {
+    parser_status: args.parserStatus ?? null,
+    error_code: args.errorCode,
+    full_text_chars: args.fullTextChars ?? 0,
+    page_count: args.pageCount ?? null,
+    extraction_method: args.extractionMethod ?? null,
+  });
+
+  return payload;
+}
+
+async function readParserState(supabaseAdmin: any, fileId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("id, status, processing_status, error_message, extraction_method, docling_raw")
+    .eq("id", fileId)
+    .maybeSingle();
+  if (error) {
+    console.warn("[ingest-file] Could not read parser state:", error);
+    return { record: null, pipeline: {}, parserStatus: null, fullTextChars: 0, pageCount: null };
+  }
+  const pipeline = extractPipelineMetadata(data);
+  const doclingRaw = data?.docling_raw ?? null;
+  const fullTextChars = Number(
+    pipeline?.full_text_chars ?? countTextChars(doclingRaw?.full_text),
+  );
+  const parserStatus =
+    pipeline?.parser_status ??
+    doclingRaw?._metadata?.parser_status ??
+    (fullTextChars <= 0 ? PARSER_STATUSES.EMPTY_TEXT : null);
+  const pageCount = Number(pipeline?.page_count ?? doclingRaw?.page_count ?? 0) || null;
+  return { record: data, pipeline, parserStatus, fullTextChars, pageCount };
+}
+
 function humanizeFieldName(fieldName: string): string {
   return String(fieldName)
     .replace(/_/g, " ")
@@ -636,6 +741,7 @@ Deno.serve(async (req: Request) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    const logger = createLogger(supabaseAdmin, file_id, orgId);
 
     // 3. Fetch file record (org_id isolation)
     const { data: fileRecord, error: fetchError } = await supabaseAdmin
@@ -860,13 +966,17 @@ Deno.serve(async (req: Request) => {
         const reason = (doclingResult as any).timedOut
           ? `Extraction timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s - the PDF may be too large or scanned at very high resolution. Click Re-extract Lease to retry, or upload a smaller/optimized PDF.`
           : `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
-        const payload = await parkForManualReview({
+        const payload = await parkForBlockedPipeline({
           supabaseAdmin,
+          logger,
           fileId: file_id,
           fileName: fileRecord.file_name ?? "document",
           moduleType: effectiveModuleType,
           documentSubtype: subtypeResult.subtype,
-          extractionMethod: (doclingResult as any).timedOut ? "timeout_review_pending" : "manual_review_fallback",
+          extractionMethod: (doclingResult as any).timedOut ? "timeout_review_pending" : "parse_failed",
+          stage: "parse",
+          parserStatus: (doclingResult as any).timedOut ? PARSER_STATUSES.TIMEOUT : PARSER_STATUSES.FAILED,
+          errorCode: (doclingResult as any).timedOut ? "PARSE_TIMEOUT" : "PDF_PARSING_FAILED",
           reason,
         });
         
@@ -879,7 +989,45 @@ Deno.serve(async (req: Request) => {
             result: doclingResult.data,
             error_details: doclingResult.error,
             stage: "extraction",
-            manual_review: true,
+            manual_review: false,
+            blocked_pipeline: true,
+            ui_review_payload: payload,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const parserState = await readParserState(supabaseAdmin, file_id);
+      if (isBlockingParserStatus(parserState.parserStatus)) {
+        const reason =
+          String(parserState.pipeline?.error_message || parserState.record?.error_message || "") ||
+          "The document could not be parsed into readable lease text.";
+        const payload = await parkForBlockedPipeline({
+          supabaseAdmin,
+          logger,
+          fileId: file_id,
+          fileName: fileRecord.file_name ?? "document",
+          moduleType: effectiveModuleType,
+          documentSubtype: subtypeResult.subtype,
+          extractionMethod: parserState.record?.extraction_method ?? fileRecord.extraction_method ?? "parse_failed",
+          stage: "parse",
+          parserStatus: String(parserState.parserStatus),
+          errorCode: String(parserState.pipeline?.error_code || "PARSER_OUTPUT_NOT_USABLE"),
+          reason,
+          fullTextChars: parserState.fullTextChars,
+          pageCount: parserState.pageCount,
+        });
+
+        return new Response(
+          JSON.stringify({
+            error: false,
+            file_id,
+            detection: detectionSummary,
+            routing: { routed_to: routing.route, reason: routing.reason },
+            stage: "extraction",
+            blocked_pipeline: true,
+            parser_status: parserState.parserStatus,
+            full_text_chars: parserState.fullTextChars,
             ui_review_payload: payload,
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -937,14 +1085,20 @@ Deno.serve(async (req: Request) => {
         }
 
         const reason = `Document normalization failed: ${normalizeResult.error || "Unknown error"}`;
-        const payload = await parkForManualReview({
+        const payload = await parkForBlockedPipeline({
           supabaseAdmin,
+          logger,
           fileId: file_id,
           fileName: fileRecord.file_name ?? "document",
           moduleType: effectiveModuleType,
           documentSubtype: subtypeResult.subtype,
-          extractionMethod: "manual_review_fallback",
+          extractionMethod: "normalize_failed",
+          stage: "normalize",
+          parserStatus: String(parserState.parserStatus ?? PARSER_STATUSES.COMPLETED),
+          errorCode: "NORMALIZATION_FAILED",
           reason,
+          fullTextChars: parserState.fullTextChars,
+          pageCount: parserState.pageCount,
         });
 
         return new Response(
@@ -956,7 +1110,8 @@ Deno.serve(async (req: Request) => {
             result: normalizeResult.data,
             error_details: normalizeResult.error,
             stage: "normalization",
-            manual_review: true,
+            manual_review: false,
+            blocked_pipeline: true,
             ui_review_payload: payload,
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },

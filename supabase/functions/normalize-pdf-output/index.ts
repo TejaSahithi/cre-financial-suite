@@ -27,7 +27,18 @@ import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
+import {
+  buildBlockedReviewPayload,
+  buildPipelineMetadata,
+  countTextChars,
+  mergePipelineIntoNormalizedOutput,
+  MIN_LEASE_TEXT_CHARS,
+  NORMALIZE_STATUSES,
+  PARSER_STATUSES,
+  REVIEW_STATUSES,
+} from "../_shared/extraction/pipeline-contract.ts";
 
 // Base64 expands PDFs by about 33%, and the intermediate binary string can
 // double memory again. Keep inline Vision fallback below Edge compute limits.
@@ -1336,6 +1347,23 @@ function isBlank(value: unknown): boolean {
   return value == null || (typeof value === "string" && value.trim() === "");
 }
 
+function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefined | null): number {
+  if (!Array.isArray(rows)) return 0;
+  let count = 0;
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    for (const [key, value] of Object.entries(row)) {
+      if (key.startsWith("_")) continue;
+      if (isInternalReviewKey(key)) continue;
+      if (isBlank(value)) continue;
+      if (Array.isArray(value) && value.length === 0) continue;
+      if (typeof value === "object" && value !== null) continue;
+      count += 1;
+    }
+  }
+  return count;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -1385,6 +1413,7 @@ Deno.serve(async (req: Request) => {
         404,
       );
     }
+    const logger = createLogger(supabaseAdmin, file_id, orgId);
 
     // Must be in pdf_parsed state
     if (fileRecord.status !== "pdf_parsed") {
@@ -1409,6 +1438,86 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const moduleType = fileRecord.module_type ?? "unknown";
+    const extractionModuleType = toExtractionModuleType(moduleType);
+    const fileName = fileRecord.file_name ?? "document";
+    const parserPipeline =
+      (fileRecord.docling_raw as any)?._metadata?.pipeline ?? {};
+    const doclingTextLength = countTextChars((fileRecord.docling_raw as any)?.full_text);
+    const parserStatus =
+      parserPipeline?.parser_status ??
+      (fileRecord.docling_raw as any)?._metadata?.parser_status ??
+      (doclingTextLength <= 0 ? PARSER_STATUSES.EMPTY_TEXT : null);
+    const parseTextErrorCode = doclingTextLength <= 0
+      ? "EMPTY_PARSE_TEXT"
+      : doclingTextLength < MIN_LEASE_TEXT_CHARS
+        ? "INSUFFICIENT_PARSE_TEXT"
+        : null;
+
+    if (parseTextErrorCode) {
+      const message = parseTextErrorCode === "EMPTY_PARSE_TEXT"
+        ? "The document could not be parsed into readable lease text."
+        : `The document parser returned only ${doclingTextLength} readable characters; at least ${MIN_LEASE_TEXT_CHARS} are required for automatic lease extraction.`;
+      const pipeline = buildPipelineMetadata({
+        ...parserPipeline,
+        parser_status: parserStatus ?? (parseTextErrorCode === "EMPTY_PARSE_TEXT"
+          ? PARSER_STATUSES.EMPTY_TEXT
+          : PARSER_STATUSES.INSUFFICIENT_TEXT),
+        normalize_status: NORMALIZE_STATUSES.SKIPPED_EMPTY_PARSE,
+        review_status: REVIEW_STATUSES.BLOCKED,
+        error_code: parseTextErrorCode,
+        error_message: message,
+        full_text_chars: doclingTextLength,
+        page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+        stage: "normalize",
+      });
+      const payload = buildBlockedReviewPayload({
+        fileId: file_id,
+        fileName,
+        moduleType,
+        documentSubtype: fileRecord.document_subtype ?? null,
+        extractionMethod: fileRecord.extraction_method ?? null,
+        message: "The document could not be parsed into readable lease text.",
+        pipeline,
+      });
+      await setStatus(supabaseAdmin, file_id, "failed", {
+        review_required: false,
+        review_status: REVIEW_STATUSES.BLOCKED,
+        processing_status: pipeline.parser_status ?? pipeline.error_code,
+        extraction_method: fileRecord.extraction_method ?? "none",
+        ui_review_payload: payload,
+        normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
+          method: "blocked_pipeline_failure",
+          rows: [],
+          warnings: payload.global_warnings,
+          validationErrors: [],
+        }),
+        parsed_data: [],
+        row_count: 0,
+        valid_count: 0,
+        error_count: 1,
+        error_message: message,
+        failed_step: "normalize",
+        processing_completed_at: new Date().toISOString(),
+      });
+      await logger.event("normalize", "blocked", {
+        normalize_status: NORMALIZE_STATUSES.SKIPPED_EMPTY_PARSE,
+        parser_status: pipeline.parser_status,
+        error_code: parseTextErrorCode,
+        full_text_chars: doclingTextLength,
+        page_count: pipeline.page_count,
+      });
+      return jsonResponse({
+        error: true,
+        file_id,
+        processing_status: "failed",
+        normalize_status: NORMALIZE_STATUSES.SKIPPED_EMPTY_PARSE,
+        error_code: parseTextErrorCode,
+        message,
+        ui_review_payload: payload,
+      }, 422);
+    }
+
     // When parse-pdf-docling stored an empty docling_raw because no backend was
     // configured AND the file was too large for native extraction, skip the
     // Vision-fallback download that would re-OOM this function for the same reason.
@@ -1428,9 +1537,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const moduleType = fileRecord.module_type ?? "unknown";
-    const extractionModuleType = toExtractionModuleType(moduleType);
-    const fileName = fileRecord.file_name ?? "document";
     const fileSizeBytes = Number(fileRecord.file_size || 0);
     const fileSizeIsKnown = Number.isFinite(fileSizeBytes) && fileSizeBytes > 0;
 
@@ -1439,7 +1545,6 @@ Deno.serve(async (req: Request) => {
     // PDFs. For digital PDFs with sufficient extracted text the file bytes are
     // never used and downloading them wastes 3–8 MB of Edge Function RAM,
     // which is the primary cause of the 546 "compute resources" error.
-    const doclingTextLength = String((fileRecord.docling_raw as any)?.full_text ?? "").length;
     const doclingBlockCount = Array.isArray((fileRecord.docling_raw as any)?.text_blocks)
       ? (fileRecord.docling_raw as any).text_blocks.length
       : 0;
@@ -1650,23 +1755,75 @@ Deno.serve(async (req: Request) => {
         };
       }
 
-      if ((!result.rows || result.rows.length === 0) && fileRecord.review_required) {
-        result.rows = [buildFallbackReviewRow(moduleType)];
-        result.warnings = [
-          ...(result.warnings ?? []),
-          "No structured fields were extracted automatically. This document is available for manual review.",
-        ];
-        result.metadata = {
-          ...(result.metadata ?? {}),
-          totalRecords: 1,
-          avgConfidence: 0,
-        };
-      }
-
-      if (!result.rows || result.rows.length === 0) {
-        throw new Error(
-          `Extraction produced 0 rows. Warnings: ${result.warnings.join("; ")}`,
-        );
+      const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
+      if (!result.rows || result.rows.length === 0 || meaningfulValueCount === 0) {
+        const reason =
+          `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
+        const pipeline = buildPipelineMetadata({
+          parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          ai_status: "ai_empty_output",
+          review_status: REVIEW_STATUSES.BLOCKED,
+          error_code: "FAILED_EMPTY_EXTRACTION",
+          error_message: reason,
+          full_text_chars: doclingTextLength,
+          page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+          mapped_fields_count: 0,
+          dynamic_terms_count: 0,
+          source_backed_count: 0,
+          lease_clauses_count: 0,
+          expense_terms_count: 0,
+          cam_terms_count: 0,
+          stage: "normalize",
+        });
+        const payload = buildBlockedReviewPayload({
+          fileId: file_id,
+          fileName,
+          moduleType,
+          documentSubtype: fileRecord.document_subtype ?? null,
+          extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
+          message: "No usable lease values were extracted from the parsed document.",
+          pipeline,
+        });
+        await setStatus(supabaseAdmin, file_id, "failed", {
+          review_required: false,
+          review_status: REVIEW_STATUSES.BLOCKED,
+          processing_status: "failed_empty_extraction",
+          extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
+          ui_review_payload: payload,
+          normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
+            method: "blocked_pipeline_failure",
+            rows: [],
+            warnings: payload.global_warnings,
+            validationErrors: result.validationErrors ?? [],
+          }),
+          parsed_data: [],
+          row_count: 0,
+          valid_count: 0,
+          error_count: 1,
+          error_message: reason,
+          failed_step: "normalize",
+          processing_completed_at: new Date().toISOString(),
+        });
+        await logger.event("normalize", "blocked", {
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          ai_status: "ai_empty_output",
+          error_code: "FAILED_EMPTY_EXTRACTION",
+          full_text_chars: doclingTextLength,
+          page_count: pipeline.page_count,
+          mapped_fields_count: 0,
+          dynamic_terms_count: 0,
+          lease_clauses_count: 0,
+        });
+        return jsonResponse({
+          error: true,
+          file_id,
+          processing_status: "failed",
+          normalize_status: NORMALIZE_STATUSES.FAILED,
+          error_code: "FAILED_EMPTY_EXTRACTION",
+          message: reason,
+          ui_review_payload: payload,
+        }, 422);
       }
 
       const uiReviewPayload = buildReviewPayload({
@@ -1866,6 +2023,14 @@ Deno.serve(async (req: Request) => {
         `rows=${result.rows.length} method=${result.method} ` +
         `confidence=${result.metadata.avgConfidence}% nextStatus=${nextStatus}`,
       );
+      await logger.event("normalize", "completed", {
+        normalize_status: NORMALIZE_STATUSES.COMPLETED,
+        row_count: result.rows.length,
+        full_text_chars: doclingTextLength,
+        page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+        method: result.method,
+        review_required: reviewRequired,
+      });
 
       return jsonResponse({
         error: false,

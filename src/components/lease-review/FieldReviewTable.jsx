@@ -27,11 +27,13 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
+  hasValidSourceEvidence,
   readFieldEvidence,
   readFieldValue,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
 import { validateFieldValue, computeSourceQuality } from "@/components/lease-review/utils/fieldValidator";
+import { isReviewRowDisplayable } from "@/components/lease-review/utils/dynamicFields";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -95,12 +97,7 @@ export default function FieldReviewTable({
   }
 
   const visibleFields = fields.filter((field) => {
-    if (showMissing) return true;
-    const value = readFieldValue(lease, field.key);
-    const { sourceText } = readFieldEvidence(lease, field.key);
-    const hasValue = value !== null && value !== undefined && value !== "";
-    const hasSource = Boolean(sourceText);
-    return hasValue || hasSource;
+    return isReviewRowDisplayable(field, { showMissing });
   });
 
   if (visibleFields.length === 0) {
@@ -119,7 +116,7 @@ export default function FieldReviewTable({
             <TableHead className="w-[200px] text-xs">Field</TableHead>
             <TableHead className="w-[200px] text-xs">Normalized Value</TableHead>
             <TableHead className="w-[60px] text-xs text-center">Page</TableHead>
-            <TableHead className="text-xs">Exact Source Text</TableHead>
+            <TableHead className="text-xs">Source Text</TableHead>
             <TableHead className="w-[170px] text-xs text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -127,12 +124,17 @@ export default function FieldReviewTable({
           {visibleFields.map((field) => {
             const review = fieldReviews?.[field.key];
             const reviewStatus = review?.status || REVIEW_STATUSES.PENDING;
-            const value = readFieldValue(lease, field.key);
+            const value = field.normalized_value ?? field.value ?? readFieldValue(lease, field.key);
             const evidence = readFieldEvidence(lease, field.key);
-            const { sourceText, extractionStatus, sourcePage } = evidence;
+            const sourceText = field.source_text ?? field.exact_source_text ?? evidence.sourceText;
+            const extractionStatus = field.status ?? field.extraction_status ?? evidence.extractionStatus;
+            const sourcePage = field.page_number ?? field.source_page ?? evidence.sourcePage;
             const required = field.required;
             const validationResult = validateFieldValue(field.key, value);
-            const sourceQualityKey = computeSourceQuality(value, sourceText, extractionStatus);
+            const hasValidSource = hasValidSourceEvidence({ sourcePage, sourceText });
+            const sourceQualityKey = hasValidSource || /^(calculated|derived|computed)$/i.test(String(extractionStatus || ""))
+              ? computeSourceQuality(value, sourceText, extractionStatus)
+              : "missing";
             const sqBadge = SOURCE_QUALITY_BADGE[sourceQualityKey];
             const isConflict = conflictKeys?.has(field.key);
 
@@ -155,7 +157,7 @@ export default function FieldReviewTable({
                 {/* Field name */}
                 <TableCell className="text-xs">
                   <div className="flex flex-wrap items-center gap-1 font-medium text-slate-700">
-                    {field.label}
+                    {field.field_label || field.label}
                     {required && <span className="text-red-500">*</span>}
                     {isConflict && (
                       <span className="rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide bg-red-100 text-red-700">

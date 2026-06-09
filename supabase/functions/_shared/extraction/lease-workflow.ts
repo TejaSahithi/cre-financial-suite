@@ -298,7 +298,7 @@ function normalizeToken(value: unknown) {
 function sourcePageOf(value: any): number | null {
   const page = value?.page ?? value?.page_number ?? value?.source_page ?? null;
   const numeric = Number(page);
-  return Number.isFinite(numeric) ? numeric : null;
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
 function isGenericSourceText(value: unknown) {
@@ -2071,12 +2071,7 @@ function findSupportingClauseForRule(
   // extractClauseSnippet returns null for clause_text now when no document
   // text matches (no more keyword fallback), so the caller will correctly
   // mark the rule as missing source evidence.
-  const fallback = extractClauseSnippet(textBlocks, fullText, keywords, 420);
-  return {
-    clause_text: fallback.clause_text,
-    source_page: fallback.source_page,
-    clause_type: "supporting_text",
-  };
+  return null;
 }
 
 function escapeForRegex(value: string) {
@@ -2452,7 +2447,9 @@ function deriveExpenseRules(
 
   const sourceBackedRules = rules.filter((rule) => {
     const sourcePage = asNumber(rule.source_page);
-    return Boolean(rule.source_clause) || (sourcePage != null && sourcePage > 0);
+    const sourceClause = cleanSourceText(rule.source_clause);
+    const clauseType = String(rule.clauses?.[0]?.clause_type || "").toLowerCase();
+    return Boolean(sourceClause) && sourcePage != null && sourcePage > 0 && clauseType !== "supporting_text";
   });
 
   return finalizeDerivedExpenseRules(sourceBackedRules);

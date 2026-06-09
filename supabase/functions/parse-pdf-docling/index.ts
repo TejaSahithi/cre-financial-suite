@@ -18,7 +18,18 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { parseDocument } from "../_shared/extraction/parser.ts";
-import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
+import { setStatus } from "../_shared/pipeline-status.ts";
+import { createLogger } from "../_shared/logger.ts";
+import {
+  buildBlockedReviewPayload,
+  buildPipelineMetadata,
+  countTextChars,
+  mergePipelineIntoNormalizedOutput,
+  MIN_LEASE_TEXT_CHARS,
+  parserStatusForTextLength,
+  PARSER_STATUSES,
+  REVIEW_STATUSES,
+} from "../_shared/extraction/pipeline-contract.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -32,6 +43,7 @@ Deno.serve(async (req: Request) => {
     });
 
   try {
+    const functionStartedAt = new Date().toISOString();
     // 1. Auth + org isolation
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
@@ -68,6 +80,90 @@ Deno.serve(async (req: Request) => {
 
     const fileName: string = fileRecord.file_name ?? "document";
     const mimeType: string = fileRecord.mime_type ?? "application/octet-stream";
+    const logger = createLogger(supabaseAdmin, file_id, orgId);
+
+    const persistBlockedParse = async (args: {
+      parserStatus: string;
+      errorCode: string;
+      message: string;
+      fullTextChars?: number;
+      pageCount?: number | null;
+      providerUsed?: string | null;
+      warnings?: string[];
+      doclingRaw?: Record<string, unknown> | null;
+    }) => {
+      const pipeline = buildPipelineMetadata({
+        parser_status: args.parserStatus,
+        review_status: REVIEW_STATUSES.BLOCKED,
+        error_code: args.errorCode,
+        error_message: args.message,
+        started_at: functionStartedAt,
+        finished_at: new Date().toISOString(),
+        full_text_chars: args.fullTextChars ?? 0,
+        page_count: args.pageCount ?? null,
+        provider_used: args.providerUsed ?? null,
+        docling_raw_present: !!args.doclingRaw,
+        warnings: args.warnings ?? [],
+        stage: "parse",
+      });
+      const payload = buildBlockedReviewPayload({
+        fileId: file_id,
+        fileName,
+        moduleType: fileRecord.module_type ?? "leases",
+        documentSubtype: fileRecord.document_subtype ?? null,
+        extractionMethod: args.providerUsed ?? null,
+        message: "The document could not be parsed into readable lease text.",
+        pipeline,
+      });
+      const doclingRaw = {
+        ...(args.doclingRaw ?? {}),
+        full_text: (args.doclingRaw as any)?.full_text ?? "",
+        text_blocks: Array.isArray((args.doclingRaw as any)?.text_blocks) ? (args.doclingRaw as any).text_blocks : [],
+        tables: Array.isArray((args.doclingRaw as any)?.tables) ? (args.doclingRaw as any).tables : [],
+        fields: Array.isArray((args.doclingRaw as any)?.fields) ? (args.doclingRaw as any).fields : [],
+        pages: Array.isArray((args.doclingRaw as any)?.pages) ? (args.doclingRaw as any).pages : [],
+        page_count: args.pageCount ?? (args.doclingRaw as any)?.page_count ?? null,
+        warnings: args.warnings ?? (args.doclingRaw as any)?.warnings ?? [],
+        extraction_method: args.providerUsed ?? (args.doclingRaw as any)?.extraction_method ?? "none",
+        _metadata: {
+          ...(((args.doclingRaw as any)?._metadata ?? {}) as Record<string, unknown>),
+          ...pipeline,
+          pipeline,
+        },
+      };
+      const { error } = await setStatus(supabaseAdmin, file_id, "failed", {
+        processing_status: args.parserStatus,
+        review_status: REVIEW_STATUSES.BLOCKED,
+        review_required: false,
+        error_message: args.message,
+        failed_step: "parse",
+        extraction_method: args.providerUsed ?? "none",
+        docling_raw: doclingRaw,
+        ui_review_payload: payload,
+        normalized_output: mergePipelineIntoNormalizedOutput(null, pipeline, {
+          method: "blocked_pipeline_failure",
+          rows: [],
+          warnings: payload.global_warnings,
+          validationErrors: [],
+        }),
+        parsed_data: [],
+        row_count: 0,
+        valid_count: 0,
+        error_count: 1,
+      });
+      if (error) {
+        console.error(`[parse-pdf-docling] Failed to persist blocked parser state for ${file_id}:`, error);
+      }
+      await logger.event("parse", "blocked", {
+        parser_status: args.parserStatus,
+        error_code: args.errorCode,
+        full_text_chars: args.fullTextChars ?? 0,
+        page_count: args.pageCount ?? null,
+        provider_used: args.providerUsed ?? null,
+        duration_ms: pipeline.total_duration_ms,
+      });
+      return payload;
+    };
 
     console.log(
       `[parse-pdf-docling] file_id=${file_id} name="${fileName}" mime=${mimeType} ` +
@@ -79,6 +175,10 @@ Deno.serve(async (req: Request) => {
     if (parsingStatusError) {
       throw new Error(`Failed to transition file to parsing: ${parsingStatusError.message}`);
     }
+    await logger.event("parse", "started", {
+      file_size_bytes: Number(fileRecord.file_size || 0) || null,
+      mime_type: mimeType,
+    });
 
     try {
       // 5. Pre-flight: check whether any parser backend can handle this file.
@@ -100,46 +200,29 @@ Deno.serve(async (req: Request) => {
           `larger than native-text limit (${MAX_NATIVE_BYTES / 1024 / 1024} MB) and no Docling/Vision backend configured. ` +
           `Storing empty docling_raw and continuing so the reviewer can manually fill fields.`,
         );
-        const emptyMetadata = {
-          extraction_method: "none",
-          file_format: mimeType,
-          page_count: 0,
-          table_count: 0,
-          field_count: 0,
-          text_block_count: 0,
-          has_content: false,
-          extraction_timestamp: new Date().toISOString(),
-          extraction_skipped_reason:
-            `File too large for native extraction (${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB) and ` +
-            `no DOCLING_API_URL or Vertex AI credentials are configured. ` +
-            `Set one of these in Supabase Edge Function secrets to enable AI extraction.`,
-        };
-        const { error: skipUpdateError } = await setStatus(supabaseAdmin, file_id, "pdf_parsed", {
-          docling_raw: {
-            full_text: "",
-            text_blocks: [],
-            tables: [],
-            fields: [],
-            pages: [],
-            page_count: 0,
-            warnings: [emptyMetadata.extraction_skipped_reason],
-            extraction_method: "none",
-            _metadata: emptyMetadata,
-          },
-          extraction_method: "none",
-          parsed_data: [],
-          row_count: 0,
-          processing_completed_at: new Date().toISOString(),
+        const reason =
+          `File too large for native extraction (${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB) and ` +
+          `no DOCLING_API_URL or Vertex AI credentials are configured. ` +
+          `Set one of these in Supabase Edge Function secrets to enable AI extraction.`;
+        const payload = await persistBlockedParse({
+          parserStatus: PARSER_STATUSES.OCR_REQUIRED,
+          errorCode: "PARSER_PROVIDER_UNAVAILABLE",
+          message: reason,
+          fullTextChars: 0,
+          pageCount: null,
+          providerUsed: "none",
+          warnings: [reason],
         });
-        if (skipUpdateError) throw new Error(`Failed to store empty docling_raw: ${skipUpdateError.message}`);
         return jsonResponse({
-          error: false,
+          error: true,
           file_id,
-          processing_status: "pdf_parsed",
+          processing_status: "failed",
           extraction_method: "none",
-          extraction_skipped: true,
-          message: emptyMetadata.extraction_skipped_reason,
-        });
+          parser_status: PARSER_STATUSES.OCR_REQUIRED,
+          error_code: "PARSER_PROVIDER_UNAVAILABLE",
+          message: reason,
+          ui_review_payload: payload,
+        }, 422);
       }
 
       // 5b. Download bytes from Supabase Storage
@@ -166,10 +249,6 @@ Deno.serve(async (req: Request) => {
       }
 
       const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
-      // fileBlob is no longer needed after conversion — release reference so GC
-      // can reclaim it before parseDocument (which may allocate Docling FormData).
-      (fileBlob as any) = null;
-
       const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
         .storage
         .from("financial-uploads")
@@ -214,7 +293,7 @@ Deno.serve(async (req: Request) => {
       const extractionMetadata = {
         extraction_method: extractionMethod,
         file_format: mimeType,
-        page_count: doclingOutput.page_count || 1,
+        page_count: doclingOutput.page_count ?? null,
         table_count: doclingOutput.tables?.length ?? 0,
         field_count: doclingOutput.fields?.length ?? 0,
         text_block_count: doclingOutput.text_blocks?.length ?? 0,
@@ -227,13 +306,60 @@ Deno.serve(async (req: Request) => {
         text_truncated: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS,
         blocks_truncated: Array.isArray(doclingOutput.text_blocks) && doclingOutput.text_blocks.length > MAX_STORED_BLOCKS,
       };
+      const fullTextChars = countTextChars(doclingOutput.full_text);
+      const parserStatus = parserStatusForTextLength(fullTextChars);
+      const parserPipeline = buildPipelineMetadata({
+        parser_status: parserStatus,
+        review_status: parserStatus === PARSER_STATUSES.COMPLETED ? null : REVIEW_STATUSES.BLOCKED,
+        error_code: parserStatus === PARSER_STATUSES.COMPLETED ? null : (
+          parserStatus === PARSER_STATUSES.EMPTY_TEXT ? "EMPTY_PARSE_TEXT" : "INSUFFICIENT_PARSE_TEXT"
+        ),
+        error_message: parserStatus === PARSER_STATUSES.COMPLETED ? null : "The document could not be parsed into readable lease text.",
+        started_at: functionStartedAt,
+        finished_at: new Date().toISOString(),
+        full_text_chars: fullTextChars,
+        page_count: doclingOutput.page_count ?? null,
+        provider_used: extractionMethod,
+        docling_raw_present: true,
+        ocr_used: extractionMethod.includes("vision") || extractionMethod.includes("ocr"),
+        warnings: Array.isArray((doclingOutput as any).warnings) ? (doclingOutput as any).warnings : [],
+        stage: "parse",
+      });
+
+      if (parserStatus !== PARSER_STATUSES.COMPLETED) {
+        const errorCode = parserStatus === PARSER_STATUSES.EMPTY_TEXT ? "EMPTY_PARSE_TEXT" : "INSUFFICIENT_PARSE_TEXT";
+        const message = parserStatus === PARSER_STATUSES.EMPTY_TEXT
+          ? "The document could not be parsed into readable lease text."
+          : `The document parser returned only ${fullTextChars} readable characters; at least ${MIN_LEASE_TEXT_CHARS} are required for automatic lease extraction.`;
+        const payload = await persistBlockedParse({
+          parserStatus,
+          errorCode,
+          message,
+          fullTextChars,
+          pageCount: doclingOutput.page_count ?? null,
+          providerUsed: extractionMethod,
+          warnings: Array.isArray((doclingOutput as any).warnings) ? (doclingOutput as any).warnings : [],
+          doclingRaw: { ...trimmedDoclingRaw, _metadata: { ...extractionMetadata, pipeline: parserPipeline } },
+        });
+        return jsonResponse({
+          error: true,
+          file_id,
+          processing_status: "failed",
+          parser_status: parserStatus,
+          error_code: errorCode,
+          message,
+          full_text_chars: fullTextChars,
+          page_count: doclingOutput.page_count ?? null,
+          ui_review_payload: payload,
+        }, 422);
+      }
 
       const { error: updateError } = await setStatus(
         supabaseAdmin,
         file_id,
         "pdf_parsed",
         {
-          docling_raw: { ...trimmedDoclingRaw, _metadata: extractionMetadata },
+          docling_raw: { ...trimmedDoclingRaw, _metadata: { ...extractionMetadata, ...parserPipeline, pipeline: parserPipeline } },
           extraction_method: extractionMethod,
           parsed_data: [],
           row_count: (doclingOutput.tables ?? []).reduce(
@@ -252,6 +378,16 @@ Deno.serve(async (req: Request) => {
         `[parse-pdf-docling] OK file_id=${file_id} method=${extractionMethod} ` +
         `blocks=${extractionMetadata.text_block_count} tables=${extractionMetadata.table_count}`,
       );
+      await logger.event("parse", "completed", {
+        parser_status: parserStatus,
+        full_text_chars: fullTextChars,
+        page_count: doclingOutput.page_count ?? null,
+        provider_used: extractionMethod,
+        text_block_count: extractionMetadata.text_block_count,
+        table_count: extractionMetadata.table_count,
+        field_count: extractionMetadata.field_count,
+        duration_ms: parserPipeline.total_duration_ms,
+      });
 
       return jsonResponse({
         error: false,
@@ -260,12 +396,13 @@ Deno.serve(async (req: Request) => {
         extraction_method: extractionMethod,
         file_format: mimeType,
         page_count: doclingOutput.page_count,
+        parser_status: parserStatus,
         table_count: extractionMetadata.table_count,
         field_count: extractionMetadata.field_count,
         text_block_count: extractionMetadata.text_block_count,
         has_content: extractionMetadata.has_content,
         content_summary: {
-          text_length: doclingOutput.full_text?.length ?? 0,
+          text_length: fullTextChars,
           tables_found: extractionMetadata.table_count > 0,
           fields_found: extractionMetadata.field_count > 0,
           structured_data:
@@ -279,13 +416,15 @@ Deno.serve(async (req: Request) => {
         extractionError.message,
       );
 
-      await setFailed(
-        supabaseAdmin,
-        file_id,
-        `Document extraction failed: ${extractionError.message}`,
-        "parsing",
-        15,
-      );
+      await persistBlockedParse({
+        parserStatus: PARSER_STATUSES.FAILED,
+        errorCode: "PDF_PARSING_FAILED",
+        message: `Document extraction failed: ${extractionError.message}`,
+        fullTextChars: 0,
+        pageCount: null,
+        providerUsed: null,
+        warnings: [String(extractionError.message ?? extractionError)],
+      });
 
       throw extractionError;
     }

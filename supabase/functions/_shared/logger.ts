@@ -18,6 +18,7 @@ export interface PipelineLogger {
   info(step: string, message: string, metadata?: Record<string, unknown>): Promise<void>;
   warn(step: string, message: string, metadata?: Record<string, unknown>): Promise<void>;
   error(step: string, message: string, metadata?: Record<string, unknown>): Promise<void>;
+  event(stage: string, status: string, metadata?: Record<string, unknown>): Promise<void>;
 }
 
 export function createLogger(
@@ -85,5 +86,17 @@ export function createLogger(
     info: (step, message, metadata) => write("info", step, message, metadata),
     warn: (step, message, metadata) => write("warn", step, message, metadata),
     error: (step, message, metadata) => write("error", step, message, metadata),
+    event: (stage, status, metadata = {}) =>
+      write(
+        status === "failed" || status === "blocked" ? "error" : status === "warning" ? "warn" : "info",
+        stage,
+        `pipeline_stage:${stage}:${status}`,
+        {
+          event_type: "pipeline_stage",
+          stage,
+          status,
+          ...metadata,
+        },
+      ),
   };
 }

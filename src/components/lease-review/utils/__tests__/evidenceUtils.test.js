@@ -4,13 +4,27 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/lib/leaseReviewSchema", () => ({
   LEASE_REVIEW_FIELDS: [],
+  FIELDS_BY_TAB: {
+    parties_premises: [{ key: "tenant_name", label: "Tenant Name", required: true, type: "text" }],
+  },
   hasValidSourceEvidence: ({ sourceText, sourcePage } = {}) => !!(sourceText || sourcePage != null),
+  isMeaningfulValue: (value) => value !== null && value !== undefined && value !== "",
   isCalculatedExtractionStatus: (s) => s === "calculated",
   isManualExtractionStatus: (s) => s === "manual_required",
   canAcceptCalculatedReviewField: () => false,
   isResolvedReview: (review) => review && ["accepted","edited","n_a","manual_required"].includes(review.status),
+  normalizeSourcePage: (page) => {
+    if (page === null || page === undefined || page === "") return null;
+    const n = Number(page);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  },
   readFieldValue: vi.fn(() => null),
   readFieldEvidence: vi.fn(() => ({ sourceText: null, sourcePage: null, extractionStatus: null })),
+  readFieldConfidence: vi.fn(() => null),
+  resolveExtractionStatus: vi.fn((_lease, _key, { value, evidence } = {}) => {
+    if (value === null || value === undefined || value === "") return "not_found";
+    return evidence?.sourceText && evidence?.sourcePage ? "extracted" : "missing_source_evidence";
+  }),
   REVIEW_STATUSES: { PENDING: "pending", ACCEPTED: "accepted", EDITED: "edited", N_A: "n_a", MANUAL_REQUIRED: "manual_required" },
   cleanSourceEvidenceText: (value) => {
     const text = String(value ?? "").trim();
@@ -20,7 +34,6 @@ vi.mock("@/lib/leaseReviewSchema", () => ({
     if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
     return text;
   },
-  readFieldValue: vi.fn(() => null),
 }));
 
 vi.mock("@/lib/leaseFieldResolver", () => ({
@@ -60,6 +73,8 @@ import {
   inferDynamicItemTab,
   inferDynamicItemType,
   collectExtractedDocumentItems,
+  buildLeaseReviewRowsByTab,
+  isReviewRowDisplayable,
 } from "../dynamicFields";
 
 import { detectDocumentMismatch, detectFieldConflicts } from "../validation";
@@ -534,6 +549,77 @@ describe("fieldMatchesFilter — showMissing equivalence", () => {
 });
 
 // ── 13. detectFieldConflicts (regression guard) ──────────────────────────────
+
+describe("buildLeaseReviewRowsByTab", () => {
+  it("carries dynamic row value, source text, and page into the review table shape", () => {
+    const lease = {
+      source_file_id: "file-1",
+      extraction_data: {
+        workflow_output: {
+          lease_clauses: [
+            {
+              clause_type: "assignment_and_subletting",
+              value: "Landlord consent required",
+              source_text: "Tenant shall not assign this Lease without Landlord's prior written consent.",
+              source_page: 7,
+              confidence: 0.91,
+              category: "legal_options",
+            },
+          ],
+        },
+      },
+    };
+
+    const rowsByTab = buildLeaseReviewRowsByTab(lease);
+    const row = Object.values(rowsByTab).flat().find((item) => item.key === "clause_assignment_and_subletting");
+
+    expect(row).toBeTruthy();
+    expect(row.normalized_value).toBe("Landlord consent required");
+    expect(row.source_text).toContain("prior written consent");
+    expect(row.page_number).toBe(7);
+    expect(row.is_dynamic).toBe(true);
+    expect(row.source_file_id).toBe("file-1");
+  });
+
+  it("does not stamp page 1 when a dynamic item has no valid page", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            cam_cap_amount: {
+              value: "$5.25",
+              source_text: "Tenant shall pay CAM in the amount of $5.25 per leasable square foot.",
+              source_page: "",
+            },
+          },
+        },
+      },
+    };
+
+    const rowsByTab = buildLeaseReviewRowsByTab(lease);
+    const row = Object.values(rowsByTab).flat().find((item) => item.key === "cam_cap_amount");
+
+    expect(row).toBeTruthy();
+    expect(row.page_number).toBeNull();
+    expect(row.source_text).toContain("$5.25");
+  });
+});
+
+describe("isReviewRowDisplayable", () => {
+  it("hides empty standard fields by default", () => {
+    expect(isReviewRowDisplayable({ key: "tenant_name", required: true, normalized_value: null }, { showMissing: false })).toBe(false);
+  });
+
+  it("shows required missing standard fields only when showMissing is enabled", () => {
+    expect(isReviewRowDisplayable({ key: "tenant_name", required: true, normalized_value: null }, { showMissing: true })).toBe(true);
+    expect(isReviewRowDisplayable({ key: "optional_note", required: false, normalized_value: null }, { showMissing: true })).toBe(false);
+  });
+
+  it("shows dynamic rows only when they have a value or source", () => {
+    expect(isReviewRowDisplayable({ key: "cam_cap", is_dynamic: true, normalized_value: "$5.25" })).toBe(true);
+    expect(isReviewRowDisplayable({ key: "cam_cap", is_dynamic: true, normalized_value: null, source_text: null }, { showMissing: true })).toBe(false);
+  });
+});
 
 describe("detectFieldConflicts", () => {
   it("flags monthly × 12 ≠ annual", () => {

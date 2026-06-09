@@ -1,10 +1,17 @@
 import {
+  FIELDS_BY_TAB,
   LEASE_REVIEW_FIELDS,
   hasValidSourceEvidence,
+  isMeaningfulValue,
   isCalculatedExtractionStatus,
   isManualExtractionStatus,
   canAcceptCalculatedReviewField,
   cleanSourceEvidenceText,
+  normalizeSourcePage,
+  readFieldConfidence,
+  readFieldEvidence,
+  readFieldValue,
+  resolveExtractionStatus,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
 import { entryValue, entrySourceText, entrySourcePage } from "@/components/lease-review/utils/fieldExtractors";
@@ -239,13 +246,127 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     if (!byTab[tab]) byTab[tab] = [];
     byTab[tab].push({
       key,
+      id: key,
+      field_key: key,
       label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
+      field_label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
       tab,
+      category: tab,
       type: inferDynamicItemType(item, key),
       allowNA: true,
       allowCalculatedAccept: canAcceptCalculatedReviewField({ key }),
       dynamic_document_item: true,
+      is_dynamic: true,
+      normalized_value: value,
+      raw_value: item?.raw_value ?? item?.rawValue ?? value,
+      page_number: normalizeSourcePage(item?.source_page ?? item?.page_number ?? item?.page),
+      source_text: sourceText,
+      confidence: typeof item?.confidence === "number" ? item.confidence : null,
+      status: item?.extraction_status ?? item?.review_status ?? null,
+      extraction_status: item?.extraction_status ?? item?.review_status ?? null,
+      source_file_id: lease?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
     });
   }
   return byTab;
+}
+
+export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
+  const key = field?.key || field?.field_key;
+  if (!key) return null;
+
+  const schemaValue = field.normalized_value ?? field.value ?? readFieldValue(lease, key);
+  const evidence = readFieldEvidence(lease, key);
+  const sourcePage = normalizeSourcePage(
+    field.page_number
+      ?? field.source_page
+      ?? field.page
+      ?? evidence.sourcePage,
+  );
+  const sourceText = cleanSourceEvidenceText(
+    field.source_text
+      ?? field.exact_source_text
+      ?? field.source_clause
+      ?? evidence.sourceText,
+  );
+  const confidence = typeof field.confidence === "number"
+    ? field.confidence
+    : readFieldConfidence(lease, key, null);
+  const statusEvidence = {
+    sourcePage,
+    sourceText,
+    extractionStatus: field.status ?? field.extraction_status ?? evidence.extractionStatus,
+  };
+  const status = field.status
+    ?? field.extraction_status
+    ?? resolveExtractionStatus(lease, key, {
+      value: schemaValue,
+      confidence,
+      evidence: statusEvidence,
+    });
+
+  return {
+    ...field,
+    id: field.id ?? key,
+    key,
+    field_key: key,
+    label: field.label ?? field.field_label ?? titleizeFieldKey(key),
+    field_label: field.field_label ?? field.label ?? titleizeFieldKey(key),
+    normalized_value: schemaValue,
+    raw_value: field.raw_value ?? evidence.rawValue ?? schemaValue,
+    page_number: sourcePage,
+    source_text: sourceText,
+    category: field.category ?? field.tab ?? tabKey ?? "unknown",
+    tab: field.tab ?? tabKey,
+    confidence,
+    status,
+    extraction_status: status,
+    is_dynamic: Boolean(field.is_dynamic || field.dynamic_document_item),
+    source_file_id: field.source_file_id ?? lease?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
+  };
+}
+
+export function buildLeaseReviewRowsByTab(lease, { userCustomFields = {} } = {}) {
+  const dynamicFieldsByTab = buildDynamicDocumentFieldsByTab(lease);
+  const byTab = {};
+
+  for (const tab of Object.keys(FIELDS_BY_TAB)) {
+    const rows = [
+      ...(FIELDS_BY_TAB[tab] || []),
+      ...(dynamicFieldsByTab[tab] || []),
+      ...(userCustomFields[tab] || []),
+    ]
+      .map((field) => buildCanonicalLeaseReviewField(lease, field, tab))
+      .filter(Boolean);
+    byTab[tab] = rows;
+  }
+
+  for (const [tab, fields] of Object.entries(dynamicFieldsByTab)) {
+    if (byTab[tab]) continue;
+    byTab[tab] = fields
+      .map((field) => buildCanonicalLeaseReviewField(lease, field, tab))
+      .filter(Boolean);
+  }
+
+  for (const [tab, fields] of Object.entries(userCustomFields || {})) {
+    if (byTab[tab]) continue;
+    byTab[tab] = fields
+      .map((field) => buildCanonicalLeaseReviewField(lease, field, tab))
+      .filter(Boolean);
+  }
+
+  return byTab;
+}
+
+export function buildLeaseReviewRows(lease, options = {}) {
+  return Object.values(buildLeaseReviewRowsByTab(lease, options)).flat();
+}
+
+export function isReviewRowDisplayable(row, { showMissing = false } = {}) {
+  const hasValue = isMeaningfulValue(row?.normalized_value ?? row?.value);
+  const hasSource = Boolean(cleanSourceEvidenceText(row?.source_text ?? row?.source_clause));
+  if (showMissing) {
+    if (row?.is_dynamic || row?.dynamic_document_item) return hasValue || hasSource;
+    return Boolean(row?.required) || hasValue || hasSource;
+  }
+  return hasValue || hasSource;
 }

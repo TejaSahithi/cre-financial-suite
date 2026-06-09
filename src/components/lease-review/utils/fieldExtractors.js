@@ -1,4 +1,4 @@
-import { cleanExtractedSourceText } from "@/components/lease-review/utils/dynamicFields";
+import { cleanSourceEvidenceText, normalizeSourcePage } from "@/lib/leaseReviewSchema";
 
 export function entryValue(entry) {
   if (entry == null) return null;
@@ -8,7 +8,7 @@ export function entryValue(entry) {
 
 export function entrySourceText(entry) {
   if (!entry || typeof entry !== "object") return null;
-  return cleanExtractedSourceText(
+  return cleanSourceEvidenceText(
     entry.exact_source_text
       ?? entry.exactSourceText
       ?? entry.source_clause
@@ -24,8 +24,7 @@ export function entrySourcePage(entry) {
   if (!entry || typeof entry !== "object") return null;
   const page = entry.source_page ?? entry.sourcePage ?? entry.page_number ?? entry.page
     ?? entry.evidence?.source_page ?? entry.evidence?.page_number ?? entry.evidence?.page;
-  const numeric = Number(page);
-  return Number.isFinite(numeric) ? numeric : null;
+  return normalizeSourcePage(page);
 }
 
 export function getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, key) {
@@ -38,7 +37,7 @@ export function getEvidenceRecordForKey(fieldEvidence, fieldsWithEvidence, ed, k
 
 export function validEvidenceRecord(record) {
   if (!record || typeof record !== "object") return null;
-  const sourceText = cleanExtractedSourceText(
+  const sourceText = cleanSourceEvidenceText(
     record.source_text
       ?? record.exact_source_text
       ?? record.source_clause
@@ -51,7 +50,7 @@ export function validEvidenceRecord(record) {
   if (!sourceText && sourcePage == null) return null;
   return {
     raw_value: record.raw_value ?? record.rawValue ?? record.value ?? null,
-    source_page: sourcePage == null || sourcePage === "" ? null : Number(sourcePage),
+    source_page: normalizeSourcePage(sourcePage),
     source_text: sourceText,
   };
 }

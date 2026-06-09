@@ -78,11 +78,27 @@ export default function ExtractionDebugPanel({ lease }) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("id, file_name, docling_raw, ui_review_payload, normalized_output, parsed_data, valid_data, extraction_method, status, module_type, updated_at")
+        .select("id, file_name, docling_raw, ui_review_payload, normalized_output, parsed_data, valid_data, extraction_method, status, processing_status, review_status, error_message, module_type, updated_at")
         .eq("id", sourceFileId)
         .maybeSingle();
       if (error) throw error;
       return data;
+    },
+    retry: false,
+  });
+
+  const { data: pipelineLogs = [] } = useQuery({
+    queryKey: ["debug-pipeline-logs", sourceFileId],
+    enabled: !!sourceFileId && !!supabase,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("pipeline_logs")
+        .select("id, step, level, message, metadata, timestamp")
+        .eq("file_id", sourceFileId)
+        .order("timestamp", { ascending: false })
+        .limit(12);
+      if (error) throw error;
+      return data || [];
     },
     retry: false,
   });
@@ -139,6 +155,11 @@ export default function ExtractionDebugPanel({ lease }) {
   // path doesn't copy it onto the lease).
   const pipelineDebug = uploadedFile?.normalized_output?.metadata?.extractionDebug
     || uploadedFile?.normalized_output?.metadata?.extraction_debug
+    || {};
+  const pipelineMeta =
+    uploadedFile?.ui_review_payload?.metadata?.pipeline
+    || uploadedFile?.normalized_output?.metadata?.pipeline
+    || uploadedFile?.docling_raw?._metadata?.pipeline
     || {};
   const debugRead = (key) => extractionDebug?.[key] ?? pipelineDebug?.[key];
   const doclingPagesParsed = workflowOutput?.summary?.docling_pages_parsed
@@ -206,6 +227,20 @@ export default function ExtractionDebugPanel({ lease }) {
             : "not run");
 
   const debugSummary = {
+    uploaded_file_id: uploadedFile?.id ?? sourceFileId ?? "-",
+    lease_id: lease?.id ?? "-",
+    uploaded_file_status: uploadedFile?.status ?? "-",
+    processing_status: uploadedFile?.processing_status ?? "-",
+    parser_status: pipelineMeta?.parser_status ?? debugRead("parser_status") ?? "-",
+    normalize_status: pipelineMeta?.normalize_status ?? debugRead("normalize_status") ?? "-",
+    ai_status: pipelineMeta?.ai_status ?? debugRead("ai_status") ?? "-",
+    review_status: pipelineMeta?.review_status ?? uploadedFile?.review_status ?? "-",
+    error_code: pipelineMeta?.error_code ?? debugRead("error_code") ?? "-",
+    error_message: pipelineMeta?.error_message ?? uploadedFile?.error_message ?? debugRead("error_message") ?? "-",
+    pipeline_attempt: pipelineMeta?.attempt ?? "-",
+    pipeline_duration_ms: pipelineMeta?.total_duration_ms ?? "-",
+    docling_raw_present: pipelineMeta?.docling_raw_present ?? Boolean(doclingRaw),
+    ocr_used: pipelineMeta?.ocr_used ?? "-",
     // Headline mapping diagnostics — first so a failure is immediately visible.
     mapping_failure_reason:
       debugRead("mapping_failure_reason")
@@ -625,6 +660,49 @@ export default function ExtractionDebugPanel({ lease }) {
             </div>
           ))}
         </div>
+      </Section>
+
+      <Section title="Pipeline Stage Events" count={`${pipelineLogs.length} recent`}>
+        {pipelineLogs.length === 0 ? (
+          <p className="text-slate-500">No pipeline stage events have been logged for this source file yet.</p>
+        ) : (
+          <div className="max-h-64 overflow-auto rounded border border-slate-200">
+            <table className="w-full text-[11px]">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-2 py-1 text-left">Time</th>
+                  <th className="px-2 py-1 text-left">Stage</th>
+                  <th className="px-2 py-1 text-left">Level</th>
+                  <th className="px-2 py-1 text-left">Status</th>
+                  <th className="px-2 py-1 text-left">Error</th>
+                  <th className="px-2 py-1 text-left">Counts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pipelineLogs.map((log) => {
+                  const metadata = log?.metadata || {};
+                  return (
+                    <tr key={log.id} className="border-t border-slate-100">
+                      <td className="px-2 py-1 text-slate-600">{log.timestamp ? new Date(log.timestamp).toLocaleString() : "-"}</td>
+                      <td className="px-2 py-1 font-medium text-slate-700">{metadata.stage || log.step || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{log.level || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{metadata.status || "-"}</td>
+                      <td className="px-2 py-1 text-amber-700">{metadata.error_code || "-"}</td>
+                      <td className="max-w-[280px] truncate px-2 py-1 text-slate-600" title={prettyJson(metadata, 1200)}>
+                        {[
+                          metadata.full_text_chars != null ? `chars=${metadata.full_text_chars}` : null,
+                          metadata.page_count != null ? `pages=${metadata.page_count}` : null,
+                          metadata.mapped_fields_count != null ? `mapped=${metadata.mapped_fields_count}` : null,
+                          metadata.lease_clauses_count != null ? `clauses=${metadata.lease_clauses_count}` : null,
+                        ].filter(Boolean).join(" ") || "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Section>
 
       <Section
