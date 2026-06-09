@@ -81,10 +81,77 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      // 5. Download bytes from Supabase Storage
+      // 5. Pre-flight: check whether any parser backend can handle this file.
+      // Native PDF text extraction only handles ≤ 4 MB. Docling and Vision handle
+      // larger files via external APIs. If the file is large and neither API is
+      // configured, downloading it would waste memory and still return empty output.
+      const MAX_NATIVE_BYTES = 4 * 1024 * 1024;
+      const fileSizeBytes = Number(fileRecord.file_size || 0);
+      const hasDocling = !!Deno.env.get("DOCLING_API_URL");
+      const hasVision = !!(
+        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+      );
+
+      const fileTooLargeForNative = fileSizeBytes > 0 && fileSizeBytes > MAX_NATIVE_BYTES;
+      if (fileTooLargeForNative && !hasDocling && !hasVision) {
+        console.warn(
+          `[parse-pdf-docling] file_id=${file_id} size=${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB — ` +
+          `larger than native-text limit (${MAX_NATIVE_BYTES / 1024 / 1024} MB) and no Docling/Vision backend configured. ` +
+          `Storing empty docling_raw and continuing so the reviewer can manually fill fields.`,
+        );
+        const emptyMetadata = {
+          extraction_method: "none",
+          file_format: mimeType,
+          page_count: 0,
+          table_count: 0,
+          field_count: 0,
+          text_block_count: 0,
+          has_content: false,
+          extraction_timestamp: new Date().toISOString(),
+          extraction_skipped_reason:
+            `File too large for native extraction (${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB) and ` +
+            `no DOCLING_API_URL or Vertex AI credentials are configured. ` +
+            `Set one of these in Supabase Edge Function secrets to enable AI extraction.`,
+        };
+        const { error: skipUpdateError } = await setStatus(supabaseAdmin, file_id, "pdf_parsed", {
+          docling_raw: {
+            full_text: "",
+            text_blocks: [],
+            tables: [],
+            fields: [],
+            pages: [],
+            page_count: 0,
+            warnings: [emptyMetadata.extraction_skipped_reason],
+            extraction_method: "none",
+            _metadata: emptyMetadata,
+          },
+          extraction_method: "none",
+          parsed_data: [],
+          row_count: 0,
+          processing_completed_at: new Date().toISOString(),
+        });
+        if (skipUpdateError) throw new Error(`Failed to store empty docling_raw: ${skipUpdateError.message}`);
+        return jsonResponse({
+          error: false,
+          file_id,
+          processing_status: "pdf_parsed",
+          extraction_method: "none",
+          extraction_skipped: true,
+          message: emptyMetadata.extraction_skipped_reason,
+        });
+      }
+
+      // 5b. Download bytes from Supabase Storage
       const storagePath = fileRecord.file_url.replace(
         /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
         "",
+      );
+
+      console.log(
+        `[parse-pdf-docling] downloading file_id=${file_id} ` +
+        `size=${fileSizeBytes > 0 ? (fileSizeBytes / 1024 / 1024).toFixed(2) + " MB" : "unknown"} ` +
+        `hasDocling=${hasDocling} hasVision=${hasVision}`,
       );
 
       const { data: fileBlob, error: downloadError } = await supabaseAdmin
@@ -99,6 +166,10 @@ Deno.serve(async (req: Request) => {
       }
 
       const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
+      // fileBlob is no longer needed after conversion — release reference so GC
+      // can reclaim it before parseDocument (which may allocate Docling FormData).
+      (fileBlob as any) = null;
+
       const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
         .storage
         .from("financial-uploads")
@@ -118,6 +189,28 @@ Deno.serve(async (req: Request) => {
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
 
       // 7. Persist raw output + metadata + transition to 'pdf_parsed'
+      //
+      // Cap full_text and text_blocks before storing — for a long lease PDF the
+      // raw Docling output can be 5–20 MB. The extraction pipeline only uses the
+      // first ~30 K characters of text (via chunker.ts) and at most a few hundred
+      // blocks, so trimming here saves significant heap during JSON serialization
+      // and keeps the Supabase JSONB column within sensible limits.
+      const MAX_STORED_TEXT_CHARS  = 80_000;
+      const MAX_STORED_BLOCKS      = 500;
+      const MAX_STORED_TABLES      = 200;
+      const trimmedDoclingRaw: Record<string, unknown> = {
+        ...doclingOutput,
+        full_text: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS
+          ? doclingOutput.full_text.slice(0, MAX_STORED_TEXT_CHARS) + "\n[truncated]"
+          : doclingOutput.full_text,
+        text_blocks: Array.isArray(doclingOutput.text_blocks) && doclingOutput.text_blocks.length > MAX_STORED_BLOCKS
+          ? doclingOutput.text_blocks.slice(0, MAX_STORED_BLOCKS)
+          : doclingOutput.text_blocks,
+        tables: Array.isArray(doclingOutput.tables) && doclingOutput.tables.length > MAX_STORED_TABLES
+          ? doclingOutput.tables.slice(0, MAX_STORED_TABLES)
+          : doclingOutput.tables,
+      };
+
       const extractionMetadata = {
         extraction_method: extractionMethod,
         file_format: mimeType,
@@ -131,6 +224,8 @@ Deno.serve(async (req: Request) => {
           (doclingOutput.fields?.length ?? 0) > 0
         ),
         extraction_timestamp: new Date().toISOString(),
+        text_truncated: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS,
+        blocks_truncated: Array.isArray(doclingOutput.text_blocks) && doclingOutput.text_blocks.length > MAX_STORED_BLOCKS,
       };
 
       const { error: updateError } = await setStatus(
@@ -138,7 +233,7 @@ Deno.serve(async (req: Request) => {
         file_id,
         "pdf_parsed",
         {
-          docling_raw: { ...doclingOutput, _metadata: extractionMetadata },
+          docling_raw: { ...trimmedDoclingRaw, _metadata: extractionMetadata },
           extraction_method: extractionMethod,
           parsed_data: [],
           row_count: (doclingOutput.tables ?? []).reduce(

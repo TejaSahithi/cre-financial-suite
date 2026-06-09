@@ -27,20 +27,33 @@ const CRITICAL_DATE_COLUMNS =
   "id, org_id, lease_id, property_id, date_type, due_date, owner_email, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
 const CRITICAL_DATE_COLUMNS_NO_OWNER_EMAIL =
   "id, org_id, lease_id, property_id, date_type, due_date, owner_name, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
+const CRITICAL_DATE_COLUMNS_NO_OWNERS =
+  "id, org_id, lease_id, property_id, date_type, due_date, status, completed_at, completed_by, reminder_days_before, note, source, created_at, updated_at";
 
 function isMissingOwnerEmailColumn(error) {
   const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
   return text.includes("owner_email") && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
 }
 
+function isMissingOwnerNameColumn(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return text.includes("owner_name") && (text.includes("does not exist") || text.includes("schema cache") || error?.code === "42703" || error?.code === "PGRST204");
+}
+
 function withOwnerEmailFallback(row) {
-  return { ...row, owner_email: row?.owner_email || null };
+  return { ...row, owner_email: row?.owner_email || null, owner_name: row?.owner_name || null };
 }
 
 function stripMissingOwnerEmail(error, payload) {
-  if (!isMissingOwnerEmailColumn(error)) return null;
-  const { owner_email, ...withoutOwnerEmail } = payload || {};
-  return withoutOwnerEmail;
+  if (isMissingOwnerEmailColumn(error)) {
+    const { owner_email, ...withoutOwnerEmail } = payload || {};
+    return withoutOwnerEmail;
+  }
+  if (isMissingOwnerNameColumn(error)) {
+    const { owner_email, owner_name, ...withoutOwners } = payload || {};
+    return withoutOwners;
+  }
+  return null;
 }
 
 export async function listCriticalDates({ orgId, propertyId, leaseId, status } = {}) {
@@ -61,6 +74,10 @@ export async function listCriticalDates({ orgId, propertyId, leaseId, status } =
   if (error && isMissingOwnerEmailColumn(error)) {
     console.warn("[criticalDateService] owner_email column missing; retrying without it.");
     ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_NO_OWNER_EMAIL));
+  }
+  if (error && isMissingOwnerNameColumn(error)) {
+    console.warn("[criticalDateService] owner_name column missing; retrying without owner columns.");
+    ({ data, error } = await runQuery(CRITICAL_DATE_COLUMNS_NO_OWNERS));
   }
   if (error) {
     console.warn("[criticalDateService] list failed:", error.message);
@@ -110,7 +127,7 @@ export async function updateCriticalDate(id, patch) {
     .eq("id", id)
     .select()
     .single();
-  const fallbackPatch = stripMissingOwnerEmail(error, patch);
+  let fallbackPatch = stripMissingOwnerEmail(error, patch);
   if (fallbackPatch) {
     ({ data, error } = await supabase
       .from("lease_critical_dates")
@@ -118,6 +135,16 @@ export async function updateCriticalDate(id, patch) {
       .eq("id", id)
       .select()
       .single());
+    // Second-level fallback: owner_name also missing
+    const fallbackPatch2 = stripMissingOwnerEmail(error, fallbackPatch);
+    if (fallbackPatch2) {
+      ({ data, error } = await supabase
+        .from("lease_critical_dates")
+        .update(fallbackPatch2)
+        .eq("id", id)
+        .select()
+        .single());
+    }
   }
   if (error) throw error;
   return withOwnerEmailFallback(data);

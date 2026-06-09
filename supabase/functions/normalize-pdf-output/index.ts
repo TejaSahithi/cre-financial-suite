@@ -1409,6 +1409,25 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // When parse-pdf-docling stored an empty docling_raw because no backend was
+    // configured AND the file was too large for native extraction, skip the
+    // Vision-fallback download that would re-OOM this function for the same reason.
+    const extractionSkipped =
+      (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ||
+      (fileRecord.docling_raw as any)?.extraction_method === "none";
+    const hasLLM = !!(
+      Deno.env.get("ANTHROPIC_API_KEY") ||
+      ((Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")))
+    );
+    if (extractionSkipped && !hasLLM) {
+      console.warn(
+        `[normalize-pdf-output] file_id=${file_id} — parse-pdf-docling stored empty output ` +
+        `and no LLM is configured. Transitioning to review_required with empty payload so the ` +
+        `reviewer can fill fields manually.`,
+      );
+    }
+
     const moduleType = fileRecord.module_type ?? "unknown";
     const extractionModuleType = toExtractionModuleType(moduleType);
     const fileName = fileRecord.file_name ?? "document";
@@ -1473,7 +1492,16 @@ Deno.serve(async (req: Request) => {
       return null;
     };
 
-    if (!doclingTextIsGood && fileTooLargeForInlineVision) {
+    if (!doclingTextIsGood && extractionSkipped) {
+      fileLoadStatus = "skipped_extraction_not_configured";
+      fileLoadError =
+        (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ??
+        "Extraction was skipped because no parser backend is configured.";
+      console.warn(
+        `[normalize-pdf-output] file_id=${file_id} — extraction was skipped upstream; ` +
+        `not re-downloading file. Reason: ${fileLoadError}`,
+      );
+    } else if (!doclingTextIsGood && fileTooLargeForInlineVision) {
       fileLoadStatus = "skipped_large_file";
       fileLoadError =
         `File is ${(fileSizeBytes / (1024 * 1024)).toFixed(1)} MB; ` +

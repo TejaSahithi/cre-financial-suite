@@ -437,7 +437,47 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
       clearTimeout(timeoutId);
 
       if (response.ok) {
-        const raw = await response.json();
+        // Guard against oversized Docling responses (e.g. large documents with
+        // embedded base64 data) that would OOM the edge function when buffered.
+        const MAX_DOCLING_RESPONSE_BYTES = 12 * 1024 * 1024; // 12 MB
+        const contentLength = Number(response.headers.get("content-length") ?? 0);
+        if (contentLength > MAX_DOCLING_RESPONSE_BYTES) {
+          console.warn(
+            `[parser] Docling response Content-Length ${contentLength} bytes exceeds limit; ` +
+            `discarding and falling back.`,
+          );
+          await response.body?.cancel().catch(() => undefined);
+          return null;
+        }
+        // Stream the response into a size-capped buffer to prevent OOM when
+        // Content-Length is absent (chunked transfer encoding).
+        const reader = response.body?.getReader();
+        if (!reader) return null;
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        let truncated = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          totalBytes += value.length;
+          if (totalBytes > MAX_DOCLING_RESPONSE_BYTES) {
+            truncated = true;
+            await reader.cancel().catch(() => undefined);
+            break;
+          }
+          chunks.push(value);
+        }
+        if (truncated) {
+          console.warn(
+            `[parser] Docling response exceeded ${MAX_DOCLING_RESPONSE_BYTES / 1024 / 1024} MB ` +
+            `mid-stream; discarding and falling back.`,
+          );
+          return null;
+        }
+        const combined = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length; }
+        const raw = JSON.parse(new TextDecoder().decode(combined));
         return normaliseDoclingResponse(raw, ctx.fileName);
       }
 
@@ -707,6 +747,16 @@ function tag(out: DoclingOutput, method: string): DoclingOutput {
   return out;
 }
 
+// Maximum compressed stream size to attempt decompression on — large streams
+// are almost always binary content (fonts, images) rather than text operators.
+// Decompressing them can spike memory 5-10x and is the primary cause of 546.
+const MAX_STREAM_DECOMPRESS_BYTES = 128 * 1024; // 128 KB compressed
+// Stop processing streams once we've collected enough text.
+const MAX_NATIVE_EXTRACTED_CHARS = 50_000;
+// Hard limit on how many FlateDecode streams to attempt so a pathological
+// PDF with thousands of tiny streams can't exhaust the memory budget.
+const MAX_STREAM_ITERATIONS = 60;
+
 async function parseNativePdfText(
   fileBytes: Uint8Array,
   fileName: string,
@@ -722,16 +772,38 @@ async function parseNativePdfText(
 
     textParts.push(extractPdfOperatorText(rawPdf));
 
-    for (const streamMatch of rawPdf.matchAll(/<<(?:.|\n|\r)*?>>\s*stream\r?\n?([\s\S]*?)\r?\n?endstream/g)) {
-      const objectText = streamMatch[0];
-      const streamText = streamMatch[1] ?? "";
-      if (!/\/FlateDecode\b/i.test(objectText)) continue;
+    let streamCount = 0;
+    let totalExtracted = textParts[0].length;
 
-      const streamStart = streamMatch.index! + objectText.indexOf(streamText);
+    for (const streamMatch of rawPdf.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      if (totalExtracted >= MAX_NATIVE_EXTRACTED_CHARS) break;
+      if (streamCount >= MAX_STREAM_ITERATIONS) break;
+
+      const streamText = streamMatch[1] ?? "";
+      // Skip binary-only streams — they don't contain PDF text operators.
+      if (streamText.length > MAX_STREAM_DECOMPRESS_BYTES) continue;
+
+      // Locate the object header (up to 1 KB before the stream keyword) to check
+      // for FlateDecode without capturing it in the regex match itself.
+      const streamKeywordPos = streamMatch.index ?? 0;
+      const headerStart = Math.max(0, streamKeywordPos - 1024);
+      const headerSnippet = rawPdf.slice(headerStart, streamKeywordPos);
+      if (!/\/FlateDecode\b/i.test(headerSnippet)) continue;
+
+      streamCount++;
+      // Calculate exact byte offset of stream content.
+      // The full match starts with "stream" then \r\n or \n.
+      const newlineLen = streamMatch[0][6] === "\r" ? 2 : 1;
+      const streamStart = streamMatch.index! + 6 + newlineLen; // "stream".length = 6
       const encoded = fileBytes.slice(streamStart, streamStart + streamText.length);
-      const decodedStream = await decodePdfStream(encoded, objectText);
+      const decodedStream = await decodePdfStream(encoded, headerSnippet);
       if (!decodedStream) continue;
-      textParts.push(extractPdfOperatorText(decoder.decode(decodedStream)));
+
+      const extracted = extractPdfOperatorText(decoder.decode(decodedStream));
+      if (extracted.length > 0) {
+        textParts.push(extracted);
+        totalExtracted += extracted.length;
+      }
     }
 
     const text = cleanExtractedPdfText(textParts.join("\n"));
@@ -861,22 +933,47 @@ function decodeAsciiHex(bytes: Uint8Array): Uint8Array {
   return new Uint8Array(out.filter((byte) => !Number.isNaN(byte)));
 }
 
+// Max characters to extract per call so we never accumulate unbounded output.
+const MAX_OPERATOR_EXTRACT_CHARS = 30_000;
+
 function extractPdfOperatorText(pdfText: string): string {
   const chunks: string[] = [];
-  const sections = [...pdfText.matchAll(/BT([\s\S]*?)ET/g)].map((match) => match[1]);
-  const sources = sections.length > 0 ? sections : [pdfText];
+  let totalChars = 0;
 
-  for (const source of sources) {
+  // Use the matchAll iterator lazily (no spread) so BT/ET sections are
+  // processed one at a time without holding all match objects simultaneously.
+  let hasBtSections = false;
+  for (const btMatch of pdfText.matchAll(/BT([\s\S]*?)ET/g)) {
+    if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
+    hasBtSections = true;
+    const source = btMatch[1];
+
     for (const match of source.matchAll(/\((?:\\.|[^\\)])*\)\s*Tj/g)) {
-      chunks.push(decodePdfLiteral(match[0].replace(/\s*Tj\s*$/, "")));
+      const decoded = decodePdfLiteral(match[0].replace(/\s*Tj\s*$/, ""));
+      if (decoded) { chunks.push(decoded); totalChars += decoded.length; }
+      if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
     }
-    for (const match of source.matchAll(/\[((?:.|\n|\r)*?)\]\s*TJ/g)) {
+    for (const match of source.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
       for (const stringMatch of match[1].matchAll(/\((?:\\.|[^\\)])*\)/g)) {
-        chunks.push(decodePdfLiteral(stringMatch[0]));
+        const decoded = decodePdfLiteral(stringMatch[0]);
+        if (decoded) { chunks.push(decoded); totalChars += decoded.length; }
+        if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
       }
+      if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
     }
     for (const match of source.matchAll(/<([0-9A-Fa-f\s]+)>\s*Tj/g)) {
-      chunks.push(decodePdfHex(match[1]));
+      const decoded = decodePdfHex(match[1]);
+      if (decoded) { chunks.push(decoded); totalChars += decoded.length; }
+      if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
+    }
+  }
+
+  // Fallback: scan the whole text when no BT/ET markers found (rare).
+  if (!hasBtSections) {
+    for (const match of pdfText.matchAll(/\((?:\\.|[^\\)])*\)\s*Tj/g)) {
+      if (totalChars >= MAX_OPERATOR_EXTRACT_CHARS) break;
+      const decoded = decodePdfLiteral(match[0].replace(/\s*Tj\s*$/, ""));
+      if (decoded) { chunks.push(decoded); totalChars += decoded.length; }
     }
   }
 
