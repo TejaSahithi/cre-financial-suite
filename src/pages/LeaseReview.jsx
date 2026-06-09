@@ -2697,12 +2697,13 @@ export default function LeaseReview() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <div>
-              <p className="font-semibold">No extracted data — AI pipeline did not complete</p>
+              <p className="font-semibold">No fields were auto-extracted</p>
               <p className="mt-1 text-xs text-red-600">
-                The extraction pipeline timed out or ran out of compute resources before it could
-                save any field values. Click <strong>Re-extract Lease</strong> to try again.
-                If this keeps happening, the Supabase edge functions may need to be redeployed
-                with the updated timeout settings.
+                The AI extraction backend is not configured or could not read this document, so no
+                fields were populated automatically. You can still <strong>fill in all fields manually</strong> below
+                and approve the abstract. To enable AI extraction, set <code>ANTHROPIC_API_KEY</code> in your
+                Supabase Edge Function secrets and redeploy the edge functions. You can also click{" "}
+                <strong>Re-extract Lease</strong> to retry if the issue has been fixed.
               </p>
             </div>
           </div>

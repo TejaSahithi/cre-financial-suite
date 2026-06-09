@@ -1757,6 +1757,26 @@ Deno.serve(async (req: Request) => {
 
       const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
       if (!result.rows || result.rows.length === 0 || meaningfulValueCount === 0) {
+        // For review-required files (all leases), inject a fallback empty row instead of
+        // failing. This lets the reviewer manually fill in fields rather than hitting a
+        // dead-end "failed" status. Without an LLM backend, rule/table extraction often
+        // finds nothing, but the document is still parseable and reviewable.
+        if (fileRecord.review_required) {
+          console.warn(
+            `[normalize-pdf-output] file_id=${file_id} — extraction produced no usable values ` +
+            `(LLM likely not configured). Injecting fallback empty row for manual review.`,
+          );
+          (result as any).rows = [buildFallbackReviewRow(moduleType)];
+          if (!Array.isArray((result as any).warnings)) (result as any).warnings = [];
+          (result as any).warnings.push(
+            "No fields were auto-extracted (AI backend not configured or document could not be read). " +
+            "Please fill in the required fields manually.",
+          );
+          if (!(result as any).method) (result as any).method = "manual_review_fallback";
+          if (!(result as any).metadata) (result as any).metadata = {};
+          (result as any).metadata.avgConfidence = 0;
+          // fall through to the normal review_required path below
+        } else {
         const reason =
           `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
         const pipeline = buildPipelineMetadata({
@@ -1824,6 +1844,7 @@ Deno.serve(async (req: Request) => {
           message: reason,
           ui_review_payload: payload,
         }, 422);
+        } // end else (non-review-required modules)
       }
 
       const uiReviewPayload = buildReviewPayload({
