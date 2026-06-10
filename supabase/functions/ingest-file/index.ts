@@ -181,11 +181,18 @@ async function callEdgeFunction(
   return { ok: false, status: 500, data: {}, error: "Unexpected retry loop exit" };
 }
 
-function dispatchLeaseExtractionWorker(fileId: string, jobId: string, orgId: string) {
+function dispatchLeaseExtractionWorker(jobId: string, logger: any) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const workerSecret = Deno.env.get("WORKER_INTERNAL_SECRET") ?? "";
   if (!supabaseUrl || !serviceKey) {
     console.warn("[ingest-file] Missing service configuration; cannot dispatch lease-extraction-worker");
+    logger?.event?.("worker_dispatch_failed", "failed", {
+      provider: "lease-extraction-worker",
+      error_code: "WORKER_DISPATCH_CONFIG_MISSING",
+      error_message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+      metadata: { job_id: jobId },
+    });
     return;
   }
 
@@ -193,13 +200,32 @@ function dispatchLeaseExtractionWorker(fileId: string, jobId: string, orgId: str
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Authorization": `Bearer ${serviceKey}`,
       "apikey": serviceKey,
-      "x-internal-service-key": serviceKey,
-      "x-internal-org-id": orgId,
+      ...(workerSecret ? { "x-worker-secret": workerSecret } : {}),
     },
-    body: JSON.stringify({ file_id: fileId, job_id: jobId }),
-  }).catch((error) => {
-    console.error("[ingest-file] lease-extraction-worker dispatch failed:", error?.message || error);
+    body: JSON.stringify({ job_id: jobId }),
+  }).then(async (response) => {
+    if (response.ok) return;
+
+    const text = await response.text().catch(() => "");
+    const message = text.slice(0, 500) || `HTTP ${response.status}`;
+    console.error("[ingest-file] lease-extraction-worker dispatch failed:", message);
+    await logger?.event?.("worker_dispatch_failed", "failed", {
+      provider: "lease-extraction-worker",
+      error_code: "WORKER_DISPATCH_FAILED",
+      error_message: message,
+      metadata: { job_id: jobId, status: response.status },
+    });
+  }).catch(async (error) => {
+    const message = error?.message || String(error);
+    console.error("[ingest-file] lease-extraction-worker dispatch failed:", message);
+    await logger?.event?.("worker_dispatch_failed", "failed", {
+      provider: "lease-extraction-worker",
+      error_code: "WORKER_DISPATCH_FAILED",
+      error_message: message,
+      metadata: { job_id: jobId },
+    });
   });
 
   const edgeRuntime = (globalThis as any).EdgeRuntime;
@@ -271,7 +297,7 @@ async function enqueueLeaseExtractionJob(args: {
     metadata: { job_id: job.id },
   });
 
-  dispatchLeaseExtractionWorker(fileRecord.id, job.id, orgId);
+  dispatchLeaseExtractionWorker(job.id, logger);
   return job;
 }
 

@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { createAdminClient } from "../_shared/supabase.ts";
 import { createLogger } from "../_shared/logger.ts";
-import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
+import { setFailed } from "../_shared/pipeline-status.ts";
+import { isAuthorizedWorkerCall, UNAUTHORIZED_WORKER_RESPONSE } from "./auth.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
 const STAGE_TIMEOUT_MS = 140_000;
@@ -16,11 +17,14 @@ function jsonResponse(body: unknown, status = 200) {
 
 function serviceHeaders(orgId: string) {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const workerSecret = Deno.env.get("WORKER_INTERNAL_SECRET") ?? "";
   return {
     "Content-Type": "application/json",
+    "Authorization": `Bearer ${serviceKey}`,
     "apikey": serviceKey,
     "x-internal-service-key": serviceKey,
     "x-internal-org-id": orgId,
+    ...(workerSecret ? { "x-worker-secret": workerSecret } : {}),
   };
 }
 
@@ -58,7 +62,7 @@ function dispatchSelf(fileId: string, jobId: string, orgId: string) {
   const promise = fetch(`${supabaseUrl}/functions/v1/${WORKER_NAME}`, {
     method: "POST",
     headers: serviceHeaders(orgId),
-    body: JSON.stringify({ file_id: fileId, job_id: jobId }),
+    body: JSON.stringify({ job_id: jobId }),
   }).catch((error) => {
     console.error(`[${WORKER_NAME}] self-dispatch failed:`, error?.message || error);
   });
@@ -88,26 +92,37 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
+    if (!isAuthorizedWorkerCall(req)) {
+      return jsonResponse(UNAUTHORIZED_WORKER_RESPONSE, 401);
+    }
+
+    const supabaseAdmin = createAdminClient();
     const body = await req.json().catch(() => ({}));
-    const fileId = body.file_id;
     const jobId = body.job_id;
 
-    if (!fileId || !jobId) {
-      return jsonResponse({ error: true, error_code: "MISSING_JOB_INPUT", message: "file_id and job_id are required" }, 400);
+    if (!jobId) {
+      return jsonResponse({ error: true, error_code: "MISSING_JOB_INPUT", message: "job_id is required" }, 400);
     }
 
     const { data: job, error: jobError } = await supabaseAdmin
       .from("pipeline_jobs")
       .select("*")
       .eq("id", jobId)
-      .eq("uploaded_file_id", fileId)
-      .eq("org_id", orgId)
       .maybeSingle();
 
     if (jobError || !job) {
       return jsonResponse({ error: true, error_code: "JOB_NOT_FOUND", message: jobError?.message || "Pipeline job not found" }, 404);
+    }
+
+    const orgId = job.org_id || job.input?.org_id;
+    const fileId = job.uploaded_file_id || job.input?.uploaded_file_id || body.file_id;
+
+    if (!orgId || !fileId) {
+      await failJob(supabaseAdmin, job, "MISSING_JOB_CONTEXT", "Pipeline job is missing org_id or uploaded_file_id");
+      return jsonResponse(
+        { error: true, error_code: "MISSING_JOB_CONTEXT", message: "Pipeline job is missing org_id or uploaded_file_id" },
+        400,
+      );
     }
 
     if (["completed", "failed", "cancelled"].includes(job.status)) {
