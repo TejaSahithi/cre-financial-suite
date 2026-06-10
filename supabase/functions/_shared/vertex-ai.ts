@@ -442,25 +442,37 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
 
       if (response.ok) {
         const data = await response.json();
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        const candidate = data.candidates?.[0];
+        const content = candidate?.content?.parts?.[0]?.text ?? "";
+        const finishReason = candidate?.finishReason ?? "";
         const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
-        console.log(`[vertex-ai] File success with ${mod} in ${loc}`);
+        console.log(`[vertex-ai] File success with ${mod} in ${loc} (finishReason=${finishReason || "STOP"})`);
+        if (!content && finishReason && finishReason !== "STOP") {
+          // Model refused or hit a limit — surface the reason so callers can report it
+          lastError = new Error(`Gemini returned empty content (finishReason=${finishReason})`);
+          continue;
+        }
         return { content, model: mod, inputTokens, outputTokens };
       }
 
       const errText = await response.text().catch(() => "unknown error");
       lastError = new Error(`Vertex AI API error ${response.status}: ${errText}`);
-      if (response.status === 404 || response.status === 400) {
-        console.warn(`[vertex-ai] File model failed (${response.status}) ${mod} in ${loc}: ${errText.slice(0, 220)}`);
+      if (response.status === 404) {
+        // 404 = model not available in this location; try the next combination
+        console.warn(`[vertex-ai] File model 404 for ${mod} in ${loc}: ${errText.slice(0, 220)}`);
         continue;
+      }
+      if (response.status === 400) {
+        // 400 = bad request. This usually means the file is too large, the MIME type
+        // is unsupported, or the request format is wrong — none of which a different
+        // model or location can fix. Throw immediately to surface the real error.
+        throw lastError;
       }
       throw lastError;
     } catch (err) {
       lastError = err;
-      if (String(err.message || "").includes("404") || String(err.message || "").includes("400")) {
-        continue;
-      }
+      if (String(err.message || "").includes("404")) continue;
       throw err;
     }
   }
@@ -645,10 +657,12 @@ export async function callVertexAIFileJSON<T = unknown>(opts: VertexAIFileOption
   text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
   if (!text) {
+    const reason = response.outputTokens === 0
+      ? "model returned 0 output tokens — likely a safety filter, unsupported content type, or billing issue"
+      : "model returned empty text despite non-zero tokens — possible response format mismatch";
     console.error(
       `[vertex-ai] Empty file-mode response from ${response.model} ` +
-      `(in=${response.inputTokens} out=${response.outputTokens} tokens). ` +
-      `Likely model refusal or safety filter.`,
+      `(in=${response.inputTokens} out=${response.outputTokens} tokens): ${reason}.`,
     );
     return null;
   }

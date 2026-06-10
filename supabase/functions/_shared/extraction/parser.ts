@@ -72,8 +72,12 @@ export async function parseDocument(
 ): Promise<DoclingOutput> {
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   const hasVision = !!(
-    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+    // Vertex AI service account path
+    ((Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+     (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))) ||
+    // Gemini Developer API key path
+    Deno.env.get("GEMINI_API_KEY") ||
+    Deno.env.get("GOOGLE_API_KEY")
   );
   const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
   const estimatedPageCount = mimeType.includes("pdf") ? estimatePdfPageCount(fileBytes) : null;
@@ -297,9 +301,12 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
 
 async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
   if (!ctx.hasVision) {
-    return tag(emptyOutput([
-      "No parser backend available. Set DOCLING_API_URL or Vertex AI credentials.",
-    ]), "none");
+    // Throw so parse-pdf-docling can report a clear PARSER_PROVIDER_UNAVAILABLE error
+    // rather than returning an emptyOutput that silently becomes "readable chars: 0".
+    throw new Error(
+      "No parser backend available. Configure DOCLING_API_URL or set VERTEX_PROJECT_ID + " +
+      "GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets to enable document parsing.",
+    );
   }
   try {
     const extracted = await extractDocumentWithVision(ctx.fileBytes, ctx.mimeType, ctx.fileUrl);
@@ -313,7 +320,8 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
         return tag(doclingOutput, "docling");
       }
     }
-    return tag(emptyOutput([`Vision OCR failed: ${err.message}`]), "none");
+    // No successful fallback — propagate the real error so the caller can report it
+    throw new Error(`Vision OCR failed: ${err.message}`);
   }
 }
 
@@ -338,7 +346,8 @@ async function runVisionFirst(ctx: ParseContext): Promise<DoclingOutput> {
       const doclingOutput = await callDocling(ctx);
       if (doclingOutput) return tag(doclingOutput, "docling");
     }
-    return tag(emptyOutput([`Vision OCR failed: ${err.message}`]), "none");
+    // Both Vision and Docling failed — propagate the real error
+    throw new Error(`Vision OCR failed: ${err.message}`);
   }
 
   if (!ctx.hasDocling || !canDoclingHandle(ctx.mimeType) || ctx.fileBytes.length > MAX_DOCLING_SUPPLEMENT_BYTES) {
@@ -644,15 +653,19 @@ function visionExtractionToDocling(
     : [];
 
   if ((expectedPageCount ?? 0) > 1 && pages.length === 0) {
-    throw new Error(
-      `Gemini Vision did not return page-aware output for ${expectedPageCount}-page PDF; refusing to create fake page 1 evidence.`,
+    console.warn(
+      `[parser] Gemini Vision returned 0 page-aware items for ${expectedPageCount}-page PDF; ` +
+      `using flat text fallback instead of discarding content.`,
     );
+    // Fall through to flat-text fallback below rather than discarding all content
   }
 
   if ((expectedPageCount ?? 0) > 1 && pages.length > 0 && pages.length < Number(expectedPageCount)) {
-    throw new Error(
-      `Gemini Vision returned ${pages.length} page(s) for a ${expectedPageCount}-page PDF; refusing partial page evidence.`,
+    console.warn(
+      `[parser] Gemini Vision returned ${pages.length} of ${expectedPageCount} estimated pages; ` +
+      `using partial result rather than discarding content.`,
     );
+    // Use what Vision returned — partial coverage beats nothing
   }
 
   if (pages.length === 0) {

@@ -314,6 +314,12 @@ export default function LeaseUpload() {
   const retriedUploadedFiles = useRef(new Set());
   const retriedManualFallbackFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
+  // Ref keeps the latest fileRecord status visible inside the polling interval
+  // without requiring the interval to be recreated on every status change.
+  const fileRecordStatusRef = useRef(null);
+
+  // Keep ref in sync so polling interval always reads the latest status.
+  fileRecordStatusRef.current = fileRecord?.status ?? null;
 
   const { data: properties = [] } = useOrgQuery("Property");
   const { data: buildings = [] } = useOrgQuery("Building");
@@ -453,8 +459,12 @@ export default function LeaseUpload() {
     await queryClient.invalidateQueries({ queryKey: ["Lease"] });
   };
 
-  const ensureLeaseDraft = async ({ silent = false } = {}) => {
+  // Accept an explicit snapshot to avoid stale-closure issues in effects.
+  const ensureLeaseDraft = async ({ silent = false, record: recordOverride } = {}) => {
     if (!fileId) return null;
+
+    // Use the caller-supplied snapshot when provided; fall back to state.
+    const record = recordOverride ?? fileRecord;
 
     const existing = await findLeaseByFileId(fileId);
     if (existing?.id) {
@@ -465,8 +475,8 @@ export default function LeaseUpload() {
     // Statuses where the file has been processed enough that a lease draft is
     // either already expected or can be safely manufactured client-side.
     const fileIsReady =
-      fileRecord?.review_required === true ||
-      ["review_required", "validated", "approved", "storing", "stored", "computing", "completed"].includes(fileRecord?.status || "");
+      record?.review_required === true ||
+      ["review_required", "validated", "approved", "storing", "stored", "computing", "completed"].includes(record?.status || "");
 
     if (!fileIsReady) {
       return null;
@@ -479,7 +489,7 @@ export default function LeaseUpload() {
       data = await invokeEdgeFunction("review-approve", {
         file_id: fileId,
         action: "prepare",
-        review_payload: fileRecord?.ui_review_payload || null,
+        review_payload: record?.ui_review_payload || null,
       });
     } catch (prepareErr) {
       if (!isUnsupportedPrepareAction(prepareErr)) {
@@ -490,7 +500,7 @@ export default function LeaseUpload() {
           data = await invokeEdgeFunction("review-approve", {
             file_id: fileId,
             action: "approve",
-            review_payload: fileRecord?.ui_review_payload || null,
+            review_payload: record?.ui_review_payload || null,
           });
         } catch (approveErr) {
           edgeFailed = true;
@@ -508,7 +518,7 @@ export default function LeaseUpload() {
       await fetchFileRecord(fileId);
       const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
       if (linkedLeaseId) {
-        await ensureLeaseSourceFileLink(linkedLeaseId, fileRecord || { id: fileId });
+        await ensureLeaseSourceFileLink(linkedLeaseId, record || { id: fileId });
         await invalidateLeaseQueries();
         return linkedLeaseId;
       }
@@ -520,7 +530,7 @@ export default function LeaseUpload() {
     // Review and edit fields. This is the same shape review-approve would
     // produce on the happy path.
     try {
-      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, fileRecord);
+      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, record);
       if (fallbackLeaseId) {
         await invalidateLeaseQueries();
         await fetchFileRecord(fileId);
@@ -547,9 +557,14 @@ export default function LeaseUpload() {
       await fetchFileRecord(fileId);
     };
 
+    // Initial fetch immediately on mount / fileId change.
     poll();
+
+    // The interval reads fileRecordStatusRef.current (always up-to-date) instead
+    // of closing over fileRecord?.status (stale). This also avoids recreating the
+    // interval on every status update, preventing the polling cascade memory leak.
     const interval = window.setInterval(() => {
-      if (!ACTIVE_STATUSES.has(fileRecord?.status)) {
+      if (!ACTIVE_STATUSES.has(fileRecordStatusRef.current)) {
         return;
       }
       poll();
@@ -559,7 +574,8 @@ export default function LeaseUpload() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [fileId, fileRecord?.status]);
+    // Only recreate when fileId changes — NOT on every status change.
+  }, [fileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!fileId || fileRecord?.status !== "uploaded" || retriedUploadedFiles.current.has(fileId)) {
@@ -638,7 +654,7 @@ export default function LeaseUpload() {
     if (!fileId) return;
     setOpeningReview(true);
     try {
-      const leaseId = await ensureLeaseDraft();
+      const leaseId = await ensureLeaseDraft({ record: fileRecord });
       if (leaseId) {
         navigate(createPageUrl("LeaseReview", { id: leaseId }));
       } else {
@@ -732,9 +748,12 @@ export default function LeaseUpload() {
     preparedLeaseDraftFiles.current.add(fileId);
     let cancelled = false;
 
+    // Capture the current fileRecord snapshot so the async call doesn't
+    // read stale state from a re-render that fires mid-execution.
+    const capturedRecord = fileRecord;
     (async () => {
       try {
-        const leaseId = await ensureLeaseDraft({ silent: true });
+        const leaseId = await ensureLeaseDraft({ silent: true, record: capturedRecord });
         if (!leaseId && !cancelled) {
           preparedLeaseDraftFiles.current.delete(fileId);
         }
@@ -1163,7 +1182,7 @@ async function findLeaseByFileId(fileId) {
   const { data, error } = await supabase
     .from("leases")
     .select("id")
-    .eq("extraction_data->>source_file_id", fileId)
+    .filter("extraction_data->>source_file_id", "eq", fileId)
     .limit(1)
     .maybeSingle();
   if (error) return null;

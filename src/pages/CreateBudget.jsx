@@ -32,7 +32,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 function buildDefaultForm(scope) {
   return {
     name: "",
-    budget_year: 2027,
+    budget_year: new Date().getFullYear(),
     scope: scope.unitId ? "unit" : scope.buildingId ? "building" : "property",
     period: "annual",
     portfolio_id: scope.portfolioId || "",
@@ -53,15 +53,6 @@ function normalizeBudgetNotificationRecipients(stakeholders, propertyId) {
       .map((stakeholder) => stakeholder.email.trim().toLowerCase())
       .filter(Boolean)
   )];
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 async function invalidateBudgetCaches(queryClient) {
@@ -85,7 +76,7 @@ export default function CreateBudget() {
   const [rejectComment, setRejectComment] = useState("");
   const [rejectTargetId, setRejectTargetId] = useState(null);
   const [historicalFileIds, setHistoricalFileIds] = useState([]);
-  const [generateWithoutCam, setGenerateWithoutCam] = useState(false);
+  const [generateWithoutCam, setGenerateWithoutCam] = useState(true);
 
   const { orgId } = useOrgQuery("Budget");
   const { data: stakeholders = [] } = useOrgQuery("Stakeholder");
@@ -196,75 +187,89 @@ export default function CreateBudget() {
   });
 
   const handleGenerate = async () => {
-    if (!latestCamSnapshot && !generateWithoutCam) {
-      toast.error("CAM snapshot is missing. Run CAM first or choose Generate without CAM.");
+    if (!form.name.trim()) {
+      toast.error("Please enter a budget name.");
+      return;
+    }
+    if (!form.property_id) {
+      toast.error("Please select a property.");
       return;
     }
 
     setGenerating(true);
-    const scopeLabel =
-      selectedUnit
-        ? `Unit ${selectedUnit.unit_number || selectedUnit.unit_id_code || selectedUnit.id}`
-        : selectedBuilding
-          ? `Building ${selectedBuilding.name || selectedBuilding.id}`
-          : selectedProperty
-            ? selectedProperty.name
-            : form.name || "Property";
-
-    let data = {};
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session?.session?.access_token;
-      const { data: result, error } = await supabase.functions.invoke("generate-budget", {
-        body: {
-          scope_label: scopeLabel,
-          budget_year: form.budget_year,
-          scope: form.scope,
-          period: form.period,
-          method,
-          leases: scopeLeases.map((lease) => ({ tenant_name: lease.tenant_name, annual_rent: lease.annual_rent })),
-          historical_file_ids: method === "historical_ai" ? historicalFileIds : [],
-        },
-        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      const writableOrgId = await resolveWritableOrgId(orgId);
+      if (!writableOrgId) {
+        toast.error("No organization selected. Select an organization before creating a budget.");
+        return;
+      }
+
+      const scopeLabel =
+        selectedUnit
+          ? `Unit ${selectedUnit.unit_number || selectedUnit.unit_id_code || selectedUnit.id}`
+          : selectedBuilding
+            ? `Building ${selectedBuilding.name || selectedBuilding.id}`
+            : selectedProperty
+              ? selectedProperty.name
+              : form.name || "Property";
+
+      let aiData = null;
+      if (method !== "manual") {
+        try {
+          const { data: session } = await supabase.auth.getSession();
+          const token = session?.session?.access_token;
+          const { data: result, error } = await supabase.functions.invoke("generate-budget", {
+            body: {
+              scope_label: scopeLabel,
+              budget_year: form.budget_year,
+              scope: form.scope,
+              period: form.period,
+              method,
+              leases: scopeLeases.map((lease) => ({ tenant_name: lease.tenant_name, annual_rent: lease.annual_rent })),
+              historical_file_ids: method === "historical_ai" ? historicalFileIds : [],
+            },
+            ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+          });
+          if (error) {
+            console.error("[CreateBudget] generate-budget error:", error);
+            toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry. " + (error.message || ""));
+          } else if (result?.error) {
+            console.error("[CreateBudget] generate-budget returned error:", result);
+            toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry. " + (result.message || ""));
+          } else if (result) {
+            aiData = result;
+          }
+        } catch (aiError) {
+          console.error("[CreateBudget] generate-budget exception:", aiError);
+          toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry.");
+        }
+      }
+
+      const derivedPortfolioId = selectedProperty?.portfolio_id || form.portfolio_id || null;
+
+      createMutation.mutate({
+        name: form.name,
+        org_id: writableOrgId,
+        budget_year: form.budget_year,
+        scope: form.scope,
+        period: form.period,
+        portfolio_id: derivedPortfolioId,
+        property_id: form.property_id || undefined,
+        building_id: form.building_id || undefined,
+        unit_id: form.unit_id || undefined,
+        generation_method: method,
+        status: method === "manual" ? "draft" : aiData ? "ai_generated" : "draft",
+        cam_snapshot_id: latestCamSnapshot?.id || null,
+        total_revenue: aiData?.total_revenue ?? null,
+        total_expenses: aiData?.total_expenses ?? null,
+        cam_total: aiData?.cam_total ?? null,
+        noi: aiData?.noi ?? null,
+        ai_insights: aiData?.ai_insights || "",
+        manual_notes: generateWithoutCam && !latestCamSnapshot ? "Generated without CAM snapshot by explicit user override." : null,
       });
-      if (error) {
-        console.error("[CreateBudget] generate-budget error:", error);
-        toast.error(error.message || "Failed to generate budget from historical data");
-      } else if (result?.error) {
-        console.error("[CreateBudget] generate-budget returned error:", result);
-        toast.error(result.message || "Failed to generate budget from historical data");
-      }
-      if (!error && result && !result.error) {
-        data = result;
-      }
-    } catch (error) {
-      console.error("[CreateBudget] generate-budget error:", error);
+    } finally {
+      setGenerating(false);
     }
-
-    const writableOrgId = await resolveWritableOrgId(orgId);
-    const derivedPortfolioId = selectedProperty?.portfolio_id || form.portfolio_id || null;
-
-    createMutation.mutate({
-      name: form.name,
-      org_id: writableOrgId || "",
-      budget_year: form.budget_year,
-      scope: form.scope,
-      period: form.period,
-      portfolio_id: derivedPortfolioId,
-      property_id: form.property_id || undefined,
-      building_id: form.building_id || undefined,
-      unit_id: form.unit_id || undefined,
-      generation_method: method,
-      status: method === "manual" ? "draft" : "ai_generated",
-      cam_snapshot_id: latestCamSnapshot?.id || null,
-      total_revenue: data.total_revenue || 669000,
-      total_expenses: data.total_expenses || 232050,
-      cam_total: data.cam_total || 72900,
-      noi: data.noi || 436950,
-      ai_insights: data.ai_insights || "",
-      manual_notes: generateWithoutCam && !latestCamSnapshot ? "Generated without CAM snapshot by explicit user override." : null,
-    });
-    setGenerating(false);
   };
 
   const methods = [
@@ -600,27 +605,15 @@ export default function CreateBudget() {
                 </div>
               )}
 
-              <div className={`rounded-lg border p-3 text-sm ${latestCamSnapshot ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+              <div className={`rounded-lg border p-3 text-sm ${latestCamSnapshot ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-slate-50 border-slate-200 text-slate-600"}`}>
                 {latestCamSnapshot
                   ? `CAM snapshot ready from ${new Date(latestCamSnapshot.computed_at).toLocaleString()}. Budget generation will use CAM recovery inputs.`
-                  : "No CAM snapshot found for this property and year. Budget generation is blocked unless you explicitly generate without CAM."}
+                  : "No CAM snapshot found for this property and year. Budget will be created without CAM recovery projections — you can run CAM Calculations later and update the budget."}
               </div>
 
               <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                Lease is not the only source of truth for budget generation.
                 The budget uses lease data for rent and obligation terms, approved expense data for operating cost history, and CAM snapshots for recovery projections.
               </div>
-
-              {!latestCamSnapshot && (
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={generateWithoutCam}
-                    onChange={(event) => setGenerateWithoutCam(event.target.checked)}
-                  />
-                  Generate without CAM
-                </label>
-              )}
 
               {method === "historical_ai" && (
                 <Card className="bg-slate-50 border-dashed">

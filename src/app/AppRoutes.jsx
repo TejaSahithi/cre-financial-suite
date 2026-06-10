@@ -11,9 +11,9 @@ const { Pages, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
 const MainPage = mainPageKey ? Pages[mainPageKey] : <></>;
 
-function RouteSuspense({ children }) {
+function RouteSuspense({ pageName, children }) {
   return (
-    <Suspense fallback={<LoadingScreen />}>
+    <Suspense fallback={<LoadingScreen pageName={pageName} />}>
       {children}
     </Suspense>
   );
@@ -23,7 +23,7 @@ export default function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={
-        <RouteSuspense>
+        <RouteSuspense pageName={mainPageKey}>
           <LayoutWrapper currentPageName={mainPageKey}>
             <MainPage />
           </LayoutWrapper>
@@ -37,7 +37,7 @@ export default function AppRoutes() {
             key={path}
             path={`/${path}`}
             element={
-              <RouteSuspense>
+              <RouteSuspense pageName={path}>
                 <RbacGuard pageName={path}>
                   {isMandatorySetup ? (
                     <Page />

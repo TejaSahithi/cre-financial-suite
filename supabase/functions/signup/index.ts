@@ -398,7 +398,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Generate confirmation link and send via Resend
+    // Send confirmation email: try Resend first, fall back to Supabase built-in SMTP.
     if (RESEND_API_KEY) {
       const link = await getAnyAuthLink(admin, normalizedEmail, POST_CONFIRM_URL);
       if (link) {
@@ -415,7 +415,24 @@ Deno.serve(async (req: Request) => {
         console.error("[signup] Failed to generate auth link for new user:", normalizedEmail);
       }
     } else {
-      console.warn("[signup] RESEND_API_KEY not set — no confirmation email sent");
+      // RESEND_API_KEY not set — fall back to Supabase's built-in email by
+      // re-triggering signup via the non-admin client. This sends the default
+      // Supabase confirmation email so the user is not left in limbo.
+      console.warn("[signup] RESEND_API_KEY not set — falling back to Supabase built-in confirmation email");
+      try {
+        const { error: resendErr } = await admin.auth.resend({
+          type: "signup",
+          email: normalizedEmail,
+          options: { emailRedirectTo: POST_CONFIRM_URL },
+        });
+        if (resendErr) {
+          console.error("[signup] Supabase built-in resend also failed:", resendErr.message);
+        } else {
+          console.log("[signup] Supabase built-in confirmation email triggered for:", normalizedEmail);
+        }
+      } catch (fallbackErr: any) {
+        console.error("[signup] Supabase built-in email fallback threw:", fallbackErr?.message);
+      }
     }
 
     return new Response(JSON.stringify({ success: true, confirmationRequired: true, flow: "signup" }), {

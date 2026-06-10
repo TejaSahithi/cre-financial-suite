@@ -258,8 +258,12 @@ Deno.serve(async (req: Request) => {
       const fileSizeBytes = Number(fileRecord.file_size || 0);
       const hasDocling = !!Deno.env.get("DOCLING_API_URL");
       const hasVision = !!(
-        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+        // Vertex AI service account path
+        ((Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+         (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))) ||
+        // Gemini Developer API key path
+        Deno.env.get("GEMINI_API_KEY") ||
+        Deno.env.get("GOOGLE_API_KEY")
       );
 
       const fileTooLargeForNative = fileSizeBytes > 0 && fileSizeBytes > MAX_NATIVE_BYTES;
@@ -485,31 +489,42 @@ Deno.serve(async (req: Request) => {
         extractionError.message,
       );
 
+      const errMsg = String(extractionError.message ?? extractionError);
+      const isOcrError = /vision ocr|gemini vision|vertex ai|ocr (failed|required)|No parser backend/i.test(errMsg);
+      const isProviderMissing = /No parser backend|DOCLING_API_URL|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT_KEY/i.test(errMsg);
+
       await persistBlockedParse({
-        parserStatus: PARSER_STATUSES.FAILED,
-        errorCode: "PDF_PARSING_FAILED",
-        message: `Document extraction failed: ${extractionError.message}`,
+        parserStatus: isOcrError ? PARSER_STATUSES.OCR_FAILED : PARSER_STATUSES.FAILED,
+        errorCode: isProviderMissing ? "PARSER_PROVIDER_UNAVAILABLE" : (isOcrError ? "OCR_FAILED" : "PDF_PARSING_FAILED"),
+        message: errMsg,
         fullTextChars: 0,
         pageCount: null,
-        providerUsed: null,
-        warnings: [String(extractionError.message ?? extractionError)],
+        providerUsed: isOcrError ? "gemini_vision" : null,
+        warnings: [errMsg],
       });
 
       throw extractionError;
     }
   } catch (err) {
     console.error("[parse-pdf-docling] Error:", err.message);
+    const errMsg = String(err.message ?? "");
     // Auth failures get a clean 401 so the worker maps them to DOWNSTREAM_AUTH_FAILED
     // instead of the generic DOWNSTREAM_FUNCTION_FAILED (400).
-    const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(
-      String(err.message ?? ""),
-    );
+    const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(errMsg);
+    const isOcrError = /vision ocr|gemini vision|vertex ai|ocr (failed|required)|No parser backend/i.test(errMsg);
+    const isProviderMissing = /No parser backend|DOCLING_API_URL|VERTEX_PROJECT_ID|GOOGLE_SERVICE_ACCOUNT_KEY/i.test(errMsg);
     return jsonResponse(
       {
         ok: false,
         error: true,
-        message: err.message,
-        error_code: isAuthError ? "UNAUTHORIZED_INTERNAL_PARSE_CALL" : "PDF_PARSING_FAILED",
+        message: errMsg,
+        error_code: isAuthError
+          ? "UNAUTHORIZED_INTERNAL_PARSE_CALL"
+          : isProviderMissing
+            ? "PARSER_PROVIDER_UNAVAILABLE"
+            : isOcrError
+              ? "OCR_FAILED"
+              : "PDF_PARSING_FAILED",
       },
       isAuthError ? 401 : 400,
     );

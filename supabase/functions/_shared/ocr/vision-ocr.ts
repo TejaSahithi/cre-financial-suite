@@ -8,7 +8,7 @@
  * scanned PDFs/images are sent to Vertex AI Gemini Vision instead.
  */
 
-import { callVertexAIFileJSON, callVertexAIWithFile } from "../vertex-ai.ts";
+import { callVertexAIFileJSON, callVertexAIWithFile, callGeminiWithAPIKeyAndFile } from "../vertex-ai.ts";
 
 const OCR_SYSTEM_PROMPT = `You are a precise OCR engine. Extract ALL visible text from this document exactly as it appears.
 
@@ -32,31 +32,47 @@ export async function runVisionOCR(
   mimeType: string = "application/pdf",
   fileUri?: string,
 ): Promise<string> {
-  console.log(`[ocr] Running Gemini Vision OCR (${mimeType}, ${fileBytes.length} bytes)`);
+  const INLINE_LIMIT_BYTES = 20 * 1024 * 1024;
+  const useUri = !!fileUri && fileBytes.length > INLINE_LIMIT_BYTES;
+  console.log(`[ocr] Running Gemini Vision OCR (${mimeType}, ${fileBytes.length} bytes, mode=${useUri ? "uri" : "inline"})`);
 
-  const hasVertexAI = !!(
-    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
-  ) && !!(
-    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  const hasVertexCreds = !!(
+    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
   );
+  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
 
-  if (!hasVertexAI) {
+  if (!hasVertexCreds && !hasGeminiKey) {
     throw new Error(
-      "OCR requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+      "OCR requires Vertex AI or a Gemini API key. Set VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY " +
+      "or GEMINI_API_KEY in Supabase secrets."
     );
   }
 
   try {
-    const response = await callVertexAIWithFile({
-      systemPrompt: OCR_SYSTEM_PROMPT,
-      userPrompt: "Extract all text from this document. Return only the raw text, nothing else.",
-      fileBytes,
-      fileUri,
-      fileMimeType: mimeType,
-      maxOutputTokens: 8192,
-      temperature: 0,
-      responseMimeType: "text/plain",
-    });
+    let response;
+    if (hasVertexCreds) {
+      response = await callVertexAIWithFile({
+        systemPrompt: OCR_SYSTEM_PROMPT,
+        userPrompt: "Extract all text from this document. Return only the raw text, nothing else.",
+        fileBytes,
+        fileUri: useUri ? fileUri : undefined,
+        fileMimeType: mimeType,
+        maxOutputTokens: 16384,
+        temperature: 0,
+        responseMimeType: "text/plain",
+      });
+    } else {
+      response = await callGeminiWithAPIKeyAndFile({
+        systemPrompt: OCR_SYSTEM_PROMPT,
+        userPrompt: "Extract all text from this document. Return only the raw text, nothing else.",
+        fileBytes,
+        fileUri: useUri ? fileUri : undefined,
+        fileMimeType: mimeType,
+        maxOutputTokens: 16384,
+        temperature: 0,
+      });
+    }
 
     const text = response.content?.trim() ?? "";
 
@@ -93,22 +109,46 @@ export async function extractDocumentWithVision(
   fields: Array<{ key: string; value: string; confidence?: number; page?: number; source_text?: string }>;
   warnings: string[];
 }> {
-  console.log(`[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes)`);
-  const isLargeInlineFile = !fileUri && fileBytes.length > 8 * 1024 * 1024;
+  // For files ≤ 20 MB always use inline base64 — it's more reliable than asking
+  // Vertex AI to fetch the file over HTTP (signed URLs can expire, CDN firewalls
+  // differ, and Supabase CDN may not be reachable from all Vertex AI data centres).
+  // Only use the fileUri path for files above 20 MB where inline is impractical.
+  const INLINE_LIMIT_BYTES = 20 * 1024 * 1024;
+  const useUri = !!fileUri && fileBytes.length > INLINE_LIMIT_BYTES;
+  const effectiveUri = useUri ? fileUri : undefined;
+  const isLargeInlineFile = !useUri && fileBytes.length > 8 * 1024 * 1024;
 
-  const hasVertexAI = !!(
-    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
-  ) && !!(
-    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  console.log(
+    `[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes, ` +
+    `mode=${useUri ? "uri" : "inline"})`,
   );
 
-  if (!hasVertexAI) {
+  const hasVertexCreds2 = !!(
+    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+  );
+  const hasGeminiKey2 = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
+
+  if (!hasVertexCreds2 && !hasGeminiKey2) {
     throw new Error(
-      "OCR requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+      "OCR requires Vertex AI or a Gemini API key. Set VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY " +
+      "or GEMINI_API_KEY in Supabase secrets."
     );
   }
 
-  const result = await callVertexAIFileJSON<{
+  const callFileJSON = hasVertexCreds2
+    ? callVertexAIFileJSON
+    : async <T>(opts: Parameters<typeof callVertexAIFileJSON>[0]): Promise<T | null> => {
+        const response = await callGeminiWithAPIKeyAndFile(opts);
+        let text = response.content.trim()
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
+        if (!text) return null;
+        try { return JSON.parse(text) as T; } catch { return null; }
+      };
+
+  const result = await callFileJSON<{
     page_count?: number;
     pages?: Array<{
       page?: number;
@@ -141,11 +181,36 @@ Rules:
 7. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all reviewable fields and the important OCR text from this document.",
     fileBytes,
-    fileUri,
+    fileUri: effectiveUri,
     fileMimeType: mimeType,
-    maxOutputTokens: isLargeInlineFile ? 8192 : 16384,
+    // 32 K tokens handles large leases; Gemini 2.5 Flash supports up to 65 K.
+    // Older fallback models (1.5 Pro) cap at 8 K — the repair logic in
+    // callVertexAIFileJSON recovers truncated JSON when possible.
+    maxOutputTokens: isLargeInlineFile ? 16384 : 32768,
     temperature: 0,
   });
+
+  // If JSON extraction failed (null = model returned empty / truncated response),
+  // fall back to plain-text OCR so we still get readable content from the document.
+  if (!result) {
+    console.warn("[ocr] JSON extraction returned null — falling back to plain-text OCR");
+    let fallbackText = "";
+    try {
+      fallbackText = await runVisionOCR(fileBytes, mimeType, fileUri);
+    } catch (fallbackErr) {
+      throw new Error(`Gemini Vision failed (JSON + text fallback both failed): ${fallbackErr.message}`);
+    }
+    if (!fallbackText || fallbackText.length < 5) {
+      throw new Error("Gemini Vision returned no text or fields.");
+    }
+    return {
+      text: fallbackText,
+      page_count: undefined,
+      pages: [],
+      fields: [],
+      warnings: ["JSON extraction failed; plain-text OCR used as fallback — field extraction may be limited"],
+    };
+  }
 
   const cleanedPages = Array.isArray(result?.pages)
     ? result.pages
@@ -210,21 +275,35 @@ export async function extractVisibleKeyValues(
 ): Promise<Array<{ key: string; value: string; confidence?: number; page?: number }>> {
   console.log(`[ocr] Extracting visible key-value pairs (${mimeType}, ${fileBytes.length} bytes)`);
 
-  const hasVertexAI = !!(
-    Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")
-  ) && !!(
-    Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY")
+  const hasVertexCreds3 = !!(
+    (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+    (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
   );
+  const hasGeminiKey3 = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
 
-  if (!hasVertexAI) {
+  if (!hasVertexCreds3 && !hasGeminiKey3) {
     throw new Error(
-      "Key-value extraction requires Vertex AI (Gemini). Set VERTEX_PROJECT_ID and GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets."
+      "Key-value extraction requires Vertex AI or a Gemini API key. Set VERTEX_PROJECT_ID + GOOGLE_SERVICE_ACCOUNT_KEY " +
+      "or GEMINI_API_KEY in Supabase secrets."
     );
   }
 
-  const result = await callVertexAIFileJSON<{
-    fields?: Array<{ key?: string; value?: unknown; confidence?: number; page?: number }>;
-  }>({
+  const callFileJSON3 = hasVertexCreds3
+    ? callVertexAIFileJSON
+    : async (opts) => {
+        const response = await callGeminiWithAPIKeyAndFile(opts);
+        let text = response.content.trim()
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
+        if (!text) return null;
+        try { return JSON.parse(text); } catch { return null; }
+      };
+
+  const INLINE_LIMIT_BYTES = 20 * 1024 * 1024;
+  const useUri3 = !!fileUri && fileBytes.length > INLINE_LIMIT_BYTES;
+
+  const result = await callFileJSON3({
     systemPrompt: `You extract structured data from commercial real estate legal documents.
 
 Return JSON only with this shape:
@@ -239,7 +318,7 @@ Rules:
 6. Return valid JSON only. No markdown.`,
     userPrompt: "Extract all meaningful field/value pairs from this document for a review UI.",
     fileBytes,
-    fileUri,
+    fileUri: useUri3 ? fileUri : undefined,
     fileMimeType: mimeType,
     maxOutputTokens: 8192,
     temperature: 0,
