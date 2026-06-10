@@ -23,12 +23,33 @@ function jsonResponse(body: unknown, status = 200) {
 
 async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-  const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
-    method: "POST",
-    headers: buildInternalFunctionHeaders(orgId),
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(STAGE_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
+      method: "POST",
+      headers: buildInternalFunctionHeaders(orgId),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STAGE_TIMEOUT_MS),
+    });
+  } catch (fetchErr: any) {
+    const isTimeout =
+      fetchErr?.name === "TimeoutError" ||
+      fetchErr?.name === "AbortError" ||
+      String(fetchErr?.message ?? "").toLowerCase().includes("timeout");
+    console.error(
+      `[${WORKER_NAME}] ${functionName} ${isTimeout ? "timed out" : "network error"}: ${fetchErr?.message}`,
+    );
+    return {
+      ok: false,
+      status: isTimeout ? 504 : 500,
+      data: {},
+      error_code: isTimeout ? "STAGE_TIMEOUT" : "NETWORK_ERROR",
+      retryable: isTimeout,
+      error: isTimeout
+        ? `${functionName} timed out after ${STAGE_TIMEOUT_MS / 1000}s — document may be too large or the parsing service is slow`
+        : `Network error calling ${functionName}: ${fetchErr?.message}`,
+    };
+  }
 
   const text = await response.text().catch(() => "");
   let data: any = {};
