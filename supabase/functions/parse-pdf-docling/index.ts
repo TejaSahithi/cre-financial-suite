@@ -16,7 +16,8 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { createAdminClient, verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { isInternalCall } from "../_shared/internal-auth.ts";
 import { parseDocument } from "../_shared/extraction/parser.ts";
 import { setStatus } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
@@ -42,11 +43,62 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  // Two caller modes:
+  //   A. Internal worker  — x-worker-secret / x-internal-service-key / service-role Bearer
+  //   B. User-facing call — normal user JWT forwarded by ingest-file
+  //
+  // For mode A, verifyUser() short-circuits on x-internal-service-key and
+  // returns an admin client + synthetic internal user.  getUserOrgId() then
+  // reads x-internal-org-id from the header (set by buildInternalFunctionHeaders).
+  //
+  // If neither mode applies we return a structured 401 immediately so the
+  // worker can map it to DOWNSTREAM_AUTH_FAILED instead of a generic 400.
+  const hasUserAuth = Boolean(
+    req.headers.get("Authorization") ||
+    req.headers.get("x-user-jwt") ||
+    req.headers.get("x-supabase-auth"),
+  );
+
+  if (!isInternalCall(req) && !hasUserAuth) {
+    return jsonResponse(
+      { ok: false, error_code: "UNAUTHORIZED_INTERNAL_PARSE_CALL", message: "Unauthorized parse request" },
+      401,
+    );
+  }
+
   try {
     const functionStartedAt = new Date().toISOString();
     // 1. Auth + org isolation
-    const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
+    let user: any;
+    let supabaseAdmin: any;
+    let orgId: string;
+
+    if (isInternalCall(req)) {
+      supabaseAdmin = createAdminClient();
+      user = { id: "internal-compute", email: "internal-compute@system.local" };
+      // orgId from x-internal-org-id header (set by lease-extraction-worker via
+      // buildInternalFunctionHeaders).  If missing, fall back to DB lookup below.
+      const headerOrgId = req.headers.get("x-internal-org-id")?.trim() ?? "";
+      if (headerOrgId && /^[0-9a-f-]{36}$/i.test(headerOrgId)) {
+        orgId = headerOrgId;
+      } else {
+        // Will be resolved after fetching the file record (see below).
+        orgId = "";
+      }
+    } else {
+      const authResult = await verifyUser(req);
+      user = authResult.user;
+      supabaseAdmin = authResult.supabaseAdmin;
+      try {
+        orgId = await getUserOrgId(user.id, supabaseAdmin, req);
+      } catch (orgErr) {
+        return jsonResponse(
+          { ok: false, error_code: "UNAUTHORIZED_INTERNAL_PARSE_CALL", message: "Unauthorized parse request" },
+          401,
+        );
+      }
+    }
 
     // 2. Parse request body
     const body = await req.json().catch(() => ({}));
@@ -59,23 +111,40 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 3. Fetch file record (org_id scoped)
-    const { data: fileRecord, error: fetchError } = await supabaseAdmin
-      .from("uploaded_files")
-      .select("*")
-      .eq("id", file_id)
-      .eq("org_id", orgId)
-      .single();
-
-    if (fetchError || !fileRecord) {
-      return jsonResponse(
-        {
-          error: true,
-          message: `File not found: ${fetchError?.message ?? "Invalid file_id or org mismatch"}`,
-          error_code: "FILE_NOT_FOUND",
-        },
-        404,
-      );
+    // 3. Fetch file record.
+    // Internal calls may arrive without an org_id header when the worker
+    // builds headers without an explicit org (shouldn't happen, but be safe).
+    // In that case do an unscoped admin lookup so we can still resolve the org.
+    let fileRecord: any;
+    if (orgId) {
+      const { data, error: fetchError } = await supabaseAdmin
+        .from("uploaded_files")
+        .select("*")
+        .eq("id", file_id)
+        .eq("org_id", orgId)
+        .single();
+      if (fetchError || !data) {
+        return jsonResponse(
+          { error: true, message: `File not found: ${fetchError?.message ?? "Invalid file_id or org mismatch"}`, error_code: "FILE_NOT_FOUND" },
+          404,
+        );
+      }
+      fileRecord = data;
+    } else {
+      // orgId missing — admin lookup without org scope (internal calls only)
+      const { data, error: fetchError } = await supabaseAdmin
+        .from("uploaded_files")
+        .select("*")
+        .eq("id", file_id)
+        .maybeSingle();
+      if (fetchError || !data) {
+        return jsonResponse(
+          { error: true, message: `File not found: ${fetchError?.message ?? "Invalid file_id"}`, error_code: "FILE_NOT_FOUND" },
+          404,
+        );
+      }
+      fileRecord = data;
+      orgId = data.org_id ?? "";
     }
 
     const fileName: string = fileRecord.file_name ?? "document";
@@ -430,13 +499,19 @@ Deno.serve(async (req: Request) => {
     }
   } catch (err) {
     console.error("[parse-pdf-docling] Error:", err.message);
+    // Auth failures get a clean 401 so the worker maps them to DOWNSTREAM_AUTH_FAILED
+    // instead of the generic DOWNSTREAM_FUNCTION_FAILED (400).
+    const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(
+      String(err.message ?? ""),
+    );
     return jsonResponse(
       {
+        ok: false,
         error: true,
         message: err.message,
-        error_code: "PDF_PARSING_FAILED",
+        error_code: isAuthError ? "UNAUTHORIZED_INTERNAL_PARSE_CALL" : "PDF_PARSING_FAILED",
       },
-      400,
+      isAuthError ? 401 : 400,
     );
   }
 });

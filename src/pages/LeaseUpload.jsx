@@ -220,23 +220,47 @@ function statusFromDisplayState(displayState) {
   }
 }
 
+// Status-like values that should never be surfaced as error codes in the UI.
+const STATUS_VALUES = new Set([
+  "ready_for_review", "review_required", "parsing", "parsed", "pdf_parsed",
+  "validating", "validated", "storing", "stored", "computing", "completed",
+  "uploaded", "lease_extraction_queued", "pending", "queued", "running",
+]);
+
 function buildPipelineFailure(record, reviewPayload) {
   if (!record || record.status !== "failed") return null;
 
   const pipeline = extractPipelineMetadataFromRecord(record, reviewPayload);
-  const parserStatus = firstText(pipeline.parser_status, record.processing_status);
+  const parserStatus = firstText(pipeline.parser_status);
   const normalizeStatus = firstText(pipeline.normalize_status);
   const aiStatus = firstText(pipeline.ai_status);
-  const stage = firstText(pipeline.stage, record.failed_step) || "pipeline";
-  const errorCode = firstText(pipeline.error_code, parserStatus, normalizeStatus, aiStatus, record.processing_status);
-  const rawMessage = firstText(pipeline.error_message, record.error_message);
+  const stage = firstText(pipeline.stage, record.failed_step, record.latest_job?.stage) || "pipeline";
+
+  // Use the job-level error_code as the most reliable source — it is set by
+  // the worker (e.g. DOWNSTREAM_AUTH_FAILED) and does not confuse status
+  // values like "ready_for_review" with error codes.
+  const jobErrorCode = firstText(record.latest_job?.error_code);
+  const pipelineErrorCode = firstText(pipeline.error_code, parserStatus, normalizeStatus, aiStatus);
+  // Exclude processing_status fallback — it holds lifecycle states, not error codes.
+  const rawErrorCode = jobErrorCode || pipelineErrorCode;
+  const errorCode = rawErrorCode && !STATUS_VALUES.has(rawErrorCode) ? rawErrorCode : (jobErrorCode || pipelineErrorCode || "");
+
+  const rawMessage = firstText(
+    record.latest_job?.error_message,
+    pipeline.error_message,
+    record.error_message,
+  );
   const fullTextChars = Number(pipeline.full_text_chars ?? 0);
   const pageCount = pipeline.page_count ?? null;
 
   let reason = rawMessage;
   let recovery = "Re-run extraction after fixing the document or backend configuration.";
 
-  if (/parse_timeout|PARSE_TIMEOUT|timed out|timeout/i.test(`${parserStatus} ${errorCode} ${rawMessage}`)) {
+  const combined = `${parserStatus} ${errorCode} ${rawMessage}`;
+  if (/DOWNSTREAM_AUTH_FAILED|401|parse.*returned 401|unauthorized.*parse/i.test(combined)) {
+    reason = rawMessage || "The extraction worker could not authenticate to the document parser.";
+    recovery = "Ensure WORKER_INTERNAL_SECRET is set in Supabase secrets and redeploy the Edge Functions, then retry.";
+  } else if (/parse_timeout|PARSE_TIMEOUT|timed out|timeout/i.test(combined)) {
     reason = "The document parser timed out before it could produce readable lease text.";
     recovery = "Upload a smaller/optimized PDF, or deploy a longer-running/background parser before retrying.";
   } else if (/EMPTY_PARSE_TEXT|parse_completed_empty_text/i.test(`${parserStatus} ${errorCode}`)) {
@@ -767,13 +791,18 @@ export default function LeaseUpload() {
     return Date.now() - updatedAt > 3 * 60 * 1000; // stuck for > 3 minutes
   }, [fileRecord?.status, fileRecord?.updated_at]);
 
-  // The lease draft can be opened as soon as the file is past extraction.
-  // Including `validating` lets users open Lease Review for files stuck there
-  // so they can use its Re-extract button (which already uses force_reextract).
-  const canOpenReview = [
+  // "Open Lease Review" is only meaningful when there is an actual review
+  // payload (i.e. extraction produced fields the user can inspect/approve).
+  // A failed parse produces a blocked placeholder payload — not a real review.
+  // Hiding the button avoids confusion and prevents navigating to an empty review.
+  const hasValidReviewPayload =
+    fileRecord?.review_required === true &&
+    fileRecord?.ui_review_payload != null &&
+    fileRecord?.status !== "failed";
+
+  const canOpenReview = hasValidReviewPayload || [
     "validating",
     "validated",
-    "review_required",
     "approved",
     "storing",
     "stored",
@@ -891,16 +920,18 @@ export default function LeaseUpload() {
             </div>
 
             <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-              <Button
-                onClick={openLeaseReview}
-                disabled={openingReview || !canOpenReview}
-                size="sm"
-                className="bg-teal-600 hover:bg-teal-700"
-              >
-                {openingReview && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Open Lease Review
-              </Button>
+              {canOpenReview && (
+                <Button
+                  onClick={openLeaseReview}
+                  disabled={openingReview}
+                  size="sm"
+                  className="bg-teal-600 hover:bg-teal-700"
+                >
+                  {openingReview && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Open Lease Review
+                </Button>
+              )}
               <Button
                 onClick={retryExtraction}
                 disabled={retryingExtraction}

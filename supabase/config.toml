@@ -71,9 +71,14 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
+# verify_jwt=false: parse-pdf-docling is called from both the browser (via
+# ingest-file, user JWT) and from lease-extraction-worker (service-role key).
+# Supabase's platform JWT check rejects the service-role Bearer in verify_jwt=true
+# mode, so auth is handled entirely inside the function via verifyUser() which
+# already short-circuits on x-internal-service-key == SUPABASE_SERVICE_ROLE_KEY.
 [functions.parse-pdf-docling]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.normalize-pdf-output]
 enabled = true
