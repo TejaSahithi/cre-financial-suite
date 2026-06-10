@@ -127,6 +127,43 @@ function extractPipelineMetadataFromRecord(record, reviewPayload) {
   );
 }
 
+const UPLOADED_FILE_SELECTS = [
+  "id, file_name, file_url, status, processing_status, failed_step, error_message, review_required, review_status, " +
+    "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
+    "org_id, property_id, building_id, unit_id, updated_at",
+  "id, file_name, file_url, status, failed_step, error_message, review_required, review_status, " +
+    "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
+    "org_id, property_id, building_id, unit_id, updated_at",
+  "id, file_name, file_url, status, error_message, review_required, review_status, " +
+    "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
+    "org_id, property_id, building_id, unit_id, updated_at",
+  "id, file_name, file_url, status, error_message, row_count, org_id, updated_at",
+];
+
+async function selectUploadedFileRecord(id) {
+  let lastError = null;
+
+  for (const columns of UPLOADED_FILE_SELECTS) {
+    const { data, error } = await supabase
+      .from("uploaded_files")
+      .select(columns)
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!error) return { data, error: null };
+
+    lastError = error;
+    if (!isMissingUploadedFileColumnError(error)) break;
+  }
+
+  return { data: null, error: lastError };
+}
+
+function isMissingUploadedFileColumnError(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`;
+  return /42703|PGRST204|column .* does not exist|Could not find .* column|schema cache/i.test(text);
+}
+
 function buildPipelineFailure(record, reviewPayload) {
   if (!record || record.status !== "failed") return null;
 
@@ -320,29 +357,7 @@ export default function LeaseUpload() {
   const fetchFileRecord = async (id) => {
     if (!id) return;
     setLoadingRecord(true);
-    let { data, error } = await supabase
-      .from("uploaded_files")
-      .select(
-        "id, file_name, file_url, status, processing_status, failed_step, error_message, review_required, review_status, " +
-        "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
-        "org_id, property_id, building_id, unit_id, updated_at",
-      )
-      .eq("id", id)
-      .maybeSingle();
-
-    if (error) {
-      const fallback = await supabase
-        .from("uploaded_files")
-        .select(
-          "id, file_name, file_url, status, error_message, review_required, review_status, " +
-          "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
-          "org_id, property_id, building_id, unit_id, updated_at",
-        )
-        .eq("id", id)
-        .maybeSingle();
-      data = fallback.data;
-      error = fallback.error;
-    }
+    const { data, error } = await selectUploadedFileRecord(id);
 
     setLoadingRecord(false);
 

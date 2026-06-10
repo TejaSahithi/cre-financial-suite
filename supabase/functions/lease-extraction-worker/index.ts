@@ -3,7 +3,13 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient } from "../_shared/supabase.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { setFailed } from "../_shared/pipeline-status.ts";
-import { isAuthorizedWorkerCall, UNAUTHORIZED_WORKER_RESPONSE } from "./auth.ts";
+import {
+  buildInternalFunctionHeaders,
+  classifyDownstreamError,
+  getMissingWorkerConfig,
+  isAuthorizedWorkerCall,
+  UNAUTHORIZED_WORKER_RESPONSE,
+} from "./auth.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
 const STAGE_TIMEOUT_MS = 140_000;
@@ -15,24 +21,11 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function serviceHeaders(orgId: string) {
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const workerSecret = Deno.env.get("WORKER_INTERNAL_SECRET") ?? "";
-  return {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${serviceKey}`,
-    "apikey": serviceKey,
-    "x-internal-service-key": serviceKey,
-    "x-internal-org-id": orgId,
-    ...(workerSecret ? { "x-worker-secret": workerSecret } : {}),
-  };
-}
-
 async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
     method: "POST",
-    headers: serviceHeaders(orgId),
+    headers: buildInternalFunctionHeaders(orgId),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(STAGE_TIMEOUT_MS),
   });
@@ -46,11 +39,19 @@ async function callInternalFunction(functionName: string, body: Record<string, u
   }
 
   if (!response.ok) {
+    const classified = classifyDownstreamError(response.status);
+    const safeError =
+      classified.error_code === "DOWNSTREAM_AUTH_FAILED"
+        ? `${functionName} returned ${response.status}`
+        : data?.message || data?.error_details || data?.error_code || text.slice(0, 500) || `HTTP ${response.status}`;
+
     return {
       ok: false,
       status: response.status,
       data,
-      error: data?.message || data?.error_details || data?.error_code || text.slice(0, 500) || `HTTP ${response.status}`,
+      error_code: classified.error_code,
+      retryable: classified.retryable,
+      error: safeError,
     };
   }
 
@@ -61,7 +62,7 @@ function dispatchSelf(fileId: string, jobId: string, orgId: string) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const promise = fetch(`${supabaseUrl}/functions/v1/${WORKER_NAME}`, {
     method: "POST",
-    headers: serviceHeaders(orgId),
+    headers: buildInternalFunctionHeaders(orgId),
     body: JSON.stringify({ job_id: jobId }),
   }).catch((error) => {
     console.error(`[${WORKER_NAME}] self-dispatch failed:`, error?.message || error);
@@ -86,6 +87,28 @@ async function failJob(supabaseAdmin: any, job: any, errorCode: string, errorMes
     .eq("id", job.id);
 }
 
+async function failJobAndUpload(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  errorCode: string,
+  errorMessage: string,
+  stage: string,
+  progress: number,
+) {
+  await failJob(supabaseAdmin, job, errorCode, errorMessage);
+
+  const { data: latestFile } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("status")
+    .eq("id", fileId)
+    .maybeSingle();
+
+  if (latestFile?.status !== "failed") {
+    await setFailed(supabaseAdmin, fileId, errorMessage, stage, progress);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -96,13 +119,47 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(UNAUTHORIZED_WORKER_RESPONSE, 401);
     }
 
-    const supabaseAdmin = createAdminClient();
     const body = await req.json().catch(() => ({}));
     const jobId = body.job_id;
 
     if (!jobId) {
       return jsonResponse({ error: true, error_code: "MISSING_JOB_INPUT", message: "job_id is required" }, 400);
     }
+
+    const missingConfig = getMissingWorkerConfig();
+    if (missingConfig.length > 0) {
+      const message = `Worker configuration missing: ${missingConfig.join(", ")}`;
+      const canPersistConfigFailure =
+        !missingConfig.includes("SUPABASE_URL") &&
+        !missingConfig.includes("SUPABASE_SERVICE_ROLE_KEY");
+
+      if (canPersistConfigFailure) {
+        try {
+          const adminForConfigFailure = createAdminClient();
+          const { data: configJob } = await adminForConfigFailure
+            .from("pipeline_jobs")
+            .select("*")
+            .eq("id", jobId)
+            .maybeSingle();
+          if (configJob?.id) {
+            await failJob(adminForConfigFailure, configJob, "WORKER_CONFIG_MISSING", message);
+          }
+        } catch (configPersistError) {
+          console.warn(`[${WORKER_NAME}] could not persist WORKER_CONFIG_MISSING:`, configPersistError?.message || configPersistError);
+        }
+      }
+
+      return jsonResponse(
+        {
+          error: true,
+          error_code: "WORKER_CONFIG_MISSING",
+          message,
+        },
+        500,
+      );
+    }
+
+    const supabaseAdmin = createAdminClient();
 
     const { data: job, error: jobError } = await supabaseAdmin
       .from("pipeline_jobs")
@@ -163,24 +220,15 @@ Deno.serve(async (req: Request) => {
       const parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId);
       if (!parseResult.ok) {
         const message = parseResult.error || "Document parsing failed";
-        await failJob(supabaseAdmin, job, parseResult.data?.error_code || "PARSE_FAILED", message);
-
-        const { data: latestFile } = await supabaseAdmin
-          .from("uploaded_files")
-          .select("status")
-          .eq("id", fileId)
-          .maybeSingle();
-
-        if (latestFile?.status !== "failed") {
-          await setFailed(supabaseAdmin, fileId, message, "parse", 15);
-        }
+        const errorCode = parseResult.error_code || parseResult.data?.error_code || "PARSE_FAILED";
+        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "parse", 15);
 
         await logger.event("parse", "failed", {
-          error_code: parseResult.data?.error_code || "PARSE_FAILED",
+          error_code: errorCode,
           error_message: message,
-          metadata: { job_id: job.id, status: parseResult.status },
+          metadata: { job_id: job.id, status: parseResult.status, retryable: Boolean(parseResult.retryable) },
         });
-        return jsonResponse({ error: true, job_id: job.id, stage: "parse", message }, 200);
+        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", message }, 200);
       }
 
       await supabaseAdmin
@@ -214,24 +262,15 @@ Deno.serve(async (req: Request) => {
       const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId }, orgId);
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
-        await failJob(supabaseAdmin, job, normalizeResult.data?.error_code || "NORMALIZE_FAILED", message);
-
-        const { data: latestFile } = await supabaseAdmin
-          .from("uploaded_files")
-          .select("status")
-          .eq("id", fileId)
-          .maybeSingle();
-
-        if (latestFile?.status !== "failed") {
-          await setFailed(supabaseAdmin, fileId, message, "normalize", 45);
-        }
+        const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
+        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "normalize", 45);
 
         await logger.event("normalize", "failed", {
-          error_code: normalizeResult.data?.error_code || "NORMALIZE_FAILED",
+          error_code: errorCode,
           error_message: message,
-          metadata: { job_id: job.id, status: normalizeResult.status },
+          metadata: { job_id: job.id, status: normalizeResult.status, retryable: Boolean(normalizeResult.retryable) },
         });
-        return jsonResponse({ error: true, job_id: job.id, stage: "normalize", message }, 200);
+        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", message }, 200);
       }
 
       await supabaseAdmin
