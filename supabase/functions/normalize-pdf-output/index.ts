@@ -23,6 +23,7 @@
 
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
@@ -1375,6 +1376,23 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
+  // ── Auth guard ──────────────────────────────────────────────────────────────
+  // Called from both browser (user JWT via ingest-file) and internally from
+  // lease-extraction-worker (service-role Bearer + x-internal-service-key).
+  // With verify_jwt=false the Supabase platform skips its own JWT check, so
+  // we reject completely unauthenticated requests here before any DB work.
+  const hasAnyAuth = Boolean(
+    req.headers.get("Authorization") ||
+    req.headers.get("x-worker-secret") ||
+    req.headers.get("x-internal-service-key"),
+  );
+  if (!hasAnyAuth) {
+    return jsonResponse(
+      { ok: false, error_code: "UNAUTHORIZED_NORMALIZE_CALL", message: "Unauthorized normalization request" },
+      401,
+    );
+  }
+
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
@@ -2081,13 +2099,17 @@ Deno.serve(async (req: Request) => {
     }
   } catch (err) {
     console.error("[normalize-pdf-output] Error:", err.message);
+    const isAuthError = /unauthorized|missing authorization|invalid token|auth failed/i.test(
+      String(err.message ?? ""),
+    );
     return jsonResponse(
       {
+        ok: false,
         error: true,
         message: err.message,
-        error_code: "NORMALIZATION_FAILED",
+        error_code: isAuthError ? "UNAUTHORIZED_NORMALIZE_CALL" : "NORMALIZATION_FAILED",
       },
-      400,
+      isAuthError ? 401 : 400,
     );
   }
 });

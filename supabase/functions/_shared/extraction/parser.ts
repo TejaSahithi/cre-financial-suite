@@ -35,8 +35,14 @@ import type {
 } from "./types.ts";
 import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
 
-const MIN_DIGITAL_BLOCKS = 5;       // below this, a PDF is treated as scanned
+// A PDF needs at least this many Docling text blocks to be trusted as
+// "digital" (non-scanned). 2 is intentionally low — a simple single-page
+// lease amendment may have only 2-3 paragraphs. If Docling returns ≥2
+// blocks OR extracts ≥500 meaningful characters we skip the Vision fallback.
+const MIN_DIGITAL_BLOCKS = 2;
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
+// Minimum extracted chars from Docling to trust as complete even with few blocks
+const MIN_DOCLING_TEXT_CHARS = 500;
 const MAX_DOCLING_SUPPLEMENT_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_PDF_BYTES = 8 * 1024 * 1024;
 const MAX_NATIVE_PDF_TEXT_BYTES = 4 * 1024 * 1024;
@@ -80,6 +86,9 @@ export async function parseDocument(
       const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
       const nativeLooksComplete =
         nativeTextChars >= MIN_NATIVE_PDF_TEXT_CHARS ||
+        // Single-page leases: 800+ chars with 2+ blocks is sufficient.
+        // The old threshold (5 blocks) incorrectly classified simple single-page
+        // amendments as needing OCR even when native parsing was complete.
         (estimatedPageCount === 1 && nativeTextChars >= 800 && nativeBlockCount >= MIN_DIGITAL_BLOCKS);
 
       if (nativeLooksComplete) {
@@ -247,7 +256,10 @@ function estimatePdfPageCount(bytes: Uint8Array): number | null {
 
 async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
   const doclingOutput = await callDocling(ctx);
-  if (doclingOutput && (doclingOutput.text_blocks?.length ?? 0) >= MIN_DIGITAL_BLOCKS) {
+  if (doclingOutput && (
+    (doclingOutput.text_blocks?.length ?? 0) >= MIN_DIGITAL_BLOCKS ||
+    (doclingOutput.full_text?.trim().length ?? 0) >= MIN_DOCLING_TEXT_CHARS
+  )) {
     return tag(doclingOutput, "docling");
   }
 

@@ -186,6 +186,16 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: false, job_id: job.id, status: job.status, stage: job.stage });
     }
 
+    // Guard against running a job that has already exceeded its attempt budget.
+    // max_attempts defaults to 3 (set at job creation in ingest-file).
+    const currentAttempt = Number(job.attempt || 0);
+    const maxAttempts = Number(job.max_attempts || 3);
+    if (currentAttempt >= maxAttempts) {
+      const message = `Job exceeded max_attempts (${currentAttempt}/${maxAttempts})`;
+      await failJobAndUpload(supabaseAdmin, job, fileId, "MAX_ATTEMPTS_EXCEEDED", message, job.stage ?? "parse", 15);
+      return jsonResponse({ error: true, error_code: "MAX_ATTEMPTS_EXCEEDED", job_id: job.id, message }, 200);
+    }
+
     const { data: fileRecord, error: fileError } = await supabaseAdmin
       .from("uploaded_files")
       .select("id, org_id, status, file_name, module_type")

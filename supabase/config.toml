@@ -80,9 +80,14 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+# verify_jwt=false: normalize-pdf-output is called both by browsers (via
+# ingest-file with user JWT) and from lease-extraction-worker (service-role
+# key). Supabase's platform JWT check rejects service-role Bearer when
+# verify_jwt=true; auth is handled inside via verifyUser() which
+# short-circuits on x-internal-service-key == SUPABASE_SERVICE_ROLE_KEY.
 [functions.normalize-pdf-output]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 
 [functions.review-approve]
 enabled = true
