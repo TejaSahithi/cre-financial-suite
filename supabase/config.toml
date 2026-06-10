@@ -59,6 +59,14 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+# Internal background worker — called by ingest-file using the service role key.
+# verify_jwt=false because Supabase's platform JWT check rejects service-role
+# Bearer tokens issued from within another edge function; auth is handled
+# internally via WORKER_INTERNAL_SECRET / SUPABASE_SERVICE_ROLE_KEY check.
+[functions.lease-extraction-worker]
+enabled = true
+verify_jwt = false
+
 [functions.parse-file]
 enabled = true
 verify_jwt = true
