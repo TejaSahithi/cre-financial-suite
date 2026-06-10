@@ -181,6 +181,100 @@ async function callEdgeFunction(
   return { ok: false, status: 500, data: {}, error: "Unexpected retry loop exit" };
 }
 
+function dispatchLeaseExtractionWorker(fileId: string, jobId: string, orgId: string) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!supabaseUrl || !serviceKey) {
+    console.warn("[ingest-file] Missing service configuration; cannot dispatch lease-extraction-worker");
+    return;
+  }
+
+  const promise = fetch(`${supabaseUrl}/functions/v1/lease-extraction-worker`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": serviceKey,
+      "x-internal-service-key": serviceKey,
+      "x-internal-org-id": orgId,
+    },
+    body: JSON.stringify({ file_id: fileId, job_id: jobId }),
+  }).catch((error) => {
+    console.error("[ingest-file] lease-extraction-worker dispatch failed:", error?.message || error);
+  });
+
+  const edgeRuntime = (globalThis as any).EdgeRuntime;
+  if (edgeRuntime?.waitUntil) {
+    edgeRuntime.waitUntil(promise);
+  }
+}
+
+async function enqueueLeaseExtractionJob(args: {
+  supabaseAdmin: any;
+  logger: any;
+  fileRecord: Record<string, any>;
+  orgId: string;
+  forceReextract: boolean;
+}) {
+  const { supabaseAdmin, logger, fileRecord, orgId, forceReextract } = args;
+  const now = new Date().toISOString();
+
+  await supabaseAdmin
+    .from("pipeline_jobs")
+    .update({
+      status: "cancelled",
+      error_code: "SUPERSEDED",
+      error_message: "Superseded by a newer lease extraction request.",
+      completed_at: now,
+      updated_at: now,
+    })
+    .eq("uploaded_file_id", fileRecord.id)
+    .eq("job_type", "lease_extraction")
+    .in("status", ["queued", "running"]);
+
+  const { data: job, error: jobError } = await supabaseAdmin
+    .from("pipeline_jobs")
+    .insert({
+      org_id: orgId,
+      uploaded_file_id: fileRecord.id,
+      job_type: "lease_extraction",
+      stage: "parse",
+      status: "queued",
+      max_attempts: 3,
+      input: {
+        force_reextract: forceReextract,
+        module_type: fileRecord.module_type ?? "leases",
+        file_name: fileRecord.file_name ?? null,
+      },
+      metadata: {
+        enqueued_by: "ingest-file",
+        enqueued_at: now,
+      },
+    })
+    .select("id")
+    .single();
+
+  if (jobError || !job?.id) {
+    throw new Error(`Could not enqueue lease extraction job: ${jobError?.message || "missing job id"}`);
+  }
+
+  const statusResult = await setStatus(supabaseAdmin, fileRecord.id, "parsing", {
+    processing_status: "lease_extraction_queued",
+    error_message: null,
+    failed_step: null,
+  });
+  if (statusResult.error) {
+    throw new Error(`Could not mark lease extraction as queued: ${statusResult.error.message}`);
+  }
+
+  await logger.event("parse", "queued", {
+    provider: "lease-extraction-worker",
+    metadata: { job_id: job.id },
+  });
+
+  dispatchLeaseExtractionWorker(fileRecord.id, job.id, orgId);
+  return job;
+}
+
 /**
  * Download only the first `maxBytes` bytes of a file using an HTTP Range
  * request. This avoids loading the entire file into the edge function's heap
@@ -732,6 +826,7 @@ Deno.serve(async (req: Request) => {
       defer_store = false,
       force_reextract = false,             // when true, reset file status so the
                                            // pipeline can re-run on already-processed files
+      run_synchronously = false,
     } = body;
     requestedFileId = file_id ?? null;
 
@@ -872,6 +967,14 @@ Deno.serve(async (req: Request) => {
       `reviewRequired=${reviewRequired}`,
     );
 
+    const detectionSummary = {
+      file_format: detection.fileFormat,
+      module_type: detection.moduleType,
+      format_source: detection.formatSource,
+      module_source: detection.moduleSource,
+      confidence: detection.confidence,
+    };
+
     // NOTE: status is left at 'uploaded' here. The next function in the
     // chain (parse-file / parse-pdf-docling) transitions to 'parsing' via
     // the FSM in _shared/pipeline-status.ts. Writing an ad-hoc status
@@ -899,6 +1002,31 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    if (routing.route === "parse-pdf-docling" && isLeaseModule && run_synchronously !== true) {
+      const job = await enqueueLeaseExtractionJob({
+        supabaseAdmin,
+        logger,
+        fileRecord,
+        orgId,
+        forceReextract: force_reextract === true,
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: false,
+          file_id,
+          extraction_queued: true,
+          job_id: job.id,
+          status: "parsing",
+          processing_status: "lease_extraction_queued",
+          detection: detectionSummary,
+          routing: { routed_to: routing.route, reason: routing.reason },
+          message: "Lease extraction has been queued. The parser will run in the background and Lease Review will appear when extraction is ready.",
+        }),
+        { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     // 9. Call the appropriate downstream function(s)
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const downstreamAuthToken =
@@ -915,13 +1043,6 @@ Deno.serve(async (req: Request) => {
       `[ingest-file] Routing file_id=${file_id} (${detection.fileFormat}/${detection.moduleType}) → ${routing.route}`,
     );
 
-    const detectionSummary = {
-      file_format: detection.fileFormat,
-      module_type: detection.moduleType,
-      format_source: detection.formatSource,
-      module_source: detection.moduleSource,
-      confidence: detection.confidence,
-    };
     const effectiveModuleType =
       detection.moduleType !== "unknown"
         ? detection.moduleType
