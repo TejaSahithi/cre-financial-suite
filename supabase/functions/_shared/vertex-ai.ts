@@ -292,6 +292,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
           "Authorization": `Bearer ${accessToken}`,
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30000),
       });
 
       if (response.ok) {
@@ -312,7 +313,16 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
       throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
     } catch (err) {
       lastError = err;
-      if (err.message.includes("404")) continue;
+      if (
+        err.message.includes("404") ||
+        err?.name === "TimeoutError" ||
+        err?.name === "AbortError"
+      ) {
+        if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+          console.warn(`[vertex-ai] Request to ${mod} in ${loc} timed out after 30s; trying next`);
+        }
+        continue;
+      }
       throw err;
     }
   }
@@ -438,6 +448,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
           "Authorization": `Bearer ${accessToken}`,
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(60000),
       });
 
       if (response.ok) {
@@ -472,7 +483,16 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
       throw lastError;
     } catch (err) {
       lastError = err;
-      if (String(err.message || "").includes("404")) continue;
+      if (
+        String(err.message || "").includes("404") ||
+        err?.name === "TimeoutError" ||
+        err?.name === "AbortError"
+      ) {
+        if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+          console.warn(`[vertex-ai] File request to ${mod} in ${loc} timed out after 60s; trying next`);
+        }
+        continue;
+      }
       throw err;
     }
   }
