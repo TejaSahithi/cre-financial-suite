@@ -89,6 +89,92 @@ function statusLabelFor(status) {
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const FAILURE_STAGE_LABELS = {
+  upload: "Upload",
+  parse: "Document parsing",
+  normalize: "Normalization",
+  ai_extraction: "AI extraction",
+  review_draft: "Review draft",
+  rule_extraction: "Expense rule extraction",
+  approval: "Approval",
+};
+
+function compactText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const text = compactText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function displayCode(value) {
+  const text = compactText(value);
+  return text ? text.replace(/_/g, " ") : "";
+}
+
+function extractPipelineMetadataFromRecord(record, reviewPayload) {
+  return (
+    reviewPayload?.metadata?.pipeline ||
+    record?.ui_review_payload?.metadata?.pipeline ||
+    record?.normalized_output?.metadata?.pipeline ||
+    record?.docling_raw?._metadata?.pipeline ||
+    record?.docling_raw?._metadata ||
+    {}
+  );
+}
+
+function buildPipelineFailure(record, reviewPayload) {
+  if (!record || record.status !== "failed") return null;
+
+  const pipeline = extractPipelineMetadataFromRecord(record, reviewPayload);
+  const parserStatus = firstText(pipeline.parser_status, record.processing_status);
+  const normalizeStatus = firstText(pipeline.normalize_status);
+  const aiStatus = firstText(pipeline.ai_status);
+  const stage = firstText(pipeline.stage, record.failed_step) || "pipeline";
+  const errorCode = firstText(pipeline.error_code, parserStatus, normalizeStatus, aiStatus, record.processing_status);
+  const rawMessage = firstText(pipeline.error_message, record.error_message);
+  const fullTextChars = Number(pipeline.full_text_chars ?? 0);
+  const pageCount = pipeline.page_count ?? null;
+
+  let reason = rawMessage;
+  let recovery = "Re-run extraction after fixing the document or backend configuration.";
+
+  if (/parse_timeout|PARSE_TIMEOUT|timed out|timeout/i.test(`${parserStatus} ${errorCode} ${rawMessage}`)) {
+    reason = "The document parser timed out before it could produce readable lease text.";
+    recovery = "Upload a smaller/optimized PDF, or deploy a longer-running/background parser before retrying.";
+  } else if (/EMPTY_PARSE_TEXT|parse_completed_empty_text/i.test(`${parserStatus} ${errorCode}`)) {
+    reason = "The parser completed, but produced no readable lease text.";
+    recovery = "Upload a text-searchable PDF or OCR-optimized copy, then re-run extraction.";
+  } else if (/INSUFFICIENT_PARSE_TEXT|parse_completed_insufficient_text/i.test(`${parserStatus} ${errorCode}`)) {
+    reason = `The parser produced only ${Number.isFinite(fullTextChars) ? fullTextChars : 0} readable characters, which is not enough for lease extraction.`;
+    recovery = "Upload a cleaner/text-searchable lease PDF, then re-run extraction.";
+  } else if (/PARSER_PROVIDER_UNAVAILABLE|No parser backend|Docling|Vertex|provider/i.test(`${errorCode} ${rawMessage}`)) {
+    reason = rawMessage || "No configured parser/OCR provider is available for this document.";
+    recovery = "Check Supabase secrets for Docling or Vertex/Gemini, redeploy the Edge Functions, then retry.";
+  } else if (/EMPTY_PARSE_TEXT|INSUFFICIENT_PARSE_TEXT/i.test(rawMessage)) {
+    reason = "The document could not be parsed into readable lease text.";
+    recovery = "Upload a text-searchable or OCR-optimized PDF, then re-run extraction.";
+  } else if (!reason) {
+    reason = "The extraction pipeline stopped before a Lease Review draft could be created.";
+  }
+
+  const stageLabel = FAILURE_STAGE_LABELS[stage] || displayCode(stage) || "Pipeline";
+  return {
+    stage,
+    stageLabel,
+    errorCode: errorCode || "PIPELINE_FAILED",
+    reason,
+    recovery,
+    fullTextChars: Number.isFinite(fullTextChars) ? fullTextChars : null,
+    pageCount,
+    provider: firstText(pipeline.provider_used, record.extraction_method),
+  };
+}
+
 export default function LeaseUpload() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -237,8 +323,8 @@ export default function LeaseUpload() {
     let { data, error } = await supabase
       .from("uploaded_files")
       .select(
-        "id, file_name, file_url, status, error_message, review_required, review_status, " +
-        "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
+        "id, file_name, file_url, status, processing_status, failed_step, error_message, review_required, review_status, " +
+        "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
         "org_id, property_id, building_id, unit_id, updated_at",
       )
       .eq("id", id)
@@ -247,7 +333,11 @@ export default function LeaseUpload() {
     if (error) {
       const fallback = await supabase
         .from("uploaded_files")
-        .select("id, file_name, file_url, status, error_message, row_count, org_id, updated_at")
+        .select(
+          "id, file_name, file_url, status, error_message, review_required, review_status, " +
+          "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
+          "org_id, property_id, building_id, unit_id, updated_at",
+        )
         .eq("id", id)
         .maybeSingle();
       data = fallback.data;
@@ -494,6 +584,10 @@ export default function LeaseUpload() {
 
   const reviewPayload = fileRecord?.ui_review_payload || null;
   const reviewedRows = reviewPayload?.records || reviewPayload?.rows || [];
+  const pipelineFailure = useMemo(
+    () => buildPipelineFailure(fileRecord, reviewPayload),
+    [fileRecord, reviewPayload],
+  );
   const extractionQuality = useMemo(
     () => assessLeaseExtractionQuality(reviewedRows),
     [reviewedRows]
@@ -819,7 +913,13 @@ export default function LeaseUpload() {
             </ol>
             {failed && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                Pipeline failed. Use Re-run Extraction to retry.
+                <div className="font-medium">
+                  {pipelineFailure?.stageLabel || "Pipeline"} failed
+                  {pipelineFailure?.errorCode ? `: ${displayCode(pipelineFailure.errorCode)}` : ""}
+                </div>
+                <div className="mt-1 text-xs text-red-600">
+                  {pipelineFailure?.reason || "The extraction pipeline stopped before a Lease Review draft could be created."}
+                </div>
               </div>
             )}
             {isStuckInPipeline && !failed && (
@@ -849,8 +949,26 @@ export default function LeaseUpload() {
 
       {fileRecord?.status === "failed" && (
         <Card className="border-red-200 bg-red-50">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-red-700">
-            <span>{fileRecord.error_message || "Processing failed."}</span>
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4 text-sm text-red-700">
+            <div className="max-w-3xl space-y-1">
+              <div className="font-medium">
+                {pipelineFailure?.stageLabel || "Pipeline"} failed
+                {pipelineFailure?.errorCode ? `: ${displayCode(pipelineFailure.errorCode)}` : ""}
+              </div>
+              <div>{pipelineFailure?.reason || fileRecord.error_message || "Processing failed."}</div>
+              {pipelineFailure?.recovery && (
+                <div className="text-xs text-red-600">{pipelineFailure.recovery}</div>
+              )}
+              {(pipelineFailure?.fullTextChars != null || pipelineFailure?.pageCount || pipelineFailure?.provider) && (
+                <div className="text-xs text-red-500">
+                  {[
+                    pipelineFailure?.provider ? `provider: ${pipelineFailure.provider}` : null,
+                    pipelineFailure?.pageCount ? `pages: ${pipelineFailure.pageCount}` : null,
+                    pipelineFailure?.fullTextChars != null ? `readable chars: ${pipelineFailure.fullTextChars}` : null,
+                  ].filter(Boolean).join(" | ")}
+                </div>
+              )}
+            </div>
             <Button
               variant="outline"
               size="sm"

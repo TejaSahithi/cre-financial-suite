@@ -931,19 +931,14 @@ Deno.serve(async (req: Request) => {
     if (routing.route === "parse-pdf-docling") {
       console.log(`[ingest-file] Starting PDF/document processing for ${detection.fileFormat} file`);
 
-      // Shared deadline: ingest-file has a 150 s wall. Reserve 10 s for
-      // startup, parkForManualReview, and the HTTP response. Split the
-      // remaining ~140 s between the two downstream calls. parse-pdf-docling
-      // typically finishes in <30 s for most PDFs; normalize-pdf-output makes
-      // several sequential LLM calls (Vertex AI) and needs more headroom.
-      // If a call times out, its AbortError is caught and parkForManualReview
-      // runs in the remaining budget rather than the whole function hitting 504.
-      const PARSE_TIMEOUT_MS = 55_000;
-      // normalize-pdf-output makes several sequential Vertex AI LLM calls which
-      // can take 80-100 s for complex leases. Give it as much headroom as possible.
-      // If it still times out, the fire-and-forget path below lets it finish in
-      // the background without showing a false error to the user.
-      const NORMALIZE_TIMEOUT_MS = 110_000;
+      // Shared deadline: ingest-file has a finite wall-clock budget. Give the
+      // parser enough room for scanned/high-resolution lease PDFs, then cap the
+      // normalize wait based on elapsed time so ingest-file can still return a
+      // controlled response instead of being killed by the platform.
+      const pipelineStartedAt = Date.now();
+      const MAX_INGEST_WAIT_MS = 135_000;
+      const RESPONSE_SAFETY_MS = 10_000;
+      const PARSE_TIMEOUT_MS = 90_000;
 
       // Step 1: Docling extraction with enhanced error handling
       // discardSuccessBody=true: parse-pdf-docling writes docling_raw directly
@@ -964,7 +959,7 @@ Deno.serve(async (req: Request) => {
         console.error(`[ingest-file] Docling extraction failed:`, doclingResult.error);
 
         const reason = (doclingResult as any).timedOut
-          ? `Extraction timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s - the PDF may be too large or scanned at very high resolution. Click Re-extract Lease to retry, or upload a smaller/optimized PDF.`
+          ? `The document parser timed out after ${Math.round(PARSE_TIMEOUT_MS / 1000)}s before it could produce readable lease text. Upload a smaller/text-searchable PDF, or move parsing to a longer-running background worker before retrying.`
           : `Document extraction failed: ${doclingResult.error || "Unknown error"}`;
         const payload = await parkForBlockedPipeline({
           supabaseAdmin,
@@ -1043,6 +1038,12 @@ Deno.serve(async (req: Request) => {
       // 2-3 MB — holding that alongside the earlier docling response is what
       // pushes ingest-file past the 546 memory ceiling.
       // After success we read review_required directly from the DB (below).
+      const elapsedAfterParseMs = Date.now() - pipelineStartedAt;
+      const normalizeTimeoutMs = Math.max(
+        20_000,
+        Math.min(90_000, MAX_INGEST_WAIT_MS - elapsedAfterParseMs - RESPONSE_SAFETY_MS),
+      );
+
       const normalizeResult = await callEdgeFunction(
         supabaseUrl,
         "normalize-pdf-output",
@@ -1050,7 +1051,7 @@ Deno.serve(async (req: Request) => {
         downstreamAuthToken,
         actingOrgId,
         1,
-        NORMALIZE_TIMEOUT_MS,
+        normalizeTimeoutMs,
         !defer_store,
       );
       
