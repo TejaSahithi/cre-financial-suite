@@ -127,41 +127,97 @@ function extractPipelineMetadataFromRecord(record, reviewPayload) {
   );
 }
 
-const UPLOADED_FILE_SELECTS = [
-  "id, file_name, file_url, status, processing_status, failed_step, error_message, review_required, review_status, " +
-    "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
-    "org_id, property_id, building_id, unit_id, updated_at",
-  "id, file_name, file_url, status, failed_step, error_message, review_required, review_status, " +
-    "document_subtype, extraction_method, ui_review_payload, reviewed_output, normalized_output, row_count, " +
-    "org_id, property_id, building_id, unit_id, updated_at",
-  "id, file_name, file_url, status, error_message, review_required, review_status, " +
-    "document_subtype, extraction_method, ui_review_payload, reviewed_output, row_count, " +
-    "org_id, property_id, building_id, unit_id, updated_at",
-  "id, file_name, file_url, status, error_message, row_count, org_id, updated_at",
-];
+const MINIMAL_UPLOADED_FILE_SELECT = "id, file_name, file_url, status, error_message, row_count, org_id, created_at, updated_at";
 
-async function selectUploadedFileRecord(id) {
-  let lastError = null;
+async function fetchUploadedFileStatus(id) {
+  if (!id) return { data: null, error: null };
 
-  for (const columns of UPLOADED_FILE_SELECTS) {
-    const { data, error } = await supabase
-      .from("uploaded_files")
-      .select(columns)
-      .eq("id", id)
-      .maybeSingle();
+  const { data, error } = await supabase.functions.invoke("pipeline-status", {
+    body: {
+      file_id: id,
+      include_details: true,
+    },
+  });
 
-    if (!error) return { data, error: null };
-
-    lastError = error;
-    if (!isMissingUploadedFileColumnError(error)) break;
+  if (!error && data && data.error !== true) {
+    return { data: normalizePipelineStatusRecord(data, id), error: null };
   }
 
-  return { data: null, error: lastError };
+  const fallback = await supabase
+    .from("uploaded_files")
+    .select(MINIMAL_UPLOADED_FILE_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (!fallback.error && fallback.data) {
+    return {
+      data: normalizePipelineStatusRecord({
+        ...fallback.data,
+        file_id: fallback.data.id,
+        file_metadata: fallback.data,
+        schema_warnings: data?.schema_warnings || [],
+        display_state: "unknown",
+        message: data?.message || "Pipeline status details are temporarily unavailable.",
+      }, id),
+      error: null,
+    };
+  }
+
+  return { data: null, error: error || fallback.error || new Error("Could not load pipeline status.") };
 }
 
-function isMissingUploadedFileColumnError(error) {
-  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`;
-  return /42703|PGRST204|column .* does not exist|Could not find .* column|schema cache/i.test(text);
+function normalizePipelineStatusRecord(data, id) {
+  const fileMetadata = data?.file_metadata || {};
+  const pipeline = data?.pipeline || {};
+  return {
+    id: data?.id || data?.file_id || fileMetadata.id || id,
+    org_id: data?.org_id || fileMetadata.org_id || null,
+    file_name: data?.file_name || fileMetadata.file_name || "Lease document",
+    file_url: data?.file_url || fileMetadata.file_url || null,
+    status: data?.status || statusFromDisplayState(data?.display_state),
+    processing_status: data?.processing_status || data?.display_state || null,
+    failed_step: data?.failed_step || pipeline.stage || data?.latest_job?.stage || null,
+    error_message: data?.error_message || data?.message || data?.latest_job?.error_message || null,
+    review_required: data?.review_required ?? null,
+    review_status: data?.review_status ?? null,
+    document_subtype: data?.document_subtype || fileMetadata.document_subtype || null,
+    extraction_method: data?.extraction_method || null,
+    ui_review_payload: data?.ui_review_payload || null,
+    reviewed_output: data?.reviewed_output || null,
+    normalized_output: { metadata: { pipeline } },
+    row_count: data?.row_count ?? null,
+    property_id: data?.property_id || fileMetadata.property_id || null,
+    building_id: data?.building_id || fileMetadata.building_id || null,
+    unit_id: data?.unit_id || fileMetadata.unit_id || null,
+    updated_at: data?.updated_at || fileMetadata.updated_at || null,
+    created_at: data?.created_at || fileMetadata.created_at || null,
+    display_state: data?.display_state || null,
+    display_message: data?.message || null,
+    next_action: data?.next_action || null,
+    latest_job: data?.latest_job || null,
+    recent_logs: data?.recent_logs || [],
+    schema_warnings: data?.schema_warnings || [],
+  };
+}
+
+function statusFromDisplayState(displayState) {
+  switch (displayState) {
+    case "queued":
+      return "uploaded";
+    case "parsing":
+      return "parsing";
+    case "normalizing":
+    case "extracting":
+    case "creating_review":
+      return "validating";
+    case "ready_for_review":
+      return "review_required";
+    case "blocked":
+    case "failed":
+      return "failed";
+    default:
+      return null;
+  }
 }
 
 function buildPipelineFailure(record, reviewPayload) {
@@ -357,12 +413,12 @@ export default function LeaseUpload() {
   const fetchFileRecord = async (id) => {
     if (!id) return;
     setLoadingRecord(true);
-    const { data, error } = await selectUploadedFileRecord(id);
+    const { data, error } = await fetchUploadedFileStatus(id);
 
     setLoadingRecord(false);
 
     if (error) {
-      toast.error(`Could not load review data: ${error.message}`);
+      toast.error(`Could not load pipeline status: ${error.message}`);
       return;
     }
     setFileRecord(data);
@@ -1088,11 +1144,7 @@ async function ensureLeaseSourceFileLink(leaseId, fileRecordOrId) {
 
   let fileRecord = typeof fileRecordOrId === "string" ? { id: fileRecordOrId } : fileRecordOrId;
   if (!fileRecord?.file_name) {
-    const { data } = await supabase
-      .from("uploaded_files")
-      .select("id, file_name, document_subtype")
-      .eq("id", fileRecord.id)
-      .maybeSingle();
+    const { data } = await fetchUploadedFileStatus(fileRecord.id);
     fileRecord = { ...fileRecord, ...(data || {}) };
   }
 
@@ -1137,11 +1189,7 @@ async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
 
   let fileRecord = cachedFileRecord;
   if (!fileRecord || !fileRecord.org_id) {
-    const { data, error } = await supabase
-      .from("uploaded_files")
-      .select("id, org_id, property_id, building_id, unit_id, file_name, ui_review_payload, reviewed_output, parsed_data, valid_data, extraction_method, document_subtype")
-      .eq("id", fileId)
-      .maybeSingle();
+    const { data, error } = await fetchUploadedFileStatus(fileId);
     if (error || !data) return null;
     fileRecord = data;
   }
