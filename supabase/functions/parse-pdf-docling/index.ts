@@ -254,7 +254,7 @@ Deno.serve(async (req: Request) => {
       // Native PDF text extraction only handles ≤ 4 MB. Docling and Vision handle
       // larger files via external APIs. If the file is large and neither API is
       // configured, downloading it would waste memory and still return empty output.
-      const MAX_NATIVE_BYTES = 4 * 1024 * 1024;
+      const MAX_NATIVE_BYTES = 10 * 1024 * 1024;
       const fileSizeBytes = Number(fileRecord.file_size || 0);
       const hasDocling = !!Deno.env.get("DOCLING_API_URL");
       const hasVision = !!(
@@ -348,8 +348,9 @@ Deno.serve(async (req: Request) => {
       // blocks, so trimming here saves significant heap during JSON serialization
       // and keeps the Supabase JSONB column within sensible limits.
       const MAX_STORED_TEXT_CHARS  = 80_000;
-      const MAX_STORED_BLOCKS      = 500;
-      const MAX_STORED_TABLES      = 200;
+      const MAX_STORED_BLOCKS      = 1000;
+      const MAX_STORED_TABLES      = 500;
+      const MAX_STORED_PAGES       = 150;
       const trimmedDoclingRaw: Record<string, unknown> = {
         ...doclingOutput,
         full_text: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS
@@ -361,6 +362,9 @@ Deno.serve(async (req: Request) => {
         tables: Array.isArray(doclingOutput.tables) && doclingOutput.tables.length > MAX_STORED_TABLES
           ? doclingOutput.tables.slice(0, MAX_STORED_TABLES)
           : doclingOutput.tables,
+        pages: Array.isArray(doclingOutput.pages) && doclingOutput.pages.length > MAX_STORED_PAGES
+          ? doclingOutput.pages.slice(0, MAX_STORED_PAGES)
+          : doclingOutput.pages,
       };
 
       const extractionMetadata = {

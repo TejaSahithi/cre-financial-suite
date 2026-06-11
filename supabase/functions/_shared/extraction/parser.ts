@@ -43,10 +43,17 @@ const MIN_DIGITAL_BLOCKS = 2;
 const SCAN_TEXT_RATIO_THRESHOLD = 0.02; // <2% printable text → scanned
 // Minimum extracted chars from Docling to trust as complete even with few blocks
 const MIN_DOCLING_TEXT_CHARS = 500;
-const MAX_DOCLING_SUPPLEMENT_BYTES = 8 * 1024 * 1024;
-const MAX_INLINE_VISION_PDF_BYTES = 8 * 1024 * 1024;
-const MAX_NATIVE_PDF_TEXT_BYTES = 4 * 1024 * 1024;
-const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 15 * 1024 * 1024;
+// Gemini supports 20 MB inline base64. Files above this threshold use a
+// signed Supabase Storage URL (fileUri) so the model fetches the bytes
+// directly — no base64 memory pressure in the Edge Function.
+const MAX_INLINE_VISION_PDF_BYTES = 20 * 1024 * 1024;
+// Upper bound for the URI (HTTP fetch) path. Vertex AI can process files
+// this large when given a signed URL; beyond this, Docling is required.
+const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 50 * 1024 * 1024;
+// Native PDF text extraction works well for digital PDFs up to this size.
+const MAX_NATIVE_PDF_TEXT_BYTES = 10 * 1024 * 1024;
+// Docling structural supplement capped to avoid re-uploading very large files.
+const MAX_DOCLING_SUPPLEMENT_BYTES = 20 * 1024 * 1024;
 const MIN_NATIVE_PDF_TEXT_CHARS = 2500;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";

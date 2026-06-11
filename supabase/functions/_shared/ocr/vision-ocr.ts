@@ -59,7 +59,7 @@ export async function runVisionOCR(
           fileBytes,
           fileUri: useUri ? fileUri : undefined,
           fileMimeType: mimeType,
-          maxOutputTokens: 16384,
+          maxOutputTokens: 32768,
           temperature: 0,
           responseMimeType: "text/plain",
         });
@@ -72,7 +72,7 @@ export async function runVisionOCR(
             fileBytes,
             fileUri: useUri ? fileUri : undefined,
             fileMimeType: mimeType,
-            maxOutputTokens: 16384,
+            maxOutputTokens: 32768,
             temperature: 0,
           });
         } else {
@@ -86,7 +86,7 @@ export async function runVisionOCR(
         fileBytes,
         fileUri: useUri ? fileUri : undefined,
         fileMimeType: mimeType,
-        maxOutputTokens: 16384,
+        maxOutputTokens: 32768,
         temperature: 0,
       });
     }
@@ -133,7 +133,7 @@ export async function extractDocumentWithVision(
   const INLINE_LIMIT_BYTES = 20 * 1024 * 1024;
   const useUri = !!fileUri && fileBytes.length > INLINE_LIMIT_BYTES;
   const effectiveUri = useUri ? fileUri : undefined;
-  const isLargeInlineFile = !useUri && fileBytes.length > 8 * 1024 * 1024;
+  const isLargeInlineFile = !useUri && fileBytes.length > 15 * 1024 * 1024;
 
   console.log(
     `[ocr] Running combined Gemini document extraction (${mimeType}, ${fileBytes.length} bytes, ` +
@@ -212,10 +212,11 @@ Rules:
     fileBytes,
     fileUri: effectiveUri,
     fileMimeType: mimeType,
-    // 32 K tokens handles large leases; Gemini 2.5 Flash supports up to 65 K.
-    // Older fallback models (1.5 Pro) cap at 8 K — the repair logic in
-    // callVertexAIFileJSON recovers truncated JSON when possible.
-    maxOutputTokens: isLargeInlineFile ? 8192 : 12288,
+    // 32 K tokens covers leases up to ~80 pages. Files > 15 MB inline use
+    // 24 K to stay under the 110s Vertex AI timeout; everything else gets
+    // the full 32 K. URI-mode files (fileUri set) always use 32 K since
+    // memory pressure is on Google's side, not in the Edge Function.
+    maxOutputTokens: isLargeInlineFile ? 24576 : 32768,
     temperature: 0,
   });
 

@@ -43,7 +43,10 @@ import {
 
 // Base64 expands PDFs by about 33%, and the intermediate binary string can
 // double memory again. Keep inline Vision fallback below Edge compute limits.
-const MAX_INLINE_VISION_BYTES = 6 * 1024 * 1024;
+// 20 MB matches the parser.ts MAX_INLINE_VISION_PDF_BYTES — Gemini's documented
+// inline data limit — so any file small enough for parse to have processed inline
+// can also be processed inline here if Vision is needed as a fallback.
+const MAX_INLINE_VISION_BYTES = 20 * 1024 * 1024;
 
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
@@ -1570,7 +1573,11 @@ Deno.serve(async (req: Request) => {
     // for rule/table/LLM extraction without Vision. These thresholds match
     // the MIN_NATIVE_PDF_TEXT_CHARS and MIN_DIGITAL_BLOCKS constants in
     // _shared/extraction/parser.ts.
-    const doclingTextIsGood = doclingTextLength >= 2500 && doclingBlockCount >= 5;
+    // A document with ≥2500 chars AND ≥5 text blocks has enough content for
+    // rule/table/LLM extraction without Vision. The second condition catches
+    // plain-text OCR fallback results (0 text_blocks but full_text ≥ 5000 chars)
+    // — re-downloading the file in that case would be redundant and OOM the function.
+    const doclingTextIsGood = doclingTextLength >= 2500 && (doclingBlockCount >= 5 || doclingTextLength >= 5000);
     const fileTooLargeForInlineVision =
       fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
 
@@ -1743,14 +1750,12 @@ Deno.serve(async (req: Request) => {
           ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
-          // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
-          // the first 1–2 chunks of a well-formatted lease. Rule/table
-          // extraction already handles the summary table on page 1; the LLM
-          // only needs the opening pages for edge cases. Keeping this at 2
-          // prevents the function from accumulating too many Gemini response
-          // buffers in memory simultaneously (546 resource-exhaustion error).
-          maxLLMChunks: 2,
-          chunkSize: 1500,
+          // 6 chunks × 3000 chars = 18 K chars of lease text sent to the LLM.
+          // This covers the first ~6 pages where all critical lease terms live.
+          // Rule/table extraction already handles structured tables from any page;
+          // the LLM only fills in fields that rules couldn't resolve.
+          maxLLMChunks: 6,
+          chunkSize: 3000,
           llmTemperature: 0,
         },
       );

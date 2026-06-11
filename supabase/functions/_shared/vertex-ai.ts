@@ -404,7 +404,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   const filePart = buildFilePart(opts);
 
   const genConfig: Record<string, unknown> = {
-    maxOutputTokens: opts.maxOutputTokens ?? 4096,
+    maxOutputTokens: opts.maxOutputTokens ?? 32768,
     temperature: opts.temperature ?? 0,
   };
 
