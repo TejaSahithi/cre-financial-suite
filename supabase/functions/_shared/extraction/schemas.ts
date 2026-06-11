@@ -98,9 +98,22 @@ export const LEASE_SCHEMA: ModuleSchema = {
   },
   property_name: {
     type: "string",
-    labels: ["property", "property name", "building", "building name"],
+    labels: ["property", "property name", "building", "building name", "shopping center", "project name", "development name"],
     tableHeaders: ["property", "property_name", "property name", "building"],
-    description: "Name of the property or building",
+    patterns: [
+      // "located in [Name] Shopping Center" / "within the [Name] Plaza"
+      /(?:located\s+in|within|at)\s+(?:the\s+)?([A-Z][A-Za-z0-9\s'&,.-]{2,60}?)\s+(?:Shopping\s+Center|Development|Plaza|Center|Complex|Park|Building|Mall|Strip|Village)/i,
+      // "known as 'Property Name'"
+      /(?:known\s+as|called)\s+["']([A-Z][A-Za-z0-9\s'&,.-]{2,60}?)["']/i,
+      // Explicit labeled line: "Property Name: Markets at Choto"
+      /(?:^|\n)\s*property\s+name\s*[:.]\s*([^\n]{2,80})/i,
+    ],
+    description:
+      "Marketing or trade name of the property, building, or shopping center — NOT a tenant or landlord entity name. " +
+      "Look for the name of the commercial development, shopping center, or building complex. Examples: 'Markets at Choto', '224 S Peters Professional Center', 'Knoxville Commons'. " +
+      "Common patterns: 'located in the [Name] Shopping Center', 'known as [Name]', 'Property Name: [Name]'. " +
+      "Return ONLY the short property name (2-6 words). Do NOT return street addresses, clause text, party names, or mailing addresses. " +
+      "If no named property or shopping center is identified in the lease, return null.",
   },
   property_address: {
     type: "string",
@@ -340,13 +353,19 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["permitted use", "use", "use of premises", "tenant use"],
     tableHeaders: ["permitted_use", "permitted use", "use"],
     patterns: [
-      // Numbered summary: "10. Permitted Use: IT work"
-      /\d+\s*\.\s*permitted\s+use\s*[:.]?\s*([^\n]{2,200})/i,
-      // Plain labeled line
-      /(?:^|\n)\s*permitted\s+use\s*[:.]\s*([^\n]{2,200})/i,
-      /(?:^|\n)\s*use\s+of\s+premises\s*[:.]\s*([^\n]{2,200})/i,
+      // Numbered summary: "10. Permitted Use: IT work" (short — cap at 80 chars)
+      /\d+\s*\.\s*permitted\s+use\s*[:.]?\s*([^\n]{2,80})/i,
+      // Plain labeled line (short)
+      /(?:^|\n)\s*permitted\s+use\s*[:.]\s*([^\n]{2,80})/i,
+      /(?:^|\n)\s*use\s+of\s+premises\s*[:.]\s*([^\n]{2,80})/i,
     ],
-    description: "Permitted use of the premises (e.g. 'IT work', 'General office', 'Retail sales of women's apparel'). Often a short phrase.",
+    description:
+      "Core permitted use — a SHORT phrase (1-10 words) describing the tenant's primary business activity. " +
+      "Examples: 'restaurant', 'IT work', 'retail sales of clothing', 'general office use', 'restaurant and bar'. " +
+      "DO NOT return full clause text, restrictions, or multi-sentence paragraphs. " +
+      "For 'The Demised Premises shall be used and occupied by Tenant solely for the operation of a restaurant...', return 'restaurant'. " +
+      "For '...solely for the purposes of IT work', return 'IT work'. " +
+      "Extract the core activity type only; strip boilerplate restriction language.",
   },
   security_deposit: {
     type: "number",
@@ -470,22 +489,34 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: ["renewal", "renewal options", "option to renew", "renewal option"],
     tableHeaders: ["renewal", "renewal_options", "options", "renewal options"],
-    description: "Description of renewal options",
+    description:
+      "BRIEF structured description of renewal options. Format: 'X option(s) to renew for Y year(s) each' or 'X × Y-year options'. " +
+      "Examples: '2 × 5-year options', '1 option to renew for 3 years', 'No renewal option'. " +
+      "For 'Two (2) additional Five (5) year period(s)' → return '2 × 5-year options'. " +
+      "Do NOT return full clause text or multi-sentence paragraphs.",
   },
   ti_allowance: {
     type: "number",
     min: 0,
     labels: ["tenant improvement", "ti allowance", "ti", "tenant improvement allowance", "build-out allowance"],
     tableHeaders: ["ti", "ti_allowance", "tenant improvement", "ti allowance"],
-    description: "Tenant improvement allowance in USD",
+    description:
+      "TOTAL Tenant Improvement Allowance in USD (plain number, no $ or commas). " +
+      "If the lease states the TI as a per-SF rate AND provides the total (e.g. '$24.00 per SF × 2,848 SF = $68,352'), return the TOTAL dollar amount (68352), NOT the per-SF rate (24). " +
+      "If only the per-SF rate is stated with no total calculated in the document, return null. " +
+      "NEVER use the base rent PSF, CAM estimate PSF, or any other $/SF figure as the TI allowance.",
   },
   free_rent_months: {
     type: "number",
     min: 0,
     max: 60,
-    labels: ["free rent", "free rent months", "rent abatement", "rent-free period"],
+    labels: ["free rent", "free rent months", "rent abatement", "rent-free period", "abatement period"],
     tableHeaders: ["free_rent", "free_rent_months", "free rent", "abatement"],
-    description: "Number of free rent months",
+    description:
+      "Number of months with zero-dollar ($0.00) base rent (free rent / rent abatement). " +
+      "Count months shown as $0.00 (or '–') in the rent schedule table. Example: Months 1–2 at $0.00 → return 2. " +
+      "Also look for explicit phrases: 'rent-free period of X months', 'first X months shall be rent-free', 'abatement of X months rent'. " +
+      "Do NOT count partial abatement months. Return plain number (2, not '2 months').",
   },
   lease_term_months: {
     type: "number",
@@ -569,7 +600,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["renewal notice", "notice of renewal", "renewal notice period"],
     tableHeaders: ["renewal_notice_months", "renewal notice"],
     patterns: [/(?:renewal\s+notice|notice\s+(?:to|of)\s+renew)[^\n]{0,40}?(\d{1,3})\s*month/i],
-    description: "Months of notice required to exercise renewal option (or convert from days: months = round(days/30))",
+    description:
+      "Number of MONTHS of advance notice required to exercise a renewal option. ALWAYS return in months — never in days. " +
+      "If the lease states the notice period in DAYS, convert: return Math.round(days / 30). " +
+      "Conversion examples: '180 days' → 6. '90 days' → 3. '60 days' → 2. '30 days' → 1. '6 months' → 6. " +
+      "Look for phrases like 'not less than X months prior written notice' or 'not less than X days prior written notice' to exercise the option.",
   },
   termination_notice_months: {
     type: "number",
@@ -577,7 +612,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["termination notice", "notice of termination", "termination notice period"],
     tableHeaders: ["termination_notice_months", "termination notice"],
     patterns: [/(?:termination\s+notice|notice\s+of\s+termination)[^\n]{0,40}?(\d{1,3})\s*month/i],
-    description: "Months of notice required to terminate the lease early",
+    description:
+      "Number of MONTHS of advance notice required to terminate the lease early. ALWAYS return in months — never in days. " +
+      "If the lease states the notice period in DAYS, convert: return Math.round(days / 30). " +
+      "Conversion examples: '30 days' → 1. '60 days' → 2. '90 days' → 3.",
   },
   option_exercise_deadline: {
     type: "date",
@@ -773,7 +811,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["additional insureds", "additional insured", "name as additional insured"],
     tableHeaders: ["additional_insureds_required"],
     patterns: [/\b(?:name|name\s+landlord|landlord)[^\n]{0,40}additional\s+insured/i, /\badditional\s+insured/i],
-    description: "Whether landlord must be named as additional insured",
+    description:
+      "Return true if the lease REQUIRES the tenant's insurance policies to name the landlord (or landlord's agents, mortgagees, or managing agents) as additional insureds. " +
+      "Look for phrases like 'name the Landlord... as additional insureds', 'Landlord shall be named as an additional insured', or 'policies shall name Landlord as additional insured on all policies'. " +
+      "A clause requiring the landlord to be an additional insured = true. " +
+      "Return false ONLY if the lease explicitly says additional insureds are not required, or if no insurance section exists.",
   },
 
   // ─── Legal / Options ────────────────────────────────────────────────
@@ -804,7 +846,11 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["assignment", "assignment provisions", "assignment rights"],
     tableHeaders: ["assignment_provisions"],
     patterns: [/\bassignment\b[^\n]{0,200}/i],
-    description: "Brief summary of assignment & subletting rules (e.g. 'requires landlord consent')",
+    description:
+      "BRIEF SUMMARY of assignment & subletting rules — 1-2 sentences maximum. Do NOT return the full clause text. " +
+      "State: (1) whether prior landlord consent is required, (2) any exceptions (affiliates, subsidiaries). " +
+      "Examples: 'Requires prior written landlord consent; affiliates excepted.' 'Cannot assign or sublet without landlord approval.' " +
+      "Never copy multi-sentence clause paragraphs.",
   },
   default_cure_period: {
     type: "number",

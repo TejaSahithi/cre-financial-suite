@@ -713,8 +713,10 @@ export default function LeaseUpload() {
   );
   const isManualReviewFallback =
     reviewPayload?.pipeline_method === "manual_review_fallback" ||
+    reviewPayload?.pipeline_method === "parse_failed_manual_review" ||
     reviewPayload?.extraction_method === "manual_review_fallback" ||
-    reviewPayload?.metadata?.manualReviewFallback === true;
+    reviewPayload?.metadata?.manualReviewFallback === true ||
+    reviewPayload?.metadata?.parse_failed === true;
   const isTimeoutReviewPending =
     reviewPayload?.pipeline_method === "timeout_review_pending" ||
     reviewPayload?.extraction_method === "timeout_review_pending" ||

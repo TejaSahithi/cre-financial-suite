@@ -42,7 +42,10 @@ RULES:
    The top-level JSON is { "<field_key>": { value, source_text, source_page, confidence }, ... }.
 3. If a field is NOT found, return { "value": null, "source_text": null, "source_page": null, "confidence": 0 }.
 4. NEVER guess, infer, or calculate values. Only extract what is explicitly stated.
-5. NEVER calculate totals, annual amounts, or derived values.
+5. NEVER calculate totals, annual amounts, or derived values — EXCEPTION: notice periods.
+   If a field expects MONTHS but the document states the period in DAYS, convert: months = Math.round(days / 30).
+   Examples: '180 days' notice → 6 months. '90 days' notice → 3 months. '30 days' notice → 1 month.
+   This conversion applies ONLY to notice-period fields (renewal_notice_months, termination_notice_months).
 
 6. ENTITY vs PERSON disambiguation — critical:
    tenant_name and landlord_name are LEGAL ENTITY names (LLC, Inc., Corp, Trust, individual property owner).
@@ -118,7 +121,19 @@ RULES:
     effective date, assumption language, landlord consent, amended expiration date, amended base rent,
     assignee notice address, assignment consideration, and all-other-terms-remain-unchanged language
     ONLY when explicitly stated. Do NOT infer CAM, taxes, insurance, utilities, or other expense recovery
-    rules from "assumes all obligations" or "all other terms remain unchanged."`;
+    rules from "assumes all obligations" or "all other terms remain unchanged."
+
+18. Short-value fields — do NOT return full clause text:
+    permitted_use: Return ONLY the core activity (1-8 words). "restaurant", "IT work", "retail clothing sales".
+       NOT the entire use clause paragraph.
+    renewal_options: Return a brief format like "2 × 5-year options" or "1 option for 3 years". NOT the full clause.
+    assignment_provisions: Return 1-2 sentence summary. "Requires prior written landlord consent." NOT the full clause.
+    property_name: Return the marketing name of the shopping center/building (e.g. "Markets at Choto"). NOT clause text, addresses, or party names.
+
+19. TI allowance extraction:
+    ti_allowance = TOTAL dollars, NOT the per-SF rate.
+    If the document states "$24.00 per SF" AND also states the total (e.g. "$68,352"), return the TOTAL (68352).
+    If ONLY the per-SF rate is given with no total calculated, return null for ti_allowance.`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 

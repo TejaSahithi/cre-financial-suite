@@ -2,7 +2,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient } from "../_shared/supabase.ts";
 import { createLogger } from "../_shared/logger.ts";
-import { setFailed } from "../_shared/pipeline-status.ts";
+import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -92,6 +92,120 @@ async function failJob(supabaseAdmin: any, job: any, errorCode: string, errorMes
       updated_at: new Date().toISOString(),
     })
     .eq("id", job.id);
+}
+
+const LEASE_MANUAL_REVIEW_FIELDS = [
+  "tenant_name", "landlord_name", "property_name", "property_address", "unit_number",
+  "start_date", "end_date", "monthly_rent", "annual_rent", "lease_term_months",
+  "square_footage", "lease_type", "security_deposit", "escalation_rate",
+  "renewal_options", "ti_allowance", "free_rent_months", "notes",
+];
+
+async function parkLeaseForManualReview(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  fileName: string,
+  moduleType: string,
+  documentSubtype: string,
+  errorCode: string,
+  reason: string,
+) {
+  await failJob(supabaseAdmin, job, errorCode, reason);
+
+  const standardFields = LEASE_MANUAL_REVIEW_FIELDS.map((fieldKey) => ({
+    id: `0:standard:${fieldKey}`,
+    field_key: fieldKey,
+    label: fieldKey.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+    value: null,
+    original_value: null,
+    field_type: fieldKey.includes("date") ? "date"
+      : ["monthly_rent", "annual_rent", "square_footage", "lease_term_months", "ti_allowance", "free_rent_months"].includes(fieldKey) ? "number"
+      : "string",
+    required: ["tenant_name", "start_date", "end_date", "monthly_rent"].includes(fieldKey),
+    is_standard: true,
+    confidence: 0,
+    source: "system",
+    evidence: null,
+    status: "missing",
+    accepted: false,
+    rejected: false,
+    user_edit: null,
+  }));
+
+  const payload = {
+    schema_version: 2,
+    file_id: fileId,
+    file_name: fileName,
+    module_type: moduleType,
+    document_subtype: documentSubtype || "base_lease",
+    extraction_method: "manual_review_fallback",
+    pipeline_method: "parse_failed_manual_review",
+    avg_confidence: 0,
+    review_required: true,
+    review_status: "pending",
+    records: [{
+      record_index: 0,
+      row_index: 0,
+      values: Object.fromEntries(standardFields.map((f) => [f.field_key, null])),
+      fields: Object.fromEntries(standardFields.map((f) => [
+        f.field_key,
+        { value: null, confidence: 0, source: "system", evidence: null, status: "missing" },
+      ])),
+      standard_fields: standardFields,
+      custom_fields: [],
+      rejected_fields: [],
+      missing_required: standardFields.filter((f) => f.required).map((f) => f.field_key),
+      warnings: [reason],
+      confidence: 0,
+      notes: reason,
+    }],
+    global_warnings: [
+      "Automatic document parsing failed. You can enter lease fields manually in Lease Review.",
+      reason,
+    ],
+    warnings: [
+      "Automatic document parsing failed. You can enter lease fields manually in Lease Review.",
+      reason,
+    ],
+    validation_errors: [],
+    metadata: {
+      totalRecords: 1,
+      avgConfidence: 0,
+      manualReviewFallback: true,
+      parse_failed: true,
+      error_code: errorCode,
+      error_message: reason,
+    },
+    built_at: new Date().toISOString(),
+  };
+
+  const { error } = await setStatus(supabaseAdmin, fileId, "review_required", {
+    review_required: true,
+    review_status: "pending",
+    processing_status: "parse_failed_manual_review",
+    extraction_method: "manual_review_fallback",
+    ui_review_payload: payload,
+    normalized_output: {
+      method: "parse_failed_manual_review",
+      rows: [{}],
+      warnings: payload.global_warnings,
+      validationErrors: [],
+      metadata: payload.metadata,
+    },
+    parsed_data: [{}],
+    row_count: 1,
+    valid_count: 0,
+    error_count: 1,
+    error_message: reason,
+    failed_step: "parse",
+    processing_completed_at: new Date().toISOString(),
+  });
+
+  if (error && error.code !== "NO_ROW_UPDATED") {
+    console.error(`[${WORKER_NAME}] parkLeaseForManualReview setStatus error:`, error.message);
+    await setFailed(supabaseAdmin, fileId, reason, "parse", 15);
+  }
 }
 
 async function failJobAndUpload(
@@ -205,7 +319,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: fileRecord, error: fileError } = await supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, status, file_name, module_type")
+      .select("id, org_id, status, file_name, module_type, document_subtype")
       .eq("id", fileId)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -244,8 +358,27 @@ Deno.serve(async (req: Request) => {
       if (!parseResult.ok) {
         const message = parseResult.error || "Document parsing failed";
         const errorCode = parseResult.error_code || parseResult.data?.error_code || "PARSE_FAILED";
-        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "parse", 15);
+        const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
 
+        if (isLeaseModule) {
+          // For lease files, park for manual review so users can enter fields
+          // manually instead of showing a hard failure with no path forward.
+          await parkLeaseForManualReview(
+            supabaseAdmin, job, fileId,
+            fileRecord.file_name ?? "Lease document",
+            fileRecord.module_type ?? "leases",
+            fileRecord.document_subtype ?? "base_lease",
+            errorCode, message,
+          );
+          await logger.event("parse", "failed", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: { job_id: job.id, status: parseResult.status, parked_for_manual_review: true },
+          });
+          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", parked_for_manual_review: true, message }, 200);
+        }
+
+        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "parse", 15);
         await logger.event("parse", "failed", {
           error_code: errorCode,
           error_message: message,
@@ -287,8 +420,25 @@ Deno.serve(async (req: Request) => {
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
-        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "normalize", 45);
+        const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
 
+        if (isLeaseModule) {
+          await parkLeaseForManualReview(
+            supabaseAdmin, job, fileId,
+            fileRecord.file_name ?? "Lease document",
+            fileRecord.module_type ?? "leases",
+            fileRecord.document_subtype ?? "base_lease",
+            errorCode, message,
+          );
+          await logger.event("normalize", "failed", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: { job_id: job.id, status: normalizeResult.status, parked_for_manual_review: true },
+          });
+          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", parked_for_manual_review: true, message }, 200);
+        }
+
+        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "normalize", 45);
         await logger.event("normalize", "failed", {
           error_code: errorCode,
           error_message: message,

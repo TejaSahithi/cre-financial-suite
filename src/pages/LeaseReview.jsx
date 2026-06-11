@@ -3077,7 +3077,7 @@ export default function LeaseReview() {
 
         {/* Critical Dates — derived from approved abstract. */}
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <CriticalDatesTable lease={lease} />
+          <CriticalDatesTable lease={leaseFull} />
         </TabsContent>
 
         {/* Documents / Exhibits tab */}
