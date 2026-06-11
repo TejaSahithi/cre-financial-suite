@@ -820,6 +820,7 @@ export default function LeaseUpload() {
     fileRecord?.status !== "failed";
 
   const canOpenReview = hasValidReviewPayload || [
+    "review_required",
     "validating",
     "validated",
     "approved",
