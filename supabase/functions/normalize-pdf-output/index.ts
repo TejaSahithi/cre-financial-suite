@@ -1600,6 +1600,12 @@ Deno.serve(async (req: Request) => {
     const fileTooLargeForInlineVision =
       fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
 
+    console.log(
+      `[normalize-pdf-output] STAGE docling_check file_id=${file_id} ` +
+      `doclingTextLength=${doclingTextLength} doclingBlockCount=${doclingBlockCount} ` +
+      `doclingTextIsGood=${doclingTextIsGood} fileSizeBytes=${fileSizeBytes}`,
+    );
+
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
@@ -1759,6 +1765,7 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
+      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const result = await runExtractionPipeline(
@@ -1779,6 +1786,7 @@ Deno.serve(async (req: Request) => {
           llmTemperature: 0,
         },
       );
+      console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
 
       // Forward file-load status into the pipeline's extractionDebug so the
       // UI/debug panel can show why Vision did or didn't run.
@@ -1890,6 +1898,7 @@ Deno.serve(async (req: Request) => {
         } // end else (non-review-required modules)
       }
 
+      console.log(`[normalize-pdf-output] STAGE review_payload_start file_id=${file_id}`);
       const uiReviewPayload = buildReviewPayload({
         fileId: file_id,
         fileName,
@@ -1900,6 +1909,7 @@ Deno.serve(async (req: Request) => {
         doclingRaw: fileRecord.docling_raw ?? null,
         result,
       });
+      console.log(`[normalize-pdf-output] STAGE review_payload_done file_id=${file_id}`);
       if (uiReviewPayload?.metadata?.workflow_output) {
         result.metadata = {
           ...(result.metadata ?? {}),

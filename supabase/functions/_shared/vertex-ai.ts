@@ -386,6 +386,46 @@ function tryRepairJson(text: string): string | null {
 }
 
 /**
+ * Sanitize literal control characters inside JSON string values.
+ * Gemini sometimes includes literal \n, \r, \t characters verbatim inside
+ * "text" fields when extracting document content. These make JSON.parse throw
+ * a SyntaxError even though the rest of the JSON structure is valid.
+ * This function replaces them with proper JSON escape sequences.
+ */
+function sanitizeJsonControlChars(text: string): string {
+  let inString = false;
+  let escaped = false;
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && inString) {
+      escaped = true;
+      result += char;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+    if (inString && char.charCodeAt(0) < 0x20) {
+      if (char === "\n") { result += "\\n"; continue; }
+      if (char === "\r") { result += "\\r"; continue; }
+      if (char === "\t") { result += "\\t"; continue; }
+      result += " ";
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
+/**
  * Call Vertex AI Gemini with a file (PDF, image, etc.) as an inline part.
  * Gemini 1.5 Pro natively understands PDFs, images, Word docs, and more.
  * Returns the text response.
@@ -690,8 +730,25 @@ export async function callVertexAIFileJSON<T = unknown>(opts: VertexAIFileOption
   try {
     return JSON.parse(text) as T;
   } catch (err) {
-    // Attempt the same truncation repair used by callVertexAIJSON
-    const repaired = tryRepairJson(text);
+    // Step 1: Sanitize literal control characters (e.g. newlines) inside strings.
+    // Gemini occasionally returns verbatim document text with literal \n inside
+    // JSON string values — valid in the document but illegal in JSON.
+    const sanitized = sanitizeJsonControlChars(text);
+    if (sanitized !== text) {
+      try {
+        const parsed = JSON.parse(sanitized) as T;
+        console.warn(
+          `[vertex-ai] File-mode: recovered from literal control chars in JSON strings ` +
+          `(orig length ${text.length}, model=${response.model}).`,
+        );
+        return parsed;
+      } catch {
+        // fall through to truncation repair
+      }
+    }
+
+    // Step 2: Attempt truncation repair on the (possibly sanitized) text.
+    const repaired = tryRepairJson(sanitized !== text ? sanitized : text);
     if (repaired) {
       try {
         const parsed = JSON.parse(repaired) as T;
