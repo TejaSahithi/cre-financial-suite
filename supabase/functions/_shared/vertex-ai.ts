@@ -448,7 +448,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
           "Authorization": `Bearer ${accessToken}`,
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(110000),
       });
 
       if (response.ok) {
