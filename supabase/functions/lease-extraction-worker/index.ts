@@ -12,7 +12,8 @@ import {
 } from "./auth.ts";
 
 const WORKER_NAME = "lease-extraction-worker";
-const STAGE_TIMEOUT_MS = 140_000;
+const PARSE_TIMEOUT_MS = 140_000;
+const NORMALIZE_TIMEOUT_MS = 240_000;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -21,7 +22,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string) {
+async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string, timeoutMs: number) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   let response: Response;
   try {
@@ -29,7 +30,7 @@ async function callInternalFunction(functionName: string, body: Record<string, u
       method: "POST",
       headers: buildInternalFunctionHeaders(orgId),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(STAGE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (fetchErr: any) {
     const isTimeout =
@@ -46,7 +47,7 @@ async function callInternalFunction(functionName: string, body: Record<string, u
       error_code: isTimeout ? "STAGE_TIMEOUT" : "NETWORK_ERROR",
       retryable: isTimeout,
       error: isTimeout
-        ? `${functionName} timed out after ${STAGE_TIMEOUT_MS / 1000}s — document may be too large or the parsing service is slow`
+        ? `${functionName} timed out after ${timeoutMs / 1000}s — document may be too large or the parsing service is slow`
         : `Network error calling ${functionName}: ${fetchErr?.message}`,
     };
   }
@@ -79,21 +80,6 @@ async function callInternalFunction(functionName: string, body: Record<string, u
   return { ok: true, status: response.status, data, error: "" };
 }
 
-function dispatchSelf(fileId: string, jobId: string, orgId: string) {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-  const promise = fetch(`${supabaseUrl}/functions/v1/${WORKER_NAME}`, {
-    method: "POST",
-    headers: buildInternalFunctionHeaders(orgId),
-    body: JSON.stringify({ job_id: jobId }),
-  }).catch((error) => {
-    console.error(`[${WORKER_NAME}] self-dispatch failed:`, error?.message || error);
-  });
-
-  const edgeRuntime = (globalThis as any).EdgeRuntime;
-  if (edgeRuntime?.waitUntil) {
-    edgeRuntime.waitUntil(promise);
-  }
-}
 
 async function failJob(supabaseAdmin: any, job: any, errorCode: string, errorMessage: string) {
   await supabaseAdmin
@@ -242,13 +228,19 @@ Deno.serve(async (req: Request) => {
       })
       .eq("id", job.id);
 
-    if (job.stage === "parse") {
+    // Run parse and normalize sequentially in a single invocation.
+    // The original two-stage self-dispatch pattern (dispatchSelf) was unreliable:
+    // when EdgeRuntime.waitUntil is unavailable the fire-and-forget fetch is
+    // cancelled before the TCP connection is established, so normalize never ran.
+    let currentStage = job.stage;
+
+    if (currentStage === "parse") {
       await logger.event("parse", "running", {
         provider: "lease-extraction-worker",
         metadata: { job_id: job.id, attempt },
       });
 
-      const parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId);
+      const parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId, PARSE_TIMEOUT_MS);
       if (!parseResult.ok) {
         const message = parseResult.error || "Document parsing failed";
         const errorCode = parseResult.error_code || parseResult.data?.error_code || "PARSE_FAILED";
@@ -266,7 +258,7 @@ Deno.serve(async (req: Request) => {
         .from("pipeline_jobs")
         .update({
           stage: "normalize",
-          status: "queued",
+          status: "running",
           error_code: null,
           error_message: null,
           updated_at: new Date().toISOString(),
@@ -280,17 +272,18 @@ Deno.serve(async (req: Request) => {
       await logger.event("parse", "completed", {
         metadata: { job_id: job.id, next_stage: "normalize" },
       });
-      dispatchSelf(fileId, job.id, orgId);
-      return jsonResponse({ error: false, job_id: job.id, stage: "normalize", status: "queued" });
+
+      console.log(`[${WORKER_NAME}] parse done, proceeding directly to normalize for file_id=${fileId}`);
+      currentStage = "normalize";
     }
 
-    if (job.stage === "normalize") {
+    if (currentStage === "normalize") {
       await logger.event("normalize", "running", {
         provider: "lease-extraction-worker",
         metadata: { job_id: job.id, attempt },
       });
 
-      const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId }, orgId);
+      const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId }, orgId, NORMALIZE_TIMEOUT_MS);
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
