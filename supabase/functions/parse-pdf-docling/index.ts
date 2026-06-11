@@ -351,20 +351,31 @@ Deno.serve(async (req: Request) => {
       const MAX_STORED_BLOCKS      = 1000;
       const MAX_STORED_TABLES      = 500;
       const MAX_STORED_PAGES       = 150;
+      // Per-page and per-block text is capped at 3 K chars. For a dense
+      // 4 K-char page this captures the first ~75 % of the text — more than
+      // enough for field extraction and source-evidence matching in normalize.
+      // Without this cap, buildPageTextCandidates / buildEvidenceSearchBlocks
+      // allocate 3 string copies per page on every field iteration, which can
+      // push normalize-pdf-output over the 256 MB Edge Function memory limit.
+      const MAX_PAGE_TEXT_CHARS    = 3_000;
+      const trimDocText = (text: unknown) =>
+        typeof text === "string" && text.length > MAX_PAGE_TEXT_CHARS
+          ? text.slice(0, MAX_PAGE_TEXT_CHARS)
+          : text;
       const trimmedDoclingRaw: Record<string, unknown> = {
         ...doclingOutput,
         full_text: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS
           ? doclingOutput.full_text.slice(0, MAX_STORED_TEXT_CHARS) + "\n[truncated]"
           : doclingOutput.full_text,
-        text_blocks: Array.isArray(doclingOutput.text_blocks) && doclingOutput.text_blocks.length > MAX_STORED_BLOCKS
+        text_blocks: (Array.isArray(doclingOutput.text_blocks)
           ? doclingOutput.text_blocks.slice(0, MAX_STORED_BLOCKS)
-          : doclingOutput.text_blocks,
+          : []).map((b: any) => ({ ...b, text: trimDocText(b?.text) })),
         tables: Array.isArray(doclingOutput.tables) && doclingOutput.tables.length > MAX_STORED_TABLES
           ? doclingOutput.tables.slice(0, MAX_STORED_TABLES)
           : doclingOutput.tables,
-        pages: Array.isArray(doclingOutput.pages) && doclingOutput.pages.length > MAX_STORED_PAGES
+        pages: (Array.isArray(doclingOutput.pages)
           ? doclingOutput.pages.slice(0, MAX_STORED_PAGES)
-          : doclingOutput.pages,
+          : []).map((p: any) => ({ ...p, text: trimDocText(p?.text) })),
       };
 
       const extractionMetadata = {

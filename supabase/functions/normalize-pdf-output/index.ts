@@ -136,7 +136,19 @@ function compactForPageMatch(value: unknown): string {
   return normalizeForPageMatch(value).replace(/[^a-z0-9]+/g, "");
 }
 
+// Both builder functions are called O(schema_fields) times per request for
+// the same doclingRaw reference (once per field in buildReviewPayload).
+// Rebuilding them on every call was creating ~300 × 520 KB of temporary
+// string objects — the primary cause of the 546 OOM error on large leases.
+// WeakMap keys on the object reference so the cache is naturally scoped to
+// the request and GC'd when doclingRaw goes out of scope.
+const _pageTextCandidatesCache = new WeakMap<object, Array<{ text: string; normalized: string; compact: string; page: number; source: string }>>();
+const _evidenceSearchBlocksCache = new WeakMap<object, Array<{ text: string; lowered: string; page: number | null; source: string }>>();
+
 function buildPageTextCandidates(doclingRaw: Record<string, unknown> | null | undefined) {
+  if (doclingRaw && _pageTextCandidatesCache.has(doclingRaw)) {
+    return _pageTextCandidatesCache.get(doclingRaw)!;
+  }
   const candidates: Array<{ text: string; normalized: string; compact: string; page: number; source: string }> = [];
   const push = (value: unknown, pageValue: unknown, source: string) => {
     const page = positivePageNumber(pageValue);
@@ -165,12 +177,14 @@ function buildPageTextCandidates(doclingRaw: Record<string, unknown> | null | un
   }
 
   const seen = new Set<string>();
-  return candidates.filter((candidate) => {
+  const result = candidates.filter((candidate) => {
     const key = `${candidate.page}|${candidate.source}|${candidate.normalized.slice(0, 240)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  if (doclingRaw) _pageTextCandidatesCache.set(doclingRaw, result);
+  return result;
 }
 
 function pageMatchScore(candidate: { normalized: string; compact: string; source: string }, snippet: string): number {
@@ -403,6 +417,9 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
 }
 
 function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | undefined) {
+  if (doclingRaw && _evidenceSearchBlocksCache.has(doclingRaw)) {
+    return _evidenceSearchBlocksCache.get(doclingRaw)!;
+  }
   const blocks: Array<{ text: string; lowered: string; page: number | null; source: string }> = [];
   const push = (value: unknown, page: unknown, source: string) => {
     const text = cleanEvidenceSnippet(value);
@@ -432,12 +449,14 @@ function buildEvidenceSearchBlocks(doclingRaw: Record<string, unknown> | null | 
   }
 
   const seen = new Set<string>();
-  return blocks.filter((block) => {
+  const result = blocks.filter((block) => {
     const key = `${block.page ?? ""}|${block.text.slice(0, 240)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  if (doclingRaw) _evidenceSearchBlocksCache.set(doclingRaw, result);
+  return result;
 }
 
 function fieldSourceKeywords(fieldKey: string): string[] {
@@ -1750,11 +1769,12 @@ Deno.serve(async (req: Request) => {
           ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
-          // 6 chunks × 3000 chars = 18 K chars of lease text sent to the LLM.
-          // This covers the first ~6 pages where all critical lease terms live.
-          // Rule/table extraction already handles structured tables from any page;
-          // the LLM only fills in fields that rules couldn't resolve.
-          maxLLMChunks: 6,
+          // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
+          // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
+          // handles structured tables; LLM fills in fields rules couldn't resolve.
+          // Keeping this at 2 prevents accumulating too many Gemini response
+          // buffers in memory simultaneously (546 resource-exhaustion error).
+          maxLLMChunks: 2,
           chunkSize: 3000,
           llmTemperature: 0,
         },
