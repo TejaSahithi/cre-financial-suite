@@ -238,6 +238,11 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
     if (!key || !createsDynamicRow || seen.has(key)) continue;
+    // Skip clause-title placeholder items whose item_id is "clause:<type>".
+    // These are routing markers for the Clause Records tab, not field values.
+    // The backend sets display_tab:"clause_records" for new extractions; this
+    // handles older stored payloads where that field wasn't set yet.
+    if (item?.item_id && String(item.item_id).startsWith("clause:")) continue;
     // Fall back to legal_options for any item inferDynamicItemTab can't route.
     // This prevents extracted fields (e.g. force_majeure, jury_trial_waiver,
     // attorneys_fees) from being silently dropped — every extracted item with

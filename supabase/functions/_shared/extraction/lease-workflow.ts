@@ -174,7 +174,7 @@ const CLAUSE_DEFINITIONS = [
 
 const FIELD_SPECS = [
   { key: "lease_date", group: "lease_header", aliases: ["lease_date", "effective_date", "date_of_lease"], patterns: [/\b(?:dated|lease date|effective date)\b[^\n]{0,30}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i, /\bentered\s+into\s+as\s+of\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i] },
-  { key: "landlord_name", group: "lease_header", aliases: ["landlord_name", "landlord", "lessor", "owner_landlord", "owner_name"], patterns: [/\bLANDLORD[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|TENANT|LESSEE|Address|whose|having)|\s*\n|$)/, /\bLessor[:\s-]+([A-Z][^\n]{2,160})/] },
+  { key: "landlord_name", group: "lease_header", aliases: ["landlord_name", "landlord", "lessor", "owner_landlord", "owner_name"], patterns: [/\bLANDLORD[:\s-]+([A-Z0-9][^\n]{2,160}?)(?=\s+(?:By|TENANT|LESSEE|Address|whose|having)|\s*\n|$)/, /\bLessor[:\s-]+([A-Z0-9][^\n]{2,160})/, /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Trust|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i] },
   { key: "landlord_address", group: "lease_header", aliases: ["landlord_address", "landlord_notice_address", "lessor_address"], patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i, /\baddress\s+of\s+landlord\b[:\s-]+([^\n]{6,180})/i] },
   { key: "tenant_name", group: "lease_header", aliases: ["tenant_name", "tenant", "lessee", "occupant"], patterns: [/\bTENANT[:\s-]+([A-Z][^\n]{2,160}?)(?=\s+(?:By|LANDLORD|LESSOR|Address|whose|having)|\s*\n|$)/, /\bLessee[:\s-]+([A-Z][^\n]{2,160})/] },
   { key: "assignor_name", group: "assignment_amendment", aliases: ["assignor_name", "assignor", "original_tenant", "transferor"], patterns: [/\b(?:assignor|original tenant|transferor)\b[:\s-]+([^\n]{2,160})/i] },
@@ -419,6 +419,13 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
   if (ownMatch?.index != null) {
     text = text.slice(ownMatch.index + ownMatch[0].length).trim();
   }
+
+  // If after stripping our own label the text immediately starts with the other
+  // party's numbered-summary label (e.g. "4. Tenant:"), the address is blank.
+  const oppositeStart = fieldKey === "landlord_address"
+    ? /^\d+\.\s*(?:tenant|lessee)\b/i
+    : /^\d+\.\s*(?:landlord|lessor)\b/i;
+  if (oppositeStart.test(text)) return null;
 
   const stopPatterns = fieldKey === "landlord_address"
     ? [

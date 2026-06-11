@@ -154,9 +154,9 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:^|\n)\s*landlord\s*[:.]\s*([^\n]{2,120})/i,
       /(?:^|\n)\s*lessor\s*[:.]\s*([^\n]{2,120})/i,
       // Opening-clause format: "between Markets at Choto, LLC, or its assigns (referred to as 'Landlord')"
-      /\bbetween\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+(?:or\s+its\s+assigns[,\s]+)?\(?referred\s+to\s+as\s+["']?Landlord["']?\)?/i,
+      /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+(?:or\s+its\s+assigns[,\s]+)?\(?referred\s+to\s+as\s+["']?Landlord["']?\)?/i,
       // Simpler parenthetical: "between 224 Partners, LLC ("Landlord") and ..."
-      /\bbetween\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i,
+      /\bbetween\s+([A-Z0-9][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i,
       // Legacy variants
       /(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i,
     ],
