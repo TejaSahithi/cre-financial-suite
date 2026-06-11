@@ -128,7 +128,9 @@ export function collectExtractedDocumentItems(lease) {
         item_type: clauseType,
         field_key: key,
         business_area: category,
-        display_tab: inferDynamicItemTab({ business_area: category }, clauseType) || "legal_options",
+        // Always route clause records to clause_records tab so they don't
+        // create duplicate title-only rows alongside the field-specific tabs.
+        display_tab: "clause_records",
         value,
         normalized_value: value,
         raw_value: clause?.raw_value ?? value,

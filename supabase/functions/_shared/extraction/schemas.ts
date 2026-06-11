@@ -71,11 +71,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: ["signed by", "tenant signatory", "by:", "authorized signer", "tenant representative", "tenant contact"],
     tableHeaders: ["signed_by", "tenant_signatory", "signatory", "by"],
-    patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/],
+    patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,60})(?=\s*(?:Date:|Title:|Name:|$|\n))/],
     description:
-      "Individual person who signed the lease on behalf of the tenant. " +
-      "This is the person name found after 'By:' or 'Signed:' in the tenant signature block. " +
-      "This is NEVER the tenant entity name.",
+      "Individual PERSON who signed the lease on behalf of the tenant — found in the SIGNATURE BLOCK near the END of the document (after 'TENANT:' or 'LESSEE:' header). " +
+      "Extract the human name after 'By:' or 'Signed:'. " +
+      "Do NOT return 'Date', 'Title', 'Name', or any other signature block label — those are field labels, not signer names. " +
+      "Do NOT extract from body clauses. This is NEVER the tenant entity/company name.",
   },
   landlord_signatory_name: {
     type: "string",
@@ -154,6 +155,8 @@ export const LEASE_SCHEMA: ModuleSchema = {
       /(?:^|\n)\s*lessor\s*[:.]\s*([^\n]{2,120})/i,
       // Opening-clause format: "between Markets at Choto, LLC, or its assigns (referred to as 'Landlord')"
       /\bbetween\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*[,\s]+(?:or\s+its\s+assigns[,\s]+)?\(?referred\s+to\s+as\s+["']?Landlord["']?\)?/i,
+      // Simpler parenthetical: "between 224 Partners, LLC ("Landlord") and ..."
+      /\bbetween\s+([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?))\s*\(['""]?[Ll]andlord['""]?\)/i,
       // Legacy variants
       /(?:landlord\s+name|lessor\s+name|landlord|lessor|owner)\s*[:\-]\s*([^\n]{2,120})/i,
     ],
@@ -161,7 +164,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "LEGAL ENTITY name of the landlord/lessor ONLY (e.g. '224 Partners, LLC'). " +
       "DO NOT use the signatory or signer. " +
       "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'. " +
-      "Also look for opening-clause format: 'between [Entity], or its assigns (referred to as \"Landlord\")'.",
+      "Look for two opening-clause formats: (1) 'between [Entity], or its assigns (referred to as \"Landlord\")' and (2) 'between [Entity] (\"Landlord\") and ...' — in both cases extract the entity name BEFORE the parenthetical.",
   },
   assignor_name: {
     type: "string",
@@ -174,8 +177,12 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "string",
     labels: ["assignee", "new tenant", "successor tenant", "buyer", "transferee"],
     tableHeaders: ["assignee", "assignee_name", "new tenant", "transferee"],
-    patterns: [/(?:assignee|new tenant|transferee)[:\s]+([^\n]{2,120})/i],
-    description: "For lease assignments, the party receiving or assuming the lease",
+    // Require entity-type suffix to avoid matching obligation clauses ("transferee assumes...")
+    patterns: [/(?:assignee|new tenant|transferee)\s*[:\-]\s*([A-Z][A-Za-z0-9.,&'\- ]{2,100}?(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Holdings|Partners?))/i],
+    description:
+      "For lease ASSIGNMENT documents, the entity receiving/assuming the lease. " +
+      "Return null for regular leases. " +
+      "Extract only the legal entity name — do NOT return obligation clauses like 'assumes, in full, the obligations of Tenant'.",
   },
   assignment_effective_date: {
     type: "date",
@@ -213,7 +220,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     labels: ["assignment consideration", "consideration", "transfer consideration", "assignment fee"],
     tableHeaders: ["assignment_consideration", "consideration", "assignment fee"],
     patterns: [/(?:assignment\s+consideration|consideration)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i],
-    description: "Explicit consideration paid for an assignment, if stated. Do not infer.",
+    description: "Return null for regular leases — this field is ONLY for lease ASSIGNMENT documents. If this is an assignment, return the explicit dollar amount stated as consideration. Do NOT return '.', '0', or any non-numeric artifact. If no dollar amount is explicitly stated, return null.",
   },
   amended_base_rent_for_additional_year: {
     type: "number",
@@ -1413,9 +1420,10 @@ const LEASE_GROUPS: FieldGroup[] = [
     hint:
       "Identify the LEGAL ENTITIES: tenant_name and landlord_name are the company/LLC names ONLY. " +
       "Signatory names (the individual who signed 'By:') go into tenant_signatory_name and landlord_signatory_name — never into *_name. " +
-      "CRITICAL: Many leases name parties in the opening paragraph using this pattern: " +
-      "'between [LANDLORD ENTITY], or its assigns (referred to as \"Landlord\"), and [TENANT ENTITY] (referred to as \"Tenant\")'. " +
-      "Extract the entity name BEFORE the parenthetical — e.g. 'Markets at Choto, LLC' from 'between Markets at Choto, LLC, or its assigns (referred to as \"Landlord\")'. " +
+      "CRITICAL: Leases name parties in the opening paragraph in two formats: " +
+      "(1) 'between [LANDLORD ENTITY], or its assigns (referred to as \"Landlord\"), and [TENANT ENTITY] (referred to as \"Tenant\")' " +
+      "(2) 'between [LANDLORD ENTITY] (\"Landlord\") and [TENANT ENTITY] (\"Tenant\")' — the simpler parenthetical shorthand. " +
+      "In BOTH formats, extract the entity name BEFORE the parenthetical — e.g. '224 Partners, LLC' from 'between 224 Partners, LLC (\"Landlord\")'. " +
       "Do NOT return body-text phrases like 'hereby leases Premises to' — those are clause text, not entity names. " +
       "Also extract property name, premises address, unit/suite if present. " +
       "unit_number: the suite/unit identifier, typically a short number or code found in the Premises section (e.g. 'Suites 3 and 4'). " +
