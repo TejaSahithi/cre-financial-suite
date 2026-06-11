@@ -215,7 +215,7 @@ Rules:
     // 32 K tokens handles large leases; Gemini 2.5 Flash supports up to 65 K.
     // Older fallback models (1.5 Pro) cap at 8 K — the repair logic in
     // callVertexAIFileJSON recovers truncated JSON when possible.
-    maxOutputTokens: isLargeInlineFile ? 16384 : 32768,
+    maxOutputTokens: isLargeInlineFile ? 8192 : 12288,
     temperature: 0,
   });
 

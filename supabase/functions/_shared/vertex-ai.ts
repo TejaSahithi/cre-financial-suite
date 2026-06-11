@@ -14,7 +14,7 @@
  *   const result = await callVertexAIJSON({ systemPrompt, userPrompt });
  */
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
 // ---------------------------------------------------------------------------
 // Service account → OAuth2 access token
