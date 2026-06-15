@@ -266,6 +266,8 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
 
   const accessToken = await getAccessToken();
   let lastError: Error | null = null;
+  let consecutiveNetworkErrors = 0;
+  const MAX_NETWORK_ERRORS = 2;
 
   for (const { loc, mod } of attempts) {
     try {
@@ -296,6 +298,7 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
       });
 
       if (response.ok) {
+        consecutiveNetworkErrors = 0;
         const data = await response.json();
         const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
         const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
@@ -305,26 +308,36 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
       }
 
       if (response.status === 404) {
+        consecutiveNetworkErrors = 0;
         console.warn(`[vertex-ai] 404 NOT FOUND: Project=${projectId}, Model=${mod}, Loc=${loc}, URL=${url}. Ensure Vertex AI API is enabled in this project.`);
         continue;
       }
 
+      consecutiveNetworkErrors = 0;
       const errText = await response.text().catch(() => "unknown error");
       throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
     } catch (err) {
       lastError = err;
       const msg = String(err?.message || "");
       const isNetworkError = msg.includes("connection") || msg.includes("network") || msg.includes("ECONNRESET") || msg.includes("reset");
-      if (
-        msg.includes("404") ||
-        err?.name === "TimeoutError" ||
-        err?.name === "AbortError" ||
-        isNetworkError
-      ) {
+      if (isNetworkError) {
+        consecutiveNetworkErrors++;
+        if (consecutiveNetworkErrors >= MAX_NETWORK_ERRORS) {
+          // All Vertex AI regions share the same network path — if 2 consecutive
+          // requests fail with connection reset, the endpoint is unreachable (likely
+          // an IPv6 routing issue from the edge runtime). Give up so callers can
+          // fall back to GEMINI_API_KEY instead of retrying all 32 combinations.
+          const networkMsg = `Vertex AI unreachable after ${MAX_NETWORK_ERRORS} consecutive network errors (IPv6 routing issue likely). Configure GEMINI_API_KEY as fallback.`;
+          console.error(`[vertex-ai] ${networkMsg}`);
+          throw new Error(networkMsg);
+        }
+        console.warn(`[vertex-ai] Network error ${consecutiveNetworkErrors}/${MAX_NETWORK_ERRORS} for ${mod} in ${loc}: ${msg.slice(0, 120)}; trying next`);
+        continue;
+      }
+      consecutiveNetworkErrors = 0;
+      if (msg.includes("404") || err?.name === "TimeoutError" || err?.name === "AbortError") {
         if (err?.name === "TimeoutError" || err?.name === "AbortError") {
           console.warn(`[vertex-ai] Request to ${mod} in ${loc} timed out after 30s; trying next`);
-        } else if (isNetworkError) {
-          console.warn(`[vertex-ai] Request to ${mod} in ${loc} network error (${msg.slice(0, 120)}); trying next`);
         }
         continue;
       }
@@ -482,6 +495,8 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
   }
 
   let lastError: Error | null = null;
+  let consecutiveNetworkErrors = 0;
+  const MAX_NETWORK_ERRORS = 2;
   for (const { loc, mod } of buildVertexAttempts(primaryLocation, primaryModel)) {
     const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${loc}/publishers/google/models/${mod}:generateContent`;
     try {
@@ -497,6 +512,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
       });
 
       if (response.ok) {
+        consecutiveNetworkErrors = 0;
         const data = await response.json();
         const candidate = data.candidates?.[0];
         const content = candidate?.content?.parts?.[0]?.text ?? "";
@@ -516,6 +532,7 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
       lastError = new Error(`Vertex AI API error ${response.status}: ${errText}`);
       if (response.status === 404) {
         // 404 = model not available in this location; try the next combination
+        consecutiveNetworkErrors = 0;
         console.warn(`[vertex-ai] File model 404 for ${mod} in ${loc}: ${errText.slice(0, 220)}`);
         continue;
       }
@@ -525,21 +542,30 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
         // model or location can fix. Throw immediately to surface the real error.
         throw lastError;
       }
+      consecutiveNetworkErrors = 0;
       throw lastError;
     } catch (err) {
       lastError = err;
       const msg = String(err?.message || "");
       const isNetworkError = msg.includes("connection") || msg.includes("network") || msg.includes("ECONNRESET") || msg.includes("reset");
+      if (isNetworkError) {
+        consecutiveNetworkErrors++;
+        if (consecutiveNetworkErrors >= MAX_NETWORK_ERRORS) {
+          const networkMsg = `Vertex AI unreachable after ${MAX_NETWORK_ERRORS} consecutive network errors (IPv6 routing issue likely). Configure GEMINI_API_KEY as fallback.`;
+          console.error(`[vertex-ai] ${networkMsg}`);
+          throw new Error(networkMsg);
+        }
+        console.warn(`[vertex-ai] File network error ${consecutiveNetworkErrors}/${MAX_NETWORK_ERRORS} for ${mod} in ${loc}: ${msg.slice(0, 120)}; trying next`);
+        continue;
+      }
+      consecutiveNetworkErrors = 0;
       if (
         msg.includes("404") ||
         err?.name === "TimeoutError" ||
-        err?.name === "AbortError" ||
-        isNetworkError
+        err?.name === "AbortError"
       ) {
         if (err?.name === "TimeoutError" || err?.name === "AbortError") {
           console.warn(`[vertex-ai] File request to ${mod} in ${loc} timed out after 60s; trying next`);
-        } else if (isNetworkError) {
-          console.warn(`[vertex-ai] File request to ${mod} in ${loc} network error (${msg.slice(0, 120)}); trying next`);
         }
         continue;
       }
@@ -595,7 +621,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
 }
 
 function buildVertexAttempts(primaryLocation: string, primaryModel: string) {
-  const locations = uniqueStrings([primaryLocation, "global", "us-central1", "us-east4"]);
+  const locations = uniqueStrings([primaryLocation, "us-central1", "us-east4", "global"]);
   const models = uniqueStrings([
     primaryModel,
     "gemini-2.5-flash",
@@ -607,9 +633,12 @@ function buildVertexAttempts(primaryLocation: string, primaryModel: string) {
     "gemini-1.5-pro-002",
   ]);
 
+  // Try each model across ALL locations before falling back to the next model.
+  // This finds a working region for a given model before giving up on it entirely —
+  // important for 404s where a model may be available in one region but not another.
   const attempts: Array<{ loc: string; mod: string }> = [];
-  for (const loc of locations) {
-    for (const mod of models) {
+  for (const mod of models) {
+    for (const loc of locations) {
       attempts.push({ loc, mod });
     }
   }
