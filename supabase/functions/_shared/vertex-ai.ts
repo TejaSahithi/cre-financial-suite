@@ -313,13 +313,18 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
       throw new Error(`Vertex AI API error ${response.status}: ${errText}`);
     } catch (err) {
       lastError = err;
+      const msg = String(err?.message || "");
+      const isNetworkError = msg.includes("connection") || msg.includes("network") || msg.includes("ECONNRESET") || msg.includes("reset");
       if (
-        err.message.includes("404") ||
+        msg.includes("404") ||
         err?.name === "TimeoutError" ||
-        err?.name === "AbortError"
+        err?.name === "AbortError" ||
+        isNetworkError
       ) {
         if (err?.name === "TimeoutError" || err?.name === "AbortError") {
           console.warn(`[vertex-ai] Request to ${mod} in ${loc} timed out after 30s; trying next`);
+        } else if (isNetworkError) {
+          console.warn(`[vertex-ai] Request to ${mod} in ${loc} network error (${msg.slice(0, 120)}); trying next`);
         }
         continue;
       }
@@ -523,13 +528,18 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
       throw lastError;
     } catch (err) {
       lastError = err;
+      const msg = String(err?.message || "");
+      const isNetworkError = msg.includes("connection") || msg.includes("network") || msg.includes("ECONNRESET") || msg.includes("reset");
       if (
-        String(err.message || "").includes("404") ||
+        msg.includes("404") ||
         err?.name === "TimeoutError" ||
-        err?.name === "AbortError"
+        err?.name === "AbortError" ||
+        isNetworkError
       ) {
         if (err?.name === "TimeoutError" || err?.name === "AbortError") {
           console.warn(`[vertex-ai] File request to ${mod} in ${loc} timed out after 60s; trying next`);
+        } else if (isNetworkError) {
+          console.warn(`[vertex-ai] File request to ${mod} in ${loc} network error (${msg.slice(0, 120)}); trying next`);
         }
         continue;
       }

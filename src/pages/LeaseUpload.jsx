@@ -23,6 +23,7 @@ import { leaseService } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { cleanSourceEvidenceText } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 
@@ -132,11 +133,10 @@ const MINIMAL_UPLOADED_FILE_SELECT = "id, file_name, file_url, status, error_mes
 async function fetchUploadedFileStatus(id) {
   if (!id) return { data: null, error: null };
 
+  const actingOrgId = getStoredActingOrgId();
   const { data, error } = await supabase.functions.invoke("pipeline-status", {
-    body: {
-      file_id: id,
-      include_details: true,
-    },
+    body: { file_id: id, include_details: true },
+    headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},
   });
 
   if (!error && data && data.error !== true) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/services/supabaseClient";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
 
 /**
  * Statuses that indicate work is still in progress — keep polling.
@@ -66,9 +67,13 @@ export default function useFileStatus(fileId) {
 
     setIsLoading(true);
     try {
+      const actingOrgId = getStoredActingOrgId();
       const { data, error } = await supabase.functions.invoke(
         "pipeline-status",
-        { body: { file_id: fileIdRef.current } }
+        {
+          body: { file_id: fileIdRef.current },
+          headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},
+        }
       );
 
       if (error) {
