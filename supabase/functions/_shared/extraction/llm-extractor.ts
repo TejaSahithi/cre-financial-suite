@@ -25,7 +25,7 @@ import type {
 } from "./types.ts";
 import { getSchema, getFieldGroups, type FieldDef, type FieldGroup } from "./schemas.ts";
 import { buildRelevantSnippet, chunkDocument } from "./chunker.ts";
-import { callVertexAI, callVertexAIWithFile, callVertexAIJSON, callVertexAIFileJSON } from "../vertex-ai.ts";
+import { callVertexAI, callVertexAIWithFile, callVertexAIJSON, callVertexAIFileJSON, callGeminiWithAPIKey, callGeminiWithAPIKeyAndFile } from "../vertex-ai.ts";
 
 // ── System prompt — short, strict, no room for hallucination ─────────────────
 
@@ -594,7 +594,88 @@ async function callClaudeAndParse<T = unknown>(
   }
 }
 
-// ── Unified LLM call: Vertex AI only ─────────────────────────────────────────
+// ── Gemini Developer API (GEMINI_API_KEY) call + JSON parse ──────────────────
+
+async function callGeminiAndParse<T = unknown>(
+  input: ExtractionInput,
+  opts: { systemPrompt: string; userPrompt: string; maxOutputTokens?: number; temperature?: number },
+  diag: ReturnType<typeof makeDiag>,
+): Promise<T | null> {
+  const isFileMode = Boolean(input.fileBase64);
+  diag.llm_call_attempted = true;
+  if (isFileMode) {
+    diag.llm_file_mode_attempted = true;
+  } else {
+    diag.llm_text_mode_attempted = true;
+    diag.text_chars_sent_to_llm += opts.userPrompt.length;
+  }
+
+  let rawContent: string;
+  let modelUsed: string;
+
+  try {
+    if (isFileMode && input.fileBase64) {
+      const resp = await callGeminiWithAPIKeyAndFile({
+        ...opts,
+        fileBase64: input.fileBase64,
+        fileMimeType: input.fileMimeType || "application/pdf",
+      });
+      rawContent = resp.content;
+      modelUsed = resp.model;
+    } else {
+      const resp = await callGeminiWithAPIKey(opts);
+      rawContent = resp.content;
+      modelUsed = resp.model;
+    }
+  } catch (callErr) {
+    const msg = String(callErr?.message ?? callErr);
+    diag.call_errors.push(`gemini: ${msg}`);
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `gemini_call_error: ${msg.slice(0, 120)}`;
+    throw callErr;
+  }
+
+  if (!diag.model_name) diag.model_name = modelUsed;
+
+  let text = rawContent.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  diag.llm_raw_response_chars += text.length;
+
+  if (!text) {
+    diag.llm_json_parse_success = false;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? `empty_content_from_gemini_${modelUsed}`;
+    console.warn(`[llm-extractor] Gemini ${isFileMode ? "file" : "text"} mode: empty response`);
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as T;
+    diag.llm_json_parse_success = true;
+    return parsed;
+  } catch (parseErr) {
+    const repaired = repairTruncatedJson(text);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        diag.llm_json_parse_success = true;
+        diag.llm_json_repair_applied = true;
+        console.warn(`[llm-extractor] Gemini: repaired truncated JSON (orig ${text.length} chars)`);
+        return parsed;
+      } catch { /* fall through */ }
+    }
+    const preview = text.slice(0, 300);
+    diag.llm_json_parse_success = false;
+    diag.llm_json_parse_error = String(parseErr?.message ?? parseErr);
+    diag.llm_raw_response_preview = preview;
+    diag.llm_empty_response_reason = diag.llm_empty_response_reason ?? "json_parse_failed";
+    console.error(`[llm-extractor] Gemini JSON parse failed (${text.length} chars). Error: ${parseErr?.message}. Preview: ${preview}`);
+    return null;
+  }
+}
+
+// ── Unified LLM call: Vertex AI → Gemini → Claude ────────────────────────────
 
 async function callLLMAndParse<T = unknown>(
   input: ExtractionInput,
@@ -602,17 +683,34 @@ async function callLLMAndParse<T = unknown>(
   diag: ReturnType<typeof makeDiag>,
   useVertex: boolean,
   useClaude: boolean,
+  useGemini = false,
 ): Promise<T | null> {
   if (useVertex) {
     try {
       return await callVertexAndParse<T>(input, opts, diag);
     } catch (vertexErr) {
+      const warnMsg = String(vertexErr?.message ?? vertexErr).slice(0, 80);
+      if (useGemini) {
+        console.warn(`[llm-extractor] Vertex call failed (${warnMsg}), falling back to Gemini API key`);
+        try {
+          return await callGeminiAndParse<T>(input, opts, diag);
+        } catch (geminiErr) {
+          if (useClaude) {
+            console.warn(`[llm-extractor] Gemini call also failed (${String(geminiErr?.message ?? geminiErr).slice(0, 80)}), falling back to Claude`);
+            return await callClaudeAndParse<T>(input, opts, diag);
+          }
+          throw geminiErr;
+        }
+      }
       if (useClaude) {
-        console.warn(`[llm-extractor] Vertex call failed (${String(vertexErr?.message ?? vertexErr).slice(0, 80)}), falling back to Claude`);
+        console.warn(`[llm-extractor] Vertex call failed (${warnMsg}), falling back to Claude`);
         return await callClaudeAndParse<T>(input, opts, diag);
       }
       throw vertexErr;
     }
+  }
+  if (useGemini) {
+    return await callGeminiAndParse<T>(input, opts, diag);
   }
   if (useClaude) {
     return await callClaudeAndParse<T>(input, opts, diag);
@@ -655,11 +753,12 @@ export async function extractWithLLM(
 
   const hasVertexAI = missingVars.length === 0;
   const hasClaudeAI = !!Deno.env.get("ANTHROPIC_API_KEY");
+  const hasGeminiAI = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
   const diag = makeDiag(input, missingVars);
 
-  if (!hasVertexAI && !hasClaudeAI) {
+  if (!hasVertexAI && !hasClaudeAI && !hasGeminiAI) {
     const msg =
-      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}] and ANTHROPIC_API_KEY not set. ` +
+      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}], ANTHROPIC_API_KEY not set, and GEMINI_API_KEY not set. ` +
       `LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);
@@ -667,7 +766,9 @@ export async function extractWithLLM(
     return { records: [], warnings, diagnostics: diag };
   }
 
-  if (!hasVertexAI && hasClaudeAI) {
+  if (!hasVertexAI && hasGeminiAI && !hasClaudeAI) {
+    console.log(`[llm-extractor] Vertex AI not configured — using Gemini API key for extraction`);
+  } else if (!hasVertexAI && hasClaudeAI) {
     console.log(`[llm-extractor] Vertex AI not configured — using Claude (Anthropic) for extraction`);
   }
 
@@ -698,13 +799,13 @@ export async function extractWithLLM(
   if (isMultiRow) {
     return await fillMissingFieldsForRecords(
       input, docling, relevantGroups, schema, moduleType, existingRecords, temperature, warnings, diag,
-      hasVertexAI, hasClaudeAI,
+      hasVertexAI, hasClaudeAI, hasGeminiAI,
     );
   }
 
   return await extractFieldGroups(
     input, docling, relevantGroups, schema, moduleType, missingFields, maxChunks, temperature, warnings, diag,
-    hasVertexAI, hasClaudeAI,
+    hasVertexAI, hasClaudeAI, hasGeminiAI,
   );
 }
 
@@ -722,6 +823,7 @@ async function fillMissingFieldsForRecords(
   diag: ReturnType<typeof makeDiag>,
   useVertex = true,
   useClaude = false,
+  useGemini = false,
 ): Promise<StepResult> {
   const records: ExtractedRecord[] = [];
 
@@ -748,6 +850,7 @@ async function fillMissingFieldsForRecords(
         diag,
         useVertex,
         useClaude,
+        useGemini,
       );
 
       if (result == null) {
@@ -870,6 +973,7 @@ async function extractFieldGroups(
   diag: ReturnType<typeof makeDiag>,
   useVertex = true,
   useClaude = false,
+  useGemini = false,
 ): Promise<StepResult> {
   const concurrencyLimit = resolveConcurrencyLimit();
   const llmStartMs = Date.now();
@@ -914,6 +1018,7 @@ async function extractFieldGroups(
           diag,
           useVertex,
           useClaude,
+          useGemini,
         );
 
         const groupMs = Date.now() - groupStartMs;
