@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgId from "@/hooks/useOrgId";
+import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -91,6 +93,29 @@ export default function FileUploader({
   const { orgId, isAdmin } = useOrgId();
   const resolvedOrgId = orgIdOverride ?? orgId;
   const fileInputRef = useRef(null);
+
+  const [adminOrgId, setAdminOrgId] = useState(() => getStoredActingOrgId() || "");
+
+  const { data: adminOrgs = [] } = useQuery({
+    queryKey: ["file-uploader-orgs"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("organizations")
+        .select("id, name")
+        .order("name");
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: isAdmin,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const handleAdminOrgChange = useCallback((value) => {
+    setAdminOrgId(value);
+    setStoredActingOrgId(value || null);
+  }, []);
+
+  const needsOrgSelection = isAdmin && (!resolvedOrgId || resolvedOrgId === "__none__");
 
   const [files, setFiles] = useState([]);
   const [fileType, setFileType] = useState(normalizeFileType(defaultFileType || ""));
@@ -354,6 +379,27 @@ export default function FileUploader({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {isAdmin && (
+          <div className="flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50 p-3">
+            <span className="text-xs font-semibold text-violet-700 whitespace-nowrap">Organization</span>
+            <Select value={adminOrgId} onValueChange={handleAdminOrgChange}>
+              <SelectTrigger className="flex-1 h-9 bg-white border-violet-200 text-sm">
+                <SelectValue placeholder="Select organization..." />
+              </SelectTrigger>
+              <SelectContent>
+                {adminOrgs.map((org) => (
+                  <SelectItem key={org.id} value={org.id}>
+                    {org.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {needsOrgSelection && (
+              <span className="text-xs text-red-600 font-medium whitespace-nowrap">Required before upload</span>
+            )}
+          </div>
+        )}
+
         <div
           role="button"
           tabIndex={0}
@@ -438,7 +484,7 @@ export default function FileUploader({
 
         {uploadState === "idle" && (
           <div className="flex gap-2">
-            <Button className="flex-1" disabled={!files.length || !fileType} onClick={handleUpload}>
+            <Button className="flex-1" disabled={!files.length || !fileType || needsOrgSelection} onClick={handleUpload}>
               <Upload className="w-4 h-4 mr-2" />
               {multiple && files.length > 1 ? `Upload ${files.length} Files` : "Upload"}
             </Button>
