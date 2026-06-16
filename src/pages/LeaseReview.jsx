@@ -1893,7 +1893,7 @@ export default function LeaseReview() {
         await new Promise((r) => setTimeout(r, 2000));
         const { data: row, error } = await supabase
           .from("uploaded_files")
-          .select("id, status, ui_review_payload, error_message, updated_at")
+          .select("id, status, ui_review_payload, normalized_output, parsed_data, docling_raw, error_message, updated_at")
           .eq("id", sourceFileId)
           .maybeSingle();
         if (error) throw error;
@@ -2344,8 +2344,23 @@ export default function LeaseReview() {
         ? ` ${preservedSummary} reviewer-edited field${preservedSummary === 1 ? "" : "s"} preserved.`
         : "";
       if (newSourceBackedCount === 0 && newNonNullCount === 0) {
+        const debugReason =
+          extractionDebug?.mapping_failure_reason
+          || extractionDebug?.top_20_missing_fields?.[0]?.reason
+          || Object.keys(extractionDebug?.missing_by_reason || {})[0]
+          || (Number(extractionDebug?.full_text_chars || 0) === 0 ? "no_text_extracted" : null)
+          || "no_field_values";
+        const debugCounts = [
+          Number.isFinite(Number(extractionDebug?.full_text_chars))
+            ? `${Number(extractionDebug.full_text_chars).toLocaleString()} text chars`
+            : null,
+          Number.isFinite(Number(extractionDebug?.pdf_page_count_total))
+            ? `${Number(extractionDebug.pdf_page_count_total).toLocaleString()} PDF pages`
+            : null,
+          extractionDebug?.parser_source ? `parser: ${extractionDebug.parser_source}` : null,
+        ].filter(Boolean).join(", ");
         toast.warning(
-          "Extraction returned no field values. AI extraction may not be configured (check Vertex AI keys in Supabase secrets), or the document text is unreadable. You can fill in fields manually.",
+          `Extraction returned no field values (${debugReason}${debugCounts ? `; ${debugCounts}` : ""}). Check Extraction Debug for field trace and parser details.`,
         );
       } else {
         toast.success(
