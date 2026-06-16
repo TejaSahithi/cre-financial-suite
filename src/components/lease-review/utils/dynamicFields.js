@@ -122,15 +122,19 @@ export function collectExtractedDocumentItems(lease) {
       const sourcePage = entrySourcePage(clause);
       if ((value === null || value === undefined || value === "") && !sourceText) continue;
       const category = String(clause?.category || clause?.business_area || "").toLowerCase();
+      const displayTab = category && category !== "clause_records"
+        ? inferDynamicItemTab({ business_area: category }, key) || category
+        : "clause_records";
       fieldMapItems.push({
         item_id: `${sourceName}:${key}`,
         label: clause?.label || clause?.clause_label || titleizeFieldKey(clauseType),
         item_type: clauseType,
         field_key: key,
         business_area: category,
-        // Always route clause records to clause_records tab so they don't
-        // create duplicate title-only rows alongside the field-specific tabs.
-        display_tab: "clause_records",
+        // Pure clause records stay in clause_records, but typed clauses with
+        // a business area (for example legal_options landlord-consent terms)
+        // should also surface as reviewable dynamic rows.
+        display_tab: displayTab,
         value,
         normalized_value: value,
         raw_value: clause?.raw_value ?? value,
@@ -271,7 +275,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       confidence: typeof item?.confidence === "number" ? item.confidence : null,
       status: item?.extraction_status ?? item?.review_status ?? null,
       extraction_status: item?.extraction_status ?? item?.review_status ?? null,
-      source_file_id: lease?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
+      source_file_id: lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
     });
   }
   return byTab;
@@ -328,7 +332,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     status,
     extraction_status: status,
     is_dynamic: Boolean(field.is_dynamic || field.dynamic_document_item),
-    source_file_id: field.source_file_id ?? lease?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
+    source_file_id: field.source_file_id ?? lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
   };
 }
 

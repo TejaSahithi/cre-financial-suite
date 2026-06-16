@@ -17,6 +17,7 @@ import {
   scrubInapplicableStructuredFields
 } from "./utils/leaseRulePipelineText";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import leaseExpenseRuleService from "./leaseExpenseRuleService";
 import { resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { devLog, devTable, devWarn } from "./utils/logger";
@@ -212,6 +213,41 @@ function hasReadableExpenseRuleText(sourceText) {
   return typeof sourceText === "string" && sourceText.trim().length >= 500;
 }
 
+function extractSourceTextFromFilePayload(file, lease) {
+  const candidates = [
+    file?.docling_raw?.full_text,
+    file?.docling_raw?.markdown,
+    file?.docling_raw?.text,
+    file?.docling_raw?.body,
+    file?.normalized_output?.raw_text,
+    file?.normalized_output?.text,
+    file?.parsed_data?.full_text,
+    file?.parsed_data?.raw_text,
+    file?.parsed_data?.text,
+    file?.docling_raw,
+    file?.normalized_output,
+    file?.parsed_data,
+    lease?.extraction_data?.abstract,
+    lease?.extracted_text
+  ];
+
+  for (const candidate of candidates) {
+    const extracted = extractDocumentTextCandidate(candidate);
+    if (extracted && extracted.length > 50) return extracted;
+  }
+  return "";
+}
+
+function isScannableUploadedFile(file) {
+  const mime = String(file?.mime_type || "").toLowerCase();
+  const fname = String(file?.file_name || "").toLowerCase();
+  return (
+    mime.includes("pdf") ||
+    mime.startsWith("image/") ||
+    /\.(pdf|png|jpe?g|tiff?|webp|heic)$/i.test(fname)
+  );
+}
+
 function isPersistableExpenseRule(rule) {
   const isCoverageGap = rule?.rule_type === "coverage_gap" || rule?.generation_source === "original_lease_required";
   if (isCoverageGap) return true;
@@ -393,7 +429,6 @@ export const leaseRulePipelineService = {
 
     // 3. Resolve Text
     let sourceText = "";
-    let uploadedFile = null;
     if (fileId) {
       // The uploaded_files table has `mime_type` and `file_name`; `is_scanned`
       // and `file_type` do not exist (PostgREST returned 400 Bad Request when
@@ -401,60 +436,41 @@ export const leaseRulePipelineService = {
       // docling/normalized/parsed payloads and made re-extract a no-op).
       const { data: file } = await supabase
         .from("uploaded_files")
-        .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, mime_type, file_name")
+        .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, mime_type, file_name, status")
         .eq("id", fileId)
         .maybeSingle();
-      uploadedFile = file;
 
       if (file) {
-        const candidates = [
-          file?.docling_raw?.full_text,
-          file?.docling_raw?.markdown,
-          file?.docling_raw?.text,
-          file?.docling_raw?.body,
-          file?.normalized_output?.raw_text,
-          file?.normalized_output?.text,
-          file?.parsed_data?.full_text,
-          file?.parsed_data?.raw_text,
-          file?.parsed_data?.text,
-          file?.docling_raw,
-          file?.normalized_output,
-          file?.parsed_data,
-          lease?.extraction_data?.abstract,
-          lease?.extracted_text
-        ];
+        sourceText = extractSourceTextFromFilePayload(file, lease);
 
-        for (const c of candidates) {
-          const extracted = extractDocumentTextCandidate(c);
-          if (extracted && extracted.length > 50) {
-            sourceText = extracted;
-            break;
-          }
-        }
-
-        // OCR Fallback for Scanned PDF.
-        // Detect scanned-ish documents from mime_type and file_name extension
-        // (the columns that actually exist). Reaching this branch already
-        // means the parser produced no usable text — that IS the "scanned"
-        // signal, so the mime/extension check is just a guard to skip OCR
-        // for things like .docx/.csv where Vision won't help.
-        const mime = String(file.mime_type || "").toLowerCase();
-        const fname = String(file.file_name || "").toLowerCase();
-        const looksLikeScannable =
-          mime.includes("pdf") || mime.startsWith("image/")
-          || /\.(pdf|png|jpe?g|tiff?|webp|heic)$/i.test(fname);
-        if (!sourceText && looksLikeScannable) {
+        // Canonical parser fallback for scanned PDFs/images. Reaching this
+        // branch means existing parser payloads produced no usable text, so
+        // re-enter ingest-file and let parser.ts choose native PDF text,
+        // Docling, or Gemini/Vertex Vision.
+        if (!sourceText && isScannableUploadedFile(file)) {
           try {
-            devLog("Triggering OCR Vision Fallback...");
-            const { data: ocrData } = await supabase.functions.invoke("ocr-vision-extract", { body: { fileId } });
-            if (ocrData?.text) {
-              sourceText = ocrData.text;
-              await supabase.from("uploaded_files").update({ 
-                parsed_data: { ...(file.parsed_data || {}), full_text: sourceText } 
-              }).eq("id", fileId);
+            devLog("[PIPELINE TEXT FALLBACK] Reprocessing source file through ingest-file", { fileId });
+            const ingestData = await invokeEdgeFunction("ingest-file", {
+              file_id: fileId,
+              module_type: "leases",
+              force_reextract: true,
+              run_synchronously: true,
+            });
+            if (ingestData?.error || ingestData?.manual_review) {
+              devWarn("[PIPELINE TEXT FALLBACK] ingest-file returned manual/error state:", ingestData);
+            }
+
+            const { data: refreshedFile, error: refreshErr } = await supabase
+              .from("uploaded_files")
+              .select("normalized_output, parsed_data, docling_raw, reviewed_output, ui_review_payload, mime_type, file_name, status")
+              .eq("id", fileId)
+              .maybeSingle();
+            if (refreshErr) devWarn("[PIPELINE TEXT FALLBACK] source file refresh failed:", refreshErr);
+            if (refreshedFile) {
+              sourceText = extractSourceTextFromFilePayload(refreshedFile, lease);
             }
           } catch (ocrErr) {
-             devWarn("OCR fallback failed:", ocrErr);
+            devWarn("[PIPELINE TEXT FALLBACK] canonical reprocess failed:", ocrErr);
           }
         }
       }
@@ -554,15 +570,11 @@ export const leaseRulePipelineService = {
     );
     if (shouldRunLlmExtraction) {
        try {
-         const { data: llmData, error: llmErr } = await supabase.functions.invoke("extract-lease-expense-rules", {
-           body: {
-             source_text: sourceText,
-             categories: LLM_EXPENSE_CATEGORIES,
-           },
+         const llmData = await invokeEdgeFunction("extract-lease-expense-rules", {
+           source_text: sourceText,
+           categories: LLM_EXPENSE_CATEGORIES,
          });
-         if (llmErr) {
-            console.error("[LLM EXTRACTION FAILED]", llmErr);
-         } else if (llmData?.rules) {
+         if (llmData?.rules) {
             llmRules = llmData.rules;
          }
        } catch (err) {

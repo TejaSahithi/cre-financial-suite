@@ -46,6 +46,7 @@ import {
 } from "./utils/leaseExpenseRuleParsers";
 
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
@@ -1586,7 +1587,7 @@ export const leaseExpenseRuleService = {
     const expenseRules = asArray(wfRecord?.expense_rules);
     const camProfile = wfRecord?.cam_profile || null;
     const clauses = asArray(wfRecord?.lease_clauses);
-    const sourceFileId = extraction.source_file_id || null;
+    const sourceFileId = lease.source_file_id ?? extraction.source_file_id ?? null;
 
     let sourceTextLength = 0;
     let sourceTextField = null;
@@ -1943,7 +1944,7 @@ export const leaseExpenseRuleService = {
     try {
       const sourceText = await this.getLeaseSourceText(
         lease.id,
-        lease?.extraction_data?.source_file_id || null,
+        lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null,
       );
       if (!sourceText) {
         devWarn(`${tag} Phase 3 skipped — no source text available`);
@@ -1974,7 +1975,7 @@ export const leaseExpenseRuleService = {
 
     const sourceText = await this.getLeaseSourceText(
       lease.id,
-      lease?.extraction_data?.source_file_id || null
+      lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null
     );
 
     // No longer a hard throw when sourceText is empty. The deterministic
@@ -1986,20 +1987,17 @@ export const leaseExpenseRuleService = {
 
     if (sourceText) {
       try {
-        const { data, error } = await supabase.functions.invoke("extract-lease-expense-rules", {
-          body: {
-            lease_id: lease.id,
-            source_text: sourceText,
-            categories: (categories || []).map((category) => ({
-              id: category.id,
-              category_name: category.category_name,
-              subcategory_name: category.subcategory_name,
-              normalized_key: category.normalized_key,
-            })),
-          },
+        const data = await invokeEdgeFunction("extract-lease-expense-rules", {
+          lease_id: lease.id,
+          source_text: sourceText,
+          categories: (categories || []).map((category) => ({
+            id: category.id,
+            category_name: category.category_name,
+            subcategory_name: category.subcategory_name,
+            normalized_key: category.normalized_key,
+          })),
         });
 
-        if (error) throw error;
         mappedRules = mapExtractedRulesToCategories(data?.rules || [], categories, existingRules);
       } catch (error) {
         devWarn("[leaseExpenseRuleService] AI rule extraction fallback:", error);

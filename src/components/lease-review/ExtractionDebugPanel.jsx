@@ -65,7 +65,7 @@ function Section({ title, count, children, badge }) {
  */
 export default function ExtractionDebugPanel({ lease }) {
   const queryClient = useQueryClient();
-  const sourceFileId = lease?.extraction_data?.source_file_id || null;
+  const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
   const [rerunning, setRerunning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [relinkOpen, setRelinkOpen] = useState(false);

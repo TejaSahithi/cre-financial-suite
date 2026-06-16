@@ -4,8 +4,9 @@ import { FileText } from "lucide-react";
 import { supabase } from "@/services/supabaseClient";
 
 export function SourceFileLink({ lease }) {
+  const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? null;
   const { data } = useQuery({
-    queryKey: ["uploaded-file-url", lease?.id, lease?.extraction_data?.source_file_id],
+    queryKey: ["uploaded-file-url", lease?.id, sourceFileId],
     queryFn: async () => {
       if (!lease) return null;
       const row = await findUploadedFileForLease(lease);
@@ -33,7 +34,7 @@ export function SourceFileLink({ lease }) {
 export async function findUploadedFileForLease(lease) {
   if (!lease || !supabase) return null;
 
-  const sourceFileId = lease.extraction_data?.source_file_id || null;
+  const sourceFileId = lease.source_file_id ?? lease.extraction_data?.source_file_id ?? null;
   if (sourceFileId) {
     const { data } = await supabase
       .from("uploaded_files")

@@ -283,7 +283,7 @@ export default function LeaseReview() {
   const [autoLinkDebug, setAutoLinkDebug] = useState(null); // { query_count, tenant, found, top_score }
   useEffect(() => {
     if (!lease?.id || !supabase) return;
-    if (lease.extraction_data?.source_file_id) {
+    if (lease.source_file_id || lease.extraction_data?.source_file_id) {
       setLinkCandidates([]);
       setAutoLinkDebug(null);
       return;
@@ -2527,9 +2527,9 @@ export default function LeaseReview() {
           <Button
             variant="outline"
             onClick={() => setShowReextractConfirm(true)}
-            disabled={reextracting || !lease?.extraction_data?.source_file_id}
+            disabled={reextracting || !resolvedSourceFileId}
             title={
-              lease?.extraction_data?.source_file_id
+              resolvedSourceFileId
                 ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
                 : "No source file is linked to this lease. Use Extraction Debug → Re-link Source Document first."
             }
@@ -2568,7 +2568,7 @@ export default function LeaseReview() {
       {/* Source-file banner with inline file picker. Shows the ranked list
           of uploaded_files candidates the auto-link found in this org —
           one click links the lease, no UUID copying needed. */}
-      {!lease?.extraction_data?.source_file_id && (
+      {!resolvedSourceFileId && (
         <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           <div>
             <p className="font-semibold">No source file linked to this lease.</p>
@@ -3433,7 +3433,7 @@ export default function LeaseReview() {
                 <Button
                   variant="outline"
                   onClick={() => setShowReextractConfirm(true)}
-                  disabled={reextracting || !lease?.extraction_data?.source_file_id}
+                  disabled={reextracting || !resolvedSourceFileId}
                   className="border-blue-300 text-blue-700 hover:bg-blue-50"
                   title="Re-run AI extraction — next approval will create a new version"
                 >
@@ -3457,10 +3457,10 @@ export default function LeaseReview() {
                 <Button
                   variant="outline"
                   onClick={() => setShowReextractConfirm(true)}
-                  disabled={reextracting || !lease?.extraction_data?.source_file_id}
+                  disabled={reextracting || !resolvedSourceFileId}
                   className="border-blue-300 text-blue-700 hover:bg-blue-50"
                   title={
-                    lease?.extraction_data?.source_file_id
+                    resolvedSourceFileId
                       ? "Re-run AI extraction on the source PDF"
                       : "No source file linked. Use Extraction Debug → Re-link first."
                   }
@@ -3725,7 +3725,7 @@ export default function LeaseReview() {
             <ul className="list-disc space-y-1 pl-5 text-xs text-slate-500">
               <li>Field review decisions you've already made (Accept / Edit / N/A / Manual) are <strong>preserved</strong>.</li>
               <li>Approval status, signed_by, and abstract_snapshot are <strong>not touched</strong>.</li>
-              <li>Source file: <code>{lease?.extraction_data?.source_file_id || "(none)"}</code></li>
+              <li>Source file: <code>{resolvedSourceFileId || "(none)"}</code></li>
               <li>Takes ~30–60 seconds. Don't close the page while it's running.</li>
             </ul>
           </div>
@@ -3736,7 +3736,7 @@ export default function LeaseReview() {
             <Button
               className="bg-blue-600 hover:bg-blue-700"
               onClick={handleReextractLease}
-              disabled={reextracting || !lease?.extraction_data?.source_file_id}
+              disabled={reextracting || !resolvedSourceFileId}
             >
               {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
               Re-extract Now
