@@ -16,6 +16,7 @@
 
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser } from "../_shared/supabase.ts";
+import { validateVertexAIAuth } from "../_shared/vertex-ai.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -487,6 +488,54 @@ async function checkDocling(): Promise<Check> {
   }
 }
 
+async function checkVertexAuth(): Promise<Check> {
+  const hasVertexProject = !!(Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID"));
+  const hasServiceJson = !!Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
+  const hasSplitCreds = !!(Deno.env.get("GOOGLE_CLIENT_EMAIL") && Deno.env.get("GOOGLE_PRIVATE_KEY"));
+  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
+
+  if (!hasVertexProject || (!hasServiceJson && !hasSplitCreds)) {
+    return {
+      name: "vertex_auth",
+      status: hasGeminiKey ? "skip" : "warn",
+      message: hasGeminiKey
+        ? "Vertex AI service account not configured; Gemini API key fallback is present"
+        : "Vertex AI service account not configured",
+      fix: hasGeminiKey ? undefined : "Set VERTEX_PROJECT_ID plus GOOGLE_SERVICE_ACCOUNT_KEY, or GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY",
+    };
+  }
+
+  try {
+    const result = await validateVertexAIAuth();
+    if (result.ok) {
+      return {
+        name: "vertex_auth",
+        status: "pass",
+        message: `Vertex AI OAuth token validation succeeded via ${result.source ?? "configured credentials"}`,
+      };
+    }
+
+    return {
+      name: "vertex_auth",
+      status: hasGeminiKey ? "warn" : "fail",
+      message: `Vertex AI OAuth token validation failed: ${String(result.error ?? "unknown error").slice(0, 240)}`,
+      fix: hasGeminiKey
+        ? "Rotate Vertex service account credentials or remove stale Vertex secrets to use Gemini API key fallback"
+        : "Rotate GOOGLE_SERVICE_ACCOUNT_KEY or update GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY for an active Google service account with Vertex AI access",
+    };
+  } catch (err: any) {
+    const message = String(err?.message ?? err).slice(0, 240);
+    return {
+      name: "vertex_auth",
+      status: hasGeminiKey ? "warn" : "fail",
+      message: `Vertex AI OAuth token validation threw: ${message}`,
+      fix: hasGeminiKey
+        ? "Rotate Vertex service account credentials or remove stale Vertex secrets to use Gemini API key fallback"
+        : "Rotate GOOGLE_SERVICE_ACCOUNT_KEY or update GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY for an active Google service account with Vertex AI access",
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -570,12 +619,14 @@ Deno.serve(async (req: Request) => {
     parseAuthCheck,
     normalizeAuthCheck,
     doclingCheck,
+    vertexAuthCheck,
   ] = await Promise.all([
     checkDatabaseSchema(supabaseAdmin),
     checkStorage(supabaseAdmin),
     checkParseFunctionAuth(),
     checkNormalizeFunctionAuth(),
     checkDocling(),
+    checkVertexAuth(),
   ]);
 
   checks.push(...dbChecks);
@@ -583,6 +634,7 @@ Deno.serve(async (req: Request) => {
   checks.push(parseAuthCheck);
   checks.push(normalizeAuthCheck);
   checks.push(doclingCheck);
+  checks.push(vertexAuthCheck);
 
   // ── Build summary ─────────────────────────────────────────────────────────
   const hasStatus = (name: string, status: CheckStatus) =>
@@ -593,11 +645,12 @@ Deno.serve(async (req: Request) => {
   const storageReady = hasStatus("storage_bucket", "pass");
   const parseReady = hasStatus("parse_function_auth", "pass");
   const vertexReady = hasStatus("env_vertex_ai", "pass");
+  const vertexAuthReady = hasStatus("vertex_auth", "pass");
   const doclingReady = hasStatus("docling", "pass");
 
   const ready_for_digital_pdf = dbTablesReady && dbColumnsReady && storageReady && parseReady;
   const ready_for_scanned_pdf = ready_for_digital_pdf && doclingReady;
-  const ready_for_llm_extraction = ready_for_digital_pdf && vertexReady;
+  const ready_for_llm_extraction = ready_for_digital_pdf && vertexReady && vertexAuthReady;
   const ready_for_docling_tables = dbTablesReady && dbColumnsReady && storageReady && doclingReady;
 
   const overallOk = !checks.some((c) => c.status === "fail");

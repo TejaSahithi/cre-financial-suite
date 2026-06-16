@@ -155,30 +155,43 @@ function parseServiceAccountKey(raw: string): ServiceAccountKey | null {
   return null;
 }
 
-/**
- * Get a Google OAuth2 access token from the service account key.
- * Caches the token until 5 minutes before expiry.
- */
-async function getAccessToken(): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
+function serviceAccountFingerprint(key: ServiceAccountKey): string {
+  return [
+    key.client_email,
+    key.private_key?.slice(0, 80),
+    key.project_id,
+  ].join("|");
+}
 
-  if (_cachedToken && _cachedToken.expiresAt > now + 300) {
-    return _cachedToken.token;
-  }
+function getServiceAccountCandidates(): Array<{ source: string; key: ServiceAccountKey }> {
+  const candidates: Array<{ source: string; key: ServiceAccountKey }> = [];
+  const seen = new Set<string>();
+  const add = (source: string, key: ServiceAccountKey | null) => {
+    if (!key) return;
+    const fingerprint = serviceAccountFingerprint(key);
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    candidates.push({ source, key });
+  };
 
   const saKeyRaw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY");
-  let saKey: ServiceAccountKey;
-
-  if (!saKeyRaw) {
-    const fallbackKey = buildServiceAccountFromFallbackVars();
-    if (!fallbackKey) throw new Error("Vertex AI service account is not configured");
-    saKey = fallbackKey;
-  } else {
-    const parsedKey = parseServiceAccountKey(saKeyRaw) ?? buildServiceAccountFromFallbackVars(saKeyRaw);
-    if (!parsedKey) throw new Error("Vertex AI service account configuration is invalid");
-    saKey = parsedKey;
+  if (saKeyRaw) {
+    add("GOOGLE_SERVICE_ACCOUNT_KEY", parseServiceAccountKey(saKeyRaw));
+    // Some deployments put only the private key in GOOGLE_SERVICE_ACCOUNT_KEY
+    // and keep client_email/project_id in split vars. Treat that as a second
+    // valid representation, but do not let a stale JSON key block it.
+    add("GOOGLE_SERVICE_ACCOUNT_KEY_PRIVATE_KEY_WITH_SPLIT_METADATA", buildServiceAccountFromFallbackVars(saKeyRaw));
   }
+  add("GOOGLE_CLIENT_EMAIL_GOOGLE_PRIVATE_KEY", buildServiceAccountFromFallbackVars());
 
+  return candidates;
+}
+
+async function requestAccessTokenForServiceAccount(saKey: ServiceAccountKey): Promise<{
+  token: string;
+  expiresIn: number;
+}> {
+  const now = Math.floor(Date.now() / 1000);
   const iat = now;
   const exp = now + 3600; // 1 hour
 
@@ -208,12 +221,79 @@ async function getAccessToken(): Promise<string> {
   }
 
   const tokenData = await tokenRes.json();
-  _cachedToken = {
+  return {
     token: tokenData.access_token,
-    expiresAt: now + (tokenData.expires_in ?? 3600),
+    expiresIn: tokenData.expires_in ?? 3600,
   };
+}
 
-  return _cachedToken.token;
+export async function validateVertexAIAuth(): Promise<{
+  ok: boolean;
+  source?: string;
+  error?: string;
+  checked_sources: string[];
+}> {
+  const candidates = getServiceAccountCandidates();
+  const checked_sources = candidates.map((candidate) => candidate.source);
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      error: "Vertex AI service account is not configured",
+      checked_sources,
+    };
+  }
+
+  let lastError = "";
+  for (const candidate of candidates) {
+    try {
+      await requestAccessTokenForServiceAccount(candidate.key);
+      return { ok: true, source: candidate.source, checked_sources };
+    } catch (error) {
+      lastError = error?.message ?? String(error);
+      console.warn(`[vertex-ai] Credential source ${candidate.source} failed token validation: ${lastError}`);
+    }
+  }
+
+  return {
+    ok: false,
+    error: lastError || "All configured Vertex AI credentials failed token validation",
+    checked_sources,
+  };
+}
+
+/**
+ * Get a Google OAuth2 access token from the service account key.
+ * Caches the token until 5 minutes before expiry.
+ */
+async function getAccessToken(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (_cachedToken && _cachedToken.expiresAt > now + 300) {
+    return _cachedToken.token;
+  }
+
+  const candidates = getServiceAccountCandidates();
+  if (candidates.length === 0) {
+    throw new Error("Vertex AI service account is not configured");
+  }
+
+  let lastError = "";
+  for (const candidate of candidates) {
+    try {
+      const tokenData = await requestAccessTokenForServiceAccount(candidate.key);
+      console.log(`[vertex-ai] Authenticated with credential source ${candidate.source}`);
+      _cachedToken = {
+        token: tokenData.token,
+        expiresAt: now + tokenData.expiresIn,
+      };
+      return _cachedToken.token;
+    } catch (error) {
+      lastError = error?.message ?? String(error);
+      console.warn(`[vertex-ai] Credential source ${candidate.source} failed: ${lastError}`);
+    }
+  }
+
+  throw new Error(lastError || "All configured Vertex AI credentials failed");
 }
 
 // ---------------------------------------------------------------------------
