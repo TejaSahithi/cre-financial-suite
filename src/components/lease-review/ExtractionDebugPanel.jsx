@@ -81,7 +81,11 @@ export default function ExtractionDebugPanel({ lease }) {
         .select("id, file_name, docling_raw, ui_review_payload, normalized_output, parsed_data, valid_data, extraction_method, status, processing_status, review_status, error_message, module_type, updated_at")
         .eq("id", sourceFileId)
         .maybeSingle();
-      if (error) throw error;
+      // Gracefully handle missing columns (migrations not yet applied).
+      if (error) {
+        if (error.code === "42703" || /does not exist/i.test(error.message || "")) return null;
+        throw error;
+      }
       return data;
     },
     retry: false,
@@ -97,7 +101,11 @@ export default function ExtractionDebugPanel({ lease }) {
         .eq("file_id", sourceFileId)
         .order("timestamp", { ascending: false })
         .limit(12);
-      if (error) throw error;
+      // Gracefully skip if the table does not exist yet (migration pending).
+      if (error) {
+        if (error.code === "42P01" || /does not exist/i.test(error.message || "")) return [];
+        throw error;
+      }
       return data || [];
     },
     retry: false,

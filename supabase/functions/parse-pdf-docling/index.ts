@@ -102,7 +102,24 @@ Deno.serve(async (req: Request) => {
 
     // 2. Parse request body
     const body = await req.json().catch(() => ({}));
-    const { file_id } = body;
+    const { file_id, dry_run } = body;
+
+    // dry_run=true: validate auth and config only — no file required, no DB writes.
+    // Used by pipeline-health-check to verify internal worker auth is functional.
+    if (dry_run === true) {
+      const hasDocling = !!Deno.env.get("DOCLING_API_URL");
+      const hasVision = !!(
+        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+      );
+      return jsonResponse({
+        ok: true,
+        dry_run: true,
+        authenticated: true,
+        backends: { docling: hasDocling, vision: hasVision },
+        message: "Auth verified. dry_run=true — no file processed.",
+      });
+    }
 
     if (!file_id) {
       return jsonResponse(

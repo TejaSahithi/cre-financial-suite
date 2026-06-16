@@ -130,7 +130,13 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
-# Admin & Management Functions
+# Admin & Diagnostics
+# verify_jwt=true: only valid authenticated users can call this function.
+# Admin role (org_admin / super_admin) is enforced inside the handler.
+[functions.pipeline-health-check]
+enabled = true
+verify_jwt = true
+
 [functions.approve-organization]
 enabled = true
 verify_jwt = true

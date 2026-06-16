@@ -758,8 +758,9 @@ export async function extractWithLLM(
 
   if (!hasVertexAI && !hasClaudeAI && !hasGeminiAI) {
     const msg =
-      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}], ANTHROPIC_API_KEY not set, and GEMINI_API_KEY not set. ` +
-      `LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
+      `No LLM configured — Vertex AI missing vars: [${missingVars.join(", ")}]` +
+      (hasGeminiAI ? "" : ", and GEMINI_API_KEY not set") +
+      `. LLM extraction skipped. Fields requiring AI: [${missingFields.join(", ")}].`;
     console.warn(`[llm-extractor] ${msg}`);
     warnings.push(msg);
     diag.llm_empty_response_reason = "no_llm_configured";

@@ -960,30 +960,47 @@ export default function LeaseReview() {
       ufRecord0?.fields ||
       ufRecord0?.standard_fields ||
       null;
+    // Only treat the payload as having real data when at least one field has a
+    // non-null value. An all-null payload means the prior run had no LLM configured;
+    // allow a re-extract in case credentials have since been added.
+    const hasRealValues =
+      ufFieldMap &&
+      typeof ufFieldMap === "object" &&
+      Object.values(ufFieldMap).some(
+        (f) => f && typeof f === "object" && "value" in f && f.value != null && f.value !== "",
+      );
     const hasUploadedFileData =
       ufFieldMap &&
       typeof ufFieldMap === "object" &&
-      Object.keys(ufFieldMap).length > 2;
+      Object.keys(ufFieldMap).length > 2 &&
+      hasRealValues;
     if (hasUploadedFileData) {
       console.log("[LeaseReview] auto-extract: skip — uploaded file already has extracted field data in ui_review_payload");
       done(); return;
     }
 
-    // 3b. Pipeline ran but core mapping failed — retrying won't help.
+    // 3b. Pipeline ran but core mapping failed — retrying won't help without a
+    // source-file change.
     if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
-      console.log("[LeaseReview] auto-extract: skip — pipeline ran but core mapping failed (likely missing API keys or scanned PDF)");
+      console.log("[LeaseReview] auto-extract: skip — pipeline ran but core mapping failed");
       done(); return;
     }
 
-    // 3c. ui_review_payload.records exists — pipeline ran (even if all-null).
-    if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0) {
-      console.log("[LeaseReview] auto-extract: skip — ui_review_payload present (pipeline ran, all fields null)");
+    // 3c. ui_review_payload.records exists with real values — pipeline ran with results.
+    if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0 && hasRealValues) {
+      console.log("[LeaseReview] auto-extract: skip — ui_review_payload present with extracted values");
       done(); return;
     }
 
-    // 3d. Uploaded file already has a terminal or review status — pipeline ran.
+    // 3d. Uploaded file already has a terminal status — pipeline ran.
+    // When there are no real extracted values (all-null prior run) we allow a
+    // one-shot auto-re-extract even from review_required so that newly configured
+    // Vertex AI / Docling credentials take effect without a manual click.
     const ufStatus = uploadedFile?.status ?? uploadedFile?.processing_status ?? null;
-    if (ufStatus && ["review_required", "validated", "approved", "completed", "failed", "stored"].includes(String(ufStatus))) {
+    const terminalStatuses = hasRealValues
+      ? ["review_required", "validated", "approved", "completed", "failed", "stored"]
+      : ["validated", "approved", "completed", "stored"];
+    if (ufStatus && terminalStatuses.includes(String(ufStatus))) {
       console.log(`[LeaseReview] auto-extract: skip — uploaded file status=${ufStatus} (pipeline already ran)`);
       done(); return;
     }
@@ -2701,9 +2718,11 @@ export default function LeaseReview() {
               <p className="mt-1 text-xs text-red-600">
                 The AI extraction backend is not configured or could not read this document, so no
                 fields were populated automatically. You can still <strong>fill in all fields manually</strong> below
-                and approve the abstract. To enable AI extraction, set <code>ANTHROPIC_API_KEY</code> in your
-                Supabase Edge Function secrets and redeploy the edge functions. You can also click{" "}
-                <strong>Re-extract Lease</strong> to retry if the issue has been fixed.
+                and approve the abstract. To enable AI extraction, set{" "}
+                <code>VERTEX_PROJECT_ID</code> and <code>GOOGLE_SERVICE_ACCOUNT_KEY</code> in your
+                Supabase Edge Function secrets (for Vertex AI / Gemini Vision). Optionally set{" "}
+                <code>DOCLING_API_URL</code> for structured document parsing. After updating secrets,
+                redeploy the edge functions and click <strong>Re-extract Lease</strong> to retry.
               </p>
             </div>
           </div>

@@ -1045,10 +1045,10 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   for (const warning of warnings) {
     const text = String(warning || "");
     if (rowCount > 0 && /no tables found/i.test(text)) continue;
-    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT|Vertex AI|AI fallback|ANTHROPIC_API_KEY|Claude/i.test(text)) {
+    if (rowCount > 0 && /GOOGLE_SERVICE_ACCOUNT_KEY|VERTEX_PROJECT_ID|service account|private_key|JWT|Vertex AI|AI fallback|ANTHROPIC_API_KEY|GEMINI_API_KEY|Claude|No LLM configured/i.test(text)) {
       continue;
     }
-    if (/GOOGLE_SERVICE_ACCOUNT_KEY|service account|private_key|JWT/i.test(text)) {
+    if (/GOOGLE_SERVICE_ACCOUNT_KEY|VERTEX_PROJECT_ID|service account|private_key|JWT|ANTHROPIC_API_KEY|GEMINI_API_KEY|No LLM configured/i.test(text)) {
       const sanitized = "AI fallback extraction is unavailable because Google Vertex AI is not fully configured. Deterministic document parsing still ran.";
       if (!out.includes(sanitized)) out.push(sanitized);
       continue;
@@ -1417,10 +1417,59 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { user, supabaseAdmin } = await verifyUser(req);
-    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json().catch(() => ({}));
-    const { file_id } = body;
+    const { file_id, dry_run, sample_text } = body;
+
+    // dry_run=true: validate auth and optionally run extraction on sample_text.
+    // No file_id required and no DB writes — used by pipeline-health-check.
+    if (dry_run === true) {
+      const hasVertex = !!(
+        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+      );
+
+      let extraction: Record<string, unknown> | null = null;
+      if (typeof sample_text === "string" && sample_text.length > 0) {
+        try {
+          const result = await runExtractionPipeline(
+            {
+              moduleType: "lease",
+              fileName: "dry_run_sample.txt",
+              docling: {
+                full_text: sample_text,
+                text_blocks: [],
+                tables: [],
+                fields: [],
+                page_count: 1,
+                extraction_method: "dry_run",
+              },
+            },
+            { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
+          );
+          extraction = {
+            rows: result.rows?.length ?? 0,
+            method: result.method ?? "unknown",
+            warnings: result.warnings ?? [],
+          };
+        } catch (pipeErr: any) {
+          extraction = { error: pipeErr?.message ?? String(pipeErr) };
+        }
+      }
+
+      return jsonResponse({
+        ok: true,
+        dry_run: true,
+        authenticated: true,
+        llm: {
+          vertex_configured: hasVertex,
+        },
+        ...(extraction !== null ? { extraction } : {}),
+        message: "Auth verified. dry_run=true — no file processed, no DB writes.",
+      });
+    }
+
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     if (!file_id) {
       return jsonResponse(
