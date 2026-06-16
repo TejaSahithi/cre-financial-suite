@@ -12,7 +12,6 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, getUserOrgId, verifyUser } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
-import { parseDocument } from "../_shared/extraction/parser.ts";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -21,25 +20,81 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function extractStoragePath(fileUrl: string): string {
-  const raw = String(fileUrl || "").trim();
-  if (!raw) return "";
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text.length > 0) return text;
+  }
+  return "";
+}
 
-  try {
-    const url = new URL(raw);
-    const marker = "/financial-uploads/";
-    const idx = url.pathname.indexOf(marker);
-    if (idx >= 0) {
-      return decodeURIComponent(url.pathname.slice(idx + marker.length));
-    }
-  } catch {
-    // Fall through to string parsing for stored relative paths.
+function extractTextFromFileRecord(fileRecord: any): string {
+  const normalized = fileRecord?.normalized_output ?? {};
+  const reviewed = fileRecord?.reviewed_output ?? {};
+  const uiPayload = fileRecord?.ui_review_payload ?? {};
+  const parsed = fileRecord?.parsed_data ?? {};
+  const docling = fileRecord?.docling_raw ?? {};
+
+  return firstText(
+    normalized.full_text,
+    normalized.raw_text,
+    normalized.text,
+    reviewed.full_text,
+    reviewed.raw_text,
+    reviewed.text,
+    uiPayload.full_text,
+    uiPayload.raw_text,
+    uiPayload.text,
+    parsed.full_text,
+    parsed.raw_text,
+    parsed.text,
+    docling.full_text,
+    docling.text,
+    Array.isArray(docling.text_blocks)
+      ? docling.text_blocks.map((block: any) => block?.text).filter(Boolean).join("\n\n")
+      : "",
+  );
+}
+
+async function runCanonicalIngest(fileId: string, orgId: string) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured");
   }
 
-  return raw
-    .replace(/^.*\/storage\/v1\/object\/(?:public|sign)\/financial-uploads\//, "")
-    .replace(/^financial-uploads\//, "")
-    .replace(/\?.*$/, "");
+  const response = await fetch(`${supabaseUrl}/functions/v1/ingest-file`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${serviceKey}`,
+      apikey: serviceKey,
+      "x-internal-service-key": serviceKey,
+      ...(orgId ? { "x-internal-org-id": orgId } : {}),
+    },
+    body: JSON.stringify({
+      file_id: fileId,
+      module_type: "leases",
+      force_reextract: true,
+      run_synchronously: true,
+    }),
+    signal: AbortSignal.timeout(55_000),
+  });
+
+  const text = await response.text().catch(() => "");
+  let payload: any = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = { raw_response: text.slice(0, 500) };
+  }
+
+  if (!response.ok || payload?.error === true) {
+    const message = payload?.message || payload?.error_details || payload?.error || `ingest-file failed with HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload ?? {};
 }
 
 Deno.serve(async (req: Request) => {
@@ -68,7 +123,7 @@ Deno.serve(async (req: Request) => {
 
     let query = supabaseAdmin
       .from("uploaded_files")
-      .select("id, org_id, file_name, file_url, mime_type, parsed_data, docling_raw")
+      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, normalized_output, reviewed_output, ui_review_payload")
       .eq("id", fileId);
     if (orgId) query = query.eq("org_id", orgId);
 
@@ -80,64 +135,59 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const storagePath = extractStoragePath(fileRecord.file_url);
-    if (!storagePath) {
-      return jsonResponse({ error: true, message: "Uploaded file has no storage path" }, 422);
+    const initialText = extractTextFromFileRecord(fileRecord);
+    let ingestData: any = null;
+    let ingestError = "";
+
+    try {
+      ingestData = await runCanonicalIngest(fileId, fileRecord.org_id || orgId);
+    } catch (error) {
+      ingestError = error?.message ?? "ingest-file failed";
+      console.error("[ocr-vision-extract] canonical ingest failed:", ingestError);
     }
 
-    const { data: fileBlob, error: downloadError } = await supabaseAdmin
-      .storage
-      .from("financial-uploads")
-      .download(storagePath);
-    if (downloadError || !fileBlob) {
-      return jsonResponse(
-        { error: true, message: `Failed to download source file: ${downloadError?.message ?? "missing blob"}` },
-        422,
-      );
-    }
-
-    const { data: signedUrlData } = await supabaseAdmin
-      .storage
-      .from("financial-uploads")
-      .createSignedUrl(storagePath, 60 * 60);
-
-    const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
-    const fileName = fileRecord.file_name ?? "document";
-    const mimeType = fileRecord.mime_type ?? (fileBlob as any).type ?? "application/pdf";
-    const doclingRaw = await parseDocument(fileBytes, fileName, mimeType, {
-      fileUrl: signedUrlData?.signedUrl ?? fileRecord.file_url,
-    });
-    const text = String(doclingRaw?.full_text ?? "").trim();
-
-    await supabaseAdmin
+    const { data: refreshedFile, error: refreshError } = await supabaseAdmin
       .from("uploaded_files")
-      .update({
-        docling_raw: {
-          ...(fileRecord.docling_raw || {}),
-          ...doclingRaw,
-          _metadata: {
-            ...((fileRecord.docling_raw || {})._metadata || {}),
-            ...((doclingRaw || {})._metadata || {}),
-            compatibility_endpoint: "ocr-vision-extract",
-            compatibility_extracted_at: new Date().toISOString(),
-          },
-        },
-        parsed_data: {
-          ...(fileRecord.parsed_data || {}),
-          full_text: text,
-          parser_source: doclingRaw?.extraction_method ?? "compatibility_parser",
-        },
-        extraction_method: doclingRaw?.extraction_method ?? "compatibility_parser",
-      })
-      .eq("id", fileId);
+      .select("id, org_id, file_name, file_url, mime_type, status, parsed_data, docling_raw, normalized_output, reviewed_output, ui_review_payload")
+      .eq("id", fileId)
+      .maybeSingle();
+
+    if (refreshError) {
+      throw new Error(`Failed to refresh parsed file: ${refreshError.message}`);
+    }
+
+    const outputFile = refreshedFile || fileRecord;
+    const text = extractTextFromFileRecord(outputFile) || initialText;
+
+    if (!text && ingestError) {
+      return jsonResponse({
+        error: true,
+        message: ingestError,
+        file_id: fileId,
+        status: outputFile?.status ?? fileRecord.status ?? null,
+        ingest: ingestData,
+      }, 422);
+    }
 
     return jsonResponse({
       ok: true,
       file_id: fileId,
       text,
       full_text_chars: text.length,
-      parser_source: doclingRaw?.extraction_method ?? null,
-      page_count: doclingRaw?.page_count ?? null,
+      parser_source:
+        outputFile?.normalized_output?.parser_source ??
+        outputFile?.parsed_data?.parser_source ??
+        outputFile?.docling_raw?.extraction_method ??
+        outputFile?.docling_raw?._metadata?.parser_source ??
+        null,
+      page_count:
+        outputFile?.normalized_output?.page_count ??
+        outputFile?.parsed_data?.page_count ??
+        outputFile?.docling_raw?.page_count ??
+        null,
+      status: outputFile?.status ?? null,
+      ingest: ingestData,
+      compatibility_endpoint: "ocr-vision-extract",
     });
   } catch (error) {
     console.error("[ocr-vision-extract] Error:", error);
