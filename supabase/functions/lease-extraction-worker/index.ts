@@ -230,6 +230,24 @@ async function failJobAndUpload(
   }
 }
 
+function parserFailureAlreadyPersisted(parseResult: any): boolean {
+  const parserErrorCode = String(parseResult?.data?.error_code || parseResult?.error_code || "");
+  const parserStatus = String(parseResult?.data?.parser_status || parseResult?.data?.processing_status || "");
+  const message = String(parseResult?.data?.message || parseResult?.error || "");
+
+  return (
+    [
+      "OCR_FAILED",
+      "PARSER_PROVIDER_UNAVAILABLE",
+      "EMPTY_PARSE_TEXT",
+      "INSUFFICIENT_PARSE_TEXT",
+      "PDF_PARSING_FAILED",
+    ].includes(parserErrorCode) ||
+    /parse_(ocr_failed|empty_text|insufficient_text|failed)|blocked_pipeline_failure/i.test(parserStatus) ||
+    /invalid_grant|account not found|Failed to get Google access token/i.test(message)
+  );
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -357,8 +375,34 @@ Deno.serve(async (req: Request) => {
       const parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId, PARSE_TIMEOUT_MS);
       if (!parseResult.ok) {
         const message = parseResult.error || "Document parsing failed";
-        const errorCode = parseResult.error_code || parseResult.data?.error_code || "PARSE_FAILED";
+        const errorCode = parseResult.data?.error_code || parseResult.error_code || "PARSE_FAILED";
         const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
+
+        if (isLeaseModule && parserFailureAlreadyPersisted(parseResult)) {
+          // parse-pdf-docling already persisted a blocked parser state with
+          // docling_raw/_metadata and ui_review_payload. Do not overwrite that
+          // failed state with review_required/manual_review_fallback; doing so
+          // makes backend configuration failures look like successful extraction.
+          await failJob(supabaseAdmin, job, errorCode, message);
+          await logger.event("parse", "failed", {
+            error_code: errorCode,
+            error_message: message,
+            metadata: {
+              job_id: job.id,
+              status: parseResult.status,
+              blocked_pipeline_failure: true,
+              parser_status: parseResult.data?.parser_status || parseResult.data?.processing_status || null,
+            },
+          });
+          return jsonResponse({
+            error: true,
+            error_code: errorCode,
+            job_id: job.id,
+            stage: "parse",
+            blocked_pipeline_failure: true,
+            message,
+          }, 200);
+        }
 
         if (isLeaseModule) {
           // For lease files, park for manual review so users can enter fields
