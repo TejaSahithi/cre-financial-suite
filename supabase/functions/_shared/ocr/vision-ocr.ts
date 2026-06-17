@@ -24,7 +24,8 @@ RULES:
 3. Preserve table structure using tab-separated values where possible.
 4. Do NOT interpret, summarize, or modify the content - extract verbatim.
 5. If text is partially illegible, provide your best reading in [brackets].
-6. Return ONLY the extracted text. No JSON, no markdown fences, no explanation.`;
+6. For PDFs or multi-page documents, prefix each page with a line exactly like [[PAGE 1]], [[PAGE 2]], etc.
+7. Return ONLY the extracted text. No JSON, no markdown fences, no explanation.`;
 
 /**
  * Extract text from a scanned PDF or image using Gemini Vision.

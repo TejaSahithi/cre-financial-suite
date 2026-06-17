@@ -615,7 +615,58 @@ function normaliseDoclingResponse(raw: any, fileName: string): DoclingOutput {
   };
 }
 
+function splitMarkedOcrPages(ocrText: string): DoclingPage[] {
+  const text = String(ocrText || "");
+  const pageMarker = /^\s*\[\[\s*PAGE\s+(\d+)\s*\]\]\s*$/gim;
+  const matches = [...text.matchAll(pageMarker)];
+  if (matches.length === 0) return [];
+
+  const pages: DoclingPage[] = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const marker = matches[i];
+    const next = matches[i + 1];
+    const pageNumber = Number(marker[1]);
+    const start = (marker.index ?? 0) + marker[0].length;
+    const end = next?.index ?? text.length;
+    const pageText = cleanExtractedPdfText(text.slice(start, end));
+    if (!pageText) continue;
+    pages.push({
+      page: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : pages.length + 1,
+      text: pageText,
+      fields: [],
+    });
+  }
+  return pages;
+}
+
+function textBlocksFromPages(pages: DoclingPage[]): DoclingTextBlock[] {
+  return pages.flatMap((page) =>
+    String(page.text || "")
+      .split(/\n\s*\n/)
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({
+        block_index: 0,
+        type: "paragraph",
+        text,
+        page: page.page,
+      }))
+  ).map((block, index) => ({ ...block, block_index: index }));
+}
+
 function ocrTextToDocling(ocrText: string): DoclingOutput {
+  const markedPages = splitMarkedOcrPages(ocrText);
+  if (markedPages.length > 0) {
+    return {
+      pages: markedPages,
+      text_blocks: textBlocksFromPages(markedPages),
+      tables: [],
+      fields: [],
+      full_text: markedPages.map((page) => `[[PAGE ${page.page}]]\n${page.text}`).join("\n\n"),
+      page_count: Math.max(...markedPages.map((page) => page.page), markedPages.length),
+    };
+  }
+
   const paragraphs = (ocrText || "")
     .split(/\n\s*\n/)
     .map((p) => p.trim())
@@ -685,7 +736,14 @@ function visionExtractionToDocling(
       source_text: field.source_text,
     }));
     fallback.warnings = extracted?.warnings ?? [];
-    fallback.page_count = expectedPageCount ?? extracted?.page_count ?? fallback.page_count;
+    fallback.page_count = Math.max(
+      Number(expectedPageCount) || 0,
+      Number(extracted?.page_count) || 0,
+      Number(fallback.page_count) || 0,
+      Array.isArray(fallback.pages) && fallback.pages.length
+        ? Math.max(...fallback.pages.map((page) => Number(page.page) || 0))
+        : 0,
+    ) || fallback.page_count;
     return fallback;
   }
 

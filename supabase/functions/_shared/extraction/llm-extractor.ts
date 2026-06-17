@@ -89,6 +89,10 @@ RULES:
 12. source_text MUST BE THE EXACT VERBATIM text from the document snippet. NEVER paraphrase your reasoning. NEVER explain how you derived the value.
     If you derived the value from a specific phrase (e.g. extracting Tenant from "Assignee: John"), the source_text MUST BE the exact phrase "Assignee: John".
     If the text is OCR-garbled, return the garbled text exactly as it appears.
+    For lease review fields, source_text must be a complete source line, sentence, table row, or short clause that contains the value and enough surrounding label/context for a reviewer to understand why the value was extracted.
+    Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
+    If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
+    If you cannot provide both an exact source_text and the page number for a found value, return value null.
 
 13. Numbered-summary documents are common — leases often start with a section like:
         "1. Date: January 9, 2024
@@ -269,10 +273,13 @@ function normalizeLlmEvidence(raw: unknown): LlmFieldEvidence {
   if (typeof raw === "object" && !Array.isArray(raw) && ("value" in (raw as Record<string, unknown>))) {
     const obj = raw as Record<string, unknown>;
     const conf = obj.confidence;
+    const sourceText = typeof obj.source_text === "string"
+      ? obj.source_text.replace(/\s+/g, " ").trim().slice(0, 2400)
+      : null;
     return {
       value: obj.value ?? null,
-      sourceText: typeof obj.source_text === "string" ? (obj.source_text as string).slice(0, 800) : null,
-      sourcePage: typeof obj.source_page === "number" && Number.isFinite(obj.source_page) ? Number(obj.source_page) : null,
+      sourceText: sourceText || null,
+      sourcePage: Number.isFinite(Number(obj.source_page)) && Number(obj.source_page) > 0 ? Number(obj.source_page) : null,
       confidence: typeof conf === "number" && Number.isFinite(conf) ? Math.max(0, Math.min(1, conf > 1 ? conf / 100 : conf)) : null,
     };
   }
@@ -837,7 +844,7 @@ async function fillMissingFieldsForRecords(
   }
 
   for (const group of groups) {
-    const snippet = buildRelevantSnippet(docling, allLabels, 16000);
+    const snippet = buildRelevantSnippet(docling, allLabels, 24000);
     const prompt = buildMultiRowPrompt(group.fields, schema, snippet, moduleType);
     diag.groups_attempted += 1;
     // Note: buildMultiRowPrompt is for multi-record extraction; file-mode
@@ -885,11 +892,12 @@ async function fillMissingFieldsForRecords(
         }
         for (const [field, evidence] of Object.entries(parsed[i])) {
           if (evidence?.value == null) continue;
+          if (!evidence.sourceText) continue;
           records[i].fields[field] = {
             value: evidence.value,
             source: "llm",
             confidence: evidence.confidence ?? 0.70,
-            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+            sourceText: evidence.sourceText,
             sourcePage: evidence.sourcePage ?? null,
           };
         }
@@ -994,7 +1002,7 @@ async function extractFieldGroups(
     for (const f of group.fields) {
       if (schema[f]?.labels) labels.push(...schema[f].labels);
     }
-    const snippet = buildRelevantSnippet(docling, labels, 16000);
+    const snippet = buildRelevantSnippet(docling, labels, 24000);
     const prompt = buildFieldGroupPrompt(group, schema, snippet, moduleType, Boolean(input.fileBase64));
     return { group, prompt };
   });
@@ -1015,7 +1023,7 @@ async function extractFieldGroups(
       try {
         const result = await callLLMAndParse(
           input,
-          { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 2048, temperature },
+          { systemPrompt: LLM_SYSTEM_PROMPT, userPrompt: prompt, maxOutputTokens: 4096, temperature },
           diag,
           useVertex,
           useClaude,
@@ -1058,11 +1066,12 @@ async function extractFieldGroups(
         const fields: Record<string, ExtractedField> = {};
         for (const [field, evidence] of Object.entries(parsed)) {
           if (evidence?.value == null) continue;
+          if (!evidence.sourceText) continue;
           fields[field] = {
             value: evidence.value,
             source: "llm",
             confidence: evidence.confidence ?? 0.70,
-            sourceText: evidence.sourceText ?? `LLM extracted (group: ${group.name})`,
+            sourceText: evidence.sourceText,
             sourcePage: evidence.sourcePage ?? null,
           };
         }

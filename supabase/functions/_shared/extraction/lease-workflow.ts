@@ -317,9 +317,9 @@ function cleanSourceText(value: unknown) {
   return isGenericSourceText(text) ? null : text;
 }
 
-const SOURCE_SNIPPET_MAX_CHARS = 900;
-const SOURCE_SNIPPET_LOOKBACK = 450;
-const SOURCE_SNIPPET_LOOKAHEAD = 650;
+const SOURCE_SNIPPET_MAX_CHARS = 2400;
+const SOURCE_SNIPPET_LOOKBACK = 1200;
+const SOURCE_SNIPPET_LOOKAHEAD = 1400;
 const SOURCE_ABBREVIATIONS = new Set([
   "co", "corp", "inc", "ltd", "llc", "lp", "llp", "mr", "mrs", "ms", "dr",
   "jr", "sr", "st", "ave", "blvd", "rd", "ste", "suite", "no", "jan", "feb",
@@ -370,11 +370,10 @@ function isShortCompleteSourceRow(snippet: string) {
 function expandSourceSnippetFromMatch(text: string, matchStart: number, matchLength: number, maxChars = SOURCE_SNIPPET_MAX_CHARS) {
   const source = cleanText(text);
   if (!source) return null;
-  const limit = Math.max(240, Math.min(maxChars, SOURCE_SNIPPET_MAX_CHARS));
+  const limit = Math.max(420, Math.min(maxChars, SOURCE_SNIPPET_MAX_CHARS));
 
   if (isShortCompleteSourceRow(source)) return source;
-  if (source.length <= limit && /^[A-Za-z][^:]{0,90}:\s\S/.test(source)) return source;
-  if (source.length <= limit && /^\d+(?:\.\d+)*[.)]?\s+[A-Z]/.test(source)) return source;
+  if (source.length <= limit && isCleanSnippetStart(source)) return source;
 
   const safeMatchStart = Math.max(0, Math.min(matchStart, source.length));
   const safeMatchEnd = Math.max(safeMatchStart, Math.min(source.length, safeMatchStart + matchLength));
@@ -566,7 +565,8 @@ function extractPatternValue(text: string, patterns: RegExp[] = []) {
   return null;
 }
 
-function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: string[] = [], maxChars = 520) {
+function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: string[] = [], maxChars = 1600) {
+  const effectiveMax = Math.max(maxChars, 1600);
   const loweredKeywords = keywords.map((keyword) => keyword.toLowerCase());
   for (let index = 0; index < textBlocks.length; index += 1) {
     const blockText = cleanText(textBlocks[index]?.text || "");
@@ -581,27 +581,27 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     // This prevents the generic "SUMMARY OF BASIC LEASE INFORMATION…"
     // prefix from appearing as the source text for unrelated fields.
     let snippet: string | null;
-    if (blockText.length > maxChars) {
+    if (blockText.length > effectiveMax) {
       const idx = haystack.indexOf(matchedKeyword);
       const start = idx;
-      const end = Math.min(blockText.length, idx + maxChars - 60);
+      const end = Math.min(blockText.length, idx + effectiveMax - 60);
       snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim();
-      snippet = expandSourceSnippetFromMatch(blockText, idx, matchedKeyword.length, Math.max(maxChars, 700));
+      snippet = expandSourceSnippetFromMatch(blockText, idx, matchedKeyword.length, effectiveMax);
     } else {
       snippet = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
         .filter(Boolean)
         .join(" ")
-        .slice(0, maxChars);
+        .trim();
     }
-    if (blockText.length <= maxChars) {
+    if (blockText.length <= effectiveMax) {
       const joined = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
         .filter(Boolean)
         .join(" ");
-      if (joined.length <= Math.max(maxChars, 700)) {
+      if (joined.length <= effectiveMax) {
         snippet = joined;
       } else {
         const idx = joined.toLowerCase().indexOf(matchedKeyword);
-        snippet = expandSourceSnippetFromMatch(joined, idx, matchedKeyword.length, Math.max(maxChars, 700));
+        snippet = expandSourceSnippetFromMatch(joined, idx, matchedKeyword.length, effectiveMax);
       }
     }
     if (!snippet) continue;
@@ -616,7 +616,7 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     .map((item) => cleanText(item))
     .find((item) => loweredKeywords.some((keyword) => item.toLowerCase().includes(keyword)));
   if (!sentence) return { clause_text: null, source_page: null };
-  return { clause_text: sentence.length <= Math.max(maxChars, 700) ? sentence : null, source_page: null };
+  return { clause_text: sentence.length <= effectiveMax ? sentence : null, source_page: null };
 }
 
 function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown, clauseHint: string | null = null) {
@@ -625,7 +625,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
   const comparableValue = cleanText(value);
 
   if (clauseHint) {
-    const clauseSearch = extractClauseSnippet(textBlocks, cleanText(doclingRaw?.full_text || ""), [clauseHint], 420);
+    const clauseSearch = extractClauseSnippet(textBlocks, cleanText(doclingRaw?.full_text || ""), [clauseHint], 1800);
     if (clauseSearch.clause_text) {
       return {
         source_page: clauseSearch.source_page,
@@ -657,7 +657,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     if (safeDirectText) {
       const hit = comparableValue ? safeDirectText.indexOf(comparableValue) : -1;
       const snippet = hit >= 0
-        ? expandSourceSnippetFromMatch(safeDirectText, hit, comparableValue.length, 700)
+        ? expandSourceSnippetFromMatch(safeDirectText, hit, comparableValue.length, 1800)
         : null;
       if (snippet) {
         return {
@@ -672,7 +672,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
     const blockText = cleanText(block?.text || "");
     const hit = comparableValue ? blockText.indexOf(comparableValue) : -1;
     if (hit < 0) continue;
-    const snippet = expandSourceSnippetFromMatch(blockText, hit, comparableValue.length, 700);
+    const snippet = expandSourceSnippetFromMatch(blockText, hit, comparableValue.length, 1800);
     if (!snippet) continue;
     return {
       source_page: sourcePageOf(block),
@@ -728,9 +728,9 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
     tenant_signatory_name: ["tenant", "lessee", "by:", "signed by", "authorized signer"],
     landlord_name:         ["landlord", "lessor", "owner", "licensor"],
     landlord_signatory_name: ["landlord", "lessor", "by:", "signed by"],
-    property_name:         ["property", "building", "premises", "project", "development"],
-    property_address:      ["premises", "property", "building", "located at", "address of"],
-    premises_address:      ["premises", "property", "building", "located at", "address of"],
+    property_name:         ["property", "building", "premises", "project", "development", "shopping center", "center"],
+    property_address:      ["premises", "property", "building", "located at", "address of", "shopping center"],
+    premises_address:      ["premises", "property", "building", "located at", "address of", "shopping center"],
     landlord_address:      ["landlord", "lessor", "address of landlord", "landlord's address"],
     tenant_address:        ["tenant", "lessee", "address of tenant", "tenant's address"],
     permitted_use:         ["use", "permitted use", "use of premises", "purpose"],
@@ -812,6 +812,16 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     }
   }
 
+  if (fieldKey === "property_name") {
+    if (
+      valueText.length < 4 ||
+      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property)$/i.test(valueText) ||
+      /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)
+    ) {
+      return "property_name_not_specific";
+    }
+  }
+
   if (["tenant_name", "landlord_name", "broker_name", "tenant_contact_name"].includes(fieldKey)) {
     if (valueText.length > 90 || /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)) {
       return "party_name_looks_like_clause_text";
@@ -832,7 +842,7 @@ function excerptForKeywords(textBlocks: any[], fullText: string, keywords: strin
   // the rule's source_text — the UI then displayed that as if it were
   // verbatim source evidence. Now we return null so downstream code can
   // mark the rule as missing source evidence instead of faking it.
-  const snippet = extractClauseSnippet(textBlocks, fullText, keywords, 420);
+  const snippet = extractClauseSnippet(textBlocks, fullText, keywords, 1800);
   return snippet.clause_text || null;
 }
 
@@ -997,7 +1007,7 @@ function extractInsuranceStructure(text: string) {
 function buildClauseRecords(doclingRaw: any, fullText: string) {
   const textBlocks = asArray(doclingRaw?.text_blocks);
   return CLAUSE_DEFINITIONS.map((definition) => {
-    const snippet = extractClauseSnippet(textBlocks, fullText, definition.keywords, definition.maxChars);
+    const snippet = extractClauseSnippet(textBlocks, fullText, definition.keywords, Math.max(definition.maxChars, 2000));
     const clauseText = snippet.clause_text;
     let structuredFieldsJson: Record<string, unknown> = {};
 
@@ -1672,13 +1682,17 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     let normalizedValue = normalizeWorkflowFieldValue(spec.key, value);
     const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
     if (invalidReason) {
-      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "lease_type"].includes(spec.key)) {
+      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "property_name", "lease_type"].includes(spec.key)) {
         normalizedValue = null;
         extractionStatus = spec.manualRequired ? "manual_required" : "not_found";
       } else if (extractionStatus === "extracted") {
         extractionStatus = "missing_source_evidence";
       }
       relevantSourceClause = null;
+      confidenceScore = Math.min(Number(confidenceScore ?? 0.35), 0.35);
+    }
+    if (!isBlank(normalizedValue) && extractionStatus === "extracted" && !relevantSourceClause) {
+      extractionStatus = "missing_source_evidence";
       confidenceScore = Math.min(Number(confidenceScore ?? 0.35), 0.35);
     }
 
