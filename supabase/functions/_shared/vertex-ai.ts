@@ -645,7 +645,11 @@ export async function callVertexAIWithFile(opts: VertexAIFileOptions): Promise<V
         err?.name === "AbortError"
       ) {
         if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-          console.warn(`[vertex-ai] File request to ${mod} in ${loc} timed out after 60s; trying next`);
+          console.warn(`[vertex-ai] File request to ${mod} in ${loc} timed out after 110s`);
+          throw new Error(
+            `Vertex AI file request timed out after 110s for ${mod} in ${loc}. ` +
+            "Use a text-searchable PDF, configure GEMINI_API_KEY fallback, or move OCR to a longer-running worker.",
+          );
         }
         continue;
       }

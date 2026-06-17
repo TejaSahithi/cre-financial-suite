@@ -153,6 +153,26 @@ export async function extractDocumentWithVision(
     );
   }
 
+  // PDF leases can be slow when the model is asked for page-aware JSON plus
+  // structured fields in one pass. Prefer raw OCR text first; normalize then
+  // extracts lease fields from that text. Set VISION_COMBINED_JSON_FIRST=true
+  // to restore the heavier page/field JSON attempt for experiments.
+  const combinedJsonFirst =
+    String(Deno.env.get("VISION_COMBINED_JSON_FIRST") || "").toLowerCase() === "true";
+  if (mimeType.includes("pdf") && !combinedJsonFirst) {
+    const fallbackText = await runVisionOCR(fileBytes, mimeType, fileUri);
+    if (!fallbackText || fallbackText.length < 5) {
+      throw new Error("Gemini Vision returned no OCR text.");
+    }
+    return {
+      text: fallbackText,
+      page_count: undefined,
+      pages: [],
+      fields: [],
+      warnings: ["PDF text-first OCR used to avoid long page-aware JSON extraction timeout"],
+    };
+  }
+
   const geminiFileJSON = async <T>(opts: Parameters<typeof callVertexAIFileJSON>[0]): Promise<T | null> => {
     const response = await callGeminiWithAPIKeyAndFile(opts);
     let text = response.content.trim()
