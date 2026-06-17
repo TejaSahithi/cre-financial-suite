@@ -8,7 +8,13 @@
  * scanned PDFs/images are sent to Vertex AI Gemini Vision instead.
  */
 
-import { callVertexAIFileJSON, callVertexAIWithFile, callGeminiWithAPIKeyAndFile } from "../vertex-ai.ts";
+import {
+  callVertexAIFileJSON,
+  callVertexAIWithFile,
+  callGeminiWithAPIKeyAndFile,
+  getGoogleCloudAccessToken,
+  getGoogleCloudProjectId,
+} from "../vertex-ai.ts";
 
 const OCR_SYSTEM_PROMPT = `You are a precise OCR engine. Extract ALL visible text from this document exactly as it appears.
 
@@ -160,6 +166,32 @@ export async function extractDocumentWithVision(
   const combinedJsonFirst =
     String(Deno.env.get("VISION_COMBINED_JSON_FIRST") || "").toLowerCase() === "true";
   if (mimeType.includes("pdf") && !combinedJsonFirst) {
+    const warnings: string[] = [];
+    const cloudVisionDisabled =
+      String(Deno.env.get("CLOUD_VISION_PDF_OCR_DISABLED") || "").toLowerCase() === "true";
+
+    if (hasVertexCreds2 && !cloudVisionDisabled) {
+      try {
+        const cloudVisionResult = await runCloudVisionPdfOCR(fileBytes, mimeType);
+        if (cloudVisionResult.text.trim().length >= 5) {
+          return {
+            text: cloudVisionResult.text,
+            page_count: cloudVisionResult.pages.length || undefined,
+            pages: cloudVisionResult.pages,
+            fields: [],
+            warnings: [
+              ...cloudVisionResult.warnings,
+              "Cloud Vision PDF OCR used before Gemini to avoid long file-mode OCR timeout",
+            ],
+          };
+        }
+      } catch (cloudVisionErr) {
+        const message = `Cloud Vision PDF OCR failed: ${cloudVisionErr?.message || cloudVisionErr}`;
+        console.warn(`[ocr] ${message}`);
+        warnings.push(message);
+      }
+    }
+
     const fallbackText = await runVisionOCR(fileBytes, mimeType, fileUri);
     if (!fallbackText || fallbackText.length < 5) {
       throw new Error("Gemini Vision returned no OCR text.");
@@ -169,7 +201,10 @@ export async function extractDocumentWithVision(
       page_count: undefined,
       pages: [],
       fields: [],
-      warnings: ["PDF text-first OCR used to avoid long page-aware JSON extraction timeout"],
+      warnings: [
+        ...warnings,
+        "PDF text-first OCR used to avoid long page-aware JSON extraction timeout",
+      ],
     };
   }
 
@@ -316,6 +351,103 @@ Rules:
     fields: cleanedFields,
     warnings: Array.isArray(result?.warnings) ? result.warnings.map(String) : [],
   };
+}
+
+async function runCloudVisionPdfOCR(
+  fileBytes: Uint8Array,
+  mimeType: string,
+): Promise<{
+  text: string;
+  pages: Array<{ page: number; text: string; fields: [] }>;
+  warnings: string[];
+}> {
+  if (!mimeType.includes("pdf") && !mimeType.includes("tiff") && !mimeType.includes("gif")) {
+    throw new Error(`Cloud Vision files:annotate does not support ${mimeType || "unknown mime type"}`);
+  }
+
+  const projectId = getGoogleCloudProjectId();
+  if (!projectId) {
+    throw new Error("VERTEX_PROJECT_ID or GOOGLE_PROJECT_ID is required for Cloud Vision OCR");
+  }
+
+  const accessToken = await getGoogleCloudAccessToken();
+  const pageLimit = Number(Deno.env.get("CLOUD_VISION_PDF_PAGE_LIMIT") || 5);
+  const pages = Array.from({ length: Math.max(1, Math.min(5, pageLimit || 5)) }, (_, i) => i + 1);
+
+  console.log(`[ocr] Running Cloud Vision PDF OCR (${mimeType}, ${fileBytes.length} bytes, pages=${pages.join(",")})`);
+  const response = await fetch("https://vision.googleapis.com/v1/files:annotate", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+      "x-goog-user-project": projectId,
+    },
+    body: JSON.stringify({
+      requests: [
+        {
+          inputConfig: {
+            content: bytesToBase64(fileBytes),
+            mimeType,
+          },
+          features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+          pages,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(45_000),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "unknown");
+    throw new Error(`Cloud Vision files:annotate ${response.status}: ${text.slice(0, 500)}`);
+  }
+
+  const data = await response.json();
+  const fileResponse = data?.responses?.[0];
+  const pageResponses = Array.isArray(fileResponse?.responses) ? fileResponse.responses : [];
+  const ocrPages = pageResponses
+    .map((page: any, index: number) => {
+      const pageNumber = Number(page?.context?.pageNumber ?? pages[index] ?? index + 1);
+      const text = cleanOCRText(String(page?.fullTextAnnotation?.text ?? ""));
+      const errorMessage = page?.error?.message ? String(page.error.message) : "";
+      if (errorMessage) {
+        console.warn(`[ocr] Cloud Vision page ${pageNumber} error: ${errorMessage}`);
+      }
+      return {
+        page: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : index + 1,
+        text,
+        fields: [] as [],
+      };
+    })
+    .filter((page) => page.text.length > 0);
+
+  const text = cleanOCRText(ocrPages.map((page) => `[[PAGE ${page.page}]]\n${page.text}`).join("\n\n"));
+  if (!text) {
+    throw new Error("Cloud Vision returned no OCR text.");
+  }
+
+  console.log(`[ocr] Cloud Vision PDF OCR complete: ${text.length} chars, ${ocrPages.length} pages`);
+  return {
+    text,
+    pages: ocrPages,
+    warnings: ocrPages.length >= pages.length
+      ? []
+      : [`Cloud Vision OCR returned ${ocrPages.length} of ${pages.length} requested pages`],
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x6000;
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    let binary = "";
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+    chunks.push(btoa(binary));
+  }
+  return chunks.join("");
 }
 
 export async function extractVisibleKeyValues(

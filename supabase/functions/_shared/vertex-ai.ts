@@ -296,6 +296,14 @@ async function getAccessToken(): Promise<string> {
   throw new Error(lastError || "All configured Vertex AI credentials failed");
 }
 
+export async function getGoogleCloudAccessToken(): Promise<string> {
+  return await getAccessToken();
+}
+
+export function getGoogleCloudProjectId(): string | null {
+  return Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID") || null;
+}
+
 // ---------------------------------------------------------------------------
 // Vertex AI Gemini API call
 // ---------------------------------------------------------------------------
