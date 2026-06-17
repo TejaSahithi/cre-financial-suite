@@ -108,15 +108,19 @@ Deno.serve(async (req: Request) => {
     // Used by pipeline-health-check to verify internal worker auth is functional.
     if (dry_run === true) {
       const hasDocling = !!Deno.env.get("DOCLING_API_URL");
+      const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
       const hasVision = !!(
-        (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
-        (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+        (
+          (Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID")) &&
+          (Deno.env.get("GOOGLE_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_PRIVATE_KEY"))
+        ) ||
+        hasGeminiKey
       );
       return jsonResponse({
         ok: true,
         dry_run: true,
         authenticated: true,
-        backends: { docling: hasDocling, vision: hasVision },
+        backends: { docling: hasDocling, vision: hasVision, gemini_api_key: hasGeminiKey },
         message: "Auth verified. dry_run=true — no file processed.",
       });
     }

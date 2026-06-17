@@ -16,7 +16,7 @@
 
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser } from "../_shared/supabase.ts";
-import { validateVertexAIAuth } from "../_shared/vertex-ai.ts";
+import { callGeminiWithAPIKey, validateVertexAIAuth } from "../_shared/vertex-ai.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,6 +67,7 @@ function buildSecretPresenceMap(): Record<string, "present" | "missing"> {
     WORKER_INTERNAL_SECRET: has("WORKER_INTERNAL_SECRET") ? "present" : "missing",
     VERTEX_PROJECT_ID: (has("VERTEX_PROJECT_ID") || has("GOOGLE_PROJECT_ID")) ? "present" : "missing",
     GOOGLE_SERVICE_ACCOUNT_KEY: (has("GOOGLE_SERVICE_ACCOUNT_KEY") || has("GOOGLE_PRIVATE_KEY")) ? "present" : "missing",
+    GEMINI_API_KEY: (has("GEMINI_API_KEY") || has("GOOGLE_API_KEY")) ? "present" : "missing",
     DOCLING_API_URL: has("DOCLING_API_URL") ? "present" : "missing",
   };
 }
@@ -111,6 +112,16 @@ function checkEnvVars(): Check[] {
       : {}),
   });
 
+  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
+  checks.push({
+    name: "env_gemini_api_key",
+    status: hasGeminiKey ? "pass" : "skip",
+    message: hasGeminiKey
+      ? "Gemini API key fallback is configured"
+      : "GEMINI_API_KEY/GOOGLE_API_KEY not configured (recommended fallback when Vertex service account auth fails)",
+    ...(hasGeminiKey ? {} : { fix: "supabase secrets set GEMINI_API_KEY=<google-ai-api-key>" }),
+  });
+
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   checks.push({
     name: "env_docling_api_url",
@@ -122,6 +133,42 @@ function checkEnvVars(): Check[] {
   });
 
   return checks;
+}
+
+async function checkGeminiApiKey(): Promise<Check> {
+  const hasGeminiKey = !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY"));
+  if (!hasGeminiKey) {
+    return {
+      name: "gemini_api_key",
+      status: "skip",
+      message: "Gemini API key fallback is not configured",
+      fix: "Set GEMINI_API_KEY to keep OCR/LLM extraction available when Vertex service-account auth fails",
+    };
+  }
+
+  try {
+    const response = await callGeminiWithAPIKey({
+      userPrompt: "Return {\"ok\":true}.",
+      maxOutputTokens: 64,
+      temperature: 0,
+    });
+    const content = String(response.content ?? "");
+    return {
+      name: "gemini_api_key",
+      status: content ? "pass" : "warn",
+      message: content
+        ? `Gemini API key validation succeeded via ${response.model}`
+        : "Gemini API key responded with empty content",
+      ...(content ? {} : { fix: "Verify GEMINI_API_KEY has access to Gemini generateContent" }),
+    };
+  } catch (err: any) {
+    return {
+      name: "gemini_api_key",
+      status: "warn",
+      message: `Gemini API key validation failed: ${String(err?.message ?? err).slice(0, 240)}`,
+      fix: "Rotate GEMINI_API_KEY or verify the Google AI API key has Gemini API access",
+    };
+  }
 }
 
 async function checkDatabaseSchema(admin: any): Promise<Check[]> {
@@ -620,6 +667,7 @@ Deno.serve(async (req: Request) => {
     normalizeAuthCheck,
     doclingCheck,
     vertexAuthCheck,
+    geminiApiKeyCheck,
   ] = await Promise.all([
     checkDatabaseSchema(supabaseAdmin),
     checkStorage(supabaseAdmin),
@@ -627,6 +675,7 @@ Deno.serve(async (req: Request) => {
     checkNormalizeFunctionAuth(),
     checkDocling(),
     checkVertexAuth(),
+    checkGeminiApiKey(),
   ]);
 
   checks.push(...dbChecks);
@@ -635,6 +684,7 @@ Deno.serve(async (req: Request) => {
   checks.push(normalizeAuthCheck);
   checks.push(doclingCheck);
   checks.push(vertexAuthCheck);
+  checks.push(geminiApiKeyCheck);
 
   // ── Build summary ─────────────────────────────────────────────────────────
   const hasStatus = (name: string, status: CheckStatus) =>
@@ -646,11 +696,12 @@ Deno.serve(async (req: Request) => {
   const parseReady = hasStatus("parse_function_auth", "pass");
   const vertexReady = hasStatus("env_vertex_ai", "pass");
   const vertexAuthReady = hasStatus("vertex_auth", "pass");
+  const geminiReady = hasStatus("gemini_api_key", "pass");
   const doclingReady = hasStatus("docling", "pass");
 
   const ready_for_digital_pdf = dbTablesReady && dbColumnsReady && storageReady && parseReady;
   const ready_for_scanned_pdf = ready_for_digital_pdf && doclingReady;
-  const ready_for_llm_extraction = ready_for_digital_pdf && vertexReady && vertexAuthReady;
+  const ready_for_llm_extraction = ready_for_digital_pdf && ((vertexReady && vertexAuthReady) || geminiReady);
   const ready_for_docling_tables = dbTablesReady && dbColumnsReady && storageReady && doclingReady;
 
   const overallOk = !checks.some((c) => c.status === "fail");
