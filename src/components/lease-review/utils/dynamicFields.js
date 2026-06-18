@@ -425,13 +425,72 @@ function buildDerivedFieldEvidence(lease, key, currentValue) {
   return null;
 }
 
+function normalizeQuotedPropertyName(sourceText) {
+  const source = cleanSourceEvidenceText(sourceText);
+  if (!source) return null;
+  const match =
+    source.match(/\bknown\s+as\s+(The\s+[A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/) ||
+    source.match(/\bknown\s+as\s+([A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/);
+  return match?.[1]?.replace(/\s+/g, " ").trim() || null;
+}
+
+function normalizeReviewValueForField(key, value, sourceText) {
+  if (!isMeaningfulValue(value)) return value;
+
+  const normalizedKey = normalizeDynamicKey(key);
+  const text = typeof value === "string" ? value.trim() : value;
+  const valueText = String(text ?? "").trim();
+  const lowerValue = valueText.toLowerCase();
+  const source = cleanSourceEvidenceText(sourceText) || "";
+  const combined = `${valueText} ${source}`.toLowerCase();
+
+  if (normalizedKey === "property_name") {
+    const quotedName = normalizeQuotedPropertyName(source);
+    if (quotedName) return quotedName;
+    if (
+      valueText.length < 4 ||
+      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property)$/i.test(valueText) ||
+      /\b(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)\b/i.test(valueText)
+    ) {
+      return null;
+    }
+  }
+
+  if (["premises_use", "permitted_use", "use_clause"].includes(normalizedKey)) {
+    if (/\b(?:buffalo\s+wild\s+wings|restaurant|food\s+service|bar|cafe|cafe)\b/.test(combined)) {
+      return "restaurant";
+    }
+    if (
+      valueText.length > 80 ||
+      /\b(?:assign|assignment|sublet|subletting|prior\s+written\s+consent|common areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is)\b/.test(combined)
+    ) {
+      return null;
+    }
+  }
+
+  if (normalizedKey === "lease_type") {
+    if (/\bmodified\s+gross\b/.test(combined)) return "modified_gross";
+    if (/\b(?:triple\s+net|triple-net|nnn)\b/.test(combined)) return "nnn";
+    if (/\bfull\s+service(?:\s+gross)?\b/.test(combined)) return "full_service";
+    if (/\bgross\b/.test(combined)) return "gross";
+    if (["net", "single net", "double net"].includes(lowerValue)) return null;
+  }
+
+  if (["assignment_provisions", "assignment_rights", "sublease_rights"].includes(normalizedKey)) {
+    if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/.test(combined)) return null;
+    if (/\b(?:alteration|improvement|roofing contractor|roof penetrations?)\b/.test(combined)) return null;
+  }
+
+  return text;
+}
+
 export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const key = field?.key || field?.field_key;
   if (!key) return null;
 
   const initialValue = field.normalized_value ?? field.value ?? readFieldValue(lease, key);
   const derived = buildDerivedFieldEvidence(lease, key, initialValue);
-  const schemaValue = derived?.value ?? initialValue;
+  let schemaValue = derived?.value ?? initialValue;
   const evidence = readFieldEvidence(lease, key);
   const sourcePage = normalizeSourcePage(
     field.page_number
@@ -447,17 +506,33 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? derived?.sourceText
       ?? evidence.sourceText,
   );
+  schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText);
   const confidence = typeof field.confidence === "number"
     ? field.confidence
     : readFieldConfidence(lease, key, null);
+  const explicitSourceTextQuality =
+    field.source_text_quality
+      ?? field.sourceTextQuality
+      ?? derived?.sourceTextQuality
+      ?? (sourceText ? null : evidence.sourceTextQuality);
+  const explicitExtractionStatus =
+    field.status
+      ?? field.extraction_status
+      ?? derived?.extractionStatus
+      ?? (sourceText ? null : evidence.extractionStatus);
+  const explicitEvidenceType =
+    field.evidence_type
+      ?? field.evidenceType
+      ?? derived?.evidenceType
+      ?? (sourceText ? null : evidence.evidenceType);
   const statusEvidence = {
     sourcePage,
     sourceText,
     rawValue: field.raw_value ?? field.rawValue ?? evidence.rawValue ?? schemaValue,
     value: schemaValue,
-    extractionStatus: field.status ?? field.extraction_status ?? derived?.extractionStatus ?? evidence.extractionStatus,
-    evidenceType: field.evidence_type ?? field.evidenceType ?? derived?.evidenceType ?? evidence.evidenceType,
-    sourceTextQuality: field.source_text_quality ?? field.sourceTextQuality ?? derived?.sourceTextQuality ?? evidence.sourceTextQuality,
+    extractionStatus: explicitExtractionStatus,
+    evidenceType: explicitEvidenceType,
+    sourceTextQuality: explicitSourceTextQuality,
     sourceFieldKeys: field.source_field_keys ?? field.sourceFieldKeys ?? derived?.sourceFieldKeys ?? evidence.sourceFieldKeys,
     derivationTrace: field.derivation_trace ?? field.derivationTrace ?? derived?.derivationTrace ?? evidence.derivationTrace,
   };
@@ -472,6 +547,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const resolvedStatus = field.status
     ?? field.extraction_status
     ?? derived?.extractionStatus
+    ?? (sourceText && isMeaningfulValue(schemaValue) ? null : evidence.extractionStatus)
     ?? resolveExtractionStatus(lease, key, {
       value: schemaValue,
       confidence,

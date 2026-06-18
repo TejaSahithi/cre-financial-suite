@@ -165,4 +165,60 @@ describe("Lease Review evidence contract", () => {
     const rows = buildDynamicDocumentFieldsByTab(lease).legal_options || [];
     expect(rows.filter((row) => row.original_field_key === "clause_assignment_subletting")).toHaveLength(2);
   });
+
+  it("repairs property name fragments from the exact premises source", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "property_name",
+      label: "Property Name",
+      normalized_value: "a shopping",
+      source_page: 1,
+      source_text: "Premises are located in a shopping center known as The Markets at Choto in Knoxville, Tennessee.",
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBe("The Markets at Choto");
+    expect(row.source_text_quality).toBe("exact");
+  });
+
+  it("rejects common-area text as permitted use", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "permitted_use",
+      label: "Permitted Use",
+      required: true,
+      normalized_value: "the Common Areas adjacent to the Premises for sale or display of merchandise",
+      source_page: 1,
+      source_text: "Tenant accepts the Premises AS IS and acknowledges Landlord has made no representations regarding compliance.",
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.extraction_status).toBe("manual_required");
+    expect(row.requires_review).toBe(true);
+  });
+
+  it("does not accept generic net lease type from expense wording", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "lease_type",
+      label: "Lease Type",
+      required: true,
+      normalized_value: "net",
+      source_page: 2,
+      source_text: "Real estate taxes include the value of the Shopping Center as part of the net worth of Landlord.",
+      evidence_type: "inferred",
+    }, "expenses_recoveries");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.extraction_status).toBe("manual_required");
+  });
+
+  it("does not map alteration clauses into assignment provisions", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "assignment_provisions",
+      label: "Assignment Provisions",
+      normalized_value: "Tenant shall not make any alteration of, or addition or improvement to, the Premises without consent.",
+      source_page: 4,
+      source_text: "Tenant shall not make any alteration of, or addition or improvement to, the Premises without securing Landlord's prior written consent.",
+    }, "legal_options");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.source_text).toContain("alteration");
+  });
 });

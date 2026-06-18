@@ -154,7 +154,7 @@ const CLAUSE_DEFINITIONS = [
   { type: "operating_expense_recovery", title: "Operating Expense Recovery", keywords: ["operating expenses", "additional rent", "tenant shall reimburse", "tenant shall pay", "taxes, insurance", "common area maintenance"], maxChars: 820 },
   { type: "cam_recoveries", title: "CAM / Recoveries", keywords: ["common area maintenance", "cam", "common area expenses"], maxChars: 820 },
   { type: "taxes", title: "Taxes", keywords: ["real estate taxes", "property taxes", "taxes and assessments"], maxChars: 620 },
-  { type: "use_clause", title: "Use Clause", keywords: ["permitted use", "use of premises"], maxChars: 520 },
+  { type: "use_clause", title: "Use Clause", keywords: ["permitted use", "use of premises", "use the premises", "shall use", "solely for", "restaurant", "retail"], maxChars: 720 },
   { type: "assignment_subletting", title: "Assignment / Subletting", keywords: ["assignment", "subletting", "sublease"], maxChars: 620 },
   { type: "repairs_maintenance", title: "Repairs & Maintenance", keywords: ["repairs", "maintenance", "hvac"], maxChars: 620 },
   { type: "alterations", title: "Alterations", keywords: ["alterations", "improvements"], maxChars: 520 },
@@ -191,12 +191,12 @@ const FIELD_SPECS = [
   // where the signer wasn't tagged explicitly.
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
-  { key: "property_name", group: "premises", aliases: ["property_name"] },
+  { key: "property_name", group: "premises", aliases: ["property_name"], patterns: [/\bknown\s+as\s+(The\s+[A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i, /\bknown\s+as\s+([A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i] },
   { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\bpremises\s+located\s+at\s+([^\n.]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number", "space_number", "premises_suite"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
   { key: "rentable_area_sqft", group: "premises", aliases: ["rentable_area_sqft", "tenant_rsf", "square_footage", "leased_premises_area", "square_feet", "rentable_square_feet"], patterns: [/\bapproximately\s+([\d,]+)\s+rentable\s+square\s+feet/i, /(?:premises|leased|tenant)[^\n]{0,60}?([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|\bSF\b|\bRSF\b)/i, /([\d,]+)\s*rentable\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i] },
   { key: "lease_type", group: "lease_header", aliases: ["lease_type", "expense_structure", "rent_structure", "lease_structure"] },
-  { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i] },
+  { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i, /\b(?:use|operate)\s+(?:the\s+)?Premises\s+(?:solely\s+)?(?:for|as)\s+([^\n.]{4,180})/i, /\bsolely\s+for\s+([^\n.]{4,180})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
   { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [/\b(?:security\s+deposit|deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
   // lease_term: match only concise label-value forms (e.g. "Lease Term: 86 months" or
@@ -784,6 +784,16 @@ function normalizeLeaseTypeValue(value: unknown): string | null {
   return null;
 }
 
+function normalizePermittedUseValue(value: unknown, sourceText?: string | null): string | null {
+  const valueText = cleanText(value);
+  if (!valueText) return null;
+  const combined = `${valueText} ${cleanText(sourceText)}`.toLowerCase();
+  if (/\b(?:buffalo\s+wild\s+wings|restaurant|food\s+service|bar|cafe)\b/.test(combined)) return "restaurant";
+  if (/\bretail\b/.test(combined)) return "retail";
+  if (/\boffice\b/.test(combined)) return "office";
+  return valueText;
+}
+
 function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: string | null) {
   const valueText = cleanText(value);
   const source = cleanText(sourceText).toLowerCase();
@@ -822,12 +832,21 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     }
   }
 
-  if (fieldKey === "premises_use") {
+  if (fieldKey === "premises_use" || fieldKey === "permitted_use") {
     if (
       valueText.length > 80 ||
-      /\b(?:assign|assignment|sublet|subletting|consent|common areas?|parking|mechanical|sidewalk|landscaping)\b/i.test(valueText)
+      /\b(?:assign|assignment|sublet|subletting|prior\s+written\s+consent|common areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is)\b/i.test(combined)
     ) {
       return "premises_use_not_core_use";
+    }
+  }
+
+  if (["assignment_provisions", "assignment_rights", "sublease_rights"].includes(fieldKey)) {
+    if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/i.test(combined)) {
+      return "assignment_field_without_assignment_context";
+    }
+    if (/\b(?:alteration|improvement|roofing contractor|roof penetrations?)\b/i.test(combined)) {
+      return "assignment_field_contains_alteration_clause";
     }
   }
 
@@ -1732,9 +1751,12 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       ? resolvedSourceClause
       : null;
     let normalizedValue = normalizeWorkflowFieldValue(spec.key, value);
+    if (spec.key === "permitted_use" || spec.key === "premises_use") {
+      normalizedValue = normalizePermittedUseValue(normalizedValue, relevantSourceClause);
+    }
     const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
     if (invalidReason) {
-      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "property_name", "lease_type"].includes(spec.key)) {
+      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "property_name", "lease_type", "permitted_use", "premises_use", "assignment_provisions", "assignment_rights", "sublease_rights"].includes(spec.key)) {
         normalizedValue = null;
         extractionStatus = spec.manualRequired ? "manual_required" : "not_found";
       } else if (extractionStatus === "extracted") {
