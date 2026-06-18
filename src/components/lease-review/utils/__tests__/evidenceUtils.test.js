@@ -8,6 +8,20 @@ vi.mock("@/lib/leaseReviewSchema", () => ({
     parties_premises: [{ key: "tenant_name", label: "Tenant Name", required: true, type: "text" }],
   },
   hasValidSourceEvidence: ({ sourceText, sourcePage } = {}) => !!(sourceText || sourcePage != null),
+  resolveSourceTextQuality: ({ sourceText, sourcePage, sourceTextQuality, evidenceType, extractionStatus } = {}) => {
+    if (sourceTextQuality) return sourceTextQuality;
+    if (evidenceType === "derived" || ["calculated", "derived", "computed"].includes(extractionStatus)) return "derived";
+    if (evidenceType === "inferred" || extractionStatus === "inferred") return "inferred";
+    if (sourceText && sourcePage != null) return "exact";
+    if (sourceText) return "partial";
+    return "missing";
+  },
+  normalizeEvidenceType: (status, { value } = {}) => {
+    if (status === "calculated" || status === "derived" || status === "computed") return "derived";
+    if (status === "inferred") return "inferred";
+    if (value !== null && value !== undefined && value !== "") return "extracted";
+    return "missing";
+  },
   isMeaningfulValue: (value) => value !== null && value !== undefined && value !== "",
   isCalculatedExtractionStatus: (s) => s === "calculated",
   isManualExtractionStatus: (s) => s === "manual_required",

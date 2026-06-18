@@ -74,15 +74,15 @@ export const LEASE_REVIEW_FIELDS = [
   // Parties & Premises
   { key: "tenant_name",        label: "Tenant Name",                  tab: "parties_premises", required: true,  allowNA: false, type: "text" },
   { key: "tenant_signatory_name", label: "Tenant Signatory",          tab: "parties_premises", type: "text" },
-  { key: "landlord_name",      label: "Landlord Name",                tab: "parties_premises", type: "text" },
+  { key: "landlord_name",      label: "Landlord Name",                tab: "parties_premises", required: true,  allowNA: false, type: "text" },
   { key: "landlord_signatory_name", label: "Landlord Signatory",      tab: "parties_premises", type: "text" },
   { key: "property_name",      label: "Property Name",                tab: "parties_premises", type: "text" },
-  { key: "premises_address",   label: "Premises Address",             tab: "parties_premises", type: "text" },
+  { key: "premises_address",   label: "Premises Address",             tab: "parties_premises", required: true,  allowNA: false, type: "text" },
   { key: "suite_number",       label: "Suite Number",                 tab: "parties_premises", type: "text" },
   { key: "floor",              label: "Floor",                        tab: "parties_premises", type: "text" },
   { key: "square_footage",     label: "Square Footage (RSF)",         tab: "parties_premises", required: true,  allowNA: false, type: "number" },
   { key: "building_rsf",       label: "Building RSF",                 tab: "parties_premises", type: "number" },
-  { key: "premises_use",       label: "Permitted Use",                tab: "parties_premises", type: "text" },
+  { key: "premises_use",       label: "Permitted Use",                tab: "parties_premises", required: true,  allowNA: false, type: "text" },
   { key: "broker_name",        label: "Broker Name",                  tab: "parties_premises", type: "text" },
   { key: "parking_rights",     label: "Parking Rights",               tab: "parties_premises", type: "text" },
   { key: "common_area_description", label: "Common Area Description", tab: "parties_premises", type: "text" },
@@ -92,7 +92,8 @@ export const LEASE_REVIEW_FIELDS = [
   // stored on both the legacy start_date/end_date columns AND the dedicated
   // commencement_date/expiration_date columns so downstream queries that read
   // either pair keep working.
-  { key: "lease_date",                 label: "Lease Date (signed)",                 tab: "dates_term", type: "date" },
+  { key: "lease_date",                 label: "Lease Date (signed)",                 tab: "dates_term", required: true,  allowNA: false, type: "date" },
+  { key: "lease_term",                 label: "Lease Term",                          tab: "dates_term", required: true,  allowNA: false, type: "text", allowCalculatedAccept: true },
   { key: "commencement_date",          label: "Commencement Date",                   tab: "dates_term", required: true,  allowNA: false, type: "date" },
   { key: "rent_commencement_date",     label: "Rent Commencement Date",              tab: "dates_term", type: "date" },
   { key: "expiration_date",            label: "Expiration Date",                     tab: "dates_term", required: true,  allowNA: false, type: "date" },
@@ -110,7 +111,7 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "escalation_timing",   label: "Escalation Timing",       tab: "rent_charges", type: "select", options: "escalation_timing" },
   { key: "free_rent_months",    label: "Free Rent (months)",      tab: "rent_charges", type: "number" },
   { key: "ti_allowance",        label: "TI Allowance",            tab: "rent_charges", type: "currency" },
-  { key: "security_deposit",    label: "Security Deposit",        tab: "rent_charges", type: "currency" },
+  { key: "security_deposit",    label: "Security Deposit",        tab: "rent_charges", required: true, allowNA: false, type: "currency" },
   { key: "late_fee_grace_days", label: "Late Fee Grace Days",     tab: "rent_charges", type: "number" },
   { key: "late_fee_percent",    label: "Late Fee (%)",            tab: "rent_charges", type: "number" },
   { key: "default_interest_rate_formula", label: "Default Interest Rate", tab: "rent_charges", type: "text" },
@@ -189,6 +190,7 @@ const FIELD_COLUMN_ALIASES = {
   suite_number:      ["suite_number", "unit_number", "suite", "premises.suite"],
   floor:             ["floor", "premises.floor"],
   lease_date:        ["lease_execution_date", "lease_date", "dates.lease_execution_date"],
+  lease_term:        ["lease_term", "initial_term", "term", "term_months", "lease_term_months"],
   initial_term:      ["initial_term", "term_months", "lease_term_months"],
   tenant_pro_rata_share: ["tenant_share", "pro_rata_share", "tenant_pro_rata_share"],
   general_liability_min: ["commercial_general_liability_per_occurrence", "general_liability_min"],
@@ -664,30 +666,30 @@ const CALCULATED_ACCEPT_FIELD_KEY_PATTERNS = [
 
 export function canAcceptCalculatedReviewField(field) {
   if (field?.allowCalculatedAccept === true) return true;
-  const key = String(field?.key || field?.field_key || "").trim().toLowerCase();
+  const key = String(
+    typeof field === "string"
+      ? field
+      : field?.key || field?.field_key || "",
+  ).trim().toLowerCase();
   if (!key) return false;
   return CALCULATED_ACCEPT_FIELD_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 
 export function hasValidSourceEvidence(evidence = {}) {
-  const page = evidence?.sourcePage ?? evidence?.source_page ?? evidence?.page_number ?? evidence?.page;
-  const hasPage = normalizeSourcePage(page) !== null;
-  const sourceText = cleanSourceEvidenceText(
-    evidence?.sourceText
-      ?? evidence?.source_text
-      ?? evidence?.exact_source_text
-      ?? evidence?.source_clause
-      ?? evidence?.snippet,
-  );
-  return hasPage && hasNaturalSourceBoundary(sourceText);
+  const quality = resolveSourceTextQuality(evidence);
+  return [
+    SOURCE_TEXT_QUALITIES.EXACT,
+    SOURCE_TEXT_QUALITIES.PARTIAL,
+    SOURCE_TEXT_QUALITIES.DERIVED,
+    SOURCE_TEXT_QUALITIES.INFERRED,
+  ].includes(quality);
 }
 
 export function isSourceBackedField({ value, confidence, evidence, extractionStatus } = {}) {
   if (!isMeaningfulValue(value)) return false;
   if (isCalculatedExtractionStatus(extractionStatus)) return false;
   if (isManualExtractionStatus(extractionStatus)) return false;
-  if (typeof confidence !== "number" || Number.isNaN(confidence)) return false;
-  return hasValidSourceEvidence(evidence);
+  return hasValidSourceEvidence({ ...evidence, value, confidence, extractionStatus });
 }
 
 // Resolve which lease columns to write for a given review field key. Edits
@@ -698,7 +700,21 @@ export function resolveFieldColumns(key) {
 }
 
 export function readFieldEvidence(lease, key) {
-  if (!lease) return { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
+  if (!lease) {
+    return {
+      rawValue: null,
+      sourcePage: null,
+      sourceText: null,
+      sourceClause: null,
+      extractionStatus: null,
+      evidenceType: EVIDENCE_TYPES.MISSING,
+      sourceTextQuality: SOURCE_TEXT_QUALITIES.MISSING,
+      sourceFieldKeys: [],
+      derivationTrace: null,
+      requiresReview: false,
+      approvalBlockingReason: null,
+    };
+  }
   const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
 
   // Probe richer evidence sources directly. When the value lives on a
@@ -731,11 +747,18 @@ export function readFieldEvidence(lease, key) {
 
   let evSourcePage = resolved?.sourcePage ?? null;
   let evSourceText = cleanSourceEvidenceText(resolved?.exactSourceText);
+  let evSourceClause = cleanSourceEvidenceText(resolved?.sourceClause);
   let evRawValue = resolved?.rawValue ?? null;
   let evExtractionStatus = resolved?.reviewStatus ?? null;
+  let evEvidenceType = resolved?.evidenceType ?? null;
+  let evSourceTextQuality = resolved?.sourceTextQuality ?? null;
+  let evSourceFieldKeys = Array.isArray(resolved?.sourceFieldKeys) ? resolved.sourceFieldKeys : [];
+  let evDerivationTrace = resolved?.derivationTrace ?? null;
+  let evRequiresReview = Boolean(resolved?.requiresReview);
+  let evApprovalBlockingReason = resolved?.approvalBlockingReason ?? null;
 
   for (const source of richSources) {
-    if (evSourcePage != null && evSourceText && evExtractionStatus) break;
+    if (evSourcePage != null && evSourceText && evExtractionStatus && evSourceTextQuality) break;
     let entry = null;
     if (Array.isArray(source)) {
       entry = source.find((item) => {
@@ -759,6 +782,10 @@ export function readFieldEvidence(lease, key) {
         ?? entry.source_text ?? entry.snippet ?? entry.evidence?.source_clause
         ?? entry.evidence?.source_text ?? entry.evidence?.exact_source_text ?? null);
     }
+    if (!evSourceClause) {
+      evSourceClause = cleanSourceEvidenceText(entry.source_clause ?? entry.sourceClause
+        ?? entry.evidence?.source_clause ?? null);
+    }
     if (!evRawValue) {
       evRawValue = entry.raw_value ?? entry.rawValue ?? null;
     }
@@ -766,13 +793,56 @@ export function readFieldEvidence(lease, key) {
       evExtractionStatus = entry.extraction_status ?? entry.extractionStatus
         ?? entry.review_status ?? entry.reviewStatus ?? null;
     }
+    if (!evEvidenceType) {
+      evEvidenceType = entry.evidence_type ?? entry.evidenceType ?? entry.evidence?.evidence_type ?? null;
+    }
+    if (!evSourceTextQuality) {
+      evSourceTextQuality = entry.source_text_quality ?? entry.sourceTextQuality ?? entry.evidence?.source_text_quality ?? null;
+    }
+    if (evSourceFieldKeys.length === 0) {
+      const keys = entry.source_field_keys ?? entry.sourceFieldKeys ?? entry.evidence?.source_field_keys ?? null;
+      evSourceFieldKeys = Array.isArray(keys) ? keys.filter(Boolean) : [];
+    }
+    if (!evDerivationTrace) {
+      evDerivationTrace = entry.derivation_trace ?? entry.derivationTrace ?? entry.evidence?.derivation_trace ?? null;
+    }
+    if (!evApprovalBlockingReason) {
+      evApprovalBlockingReason = entry.approval_blocking_reason ?? entry.approvalBlockingReason ?? null;
+    }
+    evRequiresReview = evRequiresReview || Boolean(entry.requires_review ?? entry.requiresReview ?? false);
   }
+
+  const sourceTextQuality = resolveSourceTextQuality({
+    value: resolved?.value ?? evRawValue,
+    sourcePage: evSourcePage,
+    sourceText: evSourceText,
+    sourceClause: evSourceClause,
+    sourceTextQuality: evSourceTextQuality,
+    extractionStatus: evExtractionStatus,
+    evidenceType: evEvidenceType,
+    sourceFieldKeys: evSourceFieldKeys,
+    derivationTrace: evDerivationTrace,
+  });
+  const evidenceType = normalizeEvidenceType(evEvidenceType ?? evExtractionStatus, {
+    value: resolved?.value ?? evRawValue,
+    sourceText: evSourceText,
+    sourceTextQuality,
+    sourceFieldKeys: evSourceFieldKeys,
+    derivationTrace: evDerivationTrace,
+  });
 
   return {
     rawValue: evRawValue,
     sourcePage: normalizeSourcePage(evSourcePage),
     sourceText: evSourceText ?? null,
+    sourceClause: evSourceClause ?? null,
     extractionStatus: evExtractionStatus,
+    evidenceType,
+    sourceTextQuality,
+    sourceFieldKeys: evSourceFieldKeys,
+    derivationTrace: evDerivationTrace,
+    requiresReview: evRequiresReview,
+    approvalBlockingReason: evApprovalBlockingReason,
   };
 }
 
@@ -817,7 +887,26 @@ export const EXTRACTION_STATUSES = {
   MISSING: "missing",
   MISSING_SOURCE_EVIDENCE: "missing_source_evidence",
   CALCULATED: "calculated",
+  DERIVED: "derived",
+  INFERRED: "inferred",
   CONFLICT: "conflict_detected",
+};
+
+export const EVIDENCE_TYPES = {
+  EXTRACTED: "extracted",
+  DERIVED: "derived",
+  INFERRED: "inferred",
+  MISSING: "missing",
+  CONFLICT: "conflict",
+};
+
+export const SOURCE_TEXT_QUALITIES = {
+  EXACT: "exact",
+  PARTIAL: "partial",
+  DERIVED: "derived",
+  INFERRED: "inferred",
+  MISSING: "missing",
+  CONFLICT: "conflict",
 };
 
 export const EXTRACTION_STATUS_LABELS = {
@@ -829,6 +918,8 @@ export const EXTRACTION_STATUS_LABELS = {
   missing: "Missing",
   missing_source_evidence: "Missing Source Evidence",
   calculated: "Calculated",
+  derived: "Derived",
+  inferred: "Inferred",
   conflict_detected: "Conflict Detected",
 };
 
@@ -841,8 +932,75 @@ export const EXTRACTION_STATUS_STYLES = {
   missing: "bg-slate-100 text-slate-600",
   missing_source_evidence: "bg-amber-100 text-amber-800",
   calculated: "bg-blue-50 text-blue-700",
+  derived: "bg-blue-50 text-blue-700",
+  inferred: "bg-purple-50 text-purple-700",
   conflict_detected: "bg-red-100 text-red-700",
 };
+
+export function normalizeEvidenceType(input, context = {}) {
+  const normalized = String(input || context?.evidenceType || context?.extractionStatus || "")
+    .trim()
+    .toLowerCase();
+  if (context?.conflictCandidates?.length || normalized.includes("conflict")) return EVIDENCE_TYPES.CONFLICT;
+  if (normalized === EVIDENCE_TYPES.INFERRED || normalized === EXTRACTION_STATUSES.INFERRED) return EVIDENCE_TYPES.INFERRED;
+  if (isCalculatedExtractionStatus(normalized) || normalized === EXTRACTION_STATUSES.DERIVED) return EVIDENCE_TYPES.DERIVED;
+  if (normalized === EXTRACTION_STATUSES.NOT_FOUND || normalized === EXTRACTION_STATUSES.MISSING || normalized === EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE) {
+    return isMeaningfulValue(context?.value) ? EVIDENCE_TYPES.INFERRED : EVIDENCE_TYPES.MISSING;
+  }
+  if (isMeaningfulValue(context?.value)) return EVIDENCE_TYPES.EXTRACTED;
+  return EVIDENCE_TYPES.MISSING;
+}
+
+export function resolveSourceTextQuality(evidence = {}) {
+  const explicit = String(
+    evidence?.sourceTextQuality
+      ?? evidence?.source_text_quality
+      ?? evidence?.evidence?.source_text_quality
+      ?? "",
+  ).trim().toLowerCase();
+  if (Object.values(SOURCE_TEXT_QUALITIES).includes(explicit)) return explicit;
+
+  const extractionStatus = String(evidence?.extractionStatus ?? evidence?.extraction_status ?? "").trim().toLowerCase();
+  const evidenceType = normalizeEvidenceType(evidence?.evidenceType ?? evidence?.evidence_type ?? extractionStatus, evidence);
+  const hasConflict = evidenceType === EVIDENCE_TYPES.CONFLICT || extractionStatus.includes("conflict") || Boolean(evidence?.conflictCandidates?.length);
+  if (hasConflict) return SOURCE_TEXT_QUALITIES.CONFLICT;
+
+  const hasValue = isMeaningfulValue(evidence?.value ?? evidence?.normalized_value ?? evidence?.rawValue ?? evidence?.raw_value);
+  const sourceText = cleanSourceEvidenceText(
+    evidence?.sourceText
+      ?? evidence?.source_text
+      ?? evidence?.exact_source_text
+      ?? evidence?.exactSourceText
+      ?? evidence?.source_clause
+      ?? evidence?.sourceClause
+      ?? evidence?.snippet,
+  );
+  const sourceClause = cleanSourceEvidenceText(evidence?.sourceClause ?? evidence?.source_clause);
+  const page = normalizeSourcePage(evidence?.sourcePage ?? evidence?.source_page ?? evidence?.page_number ?? evidence?.page);
+  const hasDerivation = Boolean(
+    evidence?.derivationTrace
+      ?? evidence?.derivation_trace
+      ?? evidence?.sourceFieldKeys?.length
+      ?? evidence?.source_field_keys?.length,
+  );
+
+  if (evidenceType === EVIDENCE_TYPES.DERIVED || isCalculatedExtractionStatus(extractionStatus) || hasDerivation) {
+    return hasValue ? SOURCE_TEXT_QUALITIES.DERIVED : SOURCE_TEXT_QUALITIES.MISSING;
+  }
+  if (evidenceType === EVIDENCE_TYPES.INFERRED || extractionStatus === EXTRACTION_STATUSES.INFERRED) {
+    return hasValue && (sourceText || sourceClause || evidence?.derivationTrace || evidence?.derivation_trace)
+      ? SOURCE_TEXT_QUALITIES.INFERRED
+      : SOURCE_TEXT_QUALITIES.MISSING;
+  }
+  if (!hasValue && !sourceText && !sourceClause) return SOURCE_TEXT_QUALITIES.MISSING;
+  if (sourceText || sourceClause) {
+    const evidenceText = sourceText ?? sourceClause;
+    return page && hasNaturalSourceBoundary(evidenceText)
+      ? SOURCE_TEXT_QUALITIES.EXACT
+      : SOURCE_TEXT_QUALITIES.PARTIAL;
+  }
+  return SOURCE_TEXT_QUALITIES.MISSING;
+}
 
 /**
  * Infer an extraction status from the lease + field. Honors any explicit
@@ -868,6 +1026,7 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
 
   if (explicit) {
     if (isCalculatedExtractionStatus(explicit)) return EXTRACTION_STATUSES.CALCULATED;
+    if (explicit === EXTRACTION_STATUSES.INFERRED) return present ? EXTRACTION_STATUSES.INFERRED : EXTRACTION_STATUSES.NOT_FOUND;
     if (isManualExtractionStatus(explicit)) return explicit;
     if (explicit === EXTRACTION_STATUSES.EXTRACTED) {
       if (!present) return EXTRACTION_STATUSES.NOT_FOUND;
@@ -876,8 +1035,9 @@ export function resolveExtractionStatus(lease, key, { value, confidence, evidenc
         ? EXTRACTION_STATUSES.EXTRACTED
         : EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE;
     }
-    if (explicit === EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE && !hasEvidence) {
-      return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;
+    if (explicit === EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE) {
+      if (!present) return EXTRACTION_STATUSES.NOT_FOUND;
+      return hasEvidence ? EXTRACTION_STATUSES.EXTRACTED_NO_CONFIDENCE : EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE;
     }
     if (explicit === EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE) {
       return present ? EXTRACTION_STATUSES.MISSING_SOURCE_EVIDENCE : EXTRACTION_STATUSES.NOT_FOUND;

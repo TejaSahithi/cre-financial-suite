@@ -69,6 +69,8 @@ import {
   isManualExtractionStatus,
   cleanSourceEvidenceText,
   canAcceptCalculatedReviewField,
+  isMeaningfulValue,
+  resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases, resolveLeaseField } from "@/lib/leaseFieldResolver";
 import { createPageUrl } from "@/utils";
@@ -108,6 +110,7 @@ import {
 import {
   buildLeaseReviewRowsByTab,
   inferDynamicItemType,
+  isReviewRowDisplayable,
 } from "@/components/lease-review/utils/dynamicFields";
 import {
   detectFieldConflicts,
@@ -244,6 +247,16 @@ export default function LeaseReview() {
   const fieldsForTab = useMemo(() => {
     return buildLeaseReviewRowsByTab(leaseFull, { userCustomFields });
   }, [leaseFull, userCustomFields]);
+
+  const allReviewRows = useMemo(() => Object.values(fieldsForTab).flat(), [fieldsForTab]);
+  const reviewRowByKey = useMemo(() => {
+    const map = new Map();
+    allReviewRows.forEach((row) => {
+      if (row?.key && !map.has(row.key)) map.set(row.key, row);
+      if (row?.field_key && !map.has(row.field_key)) map.set(row.field_key, row);
+    });
+    return map;
+  }, [allReviewRows]);
 
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
@@ -1088,13 +1101,30 @@ export default function LeaseReview() {
     0,
   );
 
-  // Confidence buckets from real extracted_fields confidence_score.
-  const confidenceBuckets = LEASE_REVIEW_FIELDS.reduce(
+  // Confidence buckets from visible canonical rows. Unknown confidence with
+  // real evidence still counts as extracted instead of "failed extraction".
+  const confidenceBuckets = allReviewRows.reduce(
     (acc, f) => {
-      const value = readFieldValue(lease, f.key);
-      if (value === null || value === undefined || value === "") return acc;
-      const score = readFieldConfidence(lease, f.key);
-      acc[classifyConfidence(score)] += 1;
+      if (!isReviewRowDisplayable(f, { showMissing: false })) return acc;
+      const value = f.normalized_value ?? f.value ?? readFieldValue(leaseFull, f.key);
+      if (!isMeaningfulValue(value)) return acc;
+      const sourceQuality = f.source_text_quality ?? resolveSourceTextQuality({
+        value,
+        sourceText: f.source_text,
+        sourcePage: f.page_number ?? f.source_page,
+        extractionStatus: f.extraction_status ?? f.status,
+        evidenceType: f.evidence_type,
+        sourceFieldKeys: f.source_field_keys,
+        derivationTrace: f.derivation_trace,
+      });
+      if (["missing", "conflict"].includes(sourceQuality)) return acc;
+      const score = typeof f.confidence === "number" ? f.confidence : readFieldConfidence(leaseFull, f.key);
+      const bucket = classifyConfidence(score);
+      if (f.evidence_type === "derived" && bucket === "unknown") {
+        acc.unknown += 1;
+      } else {
+        acc[bucket] += 1;
+      }
       return acc;
     },
     { high: 0, medium: 0, low: 0, unknown: 0 },
@@ -1103,7 +1133,16 @@ export default function LeaseReview() {
   // Manual_required + conflicts surface as their own counters.
   const manualRequiredCount = Object.values(fieldReviews).filter(
     (r) => r?.status === REVIEW_STATUSES.MANUAL_REQUIRED || r?.status === REVIEW_STATUSES.NEEDS_LEGAL,
-  ).length;
+  ).length + allReviewRows.filter((row) => {
+    const quality = row.source_text_quality ?? resolveSourceTextQuality({
+      value: row.normalized_value ?? row.value,
+      sourceText: row.source_text,
+      sourcePage: row.page_number ?? row.source_page,
+      evidenceType: row.evidence_type,
+      extractionStatus: row.extraction_status ?? row.status,
+    });
+    return row.requires_review || row.evidence_type === "inferred" || quality === "conflict";
+  }).length;
   const conflicts = detectFieldConflicts(lease);
   const conflictKeySet = new Set(conflicts.map((c) => c.field_key));
 
@@ -1202,7 +1241,7 @@ export default function LeaseReview() {
 
   const bulkEvaluation = (() => {
     const allKnownKeys = new Set();
-    Object.values(fieldsForTab).flat().forEach((f) => {
+    allReviewRows.forEach((f) => {
       if (f.key) allKnownKeys.add(f.key);
       if (f.field_key) allKnownKeys.add(f.field_key);
     });
@@ -1216,6 +1255,7 @@ export default function LeaseReview() {
 
     allKnownKeys.forEach((key) => {
       const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
+      const row = reviewRowByKey.get(key) || fieldDef;
       const isRequired = REQUIRED_FIELD_KEYS.includes(key);
       const isDynamic = !fieldDef.key;
       
@@ -1239,20 +1279,44 @@ export default function LeaseReview() {
         return;
       }
 
-      if (isRequired && lease?.extraction_data?.conflicts?.[key] && !isResolvedReview(review)) {
+      if (isRequired && (lease?.extraction_data?.conflicts?.[key] || row?.evidence_type === "conflict") && !isResolvedReview(review)) {
         requiredBlockers.push(key);
         requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Unresolved Conflict" });
         return;
       }
       
-      const value = readFieldValue(lease, key);
-      const evidence = readFieldEvidence(lease, key);
-      const extractionStatus = resolveExtractionStatus(reviewStatus, evidence?.extractionStatus || "pending");
-      
-      const hasValue = value != null && value !== "";
-      const hasValidSource = hasValidSourceEvidence({ 
-        sourceText: evidence?.sourceText || evidence?.exact_source_text || evidence?.source_text, 
-        sourcePage: evidence?.sourcePage || evidence?.source_page
+      const value = row?.normalized_value ?? row?.value ?? readFieldValue(leaseFull, key);
+      const evidence = readFieldEvidence(leaseFull, key);
+      const extractionStatus = row?.extraction_status ?? row?.status ?? resolveExtractionStatus(leaseFull, key, {
+        value,
+        confidence: row?.confidence,
+        evidence: {
+          ...evidence,
+          value,
+          sourceText: row?.source_text ?? evidence?.sourceText,
+          sourcePage: row?.page_number ?? row?.source_page ?? evidence?.sourcePage,
+          extractionStatus: evidence?.extractionStatus || "pending",
+        },
+      });
+      const sourceQuality = row?.source_text_quality ?? resolveSourceTextQuality({
+        value,
+        sourceText: row?.source_text ?? evidence?.sourceText,
+        sourcePage: row?.page_number ?? row?.source_page ?? evidence?.sourcePage,
+        extractionStatus,
+        evidenceType: row?.evidence_type ?? evidence?.evidenceType,
+        sourceFieldKeys: row?.source_field_keys ?? evidence?.sourceFieldKeys,
+        derivationTrace: row?.derivation_trace ?? evidence?.derivationTrace,
+      });
+      const hasValue = isMeaningfulValue(value);
+      const hasValidSource = hasValidSourceEvidence({
+        value,
+        sourceText: row?.source_text ?? evidence?.sourceText,
+        sourcePage: row?.page_number ?? row?.source_page ?? evidence?.sourcePage,
+        extractionStatus,
+        evidenceType: row?.evidence_type ?? evidence?.evidenceType,
+        sourceTextQuality: sourceQuality,
+        sourceFieldKeys: row?.source_field_keys ?? evidence?.sourceFieldKeys,
+        derivationTrace: row?.derivation_trace ?? evidence?.derivationTrace,
       });
 
       let eligible = false;
@@ -1260,18 +1324,22 @@ export default function LeaseReview() {
 
       if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', REVIEW_STATUSES.N_A].includes(reviewStatus)) {
         eligible = true;
-      } else if (['extracted', 'extracted_no_confidence', 'missing_source_evidence', 'extracted_text_match'].includes(extractionStatus)) {
-        if (hasValue) {
+      } else if (['extracted', 'extracted_no_confidence', 'extracted_text_match'].includes(extractionStatus)) {
+        if (hasValue && hasValidSource) {
           eligible = true;
+        } else if (hasValue) {
+          reason = "Missing Source Evidence";
         } else {
           reason = "Missing Value";
         }
-      } else if (extractionStatus === 'calculated') {
-        if (canAcceptCalculatedReviewField(key)) {
+      } else if (['calculated', 'derived', 'computed'].includes(extractionStatus) || row?.evidence_type === "derived") {
+        if (hasValue && canAcceptCalculatedReviewField(row || fieldDef)) {
           eligible = true;
         } else {
           reason = "Calculated field not allowed for bulk approval";
         }
+      } else if (extractionStatus === 'inferred' || row?.evidence_type === "inferred" || row?.requires_review) {
+        reason = row?.approval_blocking_reason || "Requires Human Approval";
       } else if (extractionStatus === 'not_found' || extractionStatus === 'pending') {
         reason = "Not Found";
       } else if (extractionStatus === 'rejected' || reviewStatus === 'rejected') {
@@ -1288,17 +1356,12 @@ export default function LeaseReview() {
         eligibleFields.push(key);
       } else {
         if (isRequired) {
-          const isMissingValue = reason === "Missing Value" || reason === "Not Found";
           const isUserRejected = reason === "Rejected";
-          if (isMissingValue) {
-            // No value extracted — will be auto-marked N/A during bulk approval
-            autoNaFields.push(key);
-            autoNaDetails.push({ key, label: fieldDef.label || key, reason });
-          } else if (isUserRejected) {
+          if (isUserRejected) {
             // User explicitly rejected — stays rejected, doesn't block approval
             optionalUnresolved.push(key);
           } else {
-            // Conflict or manual-required — hard block
+            // Required extraction gaps are hard blockers.
             requiredBlockers.push(key);
             requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: reason || "Needs Review" });
           }
@@ -1313,8 +1376,6 @@ export default function LeaseReview() {
 
   const approvalBlockers = [];
   if (bulkEvaluation.requiredBlockers.length > 0) {
-    // Only conflict/manual-required blockers are hard blocks — missing-value
-    // fields are auto-marked N/A during the bulk pre-pass (see autoNaFields).
     approvalBlockers.push({
       kind: "required_pending",
       title: `${bulkEvaluation.requiredBlockers.length} required field(s) must be resolved before approval`,
@@ -2802,10 +2863,7 @@ export default function LeaseReview() {
           {LEASE_REVIEW_TABS.map((tab) => {
             if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
             const tabFields = fieldsForTab[tab.key] || [];
-            const pendingInTab = tabFields.filter((f) => {
-              if (!f.required) return false;
-              return !isResolvedReview(fieldReviews[f.key]);
-            }).length;
+            const extractedInTab = tabFields.filter((f) => isReviewRowDisplayable(f, { showMissing: false })).length;
             // Flag tabs that are inapplicable for assignment/amendment docs.
             // A tab is "not in this document" when: we're in assignment mode AND
             // every standard field in the tab is empty (no extracted value).
@@ -2827,9 +2885,9 @@ export default function LeaseReview() {
                 {notInThisDoc && (
                   <span className="ml-1 text-[9px] text-slate-400">–</span>
                 )}
-                {pendingInTab > 0 && !notInThisDoc && (
+                {extractedInTab > 0 && !notInThisDoc && (
                   <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-200 px-1 text-[10px] font-semibold text-amber-900">
-                    {pendingInTab}
+                    {extractedInTab}
                   </span>
                 )}
               </TabsTrigger>
@@ -3609,7 +3667,7 @@ export default function LeaseReview() {
                       <li><strong>{bulkEvaluation.eligibleFields.length}</strong> extracted fields will be auto-approved.</li>
                     )}
                     {(bulkEvaluation.autoNaFields || []).length > 0 && (
-                      <li><strong>{(bulkEvaluation.autoNaFields || []).length}</strong> required fields with no extracted value will be marked N/A.</li>
+                      <li><strong>{(bulkEvaluation.autoNaFields || []).length}</strong> optional empty fields will be marked N/A.</li>
                     )}
                     {bulkEvaluation.optionalUnresolved.length > 0 && (
                       <li><strong>{bulkEvaluation.optionalUnresolved.length}</strong> optional fields remain unresolved.</li>

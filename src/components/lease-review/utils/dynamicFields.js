@@ -8,9 +8,11 @@ import {
   canAcceptCalculatedReviewField,
   cleanSourceEvidenceText,
   normalizeSourcePage,
+  normalizeEvidenceType,
   readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  resolveSourceTextQuality,
   resolveExtractionStatus,
 } from "@/lib/leaseReviewSchema";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
@@ -71,7 +73,8 @@ export function collectExtractedDocumentItems(lease) {
       const confidence = typeof entry === "object" && entry
         ? entry.confidence_score ?? entry.confidence ?? null
         : null;
-      const statusEvidence = { sourcePage, sourceText };
+      const statusEvidence = { sourcePage, sourceText, value, extractionStatus };
+      const sourceTextQuality = resolveSourceTextQuality(statusEvidence);
       const effectiveStatus = isCalculatedExtractionStatus(extractionStatus)
         ? "calculated"
         : isManualExtractionStatus(extractionStatus)
@@ -93,6 +96,8 @@ export function collectExtractedDocumentItems(lease) {
         source_text: sourceText,
         source_page: sourcePage,
         confidence,
+        evidence_type: normalizeEvidenceType(extractionStatus, { value, sourceText, sourceTextQuality }),
+        source_text_quality: sourceTextQuality,
         extraction_method: sourceName,
         extraction_status: effectiveStatus,
         maps_to_existing_field: false,
@@ -276,27 +281,111 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       status: item?.extraction_status ?? item?.review_status ?? null,
       extraction_status: item?.extraction_status ?? item?.review_status ?? null,
       source_file_id: lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
+      evidence_type: normalizeEvidenceType(item?.evidence_type ?? item?.extraction_status ?? item?.review_status, { value, sourceText }),
+      source_text_quality: resolveSourceTextQuality({
+        value,
+        sourceText,
+        sourcePage: item?.source_page ?? item?.page_number ?? item?.page,
+        extractionStatus: item?.extraction_status ?? item?.review_status ?? null,
+        evidenceType: item?.evidence_type,
+      }),
+      source_field_keys: item?.source_field_keys ?? item?.sourceFieldKeys ?? [],
+      derivation_trace: item?.derivation_trace ?? item?.derivationTrace ?? null,
+      requires_review: Boolean(item?.requires_review ?? item?.requiresReview ?? false),
+      approval_blocking_reason: item?.approval_blocking_reason ?? item?.approvalBlockingReason ?? null,
     });
   }
   return byTab;
+}
+
+function parseNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function combineSourceText(...items) {
+  const texts = items
+    .map((item) => cleanSourceEvidenceText(item?.sourceText ?? item?.source_text ?? item?.sourceClause ?? item?.source_clause))
+    .filter(Boolean);
+  return [...new Set(texts)].join("\n");
+}
+
+function buildDerivedFieldEvidence(lease, key, currentValue) {
+  const monthlyEvidence = readFieldEvidence(lease, "monthly_rent");
+  const monthlyRent = parseNumber(readFieldValue(lease, "monthly_rent"));
+  const sfEvidence = readFieldEvidence(lease, "square_footage");
+  const squareFootage = parseNumber(readFieldValue(lease, "square_footage"));
+  const monthlyHasSource = hasValidSourceEvidence({ ...monthlyEvidence, value: monthlyRent });
+  const sfHasSource = hasValidSourceEvidence({ ...sfEvidence, value: squareFootage });
+
+  if (key === "annual_rent" && !isMeaningfulValue(currentValue) && monthlyRent != null && monthlyHasSource) {
+    return {
+      value: Math.round(monthlyRent * 12 * 100) / 100,
+      sourceText: monthlyEvidence.sourceText,
+      sourcePage: monthlyEvidence.sourcePage,
+      evidenceType: "derived",
+      sourceTextQuality: "derived",
+      sourceFieldKeys: ["monthly_rent"],
+      derivationTrace: `annual_rent = monthly_rent (${monthlyRent}) x 12`,
+      extractionStatus: "calculated",
+    };
+  }
+
+  if (key === "rent_per_sf") {
+    const annualRent = parseNumber(readFieldValue(lease, "annual_rent")) ?? (monthlyRent != null ? monthlyRent * 12 : null);
+    const currentRentPerSf = parseNumber(readFieldValue(lease, "rent_per_sf"));
+    if (!isMeaningfulValue(currentRentPerSf) && annualRent != null && squareFootage != null && squareFootage > 0 && (monthlyHasSource || hasValidSourceEvidence(readFieldEvidence(lease, "annual_rent"))) && sfHasSource) {
+      return {
+        value: Math.round((annualRent / squareFootage) * 100) / 100,
+        sourceText: combineSourceText(monthlyEvidence, sfEvidence) || monthlyEvidence.sourceText || sfEvidence.sourceText,
+        sourcePage: monthlyEvidence.sourcePage ?? sfEvidence.sourcePage,
+        evidenceType: "derived",
+        sourceTextQuality: "derived",
+        sourceFieldKeys: ["annual_rent", "monthly_rent", "square_footage"],
+        derivationTrace: `rent_per_sf = annual_rent (${annualRent}) / square_footage (${squareFootage})`,
+        extractionStatus: "calculated",
+      };
+    }
+  }
+
+  if (key === "billing_frequency" && !isMeaningfulValue(currentValue) && monthlyRent != null && monthlyHasSource) {
+    return {
+      value: "monthly",
+      sourceText: monthlyEvidence.sourceText,
+      sourcePage: monthlyEvidence.sourcePage,
+      evidenceType: "derived",
+      sourceTextQuality: "derived",
+      sourceFieldKeys: ["monthly_rent"],
+      derivationTrace: "billing_frequency inferred from monthly_rent",
+      extractionStatus: "calculated",
+    };
+  }
+
+  return null;
 }
 
 export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const key = field?.key || field?.field_key;
   if (!key) return null;
 
-  const schemaValue = field.normalized_value ?? field.value ?? readFieldValue(lease, key);
+  const initialValue = field.normalized_value ?? field.value ?? readFieldValue(lease, key);
+  const derived = buildDerivedFieldEvidence(lease, key, initialValue);
+  const schemaValue = derived?.value ?? initialValue;
   const evidence = readFieldEvidence(lease, key);
   const sourcePage = normalizeSourcePage(
     field.page_number
       ?? field.source_page
       ?? field.page
+      ?? derived?.sourcePage
       ?? evidence.sourcePage,
   );
   const sourceText = cleanSourceEvidenceText(
     field.source_text
       ?? field.exact_source_text
       ?? field.source_clause
+      ?? derived?.sourceText
       ?? evidence.sourceText,
   );
   const confidence = typeof field.confidence === "number"
@@ -305,15 +394,36 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const statusEvidence = {
     sourcePage,
     sourceText,
-    extractionStatus: field.status ?? field.extraction_status ?? evidence.extractionStatus,
+    value: schemaValue,
+    extractionStatus: field.status ?? field.extraction_status ?? derived?.extractionStatus ?? evidence.extractionStatus,
+    evidenceType: field.evidence_type ?? field.evidenceType ?? derived?.evidenceType ?? evidence.evidenceType,
+    sourceTextQuality: field.source_text_quality ?? field.sourceTextQuality ?? derived?.sourceTextQuality ?? evidence.sourceTextQuality,
+    sourceFieldKeys: field.source_field_keys ?? field.sourceFieldKeys ?? derived?.sourceFieldKeys ?? evidence.sourceFieldKeys,
+    derivationTrace: field.derivation_trace ?? field.derivationTrace ?? derived?.derivationTrace ?? evidence.derivationTrace,
   };
+  const sourceTextQuality = resolveSourceTextQuality(statusEvidence);
+  const evidenceType = normalizeEvidenceType(statusEvidence.evidenceType ?? statusEvidence.extractionStatus, {
+    value: schemaValue,
+    sourceText,
+    sourceTextQuality,
+    sourceFieldKeys: statusEvidence.sourceFieldKeys,
+    derivationTrace: statusEvidence.derivationTrace,
+  });
   const status = field.status
     ?? field.extraction_status
+    ?? derived?.extractionStatus
     ?? resolveExtractionStatus(lease, key, {
       value: schemaValue,
       confidence,
       evidence: statusEvidence,
     });
+  const requiresReview = Boolean(
+    field.requires_review
+      ?? field.requiresReview
+      ?? evidence.requiresReview
+      ?? (evidenceType === "inferred")
+      ?? false,
+  );
 
   return {
     ...field,
@@ -322,15 +432,26 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field_key: key,
     label: field.label ?? field.field_label ?? titleizeFieldKey(key),
     field_label: field.field_label ?? field.label ?? titleizeFieldKey(key),
+    display_value: schemaValue,
     normalized_value: schemaValue,
     raw_value: field.raw_value ?? evidence.rawValue ?? schemaValue,
     page_number: sourcePage,
+    page: sourcePage,
     source_text: sourceText,
+    source_clause: field.source_clause ?? evidence.sourceClause ?? sourceText,
     category: field.category ?? field.tab ?? tabKey ?? "unknown",
     tab: field.tab ?? tabKey,
     confidence,
+    confidence_score: confidence,
     status,
     extraction_status: status,
+    evidence_type: evidenceType,
+    source_text_quality: sourceTextQuality,
+    source_field_keys: statusEvidence.sourceFieldKeys || [],
+    derivation_trace: statusEvidence.derivationTrace ?? null,
+    requires_review: requiresReview,
+    required: Boolean(field.required),
+    approval_blocking_reason: field.approval_blocking_reason ?? field.approvalBlockingReason ?? evidence.approvalBlockingReason ?? null,
     is_dynamic: Boolean(field.is_dynamic || field.dynamic_document_item),
     source_file_id: field.source_file_id ?? lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
   };
@@ -375,9 +496,11 @@ export function buildLeaseReviewRows(lease, options = {}) {
 export function isReviewRowDisplayable(row, { showMissing = false } = {}) {
   const hasValue = isMeaningfulValue(row?.normalized_value ?? row?.value);
   const hasSource = Boolean(cleanSourceEvidenceText(row?.source_text ?? row?.source_clause));
+  const isDerivedOrInferred = ["derived", "inferred", "conflict"].includes(String(row?.evidence_type || "").toLowerCase())
+    || ["calculated", "derived", "computed", "inferred", "conflict_detected"].includes(String(row?.extraction_status || row?.status || "").toLowerCase());
   if (showMissing) {
     if (row?.is_dynamic || row?.dynamic_document_item) return hasValue || hasSource;
     return Boolean(row?.required) || hasValue || hasSource;
   }
-  return hasValue || hasSource;
+  return hasValue || hasSource || isDerivedOrInferred;
 }

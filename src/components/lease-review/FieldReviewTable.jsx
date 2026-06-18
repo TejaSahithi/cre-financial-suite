@@ -27,12 +27,12 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
-  hasValidSourceEvidence,
   readFieldEvidence,
   readFieldValue,
+  resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
-import { validateFieldValue, computeSourceQuality } from "@/components/lease-review/utils/fieldValidator";
+import { validateFieldValue } from "@/components/lease-review/utils/fieldValidator";
 import { isReviewRowDisplayable } from "@/components/lease-review/utils/dynamicFields";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -74,6 +74,8 @@ const SOURCE_QUALITY_BADGE = {
   exact:   { label: "Exact",     cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   partial: { label: "Partial",   cls: "bg-amber-50 text-amber-700 border-amber-200" },
   derived: { label: "Derived",   cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  inferred: { label: "Inferred", cls: "bg-purple-50 text-purple-700 border-purple-200" },
+  conflict: { label: "Conflict", cls: "bg-red-50 text-red-700 border-red-200" },
   missing: { label: "No source", cls: "bg-red-50 text-red-600 border-red-200" },
 };
 
@@ -131,10 +133,17 @@ export default function FieldReviewTable({
             const sourcePage = field.page_number ?? field.source_page ?? evidence.sourcePage;
             const required = field.required;
             const validationResult = validateFieldValue(field.key, value);
-            const hasValidSource = hasValidSourceEvidence({ sourcePage, sourceText });
-            const sourceQualityKey = hasValidSource || /^(calculated|derived|computed)$/i.test(String(extractionStatus || ""))
-              ? computeSourceQuality(value, sourceText, extractionStatus)
-              : "missing";
+            const sourceQualityKey = resolveSourceTextQuality({
+              value,
+              sourceText,
+              sourcePage,
+              extractionStatus,
+              evidenceType: field.evidence_type ?? evidence.evidenceType,
+              sourceTextQuality: field.source_text_quality ?? evidence.sourceTextQuality,
+              sourceFieldKeys: field.source_field_keys ?? evidence.sourceFieldKeys,
+              derivationTrace: field.derivation_trace ?? evidence.derivationTrace,
+              conflictCandidates: isConflict ? [field.key] : [],
+            });
             const sqBadge = SOURCE_QUALITY_BADGE[sourceQualityKey];
             const isConflict = conflictKeys?.has(field.key);
 

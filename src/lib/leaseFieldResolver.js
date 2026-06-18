@@ -30,6 +30,7 @@ const FIELD_ALIASES = {
   rent_commencement_date: ["rent_commencement_date", "rent_start_date", "rent_commencement"],
   expiration_date: ["expiration_date", "expiry_date", "term_end", "lease_expiration_date", "end_date", "termination_date", "end_of_term"],
   lease_date: ["lease_date", "execution_date", "date_of_lease"],
+  lease_term: ["lease_term", "initial_term", "term", "term_months", "lease_term_months"],
 
   // Rent
   lease_type: ["lease_type", "expense_structure", "lease_structure", "rent_structure"],
@@ -116,6 +117,12 @@ function extractValueFromSource(source, aliases) {
         confidence_score: item.confidence_score ?? item.confidence ?? null,
         confidence: item.confidence ?? item.confidence_score ?? null,
         extraction_status: item.extraction_status ?? item.review_status ?? null,
+        evidence_type: item.evidence_type ?? item.evidenceType ?? null,
+        source_text_quality: item.source_text_quality ?? item.sourceTextQuality ?? null,
+        source_field_keys: item.source_field_keys ?? item.sourceFieldKeys ?? null,
+        derivation_trace: item.derivation_trace ?? item.derivationTrace ?? null,
+        requires_review: item.requires_review ?? item.requiresReview ?? null,
+        approval_blocking_reason: item.approval_blocking_reason ?? item.approvalBlockingReason ?? null,
       };
     }
     return null;
@@ -312,8 +319,15 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     sourcePath: sourcePath,
     sourcePage: null,
     exactSourceText: null,
+    sourceClause: null,
     confidence: null,
     reviewStatus: null,
+    evidenceType: null,
+    sourceTextQuality: null,
+    sourceFieldKeys: [],
+    derivationTrace: null,
+    requiresReview: false,
+    approvalBlockingReason: null,
     found: true
   };
 
@@ -364,6 +378,12 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
       rawResult.evidence?.exact_source_text ||
       null;
     output.exactSourceText = scrubEvidenceText(candidateExact);
+    output.sourceClause = scrubEvidenceText(
+      rawResult.source_clause ||
+      rawResult.sourceClause ||
+      rawResult.evidence?.source_clause ||
+      null,
+    );
     output.confidence =
       rawResult.confidence_score ??
       rawResult.confidence ??
@@ -373,6 +393,32 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
       rawResult.review_status ||
       rawResult.reviewStatus ||
       rawResult.extraction_status ||
+      null;
+    output.evidenceType =
+      rawResult.evidence_type ||
+      rawResult.evidenceType ||
+      rawResult.evidence?.evidence_type ||
+      null;
+    output.sourceTextQuality =
+      rawResult.source_text_quality ||
+      rawResult.sourceTextQuality ||
+      rawResult.evidence?.source_text_quality ||
+      null;
+    const sourceFieldKeys =
+      rawResult.source_field_keys ||
+      rawResult.sourceFieldKeys ||
+      rawResult.evidence?.source_field_keys ||
+      [];
+    output.sourceFieldKeys = Array.isArray(sourceFieldKeys) ? sourceFieldKeys.filter(Boolean) : [];
+    output.derivationTrace =
+      rawResult.derivation_trace ||
+      rawResult.derivationTrace ||
+      rawResult.evidence?.derivation_trace ||
+      null;
+    output.requiresReview = Boolean(rawResult.requires_review ?? rawResult.requiresReview ?? false);
+    output.approvalBlockingReason =
+      rawResult.approval_blocking_reason ||
+      rawResult.approvalBlockingReason ||
       null;
   } else {
     // Primitive format
@@ -505,8 +551,15 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
     sourcePath: null,
     sourcePage: null,
     exactSourceText: null,
+    sourceClause: null,
     confidence: null,
     reviewStatus: null,
+    evidenceType: null,
+    sourceTextQuality: null,
+    sourceFieldKeys: [],
+    derivationTrace: null,
+    requiresReview: false,
+    approvalBlockingReason: null,
     found: false
   };
 }

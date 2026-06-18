@@ -1855,7 +1855,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
   // CAM, and Insurance tabs show meaningful content instead of all-blank rows.
   if (canonicalClassifiedLeaseType === "full_service" || canonicalClassifiedLeaseType === "gross") {
     const clauseFor = (...types: string[]) => clauses.find((clause) => types.includes(clause.clause_type) && clause.clause_text);
-    const deriveResponsibility = (key: string, value: string, clauseTypes: string[]) => {
+    const deriveResponsibility = (key: string, value: string, clauseTypes: string[], note: string) => {
       const clause = clauseFor(...clauseTypes);
       if (!isBlank(fieldMap[key]?.value) || !clause) return;
       fieldMap[key] = {
@@ -1865,14 +1865,38 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         source_clause: clause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["lease_type"],
+        derivation_trace: note,
         editable: true,
         field_group: "expense_terms",
       };
     };
-    deriveResponsibility("responsibility_taxes", "landlord", ["taxes", "operating_expense_recovery"]);
-    deriveResponsibility("responsibility_insurance", "landlord", ["insurance", "operating_expense_recovery"]);
-    deriveResponsibility("responsibility_utilities", "landlord", ["operating_expense_recovery", "repairs_maintenance"]);
-    deriveResponsibility("responsibility_repairs", "landlord", ["repairs_maintenance", "operating_expense_recovery"]);
+    deriveResponsibility(
+      "responsibility_taxes",
+      "landlord",
+      ["taxes", "operating_expense_recovery"],
+      "Full service/gross lease: taxes are treated as included in base rent unless the cited clause states a pass-through exception.",
+    );
+    deriveResponsibility(
+      "responsibility_insurance",
+      "landlord",
+      ["insurance", "operating_expense_recovery"],
+      "Full service/gross lease: property insurance is treated as included in base rent; tenant insurance obligations remain separate.",
+    );
+    deriveResponsibility(
+      "responsibility_utilities",
+      "landlord",
+      ["operating_expense_recovery", "repairs_maintenance"],
+      "Full service/gross lease: utilities are treated as included unless separately metered or expressly charged to tenant.",
+    );
+    deriveResponsibility(
+      "responsibility_repairs",
+      "landlord",
+      ["repairs_maintenance", "operating_expense_recovery"],
+      "Full service/gross lease: landlord maintains building/common systems, subject to tenant damage or premises-specific exceptions.",
+    );
     // Full Service → no separate CAM recovery
     const camClause = clauseFor("cam_recoveries", "operating_expense_recovery");
     if (isBlank(fieldMap.cam_amount?.value) && camClause) {
@@ -1883,6 +1907,10 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         source_clause: camClause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["lease_type"],
+        derivation_trace: "Full service/gross lease: separate CAM recovery defaults to 0 unless a clause states a distinct fixed or pass-through charge.",
         editable: true,
         field_group: "expense_terms",
       };
