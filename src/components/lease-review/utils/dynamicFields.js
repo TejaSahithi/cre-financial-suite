@@ -300,13 +300,12 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // a value or source text must be visible somewhere.
     const tab = inferDynamicItemTab(item, key) || "legal_options";
     if (tab === "clause_records") continue;
-    const signature = [
-      item?.item_id || "",
-      key,
-      normalizeSourcePage(item?.source_page ?? item?.page_number ?? item?.page) ?? "",
-      String(value ?? "").slice(0, 100),
-      String(sourceText ?? "").slice(0, 160),
-    ].join("|");
+    // Dedup by key + value only. Dropping item_id prevents the same field from
+    // being shown twice when it appears in both extracted_document_items and
+    // the lease_fields map (which addFieldMapItems also surfaced as dynamic rows).
+    // Different values for the same key are still shown (keyCounts renames them
+    // key_2, key_3 etc.) so genuine conflicts remain visible.
+    const signature = [key, String(value ?? "").slice(0, 100)].join("|");
     if (seenSignatures.has(signature)) continue;
     seenSignatures.add(signature);
     const count = (keyCounts.get(key) || 0) + 1;
@@ -457,12 +456,15 @@ function normalizeReviewValueForField(key, value, sourceText) {
   }
 
   if (["premises_use", "permitted_use", "use_clause"].includes(normalizedKey)) {
-    if (/\b(?:buffalo\s+wild\s+wings|restaurant|food\s+service|bar|cafe|cafe)\b/.test(combined)) {
+    if (/\b(?:buffalo\s+wild\s+wings|wings|restaurant|food\s+service|casual\s+dining|bar|cafe|coffee)\b/i.test(combined)) {
       return "restaurant";
     }
+    // Reject if the VALUE itself contains restriction or non-use language (check
+    // lowerValue not combined so that the source clause text doesn't cause
+    // false positives — lease sources almost always contain restriction clauses).
     if (
       valueText.length > 80 ||
-      /\b(?:assign|assignment|sublet|subletting|prior\s+written\s+consent|common areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is)\b/.test(combined)
+      /\b(?:shall\s+not|without\s+(?:prior\s+)?(?:written\s+)?consent|may\s+not|assign|assignment|sublet|subletting|common\s+areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is|no\s+other\s+use|restricted|not\s+to\s+be\s+used)\b/.test(lowerValue)
     ) {
       return null;
     }
@@ -479,6 +481,18 @@ function normalizeReviewValueForField(key, value, sourceText) {
   if (["assignment_provisions", "assignment_rights", "sublease_rights"].includes(normalizedKey)) {
     if (!/\b(?:assign|assignment|sublet|sublease|transfer)\b/.test(combined)) return null;
     if (/\b(?:alteration|improvement|roofing contractor|roof penetrations?)\b/.test(combined)) return null;
+  }
+
+  // Person name fields: reject clause fragments, verb phrases, or anything that isn't a human name.
+  // A valid person name is typically 2-4 words, capital letters, no verbs.
+  if (["tenant_contact_name", "tenant_signatory_name", "landlord_contact_name", "landlord_signatory_name"].includes(normalizedKey)) {
+    if (
+      valueText.length > 60 ||
+      /\b(?:leases?|accepts?|agrees?|shall|hereby|premises|article|section|tenant|landlord|lessee|lessor|pursuant|notwithstanding)\b/i.test(valueText) ||
+      /^(?:by|its|title|name|date)[:\s]/i.test(valueText)
+    ) {
+      return null;
+    }
   }
 
   return text;

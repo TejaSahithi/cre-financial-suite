@@ -803,10 +803,16 @@ function normalizeLeaseTypeValue(value: unknown): string | null {
 function normalizePermittedUseValue(value: unknown, sourceText?: string | null): string | null {
   const valueText = cleanText(value);
   if (!valueText) return null;
+  const lowerValue = valueText.toLowerCase();
   const combined = `${valueText} ${cleanText(sourceText)}`.toLowerCase();
-  if (/\b(?:buffalo\s+wild\s+wings|restaurant|food\s+service|bar|cafe)\b/.test(combined)) return "restaurant";
+  if (/\b(?:buffalo\s+wild\s+wings|wings|restaurant|food\s+service|casual\s+dining|bar|cafe)\b/.test(combined)) return "restaurant";
   if (/\bretail\b/.test(combined)) return "retail";
   if (/\boffice\b/.test(combined)) return "office";
+  // Reject restriction clause text rather than the core use type
+  if (
+    valueText.length > 80 ||
+    /\b(?:shall\s+not|without\s+(?:prior\s+)?(?:written\s+)?consent|may\s+not|assign|assignment|sublet|subletting|common\s+areas?|no\s+other\s+use|not\s+to\s+be\s+used)\b/.test(lowerValue)
+  ) return null;
   return valueText;
 }
 
@@ -851,7 +857,7 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
   if (fieldKey === "premises_use" || fieldKey === "permitted_use") {
     if (
       valueText.length > 80 ||
-      /\b(?:assign|assignment|sublet|subletting|prior\s+written\s+consent|common areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is)\b/i.test(combined)
+      /\b(?:shall\s+not|without\s+(?:prior\s+)?(?:written\s+)?consent|may\s+not|assign|assignment|sublet|subletting|common\s+areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is|no\s+other\s+use|not\s+to\s+be\s+used)\b/i.test(valueText)
     ) {
       return "premises_use_not_core_use";
     }

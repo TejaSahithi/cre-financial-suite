@@ -129,7 +129,8 @@ RULES:
 
 18. Short-value fields — do NOT return full clause text:
     permitted_use: Return ONLY the core activity (1-8 words). "restaurant", "IT work", "retail clothing sales".
-       NOT the entire use clause paragraph.
+       NOT the entire use clause paragraph. If the text describes restrictions ("shall not", "without prior written consent"),
+       that is a USE RESTRICTION clause, NOT the permitted use — return null.
     renewal_options: Return a brief format like "2 × 5-year options" or "1 option for 3 years". NOT the full clause.
     assignment_provisions: Return 1-2 sentence summary. "Requires prior written landlord consent." NOT the full clause.
     property_name: Return the marketing name of the shopping center/building (e.g. "Markets at Choto"). NOT clause text, addresses, or party names.
@@ -137,7 +138,30 @@ RULES:
 19. TI allowance extraction:
     ti_allowance = TOTAL dollars, NOT the per-SF rate.
     If the document states "$24.00 per SF" AND also states the total (e.g. "$68,352"), return the TOTAL (68352).
-    If ONLY the per-SF rate is given with no total calculated, return null for ti_allowance.`;
+    If ONLY the per-SF rate is given with no total calculated, return null for ti_allowance.
+
+20. Person name fields — CRITICAL:
+    tenant_contact_name and tenant_signatory_name must be a human name ONLY (e.g. "John Smith").
+    NEVER return: clause text, verb phrases ("leases and accepts..."), party descriptions, or partial sentences.
+    If you cannot find a clear human name in a signature block, return null.
+    landlord_contact_name and landlord_signatory_name — same rule.
+
+21. Numeric fields — return plain numbers, never sentence fragments:
+    admin_fee_pct: Return only the number (e.g. 5 for "five percent (5%)"). NOT the full sentence.
+    cam_cap_pct: Return only the cap percentage number. NOT the full sentence.
+    late_fee_percent: Return only the percentage number.
+    escalation_rate: Return only the percentage number.
+    gross_up_threshold: Return only the percentage number (e.g. 95 for "grossed up to 95%").
+
+22. security_deposit — CRITICAL:
+    Return the TOTAL final dollar amount as a plain number.
+    If a Security Deposit Addendum adds component amounts (e.g. "3rd month rent $6,004 + 86th month rent $6,904.60 = $12,908.60"), return the TOTAL (12908.60).
+    NEVER return an intermediate component. If no deposit is mentioned, return null.
+
+23. Dates — return YYYY-MM-DD only:
+    commencement_date: The lease TERM start date. ONLY return a specific calendar date. If formulaic ("upon delivery", "upon C of O", "one day after X"), return null.
+    expiration_date: The lease TERM end date. Only return a specific calendar date. If formulaic, return null.
+    For date source_text: quote the exact labeled line (e.g. "Commencement Date: March 1, 2024") — 1 sentence max.`;
 
 // ── Prompt builder for a field group ─────────────────────────────────────────
 

@@ -267,6 +267,15 @@ function usableSourceText(value: unknown): string | null {
   return isGenericSourceText(text) ? null : text;
 }
 
+function capSourceText(text: string | null | undefined, maxChars = 350): string | null {
+  if (!text) return null;
+  if (text.length <= maxChars) return text;
+  const slice = text.slice(0, maxChars);
+  const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"));
+  const cutAt = lastPeriod > maxChars * 0.55 ? lastPeriod + 1 : maxChars;
+  return slice.slice(0, cutAt).trimEnd() + "…";
+}
+
 function cleanEvidenceSnippet(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -499,6 +508,22 @@ function fieldSourceKeywords(fieldKey: string): string[] {
     start_date: ["commencement", "start", "term"],
     expiration_date: ["expiration", "expiry", "expire", "end", "term"],
     end_date: ["expiration", "expiry", "expire", "end", "term"],
+    admin_fee_pct: ["admin", "administrative fee", "management fee", "recoverable", "cam"],
+    admin_fee_percent: ["admin", "administrative fee", "management fee", "recoverable", "cam"],
+    cam_cap_pct: ["cam", "cap", "controllable", "operating expense", "common area"],
+    cam_cap_percent: ["cam", "cap", "controllable", "operating expense", "common area"],
+    default_interest_rate_formula: ["default", "interest", "overdue", "delinquent", "late payment"],
+    late_fee_percent: ["late", "late fee", "late charge", "delinquent"],
+    late_fee_grace_days: ["late", "grace", "late fee", "delinquent"],
+    rent_payment_timing: ["rent", "payable", "due", "advance"],
+    rent_due_day: ["rent", "due", "payable", "day of"],
+    rent_frequency: ["rent", "payable", "monthly", "quarterly", "annually"],
+    escalation_rate: ["escalation", "increase", "annual increase", "cpi", "percent"],
+    free_rent_months: ["free rent", "abatement", "rent abatement", "rent-free"],
+    renewal_notice_months: ["renewal", "notice", "option", "extend"],
+    termination_notice_months: ["termination", "notice", "cancel"],
+    hvac_responsibility: ["hvac", "heating", "cooling", "air conditioning", "mechanical"],
+    gross_up_threshold: ["gross up", "gross-up", "occupancy"],
   };
   return keywords[fieldKey] || [];
 }
@@ -878,14 +903,21 @@ function buildReviewPayload(opts: {
         }))
         .filter((candidate) => candidate.verifiedPage != null)
         .sort((a, b) => {
+          // Prefer LLM verbatim quotes first — the LLM was instructed to copy
+          // exact text from the document. The fallback (findSourceEvidenceForField)
+          // searches for the raw value anywhere in the doc and can land on a
+          // semantically unrelated section (e.g. finding "5" in a signage clause
+          // when looking for a 5% admin fee). LLM evidence is therefore more
+          // trustworthy; fallback is the last resort.
           const score = (candidate: any) =>
             (candidate.verifiedPage != null ? 100 : 0) +
-            (candidate.source === "fallback" ? 20 : candidate.source === "workflow" ? 10 : 0) +
+            (candidate.source === "llm" ? 20 : candidate.source === "workflow" ? 10 : 0) +
             Math.min(String(candidate.sourceText ?? "").length, 240) / 240;
           return score(b) - score(a);
         });
       const selectedEvidence = evidenceCandidates[0] ?? null;
-      const mergedSourceText = selectedEvidence?.sourceText ?? null;
+      const rawSourceText = selectedEvidence?.sourceText ?? null;
+      const mergedSourceText = capSourceText(rawSourceText);
       const mergedSourcePage = selectedEvidence?.verifiedPage ?? null;
       const hasEvidence = typeof mergedSourceText === "string" && mergedSourceText.length > 0 && mergedSourcePage != null;
       const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;

@@ -281,12 +281,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
   monthly_rent: {
     type: "number",
     min: 1,   // reject $0 — free-rent periods show $0 in the schedule; $0 is never the real rent
-    labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent"],
-    tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent", "base rent per month", "base_rent_per_month", "monthly base rent", "monthly_base_rent"],
+    labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent", "minimum rent", "fixed rent", "fixed minimum rent"],
+    tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent", "base rent per month", "base_rent_per_month", "monthly base rent", "monthly_base_rent", "minimum_rent", "minimum rent", "fixed_minimum_rent", "fixed minimum rent", "fixed_rent"],
     patterns: [
-      /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
-      /monthly\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      // Explicit "per month" / monthly qualifier comes first — most reliable
+      /(?:monthly\s+rent|base\s+rent|minimum\s+rent|fixed\s+(?:minimum\s+)?rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
       /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
+      // Numbered summary line: "7. Monthly Rent: $6,004.00" or "Base Rent: $6,004.00"
+      /\d+\s*\.\s*(?:monthly\s+rent|base\s+rent|minimum\s+rent)\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:^|\n)\s*(?:monthly\s+rent|base\s+rent|minimum\s+rent|monthly\s+base\s+rent)\s*[:.]\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
     ],
     description:
       "The base rent paid PER MONTH in USD (plain number, no $ or commas). " +
@@ -378,8 +381,16 @@ export const LEASE_SCHEMA: ModuleSchema = {
   security_deposit: {
     type: "number",
     min: 0,
-    labels: ["security deposit", "deposit", "security deposit addendum"],
+    labels: ["security deposit", "deposit", "security deposit addendum", "total security deposit"],
     tableHeaders: ["security_deposit", "deposit", "security deposit", "total security deposit"],
+    patterns: [
+      // Total / final deposit line — highest priority
+      /(?:total\s+security\s+deposit|total\s+deposit|deposit\s+total)\s*[:=]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:for\s+a\s+total\s+of|equals?|totaling|totals?)\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:\(.*?\))?\s*(?:as\s+(?:the\s+)?(?:security\s+)?deposit)?/i,
+      // Numbered summary: "Security Deposit: $12,908.60"
+      /\d+\s*\.\s*security\s+deposit\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:^|\n)\s*(?:security\s+deposit|cash\s+security\s+deposit)\s*[:.]\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+    ],
     description:
       "TOTAL security deposit amount in USD (plain number, no $ or commas). " +
       "If the lease has a Security Deposit Addendum that calculates the deposit from component month rents " +
@@ -449,7 +460,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
     min: 0,
     labels: ["cam", "cam amount", "common area maintenance", "cam charges", "cam per year"],
     tableHeaders: ["cam", "cam_amount", "cam charges", "common area", "cam/yr"],
-    description: "Annual CAM charges in USD",
+    patterns: [
+      /(?:cam|common\s+area\s+maintenance)\s*(?:charges?|amount|fees?|expense)?\s*[:.]\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+      /(?:cam|common\s+area\s+maintenance)\s*(?:charges?|amount)?\s*(?:per\s+year|annually|\/year|\/yr)\s*[:.=]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+    ],
+    description:
+      "Annual CAM (Common Area Maintenance) charges in USD as a plain number. " +
+      "ONLY extract if a specific dollar amount is explicitly labeled as CAM, common area maintenance, or operating expense charges. " +
+      "Do NOT calculate or estimate — if no explicit dollar figure is stated, return null. " +
+      "Do NOT confuse CAM charges with the base rent, security deposit, or TI allowance.",
   },
   utility_reimbursement_amount: {
     type: "number",
@@ -564,11 +583,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
   // ─── Dates extension ────────────────────────────────────────────────
   commencement_date: {
     type: "date",
-    labels: ["commencement date", "lease commencement", "term commencement", "term start"],
-    tableHeaders: ["commencement_date", "commencement", "term commencement"],
+    labels: ["commencement date", "lease commencement", "term commencement", "term start", "start date"],
+    tableHeaders: ["commencement_date", "commencement", "term commencement", "start date", "lease start"],
     patterns: [
-      /\d+\s*\.\s*commencement\s+date\s*[:.]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
-      /(?:commencement\s+date|term\s+commencement)\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // Numbered summary line: "3. Commencement Date: January 15, 2024" or "3. Commencement Date: 01/15/2024"
+      /\d+\s*\.\s*(?:commencement\s+date|lease\s+commencement|term\s+commencement|term\s+start)\s*[:.]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // Plain labeled line
+      /(?:commencement\s+date|lease\s+commencement|term\s+commencement|term\s+start|start\s+date)\s*[:.]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // "commencing on" / "commencing the" pattern
+      /(?:commencing\s+(?:on|the))\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
     description:
       "Lease term commencement date in YYYY-MM-DD (often different from lease signing date). " +
@@ -579,11 +602,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
   },
   expiration_date: {
     type: "date",
-    labels: ["expiration date", "term expiration", "term end", "lease expiration"],
-    tableHeaders: ["expiration_date", "expiration", "term expiration"],
+    labels: ["expiration date", "term expiration", "term end", "lease expiration", "end date"],
+    tableHeaders: ["expiration_date", "expiration", "term expiration", "end date", "lease end"],
     patterns: [
-      /\d+\s*\.\s*expiration\s+date\s*[:.]?\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
-      /(?:expiration\s+date|term\s+expiration)\s*[:.]\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // Numbered summary
+      /\d+\s*\.\s*(?:expiration\s+date|term\s+expiration|term\s+end|lease\s+expiration|end\s+date)\s*[:.]?\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // Plain labeled line
+      /(?:expiration\s+date|term\s+expiration|term\s+end|lease\s+expiration|end\s+date)\s*[:.]\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}|of\s+each\s+year)|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
+      // "expiring on" pattern
+      /(?:expiring\s+(?:on|the))\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
     ],
     description: "Lease expiration / end date in YYYY-MM-DD. If text says 'January 31 of each year' with commencement YYYY, use YYYY+1.",
   },
@@ -1475,9 +1502,11 @@ const LEASE_GROUPS: FieldGroup[] = [
       "If only one is present, leave the other NULL. " +
       "escalation_rate: the fixed annual percentage increase (e.g. 3 for '3.00% per year' or " +
       "'annual base rent increases by 3.00%'). " +
-      "security_deposit: look for 'Cash Security Deposit', 'Security Deposit', or 'Deposit' labeled rows. " +
+      "security_deposit: look for 'Cash Security Deposit', 'Security Deposit', or 'Deposit' labeled rows. Return the TOTAL final amount, NOT component month rents used in the deposit calculation. " +
+      "cam_amount: ONLY return if a specific dollar amount is explicitly labeled as CAM or common area maintenance. Return null if only percentage splits or pro-rata obligations are described — not a dollar figure. " +
       "escalation_type: fixed_pct / cpi / stepped / fmv / none. " +
-      "billing_frequency: monthly / quarterly / annual.",
+      "billing_frequency: monthly / quarterly / annual. " +
+      "ANTI-HALLUCINATION: If a value is not explicitly stated, return null — never estimate or infer dollar amounts.",
   },
   {
     name: "terms",

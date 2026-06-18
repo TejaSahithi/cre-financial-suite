@@ -588,6 +588,8 @@ function buildDerivedWorkflowEntry(lease, key) {
 const SENTINEL_NOT_FOUND_VALUES = new Set([
   "unknown", "n/a", "na", "none", "null", "tbd", "not specified",
   "not applicable", "see lease", "as set forth", "per lease",
+  "not found", "not available", "not stated", "not provided",
+  "not mentioned", "not included", "not applicable.",
 ]);
 
 export function isMeaningfulValue(value) {
@@ -606,6 +608,8 @@ export function readFieldValue(lease, key) {
   return resolved?.value ?? null;
 }
 
+const SOURCE_TEXT_MAX_CHARS = 320;
+
 export function cleanSourceEvidenceText(value) {
   const text = String(value ?? "").trim();
   if (!text) return null;
@@ -613,7 +617,12 @@ export function cleanSourceEvidenceText(value) {
   if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
-  return text;
+  if (text.length <= SOURCE_TEXT_MAX_CHARS) return text;
+  // Trim at the last sentence boundary within the limit so we never cut mid-word.
+  const slice = text.slice(0, SOURCE_TEXT_MAX_CHARS);
+  const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"));
+  const cutAt = lastPeriod > SOURCE_TEXT_MAX_CHARS * 0.55 ? lastPeriod + 1 : SOURCE_TEXT_MAX_CHARS;
+  return slice.slice(0, cutAt).trimEnd() + "…";
 }
 
 export function normalizeSourcePage(page) {
