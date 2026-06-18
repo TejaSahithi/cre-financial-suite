@@ -822,6 +822,15 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     }
   }
 
+  if (fieldKey === "premises_use") {
+    if (
+      valueText.length > 80 ||
+      /\b(?:assign|assignment|sublet|subletting|consent|common areas?|parking|mechanical|sidewalk|landscaping)\b/i.test(valueText)
+    ) {
+      return "premises_use_not_core_use";
+    }
+  }
+
   if (["tenant_name", "landlord_name", "broker_name", "tenant_contact_name"].includes(fieldKey)) {
     if (valueText.length > 90 || /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)) {
       return "party_name_looks_like_clause_text";
@@ -832,6 +841,49 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     return "lease_type_unknown";
   }
 
+  return null;
+}
+
+function workflowEvidenceType(status: string | null | undefined): string {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("conflict")) return "conflict";
+  if (["calculated", "derived", "computed"].includes(normalized)) return "derived";
+  if (normalized === "inferred" || normalized === "missing_source_evidence") return "inferred";
+  if (normalized === "not_found" || normalized === "manual_required" || normalized === "missing") return "missing";
+  return "extracted";
+}
+
+function workflowSourceTextQuality(opts: {
+  value: unknown;
+  sourceClause?: string | null;
+  sourcePage?: number | null;
+  extractionStatus?: string | null;
+  derivationTrace?: string | null;
+  sourceFieldKeys?: string[];
+}): string {
+  const status = String(opts.extractionStatus || "").toLowerCase();
+  if (status.includes("conflict")) return "conflict";
+  if (["calculated", "derived", "computed"].includes(status) || opts.derivationTrace || opts.sourceFieldKeys?.length) {
+    return isBlank(opts.value) ? "missing" : "derived";
+  }
+  if (status === "inferred") return isBlank(opts.value) ? "missing" : "inferred";
+  if (!opts.sourceClause) return "missing";
+  return opts.sourcePage ? "exact" : "partial";
+}
+
+function workflowReviewReason(opts: {
+  key: string;
+  value: unknown;
+  sourceClause?: string | null;
+  extractionStatus?: string | null;
+  sourceTextQuality?: string | null;
+  derivationTrace?: string | null;
+}): string | null {
+  const status = String(opts.extractionStatus || "").toLowerCase();
+  if (isBlank(opts.value) && status === "manual_required") return "Required field was not found in the lease. Manual review required.";
+  if (!isBlank(opts.value) && opts.sourceTextQuality === "missing") return "Extracted value has no valid supporting source text.";
+  if (opts.sourceTextQuality === "inferred" || status === "inferred") return "Value is inferred or classified and requires manual review.";
+  if (opts.sourceTextQuality === "derived" && !opts.derivationTrace) return "Derived value is missing a derivation trace.";
   return null;
 }
 
@@ -1695,14 +1747,39 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       extractionStatus = "missing_source_evidence";
       confidenceScore = Math.min(Number(confidenceScore ?? 0.35), 0.35);
     }
+    const sourcePage = relevantSourceClause
+      ? (relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page)
+      : null;
+    const sourceTextQuality = workflowSourceTextQuality({
+      value: normalizedValue,
+      sourceClause: relevantSourceClause,
+      sourcePage,
+      extractionStatus,
+    });
+    const evidenceType = workflowEvidenceType(extractionStatus);
+    const reviewReason = workflowReviewReason({
+      key: spec.key,
+      value: normalizedValue,
+      sourceClause: relevantSourceClause,
+      extractionStatus,
+      sourceTextQuality,
+    });
 
     fieldMap[spec.key] = {
       key: spec.key,
       value: normalizedValue,
-      source_page: relevantSourceClause ? (relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page) : null,
+      raw_value: value,
+      normalized_value: normalizedValue,
+      source_page: sourcePage,
       source_clause: relevantSourceClause,
+      exact_source_text: relevantSourceClause,
       confidence_score: extractionStatus === "not_found" || extractionStatus === "manual_required" ? null : round2(confidenceScore),
       extraction_status: extractionStatus,
+      evidence_type: evidenceType,
+      source_text_quality: sourceTextQuality,
+      requires_review: Boolean(reviewReason || sourceTextQuality === "inferred" || extractionStatus === "manual_required"),
+      review_reason: reviewReason,
+      approval_blocking_reason: reviewReason,
       editable: true,
       field_group: spec.group,
     };
@@ -1734,6 +1811,18 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     source_clause: leaseTypeSource ?? fieldMap.lease_type?.source_clause ?? null,
     confidence_score: normalizedLeaseType ? (normalizeLeaseTypeValue(classifiedLeaseType) ? 0.86 : fieldMap.lease_type?.confidence_score ?? 0.72) : 0.5,
     extraction_status: normalizedLeaseType ? (normalizeLeaseTypeValue(classifiedLeaseType) ? "calculated" : fieldMap.lease_type?.extraction_status ?? "needs_review") : "manual_required",
+    raw_value: classifiedLeaseType ?? fieldMap.lease_type?.raw_value ?? normalizedLeaseType,
+    normalized_value: normalizedLeaseType,
+    exact_source_text: leaseTypeSource ?? fieldMap.lease_type?.source_clause ?? null,
+    evidence_type: normalizeLeaseTypeValue(classifiedLeaseType) ? "inferred" : workflowEvidenceType(fieldMap.lease_type?.extraction_status),
+    source_text_quality: leaseTypeSource ? "derived" : (normalizedLeaseType ? "inferred" : "missing"),
+    requires_review: true,
+    review_reason: normalizedLeaseType
+      ? "Lease type was classified from expense signals and requires manual review."
+      : "Lease type was not found in the lease. Manual review required.",
+    approval_blocking_reason: normalizedLeaseType
+      ? "Lease type was classified from expense signals and requires manual review."
+      : "Lease type was not found in the lease. Manual review required.",
   };
 
   const tenantRsf = asNumber(fieldMap.tenant_rsf?.value);
@@ -1743,9 +1832,29 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     key: "tenant_pro_rata_share",
     value: proRataShare,
     source_page: fieldMap.tenant_rsf?.source_page ?? fieldMap.building_rsf?.source_page ?? null,
-    source_clause: proRataShare != null ? "Calculated from tenant_rsf / building_rsf" : null,
+    source_clause: proRataShare != null
+      ? [fieldMap.tenant_rsf?.source_clause, fieldMap.building_rsf?.source_clause].filter(Boolean).join("\n")
+      : null,
     confidence_score: proRataShare != null ? 1 : null,
     extraction_status: proRataShare != null ? "calculated" : "manual_required",
+    raw_value: proRataShare,
+    normalized_value: proRataShare,
+    exact_source_text: proRataShare != null
+      ? [fieldMap.tenant_rsf?.source_clause, fieldMap.building_rsf?.source_clause].filter(Boolean).join("\n")
+      : null,
+    evidence_type: proRataShare != null ? "derived" : "missing",
+    source_text_quality: proRataShare != null ? "derived" : "missing",
+    source_field_keys: ["tenant_rsf", "building_rsf"],
+    derivation_trace: proRataShare != null ? "tenant_pro_rata_share = tenant_rsf / building_rsf" : null,
+    requires_review: proRataShare == null || !fieldMap.tenant_rsf?.source_clause || !fieldMap.building_rsf?.source_clause,
+    review_reason: proRataShare == null
+      ? "Tenant pro rata share cannot be derived without tenant RSF and building RSF."
+      : (!fieldMap.tenant_rsf?.source_clause || !fieldMap.building_rsf?.source_clause
+          ? "Derived pro rata share is missing source evidence for tenant RSF or building RSF."
+          : null),
+    approval_blocking_reason: proRataShare == null
+      ? "Tenant pro rata share cannot be derived without tenant RSF and building RSF."
+      : null,
     editable: true,
     field_group: "premises",
   };

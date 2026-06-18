@@ -73,7 +73,28 @@ export function collectExtractedDocumentItems(lease) {
       const confidence = typeof entry === "object" && entry
         ? entry.confidence_score ?? entry.confidence ?? null
         : null;
-      const statusEvidence = { sourcePage, sourceText, value, extractionStatus };
+      const rawValue = typeof entry === "object" && entry ? entry.raw_value ?? entry.rawValue ?? value : value;
+      const evidenceType = typeof entry === "object" && entry ? entry.evidence_type ?? entry.evidenceType ?? null : null;
+      const derivationTrace = typeof entry === "object" && entry ? entry.derivation_trace ?? entry.derivationTrace ?? null : null;
+      const sourceFieldKeys = typeof entry === "object" && entry
+        ? entry.source_field_keys ?? entry.sourceFieldKeys ?? []
+        : [];
+      const reviewReason = typeof entry === "object" && entry
+        ? entry.review_reason ?? entry.reviewReason ?? entry.requires_review_reason ?? entry.requiresReviewReason ?? null
+        : null;
+      const approvalBlockingReason = typeof entry === "object" && entry
+        ? entry.approval_blocking_reason ?? entry.approvalBlockingReason ?? null
+        : null;
+      const statusEvidence = {
+        sourcePage,
+        sourceText,
+        value,
+        rawValue,
+        extractionStatus,
+        evidenceType,
+        sourceFieldKeys,
+        derivationTrace,
+      };
       const sourceTextQuality = resolveSourceTextQuality(statusEvidence);
       const effectiveStatus = isCalculatedExtractionStatus(extractionStatus)
         ? "calculated"
@@ -92,12 +113,23 @@ export function collectExtractedDocumentItems(lease) {
         display_tab: inferDynamicItemTab({ business_area: "" }, key),
         value,
         normalized_value: value,
-        raw_value: typeof entry === "object" && entry ? entry.raw_value ?? entry.rawValue ?? value : value,
+        raw_value: rawValue,
         source_text: sourceText,
         source_page: sourcePage,
         confidence,
-        evidence_type: normalizeEvidenceType(extractionStatus, { value, sourceText, sourceTextQuality }),
+        evidence_type: normalizeEvidenceType(evidenceType ?? extractionStatus, {
+          value,
+          sourceText,
+          sourceTextQuality,
+          sourceFieldKeys,
+          derivationTrace,
+        }),
         source_text_quality: sourceTextQuality,
+        source_field_keys: sourceFieldKeys,
+        derivation_trace: derivationTrace,
+        requires_review: Boolean(entry?.requires_review ?? entry?.requiresReview ?? reviewReason ?? approvalBlockingReason),
+        review_reason: reviewReason,
+        approval_blocking_reason: approvalBlockingReason,
         extraction_method: sourceName,
         extraction_status: effectiveStatus,
         maps_to_existing_field: false,
@@ -131,7 +163,7 @@ export function collectExtractedDocumentItems(lease) {
         ? inferDynamicItemTab({ business_area: category }, key) || category
         : "clause_records";
       fieldMapItems.push({
-        item_id: `${sourceName}:${key}`,
+        item_id: `${sourceName}:${key}:${sourcePage ?? "p0"}:${normalizeDynamicKey(String(sourceText || value || "")).slice(0, 80)}`,
         label: clause?.label || clause?.clause_label || titleizeFieldKey(clauseType),
         item_type: clauseType,
         field_key: key,
@@ -148,6 +180,15 @@ export function collectExtractedDocumentItems(lease) {
         confidence: typeof clause?.confidence === "number" ? clause.confidence : null,
         extraction_method: sourceName,
         extraction_status: sourceText ? "extracted" : "missing_source_evidence",
+        evidence_type: sourceText ? "extracted" : "missing",
+        source_text_quality: resolveSourceTextQuality({
+          value,
+          sourceText,
+          sourcePage,
+          extractionStatus: sourceText ? "extracted" : "missing_source_evidence",
+        }),
+        requires_review: !sourceText,
+        review_reason: sourceText ? null : "Clause row has no supporting source text.",
         maps_to_existing_field: false,
         maps_to_fixed_field: false,
         creates_dynamic_row: true,
@@ -230,7 +271,8 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     LEASE_REVIEW_FIELDS.flatMap((field) => getFieldAliases(field.key)).map(normalizeDynamicKey),
   );
   const byTab = {};
-  const seen = new Set();
+  const seenSignatures = new Set();
+  const keyCounts = new Map();
   for (const item of collectExtractedDocumentItems(lease)) {
     const sourceText = cleanExtractedSourceText(
       item?.source_text || item?.exact_source_text || item?.source_clause,
@@ -246,7 +288,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
-    if (!key || !createsDynamicRow || seen.has(key)) continue;
+    if (!key || !createsDynamicRow) continue;
     // Skip clause-title placeholder items whose item_id is "clause:<type>".
     // These are routing markers for the Clause Records tab, not field values.
     // The backend sets display_tab:"clause_records" for new extractions; this
@@ -258,12 +300,24 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // a value or source text must be visible somewhere.
     const tab = inferDynamicItemTab(item, key) || "legal_options";
     if (tab === "clause_records") continue;
-    seen.add(key);
+    const signature = [
+      item?.item_id || "",
+      key,
+      normalizeSourcePage(item?.source_page ?? item?.page_number ?? item?.page) ?? "",
+      String(value ?? "").slice(0, 100),
+      String(sourceText ?? "").slice(0, 160),
+    ].join("|");
+    if (seenSignatures.has(signature)) continue;
+    seenSignatures.add(signature);
+    const count = (keyCounts.get(key) || 0) + 1;
+    keyCounts.set(key, count);
+    const uniqueKey = count === 1 ? key : `${key}_${count}`;
     if (!byTab[tab]) byTab[tab] = [];
     byTab[tab].push({
-      key,
-      id: key,
-      field_key: key,
+      key: uniqueKey,
+      id: uniqueKey,
+      field_key: uniqueKey,
+      original_field_key: key,
       label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
       field_label: item?.label || titleizeFieldKey(item?.section_title || item?.field_key || item?.item_type || key),
       tab,
@@ -284,14 +338,19 @@ export function buildDynamicDocumentFieldsByTab(lease) {
       evidence_type: normalizeEvidenceType(item?.evidence_type ?? item?.extraction_status ?? item?.review_status, { value, sourceText }),
       source_text_quality: resolveSourceTextQuality({
         value,
+        rawValue: item?.raw_value ?? item?.rawValue ?? value,
         sourceText,
         sourcePage: item?.source_page ?? item?.page_number ?? item?.page,
         extractionStatus: item?.extraction_status ?? item?.review_status ?? null,
         evidenceType: item?.evidence_type,
+        sourceTextQuality: item?.source_text_quality ?? item?.sourceTextQuality,
+        sourceFieldKeys: item?.source_field_keys ?? item?.sourceFieldKeys ?? [],
+        derivationTrace: item?.derivation_trace ?? item?.derivationTrace ?? null,
       }),
       source_field_keys: item?.source_field_keys ?? item?.sourceFieldKeys ?? [],
       derivation_trace: item?.derivation_trace ?? item?.derivationTrace ?? null,
       requires_review: Boolean(item?.requires_review ?? item?.requiresReview ?? false),
+      review_reason: item?.review_reason ?? item?.reviewReason ?? item?.requires_review_reason ?? item?.requiresReviewReason ?? null,
       approval_blocking_reason: item?.approval_blocking_reason ?? item?.approvalBlockingReason ?? null,
     });
   }
@@ -394,6 +453,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const statusEvidence = {
     sourcePage,
     sourceText,
+    rawValue: field.raw_value ?? field.rawValue ?? evidence.rawValue ?? schemaValue,
     value: schemaValue,
     extractionStatus: field.status ?? field.extraction_status ?? derived?.extractionStatus ?? evidence.extractionStatus,
     evidenceType: field.evidence_type ?? field.evidenceType ?? derived?.evidenceType ?? evidence.evidenceType,
@@ -409,7 +469,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     sourceFieldKeys: statusEvidence.sourceFieldKeys,
     derivationTrace: statusEvidence.derivationTrace,
   });
-  const status = field.status
+  const resolvedStatus = field.status
     ?? field.extraction_status
     ?? derived?.extractionStatus
     ?? resolveExtractionStatus(lease, key, {
@@ -417,13 +477,48 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       confidence,
       evidence: statusEvidence,
     });
+  const hasValue = isMeaningfulValue(schemaValue);
+  const hasValidSource = hasValidSourceEvidence({
+    ...statusEvidence,
+    sourceTextQuality,
+    evidenceType,
+  });
+  const derivedWithoutTrace =
+    evidenceType === "derived" &&
+    !statusEvidence.derivationTrace &&
+    !(Array.isArray(statusEvidence.sourceFieldKeys) && statusEvidence.sourceFieldKeys.length > 0);
+  const requiredMissing = Boolean(field.required) && !hasValue;
+  const requiredNoSource = Boolean(field.required) && hasValue && !hasValidSource;
+  const inferredNeedsReview = evidenceType === "inferred" || sourceTextQuality === "inferred";
+  const backendReviewReason =
+    field.review_reason ?? field.reviewReason ??
+    field.requires_review_reason ?? field.requiresReviewReason ??
+    evidence.reviewReason ?? null;
+  let reviewReason =
+    backendReviewReason ??
+    field.approval_blocking_reason ??
+    field.approvalBlockingReason ??
+    evidence.approvalBlockingReason ??
+    null;
+  if (!reviewReason && requiredMissing) {
+    reviewReason = "Required field was not found in the lease. Manual review required.";
+  } else if (!reviewReason && requiredNoSource) {
+    reviewReason = "Required field has a value but no valid supporting source text.";
+  } else if (!reviewReason && inferredNeedsReview) {
+    reviewReason = "Value is inferred or classified and requires manual review.";
+  } else if (!reviewReason && derivedWithoutTrace) {
+    reviewReason = "Derived value is missing a derivation trace.";
+  }
   const requiresReview = Boolean(
-    field.requires_review
-      ?? field.requiresReview
-      ?? evidence.requiresReview
-      ?? (evidenceType === "inferred")
-      ?? false,
+    field.requires_review ||
+      field.requiresReview ||
+      evidence.requiresReview ||
+      reviewReason ||
+      evidenceType === "inferred",
   );
+  const status = requiredMissing && !isManualExtractionStatus(resolvedStatus)
+    ? "manual_required"
+    : resolvedStatus;
 
   return {
     ...field,
@@ -451,7 +546,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     derivation_trace: statusEvidence.derivationTrace ?? null,
     requires_review: requiresReview,
     required: Boolean(field.required),
-    approval_blocking_reason: field.approval_blocking_reason ?? field.approvalBlockingReason ?? evidence.approvalBlockingReason ?? null,
+    review_reason: reviewReason,
+    requires_review_reason: reviewReason,
+    approval_blocking_reason: field.approval_blocking_reason ?? field.approvalBlockingReason ?? evidence.approvalBlockingReason ?? reviewReason ?? null,
     is_dynamic: Boolean(field.is_dynamic || field.dynamic_document_item),
     source_file_id: field.source_file_id ?? lease?.source_file_id ?? lease?.extraction_data?.source_file_id ?? lease?.uploaded_files?.id ?? lease?.uploaded_file?.id ?? null,
   };
@@ -496,11 +593,18 @@ export function buildLeaseReviewRows(lease, options = {}) {
 export function isReviewRowDisplayable(row, { showMissing = false } = {}) {
   const hasValue = isMeaningfulValue(row?.normalized_value ?? row?.value);
   const hasSource = Boolean(cleanSourceEvidenceText(row?.source_text ?? row?.source_clause));
+  const hasReviewBlocker = Boolean(
+    row?.requires_review ||
+    row?.review_reason ||
+    row?.requires_review_reason ||
+    row?.approval_blocking_reason ||
+    isManualExtractionStatus(row?.extraction_status || row?.status),
+  );
   const isDerivedOrInferred = ["derived", "inferred", "conflict"].includes(String(row?.evidence_type || "").toLowerCase())
     || ["calculated", "derived", "computed", "inferred", "conflict_detected"].includes(String(row?.extraction_status || row?.status || "").toLowerCase());
   if (showMissing) {
     if (row?.is_dynamic || row?.dynamic_document_item) return hasValue || hasSource;
     return Boolean(row?.required) || hasValue || hasSource;
   }
-  return hasValue || hasSource || isDerivedOrInferred;
+  return hasValue || hasSource || isDerivedOrInferred || (Boolean(row?.required) && hasReviewBlocker);
 }

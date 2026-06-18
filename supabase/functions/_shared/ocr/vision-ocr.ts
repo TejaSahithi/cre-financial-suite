@@ -197,14 +197,18 @@ export async function extractDocumentWithVision(
     if (!fallbackText || fallbackText.length < 5) {
       throw new Error("Gemini Vision returned no OCR text.");
     }
+    const fallbackPages = splitMarkedOcrPages(fallbackText);
     return {
       text: fallbackText,
-      page_count: undefined,
-      pages: [],
+      page_count: fallbackPages.length || undefined,
+      pages: fallbackPages,
       fields: [],
       warnings: [
         ...warnings,
         "PDF text-first OCR used to avoid long page-aware JSON extraction timeout",
+        ...(fallbackPages.length
+          ? []
+          : ["OCR text did not include [[PAGE n]] markers, so source page mapping may require manual review"]),
       ],
     };
   }
@@ -542,4 +546,26 @@ function cleanOCRText(text: string): string {
   cleaned = cleaned.replace(/[ \t]{2,}/g, " ");
 
   return cleaned.trim();
+}
+
+function splitMarkedOcrPages(text: string): Array<{ page: number; text: string; fields: [] }> {
+  const cleaned = cleanOCRText(text);
+  if (!cleaned) return [];
+  const markerPattern = /\[\[\s*PAGE\s+(\d+)\s*\]\]/gi;
+  const markers = [...cleaned.matchAll(markerPattern)];
+  if (markers.length === 0) return [];
+
+  const pages: Array<{ page: number; text: string; fields: [] }> = [];
+  for (let i = 0; i < markers.length; i += 1) {
+    const marker = markers[i];
+    const next = markers[i + 1];
+    const page = Number(marker[1]);
+    if (!Number.isFinite(page) || page <= 0) continue;
+    const start = (marker.index ?? 0) + marker[0].length;
+    const end = next?.index ?? cleaned.length;
+    const pageText = cleanOCRText(cleaned.slice(start, end));
+    if (!pageText) continue;
+    pages.push({ page, text: pageText, fields: [] });
+  }
+  return pages;
 }

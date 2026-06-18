@@ -62,10 +62,19 @@ const displayValue = (field, value) => {
   return str;
 };
 
-function truncate(text, max = 140) {
-  if (!text) return "—";
-  const flat = String(text).replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+function sourcePreview(text, max = 900) {
+  const cleaned = String(text ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!cleaned) return { text: "—", truncated: false };
+  if (cleaned.length <= max) return { text: cleaned, truncated: false };
+  const firstParagraph = cleaned.split(/\n\s*\n/).find((part) => part.trim().length > 20)?.trim();
+  const candidate = firstParagraph && firstParagraph.length <= max
+    ? firstParagraph
+    : cleaned.slice(0, max - 1).trim();
+  return { text: `${candidate}…`, truncated: true };
 }
 
 // ── Source quality badge ──────────────────────────────────────────────────────
@@ -77,6 +86,7 @@ const SOURCE_QUALITY_BADGE = {
   inferred: { label: "Inferred", cls: "bg-purple-50 text-purple-700 border-purple-200" },
   conflict: { label: "Conflict", cls: "bg-red-50 text-red-700 border-red-200" },
   missing: { label: "No source", cls: "bg-red-50 text-red-600 border-red-200" },
+  manual_required: { label: "Manual Review", cls: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -111,15 +121,15 @@ export default function FieldReviewTable({
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white">
-      <Table>
+    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+      <Table className="min-w-[1120px]">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[200px] text-xs">Field</TableHead>
-            <TableHead className="w-[200px] text-xs">Normalized Value</TableHead>
-            <TableHead className="w-[60px] text-xs text-center">Page</TableHead>
-            <TableHead className="text-xs">Source Text</TableHead>
-            <TableHead className="w-[170px] text-xs text-right">Actions</TableHead>
+            <TableHead className="w-[190px] text-xs">Field</TableHead>
+            <TableHead className="w-[220px] text-xs">Normalized Value</TableHead>
+            <TableHead className="w-[70px] text-xs text-center">Page</TableHead>
+            <TableHead className="min-w-[520px] text-xs">Source Text</TableHead>
+            <TableHead className="w-[150px] text-xs text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -145,7 +155,22 @@ export default function FieldReviewTable({
               derivationTrace: field.derivation_trace ?? evidence.derivationTrace,
               conflictCandidates: isConflict ? [field.key] : [],
             });
-            const sqBadge = SOURCE_QUALITY_BADGE[sourceQualityKey];
+            const reviewReason =
+              field.review_reason ??
+              field.requires_review_reason ??
+              field.approval_blocking_reason ??
+              evidence.reviewReason ??
+              evidence.approvalBlockingReason ??
+              null;
+            const isManualReview =
+              field.requires_review ||
+              reviewReason ||
+              reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED ||
+              extractionStatus === "manual_required";
+            const sqBadge = SOURCE_QUALITY_BADGE[
+              isManualReview && sourceQualityKey === "missing" ? "manual_required" : sourceQualityKey
+            ];
+            const source = sourcePreview(sourceText, 900);
 
             const rowClass = isConflict
               ? "bg-red-50/40 hover:bg-red-50/70"
@@ -199,9 +224,23 @@ export default function FieldReviewTable({
                 {/* Source text + quality badge */}
                 <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
-                    <p className="italic text-slate-500 leading-snug whitespace-pre-wrap break-words max-w-xs" title={sourceText ?? ""}>
-                      {truncate(sourceText, 260)}
+                    <p className="max-w-[920px] whitespace-pre-wrap break-words text-slate-600 leading-relaxed" title={sourceText ?? ""}>
+                      {source.text}
                     </p>
+                    {source.truncated && (
+                      <button
+                        type="button"
+                        className="self-start text-[10px] font-medium text-blue-700 hover:underline"
+                        onClick={() => onOpenDetail(field)}
+                      >
+                        Open detail for full source
+                      </button>
+                    )}
+                    {reviewReason && (
+                      <p className="max-w-[920px] text-[10px] leading-snug text-amber-700">
+                        {reviewReason}
+                      </p>
+                    )}
                     {sqBadge && (
                       <span className={`self-start inline-flex items-center rounded border px-1 py-0 text-[9px] font-medium ${sqBadge.cls}`}>
                         {sqBadge.label}

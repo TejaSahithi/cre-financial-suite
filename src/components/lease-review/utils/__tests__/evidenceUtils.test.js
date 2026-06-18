@@ -620,11 +620,17 @@ describe("buildLeaseReviewRowsByTab", () => {
 });
 
 describe("isReviewRowDisplayable", () => {
-  it("hides empty standard fields by default", () => {
-    expect(isReviewRowDisplayable({ key: "tenant_name", required: true, normalized_value: null }, { showMissing: false })).toBe(false);
+  it("shows required manual-review blockers by default", () => {
+    expect(isReviewRowDisplayable({
+      key: "tenant_name",
+      required: true,
+      normalized_value: null,
+      requires_review: true,
+      review_reason: "Required field was not found in the lease.",
+    }, { showMissing: false })).toBe(true);
   });
 
-  it("shows required missing standard fields only when showMissing is enabled", () => {
+  it("shows required missing standard fields when showMissing is enabled", () => {
     expect(isReviewRowDisplayable({ key: "tenant_name", required: true, normalized_value: null }, { showMissing: true })).toBe(true);
     expect(isReviewRowDisplayable({ key: "optional_note", required: false, normalized_value: null }, { showMissing: true })).toBe(false);
   });

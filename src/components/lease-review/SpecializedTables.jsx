@@ -16,7 +16,13 @@ import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { createPageUrl } from "@/utils";
 import { ArrowUpRight, Loader2 } from "lucide-react";
-import { normalizeClauseType, readFieldValue } from "@/lib/leaseReviewSchema";
+import {
+  hasValidSourceEvidence,
+  normalizeClauseType,
+  readFieldEvidence,
+  readFieldValue,
+  resolveSourceTextQuality,
+} from "@/lib/leaseReviewSchema";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -590,44 +596,67 @@ export function CriticalDatesTable({ lease }) {
     const endMs = new Date(expiration).getTime();
     if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
       if (endMs <= startMs) {
-        flags.expiration = "Expiration is on or before commencement";
+        flags.expiration_date = "Expiration is on or before commencement";
       } else {
         const days = Math.round((endMs - startMs) / 86400000);
-        if (days < 30) flags.expiration = `Term is only ${days} day(s) — verify year`;
+        if (days < 30) flags.expiration_date = `Term is only ${days} day(s) - verify year`;
       }
     }
   }
   if (leaseDate && commencement && new Date(leaseDate).toDateString() === new Date(commencement).toDateString()) {
-    flags.commencement = "Same as lease signing date — verify";
+    flags.commencement_date = "Same as lease signing date - verify";
   }
+
+  const dateEvidence = (key, value) => {
+    const evidence = readFieldEvidence(lease, key);
+    const sourceTextQuality = resolveSourceTextQuality({
+      value,
+      sourceText: evidence.sourceText,
+      sourcePage: evidence.sourcePage,
+      extractionStatus: evidence.extractionStatus,
+      evidenceType: evidence.evidenceType,
+      sourceTextQuality: evidence.sourceTextQuality,
+      sourceFieldKeys: evidence.sourceFieldKeys,
+      derivationTrace: evidence.derivationTrace,
+    });
+    return {
+      ...evidence,
+      sourceTextQuality,
+      hasValidSource: hasValidSourceEvidence({
+        value,
+        ...evidence,
+        sourceTextQuality,
+      }),
+    };
+  };
 
   const rows = [
     { key: "lease_date", label: "Lease Date (signed)", value: leaseDate },
-    { key: "commencement", label: "Commencement Date", value: commencement },
+    { key: "commencement_date", label: "Commencement Date", value: commencement },
     {
-      key: "rent_commencement",
+      key: "rent_commencement_date",
       label: "Rent Commencement Date",
       value:
         readFieldValue(lease, "rent_commencement_date") ??
         lease?.rent_commencement_date,
     },
-    { key: "expiration", label: "Expiration Date", value: expiration },
+    { key: "expiration_date", label: "Expiration Date", value: expiration },
     {
-      key: "renewal_notice",
+      key: "renewal_notice_months",
       label: "Renewal Notice (months)",
       value:
         readFieldValue(lease, "renewal_notice_months") ??
         lease?.renewal_notice_months,
     },
     {
-      key: "termination_notice",
+      key: "termination_notice_months",
       label: "Termination Notice (months)",
       value:
         readFieldValue(lease, "termination_notice_months") ??
         lease?.termination_notice_months,
     },
     {
-      key: "option_exercise",
+      key: "option_exercise_deadline",
       label: "Option Exercise Deadline",
       value:
         readFieldValue(lease, "option_exercise_deadline") ??
@@ -660,12 +689,22 @@ export function CriticalDatesTable({ lease }) {
             <TableBody>
               {rows.map((row) => {
                 const present = row.value != null && row.value !== "";
+                const evidence = dateEvidence(row.key, row.value);
                 const conflict = flags[row.key] || null;
+                const needsReview = present && (
+                  !evidence.hasValidSource ||
+                  evidence.sourceTextQuality === "derived" ||
+                  evidence.sourceTextQuality === "inferred" ||
+                  evidence.requiresReview
+                );
                 let badgeClass = "bg-amber-50 text-amber-700";
                 let badgeText = "Not Found";
                 if (present && conflict) {
                   badgeClass = "bg-red-100 text-red-700";
                   badgeText = "Conflict";
+                } else if (needsReview) {
+                  badgeClass = "bg-purple-50 text-purple-700";
+                  badgeText = "Manual Review";
                 } else if (present) {
                   badgeClass = "bg-emerald-50 text-emerald-700";
                   badgeText = "Captured";

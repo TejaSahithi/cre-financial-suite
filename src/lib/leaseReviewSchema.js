@@ -609,7 +609,6 @@ export function readFieldValue(lease, key) {
 export function cleanSourceEvidenceText(value) {
   const text = String(value ?? "").trim();
   if (!text) return null;
-  const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|manual review|workflow placeholder|not found|unknown|n\/a|na|null|none|missing)$/i.test(text)) return null;
   if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
@@ -632,6 +631,94 @@ export function hasNaturalSourceBoundary(value) {
     return false;
   }
   return true;
+}
+
+function normalizeEvidenceComparable(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[$,%]/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function numericEvidenceTokens(value) {
+  const text = String(value ?? "");
+  const tokens = new Set();
+  for (const match of text.matchAll(/\d[\d,]*(?:\.\d+)?/g)) {
+    const raw = match[0];
+    tokens.add(raw.replace(/,/g, ""));
+    const asNumber = Number(raw.replace(/,/g, ""));
+    if (Number.isFinite(asNumber)) tokens.add(String(asNumber));
+  }
+  return tokens;
+}
+
+function isoDateSupportTokens(value) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  const monthIndex = Number(month) - 1;
+  const monthNames = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  return {
+    year,
+    day: String(Number(day)),
+    monthNumber: String(Number(month)),
+    monthName: monthNames[monthIndex],
+  };
+}
+
+function booleanSourceSupportsValue(sourceText) {
+  const source = normalizeEvidenceComparable(sourceText);
+  return /\b(shall|must|required|insurance|additional insured|waiver|consent|option|renewal|terminate|not required|no right|none)\b/.test(source);
+}
+
+function sourceTextSupportsValue({ value, rawValue, sourceText, evidenceType, extractionStatus } = {}) {
+  const source = cleanSourceEvidenceText(sourceText);
+  if (!source) return false;
+  if (!isMeaningfulValue(value ?? rawValue)) return true;
+  if (
+    evidenceType === EVIDENCE_TYPES.DERIVED ||
+    isCalculatedExtractionStatus(extractionStatus)
+  ) {
+    return true;
+  }
+  if (
+    evidenceType === EVIDENCE_TYPES.INFERRED ||
+    String(extractionStatus || "").toLowerCase() === EXTRACTION_STATUSES.INFERRED
+  ) {
+    return Boolean(source);
+  }
+  const candidate = value ?? rawValue;
+  if (typeof candidate === "boolean") return booleanSourceSupportsValue(source);
+
+  const sourceNorm = normalizeEvidenceComparable(source);
+  const valueNorm = normalizeEvidenceComparable(candidate);
+  const rawNorm = normalizeEvidenceComparable(rawValue);
+  if (valueNorm && sourceNorm.includes(valueNorm)) return true;
+  if (rawNorm && sourceNorm.includes(rawNorm)) return true;
+
+  const dateTokens = isoDateSupportTokens(candidate);
+  if (dateTokens) {
+    const hasMonth = sourceNorm.includes(dateTokens.monthName) || sourceNorm.includes(` ${dateTokens.monthNumber} `);
+    if (sourceNorm.includes(dateTokens.year) && sourceNorm.includes(dateTokens.day) && hasMonth) return true;
+  }
+
+  const valueNumbers = numericEvidenceTokens(candidate);
+  if (valueNumbers.size > 0) {
+    const sourceNumbers = numericEvidenceTokens(source);
+    if ([...valueNumbers].some((token) => sourceNumbers.has(token))) return true;
+  }
+
+  const tokens = valueNorm.split(" ").filter((token) => token.length >= 3 && !/^\d+$/.test(token));
+  if (tokens.length >= 2 && tokens.every((token) => sourceNorm.includes(token))) return true;
+  return tokens.length === 1 && sourceNorm.includes(tokens[0]);
 }
 
 export function isCalculatedExtractionStatus(status) {
@@ -681,7 +768,6 @@ export function hasValidSourceEvidence(evidence = {}) {
     SOURCE_TEXT_QUALITIES.EXACT,
     SOURCE_TEXT_QUALITIES.PARTIAL,
     SOURCE_TEXT_QUALITIES.DERIVED,
-    SOURCE_TEXT_QUALITIES.INFERRED,
   ].includes(quality);
 }
 
@@ -712,6 +798,7 @@ export function readFieldEvidence(lease, key) {
       sourceFieldKeys: [],
       derivationTrace: null,
       requiresReview: false,
+      reviewReason: null,
       approvalBlockingReason: null,
     };
   }
@@ -755,6 +842,7 @@ export function readFieldEvidence(lease, key) {
   let evSourceFieldKeys = Array.isArray(resolved?.sourceFieldKeys) ? resolved.sourceFieldKeys : [];
   let evDerivationTrace = resolved?.derivationTrace ?? null;
   let evRequiresReview = Boolean(resolved?.requiresReview);
+  let evReviewReason = resolved?.reviewReason ?? null;
   let evApprovalBlockingReason = resolved?.approvalBlockingReason ?? null;
 
   for (const source of richSources) {
@@ -806,6 +894,11 @@ export function readFieldEvidence(lease, key) {
     if (!evDerivationTrace) {
       evDerivationTrace = entry.derivation_trace ?? entry.derivationTrace ?? entry.evidence?.derivation_trace ?? null;
     }
+    if (!evReviewReason) {
+      evReviewReason = entry.review_reason ?? entry.reviewReason
+        ?? entry.requires_review_reason ?? entry.requiresReviewReason
+        ?? entry.evidence?.review_reason ?? null;
+    }
     if (!evApprovalBlockingReason) {
       evApprovalBlockingReason = entry.approval_blocking_reason ?? entry.approvalBlockingReason ?? null;
     }
@@ -817,6 +910,7 @@ export function readFieldEvidence(lease, key) {
     sourcePage: evSourcePage,
     sourceText: evSourceText,
     sourceClause: evSourceClause,
+    rawValue: evRawValue,
     sourceTextQuality: evSourceTextQuality,
     extractionStatus: evExtractionStatus,
     evidenceType: evEvidenceType,
@@ -830,6 +924,9 @@ export function readFieldEvidence(lease, key) {
     sourceFieldKeys: evSourceFieldKeys,
     derivationTrace: evDerivationTrace,
   });
+  const needsReviewForQuality =
+    sourceTextQuality === SOURCE_TEXT_QUALITIES.INFERRED ||
+    (isMeaningfulValue(resolved?.value ?? evRawValue) && sourceTextQuality === SOURCE_TEXT_QUALITIES.MISSING);
 
   return {
     rawValue: evRawValue,
@@ -841,7 +938,8 @@ export function readFieldEvidence(lease, key) {
     sourceTextQuality,
     sourceFieldKeys: evSourceFieldKeys,
     derivationTrace: evDerivationTrace,
-    requiresReview: evRequiresReview,
+    requiresReview: evRequiresReview || Boolean(evReviewReason) || needsReviewForQuality,
+    reviewReason: evReviewReason,
     approvalBlockingReason: evApprovalBlockingReason,
   };
 }
@@ -958,8 +1056,6 @@ export function resolveSourceTextQuality(evidence = {}) {
       ?? evidence?.evidence?.source_text_quality
       ?? "",
   ).trim().toLowerCase();
-  if (Object.values(SOURCE_TEXT_QUALITIES).includes(explicit)) return explicit;
-
   const extractionStatus = String(evidence?.extractionStatus ?? evidence?.extraction_status ?? "").trim().toLowerCase();
   const evidenceType = normalizeEvidenceType(evidence?.evidenceType ?? evidence?.evidence_type ?? extractionStatus, evidence);
   const hasConflict = evidenceType === EVIDENCE_TYPES.CONFLICT || extractionStatus.includes("conflict") || Boolean(evidence?.conflictCandidates?.length);
@@ -983,9 +1079,17 @@ export function resolveSourceTextQuality(evidence = {}) {
       ?? evidence?.sourceFieldKeys?.length
       ?? evidence?.source_field_keys?.length,
   );
+  const rawValue = evidence?.rawValue ?? evidence?.raw_value;
+
+  if (
+    Object.values(SOURCE_TEXT_QUALITIES).includes(explicit) &&
+    ![SOURCE_TEXT_QUALITIES.EXACT, SOURCE_TEXT_QUALITIES.PARTIAL].includes(explicit)
+  ) {
+    return explicit;
+  }
 
   if (evidenceType === EVIDENCE_TYPES.DERIVED || isCalculatedExtractionStatus(extractionStatus) || hasDerivation) {
-    return hasValue ? SOURCE_TEXT_QUALITIES.DERIVED : SOURCE_TEXT_QUALITIES.MISSING;
+    return hasValue && hasDerivation ? SOURCE_TEXT_QUALITIES.DERIVED : SOURCE_TEXT_QUALITIES.MISSING;
   }
   if (evidenceType === EVIDENCE_TYPES.INFERRED || extractionStatus === EXTRACTION_STATUSES.INFERRED) {
     return hasValue && (sourceText || sourceClause || evidence?.derivationTrace || evidence?.derivation_trace)
@@ -995,6 +1099,15 @@ export function resolveSourceTextQuality(evidence = {}) {
   if (!hasValue && !sourceText && !sourceClause) return SOURCE_TEXT_QUALITIES.MISSING;
   if (sourceText || sourceClause) {
     const evidenceText = sourceText ?? sourceClause;
+    const supportsValue = sourceTextSupportsValue({
+      value: evidence?.value ?? evidence?.normalized_value,
+      rawValue,
+      sourceText: evidenceText,
+      evidenceType,
+      extractionStatus,
+    });
+    if (hasValue && !supportsValue) return SOURCE_TEXT_QUALITIES.MISSING;
+    if (explicit === SOURCE_TEXT_QUALITIES.PARTIAL) return SOURCE_TEXT_QUALITIES.PARTIAL;
     return page && hasNaturalSourceBoundary(evidenceText)
       ? SOURCE_TEXT_QUALITIES.EXACT
       : SOURCE_TEXT_QUALITIES.PARTIAL;
