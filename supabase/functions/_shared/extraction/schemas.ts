@@ -282,7 +282,7 @@ export const LEASE_SCHEMA: ModuleSchema = {
     type: "number",
     min: 1,   // reject $0 — free-rent periods show $0 in the schedule; $0 is never the real rent
     labels: ["monthly rent", "base rent", "rent", "rent per month", "monthly base rent"],
-    tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent"],
+    tableHeaders: ["monthly_rent", "monthly rent", "base rent", "rent", "monthly", "base_rent", "base rent per month", "base_rent_per_month", "monthly base rent", "monthly_base_rent"],
     patterns: [
       /(?:monthly\s+rent|base\s+rent|minimum\s+rent)[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*month|\/month|\/mo|monthly)/i,
       /monthly\s*rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i,
@@ -291,9 +291,10 @@ export const LEASE_SCHEMA: ModuleSchema = {
     description:
       "The base rent paid PER MONTH in USD (plain number, no $ or commas). " +
       "ONLY use the number explicitly described as 'per month', 'monthly', or 'monthly rent'. " +
-      "If the lease shows a rent schedule table with multiple rows (e.g. year-over-year escalations), " +
-      "extract the FIRST NON-ZERO 'Monthly Base Rent' value — that is the first PAID period, " +
-      "skipping any $0 free-rent / rent-abatement period at the start. " +
+      "If the lease shows a RENT ADDENDUM or rent schedule table with a column called 'Base Rent Per Month' or 'Monthly Base Rent', " +
+      "extract the FIRST NON-ZERO value from that column — that is the first PAID period, " +
+      "skipping any $0 or '$-' free-rent / rent-abatement rows at the start. " +
+      "For example, if months 1-2 show '$-' (free rent) and months 3-12 show '$6,004.00', return 6004. " +
       "NEVER use annual rent or year totals; if only an annual figure is shown, leave monthly_rent NULL " +
       "and the calculator will derive it. " +
       "IMPORTANT: Do NOT extract monthly_rent from the Security Deposit Addendum — dollar amounts there " +
@@ -377,9 +378,15 @@ export const LEASE_SCHEMA: ModuleSchema = {
   security_deposit: {
     type: "number",
     min: 0,
-    labels: ["security deposit", "deposit"],
-    tableHeaders: ["security_deposit", "deposit", "security deposit"],
-    description: "Security deposit in USD",
+    labels: ["security deposit", "deposit", "security deposit addendum"],
+    tableHeaders: ["security_deposit", "deposit", "security deposit", "total security deposit"],
+    description:
+      "TOTAL security deposit amount in USD (plain number, no $ or commas). " +
+      "If the lease has a Security Deposit Addendum that calculates the deposit from component month rents " +
+      "(e.g. 'third month rent $X plus eighty-sixth month rent $Y = total $Z'), return the TOTAL ($Z), " +
+      "NOT an intermediate component amount. " +
+      "Look for phrases like 'for a total of', 'equals', 'total security deposit', or a final sum line. " +
+      "Do NOT return individual month rent amounts used in the deposit calculation.",
   },
   late_fee_amount: {
     type: "number",

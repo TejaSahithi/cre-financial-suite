@@ -164,7 +164,7 @@ const CLAUSE_DEFINITIONS = [
   { type: "remedies", title: "Remedies", keywords: ["remedies", "cumulative remedies"], maxChars: 520 },
   { type: "surrender", title: "Surrender", keywords: ["surrender", "vacate"], maxChars: 520 },
   { type: "holdover", title: "Holdover", keywords: ["holdover"], maxChars: 420 },
-  { type: "renewal_option", title: "Renewal Option", keywords: ["renewal option", "option to renew", "extend the term", "additional term"], maxChars: 720 },
+  { type: "renewal_option", title: "Renewal Option", keywords: ["renewal option", "option to renew", "option to lease", "extend the term", "additional term", "option term", "additional period", "option term addendum"], maxChars: 1200 },
   { type: "notices", title: "Notices", keywords: ["notices", "notice"], maxChars: 620 },
   { type: "subordination_estoppel", title: "Subordination / Estoppel", keywords: ["subordination", "estoppel"], maxChars: 520 },
   { type: "governing_law", title: "Governing Law", keywords: ["governing law"], maxChars: 320 },
@@ -198,15 +198,21 @@ const FIELD_SPECS = [
   { key: "lease_type", group: "lease_header", aliases: ["lease_type", "expense_structure", "rent_structure", "lease_structure"] },
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i, /\b(?:use|operate)\s+(?:the\s+)?Premises\s+(?:solely\s+)?(?:for|as)\s+([^\n.]{4,180})/i, /\bsolely\s+for\s+([^\n.]{4,180})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
-  { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [/\b(?:security\s+deposit|deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
+  { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [
+    // Prefer "total of $X,XXX.XX" — the final summed deposit amount in addendum-style leases
+    /\btotal\s+of\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
+    /\bsecurity\s+deposit\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
+    /\b(?:deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
+  ] },
   // lease_term: match only concise label-value forms (e.g. "Lease Term: 86 months" or
   // "Term: 7 years"). The old [^\n]{2,120} was too greedy and captured entire clause
   // paragraphs containing unrelated content (grease trap amortization, etc.).
   { key: "lease_term", group: "lease_term", aliases: ["lease_term", "term"], patterns: [/\blease term\b[:\s-]+(\d[^\n]{1,40})/i] },
   { key: "commencement_date", group: "lease_term", aliases: ["commencement_date", "start_date", "lease_commencement_date", "term_commencement_date", "term_start", "beginning_of_term", "commencement"], patterns: [/\b(?:commencement date|lease commencement|term commencement|commences? on)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { key: "expiration_date", group: "lease_term", aliases: ["expiration_date", "end_date", "lease_expiration_date", "termination_date", "term_end", "end_of_term", "expiry_date"], patterns: [/\b(?:expiration date|lease expiration|termination date|term end|ends? on|expires? on)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
-  { key: "renewal_notice_days", group: "lease_term", aliases: ["renewal_notice_days"], patterns: [/\bnotice\b[^\n]{0,60}?(\d{1,3})\s+days?/i] },
+  { key: "renewal_notice_months", group: "lease_term", aliases: ["renewal_notice_months", "renewal_notice_days"], clauseType: "renewal_option", patterns: [/\b(?:renewal\s+notice|notice\s+(?:to|of)\s+renew)\b[^\n]{0,60}?(\d{1,3})\s+months?/i] },
   { key: "renewal_escalation_percent", group: "lease_term", aliases: ["renewal_escalation_percent", "escalation_rate"], patterns: [/\brenewal\b[^\n]{0,80}?(\d{1,2}(?:\.\d+)?)\s*%/i] },
+  { key: "renewal_options", group: "lease_term", aliases: ["renewal_options", "renewal_option", "renewal_terms", "option_to_renew"], clauseType: "renewal_option", patterns: [/\b(?:two|three|one|four|five|\d+)\s*\(?\d*\)?\s*additional\s+(?:five|three|two|one|\d+)\s*(?:\(\s*\d+\s*\))?\s*-?\s*year\s+period/i, /\b(?:option\s+to\s+(?:renew|lease|extend)|renewal\s+option)\b[^\n.]{0,120}/i] },
   { key: "holdover_rent_multiplier", group: "lease_term", aliases: ["holdover_rent_multiplier"], clauseType: "holdover", patterns: [/\bholdover\b[^\n]{0,80}?(\d(?:\.\d+)?)\s*x/i, /\bholdover\b[^\n]{0,80}?(\d{2,3})\s*%/i] },
   { key: "base_rent_monthly", group: "rent_terms", aliases: ["base_rent_monthly", "monthly_rent", "base_rent", "monthly_base_rent", "current_monthly_rent"], patterns: [/\b(?:base rent|monthly rent|rent)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)\s*(?:per month|\/month|\/mo|monthly)/i] },
   { key: "annual_rent", group: "rent_terms", aliases: ["annual_rent"], patterns: [/\b(?:annual|yearly|base\s+annual)\s+rent[:\s]+\$?\s*([\d,]+(?:\.\d{2})?)/i, /\b(?:base\s+rent\s+for\s+(?:the\s+)?additional\s+year|additional\s+year\s+base\s+rent|amended\s+base\s+rent|extended\s+term\s+rent)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i, /\$\s*([\d,]+(?:\.\d{2})?)\s*(?:per\s*year|\/year|\/yr|annually)/i] },
@@ -259,6 +265,16 @@ const FIELD_SPECS = [
     patterns: [
       /\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i,
     ],
+  },
+  { key: "tenant_insurance_required", group: "insurance",
+    aliases: ["tenant_insurance_required", "tenant_insurance", "insurance_required"],
+    clauseType: "insurance",
+    patterns: [/\btenant\s+shall\s+(?:maintain|carry|obtain|provide|keep\s+in\s+force)[^\n]{0,80}\b(?:insurance|liability)\b/i],
+  },
+  { key: "general_liability_min", group: "insurance",
+    aliases: ["general_liability_min", "general_liability_minimum", "general_liability", "liability_minimum", "cgl_limit", "cgl_amount"],
+    clauseType: "insurance",
+    patterns: [/(?:commercial\s+general\s+liability|cgl|general\s+liability)[^\n]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
   },
   { key: "maintenance_responsibility", group: "expense_terms",
     aliases: ["maintenance_responsibility", "responsibility_repairs", "responsibility_maintenance"],
@@ -1077,8 +1093,62 @@ function extractInsuranceStructure(text: string) {
 
 function buildClauseRecords(doclingRaw: any, fullText: string) {
   const textBlocks = asArray(doclingRaw?.text_blocks);
+
+  function findClauseSnippet(
+    keywords: string[],
+    maxChars: number,
+  ): { clause_text: string | null; source_page: number | null } {
+    const loweredKeywords = keywords.map((k) => k.toLowerCase());
+    const limit = Math.max(maxChars, 1600);
+
+    // 1. Search text_blocks — simple join of matching block + next 2 blocks.
+    //    Avoids the strict sentence-boundary rules of expandSourceSnippetFromMatch
+    //    which returns null for OCR text that lacks clean `.!?` endings.
+    for (let i = 0; i < textBlocks.length; i++) {
+      const blockText = cleanText(textBlocks[i]?.text || "");
+      if (!blockText) continue;
+      const haystack = blockText.toLowerCase();
+      if (!loweredKeywords.some((kw) => haystack.includes(kw))) continue;
+      const joined = [
+        blockText,
+        cleanText(textBlocks[i + 1]?.text || ""),
+        cleanText(textBlocks[i + 2]?.text || ""),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const snippet = joined.length <= limit ? joined : joined.slice(0, limit).trimEnd();
+      if (!snippet) continue;
+      const sourcePage = Number.isFinite(Number(textBlocks[i]?.page))
+        ? Number(textBlocks[i].page)
+        : null;
+      return { clause_text: snippet, source_page: sourcePage };
+    }
+
+    // 2. Paragraph-based fallback on fullText (double-newline or
+    //    newline-before-capital/digit splits produce paragraph-sized chunks).
+    const paragraphs = fullText
+      .split(/\n{2,}|\n(?=[A-Z0-9\[\(])/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 10);
+    for (const para of paragraphs) {
+      if (!loweredKeywords.some((kw) => para.toLowerCase().includes(kw))) continue;
+      const snippet = para.length <= limit ? para : para.slice(0, limit).trimEnd();
+      return { clause_text: snippet || null, source_page: null };
+    }
+
+    // 3. Sentence-level fallback (last resort).
+    for (const part of fullText.split(/(?<=[.!?])\s+/)) {
+      const trimmed = cleanText(part);
+      if (!trimmed) continue;
+      if (!loweredKeywords.some((kw) => trimmed.toLowerCase().includes(kw))) continue;
+      return { clause_text: trimmed.length <= limit ? trimmed : null, source_page: null };
+    }
+
+    return { clause_text: null, source_page: null };
+  }
+
   return CLAUSE_DEFINITIONS.map((definition) => {
-    const snippet = extractClauseSnippet(textBlocks, fullText, definition.keywords, Math.max(definition.maxChars, 2000));
+    const snippet = findClauseSnippet(definition.keywords, Math.max(definition.maxChars, 2000));
     const clauseText = snippet.clause_text;
     let structuredFieldsJson: Record<string, unknown> = {};
 
