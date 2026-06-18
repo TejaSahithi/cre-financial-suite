@@ -133,6 +133,7 @@ export default function FieldReviewTable({
             const sourcePage = field.page_number ?? field.source_page ?? evidence.sourcePage;
             const required = field.required;
             const validationResult = validateFieldValue(field.key, value);
+            const isConflict = conflictKeys?.has(field.key);
             const sourceQualityKey = resolveSourceTextQuality({
               value,
               sourceText,
@@ -145,7 +146,6 @@ export default function FieldReviewTable({
               conflictCandidates: isConflict ? [field.key] : [],
             });
             const sqBadge = SOURCE_QUALITY_BADGE[sourceQualityKey];
-            const isConflict = conflictKeys?.has(field.key);
 
             const rowClass = isConflict
               ? "bg-red-50/40 hover:bg-red-50/70"

@@ -834,23 +834,6 @@ export default function LeaseReview() {
     [leaseFull],
   );
 
-  const handleMarkAsFullLease = async () => {
-    try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            document_type_override: "full_lease",
-          },
-        },
-      });
-      toast.success("Marked as full lease — banner dismissed.");
-    } catch {
-      toast.error("Could not save override. Try again.");
-    }
-  };
-
   const updateLeaseMutation = useMutation({
     mutationFn: async ({ id, data }) => leaseService.update(id, data),
     onSuccess: (updated) => {
@@ -880,6 +863,23 @@ export default function LeaseReview() {
       toast.error(`Update failed: ${err?.message ?? "Unknown error"}`);
     },
   });
+
+  const handleMarkAsFullLease = async () => {
+    try {
+      await updateLeaseMutation.mutateAsync({
+        id: lease.id,
+        data: {
+          extraction_data: {
+            ...(lease.extraction_data || {}),
+            document_type_override: "full_lease",
+          },
+        },
+      });
+      toast.success("Marked as full lease — banner dismissed.");
+    } catch {
+      toast.error("Could not save override. Try again.");
+    }
+  };
 
   // Auto-run extraction the first time we land on a lease that hasn't been
   // through the full re-extract pipeline yet. The canonical "extraction has
