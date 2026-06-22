@@ -9,6 +9,13 @@ type LeaseWorkflowField = {
   extraction_status: "extracted" | "calculated" | "not_found" | "manual_required" | "conflict_detected";
   editable: boolean;
   field_group: string;
+  evidence_type?: "extracted" | "derived" | "inferred" | "missing" | "conflict";
+  source_text_quality?: "exact" | "partial" | "derived" | "inferred" | "missing" | "conflict";
+  source_field_keys?: string[];
+  derivation_trace?: string | null;
+  validation_errors?: string[];
+  requires_review?: boolean;
+  review_reason?: string | null;
 };
 
 type LeaseWorkflowClause = {
@@ -572,6 +579,85 @@ function getFirstValue(row: Record<string, unknown>, aliases: string[] = []) {
   return null;
 }
 
+const SUMMARY_LABEL_TO_FIELD: Record<string, string> = {
+  date: "lease_date",
+  landlord: "landlord_name",
+  "address of landlord": "landlord_address",
+  tenant: "tenant_name",
+  "address of tenant": "tenant_address",
+  premises: "property_address",
+  building: "property_address",
+  suite: "suite_number",
+  "lease term": "lease_term",
+  term: "lease_term",
+  "commencement date": "commencement_date",
+  "rent commencement date": "rent_commencement_date",
+  "expiration date": "expiration_date",
+  rent: "base_rent_monthly",
+  "monthly rent": "base_rent_monthly",
+  "security deposit": "security_deposit_amount",
+  "permitted use": "permitted_use",
+  use: "permitted_use",
+  brokers: "broker_name",
+  broker: "broker_name",
+};
+
+const SUMMARY_LABELS = Object.keys(SUMMARY_LABEL_TO_FIELD).sort((a, b) => b.length - a.length);
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanSummaryValue(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s:;.-]+|[\s:;.-]+$/g, "")
+    .trim();
+}
+
+function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
+  const textBlocks = asArray(doclingRaw?.text_blocks);
+  const labelPattern = SUMMARY_LABELS.map(escapeRegExp).join("|");
+  const pairPattern = new RegExp(
+    `(?:^|\\n|\\r|\\b\\d{1,2}\\.\\s*)(?:\\(?\\s*)(${labelPattern})(?:\\s*\\)?)(?:\\s*[:;-]\\s*|\\s{2,})([\\s\\S]*?)(?=(?:\\n|\\r|\\s)\\d{0,2}\\.?\\s*(?:${labelPattern})(?:\\s*[:;-]|\\s{2,})|$)`,
+    "gi",
+  );
+  const chunks = [
+    ...textBlocks
+      .filter((block) => {
+        const page = sourcePageOf(block);
+        return page == null || page <= 2;
+      })
+      .map((block) => ({ text: String(block?.text || ""), source_page: sourcePageOf(block) })),
+    { text: String(fullText || "").slice(0, 8000), source_page: null },
+  ];
+  const pairs: Record<string, { field_key: string; label: string; value: string; source_text: string; source_page: number | null }> = {};
+
+  for (const chunk of chunks) {
+    const rawText = String(chunk.text || "").replace(/\r/g, "\n");
+    if (!rawText || !/landlord|tenant|premises|commencement|expiration|security deposit|permitted use|lease term|rent/i.test(rawText)) continue;
+    pairPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pairPattern.exec(rawText))) {
+      const label = cleanSummaryValue(match[1]).toLowerCase();
+      const fieldKey = SUMMARY_LABEL_TO_FIELD[label];
+      if (!fieldKey || pairs[fieldKey]) continue;
+      const value = cleanSummaryValue(match[2]).slice(0, 280);
+      if (!value || value.length < 2) continue;
+      const sourceText = cleanSummaryValue(`${match[1]}: ${value}`);
+      pairs[fieldKey] = {
+        field_key: fieldKey,
+        label,
+        value,
+        source_text: sourceText,
+        source_page: chunk.source_page ?? 1,
+      };
+    }
+  }
+
+  return pairs;
+}
+
 function extractPatternValue(text: string, patterns: RegExp[] = []) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -816,6 +902,43 @@ function normalizePermittedUseValue(value: unknown, sourceText?: string | null):
   return valueText;
 }
 
+function looksLikeDateText(value: unknown): boolean {
+  const text = cleanText(value);
+  if (!text) return false;
+  return /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4}$/i.test(text)
+    || /^\d{4}-\d{2}-\d{2}$/.test(text)
+    || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(text);
+}
+
+function looksLikePhoneOnly(value: unknown): boolean {
+  const text = cleanText(value);
+  return /^\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/.test(text);
+}
+
+function isGenericLeaseIntroEvidence(sourceText: string | null): boolean {
+  const lower = cleanText(sourceText).toLowerCase();
+  if (!lower) return false;
+  return /\bthis lease\b/.test(lower) &&
+    /\b(?:landlord|tenant)\b/.test(lower) &&
+    /\b(?:article\s+1|lease of premises|in consideration of the rent|made and entered)\b/.test(lower) &&
+    !/\b(?:rent includes|full service|property tax|real estate tax|insurance premium|property insurance|utilities|electric|water|sewer|hvac|maintenance expenses|common area maintenance|responsible|shall pay|shall maintain)\b/.test(lower);
+}
+
+function responsibilityEvidenceSupportsField(fieldKey: string, value: unknown, sourceText: string | null): boolean {
+  const source = cleanText(sourceText).toLowerCase();
+  if (!source || isGenericLeaseIntroEvidence(source)) return false;
+  const normalizedValue = cleanText(value).toLowerCase();
+  const hasExpenseAction = /\b(?:rent includes|included in rent|full service|shall pay|shall reimburse|responsible for|at (?:tenant|landlord)'?s (?:sole )?(?:cost|expense)|shall maintain|shall provide|separately metered)\b/.test(source);
+  const fieldSupported: Record<string, boolean> = {
+    responsibility_taxes: /\b(?:tax|taxes|real estate tax|property tax)\b/.test(source),
+    responsibility_insurance: /\b(?:insurance|premium|coverage)\b/.test(source),
+    responsibility_utilities: /\b(?:utilit|electric|water|sewer|gas|hvac|janitorial)\b/.test(source),
+    responsibility_repairs: /\b(?:repair|maintenance|maintain|hvac)\b/.test(source),
+    property_insurance_responsibility: /\b(?:property insurance|insurance premium|rent includes)\b/.test(source),
+  };
+  const valueSupported = !/^(tenant|landlord)$/.test(normalizedValue) || source.includes(normalizedValue) || /\b(?:rent includes|included in rent|full service)\b/.test(source);
+  return (fieldSupported[fieldKey] ?? true) && hasExpenseAction && valueSupported;
+}
 function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: string | null) {
   const valueText = cleanText(value);
   const source = cleanText(sourceText).toLowerCase();
@@ -847,7 +970,7 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
   if (fieldKey === "property_name") {
     if (
       valueText.length < 4 ||
-      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property)$/i.test(valueText) ||
+      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property|tenant has|landlord has)$/i.test(valueText) ||
       /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)
     ) {
       return "property_name_not_specific";
@@ -872,12 +995,34 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     }
   }
 
-  if (["tenant_name", "landlord_name", "broker_name", "tenant_contact_name"].includes(fieldKey)) {
-    if (valueText.length > 90 || /(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)/i.test(valueText)) {
+  if (["tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "tenant_signatory_name", "landlord_contact_name", "landlord_signatory_name", "assignee_name", "assignor_name", "guarantor_name", "owner_name"].includes(fieldKey)) {
+    if (
+      looksLikeDateText(valueText) ||
+      looksLikePhoneOnly(valueText) ||
+      valueText.length > 90 ||
+      /^(?:tenant|landlord|assignee|assignor|owner|broker|agent|date|name|title)$/i.test(valueText) ||
+      /(?:assumes?\s+in\s+full|obligations?\s+of|transfer\s+shall|shall|hereby|premises|article|section|rent|maintenance|insurance|taxes|prior\s+written\s+consent|sublet|assignment)/i.test(valueText)
+    ) {
       return "party_name_looks_like_clause_text";
     }
   }
 
+  if (fieldKey === "assignment_consideration") {
+    if (/^[.,;:-]?$/.test(valueText)) return "assignment_consideration_not_meaningful";
+    if (!/\b(?:assignment|assign|transfer|consideration|premium|fee|\$|dollar)\b/i.test(combined)) {
+      return "assignment_consideration_without_context";
+    }
+  }
+
+  if (["responsibility_taxes", "responsibility_insurance", "responsibility_utilities", "responsibility_repairs", "property_insurance_responsibility"].includes(fieldKey)) {
+    if (!responsibilityEvidenceSupportsField(fieldKey, valueText, sourceText)) {
+      return "responsibility_without_specific_evidence";
+    }
+  }
+
+  if (["tenant_insurance_required", "general_liability_min", "additional_insureds_required"].includes(fieldKey)) {
+    if (!/\b(?:insurance|liability|coverage|insured|certificate)\b/i.test(source)) return "insurance_field_without_insurance_evidence";
+  }
   if (fieldKey === "lease_type" && !normalizeLeaseTypeValue(valueText)) {
     return "lease_type_unknown";
   }
@@ -1187,6 +1332,10 @@ const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
   rent_clause: "rent_charges",
   operating_expense_recovery: "expenses_recoveries",
   cam_recoveries: "cam_rules",
+  taxes: "expenses_recoveries",
+  insurance: "insurance",
+  utilities: "expenses_recoveries",
+  lease_expense_structure: "expenses_recoveries",
   insurance_requirements: "insurance",
   renewal_option: "critical_dates",
   termination: "critical_dates",
@@ -1705,11 +1854,22 @@ function applyDocumentItemsToLeaseFields(
 function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, clauses: LeaseWorkflowClause[]) {
   const fullText = cleanText(doclingRaw?.full_text || "");
   const fieldMap: Record<string, LeaseWorkflowField> = {};
+  const summaryPairs = extractSummaryLabelPairs(doclingRaw, String(doclingRaw?.full_text || ""));
 
   for (const spec of FIELD_SPECS) {
     let value = getFirstValue(row, spec.aliases);
     let extractionStatus: LeaseWorkflowField["extraction_status"] = "extracted";
     let confidenceScore = getRowConfidence(row, spec.aliases?.[0] || spec.key) ?? 0.74;
+    const summaryPair = summaryPairs[spec.key];
+    const summaryNormalizedValue = summaryPair ? normalizeWorkflowFieldValue(spec.key, summaryPair.value) : null;
+    const currentInvalidReason = !isBlank(value)
+      ? fieldValueLooksInvalid(spec.key, normalizeWorkflowFieldValue(spec.key, value), null)
+      : null;
+    if (summaryPair && !isBlank(summaryNormalizedValue) && (isBlank(value) || currentInvalidReason)) {
+      value = summaryPair.value;
+      extractionStatus = "extracted";
+      confidenceScore = Math.max(confidenceScore, 0.91);
+    }
 
     if (isBlank(value) && spec.patterns?.length) {
       value = extractPatternValue(fullText, spec.patterns);
@@ -1815,11 +1975,12 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     // This makes sure Gemini's evidence doesn't get overwritten by a
     // text-match against a generic value like "unknown" or "1110".
     const llmEvidence = getLlmEvidenceForAliases(row, spec.aliases || [spec.key]);
-    const textMatchEvidence = (relatedClause || llmEvidence)
+    const summaryEvidence = summaryPairs[spec.key];
+    const textMatchEvidence = (relatedClause || summaryEvidence || llmEvidence)
       ? { source_page: null as number | null, source_clause: null as string | null }
       : findEvidenceForValue(doclingRaw, spec.key, value, relatedClause?.clause_title || null);
 
-    const resolvedSourceClause = relatedClause?.clause_text ?? llmEvidence?.source_text ?? textMatchEvidence.source_clause;
+    const resolvedSourceClause = relatedClause?.clause_text ?? summaryEvidence?.source_text ?? llmEvidence?.source_text ?? textMatchEvidence.source_clause;
     // Only attach source_clause when it is contextually relevant to the field.
     // An irrelevant block (e.g. a transferee financial-worth paragraph used as
     // source for tenant_name) shows "No source" instead of misleading "Exact".
@@ -1832,7 +1993,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     }
     const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
     if (invalidReason) {
-      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "property_name", "lease_type", "permitted_use", "premises_use", "assignment_provisions", "assignment_rights", "sublease_rights"].includes(spec.key)) {
+      if (["suite_number", "tenant_name", "landlord_name", "broker_name", "tenant_contact_name", "tenant_signatory_name", "landlord_contact_name", "landlord_signatory_name", "assignee_name", "assignor_name", "guarantor_name", "owner_name", "property_name", "lease_type", "permitted_use", "premises_use", "assignment_provisions", "assignment_rights", "sublease_rights", "assignment_consideration", "responsibility_taxes", "responsibility_insurance", "responsibility_utilities", "responsibility_repairs", "property_insurance_responsibility", "tenant_insurance_required", "general_liability_min", "additional_insureds_required"].includes(spec.key)) {
         normalizedValue = null;
         extractionStatus = spec.manualRequired ? "manual_required" : "not_found";
       } else if (extractionStatus === "extracted") {
@@ -1846,7 +2007,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       confidenceScore = Math.min(Number(confidenceScore ?? 0.35), 0.35);
     }
     const sourcePage = relevantSourceClause
-      ? (relatedClause?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page)
+      ? (relatedClause?.source_page ?? summaryEvidence?.source_page ?? llmEvidence?.source_page ?? textMatchEvidence.source_page)
       : null;
     const sourceTextQuality = workflowSourceTextQuality({
       value: normalizedValue,
@@ -1862,6 +2023,10 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       extractionStatus,
       sourceTextQuality,
     });
+    const validationErrors = invalidReason ? [invalidReason] : [];
+    const resolvedReviewReason = invalidReason
+      ? `Extracted value failed field validation: ${invalidReason}.`
+      : reviewReason;
 
     fieldMap[spec.key] = {
       key: spec.key,
@@ -1875,9 +2040,10 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       extraction_status: extractionStatus,
       evidence_type: evidenceType,
       source_text_quality: sourceTextQuality,
-      requires_review: Boolean(reviewReason || sourceTextQuality === "inferred" || extractionStatus === "manual_required"),
-      review_reason: reviewReason,
-      approval_blocking_reason: reviewReason,
+      validation_errors: validationErrors,
+      requires_review: Boolean(resolvedReviewReason || sourceTextQuality === "inferred" || extractionStatus === "manual_required"),
+      review_reason: resolvedReviewReason,
+      approval_blocking_reason: resolvedReviewReason,
       editable: true,
       field_group: spec.group,
     };
@@ -1922,6 +2088,102 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       ? "Lease type was classified from expense signals and requires manual review."
       : "Lease type was not found in the lease. Manual review required.",
   };
+
+  const fieldHasValidEvidence = (field: any) => Boolean(
+    field &&
+    !isBlank(field.value) &&
+    (
+      !isBlank(field.source_clause) ||
+      Number.isFinite(Number(field.source_page)) ||
+      (Array.isArray(field.source_field_keys) && field.source_field_keys.length > 0 && !isBlank(field.derivation_trace))
+    ),
+  );
+  const deriveSourceText = (...fields: any[]) => fields
+    .map((field) => cleanText(field?.source_clause || field?.exact_source_text || ""))
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+    .join("\n");
+
+  const monthlyRentForDerived = asNumber(fieldMap.base_rent_monthly?.value);
+  const squareFeetForDerived = asNumber(fieldMap.tenant_rsf?.value) ?? asNumber(fieldMap.rentable_area_sqft?.value);
+  if (monthlyRentForDerived != null && monthlyRentForDerived > 0 && fieldHasValidEvidence(fieldMap.base_rent_monthly)) {
+    const annualRentDerived = round2(monthlyRentForDerived * 12);
+    if (!fieldHasValidEvidence(fieldMap.annual_rent) || Math.abs((asNumber(fieldMap.annual_rent?.value) ?? annualRentDerived) - annualRentDerived) < 1) {
+      fieldMap.annual_rent = {
+        ...(fieldMap.annual_rent || { key: "annual_rent", editable: true, field_group: "rent_terms" }),
+        key: "annual_rent",
+        value: annualRentDerived,
+        raw_value: annualRentDerived,
+        normalized_value: annualRentDerived,
+        source_page: fieldMap.base_rent_monthly?.source_page ?? null,
+        source_clause: fieldMap.base_rent_monthly?.source_clause ?? null,
+        exact_source_text: fieldMap.base_rent_monthly?.source_clause ?? null,
+        confidence_score: 0.95,
+        extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["base_rent_monthly"],
+        derivation_trace: `annual_rent = base_rent_monthly (${monthlyRentForDerived}) x 12`,
+        validation_errors: [],
+        requires_review: false,
+        review_reason: null,
+        approval_blocking_reason: null,
+        editable: true,
+        field_group: "rent_terms",
+      };
+    }
+    if (!fieldHasValidEvidence(fieldMap.billing_frequency)) {
+      fieldMap.billing_frequency = {
+        key: "billing_frequency",
+        value: "monthly",
+        raw_value: "monthly",
+        normalized_value: "monthly",
+        source_page: fieldMap.base_rent_monthly?.source_page ?? null,
+        source_clause: fieldMap.base_rent_monthly?.source_clause ?? null,
+        exact_source_text: fieldMap.base_rent_monthly?.source_clause ?? null,
+        confidence_score: 0.95,
+        extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["base_rent_monthly"],
+        derivation_trace: "billing_frequency = monthly because base_rent_monthly source states per month/monthly rent",
+        validation_errors: [],
+        requires_review: false,
+        review_reason: null,
+        approval_blocking_reason: null,
+        editable: true,
+        field_group: "rent_terms",
+      };
+    }
+  }
+  if (monthlyRentForDerived != null && monthlyRentForDerived > 0 && squareFeetForDerived != null && squareFeetForDerived > 0 && fieldHasValidEvidence(fieldMap.base_rent_monthly)) {
+    const annualRentForPsf = asNumber(fieldMap.annual_rent?.value) ?? round2(monthlyRentForDerived * 12);
+    const rentPerSf = round2(annualRentForPsf / squareFeetForDerived);
+    if (!fieldHasValidEvidence(fieldMap.rent_per_sf) || Math.abs((asNumber(fieldMap.rent_per_sf?.value) ?? rentPerSf) - rentPerSf) < 0.05) {
+      const sfField = fieldMap.tenant_rsf || fieldMap.rentable_area_sqft;
+      fieldMap.rent_per_sf = {
+        key: "rent_per_sf",
+        value: rentPerSf,
+        raw_value: rentPerSf,
+        normalized_value: rentPerSf,
+        source_page: fieldMap.base_rent_monthly?.source_page ?? sfField?.source_page ?? null,
+        source_clause: deriveSourceText(fieldMap.base_rent_monthly, sfField),
+        exact_source_text: deriveSourceText(fieldMap.base_rent_monthly, sfField),
+        confidence_score: 0.95,
+        extraction_status: "calculated",
+        evidence_type: "derived",
+        source_text_quality: "derived",
+        source_field_keys: ["base_rent_monthly", "annual_rent", "tenant_rsf"],
+        derivation_trace: `rent_per_sf = annual_rent (${annualRentForPsf}) / tenant_rsf (${squareFeetForDerived})`,
+        validation_errors: [],
+        requires_review: false,
+        review_reason: null,
+        approval_blocking_reason: null,
+        editable: true,
+        field_group: "rent_terms",
+      };
+    }
+  }
 
   const tenantRsf = asNumber(fieldMap.tenant_rsf?.value);
   const buildingRsf = asNumber(fieldMap.building_rsf?.value);
@@ -2061,71 +2323,113 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
   // extracted, populate them as "calculated" rows so the Expenses/Recoveries,
   // CAM, and Insurance tabs show meaningful content instead of all-blank rows.
   if (canonicalClassifiedLeaseType === "full_service" || canonicalClassifiedLeaseType === "gross") {
-    const clauseFor = (...types: string[]) => clauses.find((clause) => types.includes(clause.clause_type) && clause.clause_text);
+    const responsibilitySearchKeywords: Record<string, string[]> = {
+      responsibility_taxes: ["rent includes", "full service", "property tax", "real estate tax", "taxes"],
+      responsibility_insurance: ["rent includes", "full service", "property insurance", "insurance premium", "insurance"],
+      responsibility_utilities: ["rent includes", "full service", "utilities", "electric", "water", "sewer", "hvac", "janitorial"],
+      responsibility_repairs: ["maintenance", "repair", "hvac", "shall maintain", "responsible for"],
+    };
+    const clauseForField = (key: string, value: string, types: string[]) => {
+      const clause = clauses.find((candidate) =>
+        types.includes(candidate.clause_type) &&
+        candidate.clause_text &&
+        responsibilityEvidenceSupportsField(key, value, candidate.clause_text)
+      );
+      if (clause) return clause;
+      const snippet = extractClauseSnippet(
+        asArray(doclingRaw?.text_blocks),
+        fullText,
+        responsibilitySearchKeywords[key] || ["rent includes", "full service"],
+        760,
+      );
+      if (snippet.clause_text && responsibilityEvidenceSupportsField(key, value, snippet.clause_text)) {
+        return { clause_text: snippet.clause_text, source_page: snippet.source_page, clause_type: "supporting_text" } as LeaseWorkflowClause;
+      }
+      return null;
+    };
     const deriveResponsibility = (key: string, value: string, clauseTypes: string[], note: string) => {
-      const clause = clauseFor(...clauseTypes);
+      const clause = clauseForField(key, value, clauseTypes);
       if (!isBlank(fieldMap[key]?.value) || !clause) return;
       fieldMap[key] = {
         key,
         value,
+        raw_value: value,
+        normalized_value: value,
         source_page: clause.source_page ?? null,
         source_clause: clause.clause_text,
+        exact_source_text: clause.clause_text,
+        source_text_exact: clause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
         evidence_type: "derived",
         source_text_quality: "derived",
         source_field_keys: ["lease_type"],
         derivation_trace: note,
+        validation_errors: [],
+        requires_review: true,
+        review_reason: "Nuanced full-service/gross expense treatment requires rule review before budget handoff.",
+        approval_blocking_reason: null,
         editable: true,
         field_group: "expense_terms",
       };
     };
     deriveResponsibility(
       "responsibility_taxes",
-      "landlord",
+      "Included in rent; increases may be passed through if stated in the lease",
       ["taxes", "operating_expense_recovery"],
-      "Full service/gross lease: taxes are treated as included in base rent unless the cited clause states a pass-through exception.",
+      "Full service/gross lease: taxes are included in rent unless the cited clause states a pass-through or increase exception.",
     );
     deriveResponsibility(
       "responsibility_insurance",
-      "landlord",
+      "Property insurance included; tenant carries required tenant insurance",
       ["insurance", "operating_expense_recovery"],
       "Full service/gross lease: property insurance is treated as included in base rent; tenant insurance obligations remain separate.",
     );
     deriveResponsibility(
       "responsibility_utilities",
-      "landlord",
+      "Included generally; tenant pays utilities/services used at the premises if stated",
       ["operating_expense_recovery", "repairs_maintenance"],
       "Full service/gross lease: utilities are treated as included unless separately metered or expressly charged to tenant.",
     );
     deriveResponsibility(
       "responsibility_repairs",
-      "landlord",
+      "Landlord maintains building/HVAC; tenant liable for damage or misuse exceptions",
       ["repairs_maintenance", "operating_expense_recovery"],
       "Full service/gross lease: landlord maintains building/common systems, subject to tenant damage or premises-specific exceptions.",
     );
-    // Full Service → no separate CAM recovery
-    const camClause = clauseFor("cam_recoveries", "operating_expense_recovery");
-    if (isBlank(fieldMap.cam_amount?.value) && camClause) {
-      fieldMap.cam_amount = {
-        key: "cam_amount",
-        value: 0,
+    // Full Service/Gross leases should not fabricate CAM Amount = $0. Surface
+    // the treatment as reviewable text unless a clause explicitly states a
+    // separate $0/no-CAM amount.
+    const camClause = clauses.find((clause) =>
+      ["cam_recoveries", "operating_expense_recovery"].includes(clause.clause_type) &&
+      clause.clause_text &&
+      !isGenericLeaseIntroEvidence(clause.clause_text) &&
+      /\b(?:cam|common area maintenance|rent includes|full service|included in rent)\b/i.test(clause.clause_text)
+    );
+    if (camClause && isBlank(fieldMap.cam_treatment?.value)) {
+      fieldMap.cam_treatment = {
+        key: "cam_treatment",
+        value: "No separate CAM charge identified; review full-service/gross treatment",
+        raw_value: "No separate CAM charge identified; review full-service/gross treatment",
+        normalized_value: "No separate CAM charge identified; review full-service/gross treatment",
         source_page: camClause.source_page ?? null,
         source_clause: camClause.clause_text,
+        exact_source_text: camClause.clause_text,
         confidence_score: 0.70,
         extraction_status: "calculated",
         evidence_type: "derived",
         source_text_quality: "derived",
         source_field_keys: ["lease_type"],
-        derivation_trace: "Full service/gross lease: separate CAM recovery defaults to 0 unless a clause states a distinct fixed or pass-through charge.",
+        derivation_trace: "Full service/gross lease: CAM is treated as included/no separate charge unless a clause states a distinct fixed or pass-through CAM charge.",
+        validation_errors: [],
+        requires_review: true,
+        review_reason: "Full-service/gross CAM treatment requires Expense/CAM rule review before budget handoff.",
+        approval_blocking_reason: null,
         editable: true,
         field_group: "expense_terms",
       };
     }
   }
-
-  // ── Task 3: Normalization hardening ─────────────────────────────────────────
-
   // property_name must not be a boolean sentinel
   if (!isBlank(fieldMap.property_name?.value)) {
     const pn = String(fieldMap.property_name.value).trim();
@@ -2192,6 +2496,70 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
   }
 
   return fieldMap;
+}
+
+function buildExpenseCamEvidenceClauses(fieldMap: Record<string, LeaseWorkflowField>, existingClauses: LeaseWorkflowClause[] = []) {
+  const specs = [
+    { fieldKey: "lease_type", clauseType: "lease_expense_structure", title: "Lease Expense Structure" },
+    { fieldKey: "responsibility_taxes", clauseType: "taxes", title: "Taxes" },
+    { fieldKey: "responsibility_insurance", clauseType: "insurance", title: "Insurance" },
+    { fieldKey: "responsibility_utilities", clauseType: "utilities", title: "Utilities" },
+    { fieldKey: "responsibility_repairs", clauseType: "repairs_maintenance", title: "Repairs & Maintenance" },
+    { fieldKey: "cam_treatment", clauseType: "cam_recoveries", title: "CAM / Recoveries" },
+  ];
+  const seen = new Set(existingClauses.map((clause) => `${clause.clause_type}|${cleanText(clause.clause_text || "").slice(0, 180)}`));
+  const generated: LeaseWorkflowClause[] = [];
+
+  for (const spec of specs) {
+    const field = fieldMap[spec.fieldKey];
+    const clauseText = cleanSourceText(field?.source_clause || field?.exact_source_text || field?.source_text_exact || null);
+    if (isBlank(field?.value) || !clauseText) continue;
+    const key = `${spec.clauseType}|${cleanText(clauseText).slice(0, 180)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    generated.push({
+      clause_type: spec.clauseType,
+      clause_title: spec.title,
+      clause_text: clauseText,
+      source_page: field?.source_page ?? null,
+      confidence_score: field?.confidence_score ?? 0.72,
+      exact_text: clauseText,
+      normalized_meaning: field?.value,
+      related_fields: [spec.fieldKey],
+      requires_review: Boolean(field?.requires_review || field?.evidence_type === "derived" || field?.evidence_type === "inferred"),
+      structured_fields_json: {
+        normalized_meaning: field?.value,
+        related_fields: [spec.fieldKey],
+        evidence_type: field?.evidence_type ?? null,
+        requires_review: Boolean(field?.requires_review),
+      },
+    } as any);
+  }
+
+  return generated;
+}
+
+function countClauseBackedExpenseTerms(fieldMap: Record<string, LeaseWorkflowField>, clauses: LeaseWorkflowClause[]) {
+  const fieldKeys = [
+    "lease_type",
+    "responsibility_taxes",
+    "responsibility_insurance",
+    "responsibility_utilities",
+    "responsibility_repairs",
+    "property_insurance_responsibility",
+    "tenant_insurance_required",
+    "cam_treatment",
+    "fixed_cam_amount",
+  ];
+  const sourceBackedFields = fieldKeys.filter((key) => {
+    const field = fieldMap[key];
+    return field && !isBlank(field.value) && !isBlank(field.source_clause);
+  }).length;
+  const sourceBackedClauses = clauses.filter((clause) =>
+    clause.clause_text &&
+    ["operating_expense_recovery", "cam_recoveries", "taxes", "insurance", "repairs_maintenance", "utilities", "lease_expense_structure"].includes(clause.clause_type)
+  ).length;
+  return sourceBackedFields + sourceBackedClauses;
 }
 
 function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
@@ -2707,8 +3075,7 @@ function deriveExpenseRules(
   const sourceBackedRules = rules.filter((rule) => {
     const sourcePage = asNumber(rule.source_page);
     const sourceClause = cleanSourceText(rule.source_clause);
-    const clauseType = String(rule.clauses?.[0]?.clause_type || "").toLowerCase();
-    return Boolean(sourceClause) && sourcePage != null && sourcePage > 0 && clauseType !== "supporting_text";
+    return Boolean(sourceClause) && sourcePage != null && sourcePage > 0 && !isWeakExpenseRuleSourceText(sourceClause);
   });
 
   return finalizeDerivedExpenseRules(sourceBackedRules);
@@ -2776,12 +3143,12 @@ function deriveCamProfile(fieldMap: Record<string, LeaseWorkflowField>, expenseR
     excluded_expenses: excludedExpenses,
     actual_cam_expense: null,
     annual_cam_estimate: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : null,
-    estimated_cam_billed: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : 0,
-    reconciliation_amount: reconciliationRequired ? null : 0,
-    tenant_balance_due_or_credit: reconciliationRequired ? null : 0,
-    monthly_cam_charge: /full service|gross lease/.test(normalizedLeaseType) ? 0 : fixedMonthlyCharge,
-    annual_cam_charge: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : 0,
-    normal_expense_recovery: /full service|gross lease/.test(normalizedLeaseType) ? 0 : (fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : null),
+    estimated_cam_billed: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : null,
+    reconciliation_amount: null,
+    tenant_balance_due_or_credit: null,
+    monthly_cam_charge: fixedMonthlyCharge > 0 ? fixedMonthlyCharge : null,
+    annual_cam_charge: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : null,
+    normal_expense_recovery: fixedMonthlyCharge > 0 ? round2(fixedMonthlyCharge * 12) : null,
     reconciliation_required: reconciliationRequired,
     status,
     calculation_status: manualRequired ? "manual_required" : "calculated",
@@ -2917,12 +3284,82 @@ function deriveBudgetPreview(fieldMap: Record<string, LeaseWorkflowField>, expen
     : [];
 
   return {
+    preview_only: true,
+    publish_blocked_until_approved: true,
     rent_revenue_budget: rentBudget,
     operating_expense_budget: operatingExpenseBudget,
     cam_recovery_budget: recoveries,
     tenant_billing_schedule: tenantBillingSchedule,
     annual_base_rent: annualBaseRent,
     renewal_projection: renewalProjection,
+  };
+}
+
+function hasApprovedStatus(value: unknown) {
+  return ["approved", "accepted", "reviewed"].includes(normalizeToken(value));
+}
+
+function fieldHasBudgetReadyEvidence(field: any) {
+  if (!field || isBlank(field.value)) return false;
+  if (Array.isArray(field.validation_errors) && field.validation_errors.length > 0) return false;
+  if (field.evidence_type === "inferred" || field.extraction_status === "manual_required") return false;
+  if (!isBlank(field.source_clause) || Number.isFinite(Number(field.source_page))) return true;
+  return Array.isArray(field.source_field_keys) && field.source_field_keys.length > 0 && !isBlank(field.derivation_trace);
+}
+
+function buildBudgetHandoffReadiness(row: Record<string, unknown>, fieldMap: Record<string, LeaseWorkflowField>, expenseRules: any[], budgetPreview: any) {
+  const blockedReasons: string[] = [];
+  const excludedUnapprovedInputs: string[] = [];
+  const approvedFieldKeys: string[] = [];
+  const approvedExpenseRuleIds: string[] = [];
+  const leaseApproved = hasApprovedStatus(row?.abstract_status) || hasApprovedStatus(row?.approval_status) || hasApprovedStatus(row?.review_status) || hasApprovedStatus(row?.status);
+  if (!leaseApproved) blockedReasons.push("Lease abstract is not approved.");
+
+  const budgetFieldKeys = ["base_rent_monthly", "annual_rent", "rent_per_sf", "billing_frequency", "commencement_date", "expiration_date", "lease_type", "tenant_rsf"];
+  for (const key of budgetFieldKeys) {
+    const field = fieldMap[key];
+    if (fieldHasBudgetReadyEvidence(field)) {
+      approvedFieldKeys.push(key);
+    } else if (field && !isBlank(field.value)) {
+      excludedUnapprovedInputs.push(key);
+    }
+  }
+  if (approvedFieldKeys.length === 0) blockedReasons.push("No budget fields have valid source evidence or derivation lineage.");
+
+  const rentRows = asArray((budgetPreview as any)?.rent_revenue_budget);
+  const rentScheduleGeneratedFromApprovedEvidence = rentRows.length > 0 && ["base_rent_monthly", "commencement_date", "expiration_date"].every((key) => fieldHasBudgetReadyEvidence(fieldMap[key]));
+  if (!rentScheduleGeneratedFromApprovedEvidence) {
+    blockedReasons.push("Rent schedule rows are not approved or generated from approved lease evidence.");
+  }
+
+  const recoveryRules = (expenseRules || []).filter((rule: any) =>
+    rule?.recoverable_flag === true ||
+    rule?.recoverable_from_tenant === true ||
+    ["tenant_recovery", "mixed_recovery"].includes(normalizeToken(rule?.lease_treatment)) ||
+    ["cam", "common_area_maintenance", "operating_expenses", "real_estate_taxes", "property_insurance", "utilities"].includes(normalizeToken(rule?.expense_category)),
+  );
+  for (const rule of recoveryRules) {
+    const sourceBacked = !isBlank(rule?.exact_source_text || rule?.source_clause) && Number.isFinite(Number(rule?.source_page));
+    const approved = hasApprovedStatus(rule?.approval_status) && hasApprovedStatus(rule?.review_status || rule?.row_status);
+    if (approved && sourceBacked) {
+      if (rule?.id) approvedExpenseRuleIds.push(String(rule.id));
+    } else {
+      excludedUnapprovedInputs.push(`expense_rule:${rule?.expense_category || rule?.normalized_key || "unknown"}`);
+    }
+  }
+  if (recoveryRules.length > 0 && approvedExpenseRuleIds.length < recoveryRules.length) {
+    blockedReasons.push("Expense/CAM recovery rules are not approved with source evidence.");
+  }
+
+  const uniqueBlockedReasons = [...new Set(blockedReasons)];
+  return {
+    ready: leaseApproved && uniqueBlockedReasons.length === 0,
+    preview_only: true,
+    blocked_reasons: uniqueBlockedReasons,
+    approved_field_keys: approvedFieldKeys,
+    approved_rent_schedule_rows: rentScheduleGeneratedFromApprovedEvidence ? rentRows.length : 0,
+    approved_expense_rule_ids: approvedExpenseRuleIds,
+    excluded_unapproved_inputs: [...new Set(excludedUnapprovedInputs)],
   };
 }
 
@@ -2934,14 +3371,14 @@ function buildValidationResults(fieldMap: Record<string, LeaseWorkflowField>, ex
 
   if (isFullService) {
     results.push({
-      rule: "full_service_cam_zero",
-      pass: camProfile.monthly_cam_charge === 0,
-      message: "Full Service Lease must produce zero monthly CAM charge.",
+      rule: "full_service_cam_not_fabricated",
+      pass: camProfile.monthly_cam_charge == null || camProfile.monthly_cam_charge > 0,
+      message: "Full Service Lease must not fabricate a zero monthly CAM charge without source text.",
     });
     results.push({
-      rule: "full_service_normal_expense_recovery_zero",
-      pass: camProfile.normal_expense_recovery === 0,
-      message: "Full Service Lease must produce zero normal expense recovery.",
+      rule: "full_service_normal_expense_recovery_not_fabricated",
+      pass: camProfile.normal_expense_recovery == null || camProfile.normal_expense_recovery > 0,
+      message: "Full Service Lease must not fabricate zero normal expense recovery without source text.",
     });
   }
 
@@ -3117,16 +3554,7 @@ function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
               ? "extracted"
               : "inferred";
     const confidenceScore = normalizeConfidenceScore(rule?.confidence_score);
-    const autoApproved =
-      extractionStatus !== "inferred" &&
-      extractionStatus !== "manual_required" &&
-      hasStrongEvidence &&
-      isExpenseRuleResponsibilityKnown(rule?.responsibility) &&
-      isExpenseRuleRecoverableKnown(rule) &&
-      isExpenseRuleRecoveryMethodSpecific(rule?.recovery_method) &&
-      confidenceScore != null &&
-      confidenceScore >= 0.82;
-    const reviewStatus = autoApproved ? "approved" : "needs_review";
+    const reviewStatus = "needs_review";
     const normalizedRule = {
       ...rule,
       expense_category: canonical.canonicalKey,
@@ -3141,7 +3569,9 @@ function finalizeDerivedExpenseRules(rules: Record<string, unknown>[]) {
       review_status: reviewStatus,
       approval_status: "draft",
       published_to_cam: false,
-      row_status: extractionStatus === "not_found" ? "not_mentioned" : autoApproved ? "mapped" : "needs_review",
+      row_status: extractionStatus === "not_found" ? "not_mentioned" : "needs_review",
+      requires_review: extractionStatus !== "not_found",
+      review_reason: extractionStatus === "not_found" ? null : "Draft rule generated from lease evidence; approval required before Expense/CAM or Budget handoff.",
       responsibility: isExpenseRuleResponsibilityKnown(rule?.responsibility) ? rule?.responsibility : "unknown",
     };
 
@@ -3195,6 +3625,8 @@ export function buildLeaseWorkflowAbstraction(args: {
     clauses,
   });
   applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
+  const expenseCamEvidenceClauses = buildExpenseCamEvidenceClauses(leaseFields, clauses);
+  if (expenseCamEvidenceClauses.length > 0) clauses.push(...expenseCamEvidenceClauses);
   profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null, leaseFields, extractedDocumentItems);
   if (profileDetection.selected_document_profile !== documentProfile) {
     documentProfile = profileDetection.selected_document_profile;
@@ -3438,8 +3870,13 @@ export function buildLeaseWorkflowAbstraction(args: {
     });
   }
 
+  const leaseExpenseTermsFound = coreMappingFailed ? 0 : countClauseBackedExpenseTerms(leaseFields, clauses);
+  const camTermsFound = coreMappingFailed ? 0 : clauses.filter((clause) =>
+    clause.clause_text && ["cam_recoveries", "operating_expense_recovery", "lease_expense_structure"].includes(clause.clause_type)
+  ).length + (leaseFields.cam_treatment?.source_clause ? 1 : 0);
   const camProfile = deriveCamProfile(leaseFields, expenseRules);
   const budgetPreview = deriveBudgetPreview(leaseFields, expenseRules, camProfile);
+  const budgetHandoffReadiness = buildBudgetHandoffReadiness(row, leaseFields, expenseRules, budgetPreview);
   const validations = buildValidationResults(leaseFields, expenseRules, camProfile, budgetPreview);
 
   return {
@@ -3459,6 +3896,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     expense_rules: expenseRules,
     cam_profile: camProfile,
     budget_preview: budgetPreview,
+    budget_handoff_readiness: budgetHandoffReadiness,
     validations,
     summary: {
       extracted_field_count: Object.values(leaseFields).filter((field) => field.extraction_status === "extracted").length,
@@ -3477,6 +3915,8 @@ export function buildLeaseWorkflowAbstraction(args: {
       extracted_document_item_count: extractedDocumentItems.length,
       expense_rule_count: expenseRules.length,
       validation_error_count: validations.filter((item) => item.pass === false).length,
+      budget_handoff_ready: budgetHandoffReadiness.ready,
+      budget_handoff_blocker_count: budgetHandoffReadiness.blocked_reasons.length,
       document_profile: documentProfile,
       selected_document_profile: profileDetection.selected_document_profile,
       profile_detection_signals: profileDetection.profile_detection_signals,
@@ -3519,6 +3959,8 @@ export function buildLeaseWorkflowAbstraction(args: {
       mapped_items_count: extractedDocumentItems.filter((item) => item.maps_to_fixed_field).length,
       unmapped_items_count: extractedDocumentItems.filter((item) => !item.maps_to_fixed_field).length,
       clause_records_count: extractedDocumentItems.length,
+      lease_expense_terms_found: leaseExpenseTermsFound,
+      cam_terms_found: camTermsFound,
       lease_expense_rules_generated: expenseRules.length,
       coverage_gaps_generated: extractedDocumentItems.filter((item) => item.requires_original_lease || item.extraction_status === "needs_review").length,
       rejected_generic_source_count: genericSourceTextRejected,
@@ -3535,6 +3977,8 @@ export function buildLeaseWorkflowAbstraction(args: {
       fields_rejected_missing_source_count: fieldsRejectedMissingSourceCount,
       fields_rejected_generic_source_count: genericSourceTextRejected,
       expense_rules_generated_count: expenseRules.length,
+      lease_expense_terms_found: leaseExpenseTermsFound,
+      cam_terms_found: camTermsFound,
       real_expense_rules_count: coreMappingFailed
         ? 0
         : expenseRules.filter((r: any) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,

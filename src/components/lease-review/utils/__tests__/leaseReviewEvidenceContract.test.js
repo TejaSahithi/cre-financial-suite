@@ -221,4 +221,97 @@ describe("Lease Review evidence contract", () => {
     expect(row.normalized_value).toBeNull();
     expect(row.source_text).toContain("alteration");
   });
+  it("rejects a date captured as tenant name", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "tenant_name",
+      label: "Tenant Name",
+      required: true,
+      normalized_value: "January 9, 2024",
+      source_page: 1,
+      source_text: "Tenant: January 9, 2024",
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.extraction_status).toBe("manual_required");
+    expect(row.validation_errors).toContain("tenant_name_failed_validation");
+    expect(row.review_reason).toMatch(/failed field validation/i);
+  });
+
+  it("does not show transfer clause text as an assignee name", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "assignee_name",
+      label: "Assignee Name",
+      normalized_value: "assumes, in full, the obligations of Tenant under this Lease",
+      source_page: 4,
+      source_text: "Notwithstanding the foregoing a Transfer shall not include a Permitted Transfer provided that the transferee assumes, in full, the obligations of Tenant under this Lease.",
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBeNull();
+  });
+
+  it("upgrades unsupported annual rent to a traced derived value", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            monthly_rent: {
+              value: 1400,
+              source_page: 1,
+              source_clause: "$1,400 per month",
+              extraction_status: "extracted",
+            },
+            annual_rent: {
+              value: 16800,
+              extraction_status: "missing_source_evidence",
+            },
+          },
+        },
+      },
+    };
+
+    const row = buildCanonicalLeaseReviewField(lease, { key: "annual_rent", label: "Annual Rent" }, "rent_charges");
+
+    expect(row.normalized_value).toBe(16800);
+    expect(row.evidence_type).toBe("derived");
+    expect(row.derivation_trace).toContain("monthly_rent");
+    expect(row.source_field_keys).toContain("monthly_rent");
+  });
+
+  it("rejects generic lease intro as responsibility evidence", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "responsibility_taxes",
+      label: "Taxes Responsibility",
+      normalized_value: "Landlord",
+      source_page: 2,
+      source_text: "THIS LEASE is made January 9, 2024 by and between 224 Partners, LLC (Landlord) and Mindful Tech Solutions Inc - Narendra Pydi (Tenant). ARTICLE 1 LEASE OF PREMISES in consideration of the Rent.",
+    }, "expenses_recoveries");
+
+    expect(row.normalized_value).toBeNull();
+  });
+
+  it("rejects punctuation-only assignment consideration", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "assignment_consideration",
+      label: "Assignment Consideration",
+      normalized_value: ".",
+      source_page: 1,
+      source_text: "SUMMARY OF BASIC LEASE INFORMATION",
+    }, "rent_charges");
+
+    expect(row.normalized_value).toBeNull();
+  });
+
+  it("does not show CAM Amount as $0 without supporting source", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "cam_amount",
+      label: "CAM Amount",
+      normalized_value: 0,
+      source_text: "SUMMARY OF BASIC LEASE INFORMATION",
+      source_page: 1,
+    }, "cam_rules");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.validation_errors).toContain("cam_amount_failed_validation");
+    expect(row.requires_review).toBe(true);
+  });
 });

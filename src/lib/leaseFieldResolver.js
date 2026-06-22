@@ -293,6 +293,10 @@ function isValidEntityField(fieldKey, value, sourceText) {
   if (valStr.length > 120) return false;
   if (valStr.length < 2) return false;
   if (stopwordNameValues.has(valLower)) return false;
+  if (/^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4}$/i.test(valStr)) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valStr) || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(valStr)) return false;
+  if (/^\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/.test(valStr)) return false;
+  if (/\b(?:assumes?\s+in\s+full|obligations?\s+of|transfer\s+shall|prior\s+written\s+consent)\b/i.test(valStr)) return false;
   if (/^(or|and|in|of|the|by)\s+/i.test(valStr)) return false;
   if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet|warrants?|represents?|connection with|real estate broker|negotiation|brokerage fees?)\b/i.test(valLower)) return false;
   if (/[.?!](?:\s|$)|(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return false;

@@ -18,7 +18,7 @@ import {
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
 import { entryValue, entrySourceText, entrySourcePage } from "@/components/lease-review/utils/fieldExtractors";
 
-// Single canonical implementation — delegates to leaseReviewSchema so both
+// Single canonical implementation - delegates to leaseReviewSchema so both
 // call sites (dynamicFields and LeaseReview) use identical filtering logic.
 export const cleanExtractedSourceText = cleanSourceEvidenceText;
 
@@ -45,7 +45,7 @@ export function normalizeDynamicKey(value) {
 export function collectExtractedDocumentItems(lease) {
   // Primary source: extraction_data.workflow_output (post-backfill / post-approve).
   // Fallback: ui_review_payload.metadata.workflow_output from the most recently
-  // uploaded file — available immediately after extraction, before any backfill
+  // uploaded file - available immediately after extraction, before any backfill
   // or approval has written workflow data back onto the lease row.
   const ufPayload =
     lease?.uploaded_files?.ui_review_payload ||
@@ -242,10 +242,10 @@ export function inferDynamicItemTab(item, key) {
   if (businessArea === "critical_dates") return "dates_term";
   if (/(tenant|landlord|property|premises|address|suite|unit|floor|rsf|sqft|square|footage|signatory|contact|building|use_permitted|permitted_use)/i.test(key)) return "parties_premises";
   if (/(date|term|expiration|commencement|effective|start_date|end_date|renewal_notice|signature|lease_date)/i.test(key)) return "dates_term";
-  // Insurance — must come before rent_charges so "liability" and "certificate"
+  // Insurance - must come before rent_charges so "liability" and "certificate"
   // are not swallowed by the generic "fee/charge" pattern.
   if (/(insurance|insured|deductible|liability|subrogation|waiver_of_sub|additional_insured|certificate)/i.test(key)) return "insurance";
-  // CAM — must come before rent_charges so "admin_fee" / "management_fee" /
+  // CAM - must come before rent_charges so "admin_fee" / "management_fee" /
   // "gross_up" are not swallowed by the generic "fee/percent" pattern.
   if (/(gross_up|cam_|admin_fee|management_fee|base_year|reconciliation|controllable|cam.cap|cam.pool)/i.test(key)) return "cam_rules";
   // Rent & charges: rent, deposit, allowance, late fees, holdover, etc.
@@ -296,7 +296,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     if (item?.item_id && String(item.item_id).startsWith("clause:")) continue;
     // Fall back to legal_options for any item inferDynamicItemTab can't route.
     // This prevents extracted fields (e.g. force_majeure, jury_trial_waiver,
-    // attorneys_fees) from being silently dropped — every extracted item with
+    // attorneys_fees) from being silently dropped - every extracted item with
     // a value or source text must be visible somewhere.
     const tab = inferDynamicItemTab(item, key) || "legal_options";
     if (tab === "clause_records") continue;
@@ -370,17 +370,42 @@ function combineSourceText(...items) {
   return [...new Set(texts)].join("\n");
 }
 
-function buildDerivedFieldEvidence(lease, key, currentValue) {
+function valuesRoughlyEqual(left, right) {
+  const leftNum = parseNumber(left);
+  const rightNum = parseNumber(right);
+  if (leftNum != null && rightNum != null) return Math.abs(leftNum - rightNum) < 0.02;
+  return String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
+}
+
+function currentEvidenceIsUnsupported(evidence, value) {
+  if (!isMeaningfulValue(value)) return true;
+  if (evidence?.derivationTrace || evidence?.derivation_trace) return false;
+  const sourceFieldKeys = evidence?.sourceFieldKeys ?? evidence?.source_field_keys ?? [];
+  if (Array.isArray(sourceFieldKeys) && sourceFieldKeys.length > 0) return false;
+  return !hasValidSourceEvidence({
+    ...evidence,
+    value,
+    sourceText: evidence?.sourceText ?? evidence?.source_text,
+    sourcePage: evidence?.sourcePage ?? evidence?.source_page,
+  });
+}
+
+function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {}) {
   const monthlyEvidence = readFieldEvidence(lease, "monthly_rent");
   const monthlyRent = parseNumber(readFieldValue(lease, "monthly_rent"));
   const sfEvidence = readFieldEvidence(lease, "square_footage");
   const squareFootage = parseNumber(readFieldValue(lease, "square_footage"));
   const monthlyHasSource = hasValidSourceEvidence({ ...monthlyEvidence, value: monthlyRent });
   const sfHasSource = hasValidSourceEvidence({ ...sfEvidence, value: squareFootage });
+  const shouldUpgrade = (derivedValue) =>
+    currentEvidenceIsUnsupported(currentEvidence, currentValue) &&
+    (!isMeaningfulValue(currentValue) || valuesRoughlyEqual(currentValue, derivedValue));
 
-  if (key === "annual_rent" && !isMeaningfulValue(currentValue) && monthlyRent != null && monthlyHasSource) {
+  if (key === "annual_rent" && monthlyRent != null && monthlyHasSource) {
+    const value = Math.round(monthlyRent * 12 * 100) / 100;
+    if (!shouldUpgrade(value)) return null;
     return {
-      value: Math.round(monthlyRent * 12 * 100) / 100,
+      value,
       sourceText: monthlyEvidence.sourceText,
       sourcePage: monthlyEvidence.sourcePage,
       evidenceType: "derived",
@@ -394,9 +419,11 @@ function buildDerivedFieldEvidence(lease, key, currentValue) {
   if (key === "rent_per_sf") {
     const annualRent = parseNumber(readFieldValue(lease, "annual_rent")) ?? (monthlyRent != null ? monthlyRent * 12 : null);
     const currentRentPerSf = parseNumber(readFieldValue(lease, "rent_per_sf"));
-    if (!isMeaningfulValue(currentRentPerSf) && annualRent != null && squareFootage != null && squareFootage > 0 && (monthlyHasSource || hasValidSourceEvidence(readFieldEvidence(lease, "annual_rent"))) && sfHasSource) {
+    if (annualRent != null && squareFootage != null && squareFootage > 0 && (monthlyHasSource || hasValidSourceEvidence(readFieldEvidence(lease, "annual_rent"))) && sfHasSource) {
+      const value = Math.round((annualRent / squareFootage) * 100) / 100;
+      if (!currentEvidenceIsUnsupported(currentEvidence, currentValue ?? currentRentPerSf) && !valuesRoughlyEqual(currentValue ?? currentRentPerSf, value)) return null;
       return {
-        value: Math.round((annualRent / squareFootage) * 100) / 100,
+        value,
         sourceText: combineSourceText(monthlyEvidence, sfEvidence) || monthlyEvidence.sourceText || sfEvidence.sourceText,
         sourcePage: monthlyEvidence.sourcePage ?? sfEvidence.sourcePage,
         evidenceType: "derived",
@@ -408,7 +435,8 @@ function buildDerivedFieldEvidence(lease, key, currentValue) {
     }
   }
 
-  if (key === "billing_frequency" && !isMeaningfulValue(currentValue) && monthlyRent != null && monthlyHasSource) {
+  if (key === "billing_frequency" && monthlyRent != null && monthlyHasSource) {
+    if (!shouldUpgrade("monthly")) return null;
     return {
       value: "monthly",
       sourceText: monthlyEvidence.sourceText,
@@ -423,7 +451,6 @@ function buildDerivedFieldEvidence(lease, key, currentValue) {
 
   return null;
 }
-
 function normalizeQuotedPropertyName(sourceText) {
   const source = cleanSourceEvidenceText(sourceText);
   if (!source) return null;
@@ -433,6 +460,45 @@ function normalizeQuotedPropertyName(sourceText) {
   return match?.[1]?.replace(/\s+/g, " ").trim() || null;
 }
 
+function isDateLikeText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  return /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4}$/i.test(text)
+    || /^\d{4}-\d{2}-\d{2}$/.test(text)
+    || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(text);
+}
+
+function isPhoneLikeText(value) {
+  const text = String(value ?? "").trim();
+  return /^\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/.test(text);
+}
+
+function isGenericLeaseIntroSource(sourceText) {
+  const source = cleanSourceEvidenceText(sourceText) || "";
+  const lower = source.toLowerCase();
+  return /\bthis lease\b/.test(lower) &&
+    /\b(?:landlord|tenant)\b/.test(lower) &&
+    /\b(?:article\s+1|lease of premises|in consideration of the rent|made and entered)\b/.test(lower) &&
+    !/\b(?:rent includes|full service|property tax|real estate tax|insurance premium|property insurance|utilities|electric|water|sewer|hvac|maintenance expenses|common area maintenance|responsible|shall pay|shall maintain)\b/.test(lower);
+}
+
+function responsibilitySourceSupportsValue(key, value, sourceText) {
+  const source = cleanSourceEvidenceText(sourceText) || "";
+  if (!source) return false;
+  if (isGenericLeaseIntroSource(source)) return false;
+  const lower = source.toLowerCase();
+  const normalizedValue = String(value ?? "").toLowerCase();
+  const hasExpenseAction = /\b(?:rent includes|included in rent|full service|shall pay|shall reimburse|responsible for|at (?:tenant|landlord)'?s (?:sole )?(?:cost|expense)|shall maintain|shall provide|separately metered)\b/.test(lower);
+  const fieldSupported = {
+    responsibility_taxes: /\b(?:tax|taxes|real estate tax|property tax)\b/.test(lower),
+    responsibility_insurance: /\b(?:insurance|premium|coverage)\b/.test(lower),
+    responsibility_utilities: /\b(?:utilit|electric|water|sewer|gas|hvac|janitorial)\b/.test(lower),
+    responsibility_repairs: /\b(?:repair|maintenance|maintain|hvac)\b/.test(lower),
+    property_insurance_responsibility: /\b(?:property insurance|insurance premium|rent includes)\b/.test(lower),
+  }[key] ?? true;
+  const valueSupported = !/^(tenant|landlord)$/.test(normalizedValue) || lower.includes(normalizedValue) || /\b(?:rent includes|included in rent|full service)\b/.test(lower);
+  return fieldSupported && hasExpenseAction && valueSupported;
+}
 function normalizeReviewValueForField(key, value, sourceText) {
   if (!isMeaningfulValue(value)) return value;
 
@@ -448,7 +514,7 @@ function normalizeReviewValueForField(key, value, sourceText) {
     if (quotedName) return quotedName;
     if (
       valueText.length < 4 ||
-      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property)$/i.test(valueText) ||
+      /^(?:a|the|shopping|a shopping|shopping center|center|premises|property|tenant has|landlord has)$/i.test(valueText) ||
       /\b(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes)\b/i.test(valueText)
     ) {
       return null;
@@ -461,7 +527,7 @@ function normalizeReviewValueForField(key, value, sourceText) {
     }
     // Reject if the VALUE itself contains restriction or non-use language (check
     // lowerValue not combined so that the source clause text doesn't cause
-    // false positives — lease sources almost always contain restriction clauses).
+    // false positives - lease sources almost always contain restriction clauses).
     if (
       valueText.length > 80 ||
       /\b(?:shall\s+not|without\s+(?:prior\s+)?(?:written\s+)?consent|may\s+not|assign|assignment|sublet|subletting|common\s+areas?|parking|merchandise|display|mechanical|sidewalk|landscaping|as\s+is|no\s+other\s+use|restricted|not\s+to\s+be\s+used)\b/.test(lowerValue)
@@ -483,10 +549,23 @@ function normalizeReviewValueForField(key, value, sourceText) {
     if (/\b(?:alteration|improvement|roofing contractor|roof penetrations?)\b/.test(combined)) return null;
   }
 
+  if (["tenant_name", "landlord_name", "assignor_name", "assignee_name", "guarantor_name", "owner_name", "property_manager", "broker_name"].includes(normalizedKey)) {
+    if (
+      isDateLikeText(valueText) ||
+      isPhoneLikeText(valueText) ||
+      valueText.length > 90 ||
+      /^(?:tenant|landlord|assignee|assignor|owner|broker|agent|date|name|title)$/i.test(valueText) ||
+      /\b(?:assumes?\s+in\s+full|obligations?\s+of|transfer\s+shall|shall|hereby|premises|article|section|rent|maintenance|insurance|taxes|prior\s+written\s+consent|sublet|assignment)\b/i.test(valueText)
+    ) {
+      return null;
+    }
+  }
   // Person name fields: reject clause fragments, verb phrases, or anything that isn't a human name.
   // A valid person name is typically 2-4 words, capital letters, no verbs.
   if (["tenant_contact_name", "tenant_signatory_name", "landlord_contact_name", "landlord_signatory_name"].includes(normalizedKey)) {
     if (
+      isDateLikeText(valueText) ||
+      isPhoneLikeText(valueText) ||
       valueText.length > 60 ||
       /\b(?:leases?|accepts?|agrees?|shall|hereby|premises|article|section|tenant|landlord|lessee|lessor|pursuant|notwithstanding)\b/i.test(valueText) ||
       /^(?:by|its|title|name|date)[:\s]/i.test(valueText)
@@ -495,6 +574,31 @@ function normalizeReviewValueForField(key, value, sourceText) {
     }
   }
 
+  if (normalizedKey === "assignment_consideration") {
+    if (/^[.,;:-]?$/.test(valueText)) return null;
+    if (!/\b(?:assignment|assign|transfer|consideration|premium|fee|\$|dollar)\b/i.test(combined)) return null;
+  }
+
+  if ([
+    "responsibility_taxes",
+    "responsibility_insurance",
+    "responsibility_utilities",
+    "responsibility_repairs",
+    "property_insurance_responsibility",
+  ].includes(normalizedKey)) {
+    if (!responsibilitySourceSupportsValue(normalizedKey, valueText, source)) return null;
+  }
+
+  if (["tenant_insurance_required", "general_liability_min", "additional_insureds_required"].includes(normalizedKey)) {
+    if (!/\b(?:insurance|liability|coverage|insured|certificate)\b/i.test(source)) return null;
+  }
+
+  if (["cam_amount", "fixed_cam_amount"].includes(normalizedKey)) {
+    const amount = parseNumber(valueText);
+    if (amount === 0 && !/\b(?:\$\s*0|0\.00|zero|no separate cam|no cam charge|included in rent|full service)\b/i.test(source)) {
+      return null;
+    }
+  }
   return text;
 }
 
@@ -503,9 +607,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   if (!key) return null;
 
   const initialValue = field.normalized_value ?? field.value ?? readFieldValue(lease, key);
-  const derived = buildDerivedFieldEvidence(lease, key, initialValue);
-  let schemaValue = derived?.value ?? initialValue;
   const evidence = readFieldEvidence(lease, key);
+  const derived = buildDerivedFieldEvidence(lease, key, initialValue, evidence);
+  let schemaValue = derived?.value ?? initialValue;
   const sourcePage = normalizeSourcePage(
     field.page_number
       ?? field.source_page
@@ -520,7 +624,15 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? derived?.sourceText
       ?? evidence.sourceText,
   );
+  const valueBeforeValidation = schemaValue;
   schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText);
+  const validationErrors = [
+    ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
+    ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
+  ];
+  if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
+    validationErrors.push(`${key}_failed_validation`);
+  }
   const confidence = typeof field.confidence === "number"
     ? field.confidence
     : readFieldConfidence(lease, key, null);
@@ -590,6 +702,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.approvalBlockingReason ??
     evidence.approvalBlockingReason ??
     null;
+  if (!reviewReason && validationErrors.length > 0) {
+    reviewReason = "Extracted value failed field validation.";
+  }
   if (!reviewReason && requiredMissing) {
     reviewReason = "Required field was not found in the lease. Manual review required.";
   } else if (!reviewReason && requiredNoSource) {
@@ -603,6 +718,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.requires_review ||
       field.requiresReview ||
       evidence.requiresReview ||
+      validationErrors.length > 0 ||
       reviewReason ||
       evidenceType === "inferred",
   );
@@ -634,6 +750,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     source_text_quality: sourceTextQuality,
     source_field_keys: statusEvidence.sourceFieldKeys || [],
     derivation_trace: statusEvidence.derivationTrace ?? null,
+    validation_errors: validationErrors,
     requires_review: requiresReview,
     required: Boolean(field.required),
     review_reason: reviewReason,

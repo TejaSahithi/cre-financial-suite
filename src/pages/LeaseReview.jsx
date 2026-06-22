@@ -173,7 +173,7 @@ export default function LeaseReview() {
   const [signatureMessage, setSignatureMessage] = useState("");
   const [sendingSignature, setSendingSignature] = useState(false);
 
-  // Field review state — keyed by field key.
+  // Field review state - keyed by field key.
   const [fieldReviews, setFieldReviews] = useState({});
 
   // Field detail drawer state. drawerMode lets the dropdown's "Edit" item
@@ -226,7 +226,7 @@ export default function LeaseReview() {
   }, [lease, uploadedFile]);
 
   // Detect cases where the uploaded document's extracted fields contradict the
-  // stored lease values — usually signals the wrong PDF was linked.
+  // stored lease values - usually signals the wrong PDF was linked.
   const documentMismatches = useMemo(
     () => detectDocumentMismatch(lease, uploadedFile),
     [lease, uploadedFile],
@@ -264,7 +264,7 @@ export default function LeaseReview() {
   //
   // We hydrate ONCE per lease id. Subsequent refetches (triggered by
   // saveAbstractDraft, mutation invalidations, auto-extract, etc.) must NOT
-  // overwrite local state — otherwise an Accept the user just clicked would
+  // overwrite local state - otherwise an Accept the user just clicked would
   // get wiped when the lease object re-renders before the DB upsert lands.
   // After the first hydration the local fieldReviews state is the source of
   // truth until the user reloads the page.
@@ -304,7 +304,7 @@ export default function LeaseReview() {
     let cancelled = false;
     (async () => {
       try {
-        // Cast a wide net — every module_type, broad status filter.
+        // Cast a wide net - every module_type, broad status filter.
         // Older uploads may have module_type='lease' (singular), or null.
         const { data: files, error } = await supabase
           .from("uploaded_files")
@@ -318,11 +318,11 @@ export default function LeaseReview() {
           setAutoLinkDebug({ query_count: 0, error: error.message });
           return;
         }
-        // Prefer lease uploads but don't exclude others outright — the
+        // Prefer lease uploads but don't exclude others outright - the
         // module_type column has been inconsistent across the codebase.
         const leaseLike = (files || []).filter((f) => {
           const mod = String(f.module_type || "").toLowerCase();
-          if (!mod) return true; // unknown module → include
+          if (!mod) return true; // unknown module -> include
           return mod === "leases" || mod === "lease";
         });
 
@@ -356,7 +356,7 @@ export default function LeaseReview() {
           return { s, reasons };
         };
 
-        // Sort by score desc, then by updated_at desc — so ties between
+        // Sort by score desc, then by updated_at desc - so ties between
         // re-uploads of the same file always put the freshest one first.
         const ranked = leaseLike
           .map((f) => {
@@ -391,17 +391,17 @@ export default function LeaseReview() {
         console.log("[LeaseReview] auto-link diagnostic:", dbg, "candidates:", candidates.slice(0, 5));
 
         // Decide whether to auto-link.
-        //   - Score must clear the minimum (≥ 5)
+        //   - Score must clear the minimum (>= 5)
         //   - Decisive if ANY of:
         //       a) Every tied-at-top candidate has the same normalized filename
-        //          (re-uploads of the same document — not ambiguous)
-        //       b) Top beats the runner-up of a DIFFERENT filename by ≥ 3 points
-        //       c) Top score is very high (≥ 10) AND >= 2 of the tied candidates
-        //          share the top's normalized filename — pick the most recent
+        //          (re-uploads of the same document - not ambiguous)
+        //       b) Top beats the runner-up of a DIFFERENT filename by >= 3 points
+        //       c) Top score is very high (>= 10) AND >= 2 of the tied candidates
+        //          share the top's normalized filename - pick the most recent
         //          from that filename group regardless of unrelated ties
         const top = ranked[0];
         if (!top || top.score < 5 || cancelled) {
-          console.log("[LeaseReview] auto-link: skip — no candidate clears minimum score (top:", top?.score, "min: 5)");
+          console.log("[LeaseReview] auto-link: skip - no candidate clears minimum score (top:", top?.score, "min: 5)");
           return;
         }
         const normName = (n) => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -426,7 +426,7 @@ export default function LeaseReview() {
           decisive,
         });
         if (!decisive) {
-          console.log("[LeaseReview] auto-link: skip — no decisive winner. Top tied with different-named candidates; user must pick manually.");
+          console.log("[LeaseReview] auto-link: skip - no decisive winner. Top tied with different-named candidates; user must pick manually.");
           return;
         }
 
@@ -452,7 +452,7 @@ export default function LeaseReview() {
           console.warn("[LeaseReview] auto-link write failed:", updateErr.message, updateErr.details || "");
           return;
         }
-        console.log(`[LeaseReview] auto-linked lease ${lease.id} → uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
+        console.log(`[LeaseReview] auto-linked lease ${lease.id} -> uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
 
         // Update the React-Query cache immediately so the page reflects the
         // new source_file_id without waiting for a refetch round-trip. The
@@ -531,13 +531,13 @@ export default function LeaseReview() {
           .maybeSingle();
         if (error || !file || cancelled) return;
 
-        // ── Step 1: pull whatever evidence the ui_review_payload already has.
+        // - Step 1: pull whatever evidence the ui_review_payload already has.
         //
         // The extraction pipeline stores field data in two different shapes:
         //   A) Array format: records[0].standard_fields / .custom_fields
-        //      → each item is { field_key, value, evidence: { source_clause, ... } }
+        //      -> each item is { field_key, value, evidence: { source_clause, ... } }
         //   B) Object map format: records[0].fields / .workflow_output.lease_fields
-        //      → each entry is { field_key: { value, source_text, source_page, ... } }
+        //      -> each entry is { field_key: { value, source_text, source_page, ... } }
         //
         // We must handle BOTH. Previously only format A was read, causing
         // source_text from format B to be silently dropped and every such field
@@ -546,7 +546,7 @@ export default function LeaseReview() {
         const fieldEvidence = {};
         const reviewedRow = (file.ui_review_payload?.records || file.ui_review_payload?.rows || [])[0];
         if (reviewedRow) {
-          // ── A) Array format ──────────────────────────────────────────────
+          // - A) Array format -
           const allFields = [
             ...(Array.isArray(reviewedRow.standard_fields) ? reviewedRow.standard_fields : []),
             ...(Array.isArray(reviewedRow.custom_fields) ? reviewedRow.custom_fields : []),
@@ -576,7 +576,7 @@ export default function LeaseReview() {
             }
           }
 
-          // ── B) Object map format ─────────────────────────────────────────
+          // - B) Object map format -
           // Covers records[0].fields, records[0].workflow_output.lease_fields,
           // and any other object map the pipeline might write.
           const objectMaps = [
@@ -621,7 +621,7 @@ export default function LeaseReview() {
           }
         }
 
-        // ── Step 2: synthesize evidence by text-matching every known field
+        // - Step 2: synthesize evidence by text-matching every known field
         // value against the docling text blocks. This is the fallback that
         // works even when the original extractor stamped no evidence at all.
         const blocks = buildSearchBlocksFromSources(
@@ -704,7 +704,7 @@ export default function LeaseReview() {
         const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
 
         if (Object.keys(fieldEvidence).length === 0 && !workflowOutput) {
-          // Nothing to backfill — don't churn the row.
+          // Nothing to backfill - don't churn the row.
           return;
         }
 
@@ -752,7 +752,7 @@ export default function LeaseReview() {
   // Lease expense rule set status + counts (drives the warning banner and
   // the Expense/CAM card on the summary tab). If the dedicated tables aren't
   // deployed yet (PGRST205), degrade silently with empty totals instead of
-  // throwing — otherwise the approval flow sees an error toast for an
+  // throwing - otherwise the approval flow sees an error toast for an
   // optional side feature.
   const { data: ruleSetSummary } = useQuery({
     queryKey: ["lease-expense-rule-summary", leaseId],
@@ -838,7 +838,7 @@ export default function LeaseReview() {
     mutationFn: async ({ id, data }) => leaseService.update(id, data),
     onSuccess: (updated) => {
       // Seed the cache with the returned row so a chained read (e.g.
-      // Save edit → Accept) sees the new evidence immediately, without
+      // Save edit -> Accept) sees the new evidence immediately, without
       // waiting for the invalidation-triggered refetch to complete.
       if (updated && updated.id === leaseId) {
         updateLeaseQueryCache(queryClient, leaseId, updated);
@@ -875,7 +875,7 @@ export default function LeaseReview() {
           },
         },
       });
-      toast.success("Marked as full lease — banner dismissed.");
+      toast.success("Marked as full lease - banner dismissed.");
     } catch {
       toast.error("Could not save override. Try again.");
     }
@@ -884,14 +884,14 @@ export default function LeaseReview() {
   // Auto-run extraction the first time we land on a lease that hasn't been
   // through the full re-extract pipeline yet. The canonical "extraction has
   // been finalized" marker is `evidence_refreshed_at`, which only
-  // handleReextractLease writes — review-approve creates the lease draft
+  // handleReextractLease writes - review-approve creates the lease draft
   // with workflow_output as a placeholder but does NOT pull per-field
   // evidence from ui_review_payload.records[0].standard_fields the way
   // re-extract does. So the gate now skips only when:
   //   1. evidence_refreshed_at is already set (full pipeline ran), OR
   //   2. there is no source_file_id (nothing to re-extract from), OR
   //   3. there ARE meaningful fields with evidence (pre-existing lease that
-  //      has good evidence even without the marker — don't disturb it).
+  //      has good evidence even without the marker - don't disturb it).
   // This unifies the upload + re-extract paths so a freshly uploaded lease
   // gets the same field-evidence enrichment and lease-expense-rule
   // extraction as a manual Re-extract click.
@@ -916,7 +916,7 @@ export default function LeaseReview() {
     if (lease?.extraction_data?.evidence_refreshed_at) { done(); return; }
 
     // 1b. Lease top-level columns have meaningful values AND there's actual
-    // extraction evidence — extraction already ran with real results.
+    // extraction evidence - extraction already ran with real results.
     // NOTE: top-level columns can be set from scope selection (unit/building
     // context) without any LLM extraction running. We only skip if there's
     // also real field evidence proving extraction occurred.
@@ -929,7 +929,7 @@ export default function LeaseReview() {
       (lease?.extraction_data?.field_evidence && Object.keys(lease.extraction_data.field_evidence || {}).length > 0)
     );
     if (leaseHasTopLevel && hasExtractionEvidence) {
-      console.log("[LeaseReview] auto-extract: skip — lease has top-level values with extraction evidence");
+      console.log("[LeaseReview] auto-extract: skip - lease has top-level values with extraction evidence");
       done(); return;
     }
 
@@ -938,7 +938,7 @@ export default function LeaseReview() {
     const hasEdFields = edFields && typeof edFields === "object" &&
       Object.values(edFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
     if (hasEdFields) {
-      console.log("[LeaseReview] auto-extract: skip — extraction_data.fields has meaningful values");
+      console.log("[LeaseReview] auto-extract: skip - extraction_data.fields has meaningful values");
       done(); return;
     }
 
@@ -947,7 +947,7 @@ export default function LeaseReview() {
     const hasWfFields = wfLeaseFields && typeof wfLeaseFields === "object" &&
       Object.values(wfLeaseFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
     if (hasWfFields) {
-      console.log("[LeaseReview] auto-extract: skip — workflow_output.lease_fields has meaningful values");
+      console.log("[LeaseReview] auto-extract: skip - workflow_output.lease_fields has meaningful values");
       done(); return;
     }
 
@@ -961,7 +961,7 @@ export default function LeaseReview() {
         (e) => e && typeof e === "object" && (e.source_page != null || (typeof e.source_text === "string" && e.source_text.trim().length > 0)),
       );
     if (hasPersistedEvidence) {
-      console.log("[LeaseReview] auto-extract: skip — lease already has per-field evidence");
+      console.log("[LeaseReview] auto-extract: skip - lease already has per-field evidence");
       done(); return;
     }
 
@@ -988,24 +988,24 @@ export default function LeaseReview() {
       Object.keys(ufFieldMap).length > 2 &&
       hasRealValues;
     if (hasUploadedFileData) {
-      console.log("[LeaseReview] auto-extract: skip — uploaded file already has extracted field data in ui_review_payload");
+      console.log("[LeaseReview] auto-extract: skip - uploaded file already has extracted field data in ui_review_payload");
       done(); return;
     }
 
-    // 3b. Pipeline ran but core mapping failed — retrying won't help without a
+    // 3b. Pipeline ran but core mapping failed - retrying won't help without a
     // source-file change.
     if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
-      console.log("[LeaseReview] auto-extract: skip — pipeline ran but core mapping failed");
+      console.log("[LeaseReview] auto-extract: skip - pipeline ran but core mapping failed");
       done(); return;
     }
 
-    // 3c. ui_review_payload.records exists with real values — pipeline ran with results.
+    // 3c. ui_review_payload.records exists with real values - pipeline ran with results.
     if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0 && hasRealValues) {
-      console.log("[LeaseReview] auto-extract: skip — ui_review_payload present with extracted values");
+      console.log("[LeaseReview] auto-extract: skip - ui_review_payload present with extracted values");
       done(); return;
     }
 
-    // 3d. Uploaded file already has a terminal status — pipeline ran.
+    // 3d. Uploaded file already has a terminal status - pipeline ran.
     // When there are no real extracted values (all-null prior run) we allow a
     // one-shot auto-re-extract even from review_required so that newly configured
     // Vertex AI / Docling credentials take effect without a manual click.
@@ -1014,7 +1014,7 @@ export default function LeaseReview() {
       ? ["review_required", "validated", "approved", "completed", "failed", "stored"]
       : ["validated", "approved", "completed", "stored"];
     if (ufStatus && terminalStatuses.includes(String(ufStatus))) {
-      console.log(`[LeaseReview] auto-extract: skip — uploaded file status=${ufStatus} (pipeline already ran)`);
+      console.log(`[LeaseReview] auto-extract: skip - uploaded file status=${ufStatus} (pipeline already ran)`);
       done(); return;
     }
 
@@ -1025,13 +1025,13 @@ export default function LeaseReview() {
     const lastFailedAt = Number(sessionStorage.getItem(failureKey) || 0);
     const RETRY_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
     if (lastFailedAt && Date.now() - lastFailedAt < RETRY_COOLDOWN_MS) {
-      console.log("[LeaseReview] auto-extract: skip — recent failure recorded, waiting for manual retry");
+      console.log("[LeaseReview] auto-extract: skip - recent failure recorded, waiting for manual retry");
       done(); return;
     }
 
     done();
-    console.log("[LeaseReview] auto-running re-extract — source linked but no extracted data found yet");
-    toast.info("Running full lease extraction in the background…");
+    console.log("[LeaseReview] auto-running re-extract - source linked but no extracted data found yet");
+    toast.info("Running full lease extraction in the background...");
     handleReextractLease();
   }, [
     lease?.id,
@@ -1130,6 +1130,11 @@ export default function LeaseReview() {
     { high: 0, medium: 0, low: 0, unknown: 0 },
   );
 
+  const reviewCandidateRowsCount = allReviewRows.filter((row) =>
+    isReviewRowDisplayable(row, { showMissing: false }) &&
+    (isMeaningfulValue(row.normalized_value ?? row.value) || row.requires_review || row.review_reason)
+  ).length;
+
   // Manual_required + conflicts surface as their own counters.
   const manualRequiredCount = Object.values(fieldReviews).filter(
     (r) => r?.status === REVIEW_STATUSES.MANUAL_REQUIRED || r?.status === REVIEW_STATUSES.NEEDS_LEGAL,
@@ -1160,6 +1165,10 @@ export default function LeaseReview() {
     ?? mappingWorkflowSummary.core_mapping_failed
     ?? mappingWorkflowSummary.mapping_failure_reason,
   );
+  const workflowExpenseTermsFound = Number(mappingWorkflowSummary.lease_expense_terms_found ?? 0) || 0;
+  const workflowCamTermsFound = Number(mappingWorkflowSummary.cam_terms_found ?? 0) || 0;
+  const effectiveExpenseTermsFound = Math.max(Number(ruleSetSummary?.expense?.total ?? 0) || 0, workflowExpenseTermsFound);
+  const effectiveCamTermsFound = Math.max(Number(ruleSetSummary?.cam?.total ?? 0) || 0, workflowCamTermsFound);
 
   // Validation checks (kept for summary panel).
   // For each field, prefer the stored leases-table column but fall back to
@@ -1179,15 +1188,23 @@ export default function LeaseReview() {
       pass: startOk,
       label: "Commencement < Expiration",
       detail: startOk
-        ? `${commencementValue} → ${expirationValue}`
+        ? `${commencementValue} -> ${expirationValue}`
         : "Expiration date is on/before commencement",
     });
   }
-  const summaryTenantName = lease.tenant_name || readFieldValue(src, "tenant_name");
-  const summaryLeaseType = lease.lease_type || readFieldValue(src, "lease_type");
-  const summaryLeaseDate = lease.lease_date || readFieldValue(src, "lease_date");
-  const summaryMonthlyRent = lease.monthly_rent ?? readFieldValue(src, "monthly_rent");
-  const summaryAnnualRent = lease.annual_rent ?? readFieldValue(src, "annual_rent");
+  const canonicalSummaryValue = (key, fallbackValue = null) => {
+    const row = reviewRowByKey.get(key);
+    if (row) {
+      const rowValue = row.normalized_value ?? row.value;
+      return isMeaningfulValue(rowValue) ? rowValue : null;
+    }
+    return isMeaningfulValue(fallbackValue) ? fallbackValue : readFieldValue(src, key);
+  };
+  const summaryTenantName = canonicalSummaryValue("tenant_name", lease.tenant_name);
+  const summaryLeaseType = canonicalSummaryValue("lease_type", lease.lease_type);
+  const summaryLeaseDate = canonicalSummaryValue("lease_date", lease.lease_date);
+  const summaryMonthlyRent = canonicalSummaryValue("monthly_rent", lease.monthly_rent);
+  const summaryAnnualRent = canonicalSummaryValue("annual_rent", lease.annual_rent);
   if (summaryTenantName) {
     validationChecks.push({ pass: true, label: "Tenant name present", detail: summaryTenantName });
   }
@@ -1208,7 +1225,7 @@ export default function LeaseReview() {
   }
   validationChecks.push({
     pass: confidenceBuckets.low === 0,
-    label: "All confidence scores ≥ 75%",
+    label: "All confidence scores >= 75%",
     detail: confidenceBuckets.low === 0 ? "No low-confidence fields detected" : `${confidenceBuckets.low} low-confidence field(s)`,
   });
   validationChecks.push({
@@ -1234,9 +1251,7 @@ export default function LeaseReview() {
 
   // --- Approval blockers ---------------------------------------------------
   const expenseCamUnreviewed =
-    ruleSetSummary &&
-    ruleSetSummary.ruleSet &&
-    (ruleSetSummary.expense.total + ruleSetSummary.cam.total) > 0 &&
+    (effectiveExpenseTermsFound + effectiveCamTermsFound) > 0 &&
     !approvedRuleSet;
 
   const bulkEvaluation = (() => {
@@ -1252,6 +1267,7 @@ export default function LeaseReview() {
     const requiredBlockerDetails = [];
     const autoNaFields = [];
     const autoNaDetails = [];
+    const validationBlockers = [];
 
     allKnownKeys.forEach((key) => {
       const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
@@ -1262,11 +1278,27 @@ export default function LeaseReview() {
       const review = fieldReviews[key];
       const reviewStatus = review?.status || "pending";
       
-      if (['accepted', 'approved'].includes(reviewStatus)) {
-        return; // already approved — doesn't block
-      }
       if (reviewStatus === REVIEW_STATUSES.N_A) {
-        return; // already marked N/A — doesn't block
+        return; // already marked N/A - doesn't block
+      }
+
+      const existingValidationErrors = [
+        ...(Array.isArray(row?.validation_errors) ? row.validation_errors : []),
+        ...(Array.isArray(row?.validationErrors) ? row.validationErrors : []),
+      ];
+      if (existingValidationErrors.length > 0) {
+        validationBlockers.push({ key, label: fieldDef.label || key, reason: existingValidationErrors.join(", ") });
+        if (isRequired) {
+          requiredBlockers.push(key);
+          requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Field failed validation" });
+        } else {
+          optionalUnresolved.push(key);
+        }
+        return;
+      }
+
+      if (['accepted', 'approved'].includes(reviewStatus)) {
+        return; // already approved - doesn't block
       }
       
       if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) {
@@ -1318,11 +1350,19 @@ export default function LeaseReview() {
         sourceFieldKeys: row?.source_field_keys ?? evidence?.sourceFieldKeys,
         derivationTrace: row?.derivation_trace ?? evidence?.derivationTrace,
       });
+      const validationErrors = [
+        ...(Array.isArray(row?.validation_errors) ? row.validation_errors : []),
+        ...(Array.isArray(row?.validationErrors) ? row.validationErrors : []),
+        ...(Array.isArray(evidence?.validationErrors) ? evidence.validationErrors : []),
+      ];
 
       let eligible = false;
       let reason = "";
 
-      if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', REVIEW_STATUSES.N_A].includes(reviewStatus)) {
+      if (validationErrors.length > 0) {
+        validationBlockers.push({ key, label: fieldDef.label || key, reason: validationErrors.join(", ") });
+        reason = "Field failed validation";
+      } else if (['manual', 'manual_edited'].includes(extractionStatus) || ['edited', 'manual_resolved', REVIEW_STATUSES.N_A].includes(reviewStatus)) {
         eligible = true;
       } else if (['extracted', 'extracted_no_confidence', 'extracted_text_match'].includes(extractionStatus)) {
         if (hasValue && hasValidSource) {
@@ -1358,7 +1398,7 @@ export default function LeaseReview() {
         if (isRequired) {
           const isUserRejected = reason === "Rejected";
           if (isUserRejected) {
-            // User explicitly rejected — stays rejected, doesn't block approval
+            // User explicitly rejected - stays rejected, doesn't block approval
             optionalUnresolved.push(key);
           } else {
             // Required extraction gaps are hard blockers.
@@ -1371,10 +1411,20 @@ export default function LeaseReview() {
       }
     });
 
-    return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails, autoNaFields, autoNaDetails };
+    return { eligibleFields, requiredBlockers, optionalUnresolved, requiredBlockerDetails, autoNaFields, autoNaDetails, validationBlockers };
   })();
 
   const approvalBlockers = [];
+  if (bulkEvaluation.validationBlockers.length > 0) {
+    approvalBlockers.push({
+      kind: "validation_errors",
+      title: `${bulkEvaluation.validationBlockers.length} field validation error(s) must be resolved before approval`,
+      detail: bulkEvaluation.validationBlockers
+        .map((b) => `${b.label} (${b.reason})`)
+        .join(", "),
+    });
+  }
+
   if (bulkEvaluation.requiredBlockers.length > 0) {
     approvalBlockers.push({
       kind: "required_pending",
@@ -1388,7 +1438,7 @@ export default function LeaseReview() {
   const canApprove = approvalBlockers.length === 0;
   const blockerMessage = canApprove
     ? "All checks passed. You can approve the lease abstract."
-    : approvalBlockers.map((b) => b.title).join(" • ");
+    : approvalBlockers.map((b) => b.title).join(" - ");
   const approvalDisabledTooltip = canApprove
     ? "Approve the lease abstract"
     : "Cannot approve: required fields have unresolved conflicts or require manual review. Check the Expenses/CAM tabs.";
@@ -1483,7 +1533,7 @@ export default function LeaseReview() {
     // yet. Falling back to the captured ref keeps things safe if the cache
     // is somehow empty.
     //
-    // The query uses `select: (data) => data?.[0]` — meaning the CACHE
+    // The query uses `select: (data) => data?.[0]` - meaning the CACHE
     // holds the raw array returned by leaseService.filter (typically
     // `[leaseRow]`), while `useQuery`'s `data` is the unwrapped first
     // element. We have to unwrap here too, otherwise readFieldValue
@@ -1609,7 +1659,7 @@ export default function LeaseReview() {
         columnUpdates[column] = val;
       }
     }
-    // total_sf alias → square_footage column (legacy).
+    // total_sf alias -> square_footage column (legacy).
     if (key === "total_sf") columnUpdates.square_footage = val;
 
     const previousValue = readFieldValue(lease, key);
@@ -1782,7 +1832,7 @@ export default function LeaseReview() {
 
       // Auto-build rent projection snapshots for the surrounding fiscal
       // years (and both projection modes) so the Rent Projection page has
-      // authoritative monthly_projections to render — without the user
+      // authoritative monthly_projections to render - without the user
       // having to click Run Engine. Done across:
       //   - current FY, current+1, current-1 (covers the most common views)
       //   - the FY that contains the lease commencement (term first year)
@@ -1820,7 +1870,7 @@ export default function LeaseReview() {
           force: false
         });
         console.log(
-          `[LeaseReview] generateLeaseExpenseRulesForLease → ${persisted?.persistedRulesCount || 0} rules persisted`,
+          `[LeaseReview] generateLeaseExpenseRulesForLease -> ${persisted?.persistedRulesCount || 0} rules persisted`,
           persisted
         );
       } catch (persistErr) {
@@ -1879,14 +1929,14 @@ export default function LeaseReview() {
     }
   };
 
-  // One-click re-extract: invokes ingest-file → polls until processing
-  // completes → copies the fresh ui_review_payload + workflow_output back
+  // One-click re-extract: invokes ingest-file -> polls until processing
+  // completes -> copies the fresh ui_review_payload + workflow_output back
   // onto this lease. Saves the reviewer from the Re-link/Re-run/Apply Latest
   // dance for the common case where source_file_id is already set.
   async function handleReextractLease() {
     const sourceFileId = lease?.source_file_id ?? lease?.extraction_data?.source_file_id;
     if (!sourceFileId) {
-      toast.error("No source file linked. Use Extraction Debug → Re-link Source Document first.");
+      toast.error("No source file linked. Use Extraction Debug -> Re-link Source Document first.");
       setShowReextractConfirm(false);
       return;
     }
@@ -1915,7 +1965,7 @@ export default function LeaseReview() {
         console.warn(`[Re-extract] pipeline fell back to manual review at stage=${stage}:`, detail);
         const stageLabel = stage === "normalization" ? "normalization" : "document parsing";
         toast.error(
-          `Re-extraction failed during ${stageLabel}: ${detail.length > 120 ? detail.slice(0, 120) + "…" : detail}. Check edge function logs in Supabase for details.`,
+          `Re-extraction failed during ${stageLabel}: ${detail.length > 120 ? detail.slice(0, 120) + "-" : detail}. Check edge function logs in Supabase for details.`,
           { duration: 8000 },
         );
         // Still write evidence_refreshed_at so the auto-extract loop stops.
@@ -1935,7 +1985,7 @@ export default function LeaseReview() {
           }).eq("id", lease.id);
           queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
         } catch (_writeErr) {
-          // Non-fatal — loop will stop on next successful extraction
+          // Non-fatal - loop will stop on next successful extraction
         }
         return;
       }
@@ -1946,7 +1996,7 @@ export default function LeaseReview() {
       const ACTIVE_STATUSES = new Set([
         "uploaded", "parsing", "parsed", "pdf_parsed", "validating", "validated", "storing", "stored", "computing",
       ]);
-      const MAX_POLLS = 90; // 90 × 2s = 3 minutes
+      const MAX_POLLS = 90; // 90 -- 2s = 3 minutes
       let attempts = 0;
       let latestFile = null;
       let lastStatus = "";
@@ -1971,11 +2021,11 @@ export default function LeaseReview() {
         if (!ACTIVE_STATUSES.has(status) && row?.ui_review_payload) break;
         attempts += 1;
       }
-      // Even on timeout, apply whatever's in ui_review_payload right now —
+      // Even on timeout, apply whatever's in ui_review_payload right now -
       // partial extraction is better than nothing, and the user can see what
       // came through.
       if (attempts >= MAX_POLLS) {
-        console.warn("[Re-extract] polling timed out after 3 minutes — applying partial result if any");
+        console.warn("[Re-extract] polling timed out after 3 minutes - applying partial result if any");
         toast.warning("Re-extraction is taking longer than expected. Applying whatever's available now; check Extraction Debug for full status.");
       }
       if (!latestFile?.ui_review_payload) {
@@ -1989,7 +2039,7 @@ export default function LeaseReview() {
       const wf = latestFile?.ui_review_payload?.metadata?.workflow_output;
       const workflowOutput = Array.isArray(wf?.records) ? wf.records[0] : wf || null;
 
-      // Diagnostic dump — shows exactly what the deployed pipeline returned
+      // Diagnostic dump - shows exactly what the deployed pipeline returned
       // for each field. If a field appears here with value=null, that's the
       // extractor giving up on it (rule patterns missed + LLM returned null).
       // If it's missing from this dump entirely, the field isn't in the
@@ -2167,7 +2217,7 @@ export default function LeaseReview() {
         cleanedEvidence[key] = val;
       }
 
-      // ── Re-extract preservation safety ────────────────────────────────────
+      // - Re-extract preservation safety -
       // A re-extract that returns TRULY ZERO values must NOT blank previous
       // good extraction. But when the new extraction has actual field values
       // (even without source text evidence), we allow the write so users get
@@ -2202,16 +2252,16 @@ export default function LeaseReview() {
 
       // Block only when new extraction returned zero non-null values AND there
       // is previous good data to protect. When previous data is also empty we
-      // must still write evidence_refreshed_at so the auto-extract loop stops —
+      // must still write evidence_refreshed_at so the auto-extract loop stops -
       // there is nothing to protect and blocking leaves the loop running forever.
       if (newSourceBackedCount === 0 && newNonNullCount === 0 && previousSourceBackedCount > 0) {
         overwriteBlockedReason = "new_extraction_has_zero_source_backed_fields_previous_data_preserved";
       } else if (newSourceBackedCount === 0 && newNonNullCount > 0 && previousSourceBackedCount > 0) {
-        // New extraction has values but no source evidence — only block if the
+        // New extraction has values but no source evidence - only block if the
         // previous extraction was richer (source-backed). Surface as advisory.
         console.warn(
           `[LeaseReview] re-extract: new extraction has ${newNonNullCount} non-null fields but no source evidence. ` +
-          `Previous had ${previousSourceBackedCount} source-backed fields — allowing write since LLM produced values.`
+          `Previous had ${previousSourceBackedCount} source-backed fields - allowing write since LLM produced values.`
         );
       }
 
@@ -2351,7 +2401,7 @@ export default function LeaseReview() {
 
       if (overwriteBlockedReason) {
         // Re-extract produced nothing usable. Surface the blocker clearly
-        // and short-circuit — the success toast / rule generation below
+        // and short-circuit - the success toast / rule generation below
         // assume a successful overwrite.
         console.warn("[LeaseReview] re-extract blocked from overwriting previous data:", {
           reason: overwriteBlockedReason,
@@ -2445,7 +2495,7 @@ export default function LeaseReview() {
       try {
         sessionStorage.setItem(`lease_auto_extract_failed_${leaseId}`, String(Date.now()));
       } catch {
-        // sessionStorage may be unavailable in some environments — ignore.
+        // sessionStorage may be unavailable in some environments - ignore.
       }
     } finally {
       setReextracting(false);
@@ -2560,13 +2610,13 @@ export default function LeaseReview() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Lease Review</h1>
           <p className="text-sm text-slate-500">
-            {summaryTenantName || "Unknown tenant"} —{" "}
-            {totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} ·{" "}
+            {summaryTenantName || "Unknown tenant"} -{" "}
+            {totalSf ? `${Number(totalSf).toLocaleString()} SF` : "-"} --{" "}
             {getLeaseFieldLabel("lease_type", summaryLeaseType) || "Unknown type"}
           </p>
           <p className="mt-0.5 text-xs text-slate-400">
-            Term: {commencementValue || "—"} → {expirationValue || "—"}
-            {summaryLeaseDate ? ` · Signed: ${summaryLeaseDate}` : ""}
+            Term: {commencementValue || "-"} to {expirationValue || "-"}
+            {summaryLeaseDate ? ` -- Signed: ${summaryLeaseDate}` : ""}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge className={leaseStatus === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}>
@@ -2575,7 +2625,7 @@ export default function LeaseReview() {
             {lease.abstract_status && (
               <Badge className={lease.abstract_status === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}>
                 Abstract: {lease.abstract_status}
-                {lease.abstract_version ? ` · v${lease.abstract_version}` : ""}
+                {lease.abstract_version ? ` -- v${lease.abstract_version}` : ""}
               </Badge>
             )}
             <Badge className="bg-slate-100 text-slate-700">
@@ -2607,18 +2657,18 @@ export default function LeaseReview() {
             title={
               resolvedSourceFileId
                 ? "Re-run the AI extraction on the source PDF and refresh values + evidence on this lease"
-                : "No source file is linked to this lease. Use Extraction Debug → Re-link Source Document first."
+                : "No source file is linked to this lease. Use Extraction Debug -> Re-link Source Document first."
             }
           >
             {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
             {reextracting
               ? reextractStage === "polling"
-                ? "Waiting on extraction…"
+                ? "Waiting on extraction-"
                 : reextractStage === "applying"
-                  ? "Applying values…"
+                  ? "Applying values..."
                   : reextractStage === "extracting_rules"
-                    ? "Extracting expense rules…"
-                    : "Re-extracting…"
+                    ? "Extracting expense rules..."
+                    : "Re-extracting..."
               : "Re-extract Lease"}
           </Button>
           <Button
@@ -2642,7 +2692,7 @@ export default function LeaseReview() {
       </div>
 
       {/* Source-file banner with inline file picker. Shows the ranked list
-          of uploaded_files candidates the auto-link found in this org —
+          of uploaded_files candidates the auto-link found in this org -
           one click links the lease, no UUID copying needed. */}
       {!resolvedSourceFileId && (
         <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -2652,7 +2702,7 @@ export default function LeaseReview() {
               Extraction (Docling + Gemini) can't run and the Re-extract Lease button is disabled until you point this lease at the uploaded PDF.
               {autoLinkDebug ? (
                 <span className="block mt-1 italic">
-                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "—"}" against tenant "{autoLinkDebug.tenant || "—"}". If you see duplicates below, they're re-uploads of the same file — picking the most recent (top of the list) is safe. The UUID is just an internal identifier; you don't need to memorize it.
+                  Auto-link scanned {autoLinkDebug.query_count} uploads ({autoLinkDebug.lease_like} lease-shape), top score {autoLinkDebug.top_score} for "{autoLinkDebug.top_candidate || "-"}" against tenant "{autoLinkDebug.tenant || "-"}". If you see duplicates below, they're re-uploads of the same file - picking the most recent (top of the list) is safe. The UUID is just an internal identifier; you don't need to memorize it.
                 </span>
               ) : null}
             </p>
@@ -2669,10 +2719,10 @@ export default function LeaseReview() {
                       </p>
                       <p className="text-[10px] text-slate-500">
                         score {c.score}
-                        {c.reasons?.length ? ` · ${c.reasons.join("+")}` : ""}
-                        {" · "}{c.status}
-                        {" · "}{c.updated_at ? new Date(c.updated_at).toLocaleString() : ""}
-                        {" · "}<code className="text-slate-400">{String(c.id).slice(0, 8)}…</code>
+                        {c.reasons?.length ? ` -- ${c.reasons.join("+")}` : ""}
+                        {" -- "}{c.status}
+                        {" -- "}{c.updated_at ? new Date(c.updated_at).toLocaleString() : ""}
+                        {" -- "}<code className="text-slate-400">{String(c.id).slice(0, 8)}-</code>
                       </p>
                     </div>
                     <Button
@@ -2704,10 +2754,10 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Document mismatch warning — shown when extracted fields conflict with stored lease data */}
+      {/* Document mismatch warning - shown when extracted fields conflict with stored lease data */}
       {documentMismatches.length > 0 && (
         <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-          <p className="font-semibold mb-1">⚠ Possible document mismatch — the uploaded file may not match this lease record.</p>
+          <p className="font-semibold mb-1">- Possible document mismatch - the uploaded file may not match this lease record.</p>
           <ul className="list-disc pl-4 space-y-0.5">
             {documentMismatches.map((m) => (
               <li key={m.field}>{m.detail}</li>
@@ -2722,7 +2772,7 @@ export default function LeaseReview() {
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="font-semibold mb-1">This document was detected as an Assignment / Amendment / Consent — not the full original lease.</p>
+              <p className="font-semibold mb-1">This document was detected as an Assignment / Amendment / Consent - not the full original lease.</p>
               <p>Assignment terms have been extracted and are ready to review. CAM, insurance, expense recovery, and operating expense fields require the original lease document.</p>
               <p className="mt-1 text-xs text-blue-600">If this is incorrect, click "This is a full lease" to dismiss this notice.</p>
             </div>
@@ -2739,7 +2789,7 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Rule readiness banner — only for full leases */}
+      {/* Rule readiness banner - only for full leases */}
       {!isAssignmentOnlyDocument && (
         <div
           className={`rounded-xl border px-4 py-3 text-sm ${
@@ -2761,7 +2811,7 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Extraction-in-progress banner — shown while auto-extract or re-extract is running */}
+      {/* Extraction-in-progress banner - shown while auto-extract or re-extract is running */}
       {reextracting && (
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-sm text-blue-800">
           <div className="flex items-center gap-3">
@@ -2769,13 +2819,13 @@ export default function LeaseReview() {
             <div>
               <p className="font-semibold">
                 {reextractStage === "polling"
-                  ? "Reading extracted data from the AI pipeline…"
+                  ? "Reading extracted data from the AI pipeline-"
                   : reextractStage === "applying"
-                    ? "Applying extracted values to your lease…"
-                    : "Extracting lease data from the uploaded document…"}
+                    ? "Applying extracted values to your lease-"
+                    : "Extracting lease data from the uploaded document"}
               </p>
               <p className="mt-0.5 text-xs text-blue-600">
-                This usually takes 30–60 seconds. The page will refresh automatically when complete. You don't need to do anything.
+                This usually takes 30-60 seconds. The page will refresh automatically when complete. You don't need to do anything.
               </p>
             </div>
           </div>
@@ -2785,7 +2835,8 @@ export default function LeaseReview() {
       {/* Extraction failed / no-data banner */}
       {!reextracting &&
         confidenceBuckets.high + confidenceBuckets.medium + confidenceBuckets.low + confidenceBuckets.unknown === 0 &&
-        resolvedSourceFileId && (
+        resolvedSourceFileId &&
+        reviewCandidateRowsCount === 0 && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
@@ -2805,19 +2856,37 @@ export default function LeaseReview() {
         </div>
       )}
 
-      {/* Confidence summary — 6 cards (hidden while extracting with no data yet) */}
+      {!reextracting &&
+        confidenceBuckets.high + confidenceBuckets.medium + confidenceBuckets.low + confidenceBuckets.unknown === 0 &&
+        resolvedSourceFileId &&
+        reviewCandidateRowsCount > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div>
+              <p className="font-semibold">Extraction produced review-only fields</p>
+              <p className="mt-1 text-xs text-amber-700">
+                The source document was parsed, but the extracted values are missing high-confidence source evidence or require manual review.
+                Use the tabs below to approve, edit, mark N/A, or re-extract after backend updates.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confidence summary - 6 cards (hidden while extracting with no data yet) */}
       {(!reextracting || confidenceBuckets.high + confidenceBuckets.medium + confidenceBuckets.low + confidenceBuckets.unknown > 0) && (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="p-3">
-            <p className="text-[10px] font-semibold uppercase text-emerald-600">High (≥90%)</p>
+            <p className="text-[10px] font-semibold uppercase text-emerald-600">High (&gt;=90%)</p>
             <p className="text-2xl font-bold text-emerald-700">{confidenceBuckets.high}</p>
             <p className="text-[10px] text-emerald-500">Auto-populated</p>
           </CardContent>
         </Card>
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-3">
-            <p className="text-[10px] font-semibold uppercase text-amber-600">Medium (75–89%)</p>
+            <p className="text-[10px] font-semibold uppercase text-amber-600">Medium (75-89%)</p>
             <p className="text-2xl font-bold text-amber-700">{confidenceBuckets.medium}</p>
             <p className="text-[10px] text-amber-500">Flagged for review</p>
           </CardContent>
@@ -2883,7 +2952,7 @@ export default function LeaseReview() {
               >
                 {tab.label}
                 {notInThisDoc && (
-                  <span className="ml-1 text-[9px] text-slate-400">–</span>
+                  <span className="ml-1 text-[9px] text-slate-400">-</span>
                 )}
                 {extractedInTab > 0 && !notInThisDoc && (
                   <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-200 px-1 text-[10px] font-semibold text-amber-900">
@@ -2902,16 +2971,16 @@ export default function LeaseReview() {
               <CardTitle className="text-base">Lease Summary</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <SummaryStat label="Tenant" value={summaryTenantName || "—"} />
-              <SummaryStat label="Lease Type" value={getLeaseFieldLabel("lease_type", summaryLeaseType) || "—"} />
+              <SummaryStat label="Tenant" value={summaryTenantName || "-"} />
+              <SummaryStat label="Lease Type" value={getLeaseFieldLabel("lease_type", summaryLeaseType) || "-"} />
               <SummaryStat
-                label="Term (Commencement → Expiration)"
-                value={`${commencementValue || "—"} → ${expirationValue || "—"}`}
+                label="Term (Commencement -> Expiration)"
+                value={`${commencementValue || "-"} -> ${expirationValue || "-"}`}
               />
-              <SummaryStat label="Lease Date (signed)" value={summaryLeaseDate || "—"} />
-              <SummaryStat label="Monthly Rent" value={summaryMonthlyRent ? `$${Number(summaryMonthlyRent).toLocaleString()}` : "—"} />
-              <SummaryStat label="Annual Rent" value={summaryAnnualRent ? `$${Number(summaryAnnualRent).toLocaleString()}` : "—"} />
-              <SummaryStat label="Square Footage" value={totalSf ? `${Number(totalSf).toLocaleString()} SF` : "—"} />
+              <SummaryStat label="Lease Date (signed)" value={summaryLeaseDate || "-"} />
+              <SummaryStat label="Monthly Rent" value={summaryMonthlyRent ? `$${Number(summaryMonthlyRent).toLocaleString()}` : "-"} />
+              <SummaryStat label="Annual Rent" value={summaryAnnualRent ? `$${Number(summaryAnnualRent).toLocaleString()}` : "-"} />
+              <SummaryStat label="Square Footage" value={totalSf ? `${Number(totalSf).toLocaleString()} SF` : "-"} />
             </CardContent>
           </Card>
 
@@ -2934,7 +3003,7 @@ export default function LeaseReview() {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <SummaryStat
                   label="Lease Expense Terms Found"
-                  value={String(ruleSetSummary?.expense?.total ?? 0)}
+                  value={String(effectiveExpenseTermsFound)}
                 />
                 <SummaryStat
                   label="Lease Expense Terms Approved"
@@ -2942,7 +3011,7 @@ export default function LeaseReview() {
                 />
                 <SummaryStat
                   label="CAM Terms Found"
-                  value={String(ruleSetSummary?.cam?.total ?? 0)}
+                  value={String(effectiveCamTermsFound)}
                 />
                 <SummaryStat
                   label="CAM Terms Approved"
@@ -3037,7 +3106,7 @@ export default function LeaseReview() {
           </div>
         </TabsContent>
 
-        {/* Field tabs — table-first per business section. */}
+        {/* Field tabs - table-first per business section. */}
         {LEASE_REVIEW_TABS
           .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
@@ -3071,7 +3140,7 @@ export default function LeaseReview() {
             </TabsContent>
           ))}
 
-        {/* Rent & Charges — single-value rent fields + generated rent rows.
+        {/* Rent & Charges - single-value rent fields + generated rent rows.
             The rent_schedules table remains in the backend (rent projection,
             billing, etc. read from it); we just surface the rows here so
             reviewers see the schedule that approval will publish. */}
@@ -3104,7 +3173,7 @@ export default function LeaseReview() {
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
-        {/* Expense Rules — single-value lease fields + repeatable rule rows. */}
+        {/* Expense Rules - single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <FieldTableFilter
@@ -3133,7 +3202,7 @@ export default function LeaseReview() {
           />
         </TabsContent>
 
-        {/* CAM Rules — single-value CAM lease fields + repeatable CAM rules. */}
+        {/* CAM Rules - single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <FieldTableFilter
@@ -3162,12 +3231,12 @@ export default function LeaseReview() {
           />
         </TabsContent>
 
-        {/* Clause Records — all meaningful lease clauses against a predefined checklist. */}
+        {/* Clause Records - all meaningful lease clauses against a predefined checklist. */}
         <TabsContent value="clause_records" className="mt-4 space-y-3">
           <ClauseRecordsTable lease={lease} />
         </TabsContent>
 
-        {/* Critical Dates — derived from approved abstract. */}
+        {/* Critical Dates - derived from approved abstract. */}
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
           <CriticalDatesTable lease={leaseFull} />
         </TabsContent>
@@ -3200,7 +3269,7 @@ export default function LeaseReview() {
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
-        {/* Extraction Debug tab — superadmin only. */}
+        {/* Extraction Debug tab - superadmin only. */}
         {isSuperAdminUser && (
           <TabsContent value="extraction_debug" className="mt-4 space-y-3">
             <ExtractionDebugPanel lease={lease} />
@@ -3229,7 +3298,7 @@ export default function LeaseReview() {
             </div>
             <div>
               <Label className="text-xs mb-1 block">Source Text (verbatim from document)</Label>
-              <Textarea placeholder="Paste the exact clause or sentence from the lease document…" rows={3}
+              <Textarea placeholder="Paste the exact clause or sentence from the lease document" rows={3}
                 value={customFieldForm.sourceText}
                 onChange={(e) => setCustomFieldForm((f) => ({ ...f, sourceText: e.target.value }))} />
             </div>
@@ -3475,7 +3544,7 @@ export default function LeaseReview() {
         isSaving={updateLeaseMutation.isPending}
       />
 
-      {/* Sticky bottom action bar — once the abstract is approved we collapse
+      {/* Sticky bottom action bar - once the abstract is approved we collapse
           to a confirmation message + Re-extract escape hatch (re-extraction
           creates the next version on next approval).
           Uses `sticky bottom-0` (not `fixed`) so the bar stays contained
@@ -3489,7 +3558,7 @@ export default function LeaseReview() {
             <>
               <div className="text-xs">
                 <span className="font-semibold text-emerald-700">
-                  ✓ Lease abstract approved
+                  - Lease abstract approved
                   {lease.abstract_version ? ` (v${lease.abstract_version})` : ""}
                 </span>
                 {lease.signed_by ? (
@@ -3508,10 +3577,10 @@ export default function LeaseReview() {
                   onClick={() => setShowReextractConfirm(true)}
                   disabled={reextracting || !resolvedSourceFileId}
                   className="border-blue-300 text-blue-700 hover:bg-blue-50"
-                  title="Re-run AI extraction — next approval will create a new version"
+                  title="Re-run AI extraction - next approval will create a new version"
                 >
                   {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-                  {reextracting ? "Re-extracting…" : "Re-extract Lease"}
+                  {reextracting ? "Re-extracting..." : "Re-extract Lease"}
                 </Button>
               </div>
             </>
@@ -3535,11 +3604,11 @@ export default function LeaseReview() {
                   title={
                     resolvedSourceFileId
                       ? "Re-run AI extraction on the source PDF"
-                      : "No source file linked. Use Extraction Debug → Re-link first."
+                      : "No source file linked. Use Extraction Debug -> Re-link first."
                   }
                 >
                   {reextracting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-                  {reextracting ? "Re-extracting…" : "Re-extract Lease"}
+                  {reextracting ? "Re-extracting..." : "Re-extract Lease"}
                 </Button>
                 <Button
                   variant="outline"
@@ -3597,7 +3666,7 @@ export default function LeaseReview() {
             <div>
               <Label>Current Value</Label>
               <p className="mt-1 text-sm text-slate-500">
-                {editingField ? String(readFieldValue(lease, editingField.key) ?? "—") : ""}
+                {editingField ? String(readFieldValue(lease, editingField.key) ?? "-") : ""}
               </p>
             </div>
             <div>
@@ -3685,8 +3754,8 @@ export default function LeaseReview() {
           <div className="mb-3 rounded-lg bg-slate-50 p-3">
             <p className="text-sm font-medium text-slate-700">Lease Summary</p>
             <p className="text-xs text-slate-500">
-              {lease.tenant_name} · {getLeaseFieldLabel("lease_type", lease.lease_type) || "—"} ·{" "}
-              {commencementValue || "—"} to {expirationValue || "—"}
+              {lease.tenant_name} -- {getLeaseFieldLabel("lease_type", lease.lease_type) || "-"} --{" "}
+              {commencementValue || "-"} to {expirationValue || "-"}
             </p>
           </div>
           <div className="space-y-3">
@@ -3799,7 +3868,7 @@ export default function LeaseReview() {
               <li>Field review decisions you've already made (Accept / Edit / N/A / Manual) are <strong>preserved</strong>.</li>
               <li>Approval status, signed_by, and abstract_snapshot are <strong>not touched</strong>.</li>
               <li>Source file: <code>{resolvedSourceFileId || "(none)"}</code></li>
-              <li>Takes ~30–60 seconds. Don't close the page while it's running.</li>
+              <li>Takes ~30-60 seconds. Don't close the page while it's running.</li>
             </ul>
           </div>
           <DialogFooter className="mt-3">
@@ -3872,7 +3941,7 @@ export default function LeaseReview() {
                 <SelectContent>
                   {signatureRecipients.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.name} ({s.role?.replace("_", " ")}) · {s.email}
+                      {s.name} ({s.role?.replace("_", " ")}) -- {s.email}
                     </SelectItem>
                   ))}
                 </SelectContent>
