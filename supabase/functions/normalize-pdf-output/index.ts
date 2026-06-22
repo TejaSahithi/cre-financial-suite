@@ -2117,6 +2117,13 @@ Deno.serve(async (req: Request) => {
         result.metadata = {
           ...(result.metadata ?? {}),
           extractionDebug: consolidated,
+          extraction_contract_version: "lease-review-evidence-v3",
+          extraction_build_version: "2026-06-22.1",
+          extraction_run_id: extractionRunId,
+          pipeline_job_id: finalPipelineJobId,
+          source_file_id: file_id,
+          normalized_at: new Date().toISOString(),
+          worker_attempt: worker_attempt ?? 1,
         };
         // Also expose it on the review payload metadata so the draft-creation
         // path (which only reads ui_review_payload) can persist it onto
@@ -2124,6 +2131,13 @@ Deno.serve(async (req: Request) => {
         if (uiReviewPayload?.metadata && typeof uiReviewPayload.metadata === "object") {
           (uiReviewPayload.metadata as Record<string, unknown>).extractionDebug = consolidated;
           (uiReviewPayload.metadata as Record<string, unknown>).extraction_debug = consolidated;
+          (uiReviewPayload.metadata as Record<string, unknown>).extraction_contract_version = "lease-review-evidence-v3";
+          (uiReviewPayload.metadata as Record<string, unknown>).extraction_build_version = "2026-06-22.1";
+          (uiReviewPayload.metadata as Record<string, unknown>).extraction_run_id = extractionRunId;
+          (uiReviewPayload.metadata as Record<string, unknown>).pipeline_job_id = finalPipelineJobId;
+          (uiReviewPayload.metadata as Record<string, unknown>).source_file_id = file_id;
+          (uiReviewPayload.metadata as Record<string, unknown>).normalized_at = new Date().toISOString();
+          (uiReviewPayload.metadata as Record<string, unknown>).worker_attempt = worker_attempt ?? 1;
         }
 
         // Surface a user-facing warning so the Upload screen's
