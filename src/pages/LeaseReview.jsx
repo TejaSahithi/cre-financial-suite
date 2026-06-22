@@ -2488,6 +2488,7 @@ export default function LeaseReview() {
         );
       }
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["uploaded_file_for_lease", sourceFileId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseId] });
     } catch (err) {
