@@ -166,13 +166,21 @@ export function buildRelevantSnippet(
   // Sort by score descending, take top blocks within token budget
   scored.sort((a, b) => b.score - a.score);
 
-  let result = "";
+  const selectedBlocks = [];
   let tokens = 0;
-  for (const { block } of scored) {
-    const blockTokens = estimateTokens(block.text);
+  for (const item of scored) {
+    const blockTokens = estimateTokens(item.block.text);
     if (tokens + blockTokens > maxTokens) break;
-    result += block.text + "\n\n";
+    selectedBlocks.push(item.block);
     tokens += blockTokens;
+  }
+
+  // Restore original document order so the LLM can reason about context
+  selectedBlocks.sort((a, b) => (a.block_index ?? 0) - (b.block_index ?? 0));
+
+  let result = "";
+  for (const block of selectedBlocks) {
+    result += block.text + "\n\n";
   }
 
   return result.trim() || fullText.slice(0, maxTokens * 4);
