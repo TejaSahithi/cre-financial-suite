@@ -1451,7 +1451,7 @@ Deno.serve(async (req: Request) => {
     const { user, supabaseAdmin } = await verifyUser(req);
 
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run, sample_text } = body;
+    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt } = body;
 
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
@@ -1535,6 +1535,19 @@ Deno.serve(async (req: Request) => {
       );
     }
     const logger = createLogger(supabaseAdmin, file_id, orgId);
+
+    let finalPipelineJobId = pipeline_job_id || job_id;
+    if (!finalPipelineJobId) {
+      const { data: latestJob } = await supabaseAdmin
+        .from("pipeline_jobs")
+        .select("id")
+        .eq("uploaded_file_id", file_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestJob?.id) finalPipelineJobId = latestJob.id;
+    }
+    const extractionRunId = finalPipelineJobId || file_id;
 
     // Must be in pdf_parsed state
     if (fileRecord.status !== "pdf_parsed") {
@@ -2060,6 +2073,13 @@ Deno.serve(async (req: Request) => {
         const consolidated = {
           ...pipelineDebug,
           ...fieldTraceSummary,
+          extraction_contract_version: "lease-review-evidence-v3",
+          extraction_build_version: "2026-06-22.1",
+          extraction_run_id: extractionRunId,
+          pipeline_job_id: finalPipelineJobId,
+          source_file_id: file_id,
+          normalized_at: new Date().toISOString(),
+          worker_attempt: worker_attempt ?? 1,
           unmapped_llm_keys: pipelineDebug.unmapped_llm_keys ?? [],
           rejected_fields_with_reasons: pipelineDebug.rejected_fields_with_reasons ?? [],
           // Document classification

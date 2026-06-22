@@ -460,7 +460,7 @@ Deno.serve(async (req: Request) => {
         metadata: { job_id: job.id, attempt },
       });
 
-      const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId }, orgId, NORMALIZE_TIMEOUT_MS);
+      const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId, pipeline_job_id: job.id, worker_attempt: attempt }, orgId, NORMALIZE_TIMEOUT_MS);
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
