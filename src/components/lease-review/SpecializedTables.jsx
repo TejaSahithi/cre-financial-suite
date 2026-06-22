@@ -384,15 +384,19 @@ export function ClauseRecordsTable({ lease }) {
   // Combine DB rows with extraction_data fallback so we never lose extracted
   // clause text just because the table isn't deployed yet.
   const fallbackClauses = useMemo(() => {
-    const fromWorkflow = lease?.extraction_data?.workflow_output?.lease_clauses;
+    const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
+    const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
+    
+    const fromWorkflow = workflowOutput?.lease_clauses;
     const fromTopLevel = lease?.extraction_data?.lease_clauses;
-    const workflowOutput = lease?.extraction_data?.workflow_output || {};
-    const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
+    const recordOutput = Array.isArray(rawWorkflowOutput.records) ? rawWorkflowOutput.records[0] || {} : {};
     const itemRows = [
       workflowOutput.extracted_document_items,
       workflowOutput.clause_records,
       recordOutput.extracted_document_items,
       recordOutput.clause_records,
+      rawWorkflowOutput.extracted_document_items,
+      rawWorkflowOutput.clause_records,
       lease?.extraction_data?.extracted_document_items,
       lease?.extraction_data?.clause_records,
     ].flatMap((rows) => (Array.isArray(rows) ? rows : []));

@@ -54,12 +54,13 @@ export function collectExtractedDocumentItems(lease) {
   const ufWfRecord = (ufPayload?.records || ufPayload?.rows || [])[0]?.workflow_output;
   const ufWf = ufWfRecord || ufWfMeta || {};
 
-  const workflowOutput = (
+  const rawWorkflowOutput = (
     Object.keys(lease?.extraction_data?.workflow_output || {}).length > 0
       ? lease.extraction_data.workflow_output
       : ufWf
   );
-  const recordOutput = Array.isArray(workflowOutput.records) ? workflowOutput.records[0] || {} : {};
+  const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
+  const recordOutput = Array.isArray(rawWorkflowOutput.records) ? rawWorkflowOutput.records[0] || {} : {};
   const fieldMapItems = [];
   const addFieldMapItems = (map, sourceName) => {
     if (!map || typeof map !== "object" || Array.isArray(map)) return;

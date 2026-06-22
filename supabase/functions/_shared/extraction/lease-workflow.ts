@@ -2565,7 +2565,7 @@ function countClauseBackedExpenseTerms(fieldMap: Record<string, LeaseWorkflowFie
 function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
   if (isBlank(value)) return null;
   if (/(date)$/.test(fieldKey)) return toIsoDate(value) || cleanText(value);
-  if (/(amount|percent|multiplier|sqft|rsf|share|day)$/.test(fieldKey) || ["rentable_area_sqft", "building_rsf", "tenant_rsf"].includes(fieldKey)) {
+  if (/(amount|percent|multiplier|sqft|rsf|share|day)$/.test(fieldKey) || ["rentable_area_sqft", "building_rsf", "tenant_rsf", "base_rent_monthly", "annual_rent", "monthly_rent", "base_rent"].includes(fieldKey)) {
     const numeric = asNumber(value);
     return numeric != null ? numeric : cleanText(value);
   }
