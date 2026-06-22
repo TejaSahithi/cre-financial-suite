@@ -225,16 +225,16 @@ export async function extractDocumentWithVision(
 
   const callFileJSON = hasVertexCreds2
     ? async <T>(opts: Parameters<typeof callVertexAIFileJSON>[0]): Promise<T | null> => {
-        try {
-          return await callVertexAIFileJSON<T>(opts);
-        } catch (vertexErr) {
-          if (hasGeminiKey2) {
-            console.warn(`[ocr] Vertex AI file JSON failed (${vertexErr?.message}), falling back to Gemini API key`);
-            return await geminiFileJSON<T>(opts);
-          }
-          throw vertexErr;
+      try {
+        return await callVertexAIFileJSON<T>(opts);
+      } catch (vertexErr) {
+        if (hasGeminiKey2) {
+          console.warn(`[ocr] Vertex AI file JSON failed (${vertexErr?.message}), falling back to Gemini API key`);
+          return await geminiFileJSON<T>(opts);
         }
+        throw vertexErr;
       }
+    }
     : geminiFileJSON;
 
   const result = await callFileJSON<{
@@ -487,16 +487,16 @@ export async function extractVisibleKeyValues(
 
   const callFileJSON3 = hasVertexCreds3
     ? async (opts: any) => {
-        try {
-          return await callVertexAIFileJSON(opts);
-        } catch (vertexErr) {
-          if (hasGeminiKey3) {
-            console.warn(`[ocr] Vertex AI key-value failed (${vertexErr?.message}), falling back to Gemini API key`);
-            return await geminiFileJSON3(opts);
-          }
-          throw vertexErr;
+      try {
+        return await callVertexAIFileJSON(opts);
+      } catch (vertexErr) {
+        if (hasGeminiKey3) {
+          console.warn(`[ocr] Vertex AI key-value failed (${vertexErr?.message}), falling back to Gemini API key`);
+          return await geminiFileJSON3(opts);
         }
+        throw vertexErr;
       }
+    }
     : geminiFileJSON3;
 
   const INLINE_LIMIT_BYTES = 20 * 1024 * 1024;
