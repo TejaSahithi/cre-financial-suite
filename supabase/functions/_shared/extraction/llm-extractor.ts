@@ -89,7 +89,7 @@ RULES:
 12. source_text MUST BE THE EXACT VERBATIM text from the document snippet. NEVER paraphrase your reasoning. NEVER explain how you derived the value.
     If you derived the value from a specific phrase (e.g. extracting Tenant from "Assignee: John"), the source_text MUST BE the exact phrase "Assignee: John".
     If the text is OCR-garbled, return the garbled text exactly as it appears.
-    For lease review fields, source_text must be a complete source line, sentence, table row, or short clause that contains the value and enough surrounding label/context for a reviewer to understand why the value was extracted.
+    For lease review fields, source_text must be a COMPLETE, EXACT FULL SENTENCE from the lease document that contains the value and enough surrounding context for a reviewer to understand why the value was extracted.
     Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
     If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
     If you cannot provide both an exact source_text and the page number for a found value, return value null.
