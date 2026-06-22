@@ -216,6 +216,10 @@ export function collectExtractedDocumentItems(lease) {
     recordOutput.clause_records,
     lease?.extraction_data?.extracted_document_items,
     lease?.extraction_data?.clause_records,
+    ufWf?.extracted_document_items,
+    ufWf?.clause_records,
+    ufWfRecord?.extracted_document_items,
+    ufWfRecord?.clause_records,
     fieldMapItems,
   ];
   return sources.flatMap((rows) => (Array.isArray(rows) ? rows : []));
@@ -364,6 +368,14 @@ function parseNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function extractFirstMoneyNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value ?? "");
+  const money = text.match(/\$\s*([\d,]+(?:\.\d{2})?)/);
+  if (money?.[1]) return parseNumber(money[1]);
+  return parseNumber(text);
+}
+
 function combineSourceText(...items) {
   const texts = items
     .map((item) => cleanSourceEvidenceText(item?.sourceText ?? item?.source_text ?? item?.sourceClause ?? item?.source_clause))
@@ -393,11 +405,15 @@ function currentEvidenceIsUnsupported(evidence, value) {
 
 function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {}) {
   const monthlyEvidence = readFieldEvidence(lease, "monthly_rent");
-  const monthlyRent = parseNumber(readFieldValue(lease, "monthly_rent"));
+  const baseMonthlyEvidence = readFieldEvidence(lease, "base_rent_monthly");
+  const effectiveMonthlyEvidence = hasValidSourceEvidence(monthlyEvidence) ? monthlyEvidence : baseMonthlyEvidence;
+  const monthlyRent = extractFirstMoneyNumber(readFieldValue(lease, "monthly_rent")) ?? extractFirstMoneyNumber(readFieldValue(lease, "base_rent_monthly"));
   const sfEvidence = readFieldEvidence(lease, "square_footage");
-  const squareFootage = parseNumber(readFieldValue(lease, "square_footage"));
-  const monthlyHasSource = hasValidSourceEvidence({ ...monthlyEvidence, value: monthlyRent });
-  const sfHasSource = hasValidSourceEvidence({ ...sfEvidence, value: squareFootage });
+  const tenantRsfEvidence = readFieldEvidence(lease, "tenant_rsf");
+  const effectiveSfEvidence = hasValidSourceEvidence(sfEvidence) ? sfEvidence : tenantRsfEvidence;
+  const squareFootage = parseNumber(readFieldValue(lease, "square_footage")) ?? parseNumber(readFieldValue(lease, "tenant_rsf"));
+  const monthlyHasSource = hasValidSourceEvidence({ ...effectiveMonthlyEvidence, value: monthlyRent });
+  const sfHasSource = hasValidSourceEvidence({ ...effectiveSfEvidence, value: squareFootage });
   const shouldUpgrade = (derivedValue) =>
     currentEvidenceIsUnsupported(currentEvidence, currentValue) &&
     (!isMeaningfulValue(currentValue) || valuesRoughlyEqual(currentValue, derivedValue));
@@ -407,11 +423,11 @@ function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {
     if (!shouldUpgrade(value)) return null;
     return {
       value,
-      sourceText: monthlyEvidence.sourceText,
-      sourcePage: monthlyEvidence.sourcePage,
+      sourceText: effectiveMonthlyEvidence.sourceText,
+      sourcePage: effectiveMonthlyEvidence.sourcePage,
       evidenceType: "derived",
       sourceTextQuality: "derived",
-      sourceFieldKeys: ["monthly_rent"],
+      sourceFieldKeys: ["monthly_rent", "base_rent_monthly"],
       derivationTrace: `annual_rent = monthly_rent (${monthlyRent}) x 12`,
       extractionStatus: "calculated",
     };
@@ -425,11 +441,11 @@ function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {
       if (!currentEvidenceIsUnsupported(currentEvidence, currentValue ?? currentRentPerSf) && !valuesRoughlyEqual(currentValue ?? currentRentPerSf, value)) return null;
       return {
         value,
-        sourceText: combineSourceText(monthlyEvidence, sfEvidence) || monthlyEvidence.sourceText || sfEvidence.sourceText,
-        sourcePage: monthlyEvidence.sourcePage ?? sfEvidence.sourcePage,
+        sourceText: combineSourceText(effectiveMonthlyEvidence, effectiveSfEvidence) || effectiveMonthlyEvidence.sourceText || effectiveSfEvidence.sourceText,
+        sourcePage: effectiveMonthlyEvidence.sourcePage ?? effectiveSfEvidence.sourcePage,
         evidenceType: "derived",
         sourceTextQuality: "derived",
-        sourceFieldKeys: ["annual_rent", "monthly_rent", "square_footage"],
+        sourceFieldKeys: ["annual_rent", "monthly_rent", "base_rent_monthly", "square_footage", "tenant_rsf"],
         derivationTrace: `rent_per_sf = annual_rent (${annualRent}) / square_footage (${squareFootage})`,
         extractionStatus: "calculated",
       };
@@ -440,11 +456,11 @@ function buildDerivedFieldEvidence(lease, key, currentValue, currentEvidence = {
     if (!shouldUpgrade("monthly")) return null;
     return {
       value: "monthly",
-      sourceText: monthlyEvidence.sourceText,
-      sourcePage: monthlyEvidence.sourcePage,
+      sourceText: effectiveMonthlyEvidence.sourceText,
+      sourcePage: effectiveMonthlyEvidence.sourcePage,
       evidenceType: "derived",
       sourceTextQuality: "derived",
-      sourceFieldKeys: ["monthly_rent"],
+      sourceFieldKeys: ["monthly_rent", "base_rent_monthly"],
       derivationTrace: "billing_frequency inferred from monthly_rent",
       extractionStatus: "calculated",
     };
@@ -500,7 +516,7 @@ function responsibilitySourceSupportsValue(key, value, sourceText) {
   const valueSupported = !/^(tenant|landlord)$/.test(normalizedValue) || lower.includes(normalizedValue) || /\b(?:rent includes|included in rent|full service)\b/.test(lower);
   return fieldSupported && hasExpenseAction && valueSupported;
 }
-function normalizeReviewValueForField(key, value, sourceText) {
+function normalizeReviewValueForField(key, value, sourceText, options = {}) {
   if (!isMeaningfulValue(value)) return value;
 
   const normalizedKey = normalizeDynamicKey(key);
@@ -543,6 +559,15 @@ function normalizeReviewValueForField(key, value, sourceText) {
     if (/\bfull\s+service(?:\s+gross)?\b/.test(combined)) return "full_service";
     if (/\bgross\b/.test(combined)) return "gross";
     if (["net", "single net", "double net"].includes(lowerValue)) return null;
+  }
+
+  if (["monthly_rent", "base_rent_monthly", "base_rent", "annual_rent", "security_deposit", "security_deposit_amount", "general_liability_min"].includes(normalizedKey)) {
+    const parsed = extractFirstMoneyNumber(valueText) ?? extractFirstMoneyNumber(source);
+    if (parsed == null) return null;
+    if (normalizedKey === "annual_rent" && !options.allowDerivedAnnual && !/\b(?:annual|year|yr|derived|x\s*12)\b/i.test(combined)) return null;
+    if (["monthly_rent", "base_rent_monthly", "base_rent"].includes(normalizedKey) && !/\b(?:monthly|per\s+month|\/mo|rent)\b/i.test(combined)) return null;
+    if (["security_deposit", "security_deposit_amount"].includes(normalizedKey) && !/\bsecurity\s+deposit\b/i.test(combined)) return null;
+    return parsed;
   }
 
   if (["assignment_provisions", "assignment_rights", "sublease_rights"].includes(normalizedKey)) {
@@ -626,13 +651,21 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? evidence.sourceText,
   );
   const valueBeforeValidation = schemaValue;
-  schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText);
+  schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText, {
+    allowDerivedAnnual: Boolean(derived || field.evidence_type === "derived" || field.derivation_trace || field.source_field_keys?.length),
+  });
   const validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
     ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
   ];
   if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
     validationErrors.push(`${key}_failed_validation`);
+  }
+  const hardValidationFailed = validationErrors.some((error) =>
+    /failed_validation|not_specific|looks_like_clause|without_.*evidence|not_core|invalid|not_meaningful/i.test(String(error || "")),
+  );
+  if (hardValidationFailed && isMeaningfulValue(schemaValue)) {
+    schemaValue = null;
   }
   const confidence = typeof field.confidence === "number"
     ? field.confidence
@@ -814,5 +847,10 @@ export function isReviewRowDisplayable(row, { showMissing = false } = {}) {
     if (row?.is_dynamic || row?.dynamic_document_item) return hasValue || hasSource;
     return Boolean(row?.required) || hasValue || hasSource;
   }
-  return hasValue || hasSource || isDerivedOrInferred || (Boolean(row?.required) && hasReviewBlocker);
+  // Extracted-only mode is the reviewer-facing lease abstract. Keep absent
+  // fixed fields out of this view; they remain visible through Show missing
+  // fields, the required-review queue, and approval blockers. Rows with a
+  // source clause but rejected/blank value still show so reviewers can fix bad
+  // normalization without rereading the PDF.
+  return hasValue || hasSource || isDerivedOrInferred;
 }

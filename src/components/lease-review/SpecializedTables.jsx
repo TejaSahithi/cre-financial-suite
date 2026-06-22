@@ -386,9 +386,15 @@ export function ClauseRecordsTable({ lease }) {
   const fallbackClauses = useMemo(() => {
     const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
     const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
+    const ufPayload = lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload || {};
+    const ufMetaWorkflow = ufPayload?.metadata?.workflow_output || {};
+    const ufWorkflowOutput = ufMetaWorkflow.workflow_output || ufMetaWorkflow;
+    const ufRecordOutput = (ufPayload?.records || ufPayload?.rows || [])[0]?.workflow_output || {};
     
     const fromWorkflow = workflowOutput?.lease_clauses;
     const fromTopLevel = lease?.extraction_data?.lease_clauses;
+    const fromUploadMeta = ufWorkflowOutput?.lease_clauses;
+    const fromUploadRecord = ufRecordOutput?.lease_clauses;
     const recordOutput = Array.isArray(rawWorkflowOutput.records) ? rawWorkflowOutput.records[0] || {} : {};
     const itemRows = [
       workflowOutput.extracted_document_items,
@@ -399,11 +405,17 @@ export function ClauseRecordsTable({ lease }) {
       rawWorkflowOutput.clause_records,
       lease?.extraction_data?.extracted_document_items,
       lease?.extraction_data?.clause_records,
+      ufWorkflowOutput.extracted_document_items,
+      ufWorkflowOutput.clause_records,
+      ufRecordOutput.extracted_document_items,
+      ufRecordOutput.clause_records,
     ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
     const fieldMapRows = [
       workflowOutput.lease_fields,
       recordOutput.lease_fields,
       lease?.extraction_data?.fields,
+      ufWorkflowOutput.lease_fields,
+      ufRecordOutput.lease_fields,
     ].flatMap((map, mapIdx) => {
       if (!map || typeof map !== "object" || Array.isArray(map)) return [];
       return Object.entries(map).map(([key, entry]) => ({
@@ -421,12 +433,13 @@ export function ClauseRecordsTable({ lease }) {
         extraction_status: entry?.extraction_status ?? null,
       }));
     });
-    const list = Array.isArray(fromWorkflow) ? fromWorkflow : Array.isArray(fromTopLevel) ? fromTopLevel : [];
+    const list = [fromWorkflow, fromTopLevel, fromUploadMeta, fromUploadRecord, recordOutput.lease_clauses]
+      .flatMap((rows) => (Array.isArray(rows) ? rows : []));
     const clauseRows = list.map((c, idx) => ({
       id: `extract-${idx}`,
       clause_type: c.clause_type,
       clause_title: c.clause_title,
-      clause_text: c.clause_text,
+      clause_text: cleanDocumentItemSource(c.clause_text || c.exact_text || c.source_text),
       source_page: c.source_page,
       confidence_score: c.confidence_score,
     }));

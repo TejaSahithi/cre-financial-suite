@@ -87,7 +87,7 @@ export const LEASE_REVIEW_FIELDS = [
   { key: "parking_rights",     label: "Parking Rights",               tab: "parties_premises", type: "text" },
   { key: "common_area_description", label: "Common Area Description", tab: "parties_premises", type: "text" },
 
-  // Dates & Term — Lease Date (signing), Commencement Date (term start),
+  // Dates & Term â€” Lease Date (signing), Commencement Date (term start),
   // and Expiration Date are explicitly distinct. Commencement/expiration are
   // stored on both the legacy start_date/end_date columns AND the dedicated
   // commencement_date/expiration_date columns so downstream queries that read
@@ -170,7 +170,7 @@ export const REQUIRED_FIELD_KEYS = LEASE_REVIEW_FIELDS
   .filter((field) => field.required)
   .map((field) => field.key);
 
-// Numeric field keys (used by leaseService.update to coerce strings → numbers).
+// Numeric field keys (used by leaseService.update to coerce strings â†’ numbers).
 export const NUMERIC_REVIEW_FIELDS = new Set(
   LEASE_REVIEW_FIELDS
     .filter((field) => field.type === "number" || field.type === "currency")
@@ -583,7 +583,7 @@ function buildDerivedWorkflowEntry(lease, key) {
 }
 
 // Strings that the extractor sometimes uses as a literal "I don't know"
-// stand-in. These must not be treated as real values — they shouldn't fill
+// stand-in. These must not be treated as real values â€” they shouldn't fill
 // the Normalized column and they shouldn't trigger text-matching evidence.
 const SENTINEL_NOT_FOUND_VALUES = new Set([
   "unknown", "n/a", "na", "none", "null", "tbd", "not specified",
@@ -622,7 +622,7 @@ export function cleanSourceEvidenceText(value) {
   const slice = text.slice(0, SOURCE_TEXT_MAX_CHARS);
   const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"));
   const cutAt = lastPeriod > SOURCE_TEXT_MAX_CHARS * 0.55 ? lastPeriod + 1 : SOURCE_TEXT_MAX_CHARS;
-  return slice.slice(0, cutAt).trimEnd() + "…";
+  return slice.slice(0, cutAt).trimEnd() + "â€¦";
 }
 
 export function normalizeSourcePage(page) {
@@ -829,7 +829,7 @@ export function readFieldEvidence(lease, key) {
     lease?.abstract_snapshot?.field_evidence,
     // workflow_output.lease_fields is written into each ui_review_payload record
     // by normalize-pdf-output and contains source_clause already validated by
-    // isSourceRelevantToField — probe it before the fields entry so existing
+    // isSourceRelevantToField â€” probe it before the fields entry so existing
     // leases show source text without requiring re-extraction.
     lease?.uploaded_files?.ui_review_payload?.records?.[0]?.workflow_output?.lease_fields,
     lease?.uploaded_file?.ui_review_payload?.records?.[0]?.workflow_output?.lease_fields,
@@ -964,14 +964,14 @@ export function readFieldConfidence(lease, key, fallback = null) {
   return clamp(normalizeStoredConfidence(resolved.confidence));
 }
 
-// The extractor stores confidence as 0–1; everything else stores 0–100.
+// The extractor stores confidence as 0â€“1; everything else stores 0â€“100.
 // Treat values <= 1 as fractions and scale them so the UI sees one shape.
 function normalizeStoredConfidence(score) {
   if (typeof score !== "number" || Number.isNaN(score)) return null;
   return score <= 1 ? Math.round(score * 100) : Math.round(score);
 }
 
-// Confidence bucket: "high" | "medium" | "low" | "unknown" — drives the
+// Confidence bucket: "high" | "medium" | "low" | "unknown" â€” drives the
 // summary cards. A field with extracted data but no recorded confidence is
 // classified as "unknown", not lumped into low.
 export function classifyConfidence(score) {
@@ -1127,13 +1127,13 @@ export function resolveSourceTextQuality(evidence = {}) {
 /**
  * Infer an extraction status from the lease + field. Honors any explicit
  * status set by the backend, otherwise uses these rules:
- *   - value present + source evidence + confidence  → "extracted"
- *   - value present + source evidence + no confidence → "extracted_no_confidence"
- *   - value present + NO source evidence            → "missing_source_evidence"
- *   - no value + extractor was run                  → "not_found"
- *   - no value + extractor didn't run               → "missing"
+ *   - value present + source evidence + confidence  â†’ "extracted"
+ *   - value present + source evidence + no confidence â†’ "extracted_no_confidence"
+ *   - value present + NO source evidence            â†’ "missing_source_evidence"
+ *   - no value + extractor was run                  â†’ "not_found"
+ *   - no value + extractor didn't run               â†’ "missing"
  *
- * "manual_required" can only be set by the backend or by a user action — we
+ * "manual_required" can only be set by the backend or by a user action â€” we
  * never infer it client-side because it implies a policy decision.
  */
 export function resolveExtractionStatus(lease, key, { value, confidence, evidence } = {}) {
@@ -1214,7 +1214,7 @@ export function isResolvedReview(review) {
 
 export function normalizeClauseType(type) {
   const t = String(type || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (t.includes("rent") && t.includes("escalation")) return "rent_clause";
+  if ((t.includes("rent") && t.includes("escalation")) || t === "rentclause" || t === "rentescalation") return "rent_clause";
   if (t.includes("securitydeposit")) return "security_deposit";
   if (t.includes("operatingexpense") || t.includes("expenserecovery")) return "operating_expense_recovery";
   if (t.includes("cam") || t.includes("recoveries")) return "cam_recoveries";
@@ -1222,7 +1222,17 @@ export function normalizeClauseType(type) {
   if (t.includes("insurance")) return "insurance_requirements";
   if (t.includes("use") || t.includes("permitted")) return "use_permitted_use";
   if (t.includes("assignment") || t.includes("subletting") || t.includes("sublease")) return "assignment_subletting";
-  if (t.includes("default") || t.includes("remedies")) return "defaults_remedies";
-  if (t.includes("notices")) return "notices";
+  if (t.includes("default") || t.includes("remedies") || t === "remedies") return "defaults_remedies";
+  if (t.includes("latefee") || t.includes("latecharge")) return "late_fees";
+  if (t.includes("renewal") || t.includes("optiontorenew")) return "renewal_option";
+  if (t.includes("termination") || t.includes("earlyout")) return "termination";
+  if (t.includes("repair") || t.includes("maintenance")) return "repairs_maintenance";
+  if (t.includes("alteration") || t.includes("improvement")) return "alterations";
+  if (t.includes("holdover")) return "holdover";
+  if (t.includes("subordination") || t.includes("snda")) return "subordination";
+  if (t.includes("estoppel")) return "estoppel";
+  if (t.includes("notice")) return "notices";
+  if (t.includes("broker") || t.includes("commission")) return "broker_commission";
+  if (t.includes("guaranty") || t.includes("guarantor") || t.includes("guarantee")) return "guaranty";
   return type; // return original if no mapping found
 }

@@ -177,6 +177,20 @@ const CLAUSE_DEFINITIONS = [
   { type: "governing_law", title: "Governing Law", keywords: ["governing law"], maxChars: 320 },
   { type: "jury_waiver", title: "Jury Waiver", keywords: ["jury", "waiver of jury"], maxChars: 320 },
   { type: "successors_assigns", title: "Successors & Assigns", keywords: ["successors", "assigns"], maxChars: 420 },
+  { type: "late_fees", title: "Late Fees", keywords: ["late charge", "late fee", "delinquent rent", "past due"], maxChars: 520 },
+  { type: "indemnification", title: "Indemnification", keywords: ["indemnify", "indemnification", "hold harmless"], maxChars: 720 },
+  { type: "defaults_remedies", title: "Default & Remedies", keywords: ["event of default", "default by tenant", "remedies", "landlord may terminate"], maxChars: 900 },
+  { type: "termination", title: "Termination / Early Out", keywords: ["early termination", "termination option", "terminate this lease", "termination right"], maxChars: 720 },
+  { type: "estoppel", title: "Estoppel Certificates", keywords: ["estoppel certificate", "estoppel"], maxChars: 620 },
+  { type: "broker_commission", title: "Broker / Commission", keywords: ["broker", "commission", "brokerage"], maxChars: 620 },
+  { type: "guaranty", title: "Guaranty", keywords: ["guaranty", "guarantor", "guarantee"], maxChars: 620 },
+  { type: "signage", title: "Signs / Signage", keywords: ["signage", "signs", "exterior sign"], maxChars: 620 },
+  { type: "exclusive_use", title: "Exclusive Use / Restrictions", keywords: ["exclusive use", "exclusive right", "restricted use", "prohibited use"], maxChars: 720 },
+  { type: "casualty", title: "Casualty / Damage", keywords: ["casualty", "fire or other casualty", "damage or destruction"], maxChars: 720 },
+  { type: "condemnation", title: "Condemnation", keywords: ["condemnation", "eminent domain", "taking"], maxChars: 620 },
+  { type: "force_majeure", title: "Force Majeure", keywords: ["force majeure", "unavoidable delay"], maxChars: 620 },
+  { type: "compliance_laws", title: "Compliance With Laws", keywords: ["comply with all laws", "compliance with laws", "applicable laws", "laws ordinances"], maxChars: 720 },
+  { type: "quiet_enjoyment", title: "Quiet Enjoyment", keywords: ["quiet enjoyment", "peaceably and quietly"], maxChars: 520 },
 ];
 
 const FIELD_SPECS = [
@@ -206,7 +220,7 @@ const FIELD_SPECS = [
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i, /\b(?:use|operate)\s+(?:the\s+)?Premises\s+(?:solely\s+)?(?:for|as)\s+([^\n.]{4,180})/i, /\bsolely\s+for\s+([^\n.]{4,180})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
   { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [
-    // Prefer "total of $X,XXX.XX" — the final summed deposit amount in addendum-style leases
+    // Prefer "total of $X,XXX.XX" â€” the final summed deposit amount in addendum-style leases
     /\btotal\s+of\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
     /\bsecurity\s+deposit\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
     /\b(?:deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
@@ -255,7 +269,7 @@ const FIELD_SPECS = [
   { key: "ground_rent_escalations", group: "rent_terms", aliases: ["ground_rent_escalations"], patterns: [/\bground rent\b[^\n]{0,160}\b(escalat(?:ion|es)|increase)\b/i] },
   // Responsibility patterns require an explicit *action* verb (pay / provide /
   // maintain / carry / obtain / be responsible for). A bare "tenant" or
-  // "landlord" appearing near the noun is not enough — reimbursement clauses
+  // "landlord" appearing near the noun is not enough â€” reimbursement clauses
   // ("Landlord shall maintain insurance and Tenant shall reimburse")
   // mention BOTH parties and the old regex was always returning the first
   // match (landlord) regardless of who pays. The reimbursement keyword is
@@ -290,7 +304,7 @@ const FIELD_SPECS = [
     ],
   },
   { key: "permitted_development", group: "premises", aliases: ["permitted_development"], patterns: [/\bpermitted development\b[:\s-]+([^\n.]{4,220})/i] },
-  // ── Fields that were missing from FIELD_SPECS but present in the LLM schema.
+  // â”€â”€ Fields that were missing from FIELD_SPECS but present in the LLM schema.
   // Without these, the LLM's extracted values for these keys are absorbed into
   // the pipeline row but never promoted to lease_fields, so Lease Review
   // resolver finds nothing.
@@ -298,7 +312,7 @@ const FIELD_SPECS = [
   // escalation_rate = initial-term annual increase.  renewal_escalation_percent
   // (line 200) covers the renewal-period escalation separately.
   { key: "escalation_rate", group: "rent_terms", aliases: ["escalation_rate", "annual_escalation", "base_rent_escalation"], patterns: [/\b(?:annual|base)\s+rent\b[^\n]{0,60}\bincreases?\s+by\s*(\d{1,2}(?:\.\d+)?)\s*%/i, /\bescalation\s+rate\b[:\s]+(\d{1,2}(?:\.\d+)?)\s*%/i, /\brent\b[^\n]{0,60}(?:increases?|escalates?)\s+(?:by\s+)?(\d{1,2}(?:\.\d+)?)\s*%[^\n]{0,40}(?:year|annual|each)/i] },
-  // CAM structure fields — schema uses *_pct / *_percent suffixes that the LLM
+  // CAM structure fields â€” schema uses *_pct / *_percent suffixes that the LLM
   // returns verbatim; aliases bridge to whatever the workflow/UI key is.
   { key: "cam_cap_pct", group: "expense_terms", aliases: ["cam_cap_pct", "cam_cap_percent", "cap_percent", "controllable_cap_percent"], patterns: [/\b(?:cam\s+cap|controllable\s+(?:expense|operating\s+expense)s?\s+(?:cap|shall\s+not\s+increase)|operating\s+expense\s+cap)\b[^\n]{0,80}?(\d{1,2}(?:\.\d+)?)\s*%/i, /\bcontrollable\b[^\n]{0,80}?(?:not\s+(?:more|greater)\s+than|no\s+more\s+than)[^\n]{0,40}?(\d{1,2}(?:\.\d+)?)\s*%/i] },
   { key: "gross_up_enabled", group: "expense_terms", aliases: ["gross_up_enabled", "grossup_enabled"], patterns: [/\bgross[\s-]up\b/i] },
@@ -384,7 +398,7 @@ function isCleanSnippetStart(snippet: string) {
 
 function isShortCompleteSourceRow(snippet: string) {
   if (!snippet || snippet.length > 260) return false;
-  if (/\.{3}|…/.test(snippet)) return false;
+  if (/\.{3}|â€¦/.test(snippet)) return false;
   if (!isCleanSnippetStart(snippet)) return false;
   const partyMarkerCount = (snippet.match(/\b(?:landlord|tenant|lessee|lessor|address of landlord|address of tenant)\b/gi) || []).length;
   return partyMarkerCount <= 2;
@@ -615,6 +629,76 @@ function cleanSummaryValue(value: unknown) {
     .trim();
 }
 
+function extractFirstMoneyValue(value: unknown): number | null {
+  const text = String(value ?? "");
+  const money = text.match(/\$\s*([\d,]+(?:\.\d{2})?)/);
+  if (money?.[1]) return asNumber(money[1]);
+  return asNumber(value);
+}
+
+function cleanSummaryValueForField(fieldKey: string, value: unknown): string | number | null {
+  const cleaned = cleanSummaryValue(value);
+  if (!cleaned) return null;
+  const withoutNextLabels = cleaned
+    .replace(/\s+\d{1,2}\.\s*(?:Date|Landlord|Tenant|Premises|Building|Lease Term|Commencement Date|Expiration Date|Rent|Security Deposit|Permitted Use|Brokers?)\b[\s\S]*$/i, "")
+    .trim();
+  const candidate = withoutNextLabels || cleaned;
+
+  if (["base_rent_monthly", "security_deposit_amount"].includes(fieldKey)) {
+    const amount = extractFirstMoneyValue(candidate);
+    return amount != null ? amount : null;
+  }
+  if (fieldKey === "lease_date" || fieldKey === "commencement_date" || fieldKey === "expiration_date" || fieldKey === "rent_commencement_date") {
+    return toIsoDate(candidate) || null;
+  }
+  if (fieldKey === "rentable_area_sqft") {
+    const amount = asNumber(candidate.match(/([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|sf|rsf)/i)?.[1] ?? candidate);
+    return amount != null ? amount : null;
+  }
+  if (["tenant_name", "landlord_name", "broker_name"].includes(fieldKey)) {
+    const entity = candidate
+      .replace(/\b(?:phone|tel|telephone|email)\b[\s\S]*$/i, "")
+      .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b.*$/i, "")
+      .trim();
+    if (!entity || looksLikeDateText(entity) || looksLikePhoneOnly(entity)) return null;
+    if (/^(?:tenant|landlord|broker|date|name|title|\d+)$/i.test(entity)) return null;
+    if (/\b(?:shall|hereby|premises|article|section|obligations?|transfer|consent)\b/i.test(entity)) return null;
+    return entity;
+  }
+  if (fieldKey === "permitted_use") return normalizePermittedUseValue(candidate, candidate);
+  return candidate;
+}
+
+function extractIntroPartySummaryPairs(fullText: string) {
+  const text = cleanText(fullText).slice(0, 6000);
+  const pairs: Record<string, { field_key: string; label: string; value: string; source_text: string; source_page: number | null }> = {};
+  const intro = text.match(/\bbetween\s+(.{2,140}?)\s*\(\s*["']?Landlord["']?\s*\)\s+and\s+(.{2,180}?)\s*\(\s*["']?Tenant["']?\s*\)/i)
+    || text.match(/\bby\s+and\s+between\s+(.{2,140}?)\s*,?\s+(?:as\s+)?Landlord\s+and\s+(.{2,180}?)\s*,?\s+(?:as\s+)?Tenant/i);
+  if (!intro) return pairs;
+
+  const landlord = cleanSummaryValueForField("landlord_name", intro[1]);
+  const tenant = cleanSummaryValueForField("tenant_name", intro[2]);
+  if (typeof landlord === "string" && landlord) {
+    pairs.landlord_name = {
+      field_key: "landlord_name",
+      label: "landlord",
+      value: landlord,
+      source_text: cleanSummaryValue(intro[0]),
+      source_page: 1,
+    };
+  }
+  if (typeof tenant === "string" && tenant) {
+    pairs.tenant_name = {
+      field_key: "tenant_name",
+      label: "tenant",
+      value: tenant,
+      source_text: cleanSummaryValue(intro[0]),
+      source_page: 1,
+    };
+  }
+  return pairs;
+}
+
 function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
   const textBlocks = asArray(doclingRaw?.text_blocks);
   const labelPattern = SUMMARY_LABELS.map(escapeRegExp).join("|");
@@ -631,7 +715,7 @@ function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
       .map((block) => ({ text: String(block?.text || ""), source_page: sourcePageOf(block) })),
     { text: String(fullText || "").slice(0, 8000), source_page: null },
   ];
-  const pairs: Record<string, { field_key: string; label: string; value: string; source_text: string; source_page: number | null }> = {};
+  const pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }> = { ...extractIntroPartySummaryPairs(fullText) };
 
   for (const chunk of chunks) {
     const rawText = String(chunk.text || "").replace(/\r/g, "\n");
@@ -642,9 +726,10 @@ function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
       const label = cleanSummaryValue(match[1]).toLowerCase();
       const fieldKey = SUMMARY_LABEL_TO_FIELD[label];
       if (!fieldKey || pairs[fieldKey]) continue;
-      const value = cleanSummaryValue(match[2]).slice(0, 280);
-      if (!value || value.length < 2) continue;
-      const sourceText = cleanSummaryValue(`${match[1]}: ${value}`);
+      const rawValue = cleanSummaryValue(match[2]).slice(0, 360);
+      const value = cleanSummaryValueForField(fieldKey, rawValue);
+      if (value == null || String(value).length < 1) continue;
+      const sourceText = cleanSummaryValue(`${match[1]}: ${rawValue}`);
       pairs[fieldKey] = {
         field_key: fieldKey,
         label,
@@ -680,14 +765,14 @@ function extractClauseSnippet(textBlocks: any[], fullText: string, keywords: str
     // When the matching block is large (e.g. a full summary section that
     // contains many numbered items), return only the sentence/line that
     // contains the keyword rather than the whole block + next 2 blocks.
-    // This prevents the generic "SUMMARY OF BASIC LEASE INFORMATION…"
+    // This prevents the generic "SUMMARY OF BASIC LEASE INFORMATIONâ€¦"
     // prefix from appearing as the source text for unrelated fields.
     let snippet: string | null;
     if (blockText.length > effectiveMax) {
       const idx = haystack.indexOf(matchedKeyword);
       const start = idx;
       const end = Math.min(blockText.length, idx + effectiveMax - 60);
-      snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim();
+      snippet = (start > 0 ? "â€¦" : "") + blockText.slice(start, end).trim();
       snippet = expandSourceSnippetFromMatch(blockText, idx, matchedKeyword.length, effectiveMax);
     } else {
       snippet = [blockText, cleanText(textBlocks[index + 1]?.text || ""), cleanText(textBlocks[index + 2]?.text || "")]
@@ -794,7 +879,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
       if (idx >= 0) {
         const start = idx;
         const end = Math.min(blockText.length, idx + comparableValue.length + 80);
-        snippet = (start > 0 ? "…" : "") + blockText.slice(start, end).trim() + (end < blockText.length ? "…" : "");
+        snippet = (start > 0 ? "â€¦" : "") + blockText.slice(start, end).trim() + (end < blockText.length ? "â€¦" : "");
       }
     }
     return {
@@ -868,7 +953,7 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
   };
 
   const required = FIELD_KEYWORDS[fieldKey];
-  if (!required) return true; // no constraint for this field — accept any source
+  if (!required) return true; // no constraint for this field â€” accept any source
   return required.some((kw) => haystack.includes(kw.toLowerCase()));
 }
 
@@ -1077,7 +1162,7 @@ function excerptForKeywords(textBlocks: any[], fullText: string, keywords: strin
   // Returns the actual document snippet containing one of the keywords, or
   // null if no real text matched. Previously fell back to `keywords[0]`
   // (e.g. "real estate tax"), which leaked the canonical category KEY into
-  // the rule's source_text — the UI then displayed that as if it were
+  // the rule's source_text â€” the UI then displayed that as if it were
   // verbatim source evidence. Now we return null so downstream code can
   // mark the rule as missing source evidence instead of faking it.
   const snippet = extractClauseSnippet(textBlocks, fullText, keywords, 1800);
@@ -1184,7 +1269,7 @@ function classifyLeaseType(text: string, extractedExpenseRules: any[], signals: 
   if (containsAny(text, ["triple net", "nnn", "taxes, insurance and common area maintenance"])) {
     return "Triple Net";
   }
-  // Check Modified Gross BEFORE base_year — a "Modified Gross with Base Year" document
+  // Check Modified Gross BEFORE base_year â€” a "Modified Gross with Base Year" document
   // contains BOTH phrases. Checking base_year first would misclassify it as "Base Year"
   // and lose the Modified Gross signal from the document title/body.
   if (containsAny(text, ["modified gross", "modified-gross"])) {
@@ -1252,7 +1337,7 @@ function buildClauseRecords(doclingRaw: any, fullText: string) {
     const loweredKeywords = keywords.map((k) => k.toLowerCase());
     const limit = Math.max(maxChars, 1600);
 
-    // 1. Search text_blocks — simple join of matching block + next 2 blocks.
+    // 1. Search text_blocks â€” simple join of matching block + next 2 blocks.
     //    Avoids the strict sentence-boundary rules of expandSourceSnippetFromMatch
     //    which returns null for OCR text that lacks clean `.!?` endings.
     for (let i = 0; i < textBlocks.length; i++) {
@@ -1313,6 +1398,8 @@ function buildClauseRecords(doclingRaw: any, fullText: string) {
       clause_text: clauseText,
       source_page: snippet.source_page,
       confidence_score: clauseText ? 0.78 : 0.25,
+      business_area: BUSINESS_AREA_BY_CLAUSE_TYPE[definition.type] || "legal_options",
+      display_tab: BUSINESS_AREA_BY_CLAUSE_TYPE[definition.type] || "legal_options",
       structured_fields_json: structuredFieldsJson,
     };
   });
@@ -1337,6 +1424,7 @@ const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
   utilities: "expenses_recoveries",
   lease_expense_structure: "expenses_recoveries",
   insurance_requirements: "insurance",
+  indemnification: "legal_options",
   renewal_option: "critical_dates",
   termination: "critical_dates",
   assignment_subletting: "assignment_amendment",
@@ -1345,6 +1433,21 @@ const BUSINESS_AREA_BY_CLAUSE_TYPE: Record<string, string> = {
   late_fees: "rent_charges",
   alterations: "legal_options",
   holdover: "rent_charges",
+  estoppel: "legal_options",
+  broker_commission: "parties_premises",
+  guaranty: "legal_options",
+  governing_law: "legal_options",
+  jury_waiver: "legal_options",
+  successors_assigns: "legal_options",
+  signage: "legal_options",
+  exclusive_use: "legal_options",
+  casualty: "legal_options",
+  condemnation: "legal_options",
+  force_majeure: "legal_options",
+  compliance_laws: "legal_options",
+  quiet_enjoyment: "legal_options",
+  hazardous_materials: "legal_options",
+  surrender: "legal_options",
 };
 
 const FIXED_REVIEW_FIELD_KEYS = new Set([
@@ -1496,7 +1599,7 @@ function profileSignalContext(
 
 // Patterns that mark a document as an amendment at the TITLE/HEADING level
 // (not in a passing clause mention). Full leases frequently contain phrases
-// like "may not be amended" or "no modification" — those would trip the
+// like "may not be amended" or "no modification" â€” those would trip the
 // generic AMENDMENT_PROFILE_SIGNALS list but should NOT cause the document
 // to be classified as an amendment. Requiring at least one of these strong
 // signals before applying the amendment label prevents the false positive
@@ -1517,7 +1620,7 @@ const AMENDMENT_TITLE_SIGNALS = [
   { key: "amendment_to_lease", pattern: /\bamendment\s+(?:to|of)\s+(?:the\s+)?(?:lease|sublease|agreement|tenancy)\b/i },
   // "Modification of Lease/Agreement" in a title position.
   { key: "modification_of_lease", pattern: /\bmodification\s+of\s+(?:the\s+)?(?:lease|sublease|agreement|tenancy)\b/i },
-  // "Amended and Restated …" title phrase.
+  // "Amended and Restated â€¦" title phrase.
   { key: "amended_and_restated", pattern: /\bamended\s+and\s+restated\b/i },
 ];
 
@@ -1558,7 +1661,7 @@ function detectDocumentProfileSignals(
 
   const assignmentSignalCount = assignmentSignals.length;
   const amendmentSignalCount = amendmentSignals.length;
-  // Strong amendment context — title, heading, or explicit subtype. Without
+  // Strong amendment context â€” title, heading, or explicit subtype. Without
   // at least one of these, the soft "amendment" / "modification" mentions
   // are treated as passing clause text rather than the document's own type.
   const hasStrongAmendmentContext = isStrongAmendmentSignal(fullText, documentSubtype);
@@ -1904,7 +2007,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     if (spec.key === "base_rent_monthly" && isBlank(value)) {
       // Only fall back to row.monthly_rent if it is a real, positive value.
       // The leases table column has a NOT NULL DEFAULT 0, so a zero here is
-      // almost always "we never extracted it" — not "the lease really says
+      // almost always "we never extracted it" â€” not "the lease really says
       // $0". Treating that as extracted produced a misleading green badge.
       const rowMonthly = asNumber(getFirstValue(row, ["monthly_rent"]));
       const rowAnnual = asNumber(getFirstValue(row, ["annual_rent"]));
@@ -1931,7 +2034,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     // formulaic commencement dates, so start_date here is likely the correct value.
     if (spec.key === "commencement_date" && isBlank(value)) {
       const sd = getFirstValue(row, ["start_date"]);
-      // Don't fall back when start_date == lease_date — that means the LLM returned
+      // Don't fall back when start_date == lease_date â€” that means the LLM returned
       // the signing date, which is not the commencement date.
       const leaseDate = getFirstValue(row, ["lease_date"]);
       if (sd && String(sd) !== String(leaseDate)) {
@@ -2318,7 +2421,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     }
   }
 
-  // ── Task 4: Derive expense/CAM/insurance rows for Full Service leases ────────
+  // â”€â”€ Task 4: Derive expense/CAM/insurance rows for Full Service leases â”€â”€â”€â”€â”€â”€â”€â”€
   // When the lease is Full Service and responsibility fields were not explicitly
   // extracted, populate them as "calculated" rows so the Expenses/Recoveries,
   // CAM, and Insurance tabs show meaningful content instead of all-blank rows.
@@ -2462,7 +2565,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       const entityCount = (v.match(/\b(?:LLC|Inc\.|Corp\.|Ltd\.|L\.L\.C\.|L\.P\.)\b/gi) || []).length;
       const lineCount = v.split(/\n/).filter((l) => l.trim().length > 3).length;
       if (phoneCount > 1 || entityCount > 2 || lineCount > 5) {
-        // Value is a multi-party block — not a clean single address
+        // Value is a multi-party block â€” not a clean single address
         fieldMap[key] = { ...(fieldMap[key] as any), value: null, source_clause: null, extraction_status: "not_found" };
       }
     }
@@ -2483,7 +2586,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     }
   }
 
-  // Humanize landlord_consent_for_transfer — raw key-like text → readable
+  // Humanize landlord_consent_for_transfer â€” raw key-like text â†’ readable
   if (!isBlank(fieldMap.landlord_consent_for_transfer?.value)) {
     const v = String(fieldMap.landlord_consent_for_transfer.value).trim();
     const lower = v.toLowerCase();
@@ -2539,6 +2642,52 @@ function buildExpenseCamEvidenceClauses(fieldMap: Record<string, LeaseWorkflowFi
   return generated;
 }
 
+function buildFieldEvidenceClauses(fieldMap: Record<string, LeaseWorkflowField>, existingClauses: LeaseWorkflowClause[] = []) {
+  const clauseTypeByField = new Map<string, string>();
+  for (const spec of FIELD_SPECS) {
+    if ((spec as any).clauseType) clauseTypeByField.set(spec.key, (spec as any).clauseType);
+  }
+  clauseTypeByField.set("base_rent_monthly", "rent_clause");
+  clauseTypeByField.set("annual_rent", "rent_clause");
+  clauseTypeByField.set("security_deposit_amount", "security_deposit");
+  clauseTypeByField.set("rent_payment_timing", "rent_clause");
+  clauseTypeByField.set("escalation_rate", "rent_clause");
+  clauseTypeByField.set("renewal_escalation_percent", "renewal_option");
+  clauseTypeByField.set("parking_rights", "use_permitted_use");
+  clauseTypeByField.set("responsibility_repairs", "repairs_maintenance");
+  clauseTypeByField.set("responsibility_insurance", "insurance_requirements");
+  clauseTypeByField.set("property_insurance_responsibility", "insurance_requirements");
+
+  const seen = new Set(existingClauses.map((clause) => `${clause.clause_type}|${cleanText(clause.clause_text || "").slice(0, 180)}`));
+  const generated: LeaseWorkflowClause[] = [];
+  for (const [fieldKey, clauseType] of clauseTypeByField.entries()) {
+    const field = fieldMap[fieldKey];
+    const clauseText = cleanSourceText(field?.source_clause || field?.exact_source_text || field?.source_text_exact || null);
+    if (!field || isBlank(field.value) || !clauseText || field.validation_errors?.length) continue;
+    const dedupeKey = `${clauseType}|${cleanText(clauseText).slice(0, 180)}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    generated.push({
+      clause_type: clauseType,
+      clause_title: titleFromKey(fieldKey),
+      clause_text: clauseText,
+      source_page: field.source_page ?? null,
+      confidence_score: field.confidence_score ?? 0.74,
+      exact_text: clauseText,
+      normalized_meaning: field.value,
+      related_fields: [fieldKey],
+      requires_review: Boolean(field.requires_review || field.evidence_type === "derived" || field.evidence_type === "inferred"),
+      structured_fields_json: {
+        normalized_meaning: field.value,
+        related_fields: [fieldKey],
+        evidence_type: field.evidence_type ?? null,
+        source_text_quality: field.source_text_quality ?? null,
+        requires_review: Boolean(field.requires_review),
+      },
+    } as any);
+  }
+  return generated;
+}
 function countClauseBackedExpenseTerms(fieldMap: Record<string, LeaseWorkflowField>, clauses: LeaseWorkflowClause[]) {
   const fieldKeys = [
     "lease_type",
@@ -2566,7 +2715,9 @@ function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
   if (isBlank(value)) return null;
   if (/(date)$/.test(fieldKey)) return toIsoDate(value) || cleanText(value);
   if (/(amount|percent|multiplier|sqft|rsf|share|day)$/.test(fieldKey) || ["rentable_area_sqft", "building_rsf", "tenant_rsf", "base_rent_monthly", "annual_rent", "monthly_rent", "base_rent"].includes(fieldKey)) {
-    const numeric = asNumber(value);
+    const numeric = ["base_rent_monthly", "monthly_rent", "base_rent", "annual_rent", "security_deposit_amount", "fixed_cam_amount", "general_liability_min"].includes(fieldKey)
+      ? extractFirstMoneyValue(value)
+      : asNumber(value);
     return numeric != null ? numeric : cleanText(value);
   }
   return cleanText(value);
@@ -2612,7 +2763,7 @@ function findSupportingClauseForRule(
 ) {
   // Score-based clause matcher.
   //
-  // Previously this returned the FIRST clause containing any keyword —
+  // Previously this returned the FIRST clause containing any keyword â€”
   // which gave bad results: "Security" expense matched the
   // "SECURITY DEPOSIT" article (a different concept), and a single
   // gross-lease summary paragraph got reused for utilities, repairs,
@@ -2627,7 +2778,7 @@ function findSupportingClauseForRule(
   //   -25  if a sibling "deposit"/"reserve"/"escrow" word fences the keyword
   //         away from the expense meaning (security DEPOSIT, tax ESCROW)
   //
-  // Clauses scoring < 5 are rejected → caller treats as missing evidence.
+  // Clauses scoring < 5 are rejected â†’ caller treats as missing evidence.
   const loweredKeywords = keywords.map((keyword) => normalizeToken(keyword));
   const looksLikeHeading = (text: string) => /^\s*(?:article|section|exhibit|addendum)\s+[a-z0-9]+\b/i.test(text)
     || /^\s*\d+(?:\.\d+)*\s/.test(text);
@@ -2694,7 +2845,7 @@ function findSupportingClauseForRule(
     };
   }
 
-  // No good clause match — try a paragraph-level snippet from raw text.
+  // No good clause match â€” try a paragraph-level snippet from raw text.
   // extractClauseSnippet returns null for clause_text now when no document
   // text matches (no more keyword fallback), so the caller will correctly
   // mark the rule as missing source evidence.
@@ -2721,7 +2872,7 @@ function deriveExpenseRules(
   const isSingleNet = /single net| n /.test(` ${normalizedLeaseType} `);
   // A "Modified Gross with Base Year" lease has leaseType = "Modified Gross"
   // after the classifyLeaseType fix, so /base year/ won't match the type string.
-  // Fall back to checking whether the LLM actually extracted a base_year value —
+  // Fall back to checking whether the LLM actually extracted a base_year value â€”
   // if it did, the document has a base year structure regardless of the type label.
   const isModifiedGrossRaw = /modified gross|hybrid/.test(normalizedLeaseType);
   const isBaseYear = /base year/.test(normalizedLeaseType)
@@ -2735,10 +2886,10 @@ function deriveExpenseRules(
   const textBlocks = asArray(doclingRaw?.text_blocks);
   const explicitBaseYear = asNumber(fieldMap.base_year_expense_amount?.value) ?? asNumber(fieldMap.base_year?.value);
   const explicitExpenseStop = asNumber(fieldMap.expense_stop_amount?.value);
-  // admin_fee_pct — schema key used by LLM; also read from fieldMap for cases
+  // admin_fee_pct â€” schema key used by LLM; also read from fieldMap for cases
   // where the FIELD_SPEC populated it via pattern matching.
   const explicitAdminFee = asNumber(fieldMap.admin_fee_pct?.value ?? row?.admin_fee_pct);
-  // gross_up — schema key is gross_up_threshold (LLM/FIELD_SPEC); legacy row
+  // gross_up â€” schema key is gross_up_threshold (LLM/FIELD_SPEC); legacy row
   // key is gross_up_percent; keep both for back-compat.
   const explicitGrossUp = asNumber(
     fieldMap.gross_up_threshold?.value
@@ -2746,7 +2897,7 @@ function deriveExpenseRules(
     ?? row?.gross_up_percent
     ?? row?.cam_cap_rate,
   );
-  // cam_cap_pct — controllable/CAM cap percentage extracted by LLM or patterns.
+  // cam_cap_pct â€” controllable/CAM cap percentage extracted by LLM or patterns.
   const explicitCapPercent = asNumber(
     fieldMap.cam_cap_pct?.value
     ?? row?.cam_cap_pct
@@ -2769,7 +2920,7 @@ function deriveExpenseRules(
     // For CAM-eligible rules, seed capPercent from the extracted
     // controllable/CAM cap value (cam_cap_pct / controllable_cap_percent).
     // This surfaces in deriveCamProfile as cam_cap_percent without changing
-    // any calculation logic — deriveCamProfile only reads from expenseRules.
+    // any calculation logic â€” deriveCamProfile only reads from expenseRules.
     let capPercent = blueprint.camLike ? explicitCapPercent : null;
     let baseYear = null;
     let expenseStopAmount = null;
@@ -3012,7 +3163,7 @@ function deriveExpenseRules(
     const sourcePage = supportingClause?.source_page ?? null;
     // Honest evidence requires SOMETHING from the document: a real clause
     // text snippet or a source_page anchor. If we have neither, the rule
-    // is at best inferred from lease-type heuristics — not extracted.
+    // is at best inferred from lease-type heuristics â€” not extracted.
     // Reflect that in BOTH the extraction_status and the confidence so the
     // UI doesn't show "Missing" alongside "99%" anymore.
     const hasRealEvidence = Boolean(clauseText) || sourcePage != null;
@@ -3625,6 +3776,8 @@ export function buildLeaseWorkflowAbstraction(args: {
     clauses,
   });
   applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
+  const fieldEvidenceClauses = buildFieldEvidenceClauses(leaseFields, clauses);
+  if (fieldEvidenceClauses.length > 0) clauses.push(...fieldEvidenceClauses);
   const expenseCamEvidenceClauses = buildExpenseCamEvidenceClauses(leaseFields, clauses);
   if (expenseCamEvidenceClauses.length > 0) clauses.push(...expenseCamEvidenceClauses);
   profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null, leaseFields, extractedDocumentItems);
@@ -3709,7 +3862,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   }
 
-  // ── Assignment / amendment short-circuit ──────────────────────────────
+  // â”€â”€ Assignment / amendment short-circuit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // For assignment / amendment / consent / estoppel documents that don't
   // contain an explicit expense recovery clause, the blueprint loop above
   // produces ~31 "not_found" coverage rows that the UI surfaces as
@@ -3743,7 +3896,7 @@ export function buildLeaseWorkflowAbstraction(args: {
 
   if (assignmentExpenseShortCircuitApplied) {
     // Use the "all other terms remain unchanged" / "ratification" clause as
-    // source_text if it's present in the doc — otherwise null so the row
+    // source_text if it's present in the doc â€” otherwise null so the row
     // surfaces as needs_review without a fabricated quote.
     const ratificationSnippet = (() => {
       const m = fullText.match(/(?:all\s+other\s+terms[^.]{0,160}(?:remain[^.]{0,80}(?:same|unchanged|full\s+force))|ratif(?:y|ies|ied)[^.]{0,160})/i);
@@ -3778,7 +3931,7 @@ export function buildLeaseWorkflowAbstraction(args: {
         "Load the original lease to extract CAM / tax / insurance / utility rules.",
     }];
   }
-  // ── Core mapping success / failure diagnostics ────────────────────────
+  // â”€â”€ Core mapping success / failure diagnostics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // The expense-rule blueprint loop generates rows from loose keyword
   // presence in fullText, so it can report "N lease expense terms found"
   // even when NO standard lease field (tenant, rent, dates, premises) was
@@ -3840,13 +3993,13 @@ export function buildLeaseWorkflowAbstraction(args: {
   })();
   const coreMappingFailed = mappingFailureReason !== null;
 
-  // ── Expense-rule gating on core mapping failure (do NOT flow to CAM) ───
+  // â”€â”€ Expense-rule gating on core mapping failure (do NOT flow to CAM) â”€â”€â”€
   // When NO standard lease field is source-backed, the keyword-derived
   // expense rows cannot be trusted as lease-derived terms. Demote any real
   // (non-coverage-gap) rules to coverage-gap / needs_review so they are not
   // presented as approved lease terms and do not publish to CAM / Expense
   // Classification. Source snippets are preserved so nothing is silently
-  // dropped — the reviewer still sees what was detected.
+  // dropped â€” the reviewer still sees what was detected.
   let expenseRulesDemotedForMappingFailure = 0;
   if (coreMappingFailed && !assignmentExpenseShortCircuitApplied) {
     expenseRules = expenseRules.map((rule: any) => {
@@ -3939,7 +4092,7 @@ export function buildLeaseWorkflowAbstraction(args: {
       pdf_page_count_total: pdfPageCountTotal,
       // Vision (Gemini multimodal) processes every page of the PDF when the
       // file bytes are sent via callVertexAIFileJSON. There's no per-page
-      // toggle — it's all-or-nothing from the LLM step. This flag reflects
+      // toggle â€” it's all-or-nothing from the LLM step. This flag reflects
       // what's POSSIBLE; the actual vision_fallback_triggered diagnostic
       // (in normalize-pdf-output's extractionDebug) reflects what RAN.
       vision_pages_available: pdfPageCountTotal,
@@ -3964,7 +4117,7 @@ export function buildLeaseWorkflowAbstraction(args: {
       lease_expense_rules_generated: expenseRules.length,
       coverage_gaps_generated: extractedDocumentItems.filter((item) => item.requires_original_lease || item.extraction_status === "needs_review").length,
       rejected_generic_source_count: genericSourceTextRejected,
-      // ── Core mapping diagnostics (drive mapping_failure_reason) ──────
+      // â”€â”€ Core mapping diagnostics (drive mapping_failure_reason) â”€â”€â”€â”€â”€â”€
       lease_structure: leaseStructure,
       mapping_failure_reason: mappingFailureReason,
       core_mapping_failed: coreMappingFailed,

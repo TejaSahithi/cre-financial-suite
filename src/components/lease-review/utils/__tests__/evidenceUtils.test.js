@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 
-// ── Module mocks (must come before imports that depend on them) ──────────────
+// â”€â”€ Module mocks (must come before imports that depend on them) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 vi.mock("@/lib/leaseReviewSchema", () => ({
   LEASE_REVIEW_FIELDS: [],
@@ -69,7 +69,7 @@ vi.mock("@/components/lease-review/utils/fieldExtractors", () => ({
   },
   entrySourcePage: (entry) => {
     if (!entry || typeof entry !== "object") return null;
-    // Avoid ?? null — Number(null) === 0 which isFinite accepts as a page.
+    // Avoid ?? null â€” Number(null) === 0 which isFinite accepts as a page.
     const p = entry.source_page ?? entry.page_number ?? entry.page;
     if (p == null) return null;
     const n = Number(p);
@@ -79,7 +79,7 @@ vi.mock("@/components/lease-review/utils/fieldExtractors", () => ({
   validEvidenceRecord: vi.fn(() => null),
 }));
 
-// ── Imports after mocks ──────────────────────────────────────────────────────
+// â”€â”€ Imports after mocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import {
   cleanExtractedSourceText,
@@ -96,7 +96,7 @@ import { expandToSentenceBoundary } from "../evidenceResolver";
 import { fieldMatchesFilter } from "../../FieldTableFilter";
 import { computeSourceQuality } from "../fieldValidator";
 
-// ── 1. cleanExtractedSourceText ───────────────────────────────────────────────
+// â”€â”€ 1. cleanExtractedSourceText â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("cleanExtractedSourceText", () => {
   it("is exported and callable", () => {
@@ -123,7 +123,7 @@ describe("cleanExtractedSourceText", () => {
   });
 });
 
-// ── 2. Evidence backfill — missing source text ────────────────────────────────
+// â”€â”€ 2. Evidence backfill â€” missing source text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("isGenericExtractedSourceText", () => {
   it("returns true for generic text", () => {
@@ -136,11 +136,11 @@ describe("isGenericExtractedSourceText", () => {
   });
 });
 
-// ── 3. Standard field with value but no source → missing_source_evidence ─────
+// â”€â”€ 3. Standard field with value but no source â†’ missing_source_evidence â”€â”€â”€â”€â”€
 
-describe("collectExtractedDocumentItems — extraction_status", () => {
+describe("collectExtractedDocumentItems â€” extraction_status", () => {
   it("marks a field with value but no source_text as missing_source_evidence", () => {
-    // Omit source_page entirely — passing null would convert to 0 via Number(null),
+    // Omit source_page entirely â€” passing null would convert to 0 via Number(null),
     // which Number.isFinite accepts, incorrectly triggering the "has page" branch.
     const lease = {
       extraction_data: {
@@ -181,9 +181,9 @@ describe("collectExtractedDocumentItems — extraction_status", () => {
   });
 });
 
-// ── 4. Dynamic lease_clauses create review rows ───────────────────────────────
+// â”€â”€ 4. Dynamic lease_clauses create review rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe("collectExtractedDocumentItems — lease_clauses", () => {
+describe("collectExtractedDocumentItems â€” lease_clauses", () => {
   it("creates a dynamic row for each lease_clause with a value or source_text", () => {
     const lease = {
       extraction_data: {
@@ -226,9 +226,9 @@ describe("collectExtractedDocumentItems — lease_clauses", () => {
   });
 });
 
-// ── 5. Clause tab routing ─────────────────────────────────────────────────────
+// â”€â”€ 5. Clause tab routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe("inferDynamicItemTab — clause routing (core)", () => {
+describe("inferDynamicItemTab â€” clause routing (core)", () => {
   const cases = [
     ["grease_trap_payment", "rent_charges"],
     ["cam_cap_pct", "cam_rules"],
@@ -240,13 +240,13 @@ describe("inferDynamicItemTab — clause routing (core)", () => {
   ];
 
   for (const [key, expectedTab] of cases) {
-    it(`maps "${key}" → "${expectedTab}"`, () => {
+    it(`maps "${key}" â†’ "${expectedTab}"`, () => {
       expect(inferDynamicItemTab({}, key)).toBe(expectedTab);
     });
   }
 });
 
-describe("inferDynamicItemTab — expense/CAM/insurance patterns (spec additions)", () => {
+describe("inferDynamicItemTab â€” expense/CAM/insurance patterns (spec additions)", () => {
   // Expense / recovery terms that must route to expenses_recoveries
   const expenseCases = [
     "full_service_lease",
@@ -268,7 +268,7 @@ describe("inferDynamicItemTab — expense/CAM/insurance patterns (spec additions
     "expense_recovery",
   ];
   for (const key of expenseCases) {
-    it(`expense key "${key}" → "expenses_recoveries"`, () => {
+    it(`expense key "${key}" â†’ "expenses_recoveries"`, () => {
       expect(inferDynamicItemTab({}, key)).toBe("expenses_recoveries");
     });
   }
@@ -283,7 +283,7 @@ describe("inferDynamicItemTab — expense/CAM/insurance patterns (spec additions
     "deductible_limit",
   ];
   for (const key of insuranceCases) {
-    it(`insurance key "${key}" → "insurance"`, () => {
+    it(`insurance key "${key}" â†’ "insurance"`, () => {
       expect(inferDynamicItemTab({}, key)).toBe("insurance");
     });
   }
@@ -299,13 +299,13 @@ describe("inferDynamicItemTab — expense/CAM/insurance patterns (spec additions
     "controllable_expenses",
   ];
   for (const key of camCases) {
-    it(`CAM key "${key}" → "cam_rules"`, () => {
+    it(`CAM key "${key}" â†’ "cam_rules"`, () => {
       expect(inferDynamicItemTab({}, key)).toBe("cam_rules");
     });
   }
 });
 
-// ── 6. inferDynamicItemType ───────────────────────────────────────────────────
+// â”€â”€ 6. inferDynamicItemType â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("inferDynamicItemType", () => {
   it("returns 'currency' for rent/fee keys", () => {
@@ -323,7 +323,7 @@ describe("inferDynamicItemType", () => {
   });
 });
 
-// ── 7. detectDocumentMismatch ─────────────────────────────────────────────────
+// â”€â”€ 7. detectDocumentMismatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("detectDocumentMismatch", () => {
   const makeUploadedFile = (fields) => ({
@@ -389,7 +389,7 @@ describe("detectDocumentMismatch", () => {
   });
 });
 
-// ── 8. expandToSentenceBoundary ──────────────────────────────────────────────
+// â”€â”€ 8. expandToSentenceBoundary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("expandToSentenceBoundary", () => {
   it("returns the whole block when it is a labeled row", () => {
@@ -425,7 +425,7 @@ describe("expandToSentenceBoundary", () => {
   });
 });
 
-// ── 9. fieldMatchesFilter ────────────────────────────────────────────────────
+// â”€â”€ 9. fieldMatchesFilter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("fieldMatchesFilter", () => {
   const makeField = (overrides) => ({ key: "test", required: false, dynamic_document_item: false, ...overrides });
@@ -462,9 +462,9 @@ describe("fieldMatchesFilter", () => {
   });
 });
 
-// ── 10. expandToSentenceBoundary — extended coverage ────────────────────────
+// â”€â”€ 10. expandToSentenceBoundary â€” extended coverage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe("expandToSentenceBoundary — numbered clause", () => {
+describe("expandToSentenceBoundary â€” numbered clause", () => {
   it("returns entire short numbered-clause block as exact", () => {
     const text = "4.2 Full Service Lease. Rent includes all utilities, janitorial, property tax and property insurance.";
     const hit = text.indexOf("Full Service");
@@ -482,16 +482,16 @@ describe("expandToSentenceBoundary — numbered clause", () => {
   });
 
   it("summary-row match expands to the full labeled row", () => {
-    const text = "Tenant: Mindful Tech Solutions, Inc. Narendra Pydi — 618-946-9700.";
+    const text = "Tenant: Mindful Tech Solutions, Inc. Narendra Pydi â€” 618-946-9700.";
     const hit = text.indexOf("618");
     const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "618".length);
-    // Labeled-row pattern — whole block should be returned.
+    // Labeled-row pattern â€” whole block should be returned.
     expect(snippet).toContain("Mindful Tech Solutions");
     expect(source_quality).toBe("exact");
   });
 
   it("fragment without any boundaries is marked partial", () => {
-    // No newlines, no periods, no labeled-row pattern — pure fragment
+    // No newlines, no periods, no labeled-row pattern â€” pure fragment
     const text = "approximately 4200 rentable square feet in the building and more text here with no end";
     const hit = text.indexOf("4200");
     const { snippet, source_quality } = expandToSentenceBoundary(text, hit, "4200".length);
@@ -506,9 +506,9 @@ describe("expandToSentenceBoundary — numbered clause", () => {
   });
 });
 
-// ── 11. Partial source quality blocks auto-accept ────────────────────────────
+// â”€â”€ 11. Partial source quality blocks auto-accept â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe("computeSourceQuality — partial prevents auto-accept", () => {
+describe("computeSourceQuality â€” partial prevents auto-accept", () => {
   it("returns 'partial' for a mid-sentence snippet (no terminal punctuation)", () => {
     const midFragment = "approximately 1,110 rentable square feet located at";
     expect(computeSourceQuality(1110, midFragment, "extracted")).toBe("partial");
@@ -535,15 +535,15 @@ describe("computeSourceQuality — partial prevents auto-accept", () => {
   });
 });
 
-// ── 12. Show-missing filter behavior ────────────────────────────────────────
+// â”€â”€ 12. Show-missing filter behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // FieldReviewTable uses a showMissing boolean to decide which fields to show.
 // The equivalent legacy filter key is:
-//   showMissing=false  → hide fields with no value AND no source text
-//   showMissing=true   → show all fields
+//   showMissing=false  â†’ hide fields with no value AND no source text
+//   showMissing=true   â†’ show all fields
 // We verify the underlying fieldMatchesFilter helper covers both cases.
 
-describe("fieldMatchesFilter — showMissing equivalence", () => {
+describe("fieldMatchesFilter â€” showMissing equivalence", () => {
   const makeField = (overrides) => ({ key: "f", required: false, dynamic_document_item: false, ...overrides });
 
   it("'all' filter (showMissing=true equivalent) shows a field with no value and no source", () => {
@@ -557,12 +557,12 @@ describe("fieldMatchesFilter — showMissing equivalence", () => {
 
   it("required missing fields match 'missing' filter so they appear in RequiredReviewQueue", () => {
     const requiredField = makeField({ required: true });
-    // A required field with no value is missing — it should surface in the queue.
+    // A required field with no value is missing â€” it should surface in the queue.
     expect(fieldMatchesFilter(requiredField, "missing", null, null, null, new Set())).toBe(true);
   });
 });
 
-// ── 13. detectFieldConflicts (regression guard) ──────────────────────────────
+// â”€â”€ 13. detectFieldConflicts (regression guard) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe("buildLeaseReviewRowsByTab", () => {
   it("carries dynamic row value, source text, and page into the review table shape", () => {
@@ -620,14 +620,16 @@ describe("buildLeaseReviewRowsByTab", () => {
 });
 
 describe("isReviewRowDisplayable", () => {
-  it("shows required manual-review blockers by default", () => {
-    expect(isReviewRowDisplayable({
+  it("keeps required manual-review blockers out of extracted-only view", () => {
+    const row = {
       key: "tenant_name",
       required: true,
       normalized_value: null,
       requires_review: true,
       review_reason: "Required field was not found in the lease.",
-    }, { showMissing: false })).toBe(true);
+    };
+    expect(isReviewRowDisplayable(row, { showMissing: false })).toBe(false);
+    expect(isReviewRowDisplayable(row, { showMissing: true })).toBe(true);
   });
 
   it("shows required missing standard fields when showMissing is enabled", () => {
@@ -642,14 +644,14 @@ describe("isReviewRowDisplayable", () => {
 });
 
 describe("detectFieldConflicts", () => {
-  it("flags monthly × 12 ≠ annual", () => {
-    const lease = { monthly_rent: 5000, annual_rent: 100000 }; // 5000*12=60000 ≠ 100000
+  it("flags monthly Ã— 12 â‰  annual", () => {
+    const lease = { monthly_rent: 5000, annual_rent: 100000 }; // 5000*12=60000 â‰  100000
     const result = detectFieldConflicts(lease);
     expect(result.some((c) => c.field_key === "monthly_rent")).toBe(true);
   });
 
   it("returns [] for consistent rent values", () => {
-    const lease = { monthly_rent: 9904.13, annual_rent: 118849.5 }; // ~12×
+    const lease = { monthly_rent: 9904.13, annual_rent: 118849.5 }; // ~12Ã—
     expect(detectFieldConflicts(lease)).toHaveLength(0);
   });
 });

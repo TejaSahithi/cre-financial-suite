@@ -127,7 +127,7 @@ describe("Lease Review evidence contract", () => {
     expect(row.source_text_quality).toBe("derived");
   });
 
-  it("shows required missing fields as manual review blockers", () => {
+  it("keeps required missing fields as blockers but out of extracted-only view", () => {
     const row = buildCanonicalLeaseReviewField({}, {
       key: "commencement_date",
       label: "Commencement Date",
@@ -137,7 +137,8 @@ describe("Lease Review evidence contract", () => {
     expect(row.extraction_status).toBe("manual_required");
     expect(row.requires_review).toBe(true);
     expect(row.review_reason).toMatch(/Required field was not found/);
-    expect(isReviewRowDisplayable(row, { showMissing: false })).toBe(true);
+    expect(isReviewRowDisplayable(row, { showMissing: false })).toBe(false);
+    expect(isReviewRowDisplayable(row, { showMissing: true })).toBe(true);
   });
 
   it("keeps distinct dynamic clause rows that share the same clause type", () => {
@@ -165,6 +166,56 @@ describe("Lease Review evidence contract", () => {
     const rows = buildDynamicDocumentFieldsByTab(lease).legal_options || [];
     expect(rows.filter((row) => row.original_field_key === "clause_assignment_subletting")).toHaveLength(2);
   });
+  it("surfaces upload-payload dynamic document items before lease backfill", () => {
+    const lease = {
+      uploaded_file: {
+        ui_review_payload: {
+          metadata: {
+            workflow_output: {
+              extracted_document_items: [
+                {
+                  item_type: "exclusive_use",
+                  label: "Exclusive Use",
+                  business_area: "legal_options",
+                  value: "No exclusive use right stated",
+                  source_text: "Tenant shall have no exclusive right to sell any particular product in the Building.",
+                  source_page: 18,
+                  creates_dynamic_row: true,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const rows = buildDynamicDocumentFieldsByTab(lease).legal_options || [];
+    expect(rows.some((row) => row.original_field_key === "exclusive_use")).toBe(true);
+    expect(rows[0].source_text).toContain("exclusive right");
+  });
+
+  it("routes typed backend clauses into review tabs as dynamic rows", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_clauses: [
+            {
+              clause_type: "force_majeure",
+              clause_title: "Force Majeure",
+              clause_text: "Neither party shall be liable for delays caused by force majeure events beyond its control.",
+              source_page: 22,
+              business_area: "legal_options",
+              display_tab: "legal_options",
+            },
+          ],
+        },
+      },
+    };
+
+    const rows = buildDynamicDocumentFieldsByTab(lease).legal_options || [];
+    expect(rows.some((row) => row.original_field_key === "clause_force_majeure")).toBe(true);
+  });
+
 
   it("repairs property name fragments from the exact premises source", () => {
     const row = buildCanonicalLeaseReviewField({}, {
@@ -249,7 +300,37 @@ describe("Lease Review evidence contract", () => {
     expect(row.normalized_value).toBeNull();
   });
 
-  it("upgrades unsupported annual rent to a traced derived value", () => {
+
+  it("normalizes a rent summary sentence to the monthly rent amount only", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "monthly_rent",
+      label: "Monthly Rent",
+      required: true,
+      normalized_value: "$1,400 per month Full Service Lease 30 days before each anniversary of the Lease, Rent will increase 5% each year of renewal. The 10. Security Deposit $1,400",
+      source_page: 1,
+      source_text: "Rent: $1,400 per month Full Service Lease 30 days before each anniversary of the Lease, Rent will increase 5% each year of renewal. The 10. Security Deposit $1,400",
+    }, "rent_charges");
+
+    expect(row.normalized_value).toBe(1400);
+    expect(row.source_text).toContain("Security Deposit $1,400");
+    expect(row.validation_errors).not.toContain("monthly_rent_failed_validation");
+  });
+
+  it("does not display a backend-rejected property fragment as a trusted value", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "property_name",
+      label: "Property Name",
+      normalized_value: "Tenant has",
+      source_page: 2,
+      source_text: "at Tenant has park",
+      validation_errors: ["property_name_not_specific"],
+      requires_review: true,
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBeNull();
+    expect(row.validation_errors).toContain("property_name_not_specific");
+    expect(row.requires_review).toBe(true);
+  });  it("upgrades unsupported annual rent to a traced derived value", () => {
     const lease = {
       extraction_data: {
         workflow_output: {
