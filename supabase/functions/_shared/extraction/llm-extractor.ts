@@ -92,7 +92,7 @@ RULES:
     For lease review fields, source_text must be a COMPLETE, EXACT FULL SENTENCE from the lease document that contains the value and enough surrounding context for a reviewer to understand why the value was extracted.
     Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
     If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
-    If you cannot provide both an exact source_text and the page number for a found value, return value null.
+    If you cannot provide an exact source_text for a found value, return value null.
 
 13. Numbered-summary documents are common — leases often start with a section like:
         "1. Date: January 9, 2024

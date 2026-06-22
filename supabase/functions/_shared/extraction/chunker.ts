@@ -179,7 +179,12 @@ export function buildRelevantSnippet(
   selectedBlocks.sort((a, b) => (a.block_index ?? 0) - (b.block_index ?? 0));
 
   let result = "";
+  let lastPage = null;
   for (const block of selectedBlocks) {
+    if (block.page && block.page !== lastPage) {
+      result += `\n[[PAGE ${block.page}]]\n`;
+      lastPage = block.page;
+    }
     result += block.text + "\n\n";
   }
 
