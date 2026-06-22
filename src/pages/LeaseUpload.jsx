@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -440,7 +440,7 @@ export default function LeaseUpload() {
     });
   };
 
-  const fetchFileRecord = async (id) => {
+  const fetchFileRecord = useCallback(async (id) => {
     if (!id) return;
     setLoadingRecord(true);
     const { data, error } = await fetchUploadedFileStatus(id);
@@ -452,7 +452,7 @@ export default function LeaseUpload() {
       return;
     }
     setFileRecord(data);
-  };
+  }, []);
 
   const invalidateLeaseQueries = async () => {
     clearCache();
@@ -616,7 +616,7 @@ export default function LeaseUpload() {
     toast.success("Lease uploaded. The extraction pipeline is running.");
   };
 
-  const retryExtraction = async () => {
+  const retryExtraction = useCallback(async () => {
     if (!fileId) return;
     setRetryingExtraction(true);
     try {
@@ -643,7 +643,7 @@ export default function LeaseUpload() {
     } finally {
       setRetryingExtraction(false);
     }
-  };
+  }, [fileId, fetchFileRecord]);
 
   // Open Lease Review for the lease draft tied to this file. If a draft does
   // not yet exist, send the existing extraction to the review pipeline (which
@@ -796,7 +796,7 @@ export default function LeaseUpload() {
     }, 750);
 
     return () => window.clearTimeout(retryTimer);
-  }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings]);
+  }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings, retryExtraction]);
 
   const { activeIndex, failed } = pipelineProgress(fileRecord?.status);
 

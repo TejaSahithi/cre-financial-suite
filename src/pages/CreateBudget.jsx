@@ -8,7 +8,6 @@ import { budgetService } from "@/services/budgetService";
 import { supabase } from "@/services/supabaseClient";
 import { logAudit } from "@/services/audit";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
-import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { useAuth } from "@/lib/AuthContext";
 import { createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
@@ -198,7 +197,7 @@ export default function CreateBudget() {
 
     setGenerating(true);
     try {
-      const writableOrgId = await resolveWritableOrgId(orgId);
+      const writableOrgId = orgId || null;
       if (!writableOrgId) {
         toast.error("No organization selected. Select an organization before creating a budget.");
         return;

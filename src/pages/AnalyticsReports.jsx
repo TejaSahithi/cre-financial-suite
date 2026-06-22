@@ -1,18 +1,28 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { CAMCalculationService, PropertyService, LeaseService, ExpenseService } from "@/services/api";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart3, Target, LineChart } from "lucide-react";
+import { BarChart3, Target, LineChart, AlertCircle } from "lucide-react";
 import OverviewTab from "@/components/analytics/OverviewTab";
 import InsightsTab from "@/components/analytics/InsightsTab";
 import AdvancedAnalyticsTab from "@/components/analytics/AdvancedAnalyticsTab";
 
 export default function AnalyticsReports() {
-  const { data: properties = [] } = useQuery({ queryKey: ['properties'], queryFn: () => PropertyService.list() });
-  const { data: leases = [] } = useQuery({ queryKey: ['leases'], queryFn: () => LeaseService.list() });
-  const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => ExpenseService.list() });
-  const { data: camCalcs = [] } = useQuery({ queryKey: ['cam-calcs'], queryFn: () => CAMCalculationService.list() });
+  const { data: properties = [], error: propError, isLoading: propLoading } = useQuery({ queryKey: ['properties'], queryFn: () => PropertyService.list() });
+  const { data: leases = [], error: leaseError, isLoading: leaseLoading } = useQuery({ queryKey: ['leases'], queryFn: () => LeaseService.list() });
+  const { data: expenses = [], error: expenseError, isLoading: expenseLoading } = useQuery({ queryKey: ['expenses'], queryFn: () => ExpenseService.list() });
+  const { data: camCalcs = [], error: camError, isLoading: camLoading } = useQuery({ queryKey: ['cam-calcs'], queryFn: () => CAMCalculationService.list() });
+
+  const isLoading = propLoading || leaseLoading || expenseLoading || camLoading;
+  const queryError = propError || leaseError || expenseError || camError;
+
+  useEffect(() => {
+    if (queryError) {
+      toast.error("Failed to load analytics data. Please refresh the page.");
+    }
+  }, [queryError]);
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
@@ -20,6 +30,13 @@ export default function AnalyticsReports() {
         <h1 className="text-2xl font-bold text-slate-900">Analytics & Reports</h1>
         <p className="text-sm text-slate-500">Financial performance metrics, portfolio insights, and advanced analytics</p>
       </div>
+
+      {queryError && (
+        <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>Some data failed to load. Charts may be incomplete. Try refreshing the page.</span>
+        </div>
+      )}
 
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
@@ -29,13 +46,13 @@ export default function AnalyticsReports() {
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab properties={properties} leases={leases} expenses={expenses} />
+          <OverviewTab properties={properties} leases={leases} expenses={expenses} isLoading={isLoading} />
         </TabsContent>
         <TabsContent value="insights">
-          <InsightsTab properties={properties} leases={leases} expenses={expenses} camCalcs={camCalcs} />
+          <InsightsTab properties={properties} leases={leases} expenses={expenses} camCalcs={camCalcs} isLoading={isLoading} />
         </TabsContent>
         <TabsContent value="analytics">
-          <AdvancedAnalyticsTab properties={properties} leases={leases} expenses={expenses} camCalcs={camCalcs} />
+          <AdvancedAnalyticsTab properties={properties} leases={leases} expenses={expenses} camCalcs={camCalcs} isLoading={isLoading} />
         </TabsContent>
       </Tabs>
     </div>
