@@ -219,12 +219,14 @@ const FIELD_SPECS = [
   { key: "lease_type", group: "lease_header", aliases: ["lease_type", "expense_structure", "rent_structure", "lease_structure"] },
   { key: "permitted_use", group: "lease_header", aliases: ["permitted_use", "use", "use_of_premises", "use_clause", "premises_use"], clauseType: "use_clause", patterns: [/\b(?:permitted use|use of premises|use of the premises)\b[:\s-]+([^\n.]{4,220})/i, /\b(?:use|operate)\s+(?:the\s+)?Premises\s+(?:solely\s+)?(?:for|as)\s+([^\n.]{4,180})/i, /\bsolely\s+for\s+([^\n.]{4,180})/i] },
   { key: "broker_name", group: "lease_header", aliases: ["broker_name"], patterns: [/\bbroker(?:age)?\b[:\s-]+([^\n]{4,160})/i] },
-  { key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [
-    // Prefer "total of $X,XXX.XX" â€” the final summed deposit amount in addendum-style leases
-    /\btotal\s+of\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
-    /\bsecurity\s+deposit\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
-    /\b(?:deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
-  ] },
+  {
+    key: "security_deposit_amount", group: "rent_terms", aliases: ["security_deposit_amount", "security_deposit", "deposit"], patterns: [
+      // Prefer "total of $X,XXX.XX" â€” the final summed deposit amount in addendum-style leases
+      /\btotal\s+of\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
+      /\bsecurity\s+deposit\b[^\n$]{0,120}\$\s*([\d,]+(?:\.\d{2})?)/i,
+      /\b(?:deposit)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i,
+    ]
+  },
   // lease_term: match only concise label-value forms (e.g. "Lease Term: 86 months" or
   // "Term: 7 years"). The old [^\n]{2,120} was too greedy and captured entire clause
   // paragraphs containing unrelated content (grease trap amortization, etc.).
@@ -275,29 +277,34 @@ const FIELD_SPECS = [
   // match (landlord) regardless of who pays. The reimbursement keyword is
   // intentionally excluded so we don't misclassify reimbursement clauses
   // as direct responsibility; those land as needs_review via not_found.
-  { key: "tax_responsibility", group: "expense_terms",
+  {
+    key: "tax_responsibility", group: "expense_terms",
     aliases: ["tax_responsibility", "responsibility_taxes", "responsibility_tax", "tax_resp"],
     patterns: [
       /\b(?:tax(?:es)?|real estate taxes|property taxes)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:pay|be\s+responsible)/i,
     ],
   },
-  { key: "insurance_responsibility", group: "expense_terms",
+  {
+    key: "insurance_responsibility", group: "expense_terms",
     aliases: ["insurance_responsibility", "responsibility_insurance"],
     patterns: [
       /\b(?:property\s+insurance|liability\s+insurance|insurance)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:provide|maintain|carry|obtain|procure|keep\s+in\s+force)/i,
     ],
   },
-  { key: "tenant_insurance_required", group: "insurance",
+  {
+    key: "tenant_insurance_required", group: "insurance",
     aliases: ["tenant_insurance_required", "tenant_insurance", "insurance_required"],
     clauseType: "insurance",
     patterns: [/\btenant\s+shall\s+(?:maintain|carry|obtain|provide|keep\s+in\s+force)[^\n]{0,80}\b(?:insurance|liability)\b/i],
   },
-  { key: "general_liability_min", group: "insurance",
+  {
+    key: "general_liability_min", group: "insurance",
     aliases: ["general_liability_min", "general_liability_minimum", "general_liability", "liability_minimum", "cgl_limit", "cgl_amount"],
     clauseType: "insurance",
     patterns: [/(?:commercial\s+general\s+liability|cgl|general\s+liability)[^\n]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
   },
-  { key: "maintenance_responsibility", group: "expense_terms",
+  {
+    key: "maintenance_responsibility", group: "expense_terms",
     aliases: ["maintenance_responsibility", "responsibility_repairs", "responsibility_maintenance"],
     patterns: [
       /\b(?:maintenance|repairs?)\b[^.\n]{0,80}\b(landlord|lessor|tenant|lessee)\s+(?:shall|will|must|is\s+(?:required|obligated)\s+to|agrees\s+to)\s+(?:perform|maintain|repair|be\s+responsible)/i,
@@ -465,17 +472,17 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
 
   const stopPatterns = fieldKey === "landlord_address"
     ? [
-        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
-        /\b(?:tenant|lessee)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
-        /\btenant_contact_/i,
-      ]
+      /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+      /\b(?:tenant|lessee)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+      /\btenant_contact_/i,
+    ]
     : [
-        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
-        /\b(?:landlord|lessor)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
-        /\blandlord_contact_/i,
-      ];
+      /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+      /\b(?:landlord|lessor)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+      /\blandlord_contact_/i,
+    ];
 
   let stopAt = text.length;
   for (const pattern of stopPatterns) {
@@ -1079,45 +1086,45 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
   const haystack = sourceText.toLowerCase();
 
   const FIELD_KEYWORDS: Record<string, string[]> = {
-    tenant_name:           ["tenant", "lessee", "occupant", "assignee"],
+    tenant_name: ["tenant", "lessee", "occupant", "assignee"],
     tenant_signatory_name: ["tenant", "lessee", "by:", "signed by", "authorized signer"],
-    landlord_name:         ["landlord", "lessor", "owner", "licensor"],
+    landlord_name: ["landlord", "lessor", "owner", "licensor"],
     landlord_signatory_name: ["landlord", "lessor", "by:", "signed by"],
-    property_name:         ["property", "building", "premises", "project", "development", "shopping center", "center"],
-    property_address:      ["premises", "property", "building", "located at", "address of", "shopping center"],
-    premises_address:      ["premises", "property", "building", "located at", "address of", "shopping center"],
-    landlord_address:      ["landlord", "lessor", "address of landlord", "landlord's address"],
-    tenant_address:        ["tenant", "lessee", "address of tenant", "tenant's address"],
-    permitted_use:         ["use", "permitted use", "use of premises", "purpose"],
-    square_footage:        ["square feet", "sq ft", "sf", "rsf", "rentable", "premises", "approximately"],
-    rentable_area_sqft:    ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
-    tenant_rsf:            ["square feet", "sf", "rsf", "rentable", "tenant"],
-    monthly_rent:          ["rent", "base rent", "monthly rent", "monthly base rent", "per month"],
-    annual_rent:           ["rent", "annual rent", "per year", "yearly"],
-    rent_per_sf:           ["rent", "per square", "per sf", "per rsf", "$/sf"],
-    billing_frequency:     ["monthly", "quarterly", "annual", "rent", "payment"],
-    escalation_rate:       ["escalat", "increase", "percent", "annual", "rent"],
-    security_deposit:      ["security deposit", "deposit", "security"],
-    lease_type:            ["full service", "gross", "triple net", "nnn", "modified gross", "net lease", "expense structure", "base year", "full service gross"],
-    responsibility_taxes:  ["tax", "real estate tax", "property tax", "assessment"],
+    property_name: ["property", "building", "premises", "project", "development", "shopping center", "center"],
+    property_address: ["premises", "property", "building", "located at", "address of", "shopping center"],
+    premises_address: ["premises", "property", "building", "located at", "address of", "shopping center"],
+    landlord_address: ["landlord", "lessor", "address of landlord", "landlord's address"],
+    tenant_address: ["tenant", "lessee", "address of tenant", "tenant's address"],
+    permitted_use: ["use", "permitted use", "use of premises", "purpose"],
+    square_footage: ["square feet", "sq ft", "sf", "rsf", "rentable", "premises", "approximately"],
+    rentable_area_sqft: ["square feet", "sq ft", "sf", "rsf", "rentable", "premises"],
+    tenant_rsf: ["square feet", "sf", "rsf", "rentable", "tenant"],
+    monthly_rent: ["rent", "base rent", "monthly rent", "monthly base rent", "per month"],
+    annual_rent: ["rent", "annual rent", "per year", "yearly"],
+    rent_per_sf: ["rent", "per square", "per sf", "per rsf", "$/sf"],
+    billing_frequency: ["monthly", "quarterly", "annual", "rent", "payment"],
+    escalation_rate: ["escalat", "increase", "percent", "annual", "rent"],
+    security_deposit: ["security deposit", "deposit", "security"],
+    lease_type: ["full service", "gross", "triple net", "nnn", "modified gross", "net lease", "expense structure", "base year", "full service gross"],
+    responsibility_taxes: ["tax", "real estate tax", "property tax", "assessment"],
     responsibility_insurance: ["insurance", "liability", "coverage", "property insurance"],
     responsibility_utilities: ["utilities", "utility", "electric", "gas", "water", "hvac"],
-    responsibility_repairs:   ["repairs", "maintenance", "repair", "maintain"],
-    cam_cap_pct:           ["cam", "common area", "cap", "controllable", "operating expenses"],
-    cam_cap_type:          ["cam", "common area", "cap", "cumulative", "non-cumulative"],
-    admin_fee_pct:         ["admin", "administrative fee", "management fee", "percent"],
-    hvac_responsibility:   ["hvac", "heating", "cooling", "air conditioning"],
-    gross_up_enabled:      ["gross up", "gross-up", "occupancy"],
+    responsibility_repairs: ["repairs", "maintenance", "repair", "maintain"],
+    cam_cap_pct: ["cam", "common area", "cap", "controllable", "operating expenses"],
+    cam_cap_type: ["cam", "common area", "cap", "cumulative", "non-cumulative"],
+    admin_fee_pct: ["admin", "administrative fee", "management fee", "percent"],
+    hvac_responsibility: ["hvac", "heating", "cooling", "air conditioning"],
+    gross_up_enabled: ["gross up", "gross-up", "occupancy"],
     general_liability_min: ["insurance", "liability", "coverage", "commercial general"],
     waiver_of_subrogation: ["waiver", "subrogation", "insurance"],
     additional_insureds_required: ["additional insured", "insured", "insurance"],
-    tenant_insurance_required:    ["insurance", "liability", "coverage", "tenant shall maintain"],
+    tenant_insurance_required: ["insurance", "liability", "coverage", "tenant shall maintain"],
     property_insurance_responsibility: ["property insurance", "insurance", "landlord", "tenant"],
     right_of_first_refusal: ["first refusal", "rofr", "right of first"],
     early_termination_option: ["early termination", "terminate", "termination option"],
-    assignment_provisions:  ["assignment", "assign", "transfer"],
+    assignment_provisions: ["assignment", "assign", "transfer"],
     landlord_consent_for_transfer: ["assignment", "assign", "transfer", "consent"],
-    default_cure_period:   ["default", "cure", "notice", "days"],
+    default_cure_period: ["default", "cure", "notice", "days"],
   };
 
   const required = FIELD_KEYWORDS[fieldKey];
@@ -2481,8 +2488,8 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     review_reason: proRataShare == null
       ? "Tenant pro rata share cannot be derived without tenant RSF and building RSF."
       : (!fieldMap.tenant_rsf?.source_clause || !fieldMap.building_rsf?.source_clause
-          ? "Derived pro rata share is missing source evidence for tenant RSF or building RSF."
-          : null),
+        ? "Derived pro rata share is missing source evidence for tenant RSF or building RSF."
+        : null),
     approval_blocking_reason: proRataShare == null
       ? "Tenant pro rata share cannot be derived without tenant RSF and building RSF."
       : null,
@@ -3341,10 +3348,10 @@ function deriveExpenseRules(
         : status;
     const confidence =
       effectiveStatus === "calculated" ? 0.9
-      : effectiveStatus === "manual_required" ? 0.45
-      : effectiveStatus === "missing_source_evidence" ? 0.35
-      : mentioned ? 0.78
-      : 0.55;
+        : effectiveStatus === "manual_required" ? 0.45
+          : effectiveStatus === "missing_source_evidence" ? 0.35
+            : mentioned ? 0.78
+              : 0.55;
 
     return {
       expense_category: blueprint.key,
