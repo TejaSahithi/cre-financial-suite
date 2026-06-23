@@ -435,34 +435,45 @@ export function ClauseRecordsTable({ lease }) {
     });
     const list = [fromWorkflow, fromTopLevel, fromUploadMeta, fromUploadRecord, recordOutput.lease_clauses]
       .flatMap((rows) => (Array.isArray(rows) ? rows : []));
-    const clauseRows = list.map((c, idx) => ({
-      id: `extract-${idx}`,
-      clause_type: c.clause_type,
-      clause_title: c.clause_title,
-      clause_text: cleanDocumentItemSource(c.clause_text || c.exact_text || c.source_text),
-      source_page: c.source_page,
-      confidence_score: c.confidence_score,
-    }));
+    const clauseRows = list
+      .map((c, idx) => ({
+        id: c.id || c.item_id || `extract-${idx}`,
+        clause_type: normalizeClauseType(c.clause_type || c.type || c.item_type || "clause_records"),
+        clause_title: c.clause_title || c.title || c.label || c.section_title || "Extracted Clause",
+        clause_text: cleanDocumentItemSource(c.clause_text || c.exact_text || c.exact_source_text || c.source_text || c.source_clause),
+        source_page: c.source_page ?? c.page_number ?? c.page ?? null,
+        confidence_score: c.confidence_score ?? c.confidence ?? null,
+        structured_fields_json: c.structured_fields_json || {
+          normalized_meaning: c.normalized_meaning || c.normalized_value || c.value || null,
+          evidence_type: c.evidence_type || null,
+          requires_review: c.requires_review ?? null,
+        },
+      }))
+      .filter((row) => cleanDocumentItemSource(row.clause_text));
     const discoveredRows = Array.isArray(itemRows)
       ? [...itemRows, ...fieldMapRows]
           .filter((item) => cleanDocumentItemSource(item?.source_text || item?.exact_source_text || item?.source_clause))
-          .map((item, idx) => ({
-            id: item.item_id || `document-item-${idx}`,
-            is_document_item: true,
-            clause_type: item.business_area || item.display_tab || item.item_type || "clause_records",
-            clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
-            clause_text: cleanDocumentItemSource(item.source_text || item.exact_source_text || item.source_clause),
-            source_page: item.source_page,
-            confidence_score: item.confidence_score ?? item.confidence,
-            structured_fields_json: {
-              item_type: item.item_type || null,
-              display_tab: item.display_tab || null,
-              value: item.normalized_value ?? item.value ?? null,
-              extraction_status: item.extraction_status || null,
-              maps_to_fixed_field: item.maps_to_fixed_field ?? null,
-              creates_dynamic_row: item.creates_dynamic_row ?? null,
-            },
-          }))
+          .map((item, idx) => {
+            const semanticType = String(item.item_type || item.field_key || item.clause_type || item.business_area || item.display_tab || "clause_records").replace(/^clause[_-]/i, "");
+            return {
+              id: item.item_id || item.id || `document-item-${idx}`,
+              is_document_item: true,
+              clause_type: normalizeClauseType(semanticType),
+              clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
+              clause_text: cleanDocumentItemSource(item.source_text || item.exact_source_text || item.source_clause),
+              source_page: item.source_page ?? item.page_number ?? item.page ?? null,
+              confidence_score: item.confidence_score ?? item.confidence ?? null,
+              structured_fields_json: {
+                item_type: item.item_type || null,
+                display_tab: item.display_tab || null,
+                value: item.normalized_value ?? item.value ?? null,
+                extraction_status: item.extraction_status || null,
+                evidence_type: item.evidence_type || null,
+                maps_to_fixed_field: item.maps_to_fixed_field ?? null,
+                creates_dynamic_row: item.creates_dynamic_row ?? null,
+              },
+            };
+          })
       : [];
     const dedupedDiscovered = [];
     const seenDiscovered = new Set();
@@ -476,9 +487,13 @@ export function ClauseRecordsTable({ lease }) {
   }, [lease]);
 
   const allClauses = useMemo(() => {
-    const discovered = fallbackClauses.filter((clause) => clause.is_document_item);
-    if (Array.isArray(dbClauses) && dbClauses.length > 0) return [...dbClauses, ...discovered];
-    return fallbackClauses;
+    const sourceBackedFallbacks = fallbackClauses.filter((clause) => cleanDocumentItemSource(clause.clause_text));
+    const discovered = sourceBackedFallbacks.filter((clause) => clause.is_document_item);
+    const sourceBackedDbClauses = Array.isArray(dbClauses)
+      ? dbClauses.filter((clause) => cleanDocumentItemSource(clause.clause_text))
+      : [];
+    if (sourceBackedDbClauses.length > 0) return [...sourceBackedDbClauses, ...discovered];
+    return sourceBackedFallbacks;
   }, [dbClauses, fallbackClauses]);
 
   // Build the checklist: every standard clause type is shown; any extracted

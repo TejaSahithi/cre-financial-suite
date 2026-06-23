@@ -311,6 +311,92 @@ function isValidEntityField(fieldKey, value, sourceText) {
   return true;
 }
 
+function hasHardValidationError(errors = []) {
+  return errors.some((error) =>
+    /failed_validation|not_specific|looks_like_clause|without_.*evidence|not_core|invalid|not_meaningful|not_identifier|unknown|without_context|without_.*source/i.test(String(error || "")),
+  );
+}
+
+function sourceSupportsValue(value, sourceText) {
+  const val = String(value ?? "").trim();
+  const src = String(sourceText ?? "").trim();
+  if (!val || !src) return false;
+  const normalizedValue = val.toLowerCase().replace(/[$,]/g, "").replace(/\s+/g, " ");
+  const normalizedSource = src.toLowerCase().replace(/[$,]/g, "").replace(/\s+/g, " ");
+  if (normalizedSource.includes(normalizedValue)) return true;
+  if (/^\d+(?:\.\d+)?$/.test(normalizedValue) && normalizedSource.includes(normalizedValue)) return true;
+  return false;
+}
+
+function invalidResolvedField(fieldKey, output) {
+  const key = normalizeLeaseFieldKey(fieldKey);
+  const valueText = String(output?.value ?? "").trim();
+  const sourceText = output?.exactSourceText || output?.sourceClause || output?.rawValue || "";
+  const validationErrors = Array.isArray(output?.validationErrors) ? output.validationErrors : [];
+  if (hasHardValidationError(validationErrors)) return true;
+
+  if (["property_name", "center_name", "building_name"].includes(key)) {
+    if (!valueText || /^(?:tenant has|landlord has|a shopping|shopping|center|building|premises)$/i.test(valueText)) return true;
+    if (/\b(?:tenant|landlord)\s+(?:has|shall|may|will|agrees?|acknowledges?)\b/i.test(valueText)) return true;
+    if (/\b(?:premises|lease|article|section|obligations?|transfer|consent|hereby)\b/i.test(valueText)) return true;
+  }
+
+  if (key === "permitted_use") {
+    if (!valueText || valueText.length > 120) return true;
+    if (/\b(?:assignment|subletting|prior written consent|common areas|parking|display of merchandise|landlord consent)\b/i.test(valueText)) return true;
+  }
+
+  if (key === "lease_term") {
+    const hasTrace = Boolean(output?.derivationTrace || (Array.isArray(output?.sourceFieldKeys) && output.sourceFieldKeys.length > 0));
+    const sourceHasTermWords = /\b(?:year\s*to\s*year|month|months|year|years|term|commencement|expiration)\b/i.test(String(sourceText));
+    if (/^\d{1,3}$/.test(valueText) && !hasTrace && !sourceHasTermWords) return true;
+  }
+
+  if (["annual_rent", "rent_per_sf", "base_rent_psf", "base_rent_per_sf", "billing_frequency"].includes(key)) {
+    const isDerived = /derived/i.test(String(output?.evidenceType || output?.reviewStatus || ""));
+    if (isDerived && !output?.derivationTrace && (!Array.isArray(output?.sourceFieldKeys) || output.sourceFieldKeys.length === 0)) return true;
+  }
+
+  if (["cam_amount", "fixed_cam_amount"].includes(key) && /^\$?\s*0(?:\.00)?$/.test(valueText)) {
+    if (!/\b(?:\$\s*0|zero|no separate cam|included in (?:base )?rent|full service|gross lease)\b/i.test(String(sourceText))) return true;
+  }
+
+  if (["annual_rent", "monthly_rent", "base_rent_monthly", "security_deposit_amount"].includes(key)) {
+    const source = String(sourceText || "");
+    if (valueText && source && !sourceSupportsValue(valueText, source) && !output?.derivationTrace) return true;
+  }
+
+  return false;
+}
+
+function missingResolverOutput() {
+  return {
+    value: null,
+    rawValue: null,
+    normalizedValue: null,
+    sourcePath: null,
+    sourcePage: null,
+    exactSourceText: null,
+    sourceClause: null,
+    confidence: null,
+    reviewStatus: null,
+    evidenceType: null,
+    sourceTextQuality: null,
+    sourceFieldKeys: [],
+    derivationTrace: null,
+    requiresReview: false,
+    approvalBlockingReason: null,
+    validationErrors: [],
+    found: false
+  };
+}
+
+function isAuthoritativeExtractionSource(path) {
+  const text = String(path || "");
+  return /workflow_output|uf\.records\[0\]|extraction_data\.(?:fields|lease_fields)|uploaded_files\.reviewed_output|lease\.extracted_fields/.test(text)
+    && !/lease \(top-level\)|approved_lease_abstracts|abstract_snapshot|extraction_data\.abstract/.test(text);
+}
+
 function buildResolverOutput(rawResult, sourcePath, fieldKey) {
   if (rawResult === null || rawResult === undefined || rawResult === "") {
     return null;
@@ -332,6 +418,7 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     derivationTrace: null,
     requiresReview: false,
     approvalBlockingReason: null,
+    validationErrors: [],
     found: true
   };
 
@@ -420,6 +507,13 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
       rawResult.evidence?.derivation_trace ||
       null;
     output.requiresReview = Boolean(rawResult.requires_review ?? rawResult.requiresReview ?? false);
+    const rawValidationErrors =
+      rawResult.validation_errors ||
+      rawResult.validationErrors ||
+      rawResult.evidence?.validation_errors ||
+      rawResult.evidence?.validationErrors ||
+      [];
+    output.validationErrors = Array.isArray(rawValidationErrors) ? rawValidationErrors.filter(Boolean) : [];
     output.approvalBlockingReason =
       rawResult.approval_blocking_reason ||
       rawResult.approvalBlockingReason ||
@@ -437,8 +531,13 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
   output.value = cleanPartyAddressValue(fieldKey, output.value);
   output.rawValue = cleanPartyAddressValue(fieldKey, output.rawValue);
 
-  // Enforce entity field validation
+  // Enforce entity and field-specific validation. Invalid extracted values stay
+  // visible in review rows, but resolver consumers such as headers/summary cards
+  // must not treat them as trusted normalized values.
   if (!isValidEntityField(fieldKey, output.value, output.exactSourceText || output.rawValue)) {
+    return null;
+  }
+  if (invalidResolvedField(fieldKey, output)) {
     return null;
   }
 
@@ -481,31 +580,30 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
   const ufRecord0 = ufPayload?.records?.[0] ?? null;
 
   if (mode === "display") {
-    // Display mode: top-level columns first, then approved/extracted
+    // Display mode is the reviewer surface: trust the workflow evidence payload
+    // before stale top-level lease columns. Top-level columns remain only as a
+    // legacy fallback when no workflow payload exists.
     fallbackHierarchy.push(
-      { path: "lease (top-level)", data: lease },
-      { path: "approved_lease_abstracts.snapshot_json", data: lease?.approved_lease_abstracts?.snapshot_json },
-      { path: "lease.abstract_snapshot", data: lease?.abstract_snapshot },
-      { path: "lease.extraction_data.abstract", data: lease?.extraction_data?.abstract },
       { path: "lease.extraction_data.workflow_output.lease_fields", data: lease?.extraction_data?.workflow_output?.lease_fields },
+      { path: "uf.records[0].workflow_output.lease_fields", data: ufRecord0?.workflow_output?.lease_fields },
+      { path: "uf.records[0].standard_fields", data: ufRecord0?.standard_fields },
+      { path: "uf.records[0].fields", data: ufRecord0?.fields },
+      { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
+      { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
+      { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
       { path: "lease.extraction_data.workflow_output.expense_rules", data: lease?.extraction_data?.workflow_output?.expense_rules },
       { path: "lease.extraction_data.workflow_output.cam_rules", data: lease?.extraction_data?.workflow_output?.cam_rules },
       { path: "lease.extraction_data.workflow_output.lease_clauses", data: lease?.extraction_data?.workflow_output?.lease_clauses },
-      { path: "lease.extraction_data.fields", data: lease?.extraction_data?.fields },
-      { path: "lease.extraction_data.lease_fields", data: lease?.extraction_data?.lease_fields },
       { path: "lease.extraction_data.workflow_output.extracted_document_items", data: lease?.extraction_data?.workflow_output?.extracted_document_items },
       { path: "lease.extraction_data.extracted_document_items", data: lease?.extraction_data?.extracted_document_items },
       { path: "lease.extracted_fields", data: lease?.extracted_fields },
-      { path: "uploaded_files.reviewed_output", data: lease?.uploaded_files?.reviewed_output || lease?.uploaded_file?.reviewed_output },
-      // ui_review_payload: the extraction pipeline writes into records[0].* so we
-      // must probe each sub-path; checking ui_review_payload as a top-level object
-      // misses all values because they live one level deeper.
-      { path: "uf.records[0].workflow_output.lease_fields", data: ufRecord0?.workflow_output?.lease_fields },
-      { path: "uf.records[0].fields", data: ufRecord0?.fields },
-      { path: "uf.records[0].standard_fields", data: ufRecord0?.standard_fields },
       { path: "uf.records[0].custom_fields", data: ufRecord0?.custom_fields },
       { path: "uf.records[0]", data: ufRecord0 },
       { path: "uploaded_files.ui_review_payload", data: ufPayload },
+      { path: "approved_lease_abstracts.snapshot_json", data: lease?.approved_lease_abstracts?.snapshot_json },
+      { path: "lease.abstract_snapshot", data: lease?.abstract_snapshot },
+      { path: "lease.extraction_data.abstract", data: lease?.extraction_data?.abstract },
+      { path: "lease (top-level)", data: lease },
     );
   } else {
     // Canonical mode: approved snapshot first, then extracted workflow, then top-level
@@ -538,6 +636,9 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
     if (!data) continue;
     const rawResult = extractValueFromSource(data, aliases);
     const output = buildResolverOutput(rawResult, path, fieldKey);
+    if (!output && rawResult !== null && rawResult !== undefined && rawResult !== "" && isAuthoritativeExtractionSource(path)) {
+      return missingResolverOutput();
+    }
     if (output && output.found) {
       const hasRealEvidence = Boolean(output.exactSourceText || output.sourcePage);
       if (hasRealEvidence) return output;
@@ -548,24 +649,7 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
   if (firstFound) return firstFound;
 
   // Not found
-  return {
-    value: null,
-    rawValue: null,
-    normalizedValue: null,
-    sourcePath: null,
-    sourcePage: null,
-    exactSourceText: null,
-    sourceClause: null,
-    confidence: null,
-    reviewStatus: null,
-    evidenceType: null,
-    sourceTextQuality: null,
-    sourceFieldKeys: [],
-    derivationTrace: null,
-    requiresReview: false,
-    approvalBlockingReason: null,
-    found: false
-  };
+  return missingResolverOutput();
 }
 
 export function resolveLeaseFields(lease, fieldKeys, options = {}) {

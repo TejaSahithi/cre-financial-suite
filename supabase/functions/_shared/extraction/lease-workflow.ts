@@ -617,6 +617,20 @@ const SUMMARY_LABEL_TO_FIELD: Record<string, string> = {
 };
 
 const SUMMARY_LABELS = Object.keys(SUMMARY_LABEL_TO_FIELD).sort((a, b) => b.length - a.length);
+const SUMMARY_NUMBER_TO_FIELD: Record<string, string> = {
+  "1": "lease_date",
+  "2": "landlord_name",
+  "3": "landlord_address",
+  "4": "tenant_name",
+  "5": "tenant_address",
+  "6": "property_address",
+  "7": "property_address",
+  "8": "lease_term",
+  "9": "base_rent_monthly",
+  "10": "security_deposit_amount",
+  "11": "permitted_use",
+  "12": "broker_name",
+};
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -641,6 +655,7 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
   if (!cleaned) return null;
   const withoutNextLabels = cleaned
     .replace(/\s+\d{1,2}\.\s*(?:Date|Landlord|Tenant|Premises|Building|Lease Term|Commencement Date|Expiration Date|Rent|Security Deposit|Permitted Use|Brokers?)\b[\s\S]*$/i, "")
+    .replace(/\s+(?:Date|Landlord|Tenant|Premises|Building|Lease Term|Commencement Date|Expiration Date|Rent|Security Deposit|Permitted Use|Brokers?)\s*[:;-][\s\S]*$/i, "")
     .trim();
   const candidate = withoutNextLabels || cleaned;
 
@@ -655,14 +670,22 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
     const amount = asNumber(candidate.match(/([\d,]+)\s*(?:rentable\s+)?(?:square\s*feet|sq\.?\s*ft\.?|sf|rsf)/i)?.[1] ?? candidate);
     return amount != null ? amount : null;
   }
+  if (fieldKey === "lease_term") {
+    if (/\byear\s*to\s*year\b/i.test(candidate)) return "Year to Year";
+    if (/^\d{1,3}$/.test(candidate.trim())) return null;
+    if (/\b(?:month|months|year|years|term)\b/i.test(candidate)) return candidate;
+    return null;
+  }
   if (["tenant_name", "landlord_name", "broker_name"].includes(fieldKey)) {
     const entity = candidate
       .replace(/\b(?:phone|tel|telephone|email)\b[\s\S]*$/i, "")
       .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b.*$/i, "")
+      .replace(/^\s*\d{1,2}\.\s*/, "")
       .trim();
     if (!entity || looksLikeDateText(entity) || looksLikePhoneOnly(entity)) return null;
+    if (/^[.,;:'"-]+$/.test(entity)) return null;
     if (/^(?:tenant|landlord|broker|date|name|title|\d+)$/i.test(entity)) return null;
-    if (/\b(?:shall|hereby|premises|article|section|obligations?|transfer|consent)\b/i.test(entity)) return null;
+    if (/\b(?:shall|hereby|premises|article|section|obligations?|transfer|consent|tenant\s+has|landlord\s+has)\b/i.test(entity)) return null;
     return entity;
   }
   if (fieldKey === "permitted_use") return normalizePermittedUseValue(candidate, candidate);
@@ -699,13 +722,60 @@ function extractIntroPartySummaryPairs(fullText: string) {
   return pairs;
 }
 
+function extractSummaryRowsFromText(rawText: string, sourcePage: number | null) {
+  const normalized = String(rawText || "")
+    .replace(/\r/g, "\n")
+    .replace(/[\t ]+/g, " ");
+  if (!normalized.trim()) return [];
+
+  const labelPattern = SUMMARY_LABELS.map(escapeRegExp).join("|");
+  const rows: Array<{ label: string; field_key: string; raw_value: string; source_text: string; source_page: number | null }> = [];
+
+  // Prefer true line/row boundaries. This catches OCR that keeps summary rows
+  // as separate lines and prevents one label from swallowing the next row.
+  for (const line of normalized.split(/\n+/)) {
+    const cleanLine = cleanSummaryValue(line);
+    if (!cleanLine) continue;
+    const rowMatch = cleanLine.match(new RegExp(`^(?:\\(?\\s*)?(?:(\\d{1,2})\\.\\s*)?(${labelPattern})(?:\\s*\\)?)(?:\\s*[:;-]\\s*|\\s{2,})(.+)$`, "i"));
+    if (!rowMatch) continue;
+    const label = cleanSummaryValue(rowMatch[2]).toLowerCase();
+    const numberField = rowMatch[1] ? SUMMARY_NUMBER_TO_FIELD[rowMatch[1]] : null;
+    const fieldKey = SUMMARY_LABEL_TO_FIELD[label] || numberField;
+    if (!fieldKey) continue;
+    const rawValue = cleanSummaryValue(rowMatch[3]);
+    rows.push({ label, field_key: fieldKey, raw_value: rawValue, source_text: cleanSummaryValue(`${rowMatch[2]}: ${rawValue}`), source_page: sourcePage });
+  }
+
+  // Compact OCR fallback: locate numbered/label anchors and slice between
+  // anchors. This handles page-1 summary tables collapsed into one paragraph.
+  const anchorPattern = new RegExp(`(?:^|\\s)(?:(\\d{1,2})\\.\\s*)?(?:\\(?\\s*)(${labelPattern})(?:\\s*\\)?)(?:\\s*[:;-]\\s*|\\s{2,})`, "gi");
+  const anchors: Array<{ index: number; end: number; number: string | null; label: string; field_key: string | null }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(normalized))) {
+    const label = cleanSummaryValue(match[2]).toLowerCase();
+    const fieldKey = SUMMARY_LABEL_TO_FIELD[label] || (match[1] ? SUMMARY_NUMBER_TO_FIELD[match[1]] : null) || null;
+    anchors.push({ index: match.index, end: anchorPattern.lastIndex, number: match[1] || null, label, field_key: fieldKey });
+  }
+  for (let i = 0; i < anchors.length; i += 1) {
+    const anchor = anchors[i];
+    if (!anchor.field_key) continue;
+    const next = anchors[i + 1];
+    const rawValue = cleanSummaryValue(normalized.slice(anchor.end, next ? next.index : anchor.end + 360));
+    if (!rawValue) continue;
+    rows.push({
+      label: anchor.label,
+      field_key: anchor.field_key,
+      raw_value: rawValue,
+      source_text: cleanSummaryValue(`${anchor.label}: ${rawValue}`),
+      source_page: sourcePage,
+    });
+  }
+
+  return rows;
+}
+
 function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
   const textBlocks = asArray(doclingRaw?.text_blocks);
-  const labelPattern = SUMMARY_LABELS.map(escapeRegExp).join("|");
-  const pairPattern = new RegExp(
-    `(?:^|\\n|\\r|\\b\\d{1,2}\\.\\s*)(?:\\(?\\s*)(${labelPattern})(?:\\s*\\)?)(?:\\s*[:;-]\\s*|\\s{2,})([\\s\\S]*?)(?=(?:\\n|\\r|\\s)\\d{0,2}\\.?\\s*(?:${labelPattern})(?:\\s*[:;-]|\\s{2,})|$)`,
-    "gi",
-  );
   const chunks = [
     ...textBlocks
       .filter((block) => {
@@ -718,31 +788,24 @@ function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
   const pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }> = { ...extractIntroPartySummaryPairs(fullText) };
 
   for (const chunk of chunks) {
-    const rawText = String(chunk.text || "").replace(/\r/g, "\n");
+    const rawText = String(chunk.text || "");
     if (!rawText || !/landlord|tenant|premises|commencement|expiration|security deposit|permitted use|lease term|rent/i.test(rawText)) continue;
-    pairPattern.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pairPattern.exec(rawText))) {
-      const label = cleanSummaryValue(match[1]).toLowerCase();
-      const fieldKey = SUMMARY_LABEL_TO_FIELD[label];
-      if (!fieldKey || pairs[fieldKey]) continue;
-      const rawValue = cleanSummaryValue(match[2]).slice(0, 360);
-      const value = cleanSummaryValueForField(fieldKey, rawValue);
+    for (const row of extractSummaryRowsFromText(rawText, chunk.source_page ?? 1)) {
+      if (!row.field_key || pairs[row.field_key]) continue;
+      const value = cleanSummaryValueForField(row.field_key, row.raw_value);
       if (value == null || String(value).length < 1) continue;
-      const sourceText = cleanSummaryValue(`${match[1]}: ${rawValue}`);
-      pairs[fieldKey] = {
-        field_key: fieldKey,
-        label,
+      pairs[row.field_key] = {
+        field_key: row.field_key,
+        label: row.label,
         value,
-        source_text: sourceText,
-        source_page: chunk.source_page ?? 1,
+        source_text: cleanSummaryValue(row.source_text).slice(0, 420),
+        source_page: row.source_page ?? 1,
       };
     }
   }
 
   return pairs;
 }
-
 function extractPatternValue(text: string, patterns: RegExp[] = []) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -1536,7 +1599,7 @@ function displayTabForItem(itemType: unknown, businessArea: unknown, fieldKey?: 
   if (/(tax|utility|repair|recover|expense|direct|base rent|exclusion)/.test(type)) return "expenses_recoveries";
   if (/(rent|fee|charge|deposit|interest|holdover|allowance|consideration)/.test(type)) return "rent_charges";
   if (/(date|term|deadline|expiration|commencement|effective)/.test(type)) return "dates_term";
-  if (/(assign|consent|assumption|default|remedy|surrender|alteration|indemnity|sublet)/.test(type)) return "legal_options";
+  if (/(assign|consent|assumption|default|remedy|surrender|alteration|indemnity|sublet|subletting|force majeure|casualty|condemnation|compliance|quiet enjoyment|signage|guaranty|guarantee|jury|governing law|successors|hazardous|environmental|estoppel|subordination|snda|notice|termination|waiver|holdover)/.test(type)) return "legal_options";
   return "clause_records";
 }
 

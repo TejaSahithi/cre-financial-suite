@@ -160,9 +160,10 @@ export function collectExtractedDocumentItems(lease) {
       const sourcePage = entrySourcePage(clause);
       if ((value === null || value === undefined || value === "") && !sourceText) continue;
       const category = String(clause?.category || clause?.business_area || "").toLowerCase();
+      const typedTab = inferDynamicItemTab({ business_area: category }, key) || inferDynamicItemTab({}, clauseType);
       const displayTab = category && category !== "clause_records"
-        ? inferDynamicItemTab({ business_area: category }, key) || category
-        : "clause_records";
+        ? typedTab || category
+        : typedTab || "clause_records";
       fieldMapItems.push({
         item_id: `${sourceName}:${key}:${sourcePage ?? "p0"}:${normalizeDynamicKey(String(sourceText || value || "")).slice(0, 80)}`,
         label: clause?.label || clause?.clause_label || titleizeFieldKey(clauseType),
@@ -258,7 +259,7 @@ export function inferDynamicItemTab(item, key) {
   // Expense / recovery terms: taxes, utilities, maintenance, repairs, janitorial,
   // full-service/gross/NNN/net lease structure, operating expenses, reimbursements.
   if (/(tax|utilit|maintenance|repair|expense|operating|reimburs|recovery|recoveries|janitorial|cleaning|sanitation|full.service|gross.lease|full_service|nnn|triple.net|net.lease|modified.gross|lease.structure|lease.type|expense.structure|responsibility)/i.test(key)) return "expenses_recoveries";
-  if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|broker|estoppel|subordination|notice|rofr|termination|exclusive|noncompete|non_compete|co_tenancy|relocation)/i.test(key)) return "legal_options";
+  if (/(assign|consent|assumption|default|remed|surrender|alteration|sublet|subletting|broker|estoppel|subordination|snda|notice|rofr|termination|exclusive|noncompete|non_compete|co_tenancy|relocation|force_majeure|force majeure|casualty|condemnation|compliance|quiet_enjoyment|quiet enjoyment|signage|signs|guaranty|guarantee|indemnity|jury|governing_law|governing law|successors|hazardous|environmental|waiver|holdover)/i.test(key)) return "legal_options";
   return null;
 }
 
@@ -490,6 +491,12 @@ function isPhoneLikeText(value) {
   return /^\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/.test(text);
 }
 
+function hasHardValidationError(errors = []) {
+  return errors.some((error) =>
+    /failed_validation|not_specific|looks_like_clause|without_.*evidence|not_core|invalid|not_meaningful|not_identifier|unknown|without_context|without_.*source/i.test(String(error || "")),
+  );
+}
+
 function isGenericLeaseIntroSource(sourceText) {
   const source = cleanSourceEvidenceText(sourceText) || "";
   const lower = source.toLowerCase();
@@ -661,9 +668,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
     validationErrors.push(`${key}_failed_validation`);
   }
-  const hardValidationFailed = validationErrors.some((error) =>
-    /failed_validation|not_specific|looks_like_clause|without_.*evidence|not_core|invalid|not_meaningful/i.test(String(error || "")),
-  );
+  const hardValidationFailed = hasHardValidationError(validationErrors);
   if (hardValidationFailed && isMeaningfulValue(schemaValue)) {
     schemaValue = null;
   }
@@ -696,8 +701,8 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     sourceFieldKeys: field.source_field_keys ?? field.sourceFieldKeys ?? derived?.sourceFieldKeys ?? evidence.sourceFieldKeys,
     derivationTrace: field.derivation_trace ?? field.derivationTrace ?? derived?.derivationTrace ?? evidence.derivationTrace,
   };
-  const sourceTextQuality = resolveSourceTextQuality(statusEvidence);
-  const evidenceType = normalizeEvidenceType(statusEvidence.evidenceType ?? statusEvidence.extractionStatus, {
+  const sourceTextQuality = hardValidationFailed ? "missing" : resolveSourceTextQuality(statusEvidence);
+  const evidenceType = hardValidationFailed ? "missing" : normalizeEvidenceType(statusEvidence.evidenceType ?? statusEvidence.extractionStatus, {
     value: schemaValue,
     sourceText,
     sourceTextQuality,
@@ -713,6 +718,11 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       confidence,
       evidence: statusEvidence,
     });
+  const effectiveStatus = hardValidationFailed && Boolean(field.required)
+    ? "manual_required"
+    : hardValidationFailed
+      ? "missing_source_evidence"
+      : resolvedStatus;
   const hasValue = isMeaningfulValue(schemaValue);
   const hasValidSource = hasValidSourceEvidence({
     ...statusEvidence,
@@ -756,9 +766,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       reviewReason ||
       evidenceType === "inferred",
   );
-  const status = requiredMissing && !isManualExtractionStatus(resolvedStatus)
+  const status = requiredMissing && !isManualExtractionStatus(effectiveStatus)
     ? "manual_required"
-    : resolvedStatus;
+    : effectiveStatus;
 
   return {
     ...field,
