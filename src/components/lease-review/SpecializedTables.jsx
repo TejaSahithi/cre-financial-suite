@@ -46,6 +46,34 @@ function cleanDocumentItemSource(value) {
   return text;
 }
 
+function looksLikeClauseEvidence(value) {
+  const text = cleanDocumentItemSource(value);
+  if (!text) return false;
+  if (text.length > 180) return true;
+  return /\b(?:summary of basic lease information|this lease|article\s+\d+|section\s+\d+|tenant shall|landlord shall|premises|rent:|security deposit|common area|operating expense|insurance|utilities|maintenance|repairs?)\b/i.test(text);
+}
+
+function documentItemSource(item) {
+  if (!item || typeof item !== "object") return null;
+  return cleanDocumentItemSource(
+    item.source_text
+      || item.exact_source_text
+      || item.source_clause
+      || item.exact_text
+      || item.clause_text
+      || item.snippet
+      || (looksLikeClauseEvidence(item.normalized_value ?? item.value ?? item.raw_value ?? item.rawValue)
+        ? item.normalized_value ?? item.value ?? item.raw_value ?? item.rawValue
+        : null),
+  );
+}
+
+function documentItemValue(item) {
+  if (!item || typeof item !== "object") return null;
+  const value = item.normalized_value ?? item.normalizedValue ?? item.normalized_meaning ?? item.normalizedMeaning ?? item.value ?? item.raw_value ?? item.rawValue ?? null;
+  return looksLikeClauseEvidence(value) ? null : value;
+}
+
 export function RentScheduleTable({ leaseId }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["rent-schedule-rows", leaseId],
@@ -423,13 +451,11 @@ export function ClauseRecordsTable({ lease }) {
         item_type: key,
         label: key.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
         business_area: "clause_records",
-        source_text: cleanDocumentItemSource(
-          entry?.exact_source_text || entry?.source_clause || entry?.source_text || entry?.snippet,
-        ),
+        source_text: documentItemSource(entry),
         source_page: entry?.source_page ?? entry?.page_number ?? entry?.page ?? null,
         confidence: entry?.confidence_score ?? entry?.confidence ?? null,
-        normalized_value: entry?.normalized_value ?? entry?.value ?? entry?.raw_value ?? null,
-        value: entry?.value ?? entry?.normalized_value ?? entry?.raw_value ?? null,
+        normalized_value: documentItemValue(entry),
+        value: documentItemValue(entry),
         extraction_status: entry?.extraction_status ?? null,
       }));
     });
@@ -452,7 +478,7 @@ export function ClauseRecordsTable({ lease }) {
       .filter((row) => cleanDocumentItemSource(row.clause_text));
     const discoveredRows = Array.isArray(itemRows)
       ? [...itemRows, ...fieldMapRows]
-          .filter((item) => cleanDocumentItemSource(item?.source_text || item?.exact_source_text || item?.source_clause))
+          .filter((item) => documentItemSource(item))
           .map((item, idx) => {
             const semanticType = String(item.item_type || item.field_key || item.clause_type || item.business_area || item.display_tab || "clause_records").replace(/^clause[_-]/i, "");
             return {
@@ -460,13 +486,13 @@ export function ClauseRecordsTable({ lease }) {
               is_document_item: true,
               clause_type: normalizeClauseType(semanticType),
               clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
-              clause_text: cleanDocumentItemSource(item.source_text || item.exact_source_text || item.source_clause),
+              clause_text: documentItemSource(item),
               source_page: item.source_page ?? item.page_number ?? item.page ?? null,
               confidence_score: item.confidence_score ?? item.confidence ?? null,
               structured_fields_json: {
                 item_type: item.item_type || null,
                 display_tab: item.display_tab || null,
-                value: item.normalized_value ?? item.value ?? null,
+                value: documentItemValue(item),
                 extraction_status: item.extraction_status || null,
                 evidence_type: item.evidence_type || null,
                 maps_to_fixed_field: item.maps_to_fixed_field ?? null,

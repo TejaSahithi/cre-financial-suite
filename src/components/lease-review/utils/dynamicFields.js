@@ -26,6 +26,40 @@ export function isGenericExtractedSourceText(value) {
   return cleanSourceEvidenceText(value) === null;
 }
 
+function looksLikeEvidenceParagraph(value) {
+  const text = cleanExtractedSourceText(value);
+  if (!text) return false;
+  if (text.length > 180) return true;
+  return /\b(?:summary of basic lease information|this lease|article\s+\d+|section\s+\d+|tenant shall|landlord shall|premises|security deposit|commencement date|expiration date|rent:|full service|common area|operating expense|insurance|utilities)\b/i.test(text);
+}
+
+function clauseSourceText(clause) {
+  if (!clause || typeof clause !== "object") return null;
+  return cleanExtractedSourceText(
+    clause.exact_source_text
+      ?? clause.exactSourceText
+      ?? clause.source_clause
+      ?? clause.source_text
+      ?? clause.exact_text
+      ?? clause.clause_text
+      ?? clause.snippet
+      ?? clause.evidence?.exact_source_text
+      ?? clause.evidence?.source_clause
+      ?? clause.evidence?.source_text,
+  );
+}
+
+function clauseReviewValue(clause) {
+  if (!clause || typeof clause !== "object") return null;
+  const value = clause.normalized_value
+    ?? clause.normalizedValue
+    ?? clause.normalized_meaning
+    ?? clause.normalizedMeaning
+    ?? clause.value
+    ?? null;
+  return looksLikeEvidenceParagraph(value) ? null : value;
+}
+
 export function titleizeFieldKey(value) {
   return String(value || "Discovered Field")
     .replace(/[_-]+/g, " ")
@@ -65,8 +99,8 @@ export function collectExtractedDocumentItems(lease) {
   const addFieldMapItems = (map, sourceName) => {
     if (!map || typeof map !== "object" || Array.isArray(map)) return;
     for (const [key, entry] of Object.entries(map)) {
-      const value = entryValue(entry);
-      const sourceText = entrySourceText(entry);
+      let value = entryValue(entry);
+      let sourceText = entrySourceText(entry);
       const sourcePage = entrySourcePage(entry);
       const extractionStatus = typeof entry === "object" && entry
         ? entry.extraction_status ?? entry.extractionStatus ?? entry.review_status ?? entry.reviewStatus ?? null
@@ -75,6 +109,10 @@ export function collectExtractedDocumentItems(lease) {
         ? entry.confidence_score ?? entry.confidence ?? null
         : null;
       const rawValue = typeof entry === "object" && entry ? entry.raw_value ?? entry.rawValue ?? value : value;
+      if (!sourceText && looksLikeEvidenceParagraph(rawValue ?? value)) {
+        sourceText = cleanExtractedSourceText(rawValue ?? value);
+        value = null;
+      }
       const evidenceType = typeof entry === "object" && entry ? entry.evidence_type ?? entry.evidenceType ?? null : null;
       const derivationTrace = typeof entry === "object" && entry ? entry.derivation_trace ?? entry.derivationTrace ?? null : null;
       const sourceFieldKeys = typeof entry === "object" && entry
@@ -155,8 +193,8 @@ export function collectExtractedDocumentItems(lease) {
       // Prefix with "clause_" so static field keys are never accidentally
       // overwritten (e.g. "landlord_consent" exists as a standard field).
       const key = `clause_${normalizeDynamicKey(clauseType)}`;
-      const value = clause?.value ?? clause?.clause_text ?? null;
-      const sourceText = entrySourceText(clause);
+      const value = clauseReviewValue(clause);
+      const sourceText = clauseSourceText(clause) ?? entrySourceText(clause);
       const sourcePage = entrySourcePage(clause);
       if ((value === null || value === undefined || value === "") && !sourceText) continue;
       const category = String(clause?.category || clause?.business_area || "").toLowerCase();
@@ -176,7 +214,7 @@ export function collectExtractedDocumentItems(lease) {
         display_tab: displayTab,
         value,
         normalized_value: value,
-        raw_value: clause?.raw_value ?? value,
+        raw_value: clause?.raw_value ?? clause?.rawValue ?? value,
         source_text: sourceText,
         source_page: sourcePage,
         confidence: typeof clause?.confidence === "number" ? clause.confidence : null,
@@ -189,8 +227,8 @@ export function collectExtractedDocumentItems(lease) {
           sourcePage,
           extractionStatus: sourceText ? "extracted" : "missing_source_evidence",
         }),
-        requires_review: !sourceText,
-        review_reason: sourceText ? null : "Clause row has no supporting source text.",
+        requires_review: Boolean(clause?.requires_review ?? clause?.requiresReview ?? clause?.review_reason ?? clause?.reviewReason ?? false),
+        review_reason: clause?.review_reason ?? clause?.reviewReason ?? (sourceText ? null : "Clause row has no supporting source text."),
         maps_to_existing_field: false,
         maps_to_fixed_field: false,
         creates_dynamic_row: true,
@@ -280,10 +318,15 @@ export function buildDynamicDocumentFieldsByTab(lease) {
   const seenSignatures = new Set();
   const keyCounts = new Map();
   for (const item of collectExtractedDocumentItems(lease)) {
-    const sourceText = cleanExtractedSourceText(
-      item?.source_text || item?.exact_source_text || item?.source_clause,
+    let sourceText = cleanExtractedSourceText(
+      item?.source_text || item?.exact_source_text || item?.source_clause || item?.exact_text || item?.clause_text,
     );
-    const value = item?.normalized_value ?? item?.value ?? item?.raw_value;
+    let value = item?.normalized_value ?? item?.normalizedValue ?? item?.normalized_meaning ?? item?.normalizedMeaning ?? item?.value ?? item?.raw_value ?? item?.rawValue;
+    if (value === undefined && ("normalized_value" in (item || {}) || "value" in (item || {}))) value = null;
+    if (!sourceText && looksLikeEvidenceParagraph(value)) {
+      sourceText = cleanExtractedSourceText(value);
+      value = null;
+    }
     const hasValue = value !== undefined && value !== null && value !== "";
     // Show the row if EITHER a value OR a source clause is present. Earlier
     // gate required both, which silently dropped clause-only items (e.g.
@@ -311,7 +354,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // the lease_fields map (which addFieldMapItems also surfaced as dynamic rows).
     // Different values for the same key are still shown (keyCounts renames them
     // key_2, key_3 etc.) so genuine conflicts remain visible.
-    const signature = [key, String(value ?? "").slice(0, 100)].join("|");
+    const signature = [key, String(value ?? sourceText ?? "").slice(0, 180)].join("|");
     if (seenSignatures.has(signature)) continue;
     seenSignatures.add(signature);
     const count = (keyCounts.get(key) || 0) + 1;
@@ -661,10 +704,16 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText, {
     allowDerivedAnnual: Boolean(derived || field.evidence_type === "derived" || field.derivation_trace || field.source_field_keys?.length),
   });
-  const validationErrors = [
+  let validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
     ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
   ];
+  if (derived?.derivationTrace || (Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0)) {
+    validationErrors = validationErrors.filter((error) => {
+      const text = String(error || "");
+      return !/(?:failed_validation|without_money_evidence|no_valid_supporting_source|missing_source_evidence|missing_derivation_trace)/i.test(text);
+    });
+  }
   if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
     validationErrors.push(`${key}_failed_validation`);
   }
@@ -736,10 +785,13 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const requiredMissing = Boolean(field.required) && !hasValue;
   const requiredNoSource = Boolean(field.required) && hasValue && !hasValidSource;
   const inferredNeedsReview = evidenceType === "inferred" || sourceTextQuality === "inferred";
-  const backendReviewReason =
+  let backendReviewReason =
     field.review_reason ?? field.reviewReason ??
     field.requires_review_reason ?? field.requiresReviewReason ??
     evidence.reviewReason ?? null;
+  if (derived?.derivationTrace && backendReviewReason && /(?:failed field validation|no valid supporting source|missing.*derivation|without_money_evidence|missing_source_evidence)/i.test(String(backendReviewReason))) {
+    backendReviewReason = null;
+  }
   let reviewReason =
     backendReviewReason ??
     field.approval_blocking_reason ??
@@ -758,10 +810,11 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   } else if (!reviewReason && derivedWithoutTrace) {
     reviewReason = "Derived value is missing a derivation trace.";
   }
+  const derivedHasValidLineage = Boolean(
+    derived?.derivationTrace || (Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0),
+  );
   const requiresReview = Boolean(
-    field.requires_review ||
-      field.requiresReview ||
-      evidence.requiresReview ||
+    (!derivedHasValidLineage && (field.requires_review || field.requiresReview || evidence.requiresReview)) ||
       validationErrors.length > 0 ||
       reviewReason ||
       evidenceType === "inferred",

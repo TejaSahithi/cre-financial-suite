@@ -395,4 +395,83 @@ describe("Lease Review evidence contract", () => {
     expect(row.validation_errors).toContain("cam_amount_failed_validation");
     expect(row.requires_review).toBe(true);
   });
+  it("uses clause_text as source evidence, not as the normalized value", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_clauses: [
+            {
+              clause_type: "repairs_maintenance",
+              clause_text: "Tenant shall maintain the Premises in good order and repair throughout the Term.",
+              source_page: 4,
+              business_area: "expenses_recoveries",
+            },
+          ],
+        },
+      },
+    };
+
+    const rows = buildDynamicDocumentFieldsByTab(lease).expenses_recoveries || [];
+    const row = rows.find((item) => item.original_field_key === "clause_repairs_maintenance");
+    expect(row).toBeTruthy();
+    expect(row.normalized_value).toBeNull();
+    expect(row.source_text).toContain("Tenant shall maintain");
+    expect(row.requires_review).toBe(false);
+  });
+
+  it("rehydrates legacy OCR paragraphs as source text instead of dynamic values", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            {
+              item_type: "operating_expense_recovery",
+              label: "Operating Expense Recovery",
+              business_area: "expenses_recoveries",
+              value: "ARTICLE 2 DEFINITIONS As used in this Lease, Additional Rent shall include taxes, insurance, maintenance and utilities described in the Lease.",
+              source_page: 2,
+              creates_dynamic_row: true,
+            },
+          ],
+        },
+      },
+    };
+
+    const rows = buildDynamicDocumentFieldsByTab(lease).expenses_recoveries || [];
+    const row = rows.find((item) => item.original_field_key === "operating_expense_recovery");
+    expect(row).toBeTruthy();
+    expect(row.normalized_value).toBeNull();
+    expect(row.source_text).toContain("Additional Rent shall include");
+  });
+
+  it("does not carry stale no-source validation onto traced derived annual rent", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            monthly_rent: {
+              value: 1400,
+              source_page: 1,
+              source_clause: "$1,400 per month",
+              extraction_status: "extracted",
+            },
+            annual_rent: {
+              value: 16800,
+              validation_errors: ["money_field_without_money_evidence", "annual_rent_failed_validation"],
+              requires_review: true,
+              review_reason: "Extracted value has no valid supporting source text.",
+              extraction_status: "missing_source_evidence",
+            },
+          },
+        },
+      },
+    };
+
+    const row = buildCanonicalLeaseReviewField(lease, { key: "annual_rent", label: "Annual Rent" }, "rent_charges");
+    expect(row.normalized_value).toBe(16800);
+    expect(row.evidence_type).toBe("derived");
+    expect(row.validation_errors).toEqual([]);
+    expect(row.requires_review).toBe(false);
+    expect(row.derivation_trace).toContain("monthly_rent");
+  });
 });

@@ -3,7 +3,15 @@ import { cleanSourceEvidenceText, normalizeSourcePage } from "@/lib/leaseReviewS
 export function entryValue(entry) {
   if (entry == null) return null;
   if (typeof entry !== "object") return entry;
-  return entry.normalized_value ?? entry.value ?? entry.raw_value ?? entry.raw ?? null;
+  return entry.normalized_value
+    ?? entry.normalizedValue
+    ?? entry.normalized_meaning
+    ?? entry.normalizedMeaning
+    ?? entry.value
+    ?? entry.raw_value
+    ?? entry.rawValue
+    ?? entry.raw
+    ?? null;
 }
 
 export function entrySourceText(entry) {
@@ -13,6 +21,8 @@ export function entrySourceText(entry) {
       ?? entry.exactSourceText
       ?? entry.source_clause
       ?? entry.source_text
+      ?? entry.exact_text
+      ?? entry.clause_text
       ?? entry.snippet
       ?? entry.evidence?.source_clause
       ?? entry.evidence?.source_text
