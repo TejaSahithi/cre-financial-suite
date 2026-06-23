@@ -195,6 +195,15 @@ entrypoint = "./functions/extract-lease-expense-rules/index.ts"
 # static_files = [ "./functions/extract-lease-expense-rules/*.html" ]
 
 [functions.accept-invite]
+enabled = true
+verify_jwt = true
+
+[functions.custom-fields]
+enabled = true
+verify_jwt = true
+
+[functions.extract-with-custom-fields]
+enabled = true
 verify_jwt = true
 
 [functions.create-checkout-session]

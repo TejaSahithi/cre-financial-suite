@@ -638,6 +638,13 @@ const SUMMARY_NUMBER_TO_FIELD: Record<string, string> = {
   "11": "permitted_use",
   "12": "broker_name",
 };
+type SummaryPair = {
+  field_key: string;
+  label: string;
+  value: any;
+  source_text: string;
+  source_page: number | null;
+};
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -706,7 +713,7 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
 
 
 function setSummaryPair(
-  pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }>,
+  pairs: Record<string, SummaryPair>,
   fieldKey: string,
   label: string,
   rawValue: unknown,
@@ -737,9 +744,95 @@ function extractAddressCandidate(value: string) {
   return match?.[0] ? cleanSummaryValue(match[0]) : null;
 }
 
+
+function extractCompanyCandidates(value: string) {
+  const seen = new Set<string>();
+  return [...cleanSummaryValue(value).matchAll(/\b([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/gi)]
+    .map((match) => ({ value: cleanSummaryValueForField("tenant_name", match[1]), index: match.index ?? 0 }))
+    .filter((candidate): candidate is { value: string; index: number } => {
+      if (typeof candidate.value !== "string" || candidate.value.length < 3) return false;
+      if (looksLikeDateText(candidate.value) || fieldValueLooksInvalid("tenant_name", candidate.value, candidate.value)) return false;
+      const key = candidate.value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function extractNumberedSummarySegments(section: string) {
+  const anchors = [...section.matchAll(/\b(1[0-2]|[1-9])\.\s*/g)]
+    .map((match) => ({ number: match[1], index: match.index ?? 0, end: (match.index ?? 0) + match[0].length }))
+    .filter((anchor, index, all) => index === 0 || anchor.index - all[index - 1].index > 8);
+  const segments: Record<string, string> = {};
+  for (let index = 0; index < anchors.length; index += 1) {
+    const anchor = anchors[index];
+    const next = anchors[index + 1];
+    const segment = cleanSummaryValue(section.slice(anchor.end, next ? next.index : anchor.end + 900));
+    if (segment) segments[anchor.number] = segment;
+  }
+  return segments;
+}
+
+function recoverFlattenedNumberedSummaryPairs(section: string, sourcePage: number | null, pairs: Record<string, SummaryPair>) {
+  const segments = extractNumberedSummarySegments(section);
+  const firstPageSummary = cleanSummaryValue(Object.values(segments).join(" "));
+  const introSource = cleanSummaryValue(section.match(/\bTHIS\s+LEASE[\s\S]{0,600}?\(\s*["']?Tenant["']?\s*\)/i)?.[0] || firstPageSummary || section.slice(0, 1200));
+
+  const companyCandidates = extractCompanyCandidates(section.slice(0, 3200));
+  if (companyCandidates[0]?.value) {
+    setSummaryPair(pairs, "landlord_name", "Landlord", companyCandidates[0].value, introSource, sourcePage, { overwriteInvalid: true });
+  }
+  if (companyCandidates[1]?.value) {
+    setSummaryPair(pairs, "tenant_name", "Tenant", companyCandidates[1].value, introSource, sourcePage, { overwriteInvalid: true });
+  }
+
+  const leaseDateSource = segments["1"] || section;
+  const leaseDate = leaseDateSource.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i)?.[0];
+  if (leaseDate) setSummaryPair(pairs, "lease_date", "Date", leaseDate, leaseDateSource, sourcePage, { overwriteInvalid: true });
+
+  const landlordAddress = extractAddressCandidate(segments["3"] || "");
+  if (landlordAddress) setSummaryPair(pairs, "landlord_address", "Address of Landlord", landlordAddress, segments["3"], sourcePage, { overwriteInvalid: true });
+
+  const tenantAddress = extractAddressCandidate(segments["5"] || "");
+  if (tenantAddress) setSummaryPair(pairs, "tenant_address", "Address of Tenant", tenantAddress, segments["5"], sourcePage, { overwriteInvalid: true });
+
+  const premisesText = cleanSummaryValue([segments["6"], segments["7"]].filter(Boolean).join(" "));
+  const premisesAddress = extractAddressCandidate(premisesText);
+  if (premisesAddress) setSummaryPair(pairs, "property_address", "Premises", premisesAddress, premisesText, sourcePage, { overwriteInvalid: true });
+  const suite = premisesText.match(/\b(?:Suite|Suites?)\s*#?\s*([A-Za-z0-9-]+(?:\s*(?:and|&|,)\s*[A-Za-z0-9-]+)*)/i)?.[1];
+  if (suite) setSummaryPair(pairs, "suite_number", "Suite", suite, premisesText, sourcePage, { overwriteInvalid: true });
+  const rsf = premisesText.match(/\b([\d,]+)\s+rentable\s+square\s+feet\b/i)?.[1];
+  if (rsf) setSummaryPair(pairs, "rentable_area_sqft", "Rentable Area", rsf, premisesText, sourcePage, { overwriteInvalid: true });
+
+  const termText = segments["8"] || "";
+  if (termText) {
+    const leaseTerm = termText.match(/\bYear\s+to\s+Year\b|\b\d+\s*(?:months?|years?)\b/i)?.[0];
+    if (leaseTerm) setSummaryPair(pairs, "lease_term", "Lease Term", leaseTerm, termText, sourcePage, { overwriteInvalid: true });
+    const commencement = termText.match(/\bCommencement\s+Date\s*[:;-]?\s*([^.;]{0,80}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i)?.[1];
+    if (commencement) {
+      setSummaryPair(pairs, "commencement_date", "Commencement Date", commencement, termText, sourcePage, { overwriteInvalid: true });
+      setSummaryPair(pairs, "rent_commencement_date", "Rent Commencement Date", commencement, termText, sourcePage, { overwriteInvalid: true });
+    }
+    const expiration = termText.match(/\bExpiration\s+Date\s*[:;-]?\s*([^.;]{0,80}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+of\s+each\s+year|,\s+\d{4})?)/i)?.[1];
+    if (expiration) setSummaryPair(pairs, "expiration_date", "Expiration Date", expiration, termText, sourcePage, { overwriteInvalid: true });
+  }
+
+  const rentText = segments["9"] || "";
+  if (rentText) {
+    const rent = rentText.match(/\$\s*[\d,]+(?:\.\d{2})?\s+per\s+month/i)?.[0] || rentText.match(/\$\s*[\d,]+(?:\.\d{2})?/i)?.[0];
+    if (rent) setSummaryPair(pairs, "base_rent_monthly", "Rent", rent, rentText, sourcePage, { overwriteInvalid: true });
+    if (/\bfull\s+service\b/i.test(rentText)) setSummaryPair(pairs, "lease_type", "Lease Type", "Full Service", rentText, sourcePage, { overwriteInvalid: true });
+    const escalation = rentText.match(/\bincrease\s+([\d.]+)\s*%/i)?.[1];
+    if (escalation) setSummaryPair(pairs, "renewal_escalation_percent", "Renewal Escalation Percent", escalation, rentText, sourcePage, { overwriteInvalid: true });
+  }
+
+  if (segments["10"]) setSummaryPair(pairs, "security_deposit_amount", "Security Deposit", segments["10"], segments["10"], sourcePage, { overwriteInvalid: true });
+  if (segments["11"]) setSummaryPair(pairs, "permitted_use", "Permitted Use", segments["11"], segments["11"], sourcePage, { overwriteInvalid: true });
+  if (segments["12"]) setSummaryPair(pairs, "broker_name", "Brokers", segments["12"], segments["12"], sourcePage, { overwriteInvalid: true });
+}
 function extractFlattenedSummaryPairs(rawText: string, sourcePage: number | null) {
   const text = cleanSummaryValue(rawText);
-  const pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }> = {};
+  const pairs: Record<string, SummaryPair> = {};
   if (!text || !/summary of basic lease information|\b\d{1,2}\.\s*(?:date|landlord|tenant|premises|building|rent|security deposit|permitted use)\b/i.test(text)) {
     return pairs;
   }
@@ -748,6 +841,7 @@ function extractFlattenedSummaryPairs(rawText: string, sourcePage: number | null
 
   const introPairs = extractIntroPartySummaryPairs(section);
   for (const [key, pair] of Object.entries(introPairs)) pairs[key] = pair;
+  recoverFlattenedNumberedSummaryPairs(section, sourcePage, pairs);
 
   const tenantAnchor = section.match(/\b4\.\s*Tenant\s*[:;-]?\s*/i);
   const tenantAddressAnchor = section.match(/\b5\.\s*(?:Address\s+of\s+Tenant|Tenant\s+Address)\s*[:;-]?\s*/i);
@@ -756,9 +850,7 @@ function extractFlattenedSummaryPairs(rawText: string, sourcePage: number | null
     const dateMatch = tenantBlock.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i);
     if (dateMatch?.[0]) setSummaryPair(pairs, "lease_date", "Date", dateMatch[0], tenantBlock, sourcePage, { overwriteInvalid: true });
 
-    const companyMatches = [...tenantBlock.matchAll(/\b([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,120}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/gi)]
-      .map((match) => ({ value: cleanSummaryValue(match[1]), index: match.index ?? 0 }))
-      .filter((match) => match.value.length > 2 && !looksLikeDateText(match.value));
+    const companyMatches = extractCompanyCandidates(tenantBlock);
     const landlord = companyMatches[0];
     const tenant = companyMatches.find((match, idx) => idx > 0 && match.value !== landlord?.value);
     if (landlord?.value) setSummaryPair(pairs, "landlord_name", "Landlord", landlord.value, tenantBlock, sourcePage, { overwriteInvalid: true });
@@ -795,19 +887,25 @@ function extractFlattenedSummaryPairs(rawText: string, sourcePage: number | null
 
 function extractIntroPartySummaryPairs(fullText: string) {
   const text = cleanText(fullText).slice(0, 6000);
-  const pairs: Record<string, { field_key: string; label: string; value: string; source_text: string; source_page: number | null }> = {};
-  const intro = text.match(/\bbetween\s+(.{2,140}?)\s*\(\s*["']?Landlord["']?\s*\)\s+and\s+(.{2,180}?)\s*\(\s*["']?Tenant["']?\s*\)/i)
-    || text.match(/\bby\s+and\s+between\s+(.{2,140}?)\s*,?\s+(?:as\s+)?Landlord\s+and\s+(.{2,180}?)\s*,?\s+(?:as\s+)?Tenant/i);
-  if (!intro) return pairs;
+  const pairs: Record<string, SummaryPair> = {};
+  const intro = text.match(/\bby\s+and\s+between\s+(.{2,160}?)\s*\(\s*["']?Landlord["']?\s*\)\s+and\s+(.{2,220}?)(?:\s*\(\s*["']?Tenant["']?\s*\)|\.|,)/i)
+    || text.match(/\bbetween\s+(.{2,160}?)\s*\(\s*["']?Landlord["']?\s*\)\s+and\s+(.{2,220}?)(?:\s*\(\s*["']?Tenant["']?\s*\)|\.|,)/i)
+    || text.match(/\bby\s+and\s+between\s+(.{2,160}?)\s*,?\s+(?:as\s+)?Landlord\s+and\s+(.{2,220}?)\s*,?\s+(?:as\s+)?Tenant/i);
 
-  const landlord = cleanSummaryValueForField("landlord_name", intro[1]);
-  const tenant = cleanSummaryValueForField("tenant_name", intro[2]);
+  const candidateSource = cleanSummaryValue(intro?.[0] || text.slice(0, 900));
+  let landlord = intro ? cleanSummaryValueForField("landlord_name", intro[1]) : null;
+  let tenant = intro ? cleanSummaryValueForField("tenant_name", intro[2]) : null;
+  if (!landlord || !tenant) {
+    const companies = extractCompanyCandidates(text.slice(0, 2400));
+    landlord ||= companies[0]?.value || null;
+    tenant ||= companies.find((company, index) => index > 0 && company.value !== landlord)?.value || null;
+  }
   if (typeof landlord === "string" && landlord) {
     pairs.landlord_name = {
       field_key: "landlord_name",
       label: "landlord",
       value: landlord,
-      source_text: cleanSummaryValue(intro[0]),
+      source_text: candidateSource,
       source_page: 1,
     };
   }
@@ -816,7 +914,7 @@ function extractIntroPartySummaryPairs(fullText: string) {
       field_key: "tenant_name",
       label: "tenant",
       value: tenant,
-      source_text: cleanSummaryValue(intro[0]),
+      source_text: candidateSource,
       source_page: 1,
     };
   }
@@ -2627,7 +2725,9 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     };
     const deriveResponsibility = (key: string, value: string, clauseTypes: string[], note: string) => {
       const clause = clauseForField(key, value, clauseTypes);
-      if (!isBlank(fieldMap[key]?.value) || !clause) return;
+      const existingValue = cleanText(fieldMap[key]?.value || "");
+      const existingIsSimpleParty = /^(?:tenant|landlord)$/i.test(existingValue);
+      if ((!isBlank(fieldMap[key]?.value) && !existingIsSimpleParty) || !clause) return;
       fieldMap[key] = {
         key,
         value,
