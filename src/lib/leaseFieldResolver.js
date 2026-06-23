@@ -432,7 +432,18 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     //   - normalize-pdf-output evidence:          page_number,  source_clause
     // The resolver must accept every key family so Page / Exact Source Text
     // light up regardless of which writer populated the row.
-    output.value = rawResult.value !== undefined ? rawResult.value : null;
+    const normalizedCandidate =
+      rawResult.normalized_value !== undefined
+        ? rawResult.normalized_value
+        : rawResult.normalizedValue !== undefined
+          ? rawResult.normalizedValue
+          : null;
+    output.value =
+      normalizedCandidate !== null && normalizedCandidate !== ""
+        ? normalizedCandidate
+        : rawResult.value !== undefined
+          ? rawResult.value
+          : null;
     // Defensive: strip UI/fallback sentinel strings ("Lease Review Draft",
     // "Untitled", etc.) at the resolver layer so even if a downstream
     // writer regresses, the value never displays as extracted lease data.
@@ -443,6 +454,9 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
       rawResult.raw_value ||
       rawResult.rawValue ||
       rawResult.exact_source_text ||
+      rawResult.source_text_exact ||
+      rawResult.exact_text ||
+      rawResult.clause_text ||
       rawResult.source_text ||
       rawResult.source_clause ||
       rawResult.snippet ||
@@ -461,6 +475,9 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     const candidateExact =
       rawResult.exact_source_text ||
       rawResult.exactSourceText ||
+      rawResult.source_text_exact ||
+      rawResult.exact_text ||
+      rawResult.clause_text ||
       rawResult.source_clause ||
       rawResult.source_text ||
       rawResult.snippet ||
@@ -632,21 +649,24 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
   }
 
   let firstFound = null;
+  let rejectedAuthoritativeCandidate = false;
   for (const { path, data } of fallbackHierarchy) {
     if (!data) continue;
     const rawResult = extractValueFromSource(data, aliases);
     const output = buildResolverOutput(rawResult, path, fieldKey);
     if (!output && rawResult !== null && rawResult !== undefined && rawResult !== "" && isAuthoritativeExtractionSource(path)) {
-      return missingResolverOutput();
+      rejectedAuthoritativeCandidate = true;
+      continue;
     }
     if (output && output.found) {
       const hasRealEvidence = Boolean(output.exactSourceText || output.sourcePage);
       if (hasRealEvidence) return output;
-      if (!firstFound) firstFound = output;
+      if (!rejectedAuthoritativeCandidate && !firstFound) firstFound = output;
     }
   }
 
   if (firstFound) return firstFound;
+  if (rejectedAuthoritativeCandidate) return missingResolverOutput();
 
   // Not found
   return missingResolverOutput();

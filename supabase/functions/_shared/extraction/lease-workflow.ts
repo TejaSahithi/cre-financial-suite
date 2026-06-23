@@ -677,11 +677,16 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
     return null;
   }
   if (["tenant_name", "landlord_name", "broker_name"].includes(fieldKey)) {
-    const entity = candidate
+    let entity = candidate
       .replace(/\b(?:phone|tel|telephone|email)\b[\s\S]*$/i, "")
       .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b.*$/i, "")
       .replace(/^\s*\d{1,2}\.\s*/, "")
       .trim();
+    const entityWithSuffix = entity.match(/^(.{2,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/i);
+    if (entityWithSuffix?.[1]) entity = entityWithSuffix[1].replace(/[.,;:\s]+$/g, "").trim();
+    if (fieldKey === "tenant_name") {
+      entity = entity.replace(/\s+-\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3}\b[\s\S]*$/i, "").trim();
+    }
     if (!entity || looksLikeDateText(entity) || looksLikePhoneOnly(entity)) return null;
     if (/^[.,;:'"-]+$/.test(entity)) return null;
     if (/^(?:tenant|landlord|broker|date|name|title|\d+)$/i.test(entity)) return null;
@@ -690,6 +695,95 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
   }
   if (fieldKey === "permitted_use") return normalizePermittedUseValue(candidate, candidate);
   return candidate;
+}
+
+
+function setSummaryPair(
+  pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }>,
+  fieldKey: string,
+  label: string,
+  rawValue: unknown,
+  sourceText: unknown,
+  sourcePage: number | null,
+  options: { overwriteInvalid?: boolean } = {},
+) {
+  const value = cleanSummaryValueForField(fieldKey, rawValue);
+  if (value == null || String(value).length < 1) return;
+  const source = cleanSummaryValue(sourceText || `${label}: ${rawValue}`);
+  const existing = pairs[fieldKey];
+  if (existing && !options.overwriteInvalid) return;
+  if (existing && options.overwriteInvalid) {
+    const existingInvalid = fieldValueLooksInvalid(fieldKey, existing.value, existing.source_text);
+    if (!existingInvalid && !isBlank(existing.value)) return;
+  }
+  pairs[fieldKey] = {
+    field_key: fieldKey,
+    label,
+    value,
+    source_text: source.slice(0, 520),
+    source_page: sourcePage ?? 1,
+  };
+}
+
+function extractAddressCandidate(value: string) {
+  const match = cleanSummaryValue(value).match(/\b\d{1,6}\s+[A-Za-z0-9.'#\-\s]+?\s+(?:Road|Rd\.?|Street|St\.?|Avenue|Ave\.?|Lane|Ln\.?|Drive|Dr\.?|Boulevard|Blvd\.?)\b(?:,?\s*(?:Suite|Ste\.?|#)\s*[A-Za-z0-9-]+)?\s+[A-Za-z.'\-\s]+,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?/i);
+  return match?.[0] ? cleanSummaryValue(match[0]) : null;
+}
+
+function extractFlattenedSummaryPairs(rawText: string, sourcePage: number | null) {
+  const text = cleanSummaryValue(rawText);
+  const pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }> = {};
+  if (!text || !/summary of basic lease information|\b\d{1,2}\.\s*(?:date|landlord|tenant|premises|building|rent|security deposit|permitted use)\b/i.test(text)) {
+    return pairs;
+  }
+  const sectionStart = Math.max(0, text.search(/summary of basic lease information|\b1\.\s*date\b/i));
+  const section = text.slice(sectionStart, Math.min(text.length, sectionStart + 7000));
+
+  const introPairs = extractIntroPartySummaryPairs(section);
+  for (const [key, pair] of Object.entries(introPairs)) pairs[key] = pair;
+
+  const tenantAnchor = section.match(/\b4\.\s*Tenant\s*[:;-]?\s*/i);
+  const tenantAddressAnchor = section.match(/\b5\.\s*(?:Address\s+of\s+Tenant|Tenant\s+Address)\s*[:;-]?\s*/i);
+  if (tenantAnchor?.index != null && tenantAddressAnchor?.index != null && tenantAddressAnchor.index > tenantAnchor.index) {
+    const tenantBlock = cleanSummaryValue(section.slice(tenantAnchor.index + tenantAnchor[0].length, tenantAddressAnchor.index));
+    const dateMatch = tenantBlock.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i);
+    if (dateMatch?.[0]) setSummaryPair(pairs, "lease_date", "Date", dateMatch[0], tenantBlock, sourcePage, { overwriteInvalid: true });
+
+    const companyMatches = [...tenantBlock.matchAll(/\b([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,120}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/gi)]
+      .map((match) => ({ value: cleanSummaryValue(match[1]), index: match.index ?? 0 }))
+      .filter((match) => match.value.length > 2 && !looksLikeDateText(match.value));
+    const landlord = companyMatches[0];
+    const tenant = companyMatches.find((match, idx) => idx > 0 && match.value !== landlord?.value);
+    if (landlord?.value) setSummaryPair(pairs, "landlord_name", "Landlord", landlord.value, tenantBlock, sourcePage, { overwriteInvalid: true });
+    if (tenant?.value) setSummaryPair(pairs, "tenant_name", "Tenant", tenant.value, tenantBlock, sourcePage, { overwriteInvalid: true });
+
+    if (landlord && tenant && tenant.index > landlord.index) {
+      const betweenCompanies = tenantBlock.slice(landlord.index + landlord.value.length, tenant.index);
+      const landlordAddress = extractAddressCandidate(betweenCompanies);
+      if (landlordAddress) setSummaryPair(pairs, "landlord_address", "Address of Landlord", landlordAddress, tenantBlock, sourcePage, { overwriteInvalid: true });
+    }
+    if (tenant) {
+      const afterTenant = tenantBlock.slice(tenant.index + tenant.value.length);
+      const tenantAddress = extractAddressCandidate(afterTenant);
+      if (tenantAddress) setSummaryPair(pairs, "tenant_address", "Address of Tenant", tenantAddress, tenantBlock, sourcePage, { overwriteInvalid: true });
+    }
+  }
+
+  const labelValuePatterns: Array<[string, string, RegExp]> = [
+    ["commencement_date", "Commencement Date", /\bCommencement\s+Date\s*[:;-]?\s*([^.;]{0,80}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i],
+    ["expiration_date", "Expiration Date", /\bExpiration\s+Date\s*[:;-]?\s*([^.;]{0,80}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+of\s+each\s+year|,\s+\d{4})?)/i],
+    ["lease_term", "Lease Term", /\bLease\s+Term\s*[:;-]?\s*([^.;]{0,120}?\b(?:Year\s+to\s+Year|\d+\s*(?:months?|years?))\b)/i],
+    ["base_rent_monthly", "Rent", /\bRent\s*[:;-]?\s*(\$\s*[\d,]+(?:\.\d{2})?\s+per\s+month[^.;]{0,180})/i],
+    ["security_deposit_amount", "Security Deposit", /\bSecurity\s+Deposit\s*[:;-]?\s*(\$\s*[\d,]+(?:\.\d{2})?)/i],
+    ["permitted_use", "Permitted Use", /\bPermitted\s+Use\s*[:;-]?\s*([^.;]{2,90}?)(?=\s+\d{1,2}\.\s*Brokers?\b|\s+Brokers?\s*[:;-]|$)/i],
+    ["broker_name", "Brokers", /\bBrokers?\s*[:;-]?\s*([^.;]{2,160}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|Realty)\b)/i],
+  ];
+  for (const [fieldKey, label, pattern] of labelValuePatterns) {
+    const match = section.match(pattern);
+    if (match?.[1]) setSummaryPair(pairs, fieldKey, label, match[1], match[0], sourcePage, { overwriteInvalid: true });
+  }
+
+  return pairs;
 }
 
 function extractIntroPartySummaryPairs(fullText: string) {
@@ -787,11 +881,22 @@ function extractSummaryLabelPairs(doclingRaw: any, fullText: string) {
   ];
   const pairs: Record<string, { field_key: string; label: string; value: any; source_text: string; source_page: number | null }> = { ...extractIntroPartySummaryPairs(fullText) };
 
+  const mergeFlattenedPairs = (rawText: string, sourcePage: number | null) => {
+    const recovered = extractFlattenedSummaryPairs(rawText, sourcePage);
+    for (const [fieldKey, pair] of Object.entries(recovered)) {
+      if (!pairs[fieldKey] || fieldValueLooksInvalid(fieldKey, pairs[fieldKey].value, pairs[fieldKey].source_text)) {
+        pairs[fieldKey] = pair;
+      }
+    }
+  };
+
   for (const chunk of chunks) {
     const rawText = String(chunk.text || "");
     if (!rawText || !/landlord|tenant|premises|commencement|expiration|security deposit|permitted use|lease term|rent/i.test(rawText)) continue;
+    mergeFlattenedPairs(rawText, chunk.source_page ?? 1);
     for (const row of extractSummaryRowsFromText(rawText, chunk.source_page ?? 1)) {
-      if (!row.field_key || pairs[row.field_key]) continue;
+      if (!row.field_key) continue;
+      if (pairs[row.field_key] && !fieldValueLooksInvalid(row.field_key, pairs[row.field_key].value, pairs[row.field_key].source_text)) continue;
       const value = cleanSummaryValueForField(row.field_key, row.raw_value);
       if (value == null || String(value).length < 1) continue;
       pairs[row.field_key] = {

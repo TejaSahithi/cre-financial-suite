@@ -701,17 +701,31 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? evidence.sourceText,
   );
   const valueBeforeValidation = schemaValue;
+  const persistedSourceFieldKeys = Array.isArray(field.source_field_keys) && field.source_field_keys.length > 0
+    ? field.source_field_keys
+    : Array.isArray(field.sourceFieldKeys) && field.sourceFieldKeys.length > 0
+      ? field.sourceFieldKeys
+      : Array.isArray(evidence.sourceFieldKeys) && evidence.sourceFieldKeys.length > 0
+        ? evidence.sourceFieldKeys
+        : [];
+  const persistedDerivationTrace = field.derivation_trace ?? field.derivationTrace ?? evidence.derivationTrace ?? null;
+  const hasDerivedLineage = Boolean(
+    derived?.derivationTrace ||
+    (Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0) ||
+    persistedDerivationTrace ||
+    persistedSourceFieldKeys.length > 0,
+  );
   schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText, {
-    allowDerivedAnnual: Boolean(derived || field.evidence_type === "derived" || field.derivation_trace || field.source_field_keys?.length),
+    allowDerivedAnnual: Boolean(derived || field.evidence_type === "derived" || hasDerivedLineage),
   });
   let validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
     ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
   ];
-  if (derived?.derivationTrace || (Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0)) {
+  if (hasDerivedLineage) {
     validationErrors = validationErrors.filter((error) => {
       const text = String(error || "");
-      return !/(?:failed_validation|without_money_evidence|no_valid_supporting_source|missing_source_evidence|missing_derivation_trace)/i.test(text);
+      return !/(?:failed_validation|without_money_evidence|no_valid_supporting_source|no valid supporting source|missing_source_evidence|missing source evidence|missing_derivation_trace|missing.*derivation)/i.test(text);
     });
   }
   if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
@@ -747,8 +761,10 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     extractionStatus: explicitExtractionStatus,
     evidenceType: explicitEvidenceType,
     sourceTextQuality: explicitSourceTextQuality,
-    sourceFieldKeys: field.source_field_keys ?? field.sourceFieldKeys ?? derived?.sourceFieldKeys ?? evidence.sourceFieldKeys,
-    derivationTrace: field.derivation_trace ?? field.derivationTrace ?? derived?.derivationTrace ?? evidence.derivationTrace,
+    sourceFieldKeys: Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0
+      ? derived.sourceFieldKeys
+      : persistedSourceFieldKeys,
+    derivationTrace: derived?.derivationTrace ?? persistedDerivationTrace,
   };
   const sourceTextQuality = hardValidationFailed ? "missing" : resolveSourceTextQuality(statusEvidence);
   const evidenceType = hardValidationFailed ? "missing" : normalizeEvidenceType(statusEvidence.evidenceType ?? statusEvidence.extractionStatus, {
@@ -789,7 +805,8 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.review_reason ?? field.reviewReason ??
     field.requires_review_reason ?? field.requiresReviewReason ??
     evidence.reviewReason ?? null;
-  if (derived?.derivationTrace && backendReviewReason && /(?:failed field validation|no valid supporting source|missing.*derivation|without_money_evidence|missing_source_evidence)/i.test(String(backendReviewReason))) {
+  const staleDerivedReasonPattern = /(?:failed field validation|no valid supporting source|missing.*derivation|without_money_evidence|missing_source_evidence|missing source evidence|money_field_without_money_evidence|no_valid_supporting_source)/i;
+  if (hasDerivedLineage && backendReviewReason && staleDerivedReasonPattern.test(String(backendReviewReason))) {
     backendReviewReason = null;
   }
   let reviewReason =
@@ -798,6 +815,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.approvalBlockingReason ??
     evidence.approvalBlockingReason ??
     null;
+  if (hasDerivedLineage && reviewReason && staleDerivedReasonPattern.test(String(reviewReason))) {
+    reviewReason = null;
+  }
   if (!reviewReason && validationErrors.length > 0) {
     reviewReason = "Extracted value failed field validation.";
   }
@@ -810,9 +830,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   } else if (!reviewReason && derivedWithoutTrace) {
     reviewReason = "Derived value is missing a derivation trace.";
   }
-  const derivedHasValidLineage = Boolean(
-    derived?.derivationTrace || (Array.isArray(derived?.sourceFieldKeys) && derived.sourceFieldKeys.length > 0),
-  );
+  const derivedHasValidLineage = hasDerivedLineage;
   const requiresReview = Boolean(
     (!derivedHasValidLineage && (field.requires_review || field.requiresReview || evidence.requiresReview)) ||
       validationErrors.length > 0 ||

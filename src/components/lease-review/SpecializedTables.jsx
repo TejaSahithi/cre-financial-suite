@@ -23,6 +23,7 @@ import {
   readFieldValue,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
+import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -437,6 +438,7 @@ export function ClauseRecordsTable({ lease }) {
       ufWorkflowOutput.clause_records,
       ufRecordOutput.extracted_document_items,
       ufRecordOutput.clause_records,
+      collectExtractedDocumentItems(lease),
     ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
     const fieldMapRows = [
       workflowOutput.lease_fields,
