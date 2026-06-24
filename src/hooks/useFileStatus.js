@@ -10,7 +10,9 @@ const ACTIVE_STATUSES = new Set([
   "parsing",
   "pdf_parsed",   // PDF extracted, normalization pending
   "validating",
+  "validated",    // transitions to review_required or storing — not terminal
   "storing",
+  "stored",       // transitions to computing — not terminal
   "approved",
   "computing",
 ]);
@@ -21,8 +23,6 @@ const ACTIVE_STATUSES = new Set([
 const TERMINAL_STATUSES = new Set([
   "parsed",
   "review_required",
-  "validated",
-  "stored",
   "completed",
   "failed",
 ]);
