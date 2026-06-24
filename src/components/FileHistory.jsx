@@ -58,8 +58,12 @@ const PIPELINE_STAGES = [
   "pdf_parsed",
   "validating",
   "validated",
+  "review_required",
+  "approved",
   "storing",
   "stored",
+  "computing",
+  "completed",
   "processed",
 ];
 
