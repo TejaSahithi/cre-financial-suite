@@ -96,12 +96,20 @@ export default function FieldDetailDrawer({
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  const value = field ? readFieldValue(lease, field.key) : null;
-  const evidence = field
+  const resolvedValue = field ? readFieldValue(lease, field.key) : null;
+  const value = field ? (field.normalized_value ?? field.value ?? resolvedValue) : null;
+  const resolvedEvidence = field
     ? readFieldEvidence(lease, field.key)
     : { rawValue: null, sourcePage: null, sourceText: null, extractionStatus: null };
+  const evidence = field ? {
+    ...resolvedEvidence,
+    rawValue: field.raw_value ?? field.rawValue ?? resolvedEvidence.rawValue,
+    sourcePage: field.page_number ?? field.source_page ?? resolvedEvidence.sourcePage,
+    sourceText: field.source_text ?? field.exact_source_text ?? resolvedEvidence.sourceText,
+    extractionStatus: field.status ?? field.extraction_status ?? resolvedEvidence.extractionStatus,
+  } : resolvedEvidence;
   const { rawValue, sourcePage, sourceText } = evidence;
-  const confidence = field ? readFieldConfidence(lease, field.key) : null;
+  const confidence = field ? (field.confidence_score ?? field.confidence ?? readFieldConfidence(lease, field.key)) : null;
   const status = review?.status || REVIEW_STATUSES.PENDING;
   const confidenceLabel =
     classifyConfidence(confidence) === "unknown" ? "Unknown Confidence" : `${Math.round(confidence)}%`;

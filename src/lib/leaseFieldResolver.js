@@ -437,13 +437,23 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
         ? rawResult.normalized_value
         : rawResult.normalizedValue !== undefined
           ? rawResult.normalizedValue
-          : null;
+          : rawResult.normalized_meaning !== undefined
+            ? rawResult.normalized_meaning
+            : rawResult.normalizedMeaning !== undefined
+              ? rawResult.normalizedMeaning
+              : null;
     output.value =
       normalizedCandidate !== null && normalizedCandidate !== ""
         ? normalizedCandidate
         : rawResult.value !== undefined
           ? rawResult.value
-          : null;
+          : rawResult.raw_value !== undefined
+            ? rawResult.raw_value
+            : rawResult.rawValue !== undefined
+              ? rawResult.rawValue
+              : rawResult.raw !== undefined
+                ? rawResult.raw
+                : null;
     // Defensive: strip UI/fallback sentinel strings ("Lease Review Draft",
     // "Untitled", etc.) at the resolver layer so even if a downstream
     // writer regresses, the value never displays as extracted lease data.
