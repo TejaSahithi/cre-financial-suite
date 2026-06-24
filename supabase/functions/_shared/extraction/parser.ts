@@ -54,7 +54,12 @@ const MAX_VERTEX_HTTP_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const MAX_NATIVE_PDF_TEXT_BYTES = 10 * 1024 * 1024;
 // Docling structural supplement capped to avoid re-uploading very large files.
 const MAX_DOCLING_SUPPLEMENT_BYTES = 20 * 1024 * 1024;
-const MIN_NATIVE_PDF_TEXT_CHARS = 2500;
+// Minimum chars from native extraction to consider it "complete enough" to
+// skip Docling/Vision. Matches MIN_LEASE_TEXT_CHARS in pipeline-contract.ts —
+// if native gets >= 500 chars we can run rule/table/LLM extraction on it.
+// The old 2500-char threshold caused many digital executed leases to fall
+// through to Vision even though native extraction was perfectly sufficient.
+const MIN_NATIVE_PDF_TEXT_CHARS = 500;
 
 type Strategy = "docling_only" | "vision_only" | "vision_first" | "parallel";
 
@@ -89,7 +94,12 @@ export async function parseDocument(
   const likelyScannedPdf = mimeType.includes("pdf") && looksLikeScannedPdf(fileBytes);
   const estimatedPageCount = mimeType.includes("pdf") ? estimatePdfPageCount(fileBytes) : null;
 
-  if (!likelyScannedPdf && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
+  // Always try native PDF text extraction first — even for files that look
+  // scanned. Executed leases often have signature images (which make the
+  // scan heuristic fire) but their body text is fully digital. If native
+  // extraction yields >= MIN_NATIVE_PDF_TEXT_CHARS we skip Vision/Docling
+  // entirely, saving cost and eliminating auth-related parse failures.
+  if (mimeType.includes("pdf") && fileBytes.length <= MAX_NATIVE_PDF_TEXT_BYTES) {
     const nativePdfOutput = await parseNativePdfText(fileBytes, fileName, mimeType);
     if (nativePdfOutput && (nativePdfOutput.full_text?.trim().length ?? 0) > 20) {
       if (estimatedPageCount) nativePdfOutput.page_count = estimatedPageCount;
@@ -97,15 +107,14 @@ export async function parseDocument(
       const nativeBlockCount = nativePdfOutput.text_blocks?.length ?? 0;
       const nativeLooksComplete =
         nativeTextChars >= MIN_NATIVE_PDF_TEXT_CHARS ||
-        // Single-page leases: 800+ chars with 2+ blocks is sufficient.
-        // The old threshold (5 blocks) incorrectly classified simple single-page
-        // amendments as needing OCR even when native parsing was complete.
-        (estimatedPageCount === 1 && nativeTextChars >= 800 && nativeBlockCount >= MIN_DIGITAL_BLOCKS);
+        // Single-page leases: 400+ chars with 2+ blocks is sufficient.
+        (estimatedPageCount === 1 && nativeTextChars >= 400 && nativeBlockCount >= MIN_DIGITAL_BLOCKS);
 
       if (nativeLooksComplete) {
         console.log(
           `[parser] Native PDF parser extracted ${nativeTextChars} chars ` +
-          `across ${estimatedPageCount ?? nativePdfOutput.page_count ?? "?"} page(s) from "${fileName}"`,
+          `across ${estimatedPageCount ?? nativePdfOutput.page_count ?? "?"} page(s) from "${fileName}"` +
+          (likelyScannedPdf ? " (classified as scanned but digital text found)" : ""),
         );
         return tag(nativePdfOutput, "pdf_text");
       }
@@ -113,7 +122,8 @@ export async function parseDocument(
       console.warn(
         `[parser] Native PDF parser extracted only ${nativeTextChars} chars ` +
         `from ${estimatedPageCount ?? "unknown"} page(s) for "${fileName}" — ` +
-        "continuing to Docling/Vision instead of treating partial text as complete.",
+        (likelyScannedPdf ? "looks scanned, " : "") +
+        "continuing to Docling/Vision.",
       );
     }
   }
@@ -243,13 +253,15 @@ function looksLikeScannedPdf(bytes: Uint8Array): boolean {
 
   const sampleText = new TextDecoder("latin1", { fatal: false })
     .decode(bytes.slice(0, sampleLen));
-  const imageMarkers = (sampleText.match(/\/(?:Image|XObject|DCTDecode|JPXDecode|FlateDecode)/g) ?? []).length;
+  const imageMarkers = (sampleText.match(/\/(?:Image|XObject|DCTDecode|JPXDecode)/g) ?? []).length;
   const textOperators = (sampleText.match(/\b(?:BT|ET|Tj|TJ|Tf|Td|Tm)\b/g) ?? []).length;
 
-  // Scanned leases are usually image streams wrapped in a PDF shell.
-  // They can still have a high printable ratio because PDF syntax itself is
-  // printable, so use image-vs-text structure as the stronger signal.
-  return imageMarkers >= 3 && textOperators < 5;
+  // Scanned leases are image streams with very few (< 2) text operators.
+  // Executed digital leases commonly have signature/logo images (imageMarkers >= 3)
+  // but still have abundant digital text — FlateDecode is not a reliable scan signal
+  // because most digital PDFs also use FlateDecode for compressed text streams.
+  // Require BOTH a very low text operator count AND many image markers.
+  return imageMarkers >= 5 && textOperators < 2;
 }
 
 function estimatePdfPageCount(bytes: Uint8Array): number | null {
@@ -308,8 +320,22 @@ async function runDoclingOnly(ctx: ParseContext): Promise<DoclingOutput> {
 
 async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
   if (!ctx.hasVision) {
-    // Throw so parse-pdf-docling can report a clear PARSER_PROVIDER_UNAVAILABLE error
-    // rather than returning an emptyOutput that silently becomes "readable chars: 0".
+    // No Vision or Docling configured. Try native text extraction as last resort
+    // before throwing — this handles executed lease PDFs where we get here because
+    // the scan heuristic fired but the native parse was not tried (e.g. the file
+    // is larger than MAX_NATIVE_PDF_TEXT_BYTES but still has some digital text).
+    if (ctx.mimeType.includes("pdf")) {
+      try {
+        const nativeFallback = await parseNativePdfText(ctx.fileBytes, ctx.fileName, ctx.mimeType);
+        const nativeChars = nativeFallback?.full_text?.trim().length ?? 0;
+        if (nativeFallback && nativeChars >= MIN_NATIVE_PDF_TEXT_CHARS) {
+          console.warn(`[parser] No Vision/Docling backend — using native PDF text (${nativeChars} chars) as fallback`);
+          return tag(nativeFallback, "pdf_text");
+        }
+      } catch {
+        // ignore; throw the backend-unavailable error below
+      }
+    }
     throw new Error(
       "No parser backend available. Configure DOCLING_API_URL or set VERTEX_PROJECT_ID + " +
       "GOOGLE_SERVICE_ACCOUNT_KEY in Supabase secrets to enable document parsing.",
@@ -327,7 +353,19 @@ async function runVisionOnly(ctx: ParseContext): Promise<DoclingOutput> {
         return tag(doclingOutput, "docling");
       }
     }
-    // No successful fallback — propagate the real error so the caller can report it
+    // Vision and Docling both failed. Try native text as last resort.
+    if (ctx.mimeType.includes("pdf")) {
+      try {
+        const nativeFallback = await parseNativePdfText(ctx.fileBytes, ctx.fileName, ctx.mimeType);
+        const nativeChars = nativeFallback?.full_text?.trim().length ?? 0;
+        if (nativeFallback && nativeChars >= MIN_NATIVE_PDF_TEXT_CHARS) {
+          console.warn(`[parser] Vision failed — using native PDF text (${nativeChars} chars) as fallback`);
+          return tag(nativeFallback, "pdf_text");
+        }
+      } catch {
+        // ignore; propagate the Vision error
+      }
+    }
     throw new Error(`Vision OCR failed: ${err.message}`);
   }
 }
