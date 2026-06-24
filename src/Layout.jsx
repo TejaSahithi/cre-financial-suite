@@ -34,6 +34,7 @@ const navSections = [
   {
     label: "Leases", icon: FileText, children: [
       { label: "Upload Lease", page: "LeaseUpload" },
+      { label: "File Pipeline", page: "FileHistoryPage" },
       { label: "Lease Review", page: "LeaseReview" },
       { label: "Rent Projection", page: "RentProjection" },
       { label: "Critical Dates", page: "CriticalDates" },

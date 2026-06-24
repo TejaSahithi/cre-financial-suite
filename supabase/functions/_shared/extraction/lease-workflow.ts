@@ -2944,7 +2944,7 @@ function buildFieldEvidenceClauses(fieldMap: Record<string, LeaseWorkflowField>,
     seen.add(dedupeKey);
     generated.push({
       clause_type: clauseType,
-      clause_title: titleFromKey(fieldKey),
+      clause_title: humanize(fieldKey),
       clause_text: clauseText,
       source_page: field.source_page ?? null,
       confidence_score: field.confidence_score ?? 0.74,

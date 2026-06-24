@@ -1,9 +1,12 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgId from "@/hooks/useOrgId";
+import useFileStatus from "@/hooks/useFileStatus";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
+import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -123,6 +126,7 @@ export default function FileUploader({
   const [uploadState, setUploadState] = useState("idle"); // idle | uploading | success | partial | error
   const [uploadResults, setUploadResults] = useState([]);
   const [uploadErrors, setUploadErrors] = useState([]);
+  const [trackedFileIds, setTrackedFileIds] = useState([]);
 
   const normalizedAllowedTypes = useMemo(
     () => (allowedFileTypes || []).map((type) => normalizeFileType(type)),
@@ -260,6 +264,7 @@ export default function FileUploader({
       const data = await invokeEdgeFunctionFormData("upload-handler", formData);
 
       if (data?.file_id) {
+        setTrackedFileIds(prev => [...prev, { id: data.file_id, fileName: file.name, fileType: normalizeFileType(fileType) }]);
         invokeEdgeFunction("ingest-file", {
           file_id: data.file_id,
           module_type: normalizeFileType(fileType),
@@ -363,6 +368,7 @@ export default function FileUploader({
     setUploadResults([]);
     setUploadErrors([]);
     setUploadState("idle");
+    setTrackedFileIds([]);
   }, [defaultFileType]);
 
   const selectedFileLabel = multiple
@@ -571,7 +577,96 @@ export default function FileUploader({
             </div>
           </div>
         )}
+
+        {trackedFileIds.length > 0 && (
+          <div className="space-y-1.5 pt-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Extraction Status</p>
+            {trackedFileIds.map(f => (
+              <ExtractionStatusRow key={f.id} fileId={f.id} fileName={f.fileName} fileType={f.fileType} />
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+const EXTRACTION_STATUS_LABELS = {
+  uploaded:        { label: "Queued for extraction",    color: "text-slate-500" },
+  parsing:         { label: "Parsing document...",      color: "text-blue-600"  },
+  pdf_parsed:      { label: "Extracting fields...",     color: "text-blue-600"  },
+  validating:      { label: "Validating...",            color: "text-blue-600"  },
+  validated:       { label: "Validated",                color: "text-blue-600"  },
+  storing:         { label: "Storing data...",          color: "text-blue-600"  },
+  stored:          { label: "Stored",                   color: "text-blue-600"  },
+  computing:       { label: "Running calculations...",  color: "text-blue-600"  },
+  review_required: { label: "Ready for Review",         color: "text-amber-700" },
+  completed:       { label: "Complete",                 color: "text-emerald-700" },
+  failed:          { label: "Extraction failed",        color: "text-red-700"   },
+};
+
+const ACTIVE_EXTRACTION_STATUSES = new Set([
+  "uploaded", "parsing", "pdf_parsed", "validating", "validated", "storing", "computing",
+]);
+
+function ExtractionStatusRow({ fileId, fileName, fileType }) {
+  const { status, isLoading } = useFileStatus(fileId);
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      await invokeEdgeFunction("ingest-file", {
+        file_id: fileId,
+        force_reextract: true,
+        module_type: fileType,
+      });
+    } catch {
+      // next poll will surface the updated status
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const info = EXTRACTION_STATUS_LABELS[status] || { label: status ?? "Processing...", color: "text-slate-500" };
+  const isActive = status && ACTIVE_EXTRACTION_STATUSES.has(status);
+  const isFailed = status === "failed";
+  const isReviewReady = status === "review_required";
+  const isComplete = status === "completed";
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 bg-slate-50/70 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        {(isActive || (isLoading && !status)) && (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+        )}
+        {isReviewReady && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+        {isComplete && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
+        {isFailed && <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />}
+        <span className="truncate text-xs text-slate-600">{fileName}</span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className={`text-xs font-medium ${info.color}`}>{info.label}</span>
+        {isReviewReady && fileType === "leases" && (
+          <Link
+            to={createPageUrl("Leases", { view: "drafts" })}
+            className="text-xs font-medium text-teal-600 hover:text-teal-700 hover:underline"
+          >
+            Open Review →
+          </Link>
+        )}
+        {isFailed && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={retrying}
+            onClick={handleRetry}
+            className="h-6 px-2 text-xs"
+          >
+            {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : "Retry"}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }

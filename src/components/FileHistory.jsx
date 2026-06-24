@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/services/supabaseClient";
+import { createPageUrl } from "@/utils";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -102,9 +104,9 @@ function progressForStatus(status) {
   return Math.round(((idx + 1) / PIPELINE_STAGES.length) * 100);
 }
 
-/** Return true if this status represents an in-progress stage. */
+/** Return true if this status represents an in-progress stage that needs polling. */
 function isInProgress(status) {
-  return ["parsing", "validating", "storing"].includes(status);
+  return ["uploaded", "parsing", "pdf_parsed", "validating", "validated", "storing", "computing"].includes(status);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,18 +167,18 @@ export default function FileHistory() {
     const hasInProgress = files.some((f) => isInProgress(f.status));
     if (!hasInProgress) return;
 
-    const interval = setInterval(() => fetchFiles(true), 30_000);
+    const interval = setInterval(() => fetchFiles(true), 5_000);
     return () => clearInterval(interval);
   }, [files, fetchFiles]);
 
   // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
-  const handleRetry = async (fileId) => {
+  const handleRetry = async (fileId, moduleType) => {
     setRetryingId(fileId);
     try {
-      const { data, error } = await supabase.functions.invoke("parse-file", {
-        body: { file_id: fileId },
+      const { data, error } = await supabase.functions.invoke("ingest-file", {
+        body: { file_id: fileId, force_reextract: true, module_type: moduleType || "leases" },
       });
 
       if (error) {
@@ -184,8 +186,7 @@ export default function FileHistory() {
         return;
       }
 
-      toast.success(data?.message || "File reprocessing started");
-      // Refresh list after a short delay to pick up the new status
+      toast.success(data?.message || "Extraction restarted");
       setTimeout(() => fetchFiles(true), 2000);
     } catch (err) {
       toast.error(`Retry failed: ${err?.message || "Unexpected error"}`);
@@ -358,25 +359,36 @@ export default function FileHistory() {
                           {relativeTime(file.uploaded_at || file.created_at)}
                         </TableCell>
                         <TableCell>
-                          {isFailed && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 gap-1 text-xs"
-                              disabled={isRetrying}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRetry(file.id);
-                              }}
-                            >
-                              {isRetrying ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <RotateCcw className="w-3 h-3" />
-                              )}
-                              Retry
-                            </Button>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {file.status === "review_required" && file.module_type === "leases" && (
+                              <Link
+                                to={createPageUrl("Leases", { view: "drafts" })}
+                                className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-teal-700 hover:bg-teal-50 hover:text-teal-800"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Open Review
+                              </Link>
+                            )}
+                            {isFailed && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 gap-1 text-xs"
+                                disabled={isRetrying}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRetry(file.id, file.module_type);
+                                }}
+                              >
+                                {isRetrying ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <RotateCcw className="w-3 h-3" />
+                                )}
+                                Retry
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
 
