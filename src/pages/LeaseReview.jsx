@@ -1728,7 +1728,9 @@ export default function LeaseReview() {
 
   const handleApproveAbstract = async () => {
     if (!canApprove) {
-      toast.error(blockerMessage);
+      approvalBlockers.forEach((b) =>
+        toast.error(b.title, { description: b.detail, duration: 7000 })
+      );
       return;
     }
     if (!approvalSignedBy.trim()) {
@@ -3643,9 +3645,16 @@ export default function LeaseReview() {
                 {canApprove ? (
                   <span className="text-emerald-700">All checks passed. You can approve the lease abstract.</span>
                 ) : (
-                  <span title={blockerMessage} className="text-amber-700">
-                    Approval blocked: {blockerMessage}
-                  </span>
+                  <div className="space-y-0.5">
+                    {approvalBlockers.map((b) => (
+                      <div key={b.kind} className="text-amber-700">
+                        <span className="font-semibold">Approval blocked: {b.title}</span>
+                        {b.detail && (
+                          <span className="ml-1 text-amber-600"> — {b.detail}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -3691,7 +3700,9 @@ export default function LeaseReview() {
                   }
                   onClick={() => {
                     if (!canApprove) {
-                      toast.error(blockerMessage);
+                      approvalBlockers.forEach((b) =>
+                        toast.error(b.title, { description: b.detail, duration: 7000 })
+                      );
                       return;
                     }
                     setShowApproval(true);
