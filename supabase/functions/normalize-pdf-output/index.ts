@@ -252,6 +252,10 @@ function isGenericSourceText(value: unknown): boolean {
   const lower = text.toLowerCase();
   if (/^(llm extracted|extracted|manual_review|not found|unknown|n\/a|na|null)$/i.test(text)) return true;
   if (lower.includes("derived from")) return true;
+  // Lease preamble / boilerplate headers — never useful as field-level source text
+  if (/^\[?PAGE\s+\d+\]?\s*SUMMARY\s+OF\s+BASIC\s+LEASE\s+INFORMATION/i.test(text)) return true;
+  if (/^SUMMARY\s+OF\s+BASIC\s+LEASE\s+INFORMATION/i.test(text)) return true;
+  if (/^This\s+Summary\s+\(the\s+[""']?Summary[""']?\)\s+is\s+hereby\s+incorporated/i.test(text)) return true;
   const structuredFieldMatch = text.match(/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*(.+)$/i);
   if (structuredFieldMatch) {
     const valuePart = structuredFieldMatch[1].trim();
@@ -262,6 +266,20 @@ function isGenericSourceText(value: unknown): boolean {
   return false;
 }
 
+function isLlmSourceTextRelevantToField(fieldKey: string, sourceText: string | null): boolean {
+  if (!sourceText) return true;
+  // Insurance fields must contain insurance-domain language
+  if (["tenant_insurance_required", "general_liability_min", "property_insurance",
+       "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
+    return /\b(insurance|insure|insured|coverage|carrier|policy|certificate|liability limit)\b/i.test(sourceText);
+  }
+  // Party name fields: reject source text from assignment/transfer clauses
+  if (["landlord_name", "tenant_name"].includes(fieldKey)) {
+    if (/\b(closely held|voting shares|reorganization|merger|consolidation|assignee|permitted transfer)\b/i.test(sourceText)) return false;
+  }
+  return true;
+}
+
 function usableSourceText(value: unknown): string | null {
   const text = String(value ?? "").trim();
   return isGenericSourceText(text) ? null : text;
@@ -269,11 +287,23 @@ function usableSourceText(value: unknown): string | null {
 
 function capSourceText(text: string | null | undefined, maxChars = 350): string | null {
   if (!text) return null;
-  if (text.length <= maxChars) return text;
-  const slice = text.slice(0, maxChars);
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  if (cleaned.length <= maxChars) return cleaned;
+  const slice = cleaned.slice(0, maxChars);
+  // Prefer a sentence boundary before the limit
   const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"));
-  const cutAt = lastPeriod > maxChars * 0.55 ? lastPeriod + 1 : maxChars;
-  return slice.slice(0, cutAt).trimEnd() + "…";
+  if (lastPeriod > maxChars * 0.55) {
+    return slice.slice(0, lastPeriod + 1).trimEnd();
+  }
+  // No good backward boundary — look forward up to 120 chars to complete the sentence
+  const extended = cleaned.slice(0, maxChars + 120);
+  const forwardPeriod = extended.indexOf(". ", maxChars - 20);
+  if (forwardPeriod > -1 && forwardPeriod < maxChars + 100) {
+    return extended.slice(0, forwardPeriod + 1).trimEnd();
+  }
+  // Hard truncation as last resort
+  return slice.trimEnd() + "…";
 }
 
 function cleanEvidenceSnippet(value: unknown): string {
@@ -887,12 +917,55 @@ function buildReviewPayload(opts: {
         if (MONTH_NAMES.includes(value.trim().toLowerCase())) value = null;
       }
       // Guard: reject property_name values that are clause fragments containing "tenant"
-      if (typeof value === "string" && fieldKey === "property_name" && /\btenant\b/i.test(value)) value = null;
+      if (typeof value === "string" && fieldKey === "property_name" && /\btenant\b/i.test(value)) {
+        value = null;
+        // Clear the workflow review_reason so the UI doesn't show a validation
+        // message for a field whose value we are actively nulling out.
+        const wfField = workflowOutput?.lease_fields?.[fieldKey];
+        if (wfField) {
+          wfField.review_reason = null;
+          wfField.requires_review = false;
+          wfField.approval_blocking_reason = null;
+        }
+      }
+      // Numbered-list / parties-clause fallback: when LLM misses a party identity
+      // field, scan docling text directly with multiple patterns in priority order.
+      // Pattern A: "2. Landlord: VALUE"  (numbered summary)
+      // Pattern B: "by and between VALUE ("Landlord")"  (parties clause — quote-agnostic)
+      // Pattern C: "Landlord: VALUE"  (simple label)
+      // tenant_name Pattern B captures the name between (Landlord) and (Tenant).
+      if (value == null && doclingRaw && (fieldKey === "landlord_name" || fieldKey === "tenant_name")) {
+        const PARTY_PATTERNS: Record<string, RegExp[]> = {
+          landlord_name: [
+            /(?:^|\n)\s*\d+[.)]\s*Landlord\s*[:\-]\s*(.+?)(?=\s*\n\s*\d+[.)]|\n\s*\n|$)/im,
+            /by\s+and\s+between\s+(.+?)\s*\([^)]*Landlord[^)]*\)/i,
+            /^Landlord\s*[:\-]\s*(.+?)$/im,
+          ],
+          tenant_name: [
+            /(?:^|\n)\s*\d+[.)]\s*Tenant\s*[:\-]\s*(.+?)(?=\s*\n\s*\d+[.)]|\n\s*\n|$)/im,
+            /\([^)]*Landlord[^)]*\)\s+and\s+(.+?)\s*\([^)]*Tenant[^)]*\)/i,
+            /^Tenant\s*[:\-]\s*(.+?)$/im,
+          ],
+        };
+        const blocks = buildEvidenceSearchBlocks(doclingRaw);
+        const fullText = blocks.map((b: { text: string }) => b.text).join("\n");
+        for (const pattern of PARTY_PATTERNS[fieldKey] ?? []) {
+          const match = fullText.match(pattern);
+          if (match?.[1]) {
+            const candidate = match[1].trim().replace(/\s*\d+[.)]\s*$/, "").trim();
+            if (candidate.length >= 2 && candidate.length < 120) { value = candidate; break; }
+          }
+        }
+      }
       // Prefer evidence produced by the LLM/rule extractor; fall back to the
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.
       const llmEvidence = fieldEvidence[fieldKey];
-      const llmSourceText = usableSourceText(llmEvidence?.source_text);
+      // Reject LLM source text that is irrelevant to this field's domain
+      const rawLlmSourceText = usableSourceText(llmEvidence?.source_text);
+      const llmSourceText = isLlmSourceTextRelevantToField(fieldKey, rawLlmSourceText)
+        ? rawLlmSourceText
+        : null;
       const workflowSourceText = usableSourceText(workflowField?.source_clause);
       const fallbackEvidence = !isBlank(value)
         ? findSourceEvidenceForField(doclingRaw, fieldKey, value, def)

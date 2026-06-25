@@ -66,6 +66,7 @@ import {
   getLeaseBuildingId,
   buildDisplayRows,
   dedupeDisplayRows,
+  calculateRuleCounts,
 } from '@/components/lease-expense/utils/leaseExpenseRulesHelpers';
 export default function LeaseExpenseRules() {
   const location = useLocation();
@@ -173,7 +174,7 @@ export default function LeaseExpenseRules() {
         .in("rule_set_id", setIds);
       if (rulesErr) {
         console.error("[LeaseExpenseRules] direct rules read failed:", rulesErr);
-        return latest.map((s) => ({ leaseId: s.lease_id, ruleSet: s, rules: [] }));
+        return [];
       }
       console.log("[LeaseExpenseRules-DIRECT] rules read:", rules?.length || 0);
       const byRuleSet = new Map();

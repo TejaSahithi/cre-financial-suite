@@ -64,8 +64,15 @@ RULES:
      Output: landlord_name.value = "John Smith"  (the entity here is a natural person)
              tenant_name.value = "Acme Corp"
 
-   When extracting tenant_name, look for the FIRST entity name following the word "Tenant" / "Lessee" / "Occupant",
-   STOPPING at "By:" / "Signed:" / "Its:" / "Title:".
+     Input:  "entered into by and between 224 Partners, LLC (\"Landlord\") and Mindful Tech Solutions Inc. (\"Tenant\")"
+     Output: landlord_name.value = "224 Partners, LLC"
+             tenant_name.value = "Mindful Tech Solutions Inc."
+
+   In a "by and between ... (Landlord) and ... (Tenant)" parties clause:
+   - landlord_name is the entity that appears BEFORE the (Landlord) parenthetical
+   - tenant_name is the entity that appears BEFORE the (Tenant) parenthetical, NOT after it
+   For other formats (TENANT: / LESSEE: label style), extract the FIRST entity name
+   following the label, STOPPING at "By:" / "Signed:" / "Its:" / "Title:".
 
 7. Date conventions:
    YYYY-MM-DD format. "January 1, 2024" → "2024-01-01".
