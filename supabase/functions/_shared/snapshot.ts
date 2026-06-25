@@ -20,6 +20,9 @@ export interface SnapshotData {
   inputs: Record<string, unknown>;
   outputs: Record<string, unknown>;
   computed_by?: string;
+  engine_version?: string;
+  locked_at?: string | null;
+  locked_by?: string | null;
 }
 
 function normalizeForSnapshot(value: unknown): unknown {
@@ -190,6 +193,11 @@ export async function saveSnapshot(
     }
   }
 
+  // Extract the SHA-256 fingerprint already computed by enrichInputs so it is
+  // also stored in the top-level input_hash column for direct SQL querying.
+  const inputHash =
+    String((inputs._compute as Record<string, unknown>)?.input_fingerprint ?? "") || null;
+
   const { data: inserted, error: insertErr } = await supabaseAdmin
     .from("computation_snapshots")
     .insert({
@@ -202,6 +210,10 @@ export async function saveSnapshot(
       status: "completed",
       computed_at: now,
       computed_by: data.computed_by ?? null,
+      engine_version: data.engine_version ?? null,
+      input_hash: inputHash,
+      locked_at: data.locked_at ?? null,
+      locked_by: data.locked_by ?? null,
     })
     .select("id")
     .single();

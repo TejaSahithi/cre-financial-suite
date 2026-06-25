@@ -124,6 +124,27 @@ export async function handleCamPublishRequest(req: Request) {
       throw new Error(error.message || "publish_lease_expense_rule_to_cam_workflow failed");
     }
 
+    try {
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId,
+        entity_type: "lease_expense_rules",
+        entity_id: payload.ruleId,
+        action: "lease_expense_rule_published_to_cam",
+        actor_user_id: user.id,
+        actor_email: user.email ?? null,
+        source: "edge_function",
+        severity: "info",
+        metadata: {
+          rule_id: payload.ruleId,
+          lease_id: rule.lease_id ?? null,
+          category: rule.expense_category ?? rule.category_name ?? null,
+          payment_treatment: rule.payment_treatment ?? null,
+        },
+      });
+    } catch (auditErr) {
+      console.error("[publish-lease-expense-rule-to-cam] audit_log insert error:", auditErr?.message || auditErr);
+    }
+
     return jsonResponse({ error: false, ...data });
   } catch (err) {
     const message = err?.message || "Lease expense rule CAM publish workflow failed";

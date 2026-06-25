@@ -1890,6 +1890,8 @@ export const expenseService = {
       exclusion_applied: ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus),
       condition_applied: effectiveRecoveryStatus === "conditional",
       condition_reason: effectiveRecoveryStatus === "conditional" ? plainReason : null,
+      condition_resolved: effectiveRecoveryStatus !== "conditional",
+      condition_result: effectiveRecoveryStatus === "conditional" ? "manual_review" : null,
       rule_source: effectiveRuleSource,
       confidence_score: existingClassification?.confidence_score ?? expense.confidence_score ?? 1,
       evidence_text: existingClassification?.evidence_text || expense.evidence_text || plainReason,
@@ -1909,7 +1911,7 @@ export const expenseService = {
               : ["excluded", "non_recoverable"].includes(effectiveRecoveryStatus)
                 ? "excluded"
                 : "matched",
-      exception_type: effectiveRecoveryStatus === "needs_review" ? "manual_review" : null,
+      exception_type: (effectiveRecoveryStatus === "needs_review" || effectiveRecoveryStatus === "conditional") ? "manual_review" : null,
       finalized_at:
         effectiveApprovedStatus === "approved" && ["recoverable", "non_recoverable", "excluded"].includes(effectiveRecoveryStatus)
           ? (existingClassification?.finalized_at || now)
@@ -2260,6 +2262,7 @@ export const expenseService = {
         exceptionType = confidenceScore < 0.5 ? "low_confidence" : "missing_decision";
       } else if (isConditional) {
         classificationStatus = "conditional";
+        exceptionType = "manual_review";
       } else {
         classificationStatus = "matched";
       }
@@ -2308,6 +2311,8 @@ export const expenseService = {
         exclusion_applied: Boolean(matchedRule?.is_excluded),
         condition_applied: isConditional,
         condition_reason: isConditional ? matchedRule?.notes || matchedRule?.source || plainReason || "Conditional lease rule requires review" : null,
+        condition_resolved: !isConditional,
+        condition_result: isConditional ? "manual_review" : null,
         rule_source: ruleSource,
         confidence_score: confidenceScore,
         evidence_text: matchedRule?.source || plainReason,

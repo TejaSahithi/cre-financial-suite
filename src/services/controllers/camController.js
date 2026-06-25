@@ -1,8 +1,13 @@
-/**
- * CAM Controller — Orchestrates CAM Calculations
+/*
+ * camController.js — DEPRECATED / UNUSED
  *
- * Fetches required data, delegates to the CAM domain engine,
- * and persists the results. No business logic lives here.
+ * This controller called camEngine.js (the simplified frontend CAM engine) and
+ * wrote results directly to cam_calculations via CAMCalculationService.create().
+ * It is no longer wired to any page or route.
+ *
+ * Official CAM computation now goes through the compute-cam Edge Function which
+ * runs cam-calculator.ts (1,377-line backend engine with gross-up, base-year,
+ * management fees, and per-tenant caps) and saves results to computation_snapshots.
  */
 
 import { ExpenseService, LeaseService, CAMCalculationService } from '@/services/api';

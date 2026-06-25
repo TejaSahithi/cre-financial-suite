@@ -14,6 +14,8 @@ const VALID_EXPORT_TYPES = [
   "reconciliation",
   "expenses",
   "revenue",
+  "cam_packet",
+  "budget_book",
 ] as const;
 
 type ExportType = typeof VALID_EXPORT_TYPES[number];
@@ -25,6 +27,8 @@ const ENGINE_TYPE_MAP: Record<ExportType, string> = {
   reconciliation: "reconciliation",
   expenses: "expense",
   revenue: "revenue",
+  cam_packet: "cam",
+  budget_book: "budget",
 };
 
 const EXPORT_PAGE_MAP: Record<ExportType, string[]> = {
@@ -34,6 +38,8 @@ const EXPORT_PAGE_MAP: Record<ExportType, string[]> = {
   reconciliation: ["Reconciliation", "ActualsVariance", "Variance"],
   expenses: ["Expenses", "AddExpense", "BulkImport"],
   revenue: ["Revenue"],
+  cam_packet: ["CAMCalculation", "CAMDashboard"],
+  budget_book: ["BudgetReview"],
 };
 
 const SNAPSHOT_BACKED_EXPORTS = new Set<ExportType>([
@@ -41,6 +47,7 @@ const SNAPSHOT_BACKED_EXPORTS = new Set<ExportType>([
   "cam_calculation",
   "budget",
   "reconciliation",
+  "cam_packet",
 ]);
 
 const FALLBACK_TABLE_MAP: Record<ExportType, string> = {
@@ -48,8 +55,10 @@ const FALLBACK_TABLE_MAP: Record<ExportType, string> = {
   cam_calculation: "cam_calculations",
   budget: "budgets",
   reconciliation: "reconciliations",
+  cam_packet: "cam_calculations",
   expenses: "expenses",
   revenue: "revenues",
+  budget_book: "budgets",
 };
 
 const HEADER_MAPPINGS: Record<string, Record<string, string>> = {
@@ -162,6 +171,11 @@ const HEADER_MAPPINGS: Record<string, Record<string, string>> = {
     description: "Description",
     lease_id: "Lease ID",
     type: "Type",
+  },
+  budget_book: {
+    record_type: "Record Type",
+    property_name: "Property",
+    fiscal_year: "Fiscal Year",
   },
 };
 
@@ -586,6 +600,478 @@ async function buildBudgetExportRows({
   );
 }
 
+async function buildCamPacketExportRows({
+  supabaseAdmin,
+  orgId,
+  propertyId,
+  fiscalYear,
+  propertyName,
+  camSnapshot,
+  leaseId,
+}: {
+  supabaseAdmin: any;
+  orgId: string;
+  propertyId: string;
+  fiscalYear: number;
+  propertyName: string;
+  camSnapshot: any;
+  leaseId?: string | null;
+}): Promise<Record<string, any>[]> {
+  if (!camSnapshot?.outputs) {
+    throw new Error(
+      `No CAM snapshot found for property="${propertyId}" and fiscal_year=${fiscalYear}. Run compute-cam first.`,
+    );
+  }
+
+  const outputs = camSnapshot.outputs as Record<string, any>;
+  const inputs = (camSnapshot.inputs ?? {}) as Record<string, any>;
+  const ruleEvidence: any[] = Array.isArray(inputs.rule_evidence) ? inputs.rule_evidence : [];
+
+  let tenantCharges: any[] = Array.isArray(outputs.tenant_charges) ? outputs.tenant_charges : [];
+  if (leaseId) {
+    tenantCharges = tenantCharges.filter((t: any) => t.lease_id === leaseId);
+  }
+
+  // Fetch lease details for tenant enrichment
+  const leaseIds = tenantCharges.map((t: any) => t.lease_id).filter(Boolean);
+  let leaseMap: Record<string, any> = {};
+  if (leaseIds.length > 0) {
+    const { data: leases } = await supabaseAdmin
+      .from("leases")
+      .select("id, tenant_name, start_date, end_date, monthly_rent, annual_rent, square_footage, lease_type, status")
+      .in("id", leaseIds);
+    for (const l of leases ?? []) {
+      leaseMap[l.id] = l;
+    }
+  }
+
+  // Fetch reconciliation snapshot for expense pool breakdown (best-effort)
+  const { data: reconSnapshot } = await supabaseAdmin
+    .from("computation_snapshots")
+    .select("id, outputs, computed_at")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("engine_type", "reconciliation")
+    .eq("fiscal_year", fiscalYear)
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const reconLineItems: any[] = Array.isArray(reconSnapshot?.outputs?.line_items)
+    ? reconSnapshot.outputs.line_items
+    : [];
+
+  const rows: Record<string, any>[] = [];
+
+  // ── Section 1: Packet header ─────────────────────────────────────────────
+  rows.push({
+    record_type: "cam_packet_header",
+    property_name: propertyName,
+    property_id: propertyId,
+    fiscal_year: fiscalYear,
+    snapshot_id: camSnapshot.id ?? "Not available",
+    computed_at: camSnapshot.computed_at ?? "Not available",
+    engine_version: camSnapshot.engine_version ?? "Not available",
+    input_hash: camSnapshot.input_hash ?? "Not available",
+    tenant_filter: leaseId ?? "all_tenants",
+    reconciliation_snapshot_id: reconSnapshot?.id ?? "Not available",
+  });
+
+  // ── Section 2: Property-level CAM summary ────────────────────────────────
+  rows.push({
+    record_type: "cam_packet_property_summary",
+    property_name: propertyName,
+    fiscal_year: fiscalYear,
+    total_cam: round2(outputs.total_cam),
+    cam_per_sf: round2(outputs.cam_per_sf),
+    total_recoverable: round2(outputs.total_recoverable),
+    total_billed: round2(outputs.total_billed),
+    direct_allocations: round2(outputs.direct_allocations),
+    gross_up_adjustment: round2(outputs.gross_up_adjustment),
+    admin_fees: round2(outputs.admin_fees),
+    management_fees: round2(outputs.management_fees),
+    total_shared_before_fees: round2(outputs.total_shared_before_fees),
+    prior_payments: "Not available",
+    final_adjustment: "Not available",
+  });
+
+  // ── Section 3: Per-tenant charge rows ────────────────────────────────────
+  for (const tenant of tenantCharges) {
+    const lease = leaseMap[tenant.lease_id] ?? {};
+    rows.push({
+      record_type: "cam_packet_tenant",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      tenant_name: tenant.tenant_name ?? lease.tenant_name ?? "Not available",
+      lease_id: tenant.lease_id ?? "Not available",
+      lease_type: lease.lease_type ?? "Not available",
+      lease_start: lease.start_date ?? "Not available",
+      lease_end: lease.end_date ?? "Not available",
+      square_footage: round2(tenant.square_footage ?? lease.square_footage),
+      pro_rata_share: tenant.pro_rata_share ?? "Not available",
+      annual_cam: round2(tenant.annual_cam),
+      monthly_cam: round2(tenant.monthly_cam),
+      raw_share_before_caps: round2(tenant.raw_share_before_caps),
+      base_year_adjustment: round2(tenant.base_year_adjustment),
+      cap_adjustment: round2(tenant.cap_adjustment),
+      gross_up_applied: tenant.gross_up_applied ? "Yes" : "No",
+      cap_applied: tenant.cap_applied ? "Yes" : "No",
+      prior_payments: "Not available",
+      amount_owed_or_refund: "Not available",
+    });
+  }
+
+  // ── Section 4: Expense pool breakdown (from reconciliation snapshot) ─────
+  if (reconLineItems.length > 0) {
+    for (const item of reconLineItems) {
+      rows.push({
+        record_type: "cam_packet_expense_pool",
+        property_name: propertyName,
+        fiscal_year: fiscalYear,
+        category: item.category,
+        budgeted_amount: round2(item.budget),
+        actual_amount: round2(item.actual),
+        variance: round2(item.variance),
+        variance_pct: round2(item.variance_pct),
+        flagged: item.flagged ? "Yes" : "No",
+        source: "reconciliation_snapshot",
+      });
+    }
+  } else {
+    rows.push({
+      record_type: "cam_packet_expense_pool",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      category: "Not available",
+      budgeted_amount: "Not available",
+      actual_amount: "Not available",
+      variance: "Not available",
+      variance_pct: "Not available",
+      flagged: "Not available",
+      source: "no_reconciliation_snapshot",
+    });
+  }
+
+  // ── Section 5: Lease evidence citations ──────────────────────────────────
+  const filteredEvidence = leaseId
+    ? ruleEvidence.filter((e: any) => e.lease_id === leaseId)
+    : ruleEvidence;
+
+  if (filteredEvidence.length > 0) {
+    for (const ev of filteredEvidence) {
+      const tenantCharge = tenantCharges.find((t: any) => t.lease_id === ev.lease_id);
+      rows.push({
+        record_type: "cam_packet_evidence",
+        property_name: propertyName,
+        fiscal_year: fiscalYear,
+        tenant_name: tenantCharge?.tenant_name ?? "Not available",
+        lease_id: ev.lease_id ?? "Not available",
+        rule_id: ev.rule_id ?? "Not available",
+        category: ev.category ?? "Not available",
+        source_page: ev.source_page ?? "Not available",
+        source_text: ev.source_text ?? "Not available",
+        confidence_score: ev.confidence_score ?? "Not available",
+        approved_by: ev.approved_by ?? "Not available",
+        approved_at: ev.approved_at ?? "Not available",
+        field_review_id: ev.field_review_id ?? "Not available",
+      });
+    }
+  } else {
+    rows.push({
+      record_type: "cam_packet_evidence",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      tenant_name: "Not available",
+      lease_id: "Not available",
+      rule_id: "Not available",
+      category: "Not available",
+      source_page: "Not available",
+      source_text: "No lease evidence found in CAM snapshot inputs",
+      confidence_score: "Not available",
+      approved_by: "Not available",
+      approved_at: "Not available",
+      field_review_id: "Not available",
+    });
+  }
+
+  // ── Section 6: Calculation assumptions ───────────────────────────────────
+  const assumptions: string[] = Array.isArray(outputs.assumptions) ? outputs.assumptions : [];
+  for (const assumption of assumptions) {
+    rows.push({
+      record_type: "cam_packet_assumption",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      assumption,
+    });
+  }
+
+  return rows;
+}
+
+async function buildBudgetBookExportRows({
+  supabaseAdmin,
+  orgId,
+  propertyId,
+  fiscalYear,
+  propertyName,
+  budgetSnapshot,
+}: {
+  supabaseAdmin: any;
+  orgId: string;
+  propertyId: string;
+  fiscalYear: number;
+  propertyName: string;
+  budgetSnapshot: any;
+}): Promise<Record<string, any>[]> {
+  if (!budgetSnapshot?.outputs) {
+    throw new Error(
+      `No budget snapshot found for property="${propertyId}" and fiscal_year=${fiscalYear}. Run compute-budget first.`,
+    );
+  }
+
+  // Phase 1 — parallel: budget record, CAM snapshot, reconciliation snapshot, property sqft
+  const [budgetRes, camRes, reconRes, propRes] = await Promise.all([
+    supabaseAdmin
+      .from("budgets")
+      .select("id, name, status, scope, period, generation_method, total_revenue, total_expenses, cam_total, noi, ai_insights")
+      .eq("org_id", orgId)
+      .eq("property_id", propertyId)
+      .eq("budget_year", fiscalYear)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("computation_snapshots")
+      .select("outputs, computed_at, engine_version, input_hash")
+      .eq("org_id", orgId)
+      .eq("property_id", propertyId)
+      .eq("engine_type", "cam")
+      .eq("fiscal_year", fiscalYear)
+      .order("computed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("computation_snapshots")
+      .select("outputs, computed_at")
+      .eq("org_id", orgId)
+      .eq("property_id", propertyId)
+      .eq("engine_type", "reconciliation")
+      .eq("fiscal_year", fiscalYear)
+      .order("computed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("properties")
+      .select("name, total_sqft")
+      .eq("id", propertyId)
+      .eq("org_id", orgId)
+      .maybeSingle(),
+  ]);
+
+  const budget = budgetRes.data ?? null;
+  const camSnapshot = camRes.data ?? null;
+  const reconSnapshot = reconRes.data ?? null;
+  const propertyRecord = propRes.data ?? null;
+
+  // Phase 2 — budget_line_items requires budget.id
+  let lineItems: any[] = [];
+  if (budget?.id) {
+    const { data: li } = await supabaseAdmin
+      .from("budget_line_items")
+      .select("category, subcategory, line_type, amount, source_type, notes")
+      .eq("org_id", orgId)
+      .eq("budget_id", budget.id)
+      .order("sort_order", { ascending: true });
+    lineItems = li ?? [];
+  }
+
+  const snapshotLineItems = budgetSnapshot.outputs?.line_items ?? {};
+  const reconLineItems: any[] = Array.isArray(reconSnapshot?.outputs?.line_items)
+    ? reconSnapshot.outputs.line_items
+    : [];
+  const tenantCharges: any[] = Array.isArray(camSnapshot?.outputs?.tenant_charges)
+    ? camSnapshot.outputs.tenant_charges
+    : [];
+  const assumptions: string[] = Array.isArray(budgetSnapshot.outputs?.assumptions)
+    ? budgetSnapshot.outputs.assumptions
+    : [];
+
+  const rows: Record<string, any>[] = [];
+
+  // ── Section 1: Header (audit metadata) ───────────────────────────────────
+  const readinessMeta = budgetSnapshot.inputs?.readiness_snapshot;
+  rows.push({
+    record_type: "budget_book_header",
+    property_name: propertyName,
+    fiscal_year: fiscalYear,
+    budget_name: budget?.name ?? "Not available",
+    budget_status: budget?.status ?? budgetSnapshot.outputs?.status ?? "Not available",
+    computed_at: budgetSnapshot.computed_at ?? "Not available",
+    engine_version: budgetSnapshot.engine_version ?? "Not available",
+    input_hash: budgetSnapshot.input_hash ?? "Not available",
+    readiness_checks: readinessMeta ? JSON.stringify(readinessMeta) : "Not available",
+  });
+
+  // ── Section 2: Property summary ───────────────────────────────────────────
+  rows.push({
+    record_type: "budget_book_property_summary",
+    property_name: propertyName,
+    fiscal_year: fiscalYear,
+    total_sqft: propertyRecord?.total_sqft ?? "Not available",
+    scope: budget?.scope ?? "Not available",
+    period: budget?.period ?? "Not available",
+    generation_method: budget?.generation_method ?? "Not available",
+  });
+
+  // ── Section 3: Financial summary ──────────────────────────────────────────
+  rows.push({
+    record_type: "budget_book_summary",
+    property_name: propertyName,
+    fiscal_year: fiscalYear,
+    total_revenue: round2(budget?.total_revenue ?? snapshotLineItems?.revenue?.total),
+    total_expenses: round2(budget?.total_expenses ?? snapshotLineItems?.expenses?.total),
+    cam_total: round2(budget?.cam_total ?? snapshotLineItems?.revenue?.cam_recovery),
+    noi: round2(budget?.noi ?? snapshotLineItems?.noi),
+    ai_insights: budget?.ai_insights ?? "Not available",
+  });
+
+  // ── Section 4: Budget line items ──────────────────────────────────────────
+  if (lineItems.length > 0) {
+    for (const item of lineItems) {
+      rows.push({
+        record_type: "budget_book_line_item",
+        property_name: propertyName,
+        fiscal_year: fiscalYear,
+        line_type: item.line_type ?? "Not available",
+        category: item.category ?? "Not available",
+        subcategory: item.subcategory ?? "",
+        amount: round2(item.amount),
+        source_type: item.source_type ?? "Not available",
+        notes: item.notes ?? "",
+      });
+    }
+  } else {
+    rows.push({
+      record_type: "budget_book_line_item",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      line_type: "Not available",
+      category: "Not available",
+      subcategory: "Not available",
+      amount: "Not available",
+      source_type: "Not available",
+      notes: "No budget line items found",
+    });
+  }
+
+  // ── Section 5: CAM summary (from latest CAM snapshot) ────────────────────
+  if (camSnapshot?.outputs) {
+    rows.push({
+      record_type: "budget_book_cam_summary",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      total_cam: round2(camSnapshot.outputs.total_cam),
+      cam_per_sf: round2(camSnapshot.outputs.cam_per_sf),
+      total_recoverable: round2(camSnapshot.outputs.total_recoverable),
+      total_billed: round2(camSnapshot.outputs.total_billed),
+      admin_fees: round2(camSnapshot.outputs.admin_fees),
+      management_fees: round2(camSnapshot.outputs.management_fees),
+      tenant_count: tenantCharges.length,
+      cam_computed_at: camSnapshot.computed_at ?? "Not available",
+    });
+  } else {
+    rows.push({
+      record_type: "budget_book_cam_summary",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      total_cam: "Not available",
+      cam_per_sf: "Not available",
+      total_recoverable: "Not available",
+      total_billed: "Not available",
+      admin_fees: "Not available",
+      management_fees: "Not available",
+      tenant_count: "Not available",
+      cam_computed_at: "Not available",
+    });
+  }
+
+  // ── Section 6: Reconciliation summary ────────────────────────────────────
+  if (reconSnapshot?.outputs) {
+    const ro = reconSnapshot.outputs as Record<string, any>;
+    rows.push({
+      record_type: "budget_book_recon_summary",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      cam_estimated: round2(ro.cam_estimated ?? ro.estimated_cam),
+      cam_actual: round2(ro.cam_actual ?? ro.actual_cam),
+      adjustment: round2(ro.adjustment ?? ro.total_adjustment),
+      status: ro.status ?? "Not available",
+      recon_computed_at: reconSnapshot.computed_at ?? "Not available",
+    });
+  } else {
+    rows.push({
+      record_type: "budget_book_recon_summary",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      cam_estimated: "Not available",
+      cam_actual: "Not available",
+      adjustment: "Not available",
+      status: "Not available",
+      recon_computed_at: "Not available",
+    });
+  }
+
+  // ── Section 7: Variance (budget vs actual per category from recon) ────────
+  if (reconLineItems.length > 0) {
+    for (const item of reconLineItems) {
+      rows.push({
+        record_type: "budget_book_variance",
+        property_name: propertyName,
+        fiscal_year: fiscalYear,
+        category: item.category ?? "Not available",
+        budget: round2(item.budget),
+        actual: round2(item.actual),
+        variance: round2(item.variance),
+        variance_pct: round2(item.variance_pct),
+        flagged: item.flagged ? "Yes" : "No",
+      });
+    }
+  } else {
+    rows.push({
+      record_type: "budget_book_variance",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      category: "Not available",
+      budget: "Not available",
+      actual: "Not available",
+      variance: "Not available",
+      variance_pct: "Not available",
+      flagged: "Not available",
+    });
+  }
+
+  // ── Section 8: Assumptions ────────────────────────────────────────────────
+  if (assumptions.length > 0) {
+    for (const assumption of assumptions) {
+      rows.push({
+        record_type: "budget_book_assumption",
+        property_name: propertyName,
+        fiscal_year: fiscalYear,
+        assumption,
+      });
+    }
+  } else {
+    rows.push({
+      record_type: "budget_book_assumption",
+      property_name: propertyName,
+      fiscal_year: fiscalYear,
+      assumption: "Not available",
+    });
+  }
+
+  return rows;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -596,7 +1082,7 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { export_type, property_id, fiscal_year, format } = body;
+    const { export_type, property_id, fiscal_year, format, lease_id } = body;
 
     if (!export_type || !VALID_EXPORT_TYPES.includes(export_type)) {
       throw new Error(`Invalid or missing export_type. Must be one of: ${VALID_EXPORT_TYPES.join(", ")}`);
@@ -630,7 +1116,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: snapshot } = await supabaseAdmin
       .from("computation_snapshots")
-      .select("id, outputs, computed_at, inputs")
+      .select("id, outputs, computed_at, inputs, engine_version, input_hash")
       .eq("org_id", orgId)
       .eq("property_id", property_id)
       .eq("engine_type", engineType)
@@ -641,7 +1127,17 @@ Deno.serve(async (req: Request) => {
 
     let rows: Record<string, any>[] = [];
 
-    if (export_type === "budget") {
+    if (export_type === "cam_packet") {
+      rows = await buildCamPacketExportRows({
+        supabaseAdmin,
+        orgId,
+        propertyId: property_id,
+        fiscalYear: fiscal_year,
+        propertyName,
+        camSnapshot: snapshot,
+        leaseId: lease_id ?? null,
+      });
+    } else if (export_type === "budget") {
       rows = await buildBudgetExportRows({
         supabaseAdmin,
         orgId,
@@ -649,6 +1145,15 @@ Deno.serve(async (req: Request) => {
         fiscalYear: fiscal_year,
         propertyName,
         snapshot,
+      });
+    } else if (export_type === "budget_book") {
+      rows = await buildBudgetBookExportRows({
+        supabaseAdmin,
+        orgId,
+        propertyId: property_id,
+        fiscalYear: fiscal_year,
+        propertyName,
+        budgetSnapshot: snapshot,
       });
     } else if (snapshot?.outputs) {
       rows = flattenOutputs(export_type as ExportType, snapshot.outputs);
@@ -718,6 +1223,9 @@ Deno.serve(async (req: Request) => {
       `# Snapshot ID: ${escapeCSVValue(snapshot?.id ?? "")}`,
       `# Snapshot Computed At: ${escapeCSVValue(snapshot?.computed_at ?? "")}`,
       `# Engine Type: ${escapeCSVValue(engineType ?? "")}`,
+      `# Engine Version: ${escapeCSVValue(snapshot?.engine_version ?? "")}`,
+      `# Input Hash: ${escapeCSVValue(snapshot?.input_hash ?? "")}`,
+      ...(lease_id ? [`# Tenant Lease Filter: ${escapeCSVValue(lease_id)}`] : []),
       "",
     ];
 

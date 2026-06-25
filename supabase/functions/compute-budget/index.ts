@@ -3,6 +3,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
+const ENGINE_VERSION = "budget-v1.0";
+
 /**
  * Compute Budget Edge Function
  * Generates budgets aggregating revenue projections and expense plans.
@@ -21,7 +23,7 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { property_id, fiscal_year, action, allow_generate_without_cam } = body;
+    const { property_id, fiscal_year, action, allow_generate_without_cam, readiness_snapshot } = body;
 
     if (!property_id || !fiscal_year) {
       throw new Error("property_id and fiscal_year are required");
@@ -37,7 +39,7 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     switch (resolvedAction) {
       case "generate":
-        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true);
+        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null);
       case "approve":
         return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, "under_review", "approved", "Budget approved successfully");
       case "reject":
@@ -65,7 +67,8 @@ async function handleGenerate(
   userId: string,
   propertyId: string,
   fiscalYear: number,
-  allowGenerateWithoutCam = false
+  allowGenerateWithoutCam = false,
+  readinessSnapshot: any = null
 ) {
   // ---------------------------------------------------------------
   // 1. Fetch property details
@@ -320,6 +323,7 @@ async function handleGenerate(
       lease_count: (leases ?? []).length,
       expense_count: (expenses ?? []).length,
       revenue_count: (revenues ?? []).length,
+      readiness_snapshot: readinessSnapshot,
       _compute: {
         page_scope: ["BudgetDashboard", "CreateBudget"],
         source_tables: ["budgets", "leases", "expenses", "revenues", "computation_snapshots"],
@@ -374,15 +378,41 @@ async function handleGenerate(
     );
   }
 
-  await saveSnapshot(supabaseAdmin, {
+  const newSnapshotId = await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
     property_id: propertyId,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
+    engine_version: ENGINE_VERSION,
     inputs: snapshotPayload.inputs,
     outputs: snapshotPayload.outputs,
   });
+
+  try {
+    await supabaseAdmin.from("audit_logs").insert({
+      org_id: orgId,
+      property_id: propertyId,
+      entity_type: "computation_snapshots",
+      entity_id: newSnapshotId ?? null,
+      action: "budget_generated",
+      actor_user_id: userId,
+      source: "edge_function",
+      severity: "info",
+      metadata: {
+        fiscal_year: fiscalYear,
+        engine_type: "budget",
+        engine_version: ENGINE_VERSION,
+        snapshot_id: newSnapshotId ?? null,
+        budget_id: budgetId,
+        total_revenue: round2(totalRevenue),
+        total_expenses: round2(totalExpenses),
+        noi: noi,
+      },
+    });
+  } catch (auditErr) {
+    console.error("[compute-budget] audit_log insert error (budget_generated):", auditErr?.message || auditErr);
+  }
 
   // ---------------------------------------------------------------
   // Response
@@ -452,7 +482,8 @@ async function handleStatusTransition(
   }
 
   // Create audit log entry
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, newStatus, successMessage);
+  const auditAction = newStatus === "approved" ? "budget_approved" : "budget_rejected";
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, auditAction, successMessage);
 
   const { data: latestSnapshot } = await supabaseAdmin
     .from("computation_snapshots")
@@ -471,6 +502,7 @@ async function handleStatusTransition(
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
+    engine_version: ENGINE_VERSION,
     inputs: {
       property_id: propertyId,
       fiscal_year: fiscalYear,
@@ -590,12 +622,17 @@ async function handleLock(
     },
   };
 
+  const lockTimestamp = new Date().toISOString();
+
   await saveSnapshot(supabaseAdmin, {
     org_id: orgId,
     property_id: propertyId,
     engine_type: "budget",
     fiscal_year: fiscalYear,
     computed_by: userId,
+    engine_version: ENGINE_VERSION,
+    locked_at: lockTimestamp,
+    locked_by: userId,
     inputs: {
       ...baselinePayload.inputs,
       _compute: {
@@ -611,7 +648,7 @@ async function handleLock(
   });
 
   // Create audit log entry
-  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "locked", "Budget locked successfully");
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_locked", "Budget locked successfully");
 
   return new Response(
     JSON.stringify({
@@ -645,29 +682,27 @@ async function createAuditLog(
   budgetId: string,
   propertyId: string,
   fiscalYear: number,
-  newStatus: string,
+  auditAction: string,
   message: string
 ) {
-  const auditPayload = {
-    org_id: orgId,
-    user_id: userId,
-    entity_type: "budget",
-    entity_id: budgetId,
-    action: `budget_${newStatus}`,
-    details: {
+  try {
+    await supabaseAdmin.from("audit_logs").insert({
+      org_id: orgId,
       property_id: propertyId,
-      fiscal_year: fiscalYear,
-      new_status: newStatus,
-      message,
-      timestamp: new Date().toISOString(),
-    },
-  };
-
-  const { error: auditErr } = await supabaseAdmin
-    .from("audit_logs")
-    .insert(auditPayload);
-
-  if (auditErr) {
-    console.error("[compute-budget] audit_log insert error:", auditErr.message);
+      entity_type: "budget",
+      entity_id: budgetId,
+      action: auditAction,
+      actor_user_id: userId,
+      source: "edge_function",
+      severity: "info",
+      metadata: {
+        property_id: propertyId,
+        fiscal_year: fiscalYear,
+        message,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (auditErr) {
+    console.error("[compute-budget] audit_log insert error:", auditErr?.message || auditErr);
   }
 }

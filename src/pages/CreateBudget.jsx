@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare } from "lucide-react";
+import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare, AlertTriangle, XCircle } from "lucide-react";
 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
 import { budgetService } from "@/services/budgetService";
@@ -27,6 +27,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { checkBudgetReadiness } from "@/services/budgetReadinessService";
 
 function buildDefaultForm(scope) {
   return {
@@ -166,24 +167,19 @@ export default function CreateBudget() {
   const selectedProperty = properties.find((property) => property.id === form.property_id);
   const selectedBuilding = buildings.find((building) => building.id === form.building_id);
   const selectedUnit = units.find((unit) => unit.id === form.unit_id);
-  const { data: latestCamSnapshot } = useQuery({
-    queryKey: ["latest-cam-snapshot", form.property_id, form.budget_year],
-    queryFn: async () => {
-      if (!form.property_id) return null;
-      const { data, error } = await supabase
-        .from("computation_snapshots")
-        .select("id, computed_at, outputs")
-        .eq("property_id", form.property_id)
-        .eq("engine_type", "cam")
-        .eq("fiscal_year", form.budget_year)
-        .order("computed_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data || null;
-    },
-    enabled: !!form.property_id,
+  const { data: readiness, isLoading: readinessLoading } = useQuery({
+    queryKey: ["budget-readiness", form.property_id, form.budget_year, orgId],
+    queryFn: () =>
+      checkBudgetReadiness(supabase, {
+        propertyId: form.property_id,
+        fiscalYear: form.budget_year,
+        orgId,
+      }),
+    enabled: !!form.property_id && !!orgId,
+    staleTime: 30_000,
   });
+
+  const latestCamSnapshot = readiness?.meta?.camSnapshot ?? null;
 
   const handleGenerate = async () => {
     if (!form.name.trim()) {
@@ -640,7 +636,16 @@ export default function CreateBudget() {
                 </Card>
               )}
 
-              <Button onClick={handleGenerate} disabled={generating || !form.name || !form.property_id} className="bg-blue-600 hover:bg-blue-700">
+              {form.property_id && (
+                <BudgetReadinessChecklist checks={readiness?.checks} isLoading={readinessLoading} />
+              )}
+
+              <Button
+                onClick={handleGenerate}
+                disabled={generating || !form.name || !form.property_id || readiness?.hasBlockers === true}
+                className="bg-blue-600 hover:bg-blue-700"
+                title={readiness?.hasBlockers ? "Resolve blockers above before generating" : undefined}
+              >
                 {generating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Zap className="w-4 h-4 mr-2" />}
                 Generate Budget
               </Button>
@@ -815,6 +820,40 @@ export default function CreateBudget() {
           </Dialog>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function BudgetReadinessChecklist({ checks, isLoading }) {
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-400 animate-pulse">
+        Checking budget readiness...
+      </div>
+    );
+  }
+  if (!checks?.length) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1.5">
+      <p className="text-xs font-semibold text-slate-600 mb-2">Budget Readiness</p>
+      {checks.map((check) => {
+        const icon =
+          check.status === "pass" ? (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+          ) : check.status === "fail" ? (
+            <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+          ) : (
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          );
+        return (
+          <div key={check.id} className="flex items-center gap-2 text-xs">
+            {icon}
+            <span className="text-slate-700">{check.label}</span>
+            <span className="text-slate-400 ml-auto truncate max-w-[40%] text-right">{check.message}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

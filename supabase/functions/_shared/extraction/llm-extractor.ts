@@ -52,12 +52,12 @@ RULES:
    Signatory / signer / "By:" lines belong to tenant_signatory_name or landlord_signatory_name, NEVER to *_name.
 
    EXAMPLES:
-     Input:  "TENANT: Mindful Tech Solutions, Inc.   By: NARENDRA PYDI, President"
-     Output: tenant_name.value = "Mindful Tech Solutions, Inc."
-             tenant_signatory_name.value = "NARENDRA PYDI"
+     Input:  "TENANT: Tech Solutions, Inc.   By: JOHN SMITH, President"
+     Output: tenant_name.value = "Tech Solutions, Inc."
+             tenant_signatory_name.value = "JOHN SMITH"
 
-     Input:  "LANDLORD: 224 Partners, LLC   By: Jane Doe, Manager"
-     Output: landlord_name.value = "224 Partners, LLC"
+     Input:  "LANDLORD: Acme Partners, LLC   By: Jane Doe, Manager"
+     Output: landlord_name.value = "Acme Partners, LLC"
              landlord_signatory_name.value = "Jane Doe"
 
      Input:  "This Lease is between John Smith ('Landlord') and Acme Corp ('Tenant')"
@@ -95,19 +95,19 @@ RULES:
     If you cannot provide an exact source_text for a found value, return value null.
 
 13. Numbered-summary documents are common — leases often start with a section like:
-        "1. Date: January 9, 2024
-         2. Landlord: 224 Partners, LLC
-         3. Address of Landlord: 224 S Peters Road, Suite 212 Knoxville, TN 37923
-         4. Tenant: Mindful Tech Solutions, Inc.
-         5. Address of Tenant: 224 S Peters Road Suite #211 Knoxville, TN 37923
-         6. Premises: 1,110 rentable square feet
-         9. Rent: $1,400 per month
-         10. Permitted Use: IT work"
+        "1. Date: January 1, 2025
+         2. Landlord: Acme Partners, LLC
+         3. Address of Landlord: 123 Main St, Suite 100, Cityville, ST 12345
+         4. Tenant: Tech Solutions, Inc.
+         5. Address of Tenant: 456 Tech Blvd, Cityville, ST 12345
+         6. Premises: 2,500 rentable square feet
+         9. Rent: $5,000 per month
+         10. Permitted Use: General Office"
     The label after the number IS the field label. Extract from these lines even though they don't say
     "Landlord Name:" or "Property Address:" verbatim.
 
 14. Multi-line labeled values: when an address spans several lines, join with commas.
-    "Address: 224 S Peters Road / Suite #211 / Knoxville, TN 37923" → "224 S Peters Road, Suite #211, Knoxville, TN 37923".
+    "Address: 123 Main St / Suite #100 / Cityville, ST 12345" → "123 Main St, Suite #100, Cityville, ST 12345".
 
 15. Premises Address vs Landlord Address vs Tenant Mailing Address:
     property_address / premises_address = the address of the LEASED PREMISES (where the tenant operates).

@@ -416,6 +416,7 @@ export default function CAMDashboard() {
               <CardContent>
                 <p className="text-2xl font-bold">${recoverableTotal.toLocaleString()}</p>
                 <p className="text-xs text-slate-500">{scope.recoverableExpenses.length} recoverable lines in FY {currentYear}</p>
+                <p className="text-[10px] text-amber-600 font-medium mt-1">Preview only — not official</p>
               </CardContent>
             </Card>
             <Card>
@@ -437,6 +438,7 @@ export default function CAMDashboard() {
               <CardContent>
                 <p className="text-lg font-bold">${controllableTotal.toLocaleString()}</p>
                 <p className="text-xs text-slate-500">${nonControllableTotal.toLocaleString()} non-controllable</p>
+                <p className="text-[10px] text-amber-600 font-medium mt-1">Preview only — not official</p>
               </CardContent>
             </Card>
           </div>

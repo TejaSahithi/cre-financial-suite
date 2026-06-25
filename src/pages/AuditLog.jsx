@@ -25,6 +25,16 @@ const actionColors = {
   reject: "bg-red-100 text-red-700",
   login: "bg-sky-100 text-sky-700",
   export: "bg-cyan-100 text-cyan-700",
+  // Financial events
+  cam_computed: "bg-blue-100 text-blue-800",
+  budget_generated: "bg-emerald-100 text-emerald-800",
+  budget_approved: "bg-green-100 text-green-800",
+  budget_rejected: "bg-red-100 text-red-800",
+  budget_locked: "bg-slate-200 text-slate-800",
+  reconciliation_computed: "bg-purple-100 text-purple-800",
+  lease_expense_rule_published_to_cam: "bg-teal-100 text-teal-800",
+  expense_classification_sent_to_cam: "bg-cyan-100 text-cyan-800",
+  expense_conditional_blocked_from_cam: "bg-amber-100 text-amber-800",
 };
 
 const actionLabels = {
@@ -32,7 +42,29 @@ const actionLabels = {
   approve: "✓ APPROVE", delete: "🗑 DELETE", upload: "⬆ UPLOAD",
   sign: "✍ SIGN", lock: "🔒 LOCK", reject: "✕ REJECT",
   login: "→ LOGIN", export: "↓ EXPORT",
+  // Financial events
+  cam_computed: "CAM Computed",
+  budget_generated: "Budget Generated",
+  budget_approved: "Budget Approved",
+  budget_rejected: "Budget Rejected",
+  budget_locked: "Budget Locked",
+  reconciliation_computed: "Reconciliation Run",
+  lease_expense_rule_published_to_cam: "Rule → CAM",
+  expense_classification_sent_to_cam: "Expense → CAM",
+  expense_conditional_blocked_from_cam: "Conditional Blocked",
 };
+
+const FINANCIAL_ACTIONS = new Set([
+  "cam_computed",
+  "budget_generated",
+  "budget_approved",
+  "budget_rejected",
+  "budget_locked",
+  "reconciliation_computed",
+  "lease_expense_rule_published_to_cam",
+  "expense_classification_sent_to_cam",
+  "expense_conditional_blocked_from_cam",
+]);
 
 export default function AuditLog() {
   const [search, setSearch] = useState("");
@@ -76,8 +108,13 @@ export default function AuditLog() {
       <Tabs defaultValue="activity">
         <TabsList className="bg-white border">
           <TabsTrigger value="activity" className="text-xs">Activity Log ({logs.length})</TabsTrigger>
+          <TabsTrigger value="financial" className="text-xs">Financial Events ({logs.filter(l => FINANCIAL_ACTIONS.has(l.action)).length})</TabsTrigger>
           <TabsTrigger value="field_reviews" className="text-xs">Lease Field Reviews</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="financial" className="mt-4 space-y-4">
+          <FinancialEventsTab logs={logs} properties={properties} />
+        </TabsContent>
 
         <TabsContent value="activity" className="mt-4 space-y-4">
 
@@ -201,6 +238,91 @@ export default function AuditLog() {
           <FieldReviewsTab />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function FinancialEventsTab({ logs, properties }) {
+  const [propertyFilter, setPropertyFilter] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
+
+  const financialLogs = (logs || []).filter(l => FINANCIAL_ACTIONS.has(l.action));
+  const filtered = financialLogs.filter(l => {
+    const matchAction = actionFilter === "all" || l.action === actionFilter;
+    const matchProperty = propertyFilter === "all" || l.property_id === propertyFilter;
+    return matchAction && matchProperty;
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-3 items-center flex-wrap">
+        <Select value={actionFilter} onValueChange={setActionFilter}>
+          <SelectTrigger className="w-52"><SelectValue placeholder="All Financial Events" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Financial Events</SelectItem>
+            {[...FINANCIAL_ACTIONS].map(a => (
+              <SelectItem key={a} value={a}>{actionLabels[a] || a}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={propertyFilter} onValueChange={setPropertyFilter}>
+          <SelectTrigger className="w-48"><SelectValue placeholder="All Properties" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Properties</SelectItem>
+            {properties.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-slate-50">
+              <TableHead className="text-[11px]">TIMESTAMP</TableHead>
+              <TableHead className="text-[11px]">USER</TableHead>
+              <TableHead className="text-[11px]">EVENT</TableHead>
+              <TableHead className="text-[11px]">ENTITY</TableHead>
+              <TableHead className="text-[11px]">PROPERTY</TableHead>
+              <TableHead className="text-[11px]">DETAILS</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="text-center py-12 text-sm text-slate-400">No financial events recorded yet</TableCell></TableRow>
+            ) : (
+              filtered.map(log => {
+                const meta = typeof log.metadata === "object" && log.metadata !== null ? log.metadata : {};
+                const detailText = [
+                  meta.fiscal_year && `FY ${meta.fiscal_year}`,
+                  meta.engine_version,
+                  meta.total_cam !== undefined && `CAM $${Number(meta.total_cam).toLocaleString()}`,
+                  meta.total_revenue !== undefined && `Rev $${Number(meta.total_revenue).toLocaleString()}`,
+                  meta.noi_variance !== undefined && `NOI var $${Number(meta.noi_variance).toLocaleString()}`,
+                  meta.flagged_item_count !== undefined && `${meta.flagged_item_count} flagged`,
+                ].filter(Boolean).join(" · ");
+                return (
+                  <TableRow key={log.id} className="hover:bg-slate-50">
+                    <TableCell className="text-xs font-mono text-slate-500">{log.timestamp ? moment(log.timestamp).format("YYYY-MM-DD HH:mm") : moment(log.created_date).format("YYYY-MM-DD HH:mm")}</TableCell>
+                    <TableCell className="text-sm">{log.actor_email || log.user_email || log.user_name || "System"}</TableCell>
+                    <TableCell>
+                      <Badge className={`${actionColors[log.action] || "bg-slate-100 text-slate-600"} text-[10px]`}>
+                        {actionLabels[log.action] || log.action}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div>
+                        <span className="text-xs text-slate-600">{log.entity_type}</span>
+                        {log.entity_id && <p className="text-[10px] text-slate-400 font-mono">{log.entity_id.substring(0, 12)}</p>}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-xs text-slate-600">{log.property_name || (properties.find(p => p.id === log.property_id)?.name) || "—"}</TableCell>
+                    <TableCell className="text-xs text-slate-500 max-w-[220px] truncate">{detailText || "—"}</TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }

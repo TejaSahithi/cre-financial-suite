@@ -562,6 +562,15 @@ export default function ExpenseReview() {
           </div>
         </CardHeader>
         <CardContent>
+          {exceptionCounts.conditional > 0 && (
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <span>
+                <strong>{exceptionCounts.conditional} conditional expense{exceptionCounts.conditional !== 1 ? "s" : ""}</strong> cannot be included in CAM until reviewed.
+                Approve to mark recoverable, or reject to exclude.
+              </span>
+            </div>
+          )}
           {isLoadingExceptions ? (
             <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading exceptions…

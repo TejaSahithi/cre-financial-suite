@@ -1,8 +1,12 @@
-/**
- * CAM Engine Service — Production-Ready
+/*
+ * camEngine.js — PREVIEW-ONLY
  *
- * Domain logic for Common Area Maintenance calculations.
- * All calculation logic stays here — never in UI components.
+ * Official CAM results come from the compute-cam Edge Function and are stored in
+ * computation_snapshots (engine_type = "cam"). Read those via useSnapshotQuery.
+ *
+ * This simplified engine (no gross-up, no base-year, no management fee, no caps)
+ * exists for local UI preview estimates only and will diverge from the authoritative
+ * backend result. Never display output from this module as final figures.
  */
 
 // ─── Constants ─────────────────────────────────────────────────────────
@@ -21,7 +25,9 @@ export const CAM_METHODS = {
 // ─── Core Calculations ─────────────────────────────────────────────────
 
 /**
- * Calculate CAM charges for a property using a pro-rata share method.
+ * @deprecated Preview-only. Use the compute-cam Edge Function for official results.
+ *   Official results are stored in computation_snapshots and read via useSnapshotQuery.
+ *   This engine omits gross-up, base-year deductions, management fees, and per-tenant caps.
  *
  * @param {object} params
  * @param {Array}  params.expenses   - All expenses for the property/year
@@ -30,6 +36,12 @@ export const CAM_METHODS = {
  * @returns {object} CAM calculation result
  */
 export function calculateCAM({ expenses = [], leases = [], rules = {} }) {
+  if (process.env.NODE_ENV !== "production") {
+    console.warn(
+      "[camEngine] calculateCAM() is preview-only and will diverge from official results. " +
+      "Use the compute-cam edge function and read results via useSnapshotQuery.",
+    );
+  }
   const method = rules.method || CAM_METHODS.PRO_RATA;
   const adminFeePct = rules.adminFeePct || 0;
   const capAmount = rules.capAmount || Infinity;

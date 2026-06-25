@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, ChevronDown, ChevronUp, Sliders, Calculator, CheckCircle2 } from "lucide-react";
+import { Save, AlertTriangle, ChevronDown, ChevronUp, Sliders, Calculator, CheckCircle2, FileSearch } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 import { toast } from "sonner";
 
 import { fetchLeaseConfig, saveLeaseConfig, DEFAULT_LEASE_CAM_CONFIG } from "@/services/camConfig";
+import { supabase } from "@/services/supabaseClient";
+import ClauseEvidenceDrawer from "@/components/ExpenseClassification/ClauseEvidenceDrawer";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,11 +50,28 @@ function LeaseRuleCard({ lease, currentYear, onSaved }) {
   const [draft, setDraft] = useState({ ...DEFAULT_LEASE_CAM_CONFIG });
   const [exclusionInput, setExclusionInput] = useState("");
   const [saved, setSaved] = useState(false);
+  const [evidenceTarget, setEvidenceTarget] = useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["lease-config", lease.id],
     queryFn: () => fetchLeaseConfig(lease.id),
     enabled: expanded,
+  });
+
+  const { data: publishedRules } = useQuery({
+    queryKey: ["lease-cam-published-rules", lease.id],
+    queryFn: async () => {
+      const { data: rows, error } = await supabase
+        .from("lease_expense_rules")
+        .select("*, expense_categories(category_name)")
+        .eq("lease_id", lease.id)
+        .eq("published_to_cam", true)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return rows ?? [];
+    },
+    enabled: expanded,
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -382,6 +401,51 @@ function LeaseRuleCard({ lease, currentYear, onSaved }) {
               </div>
             </>
           )}
+
+          {/* Applied CAM Rules with Evidence */}
+          <div className="space-y-2 border-t pt-4">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold text-slate-700">Applied CAM Rules</p>
+              {publishedRules && publishedRules.length > 0 && (
+                <Badge className="bg-teal-100 text-teal-700 border-teal-200 text-[9px]">{publishedRules.length} published</Badge>
+              )}
+            </div>
+            {!publishedRules ? (
+              <p className="text-xs text-slate-400">Loading...</p>
+            ) : publishedRules.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">No CAM rules published for this lease yet.</p>
+            ) : (
+              <div className="grid gap-1">
+                {publishedRules.map((rule) => {
+                  const catName = rule.expense_categories?.category_name ?? rule.category ?? "Unknown";
+                  return (
+                    <div key={rule.id} className="flex items-center justify-between text-xs bg-white rounded px-3 py-1.5 border border-slate-100">
+                      <span className="capitalize text-slate-700">{catName.replace(/_/g, ' ')}</span>
+                      <div className="flex items-center gap-2">
+                        {rule.source_page != null && (
+                          <span className="text-[9px] text-slate-400">p. {rule.source_page}</span>
+                        )}
+                        <button
+                          className="flex items-center gap-0.5 text-[10px] text-blue-500 hover:text-blue-700"
+                          onClick={() => setEvidenceTarget({ rule, catName })}
+                        >
+                          <FileSearch className="w-3 h-3" />
+                          Evidence
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <ClauseEvidenceDrawer
+            isOpen={!!evidenceTarget}
+            onClose={() => setEvidenceTarget(null)}
+            category={{ category_name: (evidenceTarget?.catName || '').replace(/_/g, ' ') }}
+            rule={evidenceTarget?.rule ?? null}
+          />
 
           <div className="flex justify-end pt-2">
             <Button

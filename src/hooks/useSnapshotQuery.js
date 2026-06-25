@@ -107,5 +107,11 @@ export function useSnapshotQuery({
     isFetching,
     refetch,
     hasSnapshot: !!snapshot,
+    engineVersion: snapshot?.engine_version ?? null,
+    // input_hash column is populated going forward; fall back to the JSONB
+    // fingerprint for snapshots created before P0.7.
+    inputsHash: snapshot?.input_hash ?? snapshot?.inputs?._compute?.input_fingerprint ?? null,
+    lockedAt: snapshot?.locked_at ?? null,
+    lockedBy: snapshot?.locked_by ?? null,
   };
 }

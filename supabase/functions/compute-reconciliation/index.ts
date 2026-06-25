@@ -3,6 +3,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from "../_shared/supabase.ts";
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 
+const ENGINE_VERSION = "reconciliation-v1.0";
+
 /**
  * Compute Reconciliation Edge Function
  * Performs variance analysis between budget and actuals.
@@ -27,6 +29,28 @@ Deno.serve(async (req: Request) => {
 
     await assertPageAccess(req, orgId, ["Reconciliation", "ActualsVariance", "Actuals", "Variance"], "write");
     await assertPropertyAccess(req, property_id);
+
+    // ── Lock check ───────────────────────────────────────────────────────────
+    // Block recomputation when a completed snapshot is locked for this exact
+    // (org, property, engine, fiscal_year) scope.
+    const { data: lockedSnap } = await supabaseAdmin
+      .from("computation_snapshots")
+      .select("id, locked_at")
+      .eq("org_id", orgId)
+      .eq("property_id", property_id)
+      .eq("engine_type", "reconciliation")
+      .eq("fiscal_year", fiscal_year)
+      .eq("status", "completed")
+      .not("locked_at", "is", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (lockedSnap) {
+      throw new Error(
+        `Reconciliation snapshot for property ${property_id} / fiscal year ${fiscal_year} is locked ` +
+        `(locked at ${lockedSnap.locked_at}). Unlock the snapshot before recomputing.`,
+      );
+    }
 
     // ---------------------------------------------------------------
     // 1. Fetch budget for property_id and fiscal_year
@@ -421,16 +445,49 @@ Deno.serve(async (req: Request) => {
       computed_by: user.email ?? user.id,
     });
 
+    let reconSnapshotId: string | null = existingSnapshot?.id ?? null;
     if (!existingSnapshot) {
-      await saveSnapshot(supabaseAdmin, {
+      reconSnapshotId = await saveSnapshot(supabaseAdmin, {
         org_id: orgId,
         property_id,
         engine_type: "reconciliation",
         fiscal_year,
         computed_by: user.email ?? user.id,
+        engine_version: ENGINE_VERSION,
         inputs: snapshotPayload.inputs,
         outputs: snapshotPayload.outputs,
       });
+    }
+
+    try {
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId,
+        property_id,
+        entity_type: "computation_snapshots",
+        entity_id: reconSnapshotId ?? null,
+        action: "reconciliation_computed",
+        actor_user_id: user.id,
+        actor_email: user.email ?? null,
+        source: "edge_function",
+        severity: "info",
+        metadata: {
+          fiscal_year,
+          engine_type: "reconciliation",
+          engine_version: ENGINE_VERSION,
+          snapshot_id: reconSnapshotId ?? null,
+          reconciliation_id: reconciliationId,
+          budget_revenue: summary.budget_revenue,
+          actual_revenue: summary.actual_revenue,
+          revenue_variance_pct: summary.revenue_variance_pct,
+          budget_expenses: summary.budget_expenses,
+          actual_expenses: summary.actual_expenses,
+          expense_variance_pct: summary.expense_variance_pct,
+          noi_variance: summary.noi_variance,
+          flagged_item_count: flaggedItems.length,
+        },
+      });
+    } catch (auditErr) {
+      console.error("[compute-reconciliation] audit_log insert error:", auditErr?.message || auditErr);
     }
 
     // ---------------------------------------------------------------

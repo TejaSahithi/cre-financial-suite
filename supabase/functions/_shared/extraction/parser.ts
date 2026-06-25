@@ -494,7 +494,7 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-      const response = await fetch(`${doclingUrl}/api/v1/convert`, {
+      const response = await fetch(`${doclingUrl}/v1/convert/file`, {
         method: "POST",
         headers,
         body: formData,

@@ -131,7 +131,7 @@ Deno.test("Docling API Call - Success", async () => {
   // Mock successful Docling API call
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url: string | URL, options?: RequestInit) => {
-    if (url.toString().includes("/api/v1/convert")) {
+    if (url.toString().includes("/v1/convert/file")) {
       return new Response(JSON.stringify(mockDoclingResponse), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -160,7 +160,7 @@ Deno.test("Docling API Call - Success", async () => {
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
     
-    const response = await fetch(`${doclingUrl}/api/v1/convert`, {
+    const response = await fetch(`${doclingUrl}/v1/convert/file`, {
       method: "POST",
       headers,
       body: formData,
@@ -240,7 +240,7 @@ Deno.test("Docling API Call - Retry Logic", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url: string | URL, options?: RequestInit) => {
     callCount++;
-    if (url.toString().includes("/api/v1/convert")) {
+    if (url.toString().includes("/v1/convert/file")) {
       if (callCount < 3) {
         // First two calls fail with 500
         return new Response(JSON.stringify({ error: "Server error" }), {
@@ -274,7 +274,7 @@ Deno.test("Docling API Call - Retry Logic", async () => {
         formData.append("file", new Blob([fileBytes], { type: mimeType }), fileName);
         formData.append("output_formats", "text,tables,fields");
         
-        const response = await fetch(`${doclingUrl}/api/v1/convert`, {
+        const response = await fetch(`${doclingUrl}/v1/convert/file`, {
           method: "POST",
           body: formData,
         });
@@ -319,7 +319,7 @@ Deno.test("Docling API Call - Client Error No Retry", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url: string | URL, options?: RequestInit) => {
     callCount++;
-    if (url.toString().includes("/api/v1/convert")) {
+    if (url.toString().includes("/v1/convert/file")) {
       return new Response(JSON.stringify({ error: "Bad request" }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
@@ -339,7 +339,7 @@ Deno.test("Docling API Call - Client Error No Retry", async () => {
         const formData = new FormData();
         formData.append("file", new Blob([fileBytes], { type: mimeType }), fileName);
         
-        const response = await fetch(`${doclingUrl}/api/v1/convert`, {
+        const response = await fetch(`${doclingUrl}/v1/convert/file`, {
           method: "POST",
           body: formData,
         });

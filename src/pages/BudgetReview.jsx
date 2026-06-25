@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, Info, Download, ArrowRight } from "lucide-react";
+import { Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, Info, Download, ArrowRight, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -8,6 +8,7 @@ import {
 } from "recharts";
 
 import useOrgQuery from "@/hooks/useOrgQuery";
+import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import ScopeSelector from "@/components/ScopeSelector";
@@ -203,6 +204,12 @@ export default function BudgetReview() {
   const currBudgets = filteredBudgets.filter(b => (b.budget_year || b.fiscal_year) === currentYear);
   const prevBudgets = filteredBudgets.filter(b => (b.budget_year || b.fiscal_year) === prevYear);
 
+  const { engineVersion: budgetEngineVersion, inputsHash: budgetInputsHash, lockedAt: budgetLockedAt } = useSnapshotQuery({
+    engineType: "budget",
+    propertyId: scopeProperty !== "all" ? scopeProperty : null,
+    fiscalYear: currentYear,
+  });
+
   // Aggregate across all matching budgets for each year
   const currAgg = {
     total_revenue: currBudgets.reduce((s, b) => s + n(b.total_revenue), 0),
@@ -299,6 +306,28 @@ export default function BudgetReview() {
     }
   };
 
+  const handleExportBudgetBook = async () => {
+    const pid = scopeProperty || currBudgets[0]?.property_id;
+    if (!pid) {
+      toast.error("Select a property to export the budget book");
+      return;
+    }
+    const toastId = toast.loading("Preparing budget book...");
+    try {
+      const data = await invokeEdgeFunction("export-data", {
+        export_type: "budget_book",
+        property_id: pid,
+        fiscal_year: currentYear,
+        format: "csv",
+      });
+      if (!data?.download_url) throw new Error("Download URL not received");
+      window.open(data.download_url, "_blank", "noopener");
+      toast.success("Budget book ready", { id: toastId });
+    } catch (err) {
+      toast.error(`Export failed: ${err.message}`, { id: toastId });
+    }
+  };
+
   const hasBothYears = currAgg.count > 0 && prevAgg.count > 0;
   const hasAnyBudget = currAgg.count > 0 || prevAgg.count > 0;
   const subtitleScope = getScopeSubtitle(scope, {
@@ -319,6 +348,14 @@ export default function BudgetReview() {
               <Download className="mr-2 h-4 w-4" /> Export Current Year
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportBudgetBook}
+            disabled={!scopeProperty && !currBudgets[0]?.property_id}
+          >
+            <FileSpreadsheet className="mr-2 h-4 w-4" /> Export Budget Book
+          </Button>
           <Link to={createPageUrl("BudgetDashboard") + location.search}>
             <Button size="sm">
               Budget Dashboard <ArrowRight className="ml-2 h-4 w-4" />
@@ -338,6 +375,19 @@ export default function BudgetReview() {
         onBuildingChange={setScopeBuilding}
         onUnitChange={setScopeUnit}
       />
+
+      {(budgetEngineVersion || budgetLockedAt || currBudgets.some(b => b.status === "locked")) && (
+        <div className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 flex flex-wrap gap-x-3">
+          {budgetEngineVersion && <span>Engine: {budgetEngineVersion}</span>}
+          {budgetInputsHash && <span>Hash: {budgetInputsHash.slice(0, 8)}</span>}
+          {budgetLockedAt
+            ? <span className="text-amber-600 font-medium">Locked: {new Date(budgetLockedAt).toLocaleDateString()}</span>
+            : currBudgets.some(b => b.status === "locked") && (
+                <span className="text-amber-600 font-medium">Budget locked</span>
+              )
+          }
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex h-64 items-center justify-center">
@@ -406,6 +456,7 @@ export default function BudgetReview() {
                         {improved ? "Improved" : "Worsened"} from {fmtPct(m.prev)}
                       </p>
                     )}
+                    <p className="text-[10px] text-slate-400 mt-1.5">From approved budget data</p>
                   </div>
                 );
               });

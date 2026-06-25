@@ -4,6 +4,8 @@ import { verifyUser, getUserOrgId, assertPageAccess, assertPropertyAccess } from
 import { saveSnapshot, findMatchingCompletedSnapshot } from "../_shared/snapshot.ts";
 import { calculateCam } from "../_shared/cam-calculator.ts";
 
+const ENGINE_VERSION = "cam-v1.0";
+
 type ScopeLevel = "property" | "building" | "unit";
 
 function asNumber(value: unknown) {
@@ -468,6 +470,17 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
   const appliedRuleIds: string[] = [];
   const approvedPublishedCamRuleLeaseIds: string[] = [];
   const approvedPublishedCamRuleRefs: Array<{ id: string; lease_id: string }> = [];
+  const ruleEvidenceList: Array<{
+    rule_id: string;
+    lease_id: string;
+    category: string | null;
+    source_field_key: string | null;
+    source_page: number | null;
+    source_text: string | null;
+    confidence_score: number | null;
+    approved_by: string | null;
+    approved_at: string | null;
+  }> = [];
   const diagnostics = {
     approvedPublishedCamChildRuleCount: 0,
     skippedIncludedInBaseRentCount: 0,
@@ -531,6 +544,20 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
               if (rule?.id) approvedPublishedCamRuleRefs.push({ id: String(rule.id), lease_id: leaseId });
               if (rs?.id) appliedRuleSetIds.push(String(rs.id));
               if (rule?.id) appliedRuleIds.push(String(rule.id));
+              // Collect evidence metadata for snapshot inputs
+              if (rule?.id) {
+                ruleEvidenceList.push({
+                  rule_id: String(rule.id),
+                  lease_id: leaseId,
+                  category: catName ?? null,
+                  source_field_key: rule.source_field_key ?? null,
+                  source_page: rule.source_page ?? null,
+                  source_text: rule.exact_source_text ?? rule.notes ?? null,
+                  confidence_score: rule.confidence_score ?? null,
+                  approved_by: rule.approved_by ?? null,
+                  approved_at: rule.approved_at ?? null,
+                });
+              }
             } else {
               const paymentTreatment = normalizeText(rule.payment_treatment);
               if (paymentTreatment === "included_in_base_rent") diagnostics.skippedIncludedInBaseRentCount += 1;
@@ -566,6 +593,7 @@ async function fetchConfigs(supabaseAdmin: any, orgId: string, propertyId: strin
     appliedRuleIds: Array.from(new Set(appliedRuleIds)).sort(),
     approvedPublishedCamRuleLeaseIds: Array.from(new Set(approvedPublishedCamRuleLeaseIds)).sort(),
     approvedPublishedCamRuleRefs,
+    ruleEvidenceList,
     diagnostics,
   };
 }
@@ -638,6 +666,29 @@ Deno.serve(async (req: Request) => {
     await assertPageAccess(req, orgId, ["CAMCalculation", "CAMDashboard"], "write");
     await assertPropertyAccess(req, propertyId);
 
+    // ── Lock check ───────────────────────────────────────────────────────────
+    // Block recomputation when a completed snapshot is locked for this exact
+    // (org, property, engine, fiscal_year) scope. Scoped narrowly to avoid
+    // blocking other properties or fiscal years in the same org.
+    const { data: lockedSnap } = await supabaseAdmin
+      .from("computation_snapshots")
+      .select("id, locked_at")
+      .eq("org_id", orgId)
+      .eq("property_id", propertyId)
+      .eq("engine_type", "cam")
+      .eq("fiscal_year", fiscalYear)
+      .eq("status", "completed")
+      .not("locked_at", "is", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (lockedSnap) {
+      throw new Error(
+        `CAM snapshot for property ${propertyId} / fiscal year ${fiscalYear} is locked ` +
+        `(locked at ${lockedSnap.locked_at}). Unlock the snapshot before recomputing.`,
+      );
+    }
+
     const { property, buildings, units } = await fetchPropertyContext(supabaseAdmin, orgId, propertyId);
     const [expenses, leases, camReadyClassifications, camReadyInputs] = await Promise.all([
       fetchExpenses(supabaseAdmin, orgId, propertyId, fiscalYear),
@@ -653,6 +704,7 @@ Deno.serve(async (req: Request) => {
       appliedRuleSetIds,
       appliedRuleIds,
       approvedPublishedCamRuleRefs,
+      ruleEvidenceList,
       diagnostics: configDiagnostics,
     } = await fetchConfigs(
       supabaseAdmin,
@@ -660,6 +712,36 @@ Deno.serve(async (req: Request) => {
       propertyId,
       leaseIds,
     );
+
+    // Enrich evidence with lease_field_reviews where source_field_key is set
+    let ruleEvidence: any[] = ruleEvidenceList;
+    const rulesWithFieldKey = ruleEvidenceList.filter((r) => r.source_field_key);
+    if (rulesWithFieldKey.length > 0) {
+      const frLeaseIds = [...new Set(rulesWithFieldKey.map((r) => r.lease_id))];
+      const frFieldKeys = [...new Set(rulesWithFieldKey.map((r) => r.source_field_key as string))];
+      const { data: fieldReviews } = await supabaseAdmin
+        .from("lease_field_reviews")
+        .select("id, lease_id, field_key, source_page, source_text, reviewer, reviewed_at")
+        .in("lease_id", frLeaseIds)
+        .in("field_key", frFieldKeys);
+      if (fieldReviews?.length) {
+        ruleEvidence = ruleEvidenceList.map((r) => {
+          if (!r.source_field_key) return r;
+          const fr = (fieldReviews as any[]).find(
+            (f) => f.lease_id === r.lease_id && f.field_key === r.source_field_key,
+          );
+          if (!fr) return r;
+          return {
+            ...r,
+            field_review_id: fr.id ?? null,
+            field_review_page: fr.source_page ?? null,
+            field_review_text: fr.source_text ?? null,
+            reviewer: fr.reviewer ?? null,
+            reviewed_at: fr.reviewed_at ?? null,
+          };
+        });
+      }
+    }
     const mergedPropertyConfig = mergePropertyConfig(propertyConfig, body);
 
     const approvedScopedLeases = leases.filter((lease: any) =>
@@ -844,6 +926,7 @@ Deno.serve(async (req: Request) => {
       unit_count: units.length,
       property_config: mergedPropertyConfig,
       override_values: body?.override_values ?? null,
+      rule_evidence: ruleEvidence,
       _compute: {
         page_scope: ["CAMCalculation", "CAMDashboard"],
         source_tables: ["properties", "buildings", "units", "expenses", "expense_classifications", "cam_expense_inputs", "leases", "property_config", "lease_config", "lease_expense_rule_sets", "computation_snapshots"],
@@ -907,15 +990,42 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    await saveSnapshot(supabaseAdmin, {
+    const newSnapshotId = await saveSnapshot(supabaseAdmin, {
       org_id: orgId,
       property_id: propertyId,
       engine_type: "cam",
       fiscal_year: fiscalYear,
       computed_by: user.email ?? user.id,
+      engine_version: ENGINE_VERSION,
       inputs,
       outputs,
     });
+
+    try {
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId,
+        property_id: propertyId,
+        entity_type: "computation_snapshots",
+        entity_id: newSnapshotId ?? null,
+        action: "cam_computed",
+        actor_user_id: user.id,
+        actor_email: user.email ?? null,
+        source: "edge_function",
+        severity: "info",
+        metadata: {
+          fiscal_year: fiscalYear,
+          engine_type: "cam",
+          engine_version: ENGINE_VERSION,
+          snapshot_id: newSnapshotId ?? null,
+          total_cam: outputs.total_cam,
+          cam_per_sf: outputs.cam_per_sf,
+          tenant_count: outputs.tenant_charges?.length ?? 0,
+          recoverable_expense_count: inputs.recoverable_expense_count,
+        },
+      });
+    } catch (auditErr) {
+      console.error("[compute-cam] audit_log insert error:", auditErr?.message || auditErr);
+    }
 
     return new Response(
       JSON.stringify({

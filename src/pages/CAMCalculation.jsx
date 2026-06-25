@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Calculator, AlertTriangle, RefreshCw, Sliders } from "lucide-react";
+import { ArrowLeft, Calculator, AlertTriangle, RefreshCw, Sliders, Download } from "lucide-react";
 
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabaseClient";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { useSnapshotQuery } from "@/hooks/useSnapshotQuery";
 import { useComputeTrigger } from "@/hooks/useComputeTrigger";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { fetchPropertyCamConfig } from "@/services/camConfig";
 import { expenseService } from "@/services/expenseService";
 import { logAudit } from "@/services/audit";
@@ -151,6 +152,9 @@ export default function CAMCalculation() {
     computedAt,
     refetch: refetchSnapshot,
     hasSnapshot,
+    engineVersion,
+    inputsHash,
+    lockedAt,
   } = useSnapshotQuery({
     engineType: "cam",
     propertyId: scope.targetPropertyId,
@@ -235,6 +239,37 @@ export default function CAMCalculation() {
     }
   };
 
+  const [exportingPacket, setExportingPacket] = useState(false);
+
+  const handleExportPacket = async (leaseId = null) => {
+    if (!scope.targetPropertyId) {
+      toast.error("Select a property before exporting");
+      return;
+    }
+    if (!hasSnapshot) {
+      toast.error("Run CAM calculation first to generate a packet");
+      return;
+    }
+    setExportingPacket(true);
+    const toastId = toast.loading(leaseId ? "Preparing tenant CAM packet..." : "Preparing all tenant CAM packets...");
+    try {
+      const data = await invokeEdgeFunction("export-data", {
+        export_type: "cam_packet",
+        property_id: scope.targetPropertyId,
+        fiscal_year: fiscalYear,
+        format: "csv",
+        ...(leaseId ? { lease_id: leaseId } : {}),
+      });
+      if (!data?.download_url) throw new Error("Download URL not received");
+      window.open(data.download_url, "_blank", "noopener");
+      toast.success("CAM packet ready", { id: toastId });
+    } catch (err) {
+      toast.error(`Export failed: ${err?.message || "Unexpected error"}`, { id: toastId });
+    } finally {
+      setExportingPacket(false);
+    }
+  };
+
   const tenantCharges = outputs?.tenant_charges ?? [];
   const assumptions = outputs?.assumptions ?? [];
 
@@ -247,6 +282,17 @@ export default function CAMCalculation() {
         iconColor="from-teal-500 to-cyan-600"
       >
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-blue-200 text-blue-700 hover:bg-blue-50"
+            onClick={() => handleExportPacket()}
+            disabled={exportingPacket || !hasSnapshot}
+            title={!hasSnapshot ? "Run CAM calculation first" : "Export CAM reconciliation packets for all tenants"}
+          >
+            {exportingPacket ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+            Export CAM Packets
+          </Button>
           <Link to={`${createPageUrl("CAMDashboard")}?property_id=${scope.targetPropertyId}&year=${fiscalYear}`}>
             <Button variant="outline" size="sm" className="border-teal-200 text-teal-700 hover:bg-teal-50">
               <Sliders className="w-4 h-4 mr-2" />
@@ -290,7 +336,14 @@ export default function CAMCalculation() {
         <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
           Calculation scope: <span className="font-semibold capitalize">{scope.targetScopeLevel}</span> {"→"}{" "}
           <span className="font-semibold">{scope.targetScopeLabel}</span>
-          {computedAt ? <span className="ml-2 text-slate-400">Latest snapshot: {new Date(computedAt).toLocaleString()}</span> : null}
+          {computedAt ? (
+            <span className="ml-2 text-slate-400">
+              Latest snapshot: {new Date(computedAt).toLocaleString()}
+              {engineVersion ? ` · Engine: ${engineVersion}` : ""}
+              {inputsHash ? ` · Hash: ${inputsHash.slice(0, 8)}` : ""}
+              {lockedAt ? ` · Locked: ${new Date(lockedAt).toLocaleDateString()}` : ""}
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -455,6 +508,7 @@ export default function CAMCalculation() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Validated Input Summary</CardTitle>
+            <p className="text-[10px] text-amber-600 font-medium">Preview only — not official. Official results appear below after clicking Calculate CAM.</p>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
@@ -521,8 +575,9 @@ export default function CAMCalculation() {
           ) : null}
 
           <Card className="overflow-hidden">
-            <CardHeader className="pb-2">
+            <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">Tenant CAM Results</CardTitle>
+              <p className="text-[10px] text-slate-400">Click Export to download an audit-ready packet per tenant</p>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -535,6 +590,7 @@ export default function CAMCalculation() {
                     <TableHead className="text-[10px] font-bold text-right">BASE YEAR</TableHead>
                     <TableHead className="text-[10px] font-bold text-right">CAP ADJ.</TableHead>
                     <TableHead className="text-[10px] font-bold">FLAGS</TableHead>
+                    <TableHead className="text-[10px] font-bold"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -565,6 +621,19 @@ export default function CAMCalculation() {
                           {tenant.cap_applied ? <Badge className="bg-amber-100 text-amber-700 text-[9px]">CAPPED</Badge> : null}
                           {Number(tenant.base_year_adjustment || 0) > 0 ? <Badge className="bg-slate-100 text-slate-700 text-[9px]">BASE YEAR</Badge> : null}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-[10px] text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                          onClick={() => handleExportPacket(tenant.lease_id)}
+                          disabled={exportingPacket}
+                          title={`Export CAM packet for ${tenant.tenant_name}`}
+                        >
+                          <Download className="w-3 h-3 mr-1" />
+                          Export
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}

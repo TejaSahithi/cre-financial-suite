@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -47,7 +48,7 @@ export default function ChartOfAccounts() {
   const [showDialog, setShowDialog] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [editItem, setEditItem] = useState(null);
-  const [form, setForm] = useState({ code: "", name: "", type: "expense", category: "", description: "" });
+  const [form, setForm] = useState({ code: "", name: "", type: "expense", category: "", description: "", is_recoverable: false });
   const queryClient = useQueryClient();
 
   const { data: accounts = [], isLoading } = useQuery({
@@ -83,7 +84,7 @@ export default function ChartOfAccounts() {
 
   const openEdit = (acct) => {
     setEditItem(acct);
-    setForm({ code: acct.code, name: acct.name, type: acct.type, category: acct.category || "", description: acct.description || "" });
+    setForm({ code: acct.code, name: acct.name, type: acct.type, category: acct.category || "", description: acct.description || "", is_recoverable: acct.is_recoverable ?? false });
     setShowDialog(true);
   };
 
@@ -144,6 +145,7 @@ export default function ChartOfAccounts() {
               <TableHead className="text-[10px]">ACCOUNT NAME</TableHead>
               <TableHead className="text-[10px]">TYPE</TableHead>
               <TableHead className="text-[10px]">CATEGORY / MAPPING</TableHead>
+              <TableHead className="text-[10px]">RECOVERABLE</TableHead>
               <TableHead className="text-[10px]">STATUS</TableHead>
               <TableHead className="text-[10px] w-20">ACTIONS</TableHead>
             </TableRow></TableHeader>
@@ -156,6 +158,11 @@ export default function ChartOfAccounts() {
                   <TableCell className="text-sm font-medium">{a.name}</TableCell>
                   <TableCell><Badge className={`text-[9px] uppercase ${a.type === 'revenue' ? 'bg-emerald-100 text-emerald-700' : a.type === 'expense' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>{a.type}</Badge></TableCell>
                   <TableCell className="text-xs text-slate-500">{a.category ? a.category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '—'}</TableCell>
+                  <TableCell>
+                    {a.type === 'expense'
+                      ? <Badge className={a.is_recoverable ? 'bg-blue-100 text-blue-700 text-[9px]' : 'bg-slate-100 text-slate-500 text-[9px]'}>{a.is_recoverable ? 'Recoverable' : 'Non-recoverable'}</Badge>
+                      : <span className="text-[10px] text-slate-300">—</span>}
+                  </TableCell>
                   <TableCell><Badge className={a.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}>{a.is_active !== false ? 'Active' : 'Inactive'}</Badge></TableCell>
                   <TableCell>
                     <div className="flex gap-1">
@@ -191,6 +198,18 @@ export default function ChartOfAccounts() {
               </div>
             </div>
             <div><Label className="text-xs">Description</Label><Input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Optional description" /></div>
+            {form.type === 'expense' && (
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="is_recoverable"
+                  checked={!!form.is_recoverable}
+                  onCheckedChange={v => setForm({...form, is_recoverable: !!v})}
+                />
+                <Label htmlFor="is_recoverable" className="text-xs cursor-pointer">
+                  Default recoverable from tenants — applied to imported expenses with this GL code when no recoverability is set
+                </Label>
+              </div>
+            )}
           </div>
           <DialogFooter><Button onClick={handleSave} disabled={!form.code || !form.name} className="bg-blue-600 hover:bg-blue-700">{editItem ? 'Update' : 'Create'} Account</Button></DialogFooter>
         </DialogContent>

@@ -58,6 +58,9 @@ export function deriveExpenseCamSendBlockers(
   if (alreadySent) return ["already_sent"];
   if (!hasActual && !hasRule) blockers.push("missing_actual_or_rule");
   if (amount <= 0) blockers.push("missing_amount");
+  if (recoverability === "conditional" && !classification.condition_resolved) {
+    blockers.push("unresolved_conditional");
+  }
   if (camEligible !== "yes") blockers.push("not_cam_eligible");
   if (rule && (paymentTreatment === "included_in_base_rent" || paymentTreatment === "tenant_direct_contract" || rule.is_excluded === true)) {
     blockers.push("explicit_exclusion");
@@ -137,6 +140,29 @@ export async function handleExpenseCamSendRequest(req: Request) {
 
     const blockers = deriveExpenseCamSendBlockers(classification, expense, rule, payload.reason);
     if (blockers.length > 0 && !(blockers.length === 1 && blockers[0] === "already_sent")) {
+      if (blockers.includes("unresolved_conditional")) {
+        try {
+          await supabaseAdmin.from("audit_logs").insert({
+            org_id: orgId,
+            property_id: classification.property_id ?? null,
+            entity_type: "expense_classifications",
+            entity_id: payload.classificationId,
+            action: "expense_conditional_blocked_from_cam",
+            actor_user_id: user.id,
+            actor_email: user.email ?? null,
+            source: "edge_function",
+            severity: "info",
+            metadata: {
+              classification_id: payload.classificationId,
+              blockers,
+              recoverability_result: classification.recoverability_result ?? null,
+              condition_resolved: classification.condition_resolved ?? false,
+            },
+          });
+        } catch (auditErr) {
+          console.error("[send-expense-classification-to-cam] audit_log insert error (conditional_blocked):", auditErr?.message || auditErr);
+        }
+      }
       return jsonResponse({
         error: true,
         message: `Expense classification cannot be sent to CAM: ${blockers.join(", ")}`,
@@ -162,6 +188,30 @@ export async function handleExpenseCamSendRequest(req: Request) {
 
     if (error) {
       throw new Error(error.message || "send_expense_classification_to_cam_workflow failed");
+    }
+
+    try {
+      await supabaseAdmin.from("audit_logs").insert({
+        org_id: orgId,
+        property_id: classification.property_id ?? null,
+        entity_type: "expense_classifications",
+        entity_id: payload.classificationId,
+        action: "expense_classification_sent_to_cam",
+        actor_user_id: user.id,
+        actor_email: user.email ?? null,
+        source: "edge_function",
+        severity: "info",
+        metadata: {
+          classification_id: payload.classificationId,
+          expense_id: expenseId ?? null,
+          rule_id: ruleId ?? null,
+          amount: expense?.amount ?? classification.amount ?? null,
+          recoverability_result: classification.recoverability_result ?? null,
+          reason: payload.reason ?? null,
+        },
+      });
+    } catch (auditErr) {
+      console.error("[send-expense-classification-to-cam] audit_log insert error (sent):", auditErr?.message || auditErr);
     }
 
     return jsonResponse({ error: false, ...data });

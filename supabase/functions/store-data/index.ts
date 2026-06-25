@@ -249,6 +249,138 @@ function applyFileScope(
   };
 }
 
+/** SHA-256 of the five key expense fields for same-file re-upload detection. */
+async function computeRowHash(
+  amount: unknown,
+  date: unknown,
+  vendor: unknown,
+  category: unknown,
+  glCode: unknown,
+): Promise<string> {
+  const input = [
+    String(amount ?? ""),
+    String(date ?? ""),
+    String(vendor ?? "").toLowerCase().trim(),
+    String(category ?? "").toLowerCase().trim(),
+    String(glCode ?? ""),
+  ].join("|");
+  const encoded = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Returns hard blocks (invoice_number or row_hash exact match — block insert)
+ * and soft warnings (fuzzy amount+category+date match — warn but allow insert).
+ */
+async function checkExpenseDuplicates(
+  supabaseAdmin: any,
+  orgId: string,
+  mappedRows: Record<string, any>[],
+): Promise<{ hardBlocks: Record<string, any>[]; softWarnings: Record<string, any>[] }> {
+  const hardBlocks: Record<string, any>[] = [];
+  const softWarnings: Record<string, any>[] = [];
+
+  // 1. Invoice number hard match
+  const invoiceNumbers = mappedRows
+    .map((r) => r.invoice_number)
+    .filter((n): n is string => typeof n === "string" && n.trim().length > 0);
+
+  if (invoiceNumbers.length > 0) {
+    const { data: invoiceMatches } = await supabaseAdmin
+      .from("expenses")
+      .select("id, invoice_number, amount, date, category, vendor")
+      .eq("org_id", orgId)
+      .in("invoice_number", invoiceNumbers);
+
+    for (const existing of invoiceMatches ?? []) {
+      const newRow = mappedRows.find((r) => r.invoice_number === existing.invoice_number);
+      if (newRow) {
+        hardBlocks.push({
+          match_type: "invoice_number",
+          invoice_number: existing.invoice_number,
+          existing_id: existing.id,
+          existing_amount: existing.amount,
+          existing_date: existing.date,
+          new_amount: newRow.amount,
+          new_date: newRow.date,
+        });
+      }
+    }
+  }
+
+  // 2. Row hash hard match (same file re-uploaded or identical row from another file)
+  const hashes = mappedRows.map((r) => r.import_row_hash).filter(Boolean);
+  if (hashes.length > 0 && hardBlocks.length === 0) {
+    const { data: hashMatches } = await supabaseAdmin
+      .from("expenses")
+      .select("id, import_row_hash, amount, date, category, source_file_id")
+      .eq("org_id", orgId)
+      .in("import_row_hash", hashes)
+      .not("source_file_id", "is", null);
+
+    for (const existing of hashMatches ?? []) {
+      const newRow = mappedRows.find((r) => r.import_row_hash === existing.import_row_hash);
+      if (newRow) {
+        hardBlocks.push({
+          match_type: "row_hash",
+          import_row_hash: existing.import_row_hash,
+          existing_id: existing.id,
+          existing_source_file_id: existing.source_file_id,
+          existing_amount: existing.amount,
+          existing_date: existing.date,
+          new_amount: newRow.amount,
+          new_date: newRow.date,
+        });
+      }
+    }
+  }
+
+  // 3. Fuzzy match: same amount + category, date within ±3 days (warning only)
+  if (hardBlocks.length === 0) {
+    const amounts = [...new Set(mappedRows.map((r) => r.amount).filter((a) => a != null))];
+    if (amounts.length > 0) {
+      const { data: fuzzyMatches } = await supabaseAdmin
+        .from("expenses")
+        .select("id, amount, date, category, vendor, property_id")
+        .eq("org_id", orgId)
+        .in("amount", amounts.slice(0, 50))
+        .limit(300);
+
+      for (const row of mappedRows) {
+        const rowDate = row.date ? new Date(row.date) : null;
+        const match = (fuzzyMatches ?? []).find((e: any) => {
+          if (Math.abs(Number(e.amount) - Number(row.amount)) > 0.01) return false;
+          if ((e.category ?? "").toLowerCase() !== (row.category ?? "").toLowerCase()) return false;
+          if (rowDate && e.date) {
+            const diffDays =
+              Math.abs(new Date(e.date).getTime() - rowDate.getTime()) / 86400000;
+            if (diffDays > 3) return false;
+          }
+          return true;
+        });
+        if (match) {
+          softWarnings.push({
+            match_type: "fuzzy",
+            existing_id: match.id,
+            existing_amount: match.amount,
+            existing_date: match.date,
+            existing_vendor: match.vendor,
+            new_amount: row.amount,
+            new_date: row.date,
+            new_vendor: row.vendor,
+            new_category: row.category,
+          });
+        }
+      }
+    }
+  }
+
+  return { hardBlocks, softWarnings };
+}
+
 function buildStoreResult(
   fileId: string,
   tableName: string,
@@ -383,9 +515,28 @@ Deno.serve(async (req: Request) => {
         validData.find((r) => r.property_id)?.property_id ??
         null;
 
+      // 6b. For expenses: load GL account mappings (code → category + is_recoverable).
+      //     Fetched once per file; used to enrich rows before insert.
+      const glMappings = new Map<string, { category: string | null; is_recoverable: boolean | null }>();
+      if (moduleType === "expenses") {
+        const { data: glAccounts } = await supabaseAdmin
+          .from("gl_accounts")
+          .select("code, category, is_recoverable")
+          .eq("org_id", orgId)
+          .eq("is_active", true);
+        for (const acct of glAccounts ?? []) {
+          if (acct.code) {
+            glMappings.set(acct.code.trim(), {
+              category: acct.category ?? null,
+              is_recoverable: acct.is_recoverable ?? null,
+            });
+          }
+        }
+      }
+
       // 7. Map each row to the correct table columns.
       // If a row is missing property_id but the file has one, inject it.
-      const mappedRows = validData.map((row) => {
+      let mappedRows = validData.map((row) => {
         const enriched = applyFileScope(
           filePropertyId && !row.property_id
             ? { ...row, property_id: filePropertyId }
@@ -394,6 +545,64 @@ Deno.serve(async (req: Request) => {
         );
         return mapRow(enriched, moduleType, orgId, userEmail);
       });
+
+      // 7a. Expenses only: apply GL account category/recoverability where row has no category.
+      //     Only fills in missing values — never overwrites what the import file supplied.
+      if (moduleType === "expenses" && glMappings.size > 0) {
+        mappedRows = mappedRows.map((r) => {
+          if (!r.gl_code) return r;
+          const mapping = glMappings.get(String(r.gl_code).trim());
+          if (!mapping) return r; // unmapped GL code — leave row unchanged
+          const applyCategory = !r.category && mapping.category;
+          const applyClassification =
+            r.classification == null && mapping.is_recoverable != null;
+          if (!applyCategory && !applyClassification) return r;
+          return {
+            ...r,
+            ...(applyCategory ? { category: mapping.category, category_source: "gl_mapping" } : {}),
+            ...(applyClassification
+              ? { classification: mapping.is_recoverable ? "recoverable" : "non_recoverable" }
+              : {}),
+          };
+        });
+      }
+
+      // 7c. Expenses only: stamp source_file_id + per-row hash, then check for duplicates.
+      let softDupWarnings: Record<string, any>[] = [];
+      if (moduleType === "expenses") {
+        const hashes = await Promise.all(
+          mappedRows.map((r) =>
+            computeRowHash(r.amount, r.date, r.vendor, r.category, r.gl_code)
+          )
+        );
+        mappedRows = mappedRows.map((r, i) => ({
+          ...r,
+          source_file_id: file_id,
+          import_row_hash: hashes[i],
+        }));
+
+        const dupResult = await checkExpenseDuplicates(supabaseAdmin, orgId, mappedRows);
+        if (dupResult.hardBlocks.length > 0) {
+          await setFailed(
+            supabaseAdmin,
+            file_id,
+            `Duplicate expenses detected: ${dupResult.hardBlocks.length} row(s) already exist`,
+            "storing",
+            STATUS_PROGRESS.storing,
+          );
+          return new Response(
+            JSON.stringify({
+              error: true,
+              error_code: "DUPLICATE_EXPENSE_DETECTED",
+              message: `${dupResult.hardBlocks.length} expense row(s) are duplicates and were not imported`,
+              duplicate_count: dupResult.hardBlocks.length,
+              duplicate_details: dupResult.hardBlocks,
+            }),
+            { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        softDupWarnings = dupResult.softWarnings;
+      }
 
       // 8. Insert rows in batch
       const { data: insertedData, error: insertError } = await supabaseAdmin
@@ -454,6 +663,9 @@ Deno.serve(async (req: Request) => {
         JSON.stringify({
           error: false,
           ...storeResult,
+          ...(softDupWarnings.length > 0
+            ? { potential_duplicates: softDupWarnings }
+            : {}),
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -28,6 +28,9 @@ export default function Reconciliation() {
     computedAt,
     hasSnapshot,
     refetch,
+    engineVersion,
+    inputsHash,
+    lockedAt,
   } = useSnapshotQuery({
     engineType: "reconciliation",
     propertyId: activePropertyId,
@@ -214,7 +217,12 @@ export default function Reconciliation() {
               </p>
               <p className="text-xs text-blue-600">
                 {hasSnapshot && computedAt
-                  ? `Authoritative snapshot updated ${new Date(computedAt).toLocaleString()}`
+                  ? [
+                      `Authoritative snapshot updated ${new Date(computedAt).toLocaleString()}`,
+                      engineVersion ? `Engine: ${engineVersion}` : "",
+                      inputsHash ? `Hash: ${inputsHash.slice(0, 8)}` : "",
+                      lockedAt ? `Locked: ${new Date(lockedAt).toLocaleDateString()}` : "",
+                    ].filter(Boolean).join(" · ")
                   : "Preview mode only - no completed reconciliation snapshot yet"}
               </p>
             </div>
@@ -230,12 +238,14 @@ export default function Reconciliation() {
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Budgeted CAM Pool</p>
             <p className="text-2xl font-bold text-slate-900">${Number(summary.budget_expenses || 0).toLocaleString()}</p>
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-slate-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Actual CAM Pool</p>
             <p className="text-2xl font-bold text-slate-900">${Number(summary.actual_expenses || 0).toLocaleString()}</p>
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
           </CardContent>
         </Card>
         <Card className={`border-l-4 ${Number(summary.expense_variance || 0) > 0 ? "border-l-red-500" : "border-l-emerald-500"}`}>
@@ -244,12 +254,14 @@ export default function Reconciliation() {
             <p className={`text-2xl font-bold ${Number(summary.expense_variance || 0) > 0 ? "text-red-600" : "text-emerald-600"}`}>
               {Number(summary.expense_variance || 0) > 0 ? "+" : ""}${Number(summary.expense_variance || 0).toLocaleString()}
             </p>
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-amber-500">
           <CardContent className="p-4">
             <p className="text-[10px] font-semibold text-slate-500 uppercase">Flagged Variances</p>
             <p className="text-2xl font-bold text-slate-900">{(currentData.line_items || []).filter((item) => item.flagged).length}</p>
+            {!hasSnapshot && <p className="text-[10px] text-amber-600 font-medium mt-0.5">Preview estimate — not official</p>}
           </CardContent>
         </Card>
       </div>
@@ -318,7 +330,12 @@ export default function Reconciliation() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle className="text-base">Flagged Items</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle className="text-base">Flagged Items</CardTitle>
+            {!hasSnapshot && (
+              <p className="text-[10px] text-amber-600 font-medium">Preview estimate — run reconciliation for authoritative results</p>
+            )}
+          </CardHeader>
           <CardContent className="space-y-3">
             {(currentData.tenant_adjustments || []).length === 0 ? (
               <p className="text-sm text-slate-400 text-center py-8">
