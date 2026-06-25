@@ -817,6 +817,21 @@ export default function LeaseExpenseClassification() {
           </div>
         </div>
 
+        {/* Summary bar — approved rules, approved expenses, matched, unmatched */}
+        <div className="mb-3 grid grid-cols-4 gap-2 text-center text-xs">
+          {[
+            { label: "Approved Rules", value: approvedRules.length, colorBg: "bg-slate-50", colorText: "text-slate-900" },
+            { label: "Approved Expenses", value: approvedActuals.length, colorBg: "bg-slate-50", colorText: "text-slate-900" },
+            { label: "Matched", value: rows.filter(r => r.rowType === "matched_classification").length, colorBg: "bg-emerald-50", colorText: "text-emerald-700" },
+            { label: "Unmatched", value: rows.filter(r => r.rowType === "actual_missing_rule" || r.rowType === "rule_missing_actual").length, colorBg: "bg-amber-50", colorText: "text-amber-700" },
+          ].map(({ label, value, colorBg, colorText }) => (
+            <div key={label} className={`rounded-lg ${colorBg} p-2.5 shadow-sm`}>
+              <div className={`text-lg font-bold ${colorText}`}>{value}</div>
+              <div className="text-slate-500">{label}</div>
+            </div>
+          ))}
+        </div>
+
         <Card className="overflow-hidden rounded-xl border-0 bg-white shadow-md">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <div className="border-b bg-slate-50 px-4 pt-3">

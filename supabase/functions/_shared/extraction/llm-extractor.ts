@@ -105,6 +105,20 @@ RULES:
          10. Permitted Use: General Office"
     The label after the number IS the field label. Extract from these lines even though they don't say
     "Landlord Name:" or "Property Address:" verbatim.
+    CRITICAL — numbered-list boundary rule: when extracting a value from a numbered line,
+    STOP at the end of that line. The NUMBER that begins the NEXT line is NOT part of the
+    current field's value. Examples:
+      "2. Landlord: Acme Partners, LLC\n3. Address..." → landlord_name = "Acme Partners, LLC"  NOT "Acme Partners, LLC 3"
+      "3. Address of Landlord: 123 Main St\n4. Tenant..." → landlord_address = "123 Main St"  NOT "4"
+    If the address appears only as a trailing number (e.g. you see only "4"), it is WRONG — return null.
+    For tenant_contact_name / landlord_contact_name: the value MUST be a human first+last name.
+    NEVER return a calendar month name (January, February, March, April, May, June, July,
+    August, September, October, November, December) — those are dates, not person names.
+      BAD:  tenant_contact_name = "January"  ← extracted from "January 9, 2024"
+      GOOD: tenant_contact_name = "Narendra Pydi"  ← actual name from the tenant line
+    For property_name: return ONLY the official trade/marketing name of the building (e.g.
+    "Markets at Choto", "The Commons"). If no such name is stated, return null. NEVER return
+    clause text, parking clauses, or any phrase that contains the word "Tenant".
 
 14. Multi-line labeled values: when an address spans several lines, join with commas.
     "Address: 123 Main St / Suite #100 / Cityville, ST 12345" → "123 Main St, Suite #100, Cityville, ST 12345".

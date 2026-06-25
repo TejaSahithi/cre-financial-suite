@@ -150,6 +150,7 @@ export default function LeaseReview() {
   const [editValue, setEditValue] = useState("");
   const [showSignature, setShowSignature] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
+  const [showPostApprovalBanner, setShowPostApprovalBanner] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [showSendBack, setShowSendBack] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
@@ -1902,6 +1903,7 @@ export default function LeaseReview() {
 
       toast.success(`Lease abstract approved (v${approvedLease.abstract_version || 1})`);
       setShowApproval(false);
+      setShowPostApprovalBanner(true);
     } catch (err) {
       console.error("[LeaseReview] approve failed:", err);
       toast.error(err?.message || "Could not approve lease abstract");
@@ -2683,9 +2685,15 @@ export default function LeaseReview() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
+            onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
           >
             Review Expense Rules
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
+          >
+            Expense Classification
           </Button>
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="mr-1 h-4 w-4" />
@@ -2700,6 +2708,27 @@ export default function LeaseReview() {
           </Button>
         </div>
       </div>
+
+      {/* Post-approval banner: guides user to review extracted expense rules */}
+      {showPostApprovalBanner && (
+        <div className="mx-4 mt-3 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
+          <span className="text-amber-800">
+            Lease approved. Expense rules are being extracted — review and approve them before running CAM calculations.{" "}
+            <button
+              className="font-medium underline"
+              onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
+            >
+              Review expense rules →
+            </button>
+          </span>
+          <button
+            className="ml-3 text-amber-400 hover:text-amber-600"
+            onClick={() => setShowPostApprovalBanner(false)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Source-file banner with inline file picker. Shows the ranked list
           of uploaded_files candidates the auto-link found in this org -
@@ -3042,9 +3071,16 @@ export default function LeaseReview() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
+                  onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)}
                 >
                   Review Expense Rules
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(createPageUrl("LeaseExpenseClassification", { id: lease.id }))}
+                >
+                  Expense Classification
                 </Button>
               </div>
             </CardContent>

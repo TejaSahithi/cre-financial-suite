@@ -421,7 +421,13 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
     .replace(/[;,\s]+$/g, "")
     .trim();
 
-  if (text.length < 8) return value;
+  // Strip leading phone-number suffix that got concatenated with street address.
+  // e.g. "9700 1240 Bentley Park lane" → "1240 Bentley Park lane"
+  // Pattern: 3-4 digit token at start followed by another numeric token (the real street number)
+  text = text.replace(/^\d{3,4}\s+(?=\d{1,6}\s+\S)/, "").trim();
+
+  // Too short → reject completely (covers single-digit leakage like "4")
+  if (text.length < 8) return null;
   return text;
 }
 
@@ -874,7 +880,14 @@ function buildReviewPayload(opts: {
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
       const workflowField = workflowFieldFor(fieldKey, workflowOutput?.lease_fields ?? {});
       const rawValue = values[fieldKey] ?? workflowField?.value ?? null;
-      const value = cleanPartyAddressValue(fieldKey, rawValue);
+      let value = cleanPartyAddressValue(fieldKey, rawValue);
+      // Guard: reject month names extracted as person contact names
+      if (typeof value === "string" && fieldKey.endsWith("_name")) {
+        const MONTH_NAMES = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        if (MONTH_NAMES.includes(value.trim().toLowerCase())) value = null;
+      }
+      // Guard: reject property_name values that are clause fragments containing "tenant"
+      if (typeof value === "string" && fieldKey === "property_name" && /\btenant\b/i.test(value)) value = null;
       // Prefer evidence produced by the LLM/rule extractor; fall back to the
       // workflow's snippet match. This is what makes Raw Extracted / Source
       // Page / Exact Source Text light up in the Lease Review table.

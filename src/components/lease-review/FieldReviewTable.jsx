@@ -35,6 +35,23 @@ import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOption
 import { validateFieldValue } from "@/components/lease-review/utils/fieldValidator";
 import { isReviewRowDisplayable } from "@/components/lease-review/utils/dynamicFields";
 
+// ── Source text value highlighter ─────────────────────────────────────────────
+
+function highlightValueInSource(sourceText, normalizedValue) {
+  if (!sourceText || normalizedValue == null || normalizedValue === "") return sourceText;
+  const needle = String(normalizedValue);
+  if (needle.length < 2) return sourceText;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "i");
+  const parts = sourceText.split(regex);
+  if (parts.length === 1) return sourceText;
+  return parts.map((part, i) =>
+    regex.test(part)
+      ? <mark key={i} className="bg-yellow-100 text-yellow-900 rounded px-0.5 font-medium not-italic">{part}</mark>
+      : part
+  );
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 
 const displayValue = (field, value) => {
@@ -225,7 +242,7 @@ export default function FieldReviewTable({
                 <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
                     <p className="max-w-[920px] whitespace-pre-wrap break-words text-slate-600 leading-relaxed" title={sourceText ?? ""}>
-                      {source.text}
+                      {highlightValueInSource(source.text, value)}
                     </p>
                     {source.truncated && (
                       <button

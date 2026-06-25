@@ -73,6 +73,7 @@ export default function LeaseExpenseRules() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [displayMode, setDisplayMode] = useState("lease");
   const [search, setSearch] = useState(() => new URLSearchParams(location.search).get("lease") || "");
+  const leaseIdParam = useMemo(() => new URLSearchParams(location.search).get("lease_id") || null, [location.search]);
   const [editingRuleContext, setEditingRuleContext] = useState(null);
   const [editForm, setEditForm] = useState(null);
 
@@ -134,7 +135,9 @@ export default function LeaseExpenseRules() {
     return true;
   });
 
-  const leaseIds = selectorFilteredLeases.map((lease) => lease.id);
+  const leaseIds = leaseIdParam
+    ? [leaseIdParam]
+    : selectorFilteredLeases.map((lease) => lease.id);
 
 
 
@@ -529,6 +532,15 @@ export default function LeaseExpenseRules() {
         subtitle={subtitle}
         iconColor="from-amber-500 to-orange-600"
       />
+
+      {leaseIdParam && (
+        <div className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+          Showing expense rules for one lease only —{" "}
+          <Link to={createPageUrl("LeaseExpenseRules")} className="underline">
+            View all leases
+          </Link>
+        </div>
+      )}
 
       <Card className="border-blue-200 bg-blue-50">
         <CardContent className="flex items-start gap-2 p-4 text-sm text-blue-800">
