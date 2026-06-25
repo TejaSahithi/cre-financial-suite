@@ -98,6 +98,8 @@ RULES:
     If the text is OCR-garbled, return the garbled text exactly as it appears.
     For lease review fields, source_text must be a COMPLETE, EXACT FULL SENTENCE from the lease document that contains the value and enough surrounding context for a reviewer to understand why the value was extracted.
     Do NOT return fragments like only "THIS LEASE AGREEMENT", only a party name, only a date, or text ending mid-sentence.
+    Prefer the SHORTEST verbatim clause that supports the value — a single numbered line item or sentence is ideal.
+    Do NOT quote an entire paragraph, section header, or document preamble (e.g., "SUMMARY OF BASIC LEASE INFORMATION...").
     If the snippet contains [[PAGE n]] markers, source_page is mandatory and must match the page containing source_text.
     If you cannot provide an exact source_text for a found value, return value null.
 

@@ -919,6 +919,12 @@ function buildReviewPayload(opts: {
       // Guard: reject property_name values that are clause fragments containing "tenant"
       if (typeof value === "string" && fieldKey === "property_name" && /\btenant\b/i.test(value)) {
         value = null;
+        // Clear LLM evidence so the rejected extraction's garbage source text
+        // doesn't appear in the UI for a null field. fieldEvidence is read at
+        // line 963, after this guard, so the reassignment takes effect.
+        if (fieldEvidence[fieldKey]) {
+          fieldEvidence[fieldKey] = { source_text: null, source_page: null };
+        }
         // Clear the workflow review_reason so the UI doesn't show a validation
         // message for a field whose value we are actively nulling out.
         const wfField = workflowOutput?.lease_fields?.[fieldKey];
