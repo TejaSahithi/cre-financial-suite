@@ -101,7 +101,13 @@ function isGenericSummaryPreambleSource(sourceText) {
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
   const isClauseProjection = key.startsWith("clause_");
+  const hasMeaningfulDynamicValue = isMeaningfulValue(value);
   if (!isClauseProjection && (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey))) return true;
+  if (
+    isClauseProjection &&
+    (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey)) &&
+    (!hasMeaningfulDynamicValue || isGenericSummaryPreambleSource(sourceText))
+  ) return true;
   if ((value == null || value === "") && isGenericSummaryPreambleSource(sourceText)) return true;
   if (isGenericSummaryPreambleSource(sourceText) && /^(?:default|security_deposit|rent_escalation|use_clause|cam_recoveries)$/i.test(normalizedKey)) return true;
   return Boolean(item?.maps_to_fixed_field === true);
@@ -113,7 +119,9 @@ export function collectExtractedDocumentItems(lease) {
   // or approval has written workflow data back onto the lease row.
   const ufPayload =
     lease?.uploaded_files?.ui_review_payload ||
-    lease?.uploaded_file?.ui_review_payload;
+    lease?.uploaded_file?.ui_review_payload ||
+    lease?.ui_review_payload ||
+    lease?.review_payload;
   const ufWfMeta = ufPayload?.metadata?.workflow_output;
   const ufWfRecord = (ufPayload?.records || ufPayload?.rows || [])[0]?.workflow_output;
   const ufWf = ufWfRecord || ufWfMeta || {};
@@ -711,6 +719,108 @@ function recoverReviewValueFromSource(key, sourceText) {
   return null;
 }
 
+const CROSS_FIELD_RECOVERY_KEYS = new Set([
+  "tenant_name",
+  "landlord_name",
+  "broker_name",
+  "permitted_use",
+  "premises_use",
+  "use_clause",
+]);
+
+function collectWorkflowPayloadsForRecovery(lease) {
+  const directPayload = lease?.ui_review_payload || lease?.review_payload || {};
+  const uploadPayload = lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload || {};
+  const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
+  const directMetaWorkflow = directPayload?.metadata?.workflow_output || {};
+  const uploadMetaWorkflow = uploadPayload?.metadata?.workflow_output || {};
+  const directRecordWorkflow = (directPayload?.records || directPayload?.rows || [])[0]?.workflow_output || {};
+  const uploadRecordWorkflow = (uploadPayload?.records || uploadPayload?.rows || [])[0]?.workflow_output || {};
+  return [
+    rawWorkflowOutput,
+    rawWorkflowOutput?.workflow_output,
+    Array.isArray(rawWorkflowOutput?.records) ? rawWorkflowOutput.records[0]?.workflow_output : null,
+    lease?.extraction_data,
+    directPayload,
+    directMetaWorkflow,
+    directMetaWorkflow?.workflow_output,
+    directRecordWorkflow,
+    uploadPayload,
+    uploadMetaWorkflow,
+    uploadMetaWorkflow?.workflow_output,
+    uploadRecordWorkflow,
+  ].filter((payload) => payload && typeof payload === "object");
+}
+
+function collectReviewEvidenceCandidates(lease) {
+  const candidates = [];
+  const addCandidate = (entry, fieldKey = null) => {
+    if (!entry || typeof entry !== "object") return;
+    const sourceText = cleanSourceEvidenceText(
+      entrySourceText(entry) ??
+        entry.exact_source_text ??
+        entry.source_clause ??
+        entry.clause_text ??
+        entry.exact_text ??
+        entry.snippet ??
+        entry.evidence?.exact_source_text ??
+        entry.evidence?.source_clause ??
+        entry.evidence?.source_text,
+    );
+    if (!sourceText) return;
+    candidates.push({
+      fieldKey: fieldKey ?? entry.field_key ?? entry.key ?? entry.item_type ?? entry.clause_type ?? null,
+      sourceText,
+      sourcePage: entrySourcePage(entry) ?? entry.source_page ?? entry.page_number ?? entry.page ?? null,
+    });
+  };
+  const addMap = (map) => {
+    if (!map || typeof map !== "object" || Array.isArray(map)) return;
+    for (const [fieldKey, entry] of Object.entries(map)) addCandidate(entry, fieldKey);
+  };
+  const addArray = (rows) => {
+    if (!Array.isArray(rows)) return;
+    for (const entry of rows) addCandidate(entry);
+  };
+
+  for (const payload of collectWorkflowPayloadsForRecovery(lease)) {
+    addMap(payload.lease_fields);
+    addMap(payload.fields);
+    addMap(payload.field_evidence);
+    addMap(payload.field_trace);
+    addArray(payload.extracted_document_items);
+    addArray(payload.clause_records);
+    addArray(payload.lease_clauses);
+  }
+  addArray(collectExtractedDocumentItems(lease));
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.fieldKey || ""}|${candidate.sourcePage || ""}|${candidate.sourceText}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function recoverReviewValueFromLeaseEvidence(lease, key, normalizationOptions = {}) {
+  const normalizedKey = normalizeDynamicKey(key);
+  if (!CROSS_FIELD_RECOVERY_KEYS.has(normalizedKey)) return null;
+  for (const candidate of collectReviewEvidenceCandidates(lease)) {
+    const recovered = recoverReviewValueFromSource(normalizedKey, candidate.sourceText);
+    if (!isMeaningfulValue(recovered)) continue;
+    const normalized = normalizeReviewValueForField(normalizedKey, recovered, candidate.sourceText, normalizationOptions);
+    if (!isMeaningfulValue(normalized)) continue;
+    return {
+      value: normalized,
+      sourceText: candidate.sourceText,
+      sourcePage: normalizeSourcePage(candidate.sourcePage),
+      sourceFieldKey: candidate.fieldKey,
+    };
+  }
+  return null;
+}
+
 function clearRecoveredReviewErrors(errors = []) {
   return errors.filter((error) => {
     const text = String(error || "");
@@ -874,8 +984,17 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const normalizedRecoveredCandidate = isMeaningfulValue(recoveredCandidate)
     ? normalizeReviewValueForField(key, recoveredCandidate, sourceText, normalizationOptions)
     : null;
-  const usedRecoveredValue = !isMeaningfulValue(normalizedCandidate) && isMeaningfulValue(normalizedRecoveredCandidate);
-  schemaValue = usedRecoveredValue ? normalizedRecoveredCandidate : normalizedCandidate;
+  const crossFieldRecovery = !isMeaningfulValue(normalizedCandidate) && !isMeaningfulValue(normalizedRecoveredCandidate)
+    ? recoverReviewValueFromLeaseEvidence(lease, key, normalizationOptions)
+    : null;
+  const recoveredValue = isMeaningfulValue(normalizedRecoveredCandidate)
+    ? normalizedRecoveredCandidate
+    : crossFieldRecovery?.value ?? null;
+  const usedCrossFieldRecovery = Boolean(crossFieldRecovery && isMeaningfulValue(crossFieldRecovery.value));
+  const usedRecoveredValue = !isMeaningfulValue(normalizedCandidate) && isMeaningfulValue(recoveredValue);
+  schemaValue = usedRecoveredValue ? recoveredValue : normalizedCandidate;
+  const effectiveSourceText = usedCrossFieldRecovery ? crossFieldRecovery.sourceText : sourceText;
+  const effectiveSourcePage = usedCrossFieldRecovery ? crossFieldRecovery.sourcePage : sourcePage;
   let validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
     ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
@@ -903,20 +1022,20 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.source_text_quality
       ?? field.sourceTextQuality
       ?? derived?.sourceTextQuality
-      ?? (sourceText ? null : evidence.sourceTextQuality);
+      ?? (effectiveSourceText ? null : evidence.sourceTextQuality);
   const explicitExtractionStatus =
     field.status
       ?? field.extraction_status
       ?? derived?.extractionStatus
-      ?? (sourceText ? null : evidence.extractionStatus);
+      ?? (effectiveSourceText ? null : evidence.extractionStatus);
   const explicitEvidenceType =
     field.evidence_type
       ?? field.evidenceType
       ?? derived?.evidenceType
-      ?? (sourceText ? null : evidence.evidenceType);
+      ?? (effectiveSourceText ? null : evidence.evidenceType);
   const statusEvidence = {
-    sourcePage,
-    sourceText,
+    sourcePage: effectiveSourcePage,
+    sourceText: effectiveSourceText,
     rawValue: field.raw_value ?? field.rawValue ?? evidence.rawValue ?? schemaValue,
     value: schemaValue,
     extractionStatus: explicitExtractionStatus,
@@ -930,7 +1049,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const sourceTextQuality = hardValidationFailed ? "missing" : resolveSourceTextQuality(statusEvidence);
   const evidenceType = hardValidationFailed ? "missing" : normalizeEvidenceType(statusEvidence.evidenceType ?? statusEvidence.extractionStatus, {
     value: schemaValue,
-    sourceText,
+    sourceText: effectiveSourceText,
     sourceTextQuality,
     sourceFieldKeys: statusEvidence.sourceFieldKeys,
     derivationTrace: statusEvidence.derivationTrace,
@@ -938,7 +1057,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const resolvedStatus = field.status
     ?? field.extraction_status
     ?? derived?.extractionStatus
-    ?? (sourceText && isMeaningfulValue(schemaValue) ? null : evidence.extractionStatus)
+    ?? (effectiveSourceText && isMeaningfulValue(schemaValue) ? null : evidence.extractionStatus)
     ?? resolveExtractionStatus(lease, key, {
       value: schemaValue,
       confidence,
@@ -1019,10 +1138,10 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     display_value: schemaValue,
     normalized_value: schemaValue,
     raw_value: usedRecoveredValue ? schemaValue : field.raw_value ?? evidence.rawValue ?? schemaValue,
-    page_number: sourcePage,
-    page: sourcePage,
-    source_text: sourceText,
-    source_clause: field.source_clause ?? evidence.sourceClause ?? sourceText,
+    page_number: effectiveSourcePage,
+    page: effectiveSourcePage,
+    source_text: effectiveSourceText,
+    source_clause: field.source_clause ?? evidence.sourceClause ?? effectiveSourceText,
     category: field.category ?? field.tab ?? tabKey ?? "unknown",
     tab: field.tab ?? tabKey,
     confidence,

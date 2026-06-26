@@ -65,10 +65,11 @@ export const VALID_EVIDENCE = (text) => {
   const raw = String(text).trim();
   if (raw.length < 18) return false;
   const lower = String(text).toLowerCase();
-  const invalid = ["manual_review", "tenant_recovery", "tenant_direct", "inferred", "default"];
-  if (invalid.some(word => lower.includes(word))) return false;
-  
-  const unrelated = ["notice address", "permitted use"];
+  // Reject placeholder/synthetic strings (not real lease clauses)
+  const invalid = ["manual_review", "tenant_recovery", "tenant_direct", "inferred"];
+  if (invalid.some(word => lower === word || lower.startsWith(word + "_") || lower.startsWith(word + " "))) return false;
+
+  const unrelated = ["notice address"];
   if (unrelated.some(word => lower.includes(word))) return false;
 
   // Reject if the source text is clearly just the premises/address

@@ -288,6 +288,62 @@ describe("Lease Review evidence contract", () => {
     expect(row.review_reason).toMatch(/failed field validation/i);
   });
 
+  it("recovers landlord from source-backed intro clause when stale value is invalid", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "landlord_name",
+      label: "Landlord Name",
+      required: true,
+      normalized_value: "3",
+      source_page: 1,
+      source_text: 'THIS LEASE is made January 9, 2024 by and between 224 Partners, LLC ("Landlord") and Mindful Tech Solutions Inc - Narendra Pydi (Tenant).',
+      validation_errors: ["landlord_name_failed_validation"],
+      review_reason: "Required field was not found in the lease. Manual review required.",
+      requires_review: true,
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBe("224 Partners, LLC");
+    expect(row.validation_errors).toEqual([]);
+    expect(row.requires_review).toBe(false);
+    expect(row.source_text_quality).toBe("exact");
+  });
+
+  it("recovers tenant company from source-backed intro clause when stale value is a date", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "tenant_name",
+      label: "Tenant Name",
+      required: true,
+      normalized_value: "January 9, 2024",
+      source_page: 1,
+      source_text: 'THIS LEASE is made January 9, 2024 by and between 224 Partners, LLC ("Landlord") and Mindful Tech Solutions Inc - Narendra Pydi (Tenant).',
+      validation_errors: ["tenant_name_failed_validation"],
+      review_reason: "Extracted value failed field validation.",
+      requires_review: true,
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBe("Mindful Tech Solutions Inc");
+    expect(row.validation_errors).toEqual([]);
+    expect(row.requires_review).toBe(false);
+    expect(row.source_text_quality).toBe("exact");
+  });
+
+  it("recovers permitted use from compact page-one summary labels", () => {
+    const row = buildCanonicalLeaseReviewField({}, {
+      key: "permitted_use",
+      label: "Permitted Use",
+      required: true,
+      normalized_value: null,
+      source_page: 1,
+      source_text: "9. Rent: $1,400 per month 10. Permitted Use: IT work 11. Brokers: Brownlee Realty, LLC",
+      validation_errors: ["no_valid_supporting_source"],
+      review_reason: "Required field has a value but no valid supporting source text.",
+      requires_review: true,
+    }, "parties_premises");
+
+    expect(row.normalized_value).toBe("IT work");
+    expect(row.validation_errors).toEqual([]);
+    expect(row.requires_review).toBe(false);
+    expect(row.source_text_quality).toBe("exact");
+  });
   it("does not show transfer clause text as an assignee name", () => {
     const row = buildCanonicalLeaseReviewField({}, {
       key: "assignee_name",

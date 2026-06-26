@@ -570,9 +570,12 @@ export const leaseRulePipelineService = {
     );
     if (shouldRunLlmExtraction) {
        try {
+         // Full-scan mode: send the complete document text and let the LLM
+         // discover all expense-related clauses without a predefined category list.
          const llmData = await invokeEdgeFunction("extract-lease-expense-rules", {
            source_text: sourceText,
-           categories: LLM_EXPENSE_CATEGORIES,
+           categories: [],
+           full_scan: true,
          });
          if (llmData?.rules) {
             llmRules = llmData.rules;
