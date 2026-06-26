@@ -256,6 +256,9 @@ function isGenericSourceText(value: unknown): boolean {
   if (/^\[?PAGE\s+\d+\]?\s*SUMMARY\s+OF\s+BASIC\s+LEASE\s+INFORMATION/i.test(text)) return true;
   if (/^SUMMARY\s+OF\s+BASIC\s+LEASE\s+INFORMATION/i.test(text)) return true;
   if (/^This\s+Summary\s+\(the\s+[""']?Summary[""']?\)\s+is\s+hereby\s+incorporated/i.test(text)) return true;
+  // Numbered-summary line whose value part is only 1–3 digits — the digit is the next
+  // item's number leaked in, not a real field value (e.g. "2. Landlord: 3")
+  if (/^\d+[.)]\s+\w[\w\s]{0,40}[:\-]\s*\d{1,3}\s*$/.test(text)) return true;
   const structuredFieldMatch = text.match(/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*(.+)$/i);
   if (structuredFieldMatch) {
     const valuePart = structuredFieldMatch[1].trim();

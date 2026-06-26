@@ -87,7 +87,7 @@ function validateBoolean(value: unknown): boolean | null {
 
 function validateEnumValue(value: unknown, allowed: string[]): string | null {
   if (value === null || value === undefined) return null;
-  const s = String(value).trim();
+  const s = String(value).trim().toLowerCase();
   if (!s) return null;
 
   // Try direct match first, then fuzzy

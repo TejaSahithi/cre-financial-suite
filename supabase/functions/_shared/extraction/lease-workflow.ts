@@ -1290,8 +1290,8 @@ function responsibilityEvidenceSupportsField(fieldKey: string, value: unknown, s
   const fieldSupported: Record<string, boolean> = {
     responsibility_taxes: /\b(?:tax|taxes|real estate tax|property tax)\b/.test(source),
     responsibility_insurance: /\b(?:insurance|premium|coverage)\b/.test(source),
-    responsibility_utilities: /\b(?:utilit|electric|water|sewer|gas|hvac|janitorial)\b/.test(source),
-    responsibility_repairs: /\b(?:repair|maintenance|maintain|hvac)\b/.test(source),
+    responsibility_utilities: /\b(?:utilit|electric|water|sewer|gas|hvac|janitorial|full[- ]service|all\s+(?:operating|building)\s+expenses?)\b/.test(source),
+    responsibility_repairs: /\b(?:repair|maintenance|maintain|hvac|full[- ]service|all\s+(?:operating|building)\s+expenses?)\b/.test(source),
     property_insurance_responsibility: /\b(?:property insurance|insurance premium|rent includes)\b/.test(source),
   };
   const valueSupported = !/^(tenant|landlord)$/.test(normalizedValue) || source.includes(normalizedValue) || /\b(?:rent includes|included in rent|full service)\b/.test(source);

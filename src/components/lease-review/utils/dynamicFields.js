@@ -30,6 +30,9 @@ function looksLikeEvidenceParagraph(value) {
   const text = cleanExtractedSourceText(value);
   if (!text) return false;
   if (text.length > 180) return true;
+  // Short values (< 60 chars) are field answers, not paragraphs — even if they
+  // contain domain keywords like "full service", "premises", "utilities".
+  if (text.length < 60) return false;
   return /\b(?:summary of basic lease information|this lease|article\s+\d+|section\s+\d+|tenant shall|landlord shall|premises|security deposit|commencement date|expiration date|rent:|full service|common area|operating expense|insurance|utilities)\b/i.test(text);
 }
 
@@ -316,6 +319,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
   );
   const byTab = {};
   const seenSignatures = new Set();
+  const seenNormalizedKeys = new Set();
   const keyCounts = new Map();
   for (const item of collectExtractedDocumentItems(lease)) {
     let sourceText = cleanExtractedSourceText(
@@ -354,9 +358,16 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // the lease_fields map (which addFieldMapItems also surfaced as dynamic rows).
     // Different values for the same key are still shown (keyCounts renames them
     // key_2, key_3 etc.) so genuine conflicts remain visible.
-    const signature = [key, String(value ?? sourceText ?? "").slice(0, 180)].join("|");
+    const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
+    // clause_ entries are stripped-down clause-text views of the same field.
+    // If the bare key has already been accepted from any source (lease_fields,
+    // extracted_document_items, etc.) the structured version takes priority and
+    // this clause_ copy is redundant — skip it unconditionally.
+    if (key.startsWith("clause_") && seenNormalizedKeys.has(normalizedKey)) continue;
+    const signature = [normalizedKey, String(value ?? sourceText ?? "").slice(0, 180)].join("|");
     if (seenSignatures.has(signature)) continue;
     seenSignatures.add(signature);
+    seenNormalizedKeys.add(normalizedKey);
     const count = (keyCounts.get(key) || 0) + 1;
     keyCounts.set(key, count);
     const uniqueKey = count === 1 ? key : `${key}_${count}`;

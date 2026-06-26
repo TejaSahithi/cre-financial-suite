@@ -1294,8 +1294,8 @@ export default function LeaseReview() {
         ...(Array.isArray(row?.validationErrors) ? row.validationErrors : []),
       ];
       if (existingValidationErrors.length > 0) {
-        validationBlockers.push({ key, label: fieldDef.label || key, reason: existingValidationErrors.join(", ") });
         if (isRequired) {
+          validationBlockers.push({ key, label: fieldDef.label || key, reason: existingValidationErrors.join(", ") });
           requiredBlockers.push(key);
           requiredBlockerDetails.push({ key, label: fieldDef.label || key, reason: "Field failed validation" });
         } else {
