@@ -1214,12 +1214,34 @@ export function isResolvedReview(review) {
 
 export function normalizeClauseType(type) {
   const t = String(type || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "");
-  if ((t.includes("rent") && t.includes("escalation")) || t === "rentclause" || t === "rentescalation") return "rent_clause";
+  if (
+    (t.includes("rent") && t.includes("escalation")) ||
+    t === "rentclause" ||
+    t === "rentescalation" ||
+    t.includes("baserent") ||
+    t.includes("monthlyrent") ||
+    t.includes("annualrent") ||
+    t.includes("billingfrequency") ||
+    t.includes("rentpayment") ||
+    t.includes("escalationrate") ||
+    t.includes("escalationtype")
+  ) return "rent_clause";
   if (t.includes("securitydeposit")) return "security_deposit";
-  if (t.includes("operatingexpense") || t.includes("expenserecovery")) return "operating_expense_recovery";
+  if (
+    t.includes("operatingexpense") ||
+    t.includes("expenserecovery") ||
+    t.includes("leasestructure") ||
+    t.includes("expensestructure") ||
+    t.includes("leasetype") ||
+    t.includes("taxresponsibility") ||
+    t.includes("responsibilitytax") ||
+    t === "taxes" ||
+    t.includes("utility") ||
+    t.includes("janitorial")
+  ) return "operating_expense_recovery";
   if (t.includes("cam") || t.includes("recoveries")) return "cam_recoveries";
   if (t.includes("indemnification") || t.includes("indemnity")) return "indemnification";
-  if (t.includes("insurance")) return "insurance_requirements";
+  if (t.includes("insurance") || t.includes("liability") || t.includes("additionalinsured")) return "insurance_requirements";
   if (t.includes("use") || t.includes("permitted")) return "use_permitted_use";
   if (t.includes("assignment") || t.includes("subletting") || t.includes("sublease")) return "assignment_subletting";
   if (t.includes("default") || t.includes("remedies") || t === "remedies") return "defaults_remedies";

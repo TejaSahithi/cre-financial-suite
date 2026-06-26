@@ -673,6 +673,11 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
     .trim();
   const candidate = withoutNextLabels || cleaned;
 
+  if (["landlord_address", "tenant_address", "property_address", "premises_address"].includes(fieldKey)) {
+    const address = extractAddressCandidate(candidate);
+    return address || null;
+  }
+
   if (["base_rent_monthly", "security_deposit_amount"].includes(fieldKey)) {
     const amount = extractFirstMoneyValue(candidate);
     return amount != null ? amount : null;
@@ -696,6 +701,12 @@ function cleanSummaryValueForField(fieldKey: string, value: unknown): string | n
       .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b.*$/i, "")
       .replace(/^\s*\d{1,2}\.\s*/, "")
       .trim();
+    const roleMarker = fieldKey === "landlord_name"
+      ? entity.match(/([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)\s*\(\s*["']?(?:Landlord|Lessor)["']?\s*\)/i)
+      : fieldKey === "tenant_name"
+        ? entity.match(/([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)(?:\s+-\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})?\s*\(\s*["']?(?:Tenant|Lessee)["']?\s*\)/i)
+        : entity.match(/\bBrokers?\s*[:;-]\s*([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/i);
+    if (roleMarker?.[1]) entity = roleMarker[1];
     const entityWithSuffix = entity.match(/^(.{2,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP)\b)/i);
     if (entityWithSuffix?.[1]) entity = entityWithSuffix[1].replace(/[.,;:\s]+$/g, "").trim();
     if (fieldKey === "tenant_name") {

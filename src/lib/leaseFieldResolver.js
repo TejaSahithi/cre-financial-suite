@@ -229,7 +229,7 @@ function cleanPartyAddressValue(fieldKey, value) {
   const normalizedKey = normalizeLeaseFieldKey(fieldKey);
   if (!["landlord_address", "tenant_address"].includes(normalizedKey)) return value;
   let text = String(value ?? "").replace(/\s+/g, " ").trim();
-  if (!text) return value;
+  if (!text) return null;
 
   const ownLabel = normalizedKey === "landlord_address"
     ? /(?:^|\b)(?:\d+\.\s*)?(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\s*[:;-]?\s*/i
@@ -265,7 +265,141 @@ function cleanPartyAddressValue(fieldKey, value) {
     .replace(/[;,\s]+$/g, "")
     .trim();
 
-  return text.length >= 8 ? text : value;
+  const hasStreetShape =
+    /\b\d{1,6}\s+/.test(text) &&
+    /\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|boulevard|blvd\.?|suite|ste\.?|knoxville|tn|[A-Z]{2}\s+\d{5})\b/i.test(text);
+
+  return text.length >= 8 && hasStreetShape ? text : null;
+}
+
+const COMPANY_ENTITY_PATTERN = /\b([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Realty)\b)/gi;
+const STREET_ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'#\-\s]+?\s+(?:Road|Rd\.?|Street|St\.?|Avenue|Ave\.?|Lane|Ln\.?|Drive|Dr\.?|Boulevard|Blvd\.?)\b(?:,?\s*(?:Suite|Ste\.?|#)\s*[A-Za-z0-9-]+)?(?:,?\s+[A-Za-z.'\-\s]+,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)?/i;
+
+function compactEvidenceText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function cleanRecoveredEntityCandidate(value, fieldKey) {
+  let text = compactEvidenceText(value)
+    .replace(/^\s*(?:\d+\.\s*)?(?:tenant|landlord|lessor|lessee|broker|brokers?)\s*[:;-]?\s*/i, "")
+    .replace(/\(\s*["']?(?:tenant|landlord|lessor|lessee|broker)["']?\s*\)/gi, "")
+    .replace(/\b(?:phone|tel|telephone|email)\b[\s\S]*$/i, "")
+    .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b.*$/i, "")
+    .replace(/[.,;:\s]+$/g, "")
+    .trim();
+
+  if (normalizeLeaseFieldKey(fieldKey) === "tenant_name") {
+    text = text.replace(/\s+-\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3}\b[\s\S]*$/i, "").trim();
+  }
+
+  return text;
+}
+
+function extractCompanyCandidatesFromEvidence(text) {
+  const seen = new Set();
+  const candidates = [];
+  COMPANY_ENTITY_PATTERN.lastIndex = 0;
+  for (const match of compactEvidenceText(text).matchAll(COMPANY_ENTITY_PATTERN)) {
+    const value = cleanRecoveredEntityCandidate(match[1], "tenant_name");
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ value, index: match.index ?? 0 });
+  }
+  return candidates;
+}
+
+function recoverEntityValueFromEvidence(fieldKey, output) {
+  const key = normalizeLeaseFieldKey(fieldKey);
+  if (!["tenant_name", "landlord_name", "broker_name"].includes(key)) return null;
+  const evidence = compactEvidenceText([output.exactSourceText, output.sourceClause, output.rawValue].filter(Boolean).join(" "));
+  if (!evidence) return null;
+
+  let match = null;
+  if (key === "landlord_name") {
+    match = evidence.match(/([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Realty)\b)\s*\(\s*["']?(?:Landlord|Lessor)["']?\s*\)/i);
+  } else if (key === "tenant_name") {
+    match = evidence.match(/([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Realty)\b)(?:\s+-\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})?\s*\(\s*["']?(?:Tenant|Lessee)["']?\s*\)/i);
+  } else {
+    match = evidence.match(/\bBrokers?\s*[:;-]\s*([A-Z0-9][A-Za-z0-9&.'\-\s,]{1,140}?\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|LLP|Realty)\b)/i);
+  }
+
+  let candidate = cleanRecoveredEntityCandidate(match?.[1], key);
+  if (!candidate) {
+    const companies = extractCompanyCandidatesFromEvidence(evidence);
+    if (key === "landlord_name") candidate = companies[0]?.value || null;
+    if (key === "tenant_name") candidate = companies[1]?.value || companies[0]?.value || null;
+    if (key === "broker_name") candidate = companies.find((company) => /realty|broker/i.test(company.value))?.value || companies[0]?.value || null;
+  }
+
+  if (!candidate || !isValidEntityField(key, candidate, evidence)) return null;
+  return { value: candidate, sourceText: evidence };
+}
+
+function recoverAddressValueFromEvidence(fieldKey, output) {
+  const key = normalizeLeaseFieldKey(fieldKey);
+  if (!["landlord_address", "tenant_address"].includes(key)) return null;
+  const evidence = compactEvidenceText([output.exactSourceText, output.sourceClause, output.rawValue].filter(Boolean).join(" "));
+  if (!evidence) return null;
+  const label = key === "landlord_address"
+    ? /(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\s*[:;-]?\s*([\s\S]{0,220})/i
+    : /(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\s*[:;-]?\s*([\s\S]{0,220})/i;
+  const labelled = evidence.match(label)?.[1] || "";
+  const fromLabel = labelled.match(STREET_ADDRESS_PATTERN)?.[0];
+  const fallback = evidence.match(STREET_ADDRESS_PATTERN)?.[0];
+  const candidate = cleanPartyAddressValue(key, fromLabel || fallback || "");
+  return candidate ? { value: candidate, sourceText: evidence } : null;
+}
+
+function recoverPermittedUseValueFromEvidence(output) {
+  const evidence = compactEvidenceText([output.exactSourceText, output.sourceClause, output.rawValue].filter(Boolean).join(" "));
+  if (!evidence) return null;
+  const match = evidence.match(/\b(?:permitted\s+use|use)\s*[:;-]\s*([\s\S]{1,160}?)(?=\s+(?:\d{1,2}\.\s*)?(?:brokers?|security\s+deposit|rent|lease\s+term|commencement|expiration)\b|$)/i);
+  const value = compactEvidenceText(match?.[1])
+    .replace(/[.;,\s]+$/g, "")
+    .trim();
+  if (!value || value.length > 80) return null;
+  if (/\b(?:summary of basic lease information|landlord|tenant|lease|premises|consent|assignment|subletting)\b/i.test(value)) return null;
+  return { value, sourceText: match?.[0] || evidence };
+}
+
+function clearResolvedValidationErrors(output) {
+  output.validationErrors = (output.validationErrors || []).filter((error) =>
+    !/failed_validation|required field was not found|no valid supporting source|not_specific|looks_like_clause|without_.*source/i.test(String(error || "")),
+  );
+}
+
+function markRecoveredOutput(output, recovered) {
+  output.value = recovered.value;
+  output.normalizedValue = recovered.value;
+  output.rawValue = String(recovered.value);
+  output.exactSourceText = scrubEvidenceText(recovered.sourceText) || output.exactSourceText;
+  output.sourceClause = output.sourceClause || output.exactSourceText;
+  output.evidenceType = "extracted";
+  output.reviewStatus = output.reviewStatus || "extracted";
+  output.sourceTextQuality = "exact";
+  output.requiresReview = false;
+  output.approvalBlockingReason = null;
+  clearResolvedValidationErrors(output);
+}
+
+function maybeRescueResolverOutput(fieldKey, output) {
+  const key = normalizeLeaseFieldKey(fieldKey);
+  const hardInvalid = hasHardValidationError(output.validationErrors) || invalidResolvedField(fieldKey, output);
+  const missingValue = output.value === undefined || output.value === null || output.value === "";
+  const entityInvalid = ENTITY_FIELDS.has(key) && !isValidEntityField(key, output.value, output.exactSourceText || output.rawValue);
+
+  let recovered = null;
+  if (["tenant_name", "landlord_name", "broker_name"].includes(key) && (missingValue || hardInvalid || entityInvalid)) {
+    recovered = recoverEntityValueFromEvidence(key, output);
+  } else if (["landlord_address", "tenant_address"].includes(key) && (missingValue || hardInvalid || !cleanPartyAddressValue(key, output.value))) {
+    recovered = recoverAddressValueFromEvidence(key, output);
+  } else if (key === "permitted_use" && (missingValue || hardInvalid || invalidResolvedField(fieldKey, output))) {
+    recovered = recoverPermittedUseValueFromEvidence(output);
+  }
+
+  if (recovered) markRecoveredOutput(output, recovered);
+  return output;
 }
 
 const ENTITY_FIELDS = new Set([
@@ -551,13 +685,17 @@ function buildResolverOutput(rawResult, sourcePath, fieldKey) {
     output.rawValue = output.value != null ? String(output.value) : null;
   }
 
-  // Final sanitization — null/empty values produce no resolver output.
+  // Final sanitization. Try evidence rescue before declaring a value missing:
+  // OCR often captures the right party in source text while the normalized value
+  // is a summary-row number or neighboring label.
+  maybeRescueResolverOutput(fieldKey, output);
+  output.value = cleanPartyAddressValue(fieldKey, output.value);
+  output.rawValue = cleanPartyAddressValue(fieldKey, output.rawValue);
+  maybeRescueResolverOutput(fieldKey, output);
+
   if (output.value === undefined || output.value === null || output.value === "") {
      return null;
   }
-  output.value = cleanPartyAddressValue(fieldKey, output.value);
-  output.rawValue = cleanPartyAddressValue(fieldKey, output.rawValue);
-
   // Enforce entity and field-specific validation. Invalid extracted values stay
   // visible in review rows, but resolver consumers such as headers/summary cards
   // must not treat them as trusted normalized values.

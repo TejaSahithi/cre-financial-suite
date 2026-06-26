@@ -79,6 +79,33 @@ export function normalizeDynamicKey(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+const FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS = new Set([
+  "tenant_name", "landlord_name", "landlord_address", "tenant_address", "property_name", "property_address",
+  "premises_address", "suite_number", "square_footage", "rentable_area_sqft", "tenant_rsf", "permitted_use",
+  "premises_use", "use_clause", "broker_name", "broker_commission", "lease_date", "lease_term", "commencement_date",
+  "rent_commencement_date", "expiration_date", "monthly_rent", "base_rent_monthly", "base_rent", "annual_rent",
+  "rent_per_sf", "base_rent_psf", "base_rent_per_sf", "billing_frequency", "security_deposit", "security_deposit_amount",
+  "rent_clause", "rent_escalation", "escalation_rate", "escalation_type", "escalation_timing", "late_fees", "default_interest_rate",
+  "rent_payment_timing", "assignment_consideration", "lease_type", "lease_expense_structure", "expense_structure",
+  "responsibility_taxes", "tax_responsibility", "responsibility_insurance", "insurance_responsibility", "responsibility_utilities",
+  "utilities_responsibility", "responsibility_repairs", "maintenance_responsibility", "cam_treatment", "cam_recoveries", "cam_amount",
+  "tenant_insurance_required", "general_liability_min", "property_insurance_responsibility", "additional_insureds_required",
+]);
+
+function isGenericSummaryPreambleSource(sourceText) {
+  const text = String(sourceText || "");
+  return /\bsummary of basic lease information\b/i.test(text)
+    && !/\b(?:rent:\s*\$|security deposit\s*\$|permitted use\s*:|commencement date\s*:|expiration date\s*:|landlord\s*:|tenant\s*:|brokers?\s*:)/i.test(text);
+}
+
+function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
+  const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
+  const isClauseProjection = key.startsWith("clause_");
+  if (!isClauseProjection && (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey))) return true;
+  if ((value == null || value === "") && isGenericSummaryPreambleSource(sourceText)) return true;
+  if (isGenericSummaryPreambleSource(sourceText) && /^(?:default|security_deposit|rent_escalation|use_clause|cam_recoveries)$/i.test(normalizedKey)) return true;
+  return Boolean(item?.maps_to_fixed_field === true);
+}
 export function collectExtractedDocumentItems(lease) {
   // Primary source: extraction_data.workflow_output (post-backfill / post-approve).
   // Fallback: ui_review_payload.metadata.workflow_output from the most recently
@@ -339,6 +366,7 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // value. Reviewer can fill the value once the row is visible.
     if (!hasValue && !sourceText) continue;
     const key = normalizeDynamicKey(item?.field_key || item?.key || item?.item_type);
+    if (shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys)) continue;
     const mapsToFixedField = item?.maps_to_fixed_field === true || staticKeys.has(key);
     const createsDynamicRow = item?.creates_dynamic_row !== false && !mapsToFixedField;
     if (!key || !createsDynamicRow) continue;
@@ -359,11 +387,6 @@ export function buildDynamicDocumentFieldsByTab(lease) {
     // Different values for the same key are still shown (keyCounts renames them
     // key_2, key_3 etc.) so genuine conflicts remain visible.
     const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
-    // clause_ entries are stripped-down clause-text views of the same field.
-    // If the bare key has already been accepted from any source (lease_fields,
-    // extracted_document_items, etc.) the structured version takes priority and
-    // this clause_ copy is redundant — skip it unconditionally.
-    if (key.startsWith("clause_") && seenNormalizedKeys.has(normalizedKey)) continue;
     const signature = [normalizedKey, String(value ?? sourceText ?? "").slice(0, 180)].join("|");
     if (seenSignatures.has(signature)) continue;
     seenSignatures.add(signature);
@@ -577,6 +600,123 @@ function responsibilitySourceSupportsValue(key, value, sourceText) {
   const valueSupported = !/^(tenant|landlord)$/.test(normalizedValue) || lower.includes(normalizedValue) || /\b(?:rent includes|included in rent|full service)\b/.test(lower);
   return fieldSupported && hasExpenseAction && valueSupported;
 }
+const REVIEW_COMPANY_ENTITY_PATTERN = /\b[A-Z][A-Za-z0-9&.' -]{1,90}?\s+(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.)\b/g;
+
+function compactReviewEvidence(sourceText) {
+  return String(sourceText || "")
+    .replace(/\[\[PAGE\s+\d+\]\]/gi, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanRecoveredReviewEntity(candidate) {
+  const text = String(candidate || "")
+    .replace(/\([^)]*\b(?:landlord|tenant|broker|agent|lessor|lessee)\b[^)]*\)/gi, " ")
+    .replace(/\b(?:referred to as|as)\s+["']?(?:landlord|tenant|broker|agent|lessor|lessee)["']?/gi, " ")
+    .replace(/^(?:and|between|by and between|landlord|tenant|brokers?|agent|address of landlord|address of tenant)\s*:?\s*/i, "")
+    .replace(/\s*[-,;:]\s*(?:Narendra|Tenant|Landlord|Broker|Agent)\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "")
+    .trim();
+  if (!text) return null;
+  if (isDateLikeText(text) || isPhoneLikeText(text)) return null;
+  if (text.length > 100) return null;
+  if (/\b(?:shall|hereby|premises|article|section|rent|maintenance|insurance|taxes|obligations?|transfer|consent)\b/i.test(text)) return null;
+  return text;
+}
+
+function companyCandidatesFromReviewEvidence(sourceText) {
+  const source = compactReviewEvidence(sourceText);
+  if (!source) return [];
+  const candidates = [];
+  for (const match of source.matchAll(REVIEW_COMPANY_ENTITY_PATTERN)) {
+    const cleaned = cleanRecoveredReviewEntity(match[0]);
+    if (cleaned && !candidates.includes(cleaned)) candidates.push(cleaned);
+  }
+  return candidates;
+}
+
+function recoverReviewEntityFromSource(key, sourceText) {
+  const normalizedKey = normalizeDynamicKey(key);
+  const source = compactReviewEvidence(sourceText);
+  if (!source) return null;
+
+  const role = normalizedKey.includes("landlord")
+    ? "landlord"
+    : normalizedKey.includes("tenant")
+      ? "tenant"
+      : normalizedKey.includes("broker")
+        ? "broker"
+        : null;
+
+  if (role === "broker") {
+    const brokerMatch = source.match(/\bBrokers?\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+(?:THIS LEASE|ARTICLE)\b|$)/i);
+    const brokerCandidate = cleanRecoveredReviewEntity(brokerMatch?.[1]);
+    if (brokerCandidate) return brokerCandidate;
+  }
+
+  if (role === "landlord") {
+    const labelMatch = source.match(/\bLandlord\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+(?:Address of Landlord|Tenant|Premises|Building|Lease Term|Commencement Date|Expiration Date|Rent|Security Deposit|Permitted Use|Brokers?)\b|$)/i);
+    const labeled = cleanRecoveredReviewEntity(labelMatch?.[1]);
+    if (labeled) return labeled;
+
+    const introMatch = source.match(/\bby and between\s+(.+?)\s*(?:\(["']?Landlord["']?\)|["']?Landlord["']?)\s+and\s+(.+?)\s*(?:\(["']?Tenant["']?\)|["']?Tenant["']?)/i);
+    const intro = cleanRecoveredReviewEntity(introMatch?.[1]);
+    if (intro) return intro;
+  }
+
+  if (role === "tenant") {
+    const labelMatch = source.match(/\bTenant\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+(?:Address of Tenant|Premises|Building|Lease Term|Commencement Date|Expiration Date|Rent|Security Deposit|Permitted Use|Brokers?)\b|$)/i);
+    const labeled = cleanRecoveredReviewEntity(labelMatch?.[1]);
+    if (labeled) return labeled;
+
+    const introMatch = source.match(/\bby and between\s+(.+?)\s*(?:\(["']?Landlord["']?\)|["']?Landlord["']?)\s+and\s+(.+?)\s*(?:\(["']?Tenant["']?\)|["']?Tenant["']?)/i);
+    const intro = cleanRecoveredReviewEntity(introMatch?.[2]);
+    if (intro) return intro;
+
+    const dashTenant = source.match(/\band\s+([A-Z][A-Za-z0-9&.' -]{1,90}?\s+(?:Inc\.?|LLC|Corporation|Corp\.?|Company|Co\.?))\s*-\s*[^()]{2,80}\(\s*Tenant\s*\)/i);
+    const dashCandidate = cleanRecoveredReviewEntity(dashTenant?.[1]);
+    if (dashCandidate) return dashCandidate;
+  }
+
+  const companies = companyCandidatesFromReviewEvidence(source);
+  if (role === "landlord" && companies.length >= 1) return companies[0];
+  if (role === "tenant" && companies.length >= 2) return companies[1];
+  if (role === "tenant" && companies.length === 1 && /\btenant\b/i.test(source)) return companies[0];
+  return null;
+}
+
+function recoverReviewPermittedUseFromSource(sourceText) {
+  const source = compactReviewEvidence(sourceText);
+  const match = source.match(/\bPermitted Use\s*:\s*([^.;]+?)(?=\s+\d{1,2}\.\s|\s+Brokers?\s*:|\s+ARTICLE\b|$)/i);
+  const value = String(match?.[1] || "")
+    .replace(/\s+/g, " ")
+    .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "")
+    .trim();
+  if (!value || value.length > 80) return null;
+  if (/\b(?:summary|lease|landlord|tenant|shall|hereby|premises|article)\b/i.test(value)) return null;
+  return value;
+}
+
+function recoverReviewValueFromSource(key, sourceText) {
+  const normalizedKey = normalizeDynamicKey(key);
+  if (["tenant_name", "landlord_name", "broker_name"].includes(normalizedKey)) {
+    return recoverReviewEntityFromSource(normalizedKey, sourceText);
+  }
+  if (["permitted_use", "premises_use", "use_clause"].includes(normalizedKey)) {
+    return recoverReviewPermittedUseFromSource(sourceText);
+  }
+  return null;
+}
+
+function clearRecoveredReviewErrors(errors = []) {
+  return errors.filter((error) => {
+    const text = String(error || "");
+    return !/(?:failed_validation|not found in the lease|no_valid_supporting_source|no valid supporting source|missing_source_evidence|missing source evidence|looks_like_clause|not_specific)/i.test(text);
+  });
+}
 function normalizeReviewValueForField(key, value, sourceText, options = {}) {
   if (!isMeaningfulValue(value)) return value;
 
@@ -726,9 +866,16 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     persistedDerivationTrace ||
     persistedSourceFieldKeys.length > 0,
   );
-  schemaValue = normalizeReviewValueForField(key, schemaValue, sourceText, {
+  const normalizationOptions = {
     allowDerivedAnnual: Boolean(derived || field.evidence_type === "derived" || hasDerivedLineage),
-  });
+  };
+  const normalizedCandidate = normalizeReviewValueForField(key, schemaValue, sourceText, normalizationOptions);
+  const recoveredCandidate = recoverReviewValueFromSource(key, sourceText);
+  const normalizedRecoveredCandidate = isMeaningfulValue(recoveredCandidate)
+    ? normalizeReviewValueForField(key, recoveredCandidate, sourceText, normalizationOptions)
+    : null;
+  const usedRecoveredValue = !isMeaningfulValue(normalizedCandidate) && isMeaningfulValue(normalizedRecoveredCandidate);
+  schemaValue = usedRecoveredValue ? normalizedRecoveredCandidate : normalizedCandidate;
   let validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
     ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
@@ -739,7 +886,10 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       return !/(?:failed_validation|without_money_evidence|no_valid_supporting_source|no valid supporting source|missing_source_evidence|missing source evidence|missing_derivation_trace|missing.*derivation)/i.test(text);
     });
   }
-  if (isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
+  if (usedRecoveredValue) {
+    validationErrors = clearRecoveredReviewErrors(validationErrors);
+  }
+  if (!usedRecoveredValue && isMeaningfulValue(valueBeforeValidation) && !isMeaningfulValue(schemaValue)) {
     validationErrors.push(`${key}_failed_validation`);
   }
   const hardValidationFailed = hasHardValidationError(validationErrors);
@@ -817,7 +967,11 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field.requires_review_reason ?? field.requiresReviewReason ??
     evidence.reviewReason ?? null;
   const staleDerivedReasonPattern = /(?:failed field validation|no valid supporting source|missing.*derivation|without_money_evidence|missing_source_evidence|missing source evidence|money_field_without_money_evidence|no_valid_supporting_source)/i;
+  const staleRecoveredReasonPattern = /(?:failed field validation|required field was not found|not found in the lease|no valid supporting source|missing_source_evidence|missing source evidence|value is inferred|failed validation)/i;
   if (hasDerivedLineage && backendReviewReason && staleDerivedReasonPattern.test(String(backendReviewReason))) {
+    backendReviewReason = null;
+  }
+  if (usedRecoveredValue && backendReviewReason && staleRecoveredReasonPattern.test(String(backendReviewReason))) {
     backendReviewReason = null;
   }
   let reviewReason =
@@ -827,6 +981,9 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     evidence.approvalBlockingReason ??
     null;
   if (hasDerivedLineage && reviewReason && staleDerivedReasonPattern.test(String(reviewReason))) {
+    reviewReason = null;
+  }
+  if (usedRecoveredValue && reviewReason && staleRecoveredReasonPattern.test(String(reviewReason))) {
     reviewReason = null;
   }
   if (!reviewReason && validationErrors.length > 0) {
@@ -861,7 +1018,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     field_label: field.field_label ?? field.label ?? titleizeFieldKey(key),
     display_value: schemaValue,
     normalized_value: schemaValue,
-    raw_value: field.raw_value ?? evidence.rawValue ?? schemaValue,
+    raw_value: usedRecoveredValue ? schemaValue : field.raw_value ?? evidence.rawValue ?? schemaValue,
     page_number: sourcePage,
     page: sourcePage,
     source_text: sourceText,
