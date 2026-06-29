@@ -512,7 +512,13 @@ function looksLikeClauseNotName(raw: unknown): boolean {
   if (/^(signature|date)\s*:/i.test(text)) return true;
   if (/^_+$/.test(text)) return true;
   if (text.length > 90) return true;
-  return /\b(hereby|effective as of|terms? and conditions|under the lease|transfers? and assigns?|assumes?|obligations?|contained in said lease)\b/i.test(text);
+  // Date-like strings (e.g. "January 1, 2023" or "2023-01-01")
+  if (/^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}$/i.test(text)) return true;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return true;
+  if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text)) return true;
+  // Money values (e.g. "$10,000.00")
+  if (/^\$\s*[\d,]+(?:\.\d{2})?$/.test(text)) return true;
+  return /\b(hereby|effective as of|terms? and conditions|under the lease|transfers? and assigns?|assumes?|obligations?|contained in said lease|deposit(?:ed)?|payable|premises|does hereby lease|lessor hereby|landlord hereby|does hereby)\b/i.test(text);
 }
 
 function looksLikeNoticeClause(raw: unknown): boolean {
@@ -801,22 +807,31 @@ function extractViaLabels(
 
 function inferLeaseType(text: string): ExtractedField | null {
   if (/triple[\s-]net|nnn\s+lease/i.test(text)) {
-    return { value: "nnn", source: "rule", confidence: 0.90, sourceText: "document mentions triple net / NNN" };
+    return { value: "triple_net", source: "rule", confidence: 0.90, sourceText: "document mentions triple net / NNN" };
   }
-  if (/gross\s+lease|full[\s-]service/i.test(text)) {
-    return { value: "gross", source: "rule", confidence: 0.90, sourceText: "document mentions gross / full-service" };
+  if (/full[\s-]service\s+(?:gross\s+)?lease|full[\s-]service\b/i.test(text)) {
+    return { value: "full_service", source: "rule", confidence: 0.90, sourceText: "document mentions full service lease" };
+  }
+  if (/gross\s+lease/i.test(text)) {
+    return { value: "gross", source: "rule", confidence: 0.88, sourceText: "document mentions gross lease" };
   }
   if (/modified[\s-]gross/i.test(text)) {
     return { value: "modified_gross", source: "rule", confidence: 0.90, sourceText: "document mentions modified gross" };
   }
   if (/double[\s-]net|\bnn\b\s+lease/i.test(text)) {
-    return { value: "nn", source: "rule", confidence: 0.85, sourceText: "document mentions double net / NN" };
+    return { value: "double_net", source: "rule", confidence: 0.85, sourceText: "document mentions double net / NN" };
+  }
+  if (/single[\s-]net|\bsn\b\s+lease/i.test(text)) {
+    return { value: "single_net", source: "rule", confidence: 0.85, sourceText: "document mentions single net / N" };
+  }
+  if (/absolute[\s-]net|bondable\s+net/i.test(text)) {
+    return { value: "absolute_net", source: "rule", confidence: 0.85, sourceText: "document mentions absolute net" };
   }
   if (/tenant\s+shall\s+pay.*taxes.*insurance.*maintenance/i.test(text)) {
-    return { value: "nnn", source: "rule", confidence: 0.75, sourceText: "inferred NNN from tenant expense responsibility clause" };
+    return { value: "triple_net", source: "rule", confidence: 0.75, sourceText: "inferred triple_net from tenant expense responsibility clause" };
   }
   if (/landlord\s+shall\s+be\s+responsible\s+for\s+all\s+operating/i.test(text)) {
-    return { value: "gross", source: "rule", confidence: 0.75, sourceText: "inferred gross from landlord expense responsibility clause" };
+    return { value: "full_service", source: "rule", confidence: 0.75, sourceText: "inferred full_service from landlord expense responsibility clause" };
   }
   return null;
 }

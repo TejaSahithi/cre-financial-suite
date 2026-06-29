@@ -40,6 +40,14 @@ function dateStr(row: Row, field: string): string | null {
 
 // ── Lease calculations ───────────────────────────────────────────────────────
 
+/** Record a derivation trace so downstream workflow/UI knows how the value was computed. */
+function setDerived(row: Row, field: string, value: unknown, trace: string): void {
+  row[field] = value;
+  const traces = (row._derivation_traces ?? {}) as Record<string, string>;
+  traces[field] = trace;
+  row._derivation_traces = traces;
+}
+
 function computeLeaseDerived(row: Row): void {
   let monthlyRent = num(row, "monthly_rent");
   let annualRent = num(row, "annual_rent");
@@ -51,15 +59,14 @@ function computeLeaseDerived(row: Row): void {
   // Reconcile conflicts if monthly_rent was extracted as a PSF value (suspiciously small)
   if (monthlyRent !== null && monthlyRent < 300 && sqft !== null && sqft > 0) {
     if (annualRent !== null && annualRent > 1000) {
-      // Reconcile from annual_rent
-      row.monthly_rent = round2(annualRent / 12);
-      monthlyRent = row.monthly_rent;
+      const corrected = round2(annualRent / 12);
+      setDerived(row, "monthly_rent", corrected, `reconciled from annual_rent(${annualRent}) / 12 — extracted monthly looked like PSF`);
+      monthlyRent = corrected;
     } else if (annualRent === null) {
-      // Treat the extracted monthly_rent as a monthly PSF rate (e.g. "23 psf is monthly rent")
-      // Total monthly rent = extracted value * sqft
       const originalPsf = monthlyRent;
-      row.monthly_rent = round2(originalPsf * sqft);
-      monthlyRent = row.monthly_rent;
+      const corrected = round2(originalPsf * sqft);
+      setDerived(row, "monthly_rent", corrected, `monthly_rent(${originalPsf}) × square_footage(${sqft}) — treated as PSF rate`);
+      monthlyRent = corrected;
     }
   }
 
@@ -67,31 +74,33 @@ function computeLeaseDerived(row: Row): void {
   if (monthlyRent !== null && annualRent !== null) {
     const expectedMonthly = annualRent / 12;
     if (Math.abs(monthlyRent - expectedMonthly) > 10) {
-      // Trust the larger value if one is suspiciously small, otherwise trust annual
       if (monthlyRent < 300 && annualRent > 1000) {
-        row.monthly_rent = round2(expectedMonthly);
-        monthlyRent = row.monthly_rent;
+        const corrected = round2(expectedMonthly);
+        setDerived(row, "monthly_rent", corrected, `reconciled: annual_rent(${annualRent}) / 12 — extracted monthly(${monthlyRent}) was too small`);
+        monthlyRent = corrected;
       }
     }
   }
 
   // annual_rent = monthly_rent × 12
   if (monthlyRent !== null && annualRent === null) {
-    row.annual_rent = round2(monthlyRent * 12);
-    annualRent = row.annual_rent;
+    const derived = round2(monthlyRent * 12);
+    setDerived(row, "annual_rent", derived, `monthly_rent(${monthlyRent}) × 12`);
+    annualRent = derived;
   }
 
   // monthly_rent = annual_rent / 12 (if annual was extracted but monthly wasn't)
   if (monthlyRent === null && annualRent !== null) {
-    row.monthly_rent = round2(annualRent / 12);
-    monthlyRent = row.monthly_rent;
+    const derived = round2(annualRent / 12);
+    setDerived(row, "monthly_rent", derived, `annual_rent(${annualRent}) / 12`);
+    monthlyRent = derived;
   }
 
   // rent_per_sf = annual_rent / square_footage
   if (rentPerSf === null && sqft !== null && sqft > 0) {
     const annual = num(row, "annual_rent");
     if (annual !== null) {
-      row.rent_per_sf = round2(annual / sqft);
+      setDerived(row, "rent_per_sf", round2(annual / sqft), `annual_rent(${annual}) / square_footage(${sqft})`);
     }
   }
 
@@ -99,7 +108,7 @@ function computeLeaseDerived(row: Row): void {
   if (sqft === null && rentPerSf !== null && rentPerSf > 0) {
     const annual = num(row, "annual_rent");
     if (annual !== null) {
-      row.square_footage = Math.round(annual / rentPerSf);
+      setDerived(row, "square_footage", Math.round(annual / rentPerSf), `annual_rent(${annual}) / rent_per_sf(${rentPerSf})`);
     }
   }
 
@@ -114,7 +123,9 @@ function computeLeaseDerived(row: Row): void {
         (exclusiveEnd.getUTCFullYear() - s.getUTCFullYear()) * 12 +
         (exclusiveEnd.getUTCMonth() - s.getUTCMonth());
       if (exclusiveEnd.getUTCDate() < s.getUTCDate()) months -= 1;
-      if (months > 0) row.lease_term_months = months;
+      if (months > 0) {
+        setDerived(row, "lease_term_months", months, `start_date(${startDate}) to end_date(${endDate}) = ${months} months`);
+      }
     }
   }
 }

@@ -1248,9 +1248,14 @@ function isMoneyLike(text: unknown): boolean {
 function normalizeLeaseTypeValue(value: unknown): string | null {
   const raw = cleanText(value).toLowerCase();
   if (!raw) return null;
-  if (/\b(?:nnn|triple\s+net|triple-net)\b/.test(raw)) return "nnn";
+  if (/\b(?:nnn|triple\s+net|triple-net)\b/.test(raw)) return "triple_net";
   if (/\b(?:full\s+service|full-service|full\s+service\s+gross)\b/.test(raw)) return "full_service";
   if (/\bmodified\s+gross\b/.test(raw)) return "modified_gross";
+  if (/\bdouble\s+net|\bnn\b/.test(raw)) return "double_net";
+  if (/\bsingle\s+net|\bsn\b/.test(raw)) return "single_net";
+  if (/\babsolute\s+net|bondable\s+net/.test(raw)) return "absolute_net";
+  if (/\bground\s+lease/.test(raw)) return "ground";
+  if (/\bpercentage\s+(?:lease|rent)/.test(raw)) return "percentage";
   if (/\bgross\b/.test(raw)) return "gross";
   return null;
 }
@@ -1259,15 +1264,32 @@ function normalizePermittedUseValue(value: unknown, sourceText?: string | null):
   const valueText = cleanText(value);
   if (!valueText) return null;
   const lowerValue = valueText.toLowerCase();
-  const combined = `${valueText} ${cleanText(sourceText)}`.toLowerCase();
-  if (/\b(?:buffalo\s+wild\s+wings|wings|restaurant|food\s+service|casual\s+dining|bar|cafe)\b/.test(combined)) return "restaurant";
-  if (/\bretail\b/.test(combined)) return "retail";
-  if (/\boffice\b/.test(combined)) return "office";
+  const srcText = cleanText(sourceText);
+  const combined = `${valueText} ${srcText}`.toLowerCase();
+
   // Reject restriction clause text rather than the core use type
   if (
     valueText.length > 80 ||
     /\b(?:shall\s+not|without\s+(?:prior\s+)?(?:written\s+)?consent|may\s+not|assign|assignment|sublet|subletting|common\s+areas?|no\s+other\s+use|not\s+to\s+be\s+used)\b/.test(lowerValue)
   ) return null;
+
+  // Category shortcuts only when the source text actually contains the use word —
+  // prevents returning "restaurant" when the only mention is in a restriction clause
+  // or when the value was guessed from context without supporting source text.
+  if (srcText && /\b(?:buffalo\s+wild\s+wings|wings|restaurant|food\s+service|casual\s+dining|bar|cafe)\b/.test(combined)) {
+    // Source must explicitly support the use
+    if (/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+use|solely\s+for|operated\s+(?:as|for))\b/i.test(srcText)) return "restaurant";
+  }
+  if (srcText && /\bretail\b/.test(combined)) {
+    if (/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+use|solely\s+for)\b/i.test(srcText)) return "retail";
+  }
+  if (srcText && /\boffice\b/.test(combined)) {
+    if (/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+use|solely\s+for)\b/i.test(srcText)) return "office";
+  }
+
+  // Return raw value only if source text is present and contextually relevant
+  if (!srcText || !/\b(?:permitted\s+use|use|premises|shall\s+use|solely\s+for|operated\s+(?:as|for))\b/i.test(srcText)) return null;
+
   return valueText;
 }
 
@@ -1328,8 +1350,16 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     if (fieldKey === "base_rent_monthly" && !/\b(?:rent|monthly|per\s+month|base\s+rent)\b/.test(combined)) {
       return "monthly_rent_without_rent_context";
     }
-    if (fieldKey === "security_deposit_amount" && !/\bsecurity\s+deposit\b/.test(combined)) {
-      return "security_deposit_without_deposit_context";
+    if (fieldKey === "security_deposit_amount") {
+      if (!/\bsecurity\s+deposit\b/.test(combined)) {
+        return "security_deposit_without_deposit_context";
+      }
+      // $0 is only valid when the lease explicitly states zero/no deposit
+      const numericValue = asNumber(value);
+      if (numericValue === 0) {
+        const hasExplicitZero = /\b(?:zero|no\s+security\s+deposit|no\s+deposit|\$0(?:\.00)?|0\.00)\b/i.test(combined);
+        if (!hasExplicitZero) return "security_deposit_zero_without_explicit_waiver";
+      }
     }
     if (fieldKey === "ti_allowance" && !/\b(?:tenant\s+improvement|ti\s+allowance|allowance)\b/.test(combined)) {
       return "ti_allowance_without_ti_context";
@@ -1368,9 +1398,12 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
     if (
       looksLikeDateText(valueText) ||
       looksLikePhoneOnly(valueText) ||
+      isMoneyLike(valueText) ||
       valueText.length > 90 ||
       /^(?:tenant|landlord|assignee|assignor|owner|broker|agent|date|name|title)$/i.test(valueText) ||
-      /(?:assumes?\s+in\s+full|obligations?\s+of|transfer\s+shall|shall|hereby|premises|article|section|rent|maintenance|insurance|taxes|prior\s+written\s+consent|sublet|assignment)/i.test(valueText)
+      /(?:assumes?\s+in\s+full|obligations?\s+of|transfer\s+shall|shall|hereby|premises|article|section|rent|maintenance|insurance|taxes|prior\s+written\s+consent|sublet|assignment)/i.test(valueText) ||
+      /\b(?:deposit(?:ed)?|payable|does\s+hereby|security\s+deposit|cam\s+charges?|operating\s+expenses?|base\s+year)\b/i.test(valueText) ||
+      /\b(?:deposit(?:ed)?|payable|does\s+hereby|security\s+deposit)\b/i.test(source)
     ) {
       return "party_name_looks_like_clause_text";
     }

@@ -195,7 +195,7 @@ function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
   if (ENTITY_FIELDS.has(fieldName)) {
     const valStr = String(value || "").trim();
     if (!valStr) return null;
-    
+
     const srcStr = String(field.sourceText || field.source_text || "").toLowerCase();
     const valLower = valStr.toLowerCase();
     const stopwordNameValues = new Set([
@@ -208,7 +208,21 @@ function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
     if (valStr.length < 2) return null;
     if (stopwordNameValues.has(valLower)) return null;
     if (/^(or|and|in|of|the|by)\s+/i.test(valStr)) return null;
+
+    // Reject date-like values — dates are never party names
+    if (/^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}$/i.test(valStr)) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(valStr)) return null;
+    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(valStr)) return null;
+
+    // Reject money values — dollar amounts are never party names
+    if (/^\$\s*[\d,]+(?:\.\d{2})?$/.test(valStr)) return null;
+    if (/^[\d,]+(?:\.\d{2})?\s*(?:dollars?|USD)\s*$/i.test(valStr)) return null;
+
     if (/\b(may|shall|without|provided|subject to|consent|transfer|assign|sublet|warrants?|represents?|connection with|real estate broker|negotiation|brokerage fees?)\b/i.test(valLower)) return null;
+
+    // Reject deposit-related and other lease-clause fragments
+    if (/\b(deposit(?:ed)?|payable|does hereby|hereby leases?|premises|security deposit|rent(?:\s+is)?\s+due|obligations?\s+of|assumes?\s+(?:all|in\s+full)|initial\s+(?:term|rent))\b/i.test(valLower)) return null;
+
     // Reject prose sentences but allow name initials like "John C. Cooley".
     // A sentence boundary is: period/question/exclamation followed by space+uppercase,
     // OR period followed by end-of-string when not preceded by a single capital letter.
@@ -217,7 +231,12 @@ function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
     if (/(?:^|\s)(?:Section\s+)?\d+\.\d+(?:\s|$)/i.test(valStr)) return null;
 
     const clausePattern = /\b(tenant may assign|assign this lease|sublet|subtenant|assignee or subtenant|permitted transfer|affiliate|successor by merger|sale of substantially all assets|prior written consent|transfer to an affiliate|landlord shall not unreasonably withhold|consent|transfer premium|brokerage fees?|real estate broker|negotiation except as set forth)\b/i;
-    
+
+    // Reject when source text is from a security deposit or expense clause and value has no entity suffix
+    const hasEntitySuffix = /\b(?:LLC|L\.L\.C\.|Inc\.?|Corporation|Corp\.?|Company|Co\.?|LP|L\.P\.|LLP|L\.L\.P\.|Trust|Foundation|Holdings|Partners?)\b/i.test(valStr);
+    const depositSourcePattern = /\b(security\s+deposit|deposited|cam\s+charges?|operating\s+expense|base\s+year)\b/i;
+    if (depositSourcePattern.test(srcStr) && !hasEntitySuffix) return null;
+
     if (clausePattern.test(srcStr) || clausePattern.test(valLower)) {
       return null;
     }
