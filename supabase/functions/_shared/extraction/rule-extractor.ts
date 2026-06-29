@@ -880,6 +880,31 @@ export function extractRuleBased(
     if (inferred) merged.lease_type = inferred;
   }
 
+  // Positive party-name patterns for handwritten fill-in-the-blank leases.
+  // "by and between [NAME] (herein called 'Landlord')" / "and [NAME] (herein called 'Tenant')"
+  // These run at confidence 0.98 so they outrank any spurious label match from
+  // prose like "Landlord does hereby lease to..." or "Tenant has deposited...".
+  if (moduleType === "lease" || moduleType === "leases") {
+    const hereinLandlord = fullText.match(
+      /(?:by\s+and\s+between)\s+([\w\s\-.,&']+?)\s*\(?herein\s+called\s+["']?Landlord["']?\)?/i,
+    );
+    if (hereinLandlord?.[1]) {
+      const name = cleanPartyName(hereinLandlord[1]);
+      if (name && !looksLikeClauseNotName(name)) {
+        merged.landlord_name = { value: name, source: "rule", confidence: 0.98, sourceText: hereinLandlord[0].trim() };
+      }
+    }
+    const hereinTenant = fullText.match(
+      /(?:,\s*and|;\s*and)\s+([\w\s\-.,&']+?)\s*\(?herein\s+called\s+["']?Tenant["']?\)?/i,
+    );
+    if (hereinTenant?.[1]) {
+      const name = cleanPartyName(hereinTenant[1]);
+      if (name && !looksLikeClauseNotName(name)) {
+        merged.tenant_name = { value: name, source: "rule", confidence: 0.98, sourceText: hereinTenant[0].trim() };
+      }
+    }
+  }
+
   // Post-process: stamp source_page on each rule-extracted field by matching
   // its sourceText against the docling text_blocks. Cheap O(blocks*fields)
   // pass that gives the UI a real page number for evidence-aware display.

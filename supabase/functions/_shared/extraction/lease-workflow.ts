@@ -1242,7 +1242,13 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
 }
 
 function isMoneyLike(text: unknown): boolean {
-  return /\$\s*\d|(?:^|\s)\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd)\b/i.test(cleanText(text));
+  const t = cleanText(text);
+  // Primary: dollar sign (or OCR-misread "#"), comma-formatted numbers, "dollars/usd" suffix
+  if (/[\$#]\s*\d|(?:^|\s)\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd)\b/i.test(t)) return true;
+  // OCR variants for handwritten zero-dollar amounts ("sum of Ø Dollars", "sum of 0 Dollars")
+  if (/\bsum\s+of\s+(?:\d[\d.,]*|zero|[ØO0]+)\s*(?:dollars?|USD)?\b/i.test(t)) return true;
+  if (/\bØ\s*(?:dollars?|USD)\b/i.test(t)) return true;
+  return false;
 }
 
 function normalizeLeaseTypeValue(value: unknown): string | null {
@@ -1287,8 +1293,15 @@ function normalizePermittedUseValue(value: unknown, sourceText?: string | null):
     if (/\b(?:permitted\s+use|use\s+of\s+(?:the\s+)?premises|shall\s+use|solely\s+for)\b/i.test(srcText)) return "office";
   }
 
-  // Return raw value only if source text is present and contextually relevant
-  if (!srcText || !/\b(?:permitted\s+use|use|premises|shall\s+use|solely\s+for|operated\s+(?:as|for))\b/i.test(srcText)) return null;
+  // When no source text: only let through short, well-known category labels
+  // (they'll surface as "missing_source_evidence" for reviewer action).
+  if (!srcText) {
+    return /^(?:restaurant|retail|office|industrial|medical|warehouse|salon|bar|cafe|hotel|flex|cannabis|childcare|educational|grocery|automotive|entertainment|fitness|gym|fast\s*food|food\s+service|casual\s+dining|general\s+office|mixed\s+use)$/i.test(valueText)
+      ? valueText
+      : null;
+  }
+  // Source text present but not contextually relevant → reject
+  if (!/\b(?:permitted\s+use|use|premises|shall\s+use|solely\s+for|operated\s+(?:as|for))\b/i.test(srcText)) return null;
 
   return valueText;
 }
@@ -1357,7 +1370,9 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
       // $0 is only valid when the lease explicitly states zero/no deposit
       const numericValue = asNumber(value);
       if (numericValue === 0) {
-        const hasExplicitZero = /\b(?:zero|no\s+security\s+deposit|no\s+deposit|\$0(?:\.00)?|0\.00)\b/i.test(combined);
+        const hasExplicitZero = /\b(?:zero|no\s+security\s+deposit|no\s+deposit|\$0(?:\.00)?|0\.00)\b/i.test(combined)
+          || /\bsum\s+of\s+(?:zero|\$?0|[Ø0]+)\s*(?:dollars?|USD)?\b/i.test(combined)
+          || /\bØ\s*(?:dollars?|USD)?\b/i.test(combined);
         if (!hasExplicitZero) return "security_deposit_zero_without_explicit_waiver";
       }
     }
@@ -3039,6 +3054,7 @@ function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
       : asNumber(value);
     return numeric != null ? numeric : cleanText(value);
   }
+  if (fieldKey === "lease_type") return normalizeLeaseTypeValue(value) ?? cleanText(value);
   return cleanText(value);
 }
 
@@ -4164,6 +4180,18 @@ export function buildLeaseWorkflowAbstraction(args: {
   const shouldApplyComputed = (finalLeaseTypeCanonical || currentIsBlank) && finalLeaseTypeCanonical !== currentLlmType &&
     (!computedIsUnknown || currentIsBlank);
   if (shouldApplyComputed) {
+    // Try to find a snippet from the document that triggered this classification,
+    // so buildExpenseCamEvidenceClauses can attach it as the lease_expense_structure
+    // source clause instead of silently skipping the record.
+    const LEASE_TYPE_EVIDENCE_PATTERNS: Record<string, RegExp> = {
+      triple_net: /\b(?:triple\s+net|nnn|taxes[,\s]+insurance[,\s]+and[,\s]+(?:common\s+area\s+)?maintenance|tenant\s+shall\s+pay\s+(?:all\s+)?(?:real\s+estate\s+)?taxes)[^\n]{0,200}/i,
+      full_service: /\b(?:full\s+service|gross\s+lease|landlord\s+shall\s+pay\s+(?:all\s+)?(?:operating|property)\s+expenses)[^\n]{0,200}/i,
+      modified_gross: /\b(?:modified\s+gross|base\s+year|expense\s+stop)[^\n]{0,200}/i,
+      double_net: /\b(?:double\s+net|nn\b)[^\n]{0,200}/i,
+      gross: /\b(?:gross\s+lease|all[- ]inclusive\s+rent)[^\n]{0,200}/i,
+    };
+    const evidencePattern = finalLeaseTypeCanonical ? LEASE_TYPE_EVIDENCE_PATTERNS[finalLeaseTypeCanonical] : null;
+    const leaseTypeSnippet = evidencePattern ? (fullText.match(evidencePattern)?.[0]?.slice(0, 300) ?? null) : null;
     leaseFields.lease_type = {
       ...(leaseFields.lease_type || {
         key: "lease_type",
@@ -4177,6 +4205,7 @@ export function buildLeaseWorkflowAbstraction(args: {
       value: finalLeaseTypeCanonical,
       extraction_status: finalLeaseTypeCanonical ? "calculated" : "manual_required",
       confidence_score: finalLeaseTypeCanonical ? 0.86 : 0.5,
+      source_clause: leaseFields.lease_type?.source_clause ?? leaseTypeSnippet,
     };
     expenseRules = deriveExpenseRules(row, leaseFields, clauses, doclingRaw);
   }

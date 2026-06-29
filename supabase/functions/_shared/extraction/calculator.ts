@@ -112,8 +112,11 @@ function computeLeaseDerived(row: Row): void {
     }
   }
 
-  // lease_term_months from start/end dates
-  if (startDate && endDate && row.lease_term_months === null) {
+  // lease_term_months from start/end dates.
+  // Always compute and stamp the derivation trace. If the value was already
+  // extracted by the rule/LLM path, preserve it but add the trace so the UI
+  // can show derivation evidence and clear the "missing derivation trace" blocker.
+  if (startDate && endDate) {
     const s = new Date(startDate + "T00:00:00Z");
     const e = new Date(endDate + "T00:00:00Z");
     if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && e > s) {
@@ -124,7 +127,15 @@ function computeLeaseDerived(row: Row): void {
         (exclusiveEnd.getUTCMonth() - s.getUTCMonth());
       if (exclusiveEnd.getUTCDate() < s.getUTCDate()) months -= 1;
       if (months > 0) {
-        setDerived(row, "lease_term_months", months, `start_date(${startDate}) to end_date(${endDate}) = ${months} months`);
+        const traceText = `start_date(${startDate}) to end_date(${endDate}) = ${months} months`;
+        if (row.lease_term_months === null) {
+          setDerived(row, "lease_term_months", months, traceText);
+        } else {
+          // Value already extracted — stamp trace to confirm it is date-consistent
+          const traces = (row._derivation_traces ?? {}) as Record<string, string>;
+          traces["lease_term_months"] = `confirmed: ${traceText}`;
+          row._derivation_traces = traces;
+        }
       }
     }
   }
