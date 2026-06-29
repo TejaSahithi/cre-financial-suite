@@ -244,6 +244,26 @@ async function enqueueLeaseExtractionJob(args: {
   const { supabaseAdmin, logger, fileRecord, orgId, forceReextract } = args;
   const now = new Date().toISOString();
 
+  // When re-extracting, check whether we already have usable parsed text stored
+  // in docling_raw. If yes, jump straight to the "normalize" stage so OCR is
+  // not repeated — this makes re-extraction near-instant for scanned documents.
+  let initialStage = "parse";
+  if (forceReextract) {
+    const { data: existingFile } = await supabaseAdmin
+      .from("uploaded_files")
+      .select("docling_raw")
+      .eq("id", fileRecord.id)
+      .maybeSingle();
+    const existingText = String(existingFile?.docling_raw?.full_text ?? "").trim();
+    if (existingText.length >= 200) {
+      initialStage = "normalize";
+      console.log(
+        `[ingest-file] force_reextract: docling_raw has ${existingText.length} chars — ` +
+        `skipping OCR, starting at normalize stage for file_id=${fileRecord.id}`,
+      );
+    }
+  }
+
   await supabaseAdmin
     .from("pipeline_jobs")
     .update({
@@ -263,11 +283,12 @@ async function enqueueLeaseExtractionJob(args: {
       org_id: orgId,
       uploaded_file_id: fileRecord.id,
       job_type: "lease_extraction",
-      stage: "parse",
+      stage: initialStage,
       status: "queued",
       max_attempts: 3,
       input: {
         force_reextract: forceReextract,
+        skip_parse: initialStage === "normalize",
         module_type: fileRecord.module_type ?? "leases",
         file_name: fileRecord.file_name ?? null,
       },
@@ -292,9 +313,9 @@ async function enqueueLeaseExtractionJob(args: {
     throw new Error(`Could not mark lease extraction as queued: ${statusResult.error.message}`);
   }
 
-  await logger.event("parse", "queued", {
+  await logger.event(initialStage, "queued", {
     provider: "lease-extraction-worker",
-    metadata: { job_id: job.id },
+    metadata: { job_id: job.id, skip_parse: initialStage === "normalize" },
   });
 
   dispatchLeaseExtractionWorker(job.id, logger);
