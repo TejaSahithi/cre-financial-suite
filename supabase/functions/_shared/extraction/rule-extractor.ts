@@ -518,6 +518,12 @@ function looksLikeClauseNotName(raw: unknown): boolean {
   if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text)) return true;
   // Money values (e.g. "$10,000.00")
   if (/^\$\s*[\d,]+(?:\.\d{2})?$/.test(text)) return true;
+  // Garbled OCR detection: date fragments embedded in captured name text
+  // (e.g. "JUSTIN day of Feb Macon Crossing CRESS Macon 2019")
+  const hasDateOf = /\bday\s+of\b/i.test(text);
+  const hasMonthName = /\b(?:january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i.test(text);
+  const hasYear = /\b(?:19|20)\d{2}\b/.test(text);
+  if ((hasDateOf && hasMonthName) || (hasDateOf && hasYear) || (hasMonthName && hasYear)) return true;
   return /\b(hereby|effective as of|terms? and conditions|under the lease|transfers? and assigns?|assumes?|obligations?|contained in said lease|deposit(?:ed)?|payable|premises|does hereby lease|lessor hereby|landlord hereby|does hereby)\b/i.test(text);
 }
 

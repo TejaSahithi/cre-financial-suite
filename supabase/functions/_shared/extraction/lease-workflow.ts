@@ -1141,7 +1141,7 @@ function findEvidenceForValue(doclingRaw: any, fieldKey: string, value: unknown,
 
   for (const block of textBlocks) {
     const blockText = cleanText(block?.text || "");
-    const hit = comparableValue ? blockText.indexOf(comparableValue) : -1;
+    const hit = comparableValue ? blockText.toLowerCase().indexOf(comparableValue.toLowerCase()) : -1;
     if (hit < 0) continue;
     const snippet = expandSourceSnippetFromMatch(blockText, hit, comparableValue.length, 1800);
     if (!snippet) continue;
@@ -1243,10 +1243,12 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
 
 function isMoneyLike(text: unknown): boolean {
   const t = cleanText(text);
+  // Explicit zero amounts are valid money values (e.g. security deposit of $0)
+  if (/^(?:\$?0(?:\.00)?|zero)$/i.test(t)) return true;
   // Primary: dollar sign (or OCR-misread "#"), comma-formatted numbers, "dollars/usd" suffix
   if (/[\$#]\s*\d|(?:^|\s)\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd)\b/i.test(t)) return true;
   // OCR variants for handwritten zero-dollar amounts ("sum of Ø Dollars", "sum of 0 Dollars")
-  if (/\bsum\s+of\s+(?:\d[\d.,]*|zero|[ØO0]+)\s*(?:dollars?|USD)?\b/i.test(t)) return true;
+  if (/\bsum\s+of\s+(?:\d[\d.,]*|zero|[ØøO0]+)\s*(?:dollars?|USD)?\b/i.test(t)) return true;
   if (/\bØ\s*(?:dollars?|USD)\b/i.test(t)) return true;
   return false;
 }
@@ -2425,6 +2427,15 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     let normalizedValue = normalizeWorkflowFieldValue(spec.key, value);
     if (spec.key === "permitted_use" || spec.key === "premises_use") {
       normalizedValue = normalizePermittedUseValue(normalizedValue, relevantSourceClause);
+      // Fallback: when value is known but no source found (e.g. OCR case mismatch),
+      // search the document for the use clause section
+      if (!relevantSourceClause && !isBlank(normalizedValue)) {
+        const useEvidence = extractClauseSnippet(
+          asArray(doclingRaw?.text_blocks), fullText,
+          ["permitted use", "use of premises", "shall use", "for the purpose of", "tenant shall use"], 600,
+        );
+        if (useEvidence.clause_text) relevantSourceClause = useEvidence.clause_text;
+      }
     }
     const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
     if (invalidReason) {
@@ -2484,6 +2495,19 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     };
   }
 
+  // Wire derivation trace for lease_term when calculated from lease_term_months
+  if (fieldMap.lease_term?.extraction_status === "calculated" && !isBlank(fieldMap.lease_term?.value)) {
+    const ltMonths = asNumber(row?.lease_term_months);
+    fieldMap.lease_term = {
+      ...fieldMap.lease_term,
+      source_field_keys: ["lease_term_months"],
+      derivation_trace: `lease_term computed from lease_term_months(${ltMonths ?? fieldMap.lease_term.value})`,
+      requires_review: false,
+      review_reason: null,
+      approval_blocking_reason: null,
+    };
+  }
+
   const signals = inferLeaseSignals(fullText, row);
   const classifiedLeaseType = classifyLeaseType(fullText, [], signals);
   const existingLeaseType = normalizeLeaseTypeValue(fieldMap.lease_type?.value);
@@ -2520,7 +2544,7 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
       ? "Lease type was classified from expense signals and requires manual review."
       : "Lease type was not found in the lease. Manual review required.",
     approval_blocking_reason: normalizedLeaseType
-      ? "Lease type was classified from expense signals and requires manual review."
+      ? null
       : "Lease type was not found in the lease. Manual review required.",
   };
 
