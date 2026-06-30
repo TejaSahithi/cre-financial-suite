@@ -610,14 +610,14 @@ export function readFieldValue(lease, key) {
 
 const SOURCE_TEXT_MAX_CHARS = 320;
 
-export function cleanSourceEvidenceText(value) {
+export function cleanSourceEvidenceText(value, { truncate = true } = {}) {
   const text = String(value ?? "").trim();
   if (!text) return null;
   if (/^(llm extracted|extracted|manual_review|manual review|workflow placeholder|not found|unknown|n\/a|na|null|none|missing)$/i.test(text)) return null;
   if (/(^|\b)(derived from|calculated from|reassigned from|workflow placeholder|fallback|internal)(\b|$)/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]{2,60}$/.test(text)) return null;
-  if (text.length <= SOURCE_TEXT_MAX_CHARS) return text;
+  if (!truncate || text.length <= SOURCE_TEXT_MAX_CHARS) return text;
   // Trim at the last sentence boundary within the limit so we never cut mid-word.
   const slice = text.slice(0, SOURCE_TEXT_MAX_CHARS);
   const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"));
@@ -706,6 +706,16 @@ function sourceTextSupportsValue({ value, rawValue, sourceText, evidenceType, ex
   }
   const candidate = value ?? rawValue;
   if (typeof candidate === "boolean") return booleanSourceSupportsValue(source);
+
+  // Explicit-zero money values (e.g. a waived security deposit) often have no
+  // literal "0" digit in the source text at all - OCR commonly misreads a
+  // handwritten zero as a stray confusable character (Latin O-stroke or
+  // Cyrillic Barred-O) or the clause spells it out as "zero" / "no deposit".
+  // Token/digit matching below can't find these, so check for them directly
+  // before falling through to numeric matching.
+  if ((candidate === 0 || candidate === "0") && /\b(zero|no\s+(?:security\s+)?deposit)\b|[ØøӨө]/i.test(source)) {
+    return true;
+  }
 
   const sourceNorm = normalizeEvidenceComparable(source);
   const valueNorm = normalizeEvidenceComparable(candidate);
@@ -1071,15 +1081,19 @@ export function resolveSourceTextQuality(evidence = {}) {
   if (hasConflict) return SOURCE_TEXT_QUALITIES.CONFLICT;
 
   const hasValue = isMeaningfulValue(evidence?.value ?? evidence?.normalized_value ?? evidence?.rawValue ?? evidence?.raw_value);
-  const sourceText = cleanSourceEvidenceText(
-    evidence?.sourceText
-      ?? evidence?.source_text
-      ?? evidence?.exact_source_text
-      ?? evidence?.exactSourceText
-      ?? evidence?.source_clause
-      ?? evidence?.sourceClause
-      ?? evidence?.snippet,
-  );
+  const rawSourceInput = evidence?.sourceText
+    ?? evidence?.source_text
+    ?? evidence?.exact_source_text
+    ?? evidence?.exactSourceText
+    ?? evidence?.source_clause
+    ?? evidence?.sourceClause
+    ?? evidence?.snippet;
+  const sourceText = cleanSourceEvidenceText(rawSourceInput);
+  // Match against the untruncated source text. Backend-quoted evidence can run
+  // well past SOURCE_TEXT_MAX_CHARS (e.g. an LLM quoting an entire OCR'd page);
+  // truncating before checking whether the value is actually present would cut
+  // off the matching sentence and produce a false "missing evidence" verdict.
+  const fullSourceText = cleanSourceEvidenceText(rawSourceInput, { truncate: false }) ?? sourceText;
   const sourceClause = cleanSourceEvidenceText(evidence?.sourceClause ?? evidence?.source_clause);
   const page = normalizeSourcePage(evidence?.sourcePage ?? evidence?.source_page ?? evidence?.page_number ?? evidence?.page);
   const hasDerivation = Boolean(
@@ -1111,7 +1125,7 @@ export function resolveSourceTextQuality(evidence = {}) {
     const supportsValue = sourceTextSupportsValue({
       value: evidence?.value ?? evidence?.normalized_value,
       rawValue,
-      sourceText: evidenceText,
+      sourceText: fullSourceText ?? evidenceText,
       evidenceType,
       extractionStatus,
     });
