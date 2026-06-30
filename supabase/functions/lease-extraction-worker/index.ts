@@ -455,6 +455,24 @@ Deno.serve(async (req: Request) => {
     }
 
     if (currentStage === "normalize") {
+      // Fast re-extraction path: when the job is enqueued directly at the
+      // "normalize" stage (docling_raw already had usable text, so OCR was
+      // skipped), the file status is still "parsing" from enqueueLeaseExtractionJob
+      // — it never passed through parse-pdf-docling, which is what normally
+      // transitions status to "pdf_parsed". Without this, normalize-pdf-output's
+      // status guard rejects the call with "File status must be 'pdf_parsed'.
+      // Current: 'parsing'". setStatus is a no-op when already "pdf_parsed"
+      // (the path that came from the "parse" branch above).
+      const pdfParsedTransition = await setStatus(supabaseAdmin, fileId, "pdf_parsed", {
+        processing_status: "pdf_parsed",
+      });
+      if (pdfParsedTransition.error) {
+        console.error(
+          `[${WORKER_NAME}] Failed to transition to pdf_parsed before normalize stage:`,
+          pdfParsedTransition.error.message,
+        );
+      }
+
       await logger.event("normalize", "running", {
         provider: "lease-extraction-worker",
         metadata: { job_id: job.id, attempt },
