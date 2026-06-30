@@ -2554,6 +2554,11 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
     exact_source_text: leaseTypeSource ?? fieldMap.lease_type?.source_clause ?? null,
     evidence_type: normalizeLeaseTypeValue(classifiedLeaseType) ? "inferred" : workflowEvidenceType(fieldMap.lease_type?.extraction_status),
     source_text_quality: leaseTypeSource ? "derived" : (normalizedLeaseType ? "inferred" : "missing"),
+    // The per-field FIELD_SPECS pass above may have flagged "lease_type_unknown" before
+    // classification ran. Once classification succeeds, that error is stale and must be
+    // cleared - otherwise the frontend's hard-validation check treats it as still unknown
+    // and nulls out an otherwise clean, classified value.
+    validation_errors: normalizedLeaseType ? [] : (fieldMap.lease_type?.validation_errors ?? []),
     requires_review: true,
     review_reason: normalizedLeaseType
       ? "Lease type was classified from expense signals and requires manual review."

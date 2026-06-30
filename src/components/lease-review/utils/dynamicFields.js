@@ -954,13 +954,17 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? derived?.sourcePage
       ?? evidence.sourcePage,
   );
-  const sourceText = cleanSourceEvidenceText(
-    field.source_text
-      ?? field.exact_source_text
-      ?? field.source_clause
-      ?? derived?.sourceText
-      ?? evidence.sourceText,
-  );
+  const rawSourceCandidate = field.source_text
+    ?? field.exact_source_text
+    ?? field.source_clause
+    ?? derived?.sourceText
+    ?? evidence.sourceText;
+  const sourceText = cleanSourceEvidenceText(rawSourceCandidate);
+  // Evidence-quality matching needs the untruncated text: a supporting phrase can sit
+  // well past the display truncation cutoff in a long quoted clause (e.g. "Restaurant"
+  // appearing in paragraph 3 of a multi-paragraph block), which would otherwise produce
+  // a false "missing evidence" verdict even though the source actually supports the value.
+  const fullSourceText = cleanSourceEvidenceText(rawSourceCandidate, { truncate: false }) ?? sourceText;
   const valueBeforeValidation = schemaValue;
   const persistedSourceFieldKeys = Array.isArray(field.source_field_keys) && field.source_field_keys.length > 0
     ? field.source_field_keys
@@ -994,6 +998,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const usedRecoveredValue = !isMeaningfulValue(normalizedCandidate) && isMeaningfulValue(recoveredValue);
   schemaValue = usedRecoveredValue ? recoveredValue : normalizedCandidate;
   const effectiveSourceText = usedCrossFieldRecovery ? crossFieldRecovery.sourceText : sourceText;
+  const effectiveFullSourceText = usedCrossFieldRecovery ? crossFieldRecovery.sourceText : fullSourceText;
   const effectiveSourcePage = usedCrossFieldRecovery ? crossFieldRecovery.sourcePage : sourcePage;
   let validationErrors = [
     ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
@@ -1035,7 +1040,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
       ?? (effectiveSourceText ? null : evidence.evidenceType);
   const statusEvidence = {
     sourcePage: effectiveSourcePage,
-    sourceText: effectiveSourceText,
+    sourceText: effectiveFullSourceText,
     rawValue: field.raw_value ?? field.rawValue ?? evidence.rawValue ?? schemaValue,
     value: schemaValue,
     extractionStatus: explicitExtractionStatus,
