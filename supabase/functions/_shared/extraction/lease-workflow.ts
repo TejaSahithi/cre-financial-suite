@@ -1247,9 +1247,12 @@ function isMoneyLike(text: unknown): boolean {
   if (/^(?:\$?0(?:\.00)?|zero)$/i.test(t)) return true;
   // Primary: dollar sign (or OCR-misread "#"), comma-formatted numbers, "dollars/usd" suffix
   if (/[\$#]\s*\d|(?:^|\s)\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd)\b/i.test(t)) return true;
-  // OCR variants for handwritten zero-dollar amounts ("sum of Ø Dollars", "sum of 0 Dollars")
-  if (/\bsum\s+of\s+(?:\d[\d.,]*|zero|[ØøO0]+)\s*(?:dollars?|USD)?\b/i.test(t)) return true;
-  if (/\bØ\s*(?:dollars?|USD)\b/i.test(t)) return true;
+  // OCR variants for handwritten zero-dollar amounts ("sum of Ø Dollars", "sum of_ Ө Dollars", "sum of 0 Dollars")
+  // Ø/ø (U+00D8/F8 Latin O-stroke) and Ө/ө (U+04E8/E9 Cyrillic Barred O) are both
+  // common OCR misreads of a handwritten "0". "of_" (trailing underscore, no space)
+  // shows up when the blank line itself gets OCR'd as an underscore.
+  if (/\bsum\s+of_?\s*(?:\d[\d.,]*|zero|[ØøӨө0Oo]+)\s*(?:dollars?|USD)?\b/i.test(t)) return true;
+  if (/[ØøӨө]\s*(?:dollars?|USD)\b/i.test(t)) return true;
   return false;
 }
 
@@ -1373,8 +1376,8 @@ function fieldValueLooksInvalid(fieldKey: string, value: unknown, sourceText: st
       const numericValue = asNumber(value);
       if (numericValue === 0) {
         const hasExplicitZero = /\b(?:zero|no\s+security\s+deposit|no\s+deposit|\$0(?:\.00)?|0\.00)\b/i.test(combined)
-          || /\bsum\s+of\s+(?:zero|\$?0|[Ø0]+)\s*(?:dollars?|USD)?\b/i.test(combined)
-          || /\bØ\s*(?:dollars?|USD)?\b/i.test(combined);
+          || /\bsum\s+of_?\s*(?:zero|\$?0|[ØøӨө0]+)\s*(?:dollars?|USD)?\b/i.test(combined)
+          || /[ØøӨө]\s*(?:dollars?|USD)?\b/i.test(combined);
         if (!hasExplicitZero) return "security_deposit_zero_without_explicit_waiver";
       }
     }
@@ -2436,6 +2439,18 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         );
         if (useEvidence.clause_text) relevantSourceClause = useEvidence.clause_text;
       }
+    }
+    if (spec.key === "security_deposit_amount" && !relevantSourceClause && !isBlank(normalizedValue)) {
+      // Fallback: handwritten/OCR'd zero deposits ("sum of_ Ө Dollars") often
+      // don't get picked up by value-matching since OCR confusable chars
+      // (Ø/ø/Ө/ө) don't match the literal value "0".
+      // Search for the security deposit clause directly so the explicit-zero
+      // validation check below has the actual clause text to inspect.
+      const depositEvidence = extractClauseSnippet(
+        asArray(doclingRaw?.text_blocks), fullText,
+        ["security deposit"], 400,
+      );
+      if (depositEvidence.clause_text) relevantSourceClause = depositEvidence.clause_text;
     }
     const invalidReason = fieldValueLooksInvalid(spec.key, normalizedValue, relevantSourceClause);
     if (invalidReason) {

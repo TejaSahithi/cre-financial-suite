@@ -347,7 +347,9 @@ function applyLeaseCrossFieldSanity(record: ExtractedRecord): void {
   const tenantName = String(fields.tenant_name?.value ?? "").trim();
   if (tenantName && looksLikePersonNotEntity(tenantName)) {
     const tenantSourceText = String(fields.tenant_name?.sourceText ?? "").toLowerCase();
-    const isSignatoryLine = /\bby[:\s]|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits[:\s]|\btitle[:\s]/.test(tenantSourceText);
+    // "by:" requires a colon (signature block "By: ____") so this does not
+    // false-positive on ordinary party-clause prose like "by and between".
+    const isSignatoryLine = /\bby\s*:|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits\s*:|\btitle\s*:/.test(tenantSourceText);
     const hasDifferentSignatory =
       !!fields.tenant_signatory_name?.value &&
       String(fields.tenant_signatory_name.value).trim().toLowerCase() !== tenantName.toLowerCase();
@@ -374,7 +376,7 @@ function applyLeaseCrossFieldSanity(record: ExtractedRecord): void {
   const landlordName = String(fields.landlord_name?.value ?? "").trim();
   if (landlordName && looksLikePersonNotEntity(landlordName)) {
     const landlordSourceText = String(fields.landlord_name?.sourceText ?? "").toLowerCase();
-    const isLandlordSignatoryLine = /\bby[:\s]|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits[:\s]|\btitle[:\s]/.test(landlordSourceText);
+    const isLandlordSignatoryLine = /\bby\s*:|\bsigned\s+by\b|\bsignatory\b|\bsignature\b|\bits\s*:|\btitle\s*:/.test(landlordSourceText);
     const hasDifferentLandlordSignatory =
       !!fields.landlord_signatory_name?.value &&
       String(fields.landlord_signatory_name.value).trim().toLowerCase() !== landlordName.toLowerCase();
