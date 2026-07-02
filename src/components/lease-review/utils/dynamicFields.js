@@ -100,14 +100,13 @@ function isGenericSummaryPreambleSource(sourceText) {
 
 function shouldSuppressDynamicReviewItem(key, item, value, sourceText, staticKeys) {
   const normalizedKey = key.startsWith("clause_") ? key.slice(7) : key;
-  const isClauseProjection = key.startsWith("clause_");
-  const hasMeaningfulDynamicValue = isMeaningfulValue(value);
-  if (!isClauseProjection && (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey))) return true;
-  if (
-    isClauseProjection &&
-    (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey)) &&
-    (!hasMeaningfulDynamicValue || isGenericSummaryPreambleSource(sourceText))
-  ) return true;
+  // A dynamic/clause row whose normalized key collides with a static field
+  // (or the fixed suppression allowlist) always loses to the static field,
+  // regardless of how "good" the dynamic row's value/source looks - showing
+  // both produces duplicate rows for the same concept (e.g. lease_type vs.
+  // clause_lease_expense_structure). This is intentionally unconditional and
+  // not specific to any one field key.
+  if (staticKeys.has(normalizedKey) || FIXED_FIELD_DYNAMIC_SUPPRESSION_KEYS.has(normalizedKey)) return true;
   if ((value == null || value === "") && isGenericSummaryPreambleSource(sourceText)) return true;
   if (isGenericSummaryPreambleSource(sourceText) && /^(?:default|security_deposit|rent_escalation|use_clause|cam_recoveries)$/i.test(normalizedKey)) return true;
   return Boolean(item?.maps_to_fixed_field === true);
@@ -1158,6 +1157,10 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
     source_field_keys: statusEvidence.sourceFieldKeys || [],
     derivation_trace: statusEvidence.derivationTrace ?? null,
     validation_errors: validationErrors,
+    // Informational only - source text exists but doesn't support the value.
+    // Never feeds requires_review/approval_blocking_reason below, so it can't
+    // affect Approval Blockers.
+    consistency_warning: sourceTextQuality === "inconsistent",
     requires_review: requiresReview,
     required: Boolean(field.required),
     review_reason: reviewReason,

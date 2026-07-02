@@ -945,7 +945,8 @@ export function readFieldEvidence(lease, key) {
   });
   const needsReviewForQuality =
     sourceTextQuality === SOURCE_TEXT_QUALITIES.INFERRED ||
-    (isMeaningfulValue(resolved?.value ?? evRawValue) && sourceTextQuality === SOURCE_TEXT_QUALITIES.MISSING);
+    (isMeaningfulValue(resolved?.value ?? evRawValue) &&
+      (sourceTextQuality === SOURCE_TEXT_QUALITIES.MISSING || sourceTextQuality === SOURCE_TEXT_QUALITIES.INCONSISTENT));
 
   return {
     rawValue: evRawValue,
@@ -1024,6 +1025,13 @@ export const SOURCE_TEXT_QUALITIES = {
   INFERRED: "inferred",
   MISSING: "missing",
   CONFLICT: "conflict",
+  // Source text exists (and a value exists) but the text does not actually
+  // support the value - distinct from MISSING (no source text at all), since
+  // the review UI needs to tell reviewers "no evidence" apart from "evidence
+  // contradicts value". Deliberately excluded from hasValidSourceEvidence's
+  // accepted list below, so it still blocks required-field approval exactly
+  // like MISSING did before this value existed.
+  INCONSISTENT: "inconsistent",
 };
 
 export const EXTRACTION_STATUS_LABELS = {
@@ -1129,7 +1137,7 @@ export function resolveSourceTextQuality(evidence = {}) {
       evidenceType,
       extractionStatus,
     });
-    if (hasValue && !supportsValue) return SOURCE_TEXT_QUALITIES.MISSING;
+    if (hasValue && !supportsValue) return SOURCE_TEXT_QUALITIES.INCONSISTENT;
     if (explicit === SOURCE_TEXT_QUALITIES.PARTIAL) return SOURCE_TEXT_QUALITIES.PARTIAL;
     return page && hasNaturalSourceBoundary(evidenceText)
       ? SOURCE_TEXT_QUALITIES.EXACT

@@ -120,6 +120,7 @@ import { updateLeaseQueryCache } from "@/components/lease-review/utils/leaseQuer
 import { matchBuildingAndUnit } from "@/components/lease-review/utils/buildingUnitMatcher";
 import { calculateSnapshotFiscalYears } from "@/components/lease-review/utils/projectionUtils";
 import { buildBulkApprovalState } from "@/components/lease-review/utils/bulkApproval";
+import { validateCrossFieldWarnings } from "@/components/lease-review/utils/crossFieldValidator";
 
 import {
   RentScheduleTable,
@@ -264,6 +265,11 @@ export default function LeaseReview() {
     });
     return map;
   }, [allReviewRows]);
+
+  const crossFieldWarnings = useMemo(
+    () => validateCrossFieldWarnings(reviewRowByKey, leaseFull),
+    [reviewRowByKey, leaseFull],
+  );
 
   // Hydrate field reviews from the lease record when it loads. Prefer the
   // dedicated lease_field_reviews table (queryable audit trail); fall back
@@ -1124,7 +1130,7 @@ export default function LeaseReview() {
         sourceFieldKeys: f.source_field_keys,
         derivationTrace: f.derivation_trace,
       });
-      if (["missing", "conflict"].includes(sourceQuality)) return acc;
+      if (["missing", "conflict", "inconsistent"].includes(sourceQuality)) return acc;
       const score = typeof f.confidence === "number" ? f.confidence : readFieldConfidence(leaseFull, f.key);
       const bucket = classifyConfidence(score);
       if (f.evidence_type === "derived" && bucket === "unknown") {
@@ -2114,6 +2120,9 @@ export default function LeaseReview() {
           sourceText,
           extractionStatus: payload.extraction_status ?? fieldsWithEvidence[fieldKey]?.extraction_status ?? null,
         });
+        const validationErrors = Array.isArray(payload.validation_errors)
+          ? payload.validation_errors
+          : fieldsWithEvidence[fieldKey]?.validation_errors ?? [];
         fieldsWithEvidence[fieldKey] = {
           ...(fieldsWithEvidence[fieldKey] || {}),
           value,
@@ -2123,12 +2132,14 @@ export default function LeaseReview() {
           source_text: sourceText,
           raw_value: payload.raw_value ?? value,
           extraction_status: extractionStatus,
+          validation_errors: validationErrors,
         };
         evidenceMap[fieldKey] = {
           raw_value: payload.raw_value ?? value,
           source_page: sourcePage,
           source_text: sourceText,
           extraction_status: extractionStatus,
+          validation_errors: validationErrors,
         };
       };
       if (reviewedRow) {
@@ -2150,6 +2161,7 @@ export default function LeaseReview() {
               null,
             raw_value: f.original_value ?? f.evidence?.raw_value ?? null,
             extraction_status: f.status ?? null,
+            validation_errors: Array.isArray(f.validation_errors) ? f.validation_errors : [],
           });
           if (typeof f.confidence === "number") {
             confidenceMap[f.field_key] = f.confidence <= 1 ? Math.round(f.confidence * 100) : Math.round(f.confidence);
@@ -2170,6 +2182,7 @@ export default function LeaseReview() {
             null,
           raw_value: wfField.value ?? null,
           extraction_status: wfField.extraction_status ?? null,
+          validation_errors: Array.isArray(wfField.validation_errors) ? wfField.validation_errors : [],
         });
         if (typeof wfField.confidence_score === "number") {
           confidenceMap[fieldKey] = wfField.confidence_score <= 1
@@ -3191,6 +3204,7 @@ export default function LeaseReview() {
                 }}
                 showMissing={showMissingByTab[tab.key] || false}
                 conflictKeys={conflictKeySet}
+                crossFieldWarnings={crossFieldWarnings}
               />
             </TabsContent>
           ))}
@@ -3224,6 +3238,7 @@ export default function LeaseReview() {
             }}
             showMissing={showMissingByTab.rent_charges || false}
             conflictKeys={conflictKeySet}
+            crossFieldWarnings={crossFieldWarnings}
           />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
@@ -3254,6 +3269,7 @@ export default function LeaseReview() {
             }}
             showMissing={showMissingByTab.expenses_recoveries || false}
             conflictKeys={conflictKeySet}
+            crossFieldWarnings={crossFieldWarnings}
           />
         </TabsContent>
 
@@ -3283,6 +3299,7 @@ export default function LeaseReview() {
             }}
             showMissing={showMissingByTab.cam_rules || false}
             conflictKeys={conflictKeySet}
+            crossFieldWarnings={crossFieldWarnings}
           />
         </TabsContent>
 

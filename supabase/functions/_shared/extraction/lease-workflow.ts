@@ -253,7 +253,7 @@ const FIELD_SPECS = [
   // leased premises text.
   { key: "tenant_rsf", group: "premises", aliases: ["tenant_rsf", "rentable_area_sqft"] },
   { key: "floor_plan_reference", group: "premises", aliases: ["floor_plan_reference"], patterns: [/\bexhibit\s+([A-Z0-9-]+)/i] },
-  { key: "parking_rights", group: "premises", aliases: ["parking_rights"], patterns: [/\bparking\b[^\n.]{0,180}/i] },
+  { key: "parking_rights", group: "premises", aliases: ["parking_rights"], patterns: [/\bparking\b[^\n.;]{0,180}?(?=[.;]|\n|$)/i] },
   { key: "common_area_description", group: "premises", aliases: ["common_area_description"], patterns: [/\bcommon areas?\b[^\n.]{0,220}/i] },
   { key: "base_year", group: "expense_terms", aliases: ["base_year"], patterns: [/\bbase year\b[^\n]{0,20}?(\d{4})/i] },
   { key: "base_year_expense_amount", group: "expense_terms", aliases: ["base_year_expense_amount", "base_year_amount"], patterns: [/\bbase year\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
@@ -1215,10 +1215,10 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
     escalation_rate: ["escalat", "increase", "percent", "annual", "rent"],
     security_deposit: ["security deposit", "deposit", "security"],
     lease_type: ["full service", "gross", "triple net", "nnn", "modified gross", "net lease", "expense structure", "base year", "full service gross"],
-    responsibility_taxes: ["tax", "real estate tax", "property tax", "assessment"],
-    responsibility_insurance: ["insurance", "liability", "coverage", "property insurance"],
-    responsibility_utilities: ["utilities", "utility", "electric", "gas", "water", "hvac"],
-    responsibility_repairs: ["repairs", "maintenance", "repair", "maintain"],
+    tax_responsibility: ["tax", "real estate tax", "property tax", "assessment"],
+    insurance_responsibility: ["insurance", "liability", "coverage", "property insurance"],
+    maintenance_responsibility: ["repairs", "maintenance", "repair", "maintain"],
+    parking_rights: ["parking", "parking space", "parking spaces", "parking area"],
     cam_cap_pct: ["cam", "common area", "cap", "controllable", "operating expenses"],
     cam_cap_type: ["cam", "common area", "cap", "cumulative", "non-cumulative"],
     admin_fee_pct: ["admin", "administrative fee", "management fee", "percent"],
@@ -1268,6 +1268,15 @@ function normalizeLeaseTypeValue(value: unknown): string | null {
   if (/\bground\s+lease/.test(raw)) return "ground";
   if (/\bpercentage\s+(?:lease|rent)/.test(raw)) return "percentage";
   if (/\bgross\b/.test(raw)) return "gross";
+  return null;
+}
+
+function normalizeResponsibilityValue(value: unknown): string | null {
+  const raw = cleanText(value).toLowerCase();
+  if (!raw) return null;
+  if (/\bshared|\bpro.?rata|\bproportionate|\bjointly|\bsplit\b/.test(raw)) return "Shared";
+  if (/\blandlord|\blessor\b/.test(raw)) return "Landlord";
+  if (/\btenant|\blessee\b/.test(raw)) return "Tenant";
   return null;
 }
 
@@ -3099,6 +3108,14 @@ function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
     return numeric != null ? numeric : cleanText(value);
   }
   if (fieldKey === "lease_type") return normalizeLeaseTypeValue(value) ?? cleanText(value);
+  if (["tax_responsibility", "insurance_responsibility", "maintenance_responsibility"].includes(fieldKey)) {
+    return normalizeResponsibilityValue(value) ?? cleanText(value);
+  }
+  if (fieldKey === "parking_rights") {
+    const cleaned = cleanText(value);
+    const boundaryMatch = cleaned.match(/^[^.;\n]{0,180}/);
+    return (boundaryMatch ? boundaryMatch[0].trim() : cleaned) || null;
+  }
   return cleanText(value);
 }
 

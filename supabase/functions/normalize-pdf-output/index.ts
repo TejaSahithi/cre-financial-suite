@@ -1060,6 +1060,7 @@ function buildReviewPayload(opts: {
         },
         status: finalStatus,
         editable: workflowField?.editable ?? true,
+        validationErrors: Array.isArray(workflowField?.validation_errors) ? workflowField.validation_errors : [],
       });
     });
     const customFieldsFromRows = Object.entries(values)
@@ -1198,6 +1199,7 @@ function buildReviewField(opts: {
   evidence?: Record<string, unknown> | null;
   status?: string;
   editable?: boolean;
+  validationErrors?: string[];
 }) {
   const blank = isBlank(opts.value);
   return {
@@ -1216,6 +1218,7 @@ function buildReviewField(opts: {
     editable: opts.editable ?? true,
     extraction_status: opts.status ?? (blank ? "not_found" : "extracted"),
     status: opts.status ?? (blank ? "missing" : "pending"),
+    validation_errors: Array.isArray(opts.validationErrors) ? opts.validationErrors : [],
     accepted: false,
     rejected: false,
     user_edit: null,

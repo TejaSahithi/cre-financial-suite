@@ -50,7 +50,7 @@ describe("Lease Review evidence contract", () => {
     expect(normalizeSourcePage("")).toBeNull();
   });
 
-  it("does not treat unrelated source text as exact evidence", () => {
+  it("flags unrelated source text as an inconsistent evidence mismatch, not exact", () => {
     const evidence = {
       value: "Cress Family Restaurants, LLC",
       sourceText: "THIS LEASE AGREEMENT made and entered into this 8 day of September, 2020.",
@@ -58,7 +58,7 @@ describe("Lease Review evidence contract", () => {
       extractionStatus: "extracted",
     };
 
-    expect(resolveSourceTextQuality(evidence)).toBe("missing");
+    expect(resolveSourceTextQuality(evidence)).toBe("inconsistent");
     expect(hasValidSourceEvidence(evidence)).toBe(false);
   });
 

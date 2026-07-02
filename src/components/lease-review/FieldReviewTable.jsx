@@ -103,6 +103,7 @@ const SOURCE_QUALITY_BADGE = {
   inferred: { label: "Inferred", cls: "bg-purple-50 text-purple-700 border-purple-200" },
   conflict: { label: "Conflict", cls: "bg-red-50 text-red-700 border-red-200" },
   missing: { label: "No source", cls: "bg-red-50 text-red-600 border-red-200" },
+  inconsistent: { label: "Evidence mismatch", cls: "bg-orange-50 text-orange-700 border-orange-200" },
   manual_required: { label: "Manual Review", cls: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
@@ -116,6 +117,7 @@ export default function FieldReviewTable({
   onQuickAction,
   showMissing = false,
   conflictKeys,
+  crossFieldWarnings,
 }) {
   if (!fields || fields.length === 0) {
     return (
@@ -263,6 +265,11 @@ export default function FieldReviewTable({
                         {sqBadge.label}
                       </span>
                     )}
+                    {crossFieldWarnings?.get(field.key)?.map((w) => (
+                      <p key={w.check} className="max-w-[920px] text-[10px] leading-snug text-amber-600">
+                        {w.reason}
+                      </p>
+                    ))}
                   </div>
                 </TableCell>
 
