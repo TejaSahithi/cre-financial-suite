@@ -325,6 +325,30 @@ const FIELD_SPECS = [
   { key: "gross_up_enabled", group: "expense_terms", aliases: ["gross_up_enabled", "grossup_enabled"], patterns: [/\bgross[\s-]up\b/i] },
   { key: "gross_up_threshold", group: "expense_terms", aliases: ["gross_up_threshold", "gross_up_percent", "grossup_threshold"], patterns: [/\bgross[\s-]up\b[^\n]{0,80}?(\d{2,3})\s*%/i, /(?:less\s+than|below|under)\s+(\d{2,3})\s*%\s+(?:occupied|occupancy)[^\n]{0,80}?(?:gross[\s-]?up|variable\s+expenses?)/i, /gross[\s-]up[^\n]{0,60}?(?:as\s+if|to\s+reflect)[^\n]{0,40}?(\d{2,3})\s*%\s+(?:occupied|occupancy)/i] },
   { key: "hvac_responsibility", group: "expense_terms", aliases: ["hvac_responsibility", "hvac"], patterns: [/\bhvac\b[^\n]{0,120}\b(tenant|landlord|shared)\b/i] },
+  // ── Fields missing FIELD_SPECS — LLM values were absorbed but never used for pattern extraction
+  { key: "free_rent_months", group: "rent_terms", aliases: ["free_rent_months", "rent_abatement_months", "free_rent_period"], patterns: [
+    /\b(\d+)\s+months?\s+(?:of\s+)?(?:free\s+rent|rent.?free|abatement)/i,
+    /\b(?:free\s+rent|rent.?free|abatement)\b[^\n.]{0,80}?(\d+)\s+months?/i,
+  ]},
+  { key: "ti_allowance", group: "rent_terms", aliases: ["ti_allowance", "tenant_improvement_allowance", "improvement_allowance"], patterns: [
+    /\b(?:tenant\s+improvement|t\.?i\.?)\s+allowance\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i,
+    /\b(?:improvement\s+allowance|build.?out\s+allowance)\b[^\n$]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i,
+  ]},
+  { key: "escalation_timing", group: "rent_terms", aliases: ["escalation_timing", "escalation_date", "adjustment_date"], patterns: [
+    /\brent\s+(?:shall\s+)?(?:increase|escalate)\s+(?:on\s+)?(?:each|every)\s+(lease\s+anniversary|calendar\s+year|fiscal\s+year)/i,
+    /\b(lease\s+anniversary|calendar\s+year|fiscal\s+year)\b[^\n.]{0,60}(?:adjustment|increase|escalation)/i,
+  ]},
+  { key: "escalation_type", group: "rent_terms", aliases: ["escalation_type", "escalation_method", "adjustment_type"], patterns: [
+    /\b(consumer\s+price\s+index|cpi)[^\n.]{0,60}/i,
+    /\b(fixed\s+(?:percentage|rate|amount|escalation))\b/i,
+  ]},
+  { key: "termination_notice_months", group: "lease_term", aliases: ["termination_notice_months", "termination_notice_period"], patterns: [
+    /\b(?:early\s+termination|right\s+to\s+terminate)\b[^\n.]{0,80}?(\d+)\s+months?\s+(?:prior\s+)?(?:written\s+)?notice/i,
+    /\b(\d+)\s+months?\s+(?:advance\s+|written\s+)?notice[^\n.]{0,40}(?:terminate|termination)/i,
+  ]},
+  { key: "renewal_type", group: "lease_term", aliases: ["renewal_type", "renewal_option_type"], patterns: [
+    /\b(automatic\s+renewal|option\s+to\s+renew|right\s+to\s+renew|renewal\s+option)\b/i,
+  ]},
 ];
 
 function cleanText(value: unknown) {
@@ -361,9 +385,9 @@ function cleanSourceText(value: unknown) {
   return isGenericSourceText(text) ? null : text;
 }
 
-const SOURCE_SNIPPET_MAX_CHARS = 2400;
-const SOURCE_SNIPPET_LOOKBACK = 1200;
-const SOURCE_SNIPPET_LOOKAHEAD = 1400;
+const SOURCE_SNIPPET_MAX_CHARS = 900;
+const SOURCE_SNIPPET_LOOKBACK = 450;
+const SOURCE_SNIPPET_LOOKAHEAD = 650;
 const SOURCE_ABBREVIATIONS = new Set([
   "co", "corp", "inc", "ltd", "llc", "lp", "llp", "mr", "mrs", "ms", "dr",
   "jr", "sr", "st", "ave", "blvd", "rd", "ste", "suite", "no", "jan", "feb",
@@ -1234,6 +1258,22 @@ function isSourceRelevantToField(fieldKey: string, sourceText: string | null): b
     assignment_provisions: ["assignment", "assign", "transfer"],
     landlord_consent_for_transfer: ["assignment", "assign", "transfer", "consent"],
     default_cure_period: ["default", "cure", "notice", "days"],
+    // ── Previously missing entries — caused any source text to be accepted
+    late_fee_percent: ["late", "late fee", "late charge", "delinquent"],
+    late_fee_grace_days: ["late", "grace", "late fee", "grace period"],
+    default_interest_rate_formula: ["default", "interest", "overdue", "past due"],
+    tenant_contact_name: ["tenant", "lessee", "by:", "authorized", "signed"],
+    landlord_contact_name: ["landlord", "lessor", "by:", "authorized"],
+    renewal_options: ["renewal", "renew", "option", "extend", "additional"],
+    renewal_notice_months: ["renewal", "notice", "renew", "option to extend"],
+    renewal_type: ["renewal", "renew", "option", "automatic"],
+    holdover_rent_multiplier: ["holdover", "holdover rent", "month-to-month"],
+    free_rent_months: ["free rent", "rent free", "abatement", "rent abatement"],
+    ti_allowance: ["tenant improvement", "ti allowance", "improvement allowance"],
+    escalation_timing: ["escalation", "anniversary", "calendar year", "fiscal year"],
+    escalation_type: ["cpi", "consumer price index", "fixed", "escalation"],
+    termination_notice_months: ["termination", "terminate", "early termination", "notice"],
+    rent_commencement_date: ["rent commencement", "rent start", "commencement of rent"],
   };
 
   const required = FIELD_KEYWORDS[fieldKey];
@@ -3115,6 +3155,37 @@ function normalizeWorkflowFieldValue(fieldKey: string, value: unknown) {
     const cleaned = cleanText(value);
     const boundaryMatch = cleaned.match(/^[^.;\n]{0,180}/);
     return (boundaryMatch ? boundaryMatch[0].trim() : cleaned) || null;
+  }
+  if (["tenant_insurance_required", "waiver_of_subrogation", "additional_insureds_required", "gross_up_enabled"].includes(fieldKey)) {
+    if (value === true || value === false) return String(value);
+    const lower = cleanText(value).toLowerCase();
+    if (/\b(false|not required|not applicable|n\/a|waived|exempt|no\b)/.test(lower)) return "false";
+    return "true";
+  }
+  if (fieldKey === "lease_term") {
+    const months = parseLeaseTermMonths(value);
+    return months != null && months > 0 ? `${months} months` : cleanText(value);
+  }
+  if (fieldKey === "escalation_type") {
+    const lower = cleanText(value).toLowerCase();
+    if (/\bcpi\b|\bconsumer\s+price\s+index/.test(lower)) return "CPI";
+    if (/\bfixed/.test(lower)) return "Fixed Percentage";
+    return cleanText(value);
+  }
+  if (fieldKey === "escalation_timing") {
+    const lower = cleanText(value).toLowerCase();
+    if (/lease.anniversary|anniversary\s+date/.test(lower)) return "lease_anniversary";
+    if (/calendar.year/.test(lower)) return "calendar_year";
+    if (/fiscal.year/.test(lower)) return "fiscal_year";
+    return cleanText(value);
+  }
+  if (fieldKey === "free_rent_months") {
+    const months = parseLeaseTermMonths(value);
+    return months != null && months > 0 ? months : cleanText(value);
+  }
+  if (fieldKey === "ti_allowance") {
+    const money = extractFirstMoneyValue(value);
+    return money != null ? money : cleanText(value);
   }
   return cleanText(value);
 }
