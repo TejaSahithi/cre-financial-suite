@@ -67,7 +67,7 @@ export const VALID_EVIDENCE = (text) => {
   const lower = String(text).toLowerCase();
   // Reject placeholder/synthetic strings (not real lease clauses)
   const invalid = ["manual_review", "tenant_recovery", "tenant_direct", "inferred"];
-  if (invalid.some(word => lower === word || lower.startsWith(word + "_") || lower.startsWith(word + " "))) return false;
+  if (invalid.some(word => lower.includes(word))) return false;
 
   const unrelated = ["notice address"];
   if (unrelated.some(word => lower.includes(word))) return false;

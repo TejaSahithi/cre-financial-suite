@@ -946,6 +946,15 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   const evidence = readFieldEvidence(lease, key);
   const derived = buildDerivedFieldEvidence(lease, key, initialValue, evidence);
   let schemaValue = derived?.value ?? initialValue;
+
+  const incomingErrors = [
+    ...(Array.isArray(field.validation_errors) ? field.validation_errors : []),
+    ...(Array.isArray(evidence.validationErrors) ? evidence.validationErrors : []),
+  ];
+  if (hasHardValidationError(incomingErrors)) {
+    schemaValue = null;
+  }
+
   const sourcePage = normalizeSourcePage(
     field.page_number
       ?? field.source_page
@@ -1123,7 +1132,7 @@ export function buildCanonicalLeaseReviewField(lease, field, tabKey) {
   }
   const derivedHasValidLineage = hasDerivedLineage;
   const requiresReview = Boolean(
-    (!derivedHasValidLineage && (field.requires_review || field.requiresReview || evidence.requiresReview)) ||
+    (!(derivedHasValidLineage || usedRecoveredValue) && (field.requires_review || field.requiresReview || evidence.requiresReview)) ||
       validationErrors.length > 0 ||
       reviewReason ||
       evidenceType === "inferred",
