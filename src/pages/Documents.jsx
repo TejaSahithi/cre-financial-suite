@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "@/services/supabaseClient";
+import { deleteUploadedFile as deleteUploadedFileWorkflow } from "@/services/leaseService";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -214,13 +215,10 @@ export default function Documents() {
 
   const deleteUploadedFile = async (doc) => {
     if (doc.source !== "uploaded_file") return;
-    const { error } = await supabase
-      .from("uploaded_files")
-      .delete()
-      .eq("id", doc.raw_id)
-      .eq("org_id", orgId);
-    if (error) {
-      toast.error(error.message || "Could not delete document.");
+    try {
+      await deleteUploadedFileWorkflow(doc.raw_id);
+    } catch (error) {
+      toast.error(error?.message || "Could not delete document.");
       return;
     }
     setUploadedFiles(prev => prev.filter(f => f.id !== doc.raw_id));

@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
-import { leaseService } from "@/services/leaseService";
+import { leaseService, deleteUploadedFile } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -680,8 +680,7 @@ export default function LeaseUpload() {
     if (!fileId) return;
     setDeletingUpload(true);
     try {
-      const { error } = await supabase.from("uploaded_files").delete().eq("id", fileId);
-      if (error) throw error;
+      await deleteUploadedFile(fileId);
       toast.success("Upload deleted.");
       setFileId(null);
       setFileRecord(null);

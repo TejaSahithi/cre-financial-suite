@@ -3,6 +3,7 @@ import { supabase } from '@/services/supabaseClient';
 import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
 import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
 import { logAudit } from '@/services/audit';
+import { invokeEdgeFunction } from '@/services/edgeFunctions';
 
 const baseService = createEntityService('Lease');
 
@@ -131,7 +132,22 @@ export const leaseService = {
 };
 
 /**
- * Backfills missing top-level summary columns on the `leases` table using the 
+ * Server-owned uploaded_files delete (Phase HARD-2). Replaces the direct
+ * supabase.from("uploaded_files").delete() write with an audited,
+ * org-boundary-checked RPC call via the delete-uploaded-file edge function.
+ *
+ * @param {string} fileId
+ */
+export async function deleteUploadedFile(fileId) {
+  if (!fileId) throw new Error("File ID is required");
+  const result = await invokeEdgeFunction("delete-uploaded-file", {
+    file_id: fileId,
+  });
+  return result;
+}
+
+/**
+ * Backfills missing top-level summary columns on the `leases` table using the
  * generic lease field resolver to read from extraction_data, snapshot_json, etc.
  * 
  * @param {Object} options
