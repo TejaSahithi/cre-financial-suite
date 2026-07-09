@@ -9,6 +9,7 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { updateLeaseExtractionField } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -568,17 +569,16 @@ export default function ExtractionDebugPanel({ lease }) {
       if (file.org_id && lease.org_id && file.org_id !== lease.org_id) {
         throw new Error("Source file belongs to a different organization");
       }
-      const nextExtraction = {
-        ...(lease.extraction_data || {}),
-        source_file_id: trimmed,
-        source_file_name: file.file_name ?? null,
-        source_relinked_at: new Date().toISOString(),
-      };
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "source_link",
+        action: "source_file_relinked_debug",
+        patch: {
+          source_file_id: trimmed,
+          source_file_name: file.file_name ?? null,
+          source_relinked_at: new Date().toISOString(),
+        },
+      });
       toast.success(`Source file linked: ${file.file_name || trimmed}`);
       setRelinkOpen(false);
       setRelinkValue("");

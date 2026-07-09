@@ -147,6 +147,81 @@ export async function deleteUploadedFile(fileId) {
 }
 
 /**
+ * Server-owned lease extraction_data field/source-link/lease-flag write
+ * (Phase HARD-3B1 / 6D-2 / 6R-1). Replaces direct
+ * supabase.from("leases").update() writes for the narrow set of areas the
+ * update_lease_extraction_field RPC owns.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {'field_value'|'source_link'|'lease_flag'} params.fieldArea
+ * @param {string} params.action
+ * @param {string|null} [params.fieldKey] - required iff fieldArea==='field_value'
+ * @param {Object} params.patch
+ */
+export async function updateLeaseExtractionField({ leaseId, fieldArea, action, fieldKey = null, patch }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("update-lease-extraction-field", {
+    lease_id: leaseId,
+    field_area: fieldArea,
+    action,
+    field_key: fieldKey,
+    patch,
+  });
+}
+
+/**
+ * Server-owned lease review draft save (Phase HARD-3B1 / 6D-3). Replaces
+ * leaseAbstractService.js's direct extraction_data.field_reviews write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {Object} params.fieldReviews
+ */
+export async function saveLeaseReviewDraftWorkflow({ leaseId, fieldReviews }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("save-lease-review-draft", {
+    lease_id: leaseId,
+    field_reviews: fieldReviews,
+  });
+}
+
+/**
+ * Server-owned lease abstract rejection (Phase HARD-3B1 / 6D-5). Replaces
+ * leaseAbstractService.js's direct status/abstract_status/rejection write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string} params.reason
+ * @param {string|null} [params.rejectedBy]
+ */
+export async function rejectLeaseAbstractWorkflow({ leaseId, reason, rejectedBy = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("reject-lease-abstract", {
+    lease_id: leaseId,
+    reason,
+    rejected_by: rejectedBy,
+  });
+}
+
+/**
+ * Server-owned "send back for re-extraction" verdict (Phase HARD-3B1 /
+ * 6R-1). Replaces LeaseReview.jsx's direct status='draft' +
+ * extraction_data.send_back write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string|null} [params.reason]
+ */
+export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("send-lease-back-for-reextraction", {
+    lease_id: leaseId,
+    reason,
+  });
+}
+
+/**
  * Backfills missing top-level summary columns on the `leases` table using the
  * generic lease field resolver to read from extraction_data, snapshot_json, etc.
  * 

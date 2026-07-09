@@ -15,7 +15,11 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { leaseService } from "@/services/leaseService";
+import {
+  leaseService,
+  updateLeaseExtractionField,
+  sendLeaseBackForReextraction,
+} from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -449,20 +453,26 @@ export default function LeaseReview() {
         // linking a different-name candidate that happens to share the score.
         const chosen = (allTiedSameFile || highScoreSameFileMajority) ? sameFileTies[0] : top;
 
-        const nextExtraction = {
-          ...(lease.extraction_data || {}),
+        const autoLinkPatch = {
           source_file_id: chosen.file.id,
           source_file_name: chosen.file.file_name ?? null,
           auto_linked_at: new Date().toISOString(),
           auto_link_score: chosen.score,
           auto_link_reasons: chosen.reasons,
         };
-        const { error: updateErr } = await supabase
-          .from("leases")
-          .update({ extraction_data: nextExtraction })
-          .eq("id", lease.id);
-        if (updateErr) {
-          console.warn("[LeaseReview] auto-link write failed:", updateErr.message, updateErr.details || "");
+        const nextExtraction = {
+          ...(lease.extraction_data || {}),
+          ...autoLinkPatch,
+        };
+        try {
+          await updateLeaseExtractionField({
+            leaseId: lease.id,
+            fieldArea: "source_link",
+            action: "source_file_auto_linked",
+            patch: autoLinkPatch,
+          });
+        } catch (updateErr) {
+          console.warn("[LeaseReview] auto-link write failed:", updateErr?.message || updateErr);
           return;
         }
         console.log(`[LeaseReview] auto-linked lease ${lease.id} -> uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
@@ -488,17 +498,21 @@ export default function LeaseReview() {
     if (!fileId || !lease?.id) return;
     try {
       const picked = linkCandidates.find((c) => c.id === fileId);
-      const nextExtraction = {
-        ...(lease.extraction_data || {}),
+      const manualLinkPatch = {
         source_file_id: fileId,
         source_file_name: picked?.file_name ?? null,
         manually_linked_at: new Date().toISOString(),
       };
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "source_link",
+        action: "source_file_manually_linked",
+        patch: manualLinkPatch,
+      });
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        ...manualLinkPatch,
+      };
       toast.success(`Linked to ${picked?.file_name || fileId}`);
       updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
@@ -879,18 +893,22 @@ export default function LeaseReview() {
 
   const handleMarkAsFullLease = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            document_type_override: "full_lease",
-          },
-        },
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "lease_flag",
+        action: "document_type_override_set",
+        patch: { document_type_override: "full_lease" },
       });
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        document_type_override: "full_lease",
+      };
+      updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Marked as full lease - banner dismissed.");
-    } catch {
-      toast.error("Could not save override. Try again.");
+    } catch (err) {
+      console.error("[LeaseReview] mark as full lease failed:", err);
+      toast.error(err?.message || "Could not save override. Try again.");
     }
   };
 
@@ -1509,20 +1527,15 @@ export default function LeaseReview() {
     setCustomFieldSaving(true);
     try {
       // Persist value + evidence into extraction_data so readFieldValue picks it up
-      const ed = lease.extraction_data || {};
-      const updatedEd = {
-        ...ed,
-        fields: {
-          ...(ed.fields || {}),
-          [key]: { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true },
-        },
-        field_evidence: {
-          ...(ed.field_evidence || {}),
-          [key]: { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" },
-        },
-      };
-      const { error: saveErr } = await supabase.from("leases").update({ extraction_data: updatedEd }).eq("id", lease.id);
-      if (saveErr) throw saveErr;
+      const fieldPatch = { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true };
+      const fieldEvidencePatch = { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" };
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "field_value",
+        action: "custom_field_added",
+        fieldKey: key,
+        patch: { field: fieldPatch, field_evidence: fieldEvidencePatch },
+      });
       // Also add to fieldReviews so Accept/Reject work immediately
       const nextReviews = { ...fieldReviews, [key]: { status: REVIEW_STATUSES.PENDING, value: value.trim() || null, reviewed_at: new Date().toISOString() } };
       setFieldReviews(nextReviews);
@@ -1922,19 +1935,9 @@ export default function LeaseReview() {
 
   const handleSendBack = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          status: "draft",
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            send_back: {
-              reason: sendBackReason,
-              sent_back_at: new Date().toISOString(),
-            },
-          },
-        },
-      });
+      await sendLeaseBackForReextraction({ leaseId: lease.id, reason: sendBackReason });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["leases"] });
       toast.success("Sent back for re-extraction");
       setShowSendBack(false);
       const params = new URLSearchParams();
@@ -1942,8 +1945,9 @@ export default function LeaseReview() {
       if (lease.building_id) params.set("building", lease.building_id);
       if (lease.unit_id) params.set("unit", lease.unit_id);
       navigate(`${createPageUrl("LeaseUpload")}${params.toString() ? `?${params.toString()}` : ""}`);
-    } catch {
-      /* toasted */
+    } catch (err) {
+      console.error("[LeaseReview] send back failed:", err);
+      toast.error(err?.message || "Could not send lease back for re-extraction");
     }
   };
 
@@ -3514,7 +3518,6 @@ export default function LeaseReview() {
           // and (mirrored) in extraction_data.fields so every downstream reader
           // sees the same shape the extractor would have produced.
           try {
-            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
             const prevField = lease.extraction_data?.fields?.[f.key] || null;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
@@ -3530,17 +3533,34 @@ export default function LeaseReview() {
                 ? Math.max(0, Math.min(100, Math.round(evidencePatch.confidence)))
                 : null;
 
+            const fieldPatch = {
+              ...cleanPatch,
+              confidence: confValue,
+              manually_edited_evidence: true,
+              edited_at: new Date().toISOString(),
+            };
+            // update_lease_extraction_field's field_value area only accepts
+            // field/field_evidence/confidence_score patch keys, and merges
+            // (not replaces) them onto the existing fields[key]/
+            // field_evidence[key] server-side. confidence_score is omitted
+            // entirely when null so confidence_scores[key] is left untouched
+            // (matching the prior direct-write behavior).
+            await updateLeaseExtractionField({
+              leaseId: lease.id,
+              fieldArea: "field_value",
+              action: "field_evidence_edit",
+              fieldKey: f.key,
+              patch: {
+                field: fieldPatch,
+                field_evidence: cleanPatch,
+                ...(confValue != null ? { confidence_score: confValue } : {}),
+              },
+            });
             const nextExtraction = {
               ...(lease.extraction_data || {}),
               fields: {
                 ...(lease.extraction_data?.fields || {}),
-                [f.key]: {
-                  ...(prevField || {}),
-                  ...cleanPatch,
-                  confidence: confValue,
-                  manually_edited_evidence: true,
-                  edited_at: new Date().toISOString(),
-                },
+                [f.key]: { ...(prevField || {}), ...fieldPatch },
               },
               field_evidence: {
                 ...(lease.extraction_data?.field_evidence || {}),
@@ -3551,27 +3571,16 @@ export default function LeaseReview() {
                 ...(confValue != null ? { [f.key]: confValue } : {}),
               },
             };
-            const { error: updateErr } = await supabase
-              .from("leases")
-              .update({ extraction_data: nextExtraction })
-              .eq("id", lease.id);
-            if (updateErr) throw updateErr;
             // Seed the cache with the new extraction_data immediately so the
             // drawer / table re-render before the invalidation refetch
             // round-trips. Previously only invalidateQueries fired here,
             // which made the UI lag behind the actual save and looked like
             // "Save Evidence isn't reflecting".
             updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
-            await logAudit({
-              entityType: "LeaseFieldReview",
-              entityId: lease.id,
-              action: "field_evidence_edit",
-              orgId: lease.org_id,
-              fieldChanged: f.key,
-              oldValue: prevEvidence ? JSON.stringify(prevEvidence) : null,
-              newValue: JSON.stringify({ ...cleanPatch, confidence: confValue }),
-              propertyId: lease.property_id || null,
-            });
+            // No client-side logAudit here — update_lease_extraction_field
+            // already writes the canonical audit row with
+            // action='field_evidence_edit' server-side. Keeping both would
+            // produce two differently-shaped entries for the same edit.
             toast.success(`Evidence saved for ${f.label}`);
             queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
           } catch (err) {

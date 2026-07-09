@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
-import { deleteUploadedFile } from "@/services/leaseService";
+import { deleteUploadedFile, updateLeaseExtractionField } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -1235,20 +1235,22 @@ async function ensureLeaseSourceFileLink(leaseId, fileRecordOrId) {
     return lease.id;
   }
 
-  const nextExtraction = {
-    ...currentExtraction,
+  const sourceLinkPatch = {
     source_file_id: fileRecord.id,
     source_file_name: fileRecord.file_name ?? currentExtraction.source_file_name ?? null,
     document_subtype: currentExtraction.document_subtype ?? fileRecord.document_subtype ?? null,
     source_file_linked_at: new Date().toISOString(),
   };
 
-  const { error: updateError } = await supabase
-    .from("leases")
-    .update({ extraction_data: nextExtraction })
-    .eq("id", lease.id);
-  if (updateError) {
-    console.warn("[LeaseUpload] could not persist source_file_id on lease draft:", updateError.message);
+  try {
+    await updateLeaseExtractionField({
+      leaseId: lease.id,
+      fieldArea: "source_link",
+      action: "source_file_linked_on_upload",
+      patch: sourceLinkPatch,
+    });
+  } catch (updateError) {
+    console.warn("[LeaseUpload] could not persist source_file_id on lease draft:", updateError?.message || updateError);
     return null;
   }
 

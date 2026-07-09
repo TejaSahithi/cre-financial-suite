@@ -13,6 +13,7 @@
  * reads `extraction_data` keeps working during the transition.
  */
 import { supabase } from "@/services/supabaseClient";
+import { saveLeaseReviewDraftWorkflow, rejectLeaseAbstractWorkflow } from "@/services/leaseService";
 import { resolveLeaseField, resolveLeaseFields } from "@/lib/leaseFieldResolver";
 import {
   readFieldConfidence,
@@ -636,23 +637,25 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
 }
 
 /**
- * Save the in-progress review state without approving. Updates the JSONB
- * (Phase 2 shape) and upserts lease_field_reviews so the audit table mirrors
- * the draft.
+ * Save the in-progress review state without approving. Routes through the
+ * server-owned save_lease_review_draft RPC (Phase HARD-3B1 / 6D-3) instead
+ * of writing extraction_data.field_reviews directly. Note: the RPC
+ * unconditionally rejects this write once abstract_status==='approved'
+ * (409) — an intentional guarantee introduced by that RPC, not a behavior
+ * this wrapper adds. Callers already surface errors via toast + local
+ * state revert, so a rejected draft save fails loudly rather than silently
+ * no-opping the way the old direct write did.
  */
 export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
   if (!lease?.id) throw new Error("saveAbstractDraft: lease.id is required");
-  const nextExtraction = {
-    ...(lease.extraction_data || {}),
-    field_reviews: fieldReviews,
+  const result = await saveLeaseReviewDraftWorkflow({ leaseId: lease.id, fieldReviews });
+  const data = {
+    id: lease.id,
+    property_id: result?.property_id ?? lease.property_id ?? null,
+    extraction_data: result?.extraction_data,
+    abstract_status: result?.abstract_status,
+    updated_at: result?.updated_at,
   };
-  const update = {
-    extraction_data: nextExtraction,
-    abstract_status: lease.abstract_status === ABSTRACT_STATUS.APPROVED
-      ? ABSTRACT_STATUS.APPROVED  // Keep approved status; new edits create the next version on approval.
-      : ABSTRACT_STATUS.PENDING_REVIEW,
-  };
-  const data = await updateLeaseStripMissing(lease.id, update);
   await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer }).catch((err) => {
     console.warn("[leaseAbstractService] persistFieldReviews skipped:", err?.message || err);
   });
@@ -661,22 +664,20 @@ export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
 
 /**
  * Mark a lease abstract as rejected (document rejected) — used by the
- * "Reject Document" action in Lease Review.
+ * "Reject Document" action in Lease Review. Routes through the server-owned
+ * reject_lease_abstract RPC (Phase HARD-3B1 / 6D-5).
  */
 export async function rejectLeaseAbstract({ lease, reason, reviewer }) {
-  const nextExtraction = {
-    ...(lease.extraction_data || {}),
-    rejection: {
-      reason,
-      rejected_at: new Date().toISOString(),
-      rejected_by: reviewer || null,
-    },
+  if (!lease?.id) throw new Error("rejectLeaseAbstract: lease.id is required");
+  const result = await rejectLeaseAbstractWorkflow({ leaseId: lease.id, reason, rejectedBy: reviewer || null });
+  return {
+    id: lease.id,
+    property_id: result?.property_id ?? lease.property_id ?? null,
+    status: result?.status,
+    abstract_status: result?.abstract_status,
+    extraction_data: result?.extraction_data,
+    updated_at: result?.updated_at,
   };
-  return updateLeaseStripMissing(lease.id, {
-    status: "rejected",
-    abstract_status: ABSTRACT_STATUS.REJECTED,
-    extraction_data: nextExtraction,
-  });
 }
 
 /**
