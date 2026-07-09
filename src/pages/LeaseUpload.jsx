@@ -19,12 +19,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
-import { leaseService, deleteUploadedFile } from "@/services/leaseService";
+import { deleteUploadedFile } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
-import { cleanSourceEvidenceText } from "@/lib/leaseReviewSchema";
 import { createPageUrl } from "@/utils";
 
 // Statuses that still need polling because a backend stage is in flight.
@@ -311,6 +310,10 @@ export default function LeaseUpload() {
   const [retryingExtraction, setRetryingExtraction] = useState(false);
   const [deletingUpload, setDeletingUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Set when review-approve fails while preparing a Lease Review draft.
+  // No client-side fallback creates a lease in this case (see ensureLeaseDraft) --
+  // this is the persistent failure/retry state shown to the user instead.
+  const [leaseDraftError, setLeaseDraftError] = useState(null);
   const retriedUploadedFiles = useRef(new Set());
   const retriedManualFallbackFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
@@ -468,6 +471,7 @@ export default function LeaseUpload() {
 
     const existing = await findLeaseByFileId(fileId);
     if (existing?.id) {
+      setLeaseDraftError(null);
       await invalidateLeaseQueries();
       return existing.id;
     }
@@ -519,30 +523,26 @@ export default function LeaseUpload() {
       const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
       if (linkedLeaseId) {
         await ensureLeaseSourceFileLink(linkedLeaseId, record || { id: fileId });
+        setLeaseDraftError(null);
         await invalidateLeaseQueries();
         return linkedLeaseId;
       }
     }
 
-    // Client-side fallback. If review-approve isn't usable on this deployment
-    // (older function, schema drift, or any 4xx), create the lease row
-    // directly from the reviewed UI payload so the user can still open Lease
-    // Review and edit fields. This is the same shape review-approve would
-    // produce on the happy path.
-    try {
-      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, record);
-      if (fallbackLeaseId) {
-        await invalidateLeaseQueries();
-        await fetchFileRecord(fileId);
-        return fallbackLeaseId;
+    // No client-side fallback here. If review-approve fails or is
+    // unavailable, do not create a lease row from the browser -- the
+    // uploaded file and its parsed artifacts are preserved as-is, and the
+    // failure is surfaced as a persistent, retryable error state (below)
+    // rather than silently continuing as if a draft had been created.
+    if (edgeFailed) {
+      setLeaseDraftError(edgeError?.message || "Could not prepare the Lease Review draft.");
+      if (!silent) {
+        toast.error(edgeError?.message || "Could not prepare lease review draft.");
       }
-    } catch (fallbackErr) {
-      console.warn("[LeaseUpload] client-side lease draft fallback failed:", fallbackErr?.message || fallbackErr);
+      return null;
     }
 
-    if (edgeError && !silent) {
-      toast.error(edgeError?.message || "Could not prepare lease review draft.");
-    } else if (!silent) {
+    if (!silent) {
       toast.info("Lease review draft is being prepared. Try again in a moment.");
     }
     return null;
@@ -986,6 +986,29 @@ export default function LeaseUpload() {
                 Delete Upload
               </Button>
             </div>
+
+            {leaseDraftError && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <div>
+                  <div className="font-medium">Could not prepare the Lease Review draft</div>
+                  <div className="mt-1 text-xs text-red-600">{leaseDraftError}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={openLeaseReview}
+                  disabled={openingReview}
+                  className="shrink-0 border-red-200 bg-white text-red-700 hover:bg-red-100"
+                >
+                  {openingReview ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  Retry
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -1230,265 +1253,6 @@ async function ensureLeaseSourceFileLink(leaseId, fileRecordOrId) {
   }
 
   return lease.id;
-}
-
-// Client-side lease-draft creation. Used when review-approve fails or isn't
-// available on the deployment. Mirrors the row shape that review-approve's
-// ensureLeaseReviewDrafts produces, so downstream Lease Review can edit the
-// draft normally.
-async function createLeaseDraftFromUploadedFile(fileId, cachedFileRecord) {
-  if (!fileId) return null;
-
-  let fileRecord = cachedFileRecord;
-  if (!fileRecord || !fileRecord.org_id) {
-    const { data, error } = await fetchUploadedFileStatus(fileId);
-    if (error || !data) return null;
-    fileRecord = data;
-  }
-
-  const candidateRows =
-    extractRowsFromUiReview(fileRecord?.ui_review_payload) ||
-    asArrayOrNull(fileRecord?.reviewed_output?.final_records) ||
-    asArrayOrNull(fileRecord?.valid_data) ||
-    asArrayOrNull(fileRecord?.parsed_data) ||
-    [];
-  const firstRow = candidateRows[0] || {};
-
-  const confidenceScores = collectConfidenceFromPayload(fileRecord?.ui_review_payload);
-  const lowConfidenceFields = Object.entries(confidenceScores)
-    .filter(([, score]) => typeof score === "number" && score < 75)
-    .map(([field]) => field);
-
-  // Pull per-field evidence (source page, exact source text) AND the workflow
-  // output so the Lease Review table can render Raw / Page / Source Text /
-  // Confidence columns even when the lease was created via this fallback
-  // instead of review-approve. Without this, evidence is silently lost.
-  const fieldsWithEvidence = buildFieldsWithEvidence(fileRecord?.ui_review_payload);
-  const fieldEvidence = buildFieldEvidenceMap(fileRecord?.ui_review_payload);
-  const workflowOutput = extractWorkflowOutputForFirstRow(fileRecord?.ui_review_payload);
-  // Carry the consolidated extraction diagnostics (incl. mapping_failure_reason)
-  // onto the lease so Lease Review / Extraction Debug can read them directly.
-  const extractionDebug =
-    fileRecord?.ui_review_payload?.metadata?.extractionDebug
-    || fileRecord?.ui_review_payload?.metadata?.extraction_debug
-    || null;
-
-  const numeric = (v) => {
-    if (v == null || v === "") return null;
-    const n = Number(String(v).replace(/[$,%\s,]/g, ""));
-    return Number.isFinite(n) ? n : null;
-  };
-  const normalizeDate = (v) => {
-    if (!v) return null;
-    const text = String(v).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-    const d = new Date(text);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-  };
-
-  const payload = {
-    org_id: fileRecord.org_id,
-    property_id: firstRow.property_id ?? fileRecord.property_id ?? null,
-    building_id: firstRow.building_id ?? fileRecord.building_id ?? null,
-    unit_id: firstRow.unit_id ?? fileRecord.unit_id ?? null,
-    // Preserve null when extraction returned no tenant_name. The previous
-    // "Lease Review Draft" string fallback was being persisted to the lease
-    // row and displayed as the extracted tenant. List views can show
-    // "Untitled" as a UI label without writing it into the data column.
-    tenant_name: firstRow.tenant_name || null,
-    start_date: normalizeDate(firstRow.start_date || firstRow.lease_start),
-    end_date: normalizeDate(firstRow.end_date || firstRow.lease_end),
-    commencement_date: normalizeDate(firstRow.commencement_date),
-    expiration_date: normalizeDate(firstRow.expiration_date),
-    lease_date: normalizeDate(firstRow.lease_date),
-    rent_commencement_date: normalizeDate(firstRow.rent_commencement_date),
-    // Preserve null when extraction returned no rent value. Defaulting to 0
-    // here surfaces in Lease Review as a confirmed "$0 Extracted" badge,
-    // which is wrong — extraction never produced a value. Leave it null so
-    // the resolver reports Not Found / Needs Review correctly.
-    monthly_rent: numeric(firstRow.monthly_rent ?? firstRow.base_rent),
-    annual_rent: numeric(firstRow.annual_rent),
-    square_footage: numeric(firstRow.square_footage ?? firstRow.total_sf),
-    lease_type: firstRow.lease_type ?? null,
-    cam_amount: numeric(firstRow.cam_amount),
-    nnn_amount: numeric(firstRow.nnn_amount),
-    security_deposit: numeric(firstRow.security_deposit),
-    escalation_rate: numeric(firstRow.escalation_rate),
-    escalation_type: firstRow.escalation_type ?? null,
-    escalation_timing: firstRow.escalation_timing ?? null,
-    free_rent_months: numeric(firstRow.free_rent_months),
-    renewal_options: firstRow.renewal_options ?? null,
-    renewal_type: firstRow.renewal_type ?? null,
-    status: "draft",
-    notes: firstRow.notes ?? null,
-    extraction_data: {
-      source: "client_fallback",
-      source_file_id: fileRecord.id,
-      source_file_name: fileRecord.file_name ?? null,
-      document_subtype: fileRecord.document_subtype ?? null,
-      confidence_scores: confidenceScores,
-      // Replace bare row with per-field { value, confidence, source, evidence }
-      // so the Lease Review reader can pull source_page + source_text.
-      fields: fieldsWithEvidence,
-      field_evidence: fieldEvidence,
-      // Forward the workflow output (lease_fields with full provenance) so
-      // the UI's getWorkflowLeaseFields resolver lights up Raw / Page /
-      // Source Text / Confidence columns.
-      workflow_output: workflowOutput,
-      extraction_debug: extractionDebug,
-    },
-    confidence_score: averageConfidence(confidenceScores),
-    low_confidence_fields: lowConfidenceFields,
-    extracted_fields: firstRow,
-  };
-
-  const created = await leaseService.create(payload);
-  return created?.id || null;
-}
-
-function asArrayOrNull(value) {
-  return Array.isArray(value) && value.length > 0 ? value : null;
-}
-
-function extractRowsFromUiReview(payload) {
-  if (!payload) return null;
-  const records = payload.records || payload.rows;
-  if (!Array.isArray(records) || records.length === 0) return null;
-  return records.map((record) => {
-    if (record?.values && typeof record.values === "object") return record.values;
-    const row = {};
-    for (const field of record?.standard_fields || []) {
-      if (field?.field_key && field?.status !== "rejected") row[field.field_key] = field.value ?? null;
-    }
-    for (const field of record?.custom_fields || []) {
-      if (field?.field_key && field?.status !== "rejected") row[field.field_key] = field.value ?? null;
-    }
-    return row;
-  });
-}
-
-// Build extraction_data.fields as { key: { value, confidence, source, evidence }
-// }. The Lease Review reader uses this when probing each field for raw +
-// page + source-text + status. Bare row values (the previous shape) had no
-// evidence, which is why the columns rendered as "—".
-function buildFieldsWithEvidence(payload) {
-  const records = payload?.records || payload?.rows || [];
-  const record = records[0];
-  if (!record) return {};
-  const out = {};
-  const fields = [
-    ...(record.standard_fields || []),
-    ...(record.custom_fields || []),
-  ];
-  for (const field of fields) {
-    if (!field?.field_key) continue;
-    if (field.status === "rejected") continue;
-    const sourceText = cleanExtractedSourceText(field.evidence?.source_clause ?? field.evidence?.source_text);
-    out[field.field_key] = {
-      value: field.value ?? null,
-      confidence: typeof field.confidence === "number" ? field.confidence : null,
-      source: field.source ?? null,
-      evidence: field.evidence ?? null,
-      // Mirror evidence as flat keys so the resolver finds them regardless
-      // of whether it reads from extraction_data.fields[key] or
-      // extraction_data.field_evidence[key].
-      source_page: field.evidence?.page_number ?? field.evidence?.source_page ?? null,
-      source_text: sourceText,
-      raw_value: field.original_value ?? field.evidence?.raw_value ?? null,
-      extraction_status: field.status ?? null,
-    };
-  }
-  const workflowOutput = extractWorkflowOutputForFirstRow(payload);
-  for (const [fieldKey, field] of Object.entries(workflowOutput?.lease_fields || {})) {
-    if (!field || typeof field !== "object") continue;
-    out[fieldKey] = {
-      ...(out[fieldKey] || {}),
-      value: field.value ?? out[fieldKey]?.value ?? null,
-      confidence: field.confidence_score ?? out[fieldKey]?.confidence ?? null,
-      source_page: field.source_page ?? out[fieldKey]?.source_page ?? null,
-      source_text: cleanExtractedSourceText(field.source_clause) ?? out[fieldKey]?.source_text ?? null,
-      raw_value: field.value ?? out[fieldKey]?.raw_value ?? null,
-      extraction_status: field.extraction_status ?? out[fieldKey]?.extraction_status ?? null,
-    };
-  }
-  if (!out.square_footage && out.rentable_area_sqft) out.square_footage = { ...out.rentable_area_sqft, value: out.rentable_area_sqft.value };
-  if (!out.premises_address && out.property_address) out.premises_address = { ...out.property_address, value: out.property_address.value };
-  return out;
-}
-
-// Build extraction_data.field_evidence keyed by field. This is the primary
-// shape the resolver expects when populated by review-approve; the
-// client-side fallback now produces it too.
-function buildFieldEvidenceMap(payload) {
-  const records = payload?.records || payload?.rows || [];
-  const record = records[0];
-  if (!record) return {};
-  const out = {};
-  for (const field of record.standard_fields || []) {
-    if (!field?.field_key || !field?.evidence) continue;
-    const sourceText = cleanExtractedSourceText(field.evidence.source_clause ?? field.evidence.source_text);
-    out[field.field_key] = {
-      raw_value: field.original_value ?? field.evidence.raw_value ?? null,
-      source_page: field.evidence.page_number ?? field.evidence.source_page ?? null,
-      source_text: sourceText,
-      extraction_status: field.status ?? null,
-    };
-  }
-  const workflowOutput = extractWorkflowOutputForFirstRow(payload);
-  for (const [fieldKey, field] of Object.entries(workflowOutput?.lease_fields || {})) {
-    if (!field || typeof field !== "object") continue;
-    out[fieldKey] = {
-      raw_value: field.value ?? null,
-      source_page: field.source_page ?? null,
-      source_text: cleanExtractedSourceText(field.source_clause),
-      extraction_status: field.extraction_status ?? null,
-    };
-  }
-  if (!out.square_footage && out.rentable_area_sqft) out.square_footage = { ...out.rentable_area_sqft };
-  if (!out.premises_address && out.property_address) out.premises_address = { ...out.property_address };
-  return out;
-}
-
-// Delegate to the canonical implementation in leaseReviewSchema so all callers
-// use identical filtering logic and there is only one definition to maintain.
-const cleanExtractedSourceText = cleanSourceEvidenceText;
-
-// The normalize-pdf-output edge function stores the per-row workflow output
-// (lease_fields, expense_rules, cam_profile, lease_clauses) under
-// ui_review_payload.metadata.workflow_output.records[rowIndex]. Pull the
-// first row's view so extraction_data.workflow_output mirrors what
-// review-approve would have written on the happy path.
-function extractWorkflowOutputForFirstRow(payload) {
-  const wf = payload?.metadata?.workflow_output;
-  if (!wf) return null;
-  if (Array.isArray(wf.records)) {
-    return wf.records[0] ?? null;
-  }
-  return wf;
-}
-
-function collectConfidenceFromPayload(payload) {
-  const scores = {};
-  const records = payload?.records || payload?.rows || [];
-  for (const record of records) {
-    const fields = [
-      ...(record?.standard_fields || []),
-      ...(record?.custom_fields || []),
-    ];
-    for (const field of fields) {
-      if (!field?.field_key) continue;
-      const c = field.confidence;
-      if (typeof c !== "number") continue;
-      scores[field.field_key] = c <= 1 ? Math.round(c * 100) : Math.round(c);
-    }
-  }
-  return scores;
-}
-
-function averageConfidence(scores) {
-  const values = Object.values(scores).filter((s) => typeof s === "number" && !Number.isNaN(s));
-  if (values.length === 0) return null;
-  return Math.round(values.reduce((sum, s) => sum + s, 0) / values.length);
 }
 
 function getRecordValue(record, key) {
