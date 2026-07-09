@@ -216,6 +216,40 @@ function getComputeJobs(moduleType: ModuleType, propertyIds: string[], fiscalYea
   return jobs;
 }
 
+/**
+ * Builds the headers for an internal fire-and-forget call from
+ * compute-orchestrator to a compute-* Edge Function.
+ *
+ * Kong's verify_jwt=true gate (every compute-* target keeps this enabled)
+ * requires a valid Authorization: Bearer JWT before the request ever reaches
+ * the function code -- apikey/x-internal-service-key alone satisfy the
+ * function's own internal-call check (verifyUser's isInternalServiceRequest)
+ * but not the gateway. The service-role key is itself a validly-signed JWT
+ * for this project, so sending it as the Bearer token clears Kong's gate;
+ * verifyUser() still resolves this as an internal call via
+ * x-internal-service-key exactly as before (checked first, ahead of any
+ * Authorization-based user lookup), so no application-level behavior
+ * changes. Same fix as
+ * _shared/lease-approval-workflow.ts::generateApprovedRentSchedule
+ * (HARD-3X). Exported (rather than inlined in callOnce) so the header shape
+ * is independently testable without a live Deno.serve HTTP round-trip.
+ */
+export function buildComputeCallHeaders(
+  serviceKey: string,
+  orgId: string,
+  fileId: string,
+): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${serviceKey}`,
+    "apikey": serviceKey,
+    "x-internal-service-key": serviceKey,
+    "x-internal-org-id": orgId,
+    "x-source-file-id": fileId,
+    "x-compute-trigger": "upload",
+  };
+}
+
 /** Single HTTP call to an Edge Function. Returns ok + error text. */
 async function callOnce(
   supabaseUrl: string,
@@ -228,14 +262,7 @@ async function callOnce(
   try {
     const res = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": serviceKey,
-        "x-internal-service-key": serviceKey,
-        "x-internal-org-id": orgId,
-        "x-source-file-id": fileId,
-        "x-compute-trigger": "upload",
-      },
+      headers: buildComputeCallHeaders(serviceKey, orgId, fileId),
       body: JSON.stringify(body),
     });
 
