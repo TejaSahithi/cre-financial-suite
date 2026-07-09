@@ -15,3 +15,12 @@ export async function sendExpenseClassificationToCam({ classificationId, reason 
     idempotency_key: idempotencyKey,
   });
 }
+
+export async function reviewExpenseClassification({ classificationId, action, recoveryStatus = null, approvedStatus = null }) {
+  return invokeEdgeFunction("review-expense-classification", {
+    classification_id: classificationId,
+    action,
+    recovery_status: recoveryStatus,
+    approved_status: approvedStatus,
+  });
+}
