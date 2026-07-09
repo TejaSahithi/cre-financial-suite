@@ -1,0 +1,18 @@
+-- Remote deployment readiness prep, step 3 of 4.
+--
+-- The linked remote project has an extra, wide-open RLS policy on
+-- audit_logs -- "audit_logs_insert_all" FOR INSERT TO authenticated, anon
+-- WITH CHECK (true) -- that does not exist in any migration and is not
+-- present locally. Because Postgres RLS policies are OR'd together, this
+-- policy makes the properly-restrictive "audit_logs_insert" policy
+-- (actor_user_id = auth.uid() AND source = 'frontend' AND severity <>
+-- 'critical' AND an active membership in the target org) moot on remote:
+-- any authenticated caller can insert an arbitrary audit_logs row today,
+-- including a forged actor_user_id or severity.
+--
+-- This DROP POLICY IF EXISTS is a harmless no-op on local/fresh
+-- environments (the policy was never created there) and only has an effect
+-- on remote, where it removes the bypass and leaves the restrictive
+-- "audit_logs_insert"/"audit_logs_select" policies -- already matching
+-- local -- as the sole write/read gates.
+DROP POLICY IF EXISTS "audit_logs_insert_all" ON public.audit_logs;

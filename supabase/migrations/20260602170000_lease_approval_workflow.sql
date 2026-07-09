@@ -31,7 +31,7 @@ DROP POLICY IF EXISTS "lease_approval_workflow_runs_insert" ON public.lease_appr
 DROP POLICY IF EXISTS "lease_approval_workflow_runs_update" ON public.lease_approval_workflow_runs;
 
 CREATE POLICY "lease_approval_workflow_runs_select" ON public.lease_approval_workflow_runs
-  FOR SELECT USING (public.is_super_admin() OR org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
 
 CREATE POLICY "lease_approval_workflow_runs_insert" ON public.lease_approval_workflow_runs
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));
@@ -330,18 +330,24 @@ BEGIN
 
   INSERT INTO public.audit_logs (
     org_id,
+    property_id,
     entity_type,
     entity_id,
     action,
     field_changed,
     old_value,
     new_value,
-    user_id,
-    user_email,
+    actor_user_id,
+    actor_email,
+    severity,
+    source,
+    workflow_run_id,
+    metadata,
     "timestamp"
   )
   VALUES (
     p_org_id,
+    v_updated_lease.property_id,
     'Lease',
     p_lease_id::TEXT,
     'lease_abstract_approved',
@@ -356,6 +362,16 @@ BEGIN
     )::TEXT,
     p_actor_user_id,
     p_actor_email,
+    'info',
+    'edge_function',
+    v_run_id,
+    jsonb_build_object(
+      'abstract_version', v_next_version,
+      'signed_by', p_signed_by,
+      'signed_at', p_signed_at,
+      'workflow_run_id', v_run_id,
+      'idempotency_key', p_idempotency_key
+    ),
     v_now
   )
   RETURNING id INTO v_audit_log_id;

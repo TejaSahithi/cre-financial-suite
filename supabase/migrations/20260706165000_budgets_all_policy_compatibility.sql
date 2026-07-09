@@ -1,0 +1,12 @@
+-- budgets_all is a legacy, pre-migration-history policy that exists on the
+-- linked remote project only (confirmed: local has never had it). It grants
+-- FOR ALL access (SELECT+INSERT+UPDATE+DELETE) to any org member via
+-- org_id = ANY(get_my_org_ids()), with no page-permission gating at all.
+-- Because RLS permissive policies OR together, leaving it in place would
+-- silently defeat 20260707000000_budgets_rls_lockdown.sql and
+-- 20260707010000_budgets_delete_lockdown.sql's WITH CHECK(false)/USING(false)
+-- on budgets_insert/budgets_update/budgets_delete -- the table would still
+-- be fully writable directly by any client regardless of those migrations.
+-- Safe no-op on local/fresh environments, where this policy has never
+-- existed. Does not touch budgets_select/budgets_select_super_admin.
+DROP POLICY IF EXISTS "budgets_all" ON public.budgets;

@@ -1,5 +1,56 @@
 // @ts-nocheck
 
+/**
+ * Calls compute-lease synchronously, scoped to the just-approved lease, so
+ * rent-schedule generation is part of the same request/response cycle as
+ * approval instead of a client-side fire-and-forget trigger. Reuses
+ * compute-lease's existing ensureApprovedRentSchedules (delete + regenerate
+ * rows when abstract_version changed) via the same internal service-to-service
+ * call pattern already used by _shared/compute-orchestrator.ts, rather than
+ * duplicating that logic in SQL.
+ *
+ * Never throws — a rent-schedule failure must not undo an approval that
+ * already committed. Callers surface the returned status in the response.
+ */
+export async function generateApprovedRentSchedule(opts: {
+  orgId: string;
+  leaseId: string;
+  req: Request;
+}): Promise<{ status: "ok" | "skipped" | "failed"; error?: string }> {
+  const { orgId, leaseId } = opts;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+  if (!supabaseUrl || !serviceKey) {
+    console.warn("[approve-lease-workflow] Missing env vars — skipping rent schedule generation");
+    return { status: "skipped", error: "Missing Supabase service configuration" };
+  }
+
+  try {
+    const res = await fetch(`${supabaseUrl}/functions/v1/compute-lease`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": serviceKey,
+        "x-internal-service-key": serviceKey,
+        "x-internal-org-id": orgId,
+      },
+      body: JSON.stringify({ lease_id: leaseId, fiscal_year: new Date().getUTCFullYear() }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "no response body");
+      console.error(`[approve-lease-workflow] compute-lease HTTP ${res.status}: ${text.slice(0, 200)}`);
+      return { status: "failed", error: `HTTP ${res.status}` };
+    }
+
+    return { status: "ok" };
+  } catch (err) {
+    console.error("[approve-lease-workflow] compute-lease call failed:", err?.message || err);
+    return { status: "failed", error: err?.message || "network error" };
+  }
+}
+
 export function validateApprovalPayload(body: Record<string, unknown> = {}) {
   const leaseId = String(body.lease_id || "").trim();
   const signedBy = String(body.signed_by || "").trim();

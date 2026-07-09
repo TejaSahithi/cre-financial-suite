@@ -59,7 +59,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
   const { error: membershipError } = await adminClient.from("memberships").insert({
     user_id: authData.user.id,
     org_id: orgId,
-    role: "member",
+    role: "org_admin",
     status: "active",
   });
   if (membershipError) throw new Error(`Failed to create membership: ${membershipError.message}`);
@@ -213,15 +213,24 @@ Deno.test({
 
             // Attempt to UPDATE the audit log using the user's client (RLS should block this)
             const userClient = createUserClient(user.accessToken);
-            const { error: updateError } = await userClient
+            const { data: updateData, error: updateError } = await userClient
               .from("audit_logs")
               .update({ new_value: tamperedValue })
-              .eq("id", auditLogId);
+              .eq("id", auditLogId)
+              .select();
 
-            // Property: update must be blocked by RLS
-            assertExists(
-              updateError,
-              `User must not be able to update audit_log entry. Update should have been blocked.`,
+            // Property: update must be blocked by RLS. audit_logs has RLS
+            // enabled but no UPDATE policy at all, so Postgres/PostgREST
+            // doesn't raise a policy-violation error here — it simply finds
+            // no visible row to update and returns success with zero rows
+            // affected. Either shape counts as "blocked": an explicit error,
+            // or zero rows affected.
+            const updateBlocked = Boolean(updateError) || (updateData ?? []).length === 0;
+            assertEquals(
+              updateBlocked,
+              true,
+              `User must not be able to update audit_log entry. Update should have been blocked ` +
+                `(error=${JSON.stringify(updateError)}, rows affected=${(updateData ?? []).length}).`,
             );
 
             // Property: verify the value was NOT changed
@@ -294,15 +303,21 @@ Deno.test({
 
             // Attempt to DELETE the audit log using the user's client
             const userClient = createUserClient(user.accessToken);
-            const { error: deleteError } = await userClient
+            const { data: deleteData, error: deleteError } = await userClient
               .from("audit_logs")
               .delete()
-              .eq("id", auditLogId);
+              .eq("id", auditLogId)
+              .select();
 
-            // Property: delete must be blocked by RLS
-            assertExists(
-              deleteError,
-              "User must not be able to delete audit_log entries",
+            // Property: delete must be blocked by RLS. Same caveat as the
+            // UPDATE test above — no DELETE policy exists, so a blocked
+            // delete surfaces as zero rows affected rather than an error.
+            const deleteBlocked = Boolean(deleteError) || (deleteData ?? []).length === 0;
+            assertEquals(
+              deleteBlocked,
+              true,
+              `User must not be able to delete audit_log entries ` +
+                `(error=${JSON.stringify(deleteError)}, rows affected=${(deleteData ?? []).length}).`,
             );
 
             // Property: verify the entry still exists

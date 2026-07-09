@@ -1,5 +1,7 @@
 # Implementation Plan: Backend-Driven Pipeline
 
+> **Status note (added during enterprise-readiness hardening):** the architecture below is realized, not superseded. The lease-document flow (`ingest-file` → `parse-file`/`parse-pdf-docling` → `validate-data` → `store-data` → compute-orchestrator) is the concrete implementation of this plan, entered through a lease-specific front door alongside the generic `upload-handler` entry point this spec describes. See `docs/pipeline-call-graph.md` for the verified call graph before assuming any function here is dead or duplicated.
+
 ## Overview
 
 This implementation plan transforms the CRE Financial Platform from a frontend-heavy architecture into a backend-driven financial computation system. The plan follows a strict step-by-step order: Upload System → Parsing Engine → Validation Layer → Storage Layer → Computation Engine → UI Integration.

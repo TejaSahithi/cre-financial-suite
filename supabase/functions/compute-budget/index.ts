@@ -23,7 +23,7 @@ Deno.serve(async (req: Request) => {
     const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
 
     const body = await req.json();
-    const { property_id, fiscal_year, action, allow_generate_without_cam, readiness_snapshot } = body;
+    const { property_id, fiscal_year, action, allow_generate_without_cam, readiness_snapshot, ai_insights, reason } = body;
 
     if (!property_id || !fiscal_year) {
       throw new Error("property_id and fiscal_year are required");
@@ -39,15 +39,27 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------------
     switch (resolvedAction) {
       case "generate":
-        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null);
+        return await handleGenerate(supabaseAdmin, orgId, user.id, property_id, fiscal_year, allow_generate_without_cam === true, readiness_snapshot ?? null, typeof ai_insights === "string" ? ai_insights : null);
       case "approve":
-        return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, "under_review", "approved", "Budget approved successfully");
+        // CreateBudget.jsx's UI only ever offers "Approve" once a budget has
+        // been marked "reviewed" (a CreateBudget-specific intermediate step
+        // compute-budget itself has no concept of) — accept either status so
+        // the one enforced approval gate matches how the UI actually drives
+        // it, instead of a precondition the UI could never satisfy.
+        return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, ["under_review", "reviewed"], "approved", "Budget approved successfully");
+      case "mark_reviewed":
+        // Matches CreateBudget.jsx's "Mark as Reviewed" button, which is
+        // offered from draft/ai_generated/under_review.
+        return await handleMarkReviewed(supabaseAdmin, orgId, user.id, property_id, fiscal_year);
       case "reject":
-        return await handleStatusTransition(supabaseAdmin, orgId, user.id, property_id, fiscal_year, "under_review", "draft", "Budget rejected and returned to draft");
+        // CreateBudget.jsx's "Reject / Rework" button is offered from any
+        // status except approved/locked/signed (not just 'under_review') and
+        // carries a required rejection comment.
+        return await handleReject(supabaseAdmin, orgId, user.id, property_id, fiscal_year, typeof reason === "string" ? reason : null);
       case "lock":
         return await handleLock(supabaseAdmin, orgId, user.id, property_id, fiscal_year);
       default:
-        throw new Error(`Unknown action: ${resolvedAction}. Must be one of: generate, approve, reject, lock`);
+        throw new Error(`Unknown action: ${resolvedAction}. Must be one of: generate, approve, mark_reviewed, reject, lock`);
     }
   } catch (err) {
     console.error("[compute-budget] Error:", err.message);
@@ -68,7 +80,8 @@ async function handleGenerate(
   propertyId: string,
   fiscalYear: number,
   allowGenerateWithoutCam = false,
-  readinessSnapshot: any = null
+  readinessSnapshot: any = null,
+  aiInsights: string | null = null
 ) {
   // ---------------------------------------------------------------
   // 1. Fetch property details
@@ -266,6 +279,11 @@ async function handleGenerate(
     total_expenses: round2(totalExpenses),
     noi: noi,
     cam_total: round2(camRecovery),
+    // Only set ai_insights when the caller actually provided a fresh value
+    // (e.g. CreateBudget.jsx's Vertex AI preview text) — omitting the key
+    // entirely on a bare re-generate call preserves whatever was stored
+    // previously instead of clobbering it with null.
+    ...(aiInsights ? { ai_insights: aiInsights } : {}),
     generation_method: "automated",
     period: "annual",
     scope: "property",
@@ -439,10 +457,11 @@ async function handleStatusTransition(
   userId: string,
   propertyId: string,
   fiscalYear: number,
-  requiredStatus: string,
+  requiredStatus: string | string[],
   newStatus: string,
   successMessage: string
 ) {
+  const requiredStatuses = Array.isArray(requiredStatus) ? requiredStatus : [requiredStatus];
   // Fetch budget
   const { data: budgets, error: fetchErr } = await supabaseAdmin
     .from("budgets")
@@ -462,9 +481,9 @@ async function handleStatusTransition(
 
   const budget = budgets[0];
 
-  if (budget.status !== requiredStatus) {
+  if (!requiredStatuses.includes(budget.status)) {
     throw new Error(
-      `Budget status must be '${requiredStatus}' to perform this action. Current status: '${budget.status}'`
+      `Budget status must be ${requiredStatuses.map((s) => `'${s}'`).join(" or ")} to perform this action. Current status: '${budget.status}'`
     );
   }
 
@@ -530,6 +549,138 @@ async function handleStatusTransition(
       budget_id: budget.id,
       status: newStatus,
       message: successMessage,
+    }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
+}
+
+// =================================================================
+// Action: mark_reviewed
+// =================================================================
+async function handleMarkReviewed(
+  supabaseAdmin: any,
+  orgId: string,
+  userId: string,
+  propertyId: string,
+  fiscalYear: number
+) {
+  const ALLOWED_FROM = ["draft", "ai_generated", "under_review"];
+
+  const { data: budgets, error: fetchErr } = await supabaseAdmin
+    .from("budgets")
+    .select("id, status")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("budget_year", fiscalYear)
+    .limit(1);
+
+  if (fetchErr) {
+    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
+  }
+  if (!budgets || budgets.length === 0) {
+    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
+  }
+
+  const budget = budgets[0];
+  if (!ALLOWED_FROM.includes(budget.status)) {
+    throw new Error(
+      `Budget status must be one of ${ALLOWED_FROM.map((s) => `'${s}'`).join(", ")} to mark as reviewed. Current status: '${budget.status}'`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const { error: updateErr } = await supabaseAdmin
+    .from("budgets")
+    .update({
+      status: "reviewed",
+      reviewed_at: now,
+      reviewed_by: userId,
+      updated_at: now,
+    })
+    .eq("id", budget.id);
+
+  if (updateErr) {
+    throw new Error(`Failed to mark budget as reviewed: ${updateErr.message}`);
+  }
+
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_marked_reviewed", "Budget marked as reviewed");
+
+  return new Response(
+    JSON.stringify({
+      error: false,
+      budget_id: budget.id,
+      status: "reviewed",
+      message: "Budget marked as reviewed",
+    }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
+}
+
+// =================================================================
+// Action: reject (rework)
+// =================================================================
+async function handleReject(
+  supabaseAdmin: any,
+  orgId: string,
+  userId: string,
+  propertyId: string,
+  fiscalYear: number,
+  reason: string | null
+) {
+  const BLOCKED_FROM = ["approved", "locked", "signed"];
+  const trimmedReason = (reason ?? "").trim();
+
+  if (!trimmedReason) {
+    throw new Error("A rejection reason is required");
+  }
+
+  const { data: budgets, error: fetchErr } = await supabaseAdmin
+    .from("budgets")
+    .select("id, status")
+    .eq("org_id", orgId)
+    .eq("property_id", propertyId)
+    .eq("budget_year", fiscalYear)
+    .limit(1);
+
+  if (fetchErr) {
+    throw new Error(`Failed to fetch budget: ${fetchErr.message}`);
+  }
+  if (!budgets || budgets.length === 0) {
+    throw new Error(`No budget found for property ${propertyId} and fiscal year ${fiscalYear}`);
+  }
+
+  const budget = budgets[0];
+  if (BLOCKED_FROM.includes(budget.status)) {
+    throw new Error(
+      `Budget status '${budget.status}' cannot be rejected. Reject is blocked once a budget is approved, locked, or signed.`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const { error: updateErr } = await supabaseAdmin
+    .from("budgets")
+    .update({
+      status: "draft",
+      rejected_at: now,
+      rejected_by: userId,
+      rejection_comment: trimmedReason,
+      updated_at: now,
+    })
+    .eq("id", budget.id);
+
+  if (updateErr) {
+    throw new Error(`Failed to reject budget: ${updateErr.message}`);
+  }
+
+  await createAuditLog(supabaseAdmin, orgId, userId, budget.id, propertyId, fiscalYear, "budget_rejected", `Budget rejected and returned to draft: ${trimmedReason}`);
+
+  return new Response(
+    JSON.stringify({
+      error: false,
+      budget_id: budget.id,
+      status: "draft",
+      rejection_comment: trimmedReason,
+      message: "Budget rejected and returned to draft",
     }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );

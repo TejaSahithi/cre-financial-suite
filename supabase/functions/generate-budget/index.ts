@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { callVertexAIJSON } from "../_shared/vertex-ai.ts";
-import { createAdminClient } from "../_shared/supabase.ts";
+import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 
 /**
  * generate-budget Edge Function
@@ -195,25 +195,6 @@ async function loadHistoricalSummary(
   return summary;
 }
 
-async function resolveOrgIdFromAuth(req: Request): Promise<string | null> {
-  const auth = req.headers.get("Authorization") ?? req.headers.get("x-supabase-auth") ?? "";
-  if (!auth) return null;
-  const token = auth.replace(/^Bearer\s+/i, "");
-  const supabaseAdmin = createAdminClient();
-  try {
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !data?.user) return null;
-    const { data: memberships } = await supabaseAdmin
-      .from("memberships")
-      .select("org_id")
-      .eq("user_id", data.user.id);
-    const withOrg = (memberships ?? []).find((m: any) => m.org_id);
-    return withOrg?.org_id ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function estimateBudget(
   leases: Array<{ tenant_name: string; annual_rent: number }>,
   budgetYear: number,
@@ -292,6 +273,15 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // This function only returns a preview estimate — it never persists
+    // anything (see docs/server-owned-workflow-pattern.md and the Phase 4
+    // budgeting hardening notes). It still requires a real, authenticated
+    // user: previously anyone could call it unauthenticated and burn Vertex
+    // AI spend. The official/persisted budget is created by compute-budget,
+    // which is fully gated separately.
+    const { user, supabaseAdmin } = await verifyUser(req);
+    const orgId = await getUserOrgId(user.id, supabaseAdmin, req);
+
     const body = await req.json().catch(() => ({}));
     const {
       scope_label = "Property",
@@ -309,8 +299,6 @@ Deno.serve(async (req: Request) => {
 
     let historical: HistoricalSummary | null = null;
     if (fileIds.length > 0) {
-      const orgId = await resolveOrgIdFromAuth(req);
-      const supabaseAdmin = createAdminClient();
       historical = await loadHistoricalSummary(supabaseAdmin, fileIds, orgId);
       console.log(
         `[generate-budget] Loaded ${historical.files.length}/${fileIds.length} historical files; ` +
@@ -370,9 +358,15 @@ Use realistic CRE ratios: operating expenses typically 30-45% of revenue, CAM ty
 
   } catch (err) {
     console.error("[generate-budget] Error:", err.message);
+    const message = err?.message || "Budget preview generation failed";
+    const status = /unauthorized|missing authorization/i.test(message)
+      ? 401
+      : /access denied|permission|no active organization|multiple organizations/i.test(message)
+        ? 403
+        : 400;
     return new Response(
-      JSON.stringify({ error: true, message: err.message }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      JSON.stringify({ error: true, message }),
+      { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });

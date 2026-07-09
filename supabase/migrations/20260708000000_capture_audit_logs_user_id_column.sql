@@ -1,0 +1,12 @@
+-- Remote deployment readiness prep, step 1 of 4.
+--
+-- The linked remote project's audit_logs table has a live `user_id uuid`
+-- column that no migration in this repo creates -- untracked drift,
+-- confirmed via `supabase db dump --linked --schema public` (see
+-- docs/database/migration-repair.md and the Phase 5B-2B assessment).
+-- Remote's still-undeployed-fix `approve_lease_workflow` actively writes to
+-- it today, so it is not safe to drop; this migration only formally
+-- captures it so a fresh environment (or this repo's own migration history)
+-- matches remote's actual current shape. Purely additive: no FK, no
+-- default, no backfill. Nothing in this branch reads or writes it.
+ALTER TABLE public.audit_logs ADD COLUMN IF NOT EXISTS user_id uuid;

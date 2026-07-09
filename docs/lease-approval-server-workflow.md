@@ -66,9 +66,15 @@ First hardening cut implemented:
 - `public.approve_lease_workflow` owns lease approval, abstract snapshot persistence, field review mirror writes, document creation, notification creation, audit logging, critical-date upsert, and idempotent workflow-run recording.
 - `LeaseReview.jsx` now calls the server workflow for the core approval write path.
 
+Second hardening cut implemented (enterprise-readiness Phase 2):
+
+- `approve_lease_workflow` now also inserts an immutable `lease_abstract_versions` row (one per `(lease_id, version)`, locked down by construction — no client INSERT/UPDATE policy, only the RPC writes it) in the same transaction as the `leases` UPDATE. `leases.abstract_version`/`abstract_snapshot` remain the fast "current" pointer; the new table is the queryable history.
+- `approve-lease-workflow`'s edge function now calls `compute-lease` synchronously (internal service-to-service call, same request/response cycle) immediately after the RPC returns, so the approved rent schedule (`rent_schedules` rows) is guaranteed to exist before the approval response comes back — instead of depending on a client-side fire-and-forget `triggerCompute("compute-lease", ...)` call that could silently never complete. Reuses `compute-lease`'s existing `ensureApprovedRentSchedules` idempotent refresh-on-version-change logic rather than duplicating it. A rent-schedule failure is surfaced in the response (`rent_schedule.status`) but does not roll back the already-committed approval.
+- Verified end-to-end against a real local Supabase instance (HTTP call to the deployed edge function, not just the RPC) in `supabase/functions/_tests/lease-approval-rent-schedule-atomicity.property.test.ts`: confirms one version row and correct monthly `rent_schedules` rows are created, and that retrying with the same idempotency key duplicates neither.
+
 Still intentionally deferred:
 
 - Server-side rule generation.
 - Server-side lease-derived expense sync.
 - Server-side expense classification.
-- Server-side compute orchestration.
+- Folding the multi-fiscal-year/multi-projection-mode snapshot warm-up (still triggered client-side from `LeaseReview.jsx` after approval, for the Rent Projection page's aggregate views) into the same synchronous server-side chain — only the single lease's own approved rent schedule was made synchronous, not the broader property-wide projection snapshots.

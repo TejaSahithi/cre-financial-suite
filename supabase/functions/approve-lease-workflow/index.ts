@@ -4,6 +4,7 @@ import { assertPageAccess, getUserOrgId, verifyUser } from "../_shared/supabase.
 import {
   buildAbstractSnapshot,
   buildCriticalDateRows,
+  generateApprovedRentSchedule,
   validateApprovalPayload,
 } from "../_shared/lease-approval-workflow.ts";
 
@@ -104,7 +105,20 @@ Deno.serve(async (req: Request) => {
       throw new Error(error.message || "approve_lease_workflow failed");
     }
 
-    return jsonResponse({ error: false, ...data });
+    // Generate the approved rent schedule synchronously, in the same request,
+    // instead of relying on the client to fire-and-forget a compute-lease
+    // call after redirecting. Reuses compute-lease's existing
+    // ensureApprovedRentSchedules (delete+regenerate rows when
+    // abstract_version changed) rather than duplicating that logic here.
+    // A failure here does not roll back the approval that already committed
+    // above — it's surfaced in the response so the UI can show a retry state.
+    const rentSchedule = await generateApprovedRentSchedule({
+      orgId,
+      leaseId: payload.leaseId,
+      req,
+    });
+
+    return jsonResponse({ error: false, ...data, rent_schedule: rentSchedule });
   } catch (err) {
     const message = err?.message || "Lease approval workflow failed";
     const status = /unauthorized|missing authorization/i.test(message)

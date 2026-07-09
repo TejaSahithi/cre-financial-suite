@@ -190,29 +190,14 @@ export async function handleExpenseCamSendRequest(req: Request) {
       throw new Error(error.message || "send_expense_classification_to_cam_workflow failed");
     }
 
-    try {
-      await supabaseAdmin.from("audit_logs").insert({
-        org_id: orgId,
-        property_id: classification.property_id ?? null,
-        entity_type: "expense_classifications",
-        entity_id: payload.classificationId,
-        action: "expense_classification_sent_to_cam",
-        actor_user_id: user.id,
-        actor_email: user.email ?? null,
-        source: "edge_function",
-        severity: "info",
-        metadata: {
-          classification_id: payload.classificationId,
-          expense_id: expenseId ?? null,
-          rule_id: ruleId ?? null,
-          amount: expense?.amount ?? classification.amount ?? null,
-          recoverability_result: classification.recoverability_result ?? null,
-          reason: payload.reason ?? null,
-        },
-      });
-    } catch (auditErr) {
-      console.error("[send-expense-classification-to-cam] audit_log insert error (sent):", auditErr?.message || auditErr);
-    }
+    // send_expense_classification_to_cam_workflow already inserts one
+    // audit_logs row for this event inside its own transaction (action:
+    // "send_expense_classification_to_cam"). This function previously wrote
+    // a second, separate row here (action: "expense_classification_sent_to_cam")
+    // for the same logical event — a confirmed duplicate, removed. If the
+    // RPC's metadata ever needs the amount/recoverability_result fields this
+    // insert used to carry, add them to the RPC's own insert instead of
+    // reintroducing a second write here.
 
     return jsonResponse({ error: false, ...data });
   } catch (err) {

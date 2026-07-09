@@ -137,7 +137,7 @@ DROP POLICY IF EXISTS "expense_classification_cam_send_runs_insert" ON public.ex
 DROP POLICY IF EXISTS "expense_classification_cam_send_runs_update" ON public.expense_classification_cam_send_runs;
 
 CREATE POLICY "expense_classification_cam_send_runs_select" ON public.expense_classification_cam_send_runs
-  FOR SELECT USING (public.is_super_admin() OR org_id = ANY(public.get_my_org_ids()));
+  FOR SELECT USING (public.is_super_admin() OR org_id IN (SELECT public.get_my_org_ids()));
 
 CREATE POLICY "expense_classification_cam_send_runs_insert" ON public.expense_classification_cam_send_runs
   FOR INSERT WITH CHECK (public.is_super_admin() OR public.can_write_org_data(org_id));

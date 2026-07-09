@@ -52,7 +52,7 @@ async function createTestUser(adminClient: any, email: string, orgId: string) {
   const { error: membershipError } = await adminClient.from("memberships").insert({
     user_id: authData.user.id,
     org_id: orgId,
-    role: "member",
+    role: "org_admin",
     status: "active",
   });
   if (membershipError) throw new Error(`Failed to create membership: ${membershipError.message}`);

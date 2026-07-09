@@ -31,8 +31,8 @@ Routing now lazy-loads page modules through `src/pages.config.js`, with `src/app
 
 ## Next Refactor Targets
 
-- Move lease approval into the server workflow described in `docs/lease-approval-server-workflow.md`.
-- Canonicalize rule/CAM financial decisions before serverizing approve/reject or publish-to-CAM workflows, as described in `docs/rule-cam-hardening-plan.md`.
+- Done: lease approval server workflow (`docs/lease-approval-server-workflow.md`), rule/CAM canonicalization sprints 1-3 (`docs/rule-cam-hardening-plan.md`), canonical workflow-pattern template + shared run-table helpers (`docs/server-owned-workflow-pattern.md`), pipeline call-graph documentation and removal of the `LeaseUpload.jsx` client-side lease-draft bypass (`docs/pipeline-call-graph.md`).
+- In progress (enterprise-readiness hardening, phased): fold rent-schedule generation and immutable abstract versioning into the lease approval transaction; move expense classification derivation and CAM/lease config writes onto the same server-owned pattern as CAM-send/publish; collapse budgeting's two divergent paths (`CreateBudget.jsx` direct-insert vs. `compute-budget`) onto the gated engine; reconcile the `audit_logs` column-shape drift and remove redundant client-side audit inserts; module-by-module RLS lockdown on `leases`/`expenses`/`budgets`/config tables to reject direct client writes entirely.
 - Split finance services by bounded context: lease rules, actual expense classification, CAM publication, audit events, and notifications.
 - Replace root-level scratch/test scripts with either committed tests under `src/**/__tests__` or ignored local tooling.
 - Add CI gates for `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run build`.
