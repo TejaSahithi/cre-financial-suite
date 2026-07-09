@@ -1,10 +1,10 @@
-// Feature: enterprise-readiness-hardening Phase HARD-2 / HARD-2B
+// Feature: enterprise-readiness-hardening Phase HARD-2 / HARD-2B / HARD-2C
 // (delete_uploaded_file_workflow). Server-owns LeaseUpload.jsx's
 // handleDeleteUpload() action and Documents.jsx's row-level delete action --
 // both confirmed reachable, direct-write call sites for the same table.
 // Properties:
-//   1. A valid delete succeeds, exactly one audit row with a full "before"
-//      snapshot.
+//   1. A valid (unlinked) delete succeeds, exactly one audit row with a
+//      full "before" snapshot.
 //   2. A cross-org file_id is rejected, zero side effects.
 //   3. A user without page access (viewer) is blocked, zero side effects.
 //   4. An unknown/already-deleted file_id is rejected with a clear
@@ -15,12 +15,17 @@
 //      still blocked -- the RPC re-derives is_org_admin(org_id), preserving
 //      the current uploaded_files_delete RLS policy's stricter bar rather
 //      than the broader can_write_org_data used by insert/update.
-//   6. Deleting a file that is a lease's source_file_id still succeeds and
-//      the lease's source_file_id is set NULL by the FK -- documents the
-//      deliberate decision NOT to add a new "approved lease" protective
-//      block, matching current (already-shipped) product semantics.
-//   7. A pipeline_jobs row referencing the file is cascade-deleted by the
-//      FK constraint itself, not by any manual statement in this RPC.
+//   6. (HARD-2C, supersedes the original HARD-2 permissive decision)
+//      Deleting a file that is a lease's source_file_id is now BLOCKED with
+//      the exact user-facing message "This upload is already linked to
+//      lease evidence and cannot be deleted.", HTTP 409, zero audit rows,
+//      and the lease/file both survive unchanged.
+//   7. A pipeline_jobs row referencing the file does NOT block deletion
+//      (pipeline_jobs/pipeline_logs completed/success state is disposable
+//      processing bookkeeping, not evidence of downstream consumption --
+//      see the HARD-2C migration header for the full reasoning) and is
+//      still cascade-deleted by the FK constraint itself when the delete
+//      is otherwise allowed.
 //   8. (HARD-2B) A member whose page_permissions grant write ONLY to
 //      "Documents" (explicitly "none" on "LeaseUpload") can still delete --
 //      proves the edge function's assertPageAccess recognizes "Documents"
@@ -28,6 +33,17 @@
 //   9. (HARD-2B) A member whose page_permissions grant write ONLY to
 //      "LeaseUpload" (explicitly "none" on "Documents") can still delete --
 //      the symmetric case, confirming neither page name alone is required.
+//   10. (HARD-2C) lease_amendments.source_file_id linkage blocks deletion.
+//   11. (HARD-2C) lease_assignments.source_file_id linkage blocks deletion.
+//   12. (HARD-2C) compute_runs.source_file_id linkage blocks deletion.
+//   13. (HARD-2C) document_links (any entity_type) linkage blocks deletion.
+//   14. (HARD-2C) A lease whose typed source_file_id is NULL but whose
+//       extraction_data->>'source_file_id' matches the file still blocks
+//       deletion -- proves the JSONB fallback path (used live by the
+//       frontend) is checked, not just the typed column.
+//   15. (HARD-2C) An allowed (unlinked) delete still writes exactly one
+//       audit row -- re-confirms property 1 survives the new blocking
+//       logic being added ahead of the DELETE/INSERT statements.
 import {
   assertEquals,
   assertExists,
@@ -254,7 +270,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "delete_uploaded_file_workflow: deleting a lease's source file still succeeds; lease.source_file_id is set NULL, lease is not deleted (deliberate: no new protective block)",
+  name: "delete_uploaded_file_workflow: deleting a lease's source file is BLOCKED (HARD-2C), exact message, 409, zero audit rows, file+lease survive",
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -277,22 +293,29 @@ Deno.test({
 
     const res = await callFn(accessToken, { file_id: file.id });
     const body = await res.json();
-    assertEquals(res.status, 200, `expected success: ${JSON.stringify(body)}`);
+    assertEquals(body.error, true, `expected the delete to be blocked: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+    assertEquals(body.message, "This upload is already linked to lease evidence and cannot be deleted.");
 
-    const { data: leaseAfter, error: leaseErr } = await admin
-      .from("leases")
-      .select("id, source_file_id, status")
-      .eq("id", lease.id)
-      .single();
-    assertNoError(leaseErr);
-    assertExists(leaseAfter, "the approved lease must survive the source file's deletion");
-    assertEquals(leaseAfter.source_file_id, null, "source_file_id must be nulled by the FK, not left dangling");
-    assertEquals(leaseAfter.status, "approved", "lease approval status is untouched");
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+
+    const { data: leaseAfter } = await admin.from("leases").select("id, source_file_id").eq("id", lease.id).single();
+    assertExists(leaseAfter);
+    assertEquals(leaseAfter!.source_file_id, file.id, "source_file_id must be untouched -- the delete never ran");
+
+    const { data: auditRows } = await admin
+      .from("audit_logs")
+      .select("id")
+      .eq("entity_type", "UploadedFile")
+      .eq("entity_id", file.id)
+      .eq("action", "uploaded_file_deleted");
+    assertEquals(auditRows?.length ?? 0, 0, "a blocked delete must write zero audit rows");
   },
 });
 
 Deno.test({
-  name: "delete_uploaded_file_workflow: a pipeline_jobs row referencing the file is cascade-deleted by the FK, not a manual statement in this RPC",
+  name: "delete_uploaded_file_workflow: a completed pipeline_jobs row does NOT block deletion (HARD-2C decision) and is cascade-deleted by the FK, not a manual statement in this RPC",
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
@@ -393,5 +416,187 @@ Deno.test({
     const body = await res.json();
     assertEquals(res.status, 200, `expected success via LeaseUpload-only page access: ${JSON.stringify(body)}`);
     assertEquals(body.deleted_id, file.id);
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: lease_amendments.source_file_id linkage blocks deletion (HARD-2C)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const property = await insertOne(admin, "properties", {
+      org_id: org.id,
+      name: `HARD-2C Amendments Property ${suffix}`,
+      status: "active",
+    });
+    const file = await insertUploadedFile(admin, org, { property_id: property.id });
+    const lease = await insertOne(admin, "leases", { org_id: org.id, property_id: property.id });
+    await insertOne(admin, "lease_amendments", {
+      org_id: org.id,
+      lease_id: lease.id,
+      source_file_id: file.id,
+    });
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected block: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+    assertEquals(body.message, "This upload is already linked to lease evidence and cannot be deleted.");
+
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: lease_assignments.source_file_id linkage blocks deletion (HARD-2C)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const property = await insertOne(admin, "properties", {
+      org_id: org.id,
+      name: `HARD-2C Assignments Property ${suffix}`,
+      status: "active",
+    });
+    const file = await insertUploadedFile(admin, org, { property_id: property.id });
+    const lease = await insertOne(admin, "leases", { org_id: org.id, property_id: property.id });
+    await insertOne(admin, "lease_assignments", {
+      org_id: org.id,
+      lease_id: lease.id,
+      source_file_id: file.id,
+    });
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected block: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: compute_runs.source_file_id linkage blocks deletion (HARD-2C)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const file = await insertUploadedFile(admin, org);
+    await insertOne(admin, "compute_runs", {
+      org_id: org.id,
+      engine_type: "lease",
+      input_fingerprint: `fingerprint-${suffix}`,
+      status: "completed",
+      source_file_id: file.id,
+    });
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected block: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: document_links linkage (any entity_type) blocks deletion (HARD-2C)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const property = await insertOne(admin, "properties", {
+      org_id: org.id,
+      name: `HARD-2C Document Links Property ${suffix}`,
+      status: "active",
+    });
+    const file = await insertUploadedFile(admin, org);
+    await insertOne(admin, "document_links", {
+      org_id: org.id,
+      file_id: file.id,
+      entity_type: "property",
+      entity_id: property.id,
+    });
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected block: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: extraction_data->>'source_file_id' fallback (typed column NULL) blocks deletion (HARD-2C)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const property = await insertOne(admin, "properties", {
+      org_id: org.id,
+      name: `HARD-2C Extraction Data Property ${suffix}`,
+      status: "active",
+    });
+    const file = await insertUploadedFile(admin, org, { property_id: property.id });
+    // Typed source_file_id left NULL deliberately -- only the JSONB fallback
+    // path carries the reference, matching how the frontend itself falls
+    // back (lease.source_file_id ?? lease.extraction_data?.source_file_id).
+    const lease = await insertOne(admin, "leases", {
+      org_id: org.id,
+      property_id: property.id,
+      source_file_id: null,
+      extraction_data: { source_file_id: file.id },
+    });
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(body.error, true, `expected block via extraction_data fallback: ${JSON.stringify(body)}`);
+    assertEquals(res.status, 409, JSON.stringify(body));
+
+    const { data: fileAfter } = await admin.from("uploaded_files").select("id").eq("id", file.id).maybeSingle();
+    assertExists(fileAfter, "the file must survive a blocked delete");
+
+    const { data: leaseAfter } = await admin.from("leases").select("id").eq("id", lease.id).maybeSingle();
+    assertExists(leaseAfter, "the lease is untouched");
+  },
+});
+
+Deno.test({
+  name: "delete_uploaded_file_workflow: an allowed (unlinked) delete still writes exactly one audit row (HARD-2C regression check)",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, accessToken } = await setUpScope(admin, suffix);
+    const file = await insertUploadedFile(admin, org);
+
+    const res = await callFn(accessToken, { file_id: file.id });
+    const body = await res.json();
+    assertEquals(res.status, 200, `expected success: ${JSON.stringify(body)}`);
+
+    const { data: auditRows } = await admin
+      .from("audit_logs")
+      .select("id")
+      .eq("entity_type", "UploadedFile")
+      .eq("entity_id", file.id)
+      .eq("action", "uploaded_file_deleted");
+    assertEquals(auditRows?.length, 1, `expected exactly one audit row: ${JSON.stringify(auditRows)}`);
   },
 });

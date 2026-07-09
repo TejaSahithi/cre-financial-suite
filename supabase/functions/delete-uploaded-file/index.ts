@@ -16,6 +16,8 @@ function errorStatus(message: string) {
   if (/unauthorized|missing authorization/i.test(message)) return 401;
   if (/access denied|permission|only organization admins/i.test(message)) return 403;
   if (/required|not found/i.test(message)) return 400;
+  // HARD-2C: file already linked to downstream lease evidence.
+  if (/already linked to lease evidence/i.test(message)) return 409;
   return 500;
 }
 
