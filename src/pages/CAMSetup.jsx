@@ -62,6 +62,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { supabase } from "@/services/supabaseClient";
+import { saveCamProfile, approveCamProfile } from "@/services/camConfig";
 import { createPageUrl } from "@/utils";
 
 const STATUS_STYLE = {
@@ -171,18 +172,10 @@ export default function CAMSetup() {
     return c;
   }, [decoratedProfiles]);
 
-  // Mutation: save edits.
+  // Mutation: save edits. Server-owned + audited via save_cam_profile
+  // (Phase 6CAM-1) instead of a direct client update().
   const saveMutation = useMutation({
-    mutationFn: async ({ id, patch }) => {
-      const { data, error } = await supabase
-        .from("cam_profiles")
-        .update(patch)
-        .eq("id", id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
+    mutationFn: async ({ id, patch }) => saveCamProfile(id, patch),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cam-profiles"] });
       toast.success("CAM profile updated");
@@ -191,24 +184,17 @@ export default function CAMSetup() {
     onError: (err) => toast.error(err?.message || "Could not save CAM profile"),
   });
 
+  // Server-owned + audited via approve_cam_profile (Phase 6CAM-1) instead
+  // of a direct client update(). The eligibility pre-check stays
+  // client-side for immediate UX feedback; the RPC independently
+  // re-derives the same rule server-side before writing.
   const approveMutation = useMutation({
     mutationFn: async (profile) => {
       const effective = computeEffectiveStatus(profile);
       if (effective.status === "manual_required") {
         throw new Error(`Cannot approve: ${effective.reason}`);
       }
-      const { data, error } = await supabase
-        .from("cam_profiles")
-        .update({
-          status: "approved",
-          approved_at: new Date().toISOString(),
-          approved_by: null, // populated via DB trigger or auth context in real deployment
-        })
-        .eq("id", profile.id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
+      return approveCamProfile(profile.id);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cam-profiles"] });

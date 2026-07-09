@@ -16,6 +16,7 @@ import { AlertTriangle, ArrowLeft, Upload, Download, CheckCircle2, Loader2 } fro
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { toast } from "sonner";
 
 const systemFields = ["expense_date", "category", "amount", "vendor", "recoverable_flag", "description", "gl_code", "invoice_number"];
 
@@ -360,7 +361,6 @@ export default function BulkImport() {
   };
 
   const importData = async (skipDuplicates = false) => {
-    const writableOrgId = await resolveWritableOrgId(orgId);
     const effectivePropertyId = selectedUnit?.property_id || selectedBuilding?.property_id || (scopeProperty !== "all" ? scopeProperty : null);
     const effectiveBuildingId = selectedUnit?.building_id || (scopeBuilding !== "all" ? scopeBuilding : null);
     const effectiveUnitId = scopeUnit !== "all" ? scopeUnit : null;
@@ -371,24 +371,30 @@ export default function BulkImport() {
         : null);
     const dupRowNums = skipDuplicates ? new Set(dupCheck.warnings.map(w => w.rowNum)) : new Set();
     const ready = validatedRows.filter(r => r.status !== 'error' && !dupRowNums.has(r.row_num));
-    for (const row of ready) {
-      await expenseService.create({
-        date: row.expense_date,
-        category: row.category?.toLowerCase().replace(/\s+/g, '_') || "other",
-        amount: parseFloat(String(row.amount).replace(/[$,]/g, '')) || 0,
-        vendor: row.vendor || "",
-        description: row.description || "",
-        classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
-        source: "import",
-        ...(row.gl_code ? { gl_code: row.gl_code } : {}),
-        ...(row.invoice_number ? { invoice_number: row.invoice_number } : {}),
-        ...(effectivePortfolioId ? { portfolio_id: effectivePortfolioId } : {}),
-        ...(effectivePropertyId ? { property_id: effectivePropertyId } : {}),
-        ...(effectiveBuildingId ? { building_id: effectiveBuildingId } : {}),
-        ...(effectiveUnitId ? { unit_id: effectiveUnitId } : {}),
-        ...(writableOrgId ? { org_id: writableOrgId } : {}),
-        fiscal_year: row.expense_date ? new Date(row.expense_date).getFullYear() : new Date().getFullYear()
-      });
+    if (ready.length === 0) return;
+
+    const rows = ready.map((row) => ({
+      date: row.expense_date,
+      category: row.category?.toLowerCase().replace(/\s+/g, '_') || "other",
+      amount: parseFloat(String(row.amount).replace(/[$,]/g, '')) || 0,
+      vendor: row.vendor || "",
+      description: row.description || "",
+      classification: row.recoverable_flag?.toLowerCase().includes('non') ? 'non_recoverable' : row.recoverable_flag?.toLowerCase().includes('cond') ? 'conditional' : 'recoverable',
+      source: "import",
+      ...(row.gl_code ? { gl_code: row.gl_code } : {}),
+      ...(row.invoice_number ? { invoice_number: row.invoice_number } : {}),
+      ...(effectivePortfolioId ? { portfolio_id: effectivePortfolioId } : {}),
+      ...(effectivePropertyId ? { property_id: effectivePropertyId } : {}),
+      ...(effectiveBuildingId ? { building_id: effectiveBuildingId } : {}),
+      ...(effectiveUnitId ? { unit_id: effectiveUnitId } : {}),
+      fiscal_year: row.expense_date ? new Date(row.expense_date).getFullYear() : new Date().getFullYear(),
+    }));
+
+    try {
+      await expenseService.bulkCreateExpensesWorkflow(rows);
+    } catch (err) {
+      toast.error(`Import failed: ${err?.message || "Unknown error"}. No expenses were created.`);
+      return;
     }
     queryClient.invalidateQueries({ queryKey: ['Expense'] });
     setStep(4);

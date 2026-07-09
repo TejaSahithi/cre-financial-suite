@@ -149,10 +149,10 @@ export default function AddExpense() {
       : scope.scopedUnits;
 
   const createMutation = useMutation({
-    mutationFn: (data) => expenseService.create(data),
+    mutationFn: (data) => expenseService.createExpenseWorkflow(data),
   });
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => expenseService.update(id, data),
+    mutationFn: ({ id, data }) => expenseService.updateExpenseWorkflow(id, data),
   });
 
   const createVendorMutation = useMutation({

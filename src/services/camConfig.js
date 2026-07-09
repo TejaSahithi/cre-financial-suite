@@ -1,6 +1,7 @@
 import { supabase } from "@/services/supabaseClient";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 export const DEFAULT_CAM_CONFIG = {
   allocation_method: "pro_rata_total_sqft",
@@ -56,44 +57,37 @@ export async function fetchPropertyCamConfig(propertyId) {
 }
 
 export async function savePropertyCamConfig(propertyId, values) {
-  if (!supabase || !propertyId || propertyId === "all") {
+  if (!propertyId || propertyId === "all") {
     throw new Error("Select a property before saving CAM configuration");
   }
 
-  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
-  if (!orgId) {
-    throw new Error("Unable to resolve organization for CAM configuration");
-  }
+  // Server-side validated + audited via save_property_cam_config (RPC) —
+  // see docs/server-owned-workflow-pattern.md. Was previously a direct
+  // client upsert with no range validation on config_values and no audit
+  // trail on the write.
+  const configValues = {
+    allocation_method: values.allocation_method,
+    admin_fee_pct: Number(values.admin_fee_pct ?? 0),
+    management_fee_pct: Number(values.management_fee_pct ?? 0),
+    management_fee_basis: values.management_fee_basis ?? "shared_pool",
+    gross_up_enabled: Boolean(values.gross_up_enabled),
+    gross_up_target_occupancy_pct: Number(values.gross_up_target_occupancy_pct ?? 95),
+    gross_up_apply_to: values.gross_up_apply_to ?? "controllable",
+    cam_cap_rate: Number(values.cam_cap_rate ?? 0),
+    vacancy_handling: values.vacancy_handling ?? "include_vacant",
+    property_pool_denominator_mode: values.property_pool_denominator_mode ?? "property_total_sqft",
+    building_pool_denominator_mode: values.building_pool_denominator_mode ?? "building_total_sqft",
+  };
 
-  const payload = {
+  const result = await invokeEdgeFunction("save-property-cam-config", {
     property_id: propertyId,
-    org_id: orgId,
     cam_calculation_method: values.cam_calculation_method ?? "pro_rata",
     expense_recovery_method: values.expense_recovery_method ?? "base_year",
     fiscal_year_start: values.fiscal_year_start ?? 1,
-    config_values: {
-      allocation_method: values.allocation_method,
-      admin_fee_pct: Number(values.admin_fee_pct ?? 0),
-      management_fee_pct: Number(values.management_fee_pct ?? 0),
-      management_fee_basis: values.management_fee_basis ?? "shared_pool",
-      gross_up_enabled: Boolean(values.gross_up_enabled),
-      gross_up_target_occupancy_pct: Number(values.gross_up_target_occupancy_pct ?? 95),
-      gross_up_apply_to: values.gross_up_apply_to ?? "controllable",
-      cam_cap_rate: Number(values.cam_cap_rate ?? 0),
-      vacancy_handling: values.vacancy_handling ?? "include_vacant",
-      property_pool_denominator_mode: values.property_pool_denominator_mode ?? "property_total_sqft",
-      building_pool_denominator_mode: values.building_pool_denominator_mode ?? "building_total_sqft",
-    },
-  };
+    config_values: configValues,
+  });
 
-  const { data, error } = await supabase
-    .from("property_config")
-    .upsert(payload, { onConflict: "org_id,property_id" })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return { row: data, values: normalizeConfig(data) };
+  return { row: result.row, values: normalizeConfig(result.row) };
 }
 
 // ─── Per-Lease CAM Rules ──────────────────────────────────────────────────────
@@ -142,37 +136,59 @@ export async function fetchLeaseConfig(leaseId) {
 }
 
 export async function saveLeaseConfig(leaseId, values) {
-  if (!supabase || !leaseId) throw new Error("Lease ID is required");
-  const orgId = await resolveWritableOrgId(await getCurrentOrgId());
-  if (!orgId) throw new Error("Unable to resolve organization");
+  if (!leaseId) throw new Error("Lease ID is required");
 
-  const payload = {
-    lease_id: leaseId,
-    org_id: orgId,
-    base_year: values.base_year ? Number(values.base_year) : null,
-    excluded_expenses: Array.isArray(values.excluded_expenses) ? values.excluded_expenses : [],
-    config_values: {
-      ...(Array.isArray(values.cam_rule_lines) ? { cam_rule_lines: values.cam_rule_lines } : {}),
-      cam_applicable: values.cam_applicable !== false,
-      cam_cap_type: values.cam_cap_type ?? "none",
-      cam_cap_rate: values.cam_cap_rate != null ? Number(values.cam_cap_rate) : null,
-      cam_cap: values.cam_cap != null ? Number(values.cam_cap) : null,
-      base_year_amount: values.base_year_amount != null ? Number(values.base_year_amount) : null,
-      expense_stop_amount: values.expense_stop_amount != null ? Number(values.expense_stop_amount) : null,
-      gross_up_clause: Boolean(values.gross_up_clause),
-      allocation_method: values.allocation_method ?? "",
-      weight_factor: values.weight_factor != null ? Number(values.weight_factor) : null,
-      management_fee_pct: values.management_fee_pct != null ? Number(values.management_fee_pct) : null,
-      controllable_cap_rate: values.controllable_cap_rate != null ? Number(values.controllable_cap_rate) : null,
-      non_cumulative_cap_base_year: values.non_cumulative_cap_base_year != null ? Number(values.non_cumulative_cap_base_year) : null,
-    },
+  // Server-side validated + audited via save_lease_config (RPC) — see
+  // docs/server-owned-workflow-pattern.md. Was previously a direct client
+  // upsert with no range validation on config_values and no audit trail.
+  const configValues = {
+    ...(Array.isArray(values.cam_rule_lines) ? { cam_rule_lines: values.cam_rule_lines } : {}),
+    cam_applicable: values.cam_applicable !== false,
+    cam_cap_type: values.cam_cap_type ?? "none",
+    cam_cap_rate: values.cam_cap_rate != null ? Number(values.cam_cap_rate) : null,
+    cam_cap: values.cam_cap != null ? Number(values.cam_cap) : null,
+    base_year_amount: values.base_year_amount != null ? Number(values.base_year_amount) : null,
+    expense_stop_amount: values.expense_stop_amount != null ? Number(values.expense_stop_amount) : null,
+    gross_up_clause: Boolean(values.gross_up_clause),
+    allocation_method: values.allocation_method ?? "",
+    weight_factor: values.weight_factor != null ? Number(values.weight_factor) : null,
+    management_fee_pct: values.management_fee_pct != null ? Number(values.management_fee_pct) : null,
+    controllable_cap_rate: values.controllable_cap_rate != null ? Number(values.controllable_cap_rate) : null,
+    non_cumulative_cap_base_year: values.non_cumulative_cap_base_year != null ? Number(values.non_cumulative_cap_base_year) : null,
   };
 
-  const { data, error } = await supabase
-    .from("lease_config")
-    .upsert(payload, { onConflict: "org_id,lease_id" })
-    .select("*")
-    .single();
-  if (error) throw error;
-  return { row: data, values: normalizeLeaseConfig(data) };
+  const result = await invokeEdgeFunction("save-lease-config", {
+    lease_id: leaseId,
+    base_year: values.base_year ? Number(values.base_year) : null,
+    excluded_expenses: Array.isArray(values.excluded_expenses) ? values.excluded_expenses : [],
+    config_values: configValues,
+  });
+
+  return { row: result.row, values: normalizeLeaseConfig(result.row) };
+}
+
+// ─── Per-Lease CAM Profiles (CAMSetup.jsx) ────────────────────────────────────
+
+// Server-side validated + audited via save_cam_profile (RPC) — Phase 6CAM-1.
+// Was previously a direct client update() with no audit trail. patch is the
+// exact 12-field shape CAMSetup.jsx's EditForm already builds.
+export async function saveCamProfile(profileId, patch) {
+  if (!profileId) throw new Error("CAM profile ID is required");
+  const result = await invokeEdgeFunction("save-cam-profile", {
+    profile_id: profileId,
+    patch,
+  });
+  return result?.profile ?? null;
+}
+
+// Server-side validated + audited via approve_cam_profile (RPC) — Phase
+// 6CAM-1. Was previously a direct client update() that always wrote
+// approved_by: null (no trigger ever populated it); the RPC now sets
+// approved_by to the authenticated actor's email.
+export async function approveCamProfile(profileId) {
+  if (!profileId) throw new Error("CAM profile ID is required");
+  const result = await invokeEdgeFunction("approve-cam-profile", {
+    profile_id: profileId,
+  });
+  return result?.profile ?? null;
 }

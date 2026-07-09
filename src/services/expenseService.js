@@ -15,8 +15,7 @@ import {
   buildLeaseLookup,
   isMissingExpenseRuleTable,
   extractMissingColumn,
-  isMissingColumnError,
-  isSchemaCompatibilityError
+  isMissingColumnError
 } from "./utils/expenseParsers";
 import {
   bumpExclusion,
@@ -35,6 +34,7 @@ import {
 
 import { createEntityService, getCurrentOrgId } from "@/services/api";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import {
   createRuleReviewIdempotencyKey,
@@ -43,6 +43,7 @@ import {
 import {
   createExpenseClassificationCamSendIdempotencyKey,
   sendExpenseClassificationToCam,
+  reviewExpenseClassification,
 } from "@/services/expenseClassificationWorkflowService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveTableName } from "@/types";
@@ -732,7 +733,6 @@ const BASELINE_EXPENSE_CLASSIFICATION_COLUMNS = new Set([
 ]);
 
 const missingExpenseClassificationColumns = new Set();
-const missingExpenseWorkflowColumns = new Set();
 
 const EXPENSE_CLASSIFICATION_WORKFLOW_COLUMNS = [
   "classification_key",
@@ -1109,7 +1109,7 @@ async function fetchApprovedClassificationRules(scope = {}) {
   };
 }
 
-async function upsertExpenseClassification(payload) {
+async function upsertExpenseClassification(payload, { expensePatch = null } = {}) {
   if (!supabase || !payload?.org_id) return;
   if (!payload?.expense_id && !payload?.actual_expense_id && !payload?.lease_expense_rule_id) return;
   try {
@@ -1127,10 +1127,51 @@ async function upsertExpenseClassification(payload) {
       actual_expense_id: payload.actual_expense_id || payload.expense_id || null,
       row_type: rowType,
     });
+
+    // The consistency-critical case (a classification tied to a real
+    // expense) is gated server-side via persist-expense-classification: the
+    // client still computes the full match/score (unchanged), but the edge
+    // function re-checks CAM-readiness/recoverability consistency against
+    // the expense/rule before persisting, and audits every write. See
+    // docs/server-owned-workflow-pattern.md. The "rule_missing_actual"
+    // bookkeeping case (a rule row with no linked expense at all) has no
+    // expense to gate against and is left on the direct upsert below.
+    //
+    // Phase 6X-1: when expensePatch is provided, the same RPC call also
+    // persists the paired `expenses` columns (classification/recovery_status)
+    // in the same transaction as the classification upsert — replacing what
+    // used to be a second, separate, non-transactional direct write.
+    if (hasExpense) {
+      const linkedRuleId = nextPayload.lease_expense_rule_id || nextPayload.linked_expense_rule_id || nextPayload.recovery_rule_id || null;
+      const patch = { ...nextPayload };
+      delete patch.org_id;
+      delete patch.expense_id;
+      delete patch.actual_expense_id;
+      delete patch.lease_expense_rule_id;
+      delete patch.linked_expense_rule_id;
+      delete patch.recovery_rule_id;
+      delete patch.recovery_status;
+      delete patch.recoverability_result;
+      delete patch.cam_eligible;
+      delete patch.cam_status;
+      delete patch.sent_to_cam;
+
+      const result = await invokeEdgeFunction("persist-expense-classification", {
+        expense_id: nextPayload.expense_id,
+        linked_expense_rule_id: linkedRuleId,
+        recovery_status: nextPayload.recovery_status,
+        recoverability_result: nextPayload.recoverability_result,
+        cam_eligible: nextPayload.cam_eligible,
+        cam_status: nextPayload.cam_status,
+        sent_to_cam: Boolean(nextPayload.sent_to_cam),
+        ...(expensePatch && Object.keys(expensePatch).length > 0 ? { expense_patch: expensePatch } : {}),
+        ...patch,
+      });
+      return result?.row ?? null;
+    }
+
     const baselinePayload = pickColumns(nextPayload, BASELINE_EXPENSE_CLASSIFICATION_COLUMNS);
-    const conflictTargets = hasExpense
-      ? ["org_id,expense_id", "classification_key"]
-      : ["classification_key"];
+    const conflictTargets = ["classification_key"];
 
     for (const onConflict of conflictTargets) {
       const attemptPayload = { ...baselinePayload };
@@ -1163,131 +1204,6 @@ async function upsertExpenseClassification(payload) {
   } catch (error) {
     console.warn("[expenseService] expense classification persistence warning:", error);
   }
-}
-
-async function updateExpenseClassificationRecord(classificationId, patch = {}) {
-  if (!supabase || !classificationId) {
-    throw new Error("Classification record not found");
-  }
-
-  const payload = {
-    ...patch,
-    updated_at: patch.updated_at || new Date().toISOString(),
-  };
-
-  for (const missingColumn of missingExpenseClassificationColumns) {
-    delete payload[missingColumn];
-  }
-
-  while (Object.keys(payload).length > 0) {
-    const { data, error } = await supabase
-      .from("expense_classifications")
-      .update(payload)
-      .eq("id", classificationId)
-      .select()
-      .single();
-
-    if (!error) {
-      return data;
-    }
-
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
-      throw error;
-    }
-    missingExpenseClassificationColumns.add(missingColumn);
-    delete payload[missingColumn];
-  }
-
-  return null;
-}
-
-async function updateExpenseWorkflowDirect(expenseId, patch = {}) {
-  if (!supabase || !expenseId) {
-    throw new Error("Expense record not found");
-  }
-
-  const payload = compactDefined(patch);
-  const strippedColumns = [];
-
-  for (const missingColumn of missingExpenseWorkflowColumns) {
-    delete payload[missingColumn];
-  }
-
-  while (Object.keys(payload).length > 0) {
-    const { data, error } = await supabase
-      .from("expenses")
-      .update(payload)
-      .eq("id", expenseId)
-      .select("*")
-      .maybeSingle();
-
-    if (!error) {
-      if (strippedColumns.length > 0) {
-        console.warn(`[expenseService] expenses workflow update stripped unsupported columns: ${strippedColumns.join(", ")}`);
-      }
-      return data || { id: expenseId, ...payload };
-    }
-
-    const missingColumn = extractMissingColumn(error);
-    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in payload)) {
-      throw error;
-    }
-    missingExpenseWorkflowColumns.add(missingColumn);
-    strippedColumns.push(missingColumn);
-    delete payload[missingColumn];
-  }
-
-  return { id: expenseId };
-}
-
-async function persistExpenseWorkflowPatch(expenseId, expensePatch = {}) {
-  const updatedAt =
-    expensePatch.updated_at ||
-    expensePatch.classification_updated_at ||
-    new Date().toISOString();
-
-  const attempts = [
-    {
-      classification: expensePatch.classification,
-      recovery_status: expensePatch.recovery_status,
-      updated_at: updatedAt,
-    },
-    {
-      classification: expensePatch.classification,
-      recovery_status: expensePatch.recovery_status,
-      updated_at: updatedAt,
-    },
-    {
-      classification: expensePatch.classification,
-      updated_at: updatedAt,
-    },
-  ];
-
-  let lastError = null;
-  for (const attempt of attempts) {
-    const payload = Object.fromEntries(
-      Object.entries(attempt).filter(([, value]) => value !== undefined)
-    );
-    try {
-      return await updateExpenseWorkflowDirect(expenseId, payload);
-    } catch (error) {
-      if (!isSchemaCompatibilityError(error)) {
-        throw error;
-      }
-      lastError = error;
-    }
-  }
-
-  if (lastError) {
-    console.warn("[expenseService] unable to persist full expense workflow patch; falling back to classification overlay only:", lastError);
-  }
-
-  return {
-    id: expenseId,
-    ...expensePatch,
-    updated_at: updatedAt,
-  };
 }
 
 async function fetchExistingExpenseClassifications(expenseIds = []) {
@@ -1468,6 +1384,30 @@ export const expenseService = {
     return baseExpenseService.create(expense);
   },
 
+  // Server-owned, audited replacement for the manual/single expense-create
+  // path (Phase 6D-7: create_expense_workflow RPC / create-expense-workflow
+  // edge function). The lease-link derivation (resolveExpenseLeaseLink)
+  // stays unchanged, client-side; only the mechanical insert + audit moves
+  // server-side. Bulk import (BulkImport.jsx) still calls create() above,
+  // unchanged -- not migrated in this pass.
+  async createExpenseWorkflow(data) {
+    const { expense } = await this.resolveExpenseLeaseLink(data);
+    const {
+      date, amount, category, vendor, vendor_id, description, classification,
+      portfolio_id, property_id, building_id, unit_id, attachment_url,
+      lease_id, tenant_id, source, fiscal_year, approval_status, review_status,
+      service_period_start, service_period_end,
+    } = expense;
+    return invokeEdgeFunction("create-expense-workflow", {
+      expense: {
+        date, amount, category, vendor, vendor_id, description, classification,
+        portfolio_id, property_id, building_id, unit_id, attachment_url,
+        lease_id, tenant_id, source, fiscal_year, approval_status, review_status,
+        service_period_start, service_period_end,
+      },
+    });
+  },
+
   async update(id, data) {
     const current = await baseExpenseService.get(id);
     const merged = { ...current, ...data, id };
@@ -1475,6 +1415,81 @@ export const expenseService = {
     const payload = { ...expense };
     delete payload.id;
     return baseExpenseService.update(id, payload);
+  },
+
+  // Server-owned, audited replacement for AddExpense.jsx's "Edit Expense"
+  // save path (Phase 6X-3: update_expense_details RPC /
+  // update-expense-details edge function). The current-row fetch + merge +
+  // lease-link re-derivation (resolveExpenseLeaseLink) stay entirely
+  // client-side, unchanged -- matching createExpenseWorkflow's Phase 6D-7
+  // precedent -- only the mechanical persist + audit moves server-side.
+  // update() above is untouched (its only caller now uses this instead;
+  // left in place rather than removed since it's the generic entity-service
+  // contract other code may still rely on).
+  async updateExpenseWorkflow(id, data) {
+    const current = await baseExpenseService.get(id);
+    const merged = { ...current, ...data, id };
+    const { expense } = await this.resolveExpenseLeaseLink(merged);
+    const {
+      date, amount, category, vendor, vendor_id, description, classification,
+      portfolio_id, property_id, building_id, unit_id, attachment_url,
+      lease_id, tenant_id, source, fiscal_year,
+      service_period_start, service_period_end,
+    } = expense;
+    const result = await invokeEdgeFunction("update-expense-details", {
+      expense_id: id,
+      expense: {
+        date, amount, category, vendor, vendor_id, description, classification,
+        portfolio_id, property_id, building_id, unit_id, attachment_url,
+        lease_id, tenant_id, source, fiscal_year,
+        service_period_start, service_period_end,
+      },
+    });
+    return result?.expense ?? null;
+  },
+
+  // Server-owned, audited, transactional replacement for Expenses.jsx's
+  // single-delete and bulk-delete actions (Phase 6X-4: delete_expenses_workflow
+  // RPC / delete-expenses edge function). Accepts one or many ids uniformly --
+  // callers pass a single-element array for the single-delete dialog and the
+  // full selection array for bulk delete -- so both UI paths share one
+  // atomic, all-or-nothing server call instead of today's per-id Promise.all.
+  async deleteExpensesWorkflow(expenseIds) {
+    const ids = Array.isArray(expenseIds) ? expenseIds : [expenseIds];
+    if (ids.length === 0) {
+      throw new Error("At least one expense id is required");
+    }
+    return invokeEdgeFunction("delete-expenses", { expense_ids: ids });
+  },
+
+  // Server-owned, audited, transactional (all-or-nothing) replacement for
+  // BulkImport.jsx's CSV/Excel import loop (Phase 6X-5:
+  // bulk_create_expenses_workflow RPC / bulk-create-expenses edge
+  // function). Per-row lease-link derivation (resolveExpenseLeaseLink)
+  // stays entirely client-side, unchanged -- the leases list is fetched
+  // once up front and reused across all rows instead of once per row, to
+  // avoid N redundant queries for an N-row import. rows is the same
+  // shape BulkImport already builds per CSV row today.
+  async bulkCreateExpensesWorkflow(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new Error("At least one expense row is required");
+    }
+    const leases = await listWorkflowEntityRows("Lease");
+    const expenses = [];
+    for (const row of rows) {
+      const { expense } = await this.resolveExpenseLeaseLink(row, leases);
+      const {
+        date, amount, category, vendor, description, classification, source,
+        gl_code, invoice_number, portfolio_id, property_id, building_id, unit_id,
+        lease_id, tenant_id, tenant_name, fiscal_year,
+      } = expense;
+      expenses.push({
+        date, amount, category, vendor, description, classification, source,
+        gl_code, invoice_number, portfolio_id, property_id, building_id, unit_id,
+        lease_id, tenant_id, tenant_name, fiscal_year,
+      });
+    }
+    return invokeEdgeFunction("bulk-create-expenses", { expenses });
   },
 
   async listExpenseClassificationsForExpenses(expenseIds = []) {
@@ -1733,10 +1748,6 @@ export const expenseService = {
     }
   },
 
-  async updateExpenseClassification(classificationId, patch = {}) {
-    return updateExpenseClassificationRecord(classificationId, patch);
-  },
-
   async reviewExpense(expenseOrId, { recoveryStatus, approvedStatus, ruleSource = "manual", reason = null } = {}) {
     const expense =
       expenseOrId && typeof expenseOrId === "object"
@@ -1811,21 +1822,13 @@ export const expenseService = {
       fallbackReason: effectiveReason,
     });
 
-    const expensePatch = {
-      classification,
-      recovery_status: effectiveRecoveryStatus,
-      recoverability_result: effectiveRecoveryStatus,
-      approved_status: effectiveApprovedStatus,
-      review_status: effectiveReviewStatus,
-      approved_by: effectiveApprovedStatus === "approved" ? userId : null,
-      approved_at: effectiveApprovedStatus === "approved" ? now : null,
-      rule_source: effectiveRuleSource,
-      recovery_reason: plainReason,
-      classification_updated_at: now,
-      classification_updated_by: userId,
-    };
-
-    const updatedExpense = await persistExpenseWorkflowPatch(expense.id, expensePatch);
+    // Phase 6X-1: only `classification`/`recovery_status` are ever actually
+    // persisted to `expenses` by this workflow (confirmed: the pre-existing
+    // persistExpenseWorkflowPatch this replaces silently discarded every
+    // other field of a similarly-shaped patch object here) — passed through
+    // as expensePatch below so the same RPC call that upserts the
+    // classification row also updates expenses in the same transaction.
+    const updatedExpense = { ...expense, classification, recovery_status: effectiveRecoveryStatus, updated_at: now };
 
     await upsertExpenseClassification({
       id: existingClassification?.id,
@@ -1948,6 +1951,8 @@ export const expenseService = {
       classified_at: existingClassification?.classified_at || now,
       classified_by: userId || existingClassification?.classified_by || null,
       notes: plainReason || existingClassification?.notes || null,
+    }, {
+      expensePatch: { classification, recovery_status: effectiveRecoveryStatus },
     });
 
     return {
@@ -2041,6 +2046,13 @@ export const expenseService = {
     };
   },
 
+  // Phase 6X-7A: server-owned, audited replacement for this cleanup's
+  // delete step (delete_expenses_workflow, Phase 6X-4) -- previously a
+  // per-row baseExpenseService.delete() loop (unaudited beyond a
+  // fire-and-forget logAudit(), non-atomic). The read/filter logic that
+  // decides which rows are legacy lease_import junk for the lease(s) being
+  // approved is unchanged, client-side. This was the last remaining direct
+  // browser .delete() path on expenses anywhere in src/.
   async syncLeaseDerivedExpenses({ leases = [], existingExpenses = [], properties: _properties = [] } = {}) {
     const leaseIds = new Set((leases || []).map((lease) => lease?.id).filter(Boolean));
     if (leaseIds.size === 0) return { created: 0, updated: 0, deleted: 0 };
@@ -2055,13 +2067,13 @@ export const expenseService = {
       leaseIds.has(expense.lease_id)
     );
 
-    let deleted = 0;
-    for (const expense of legacyLeaseImportExpenses) {
-      const removed = await baseExpenseService.delete(expense.id);
-      if (removed) deleted += 1;
+    if (legacyLeaseImportExpenses.length === 0) {
+      return { created: 0, updated: 0, deleted: 0 };
     }
 
-    return { created: 0, updated: 0, deleted };
+    const matchingIds = legacyLeaseImportExpenses.map((expense) => expense.id);
+    const result = await this.deleteExpensesWorkflow(matchingIds);
+    return { created: 0, updated: 0, deleted: result?.deleted_count ?? matchingIds.length };
   },
 
   async classifyExpenses({ expenses = [], leases = [] } = {}) {
@@ -2232,7 +2244,6 @@ export const expenseService = {
         unit_id: expense.unit_id || matchedLease?.unit_id || null,
       };
 
-      await persistExpenseWorkflowPatch(expense.id, updatePayload);
       updated += 1;
 
       if (approvedStatus === "needs_review") {
@@ -2336,19 +2347,35 @@ export const expenseService = {
         }),
         notes: matchedRule?.notes || plainReason || null,
         classified_at: new Date().toISOString(),
+      }, {
+        expensePatch: { classification: updatePayload.classification, recovery_status: recoveryStatus },
       });
     }
 
     return { updated, needsReview, classified };
   },
 
+  // Phase 6X-2: server-owned, audited replacement for the direct
+  // baseExpenseService.update({amount}) write this used to perform. The
+  // subsequent classifyExpenses() re-run (re-deriving classification/CAM
+  // fields off the new amount) is unchanged, client-side, and already
+  // routes its own expenses/expense_classifications writes through
+  // persist_expense_classification (Phase 6X-1).
   async updateExpenseAmount(expenseId, amount, { reason = "Manual amount correction from Expense Classification" } = {}) {
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {
       throw new Error("Enter a valid amount");
     }
 
-    const updatedExpense = await baseExpenseService.update(expenseId, { amount: numericAmount });
+    const result = await invokeEdgeFunction("update-expense-amount", {
+      expense_id: expenseId,
+      amount: numericAmount,
+    });
+    const updatedExpense = result?.expense || null;
+    if (!updatedExpense) {
+      throw new Error("Expense not found");
+    }
+
     const relatedLease = updatedExpense?.lease_id ? await baseLeaseService.get(updatedExpense.lease_id) : null;
     await this.classifyExpenses({
       expenses: [updatedExpense],
@@ -2360,6 +2387,17 @@ export const expenseService = {
     };
   },
 
+  // Server-owned, audited replacement for this action's classification
+  // write (Phase 6X-6: save_lease_rule_amount_cam_input RPC /
+  // save-lease-rule-amount-cam-input edge function). Investigation found
+  // the prior direct-write "no existing row" branch had a real bug: it
+  // sent expense_id: null into a NOT NULL column, silently swallowed by
+  // upsertExpenseClassification's try/catch -- the classification row was
+  // never actually created, even though the UI toasted success. The RPC
+  // fixes this (expense_id is now nullable for this bookkeeping row type)
+  // and unifies the old update/create branches into one server-side
+  // lock-and-branch upsert, keyed the same way the client used to look it
+  // up (lease_expense_rule_id + row_type='rule_missing_actual').
   async createLeaseRuleAmountCamInput(rule, amount, currentYear) {
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount < 0) {
@@ -2374,9 +2412,6 @@ export const expenseService = {
 
     const orgId = await getCurrentOrgId();
     const fiscalYear = Number(currentYear || new Date().getFullYear());
-    const now = new Date().toISOString();
-    const authResult = await supabase?.auth?.getUser?.();
-    const userId = authResult?.data?.user?.id || null;
     const leaseId = rule.lease_id || rule.rule_set?.lease_id || null;
     const tenantId = rule.tenant_id || rule.rule_set?.tenant_id || null;
     const classificationKey = buildClassificationKey({
@@ -2384,80 +2419,35 @@ export const expenseService = {
       expenseId: `rule_amount:${rule.id}:${fiscalYear}`,
       leaseExpenseRuleId: rule.id,
     });
-    const amountBuckets = buildAmountBuckets(numericAmount, "recoverable");
 
     if (rule.published_to_cam !== true) {
       const publishResult = await this.publishRuleToCamSetup(rule.id);
       rule.published_to_cam = publishResult?.rule?.published_to_cam === true;
     }
 
-    const existingClassifications = await selectExpenseClassifications({
-      columns: ["id", "lease_expense_rule_id", "row_type"],
-      apply: (query) => query
-        .eq("lease_expense_rule_id", rule.id)
-        .eq("row_type", "rule_missing_actual")
-        .limit(1),
+    const result = await invokeEdgeFunction("save-lease-rule-amount-cam-input", {
+      rule_id: rule.id,
+      classification: {
+        classification_key: classificationKey,
+        category: rule.expense_category || rule.category_name || null,
+        subcategory: rule.expense_subcategory || null,
+        property_id: rule.property_id || rule.rule_set?.property_id || null,
+        building_id: rule.building_id || rule.rule_set?.building_id || null,
+        unit_id: rule.unit_id || rule.rule_set?.unit_id || null,
+        lease_id: leaseId,
+        tenant_id: tenantId,
+        amount: numericAmount,
+        fiscal_year: fiscalYear,
+      },
     });
-    const existingClassification = existingClassifications?.[0] || null;
-    const classificationPayload = {
-      org_id: rule.org_id || orgId,
-      classification_key: classificationKey,
-      lease_expense_rule_id: rule.id,
-      linked_expense_rule_id: rule.id,
-      recovery_rule_id: rule.id,
-      property_id: rule.property_id || rule.rule_set?.property_id || null,
-      building_id: rule.building_id || rule.rule_set?.building_id || null,
-      unit_id: rule.unit_id || rule.rule_set?.unit_id || null,
-      lease_id: leaseId,
-      tenant_id: tenantId,
-      category: rule.expense_category || rule.category_name || null,
-      subcategory: rule.expense_subcategory || null,
-      amount: numericAmount,
-      service_period_start: `${fiscalYear}-01-01`,
-      service_period_end: `${fiscalYear}-12-31`,
-      recoverability_result: "recoverable",
-      recovery_status: "recoverable",
-      cam_eligible: "yes",
-      cam_status: "cam_ready",
-      cam_source: "lease_rule_amount",
-      cam_input_type: "lease_rule_amount",
-      manual_cam_reviewed: true,
-      manual_cam_reason: "CAM rule amount entered by reviewer",
-      manual_cam_reviewed_by: userId,
-      manual_cam_reviewed_at: now,
-      classification_status: "finalized",
-      approved_status: "approved",
-      row_type: "rule_missing_actual",
-      sent_to_cam: false,
-      sent_to_cam_at: null,
-      sent_to_cam_by: null,
-      finalized_at: now,
-      reviewed_at: now,
-      reviewed_by: userId,
-      ...amountBuckets,
-      next_step: "CAM Ready",
-      updated_at: now,
-      classified_at: now,
-    };
-
-    const classification = existingClassification?.id
-      ? await updateExpenseClassificationRecord(existingClassification.id, classificationPayload)
-      : await upsertExpenseClassification({
-        ...classificationPayload,
-        actual_expense_id: null,
-        expense_id: null,
-      });
+    const classification = result?.classification || null;
 
     try {
-      const { error } = await supabase
-        .from("lease_expense_rules")
-        .update({
-          estimated_annual_amount: numericAmount,
-          estimated_monthly_amount: numericAmount / 12,
-          updated_at: now,
-        })
-        .eq("id", rule.id);
-      if (error) throw error;
+      await invokeEdgeFunction("update-lease-expense-rule-amount", {
+        rule_id: rule.id,
+        lease_id: leaseId,
+        amount: numericAmount,
+      });
     } catch (error) {
       console.warn("[expenseService] lease rule amount persistence warning:", error);
     }
@@ -2477,32 +2467,30 @@ export const expenseService = {
     return this.createLeaseRuleAmountCamInput(rule, amount, currentYear);
   },
 
+  // Server-owned, audited replacement for this action's classification
+  // write (Phase 6X-6: manual_override_expense_classification RPC /
+  // manual-override-expense-classification edge function). Investigation
+  // found that none of manual_override/override_reason/override_type/
+  // override_previous_value/override_new_value/override_source exist as
+  // columns on expense_classifications -- every prior call silently
+  // stripped all of them via the missing-column retry loop, persisting
+  // only classification_status/reviewed_by/reviewed_at/approved_by/
+  // approved_at. The RPC keeps that same real persisted-column behavior,
+  // but now finally records override_reason/override_type/
+  // override_previous_value/override_new_value in the audit row's
+  // metadata instead of silently discarding them.
   async markManualOverride(classificationId, payload) {
-    const authResult = await supabase?.auth?.getUser?.();
-    const userId = authResult?.data?.user?.id || null;
-    const now = new Date().toISOString();
-
-    return await updateExpenseClassificationRecord(classificationId, {
-      manual_override: true,
-      override_reason: payload.override_reason || null,
-      override_type: payload.override_type || null,
-      override_previous_value: payload.override_previous_value || null,
-      override_new_value: payload.override_new_value || null,
-      override_source: "manual_ui",
-      reviewed_by: userId,
-      reviewed_at: now,
-      approved_by: userId,
-      approved_at: now,
-      classification_status: "finalized", // Assume override finalizes it
-      updated_at: now,
+    const result = await invokeEdgeFunction("manual-override-expense-classification", {
+      classification_id: classificationId,
+      override_reason: payload.override_reason,
+      override_type: payload.override_type,
+      override_previous_value: payload.override_previous_value,
+      override_new_value: payload.override_new_value,
     });
+    return result?.classification ?? null;
   },
 
   async finalizeExpenseClassification(classificationOrExpenseId, recoveryStatus = "recoverable") {
-    const authResult = await supabase?.auth?.getUser?.();
-    const now = new Date().toISOString();
-    const userId = authResult?.data?.user?.id || null;
-
     let classification =
       classificationOrExpenseId && typeof classificationOrExpenseId === "object"
         ? classificationOrExpenseId
@@ -2562,50 +2550,29 @@ export const expenseService = {
       }
     }
 
-    // Finalize only records the CAM derivation outcome on the expense; it must
-    // not promote review_status / approved_status. Expense approval is owned by
-    // the Expense Review workflow.
-    const updatedExpense = await baseExpenseService.update(expenseId, {
-      classification_updated_at: now,
-      classification_updated_by: userId,
-      recovery_status: recoveryStatus,
-      recoverability_result: recoveryStatus,
-      classification: recoveryStatus,
-    });
-
-    let oldStatus = classification?.classification_status || "unknown";
-    if (classification?.id) {
-      const amount = toNumber(classification.amount ?? expense?.amount ?? updatedExpense?.amount);
-      const amountBuckets = buildAmountBuckets(amount, recoveryStatus);
-      const nextStep = normalizeText(classification.cam_eligible) === "yes" && recoveryStatus === "recoverable"
-        ? "Send to CAM"
-        : "Ready for projection";
-
-      await updateExpenseClassificationRecord(classification.id, {
-        recoverability_result: recoveryStatus,
-        recovery_status: recoveryStatus,
-        approved_status: "approved",
-        classification_status: "finalized",
-        exception_type: null,
-        reviewed_at: now,
-        reviewed_by: userId,
-        approved_at: now,
-        approved_by: userId,
-        finalized_at: now,
-        ...amountBuckets,
-        next_step: nextStep,
-      });
-      console.log(`[Diagnostics] Finalized classification ${classification.id}: ${oldStatus} -> finalized`);
-    } else {
-      console.warn(`[Diagnostics] Finalize skipped classification update because no classification.id was found for expense ${expenseId}`);
+    if (!classification?.id) {
+      throw new Error(`Cannot finalize: no expense classification row found for expense ${expenseId}`);
     }
 
-    return updatedExpense;
+    // Finalize is now a single server-owned, audited RPC call — see
+    // review_expense_classification (20260710000000_review_expense_classification.sql).
+    // It updates both `expenses` and `expense_classifications` in one
+    // transaction and writes exactly one audit_logs row; it never
+    // fabricates success on failure (invokeEdgeFunction throws on any
+    // network/edge-function/RPC error instead of returning an optimistic
+    // fallback object).
+    const result = await reviewExpenseClassification({
+      classificationId: classification.id,
+      action: "finalize",
+      recoveryStatus,
+    });
+
+    console.log(`[Diagnostics] Finalized classification ${classification.id}`);
+    return result?.row || null;
   },
 
   async reopenExpenseClassification(classificationOrExpenseId) {
-    const now = new Date().toISOString();
-    const classification =
+    let classification =
       classificationOrExpenseId && typeof classificationOrExpenseId === "object"
         ? classificationOrExpenseId
         : null;
@@ -2618,70 +2585,125 @@ export const expenseService = {
       throw new Error("Expense classification row not found");
     }
 
-    const updatedExpense = await baseExpenseService.update(expenseId, {
-      classification_status: "matched",
-      finalized_at: null,
-      reviewed_at: now,
-      cam_status: null,
-      next_step: "Finalize row",
-    });
-
-    if (classification?.id) {
-      await updateExpenseClassificationRecord(classification.id, {
-        classification_status: "matched",
-        finalized_at: null,
-        cam_status: null,
-        next_step: "Finalize row",
-      });
+    if (!classification?.id) {
+      classification = (await fetchExistingExpenseClassifications([expenseId]))[0] || null;
     }
 
-    return updatedExpense;
+    if (!classification?.id) {
+      throw new Error(`Cannot reopen: no expense classification row found for expense ${expenseId}`);
+    }
+
+    // Reopen is now a single server-owned, audited RPC call — see
+    // review_expense_classification (20260710000000_review_expense_classification.sql).
+    // The previous client-side implementation also attempted a direct
+    // write to `expenses` with columns that don't exist on that table
+    // (classification_status/finalized_at/cam_status/next_step/reviewed_at
+    // only exist on expense_classifications, confirmed via schema
+    // inspection) — that call was a silent no-op; this RPC only writes
+    // expense_classifications, the table that actually held the meaningful
+    // state.
+    const result = await reviewExpenseClassification({
+      classificationId: classification.id,
+      action: "reopen",
+    });
+
+    return result?.row || null;
   },
 
   async sendExpenseClassificationToReview(classificationOrExpenseId) {
     const authResult = await supabase?.auth?.getUser?.();
     const now = new Date().toISOString();
     const userId = authResult?.data?.user?.id || null;
-    const classification =
+    const classificationArg =
       classificationOrExpenseId && typeof classificationOrExpenseId === "object"
         ? classificationOrExpenseId
         : null;
     const expenseId =
-      classification?.expense_id ||
-      classification?.actual_expense_id ||
+      classificationArg?.expense_id ||
+      classificationArg?.actual_expense_id ||
       (typeof classificationOrExpenseId === "string" ? classificationOrExpenseId : null);
 
     if (!expenseId) {
       throw new Error("Expense classification row not found");
     }
 
-    if (classification?.id) {
-      await updateExpenseClassificationRecord(classification.id, {
-        classification_status: "exception",
-        recoverability_result: classification.recoverability_result || classification.recovery_status || "needs_review",
-        recovery_status: classification.recovery_status || classification.recoverability_result || "needs_review",
-        approved_status: classification.approved_status || "needs_review",
-        cam_status: classification.cam_status || "needs_review",
-        cam_source: classification.cam_source || "none",
-        exception_type: "manual_review",
-        reviewed_at: now,
-        reviewed_by: userId,
-        next_step: "Resolve exception",
-      });
-    }
+    // Phase 6X-1: previously two separate direct writes (a direct
+    // expense_classifications update via updateExpenseClassificationRecord,
+    // plus a direct expenses.recovery_status write via
+    // persistExpenseWorkflowPatch). Unified into one
+    // persist-expense-classification call, same as reviewExpense()/
+    // classifyExpenses() — fetch the full existing row first (matching
+    // those functions' own merge pattern) so this sparse "send to
+    // exception queue" patch doesn't blank out unrelated classification
+    // fields, then persist both tables in one transaction.
+    const [existingRows, expense, orgIdFallback] = await Promise.all([
+      fetchExistingExpenseClassifications([expenseId]),
+      baseExpenseService.get(expenseId).catch(() => null),
+      getCurrentOrgId(),
+    ]);
+    const existingClassification = existingRows[0] || classificationArg || null;
+    const merged = { ...existingClassification, ...classificationArg };
 
-    const updatedExpense = await persistExpenseWorkflowPatch(expenseId, {
-      recovery_status: classification?.recovery_status || classification?.recoverability_result || "needs_review",
-      recoverability_result: classification?.recoverability_result || classification?.recovery_status || "needs_review",
-      review_status: "needs_review",
-      approved_status: "needs_review",
+    const recoveryStatus = merged.recovery_status || merged.recoverability_result || "needs_review";
+    const orgId = merged.org_id || expense?.org_id || orgIdFallback;
+    const linkedExpenseRuleId =
+      merged.lease_expense_rule_id || merged.linked_expense_rule_id || merged.recovery_rule_id || null;
+
+    await upsertExpenseClassification({
+      id: merged.id,
+      org_id: orgId,
+      expense_id: expenseId,
+      actual_expense_id: expenseId,
+      classification_key:
+        merged.classification_key ||
+        buildClassificationKey({ orgId, expenseId, leaseExpenseRuleId }),
+      property_id: merged.property_id || expense?.property_id || null,
+      building_id: merged.building_id || expense?.building_id || null,
+      unit_id: merged.unit_id || expense?.unit_id || null,
+      lease_id: merged.lease_id || expense?.lease_id || null,
+      tenant_id: merged.tenant_id || expense?.tenant_id || null,
+      recovery_rule_id: linkedExpenseRuleId,
+      linked_expense_rule_id: linkedExpenseRuleId,
+      lease_expense_rule_id: linkedExpenseRuleId,
+      category: merged.category || expense?.category || null,
+      subcategory: merged.subcategory || null,
+      amount: merged.amount ?? (Number.isFinite(Number(expense?.amount)) ? Number(expense.amount) : 0),
+      service_period_start: merged.service_period_start || null,
+      service_period_end: merged.service_period_end || null,
+      recovery_status: recoveryStatus,
+      recoverability_result: merged.recoverability_result || recoveryStatus,
+      cam_eligible: merged.cam_eligible || "needs_review",
+      recovery_method: merged.recovery_method || null,
+      recovery_reason: merged.recovery_reason || merged.notes || null,
+      allocation_method: merged.allocation_method || "pro_rata",
+      allocation_basis: merged.allocation_basis || "pro_rata",
+      cap_applied: Boolean(merged.cap_applied),
+      exclusion_applied: Boolean(merged.exclusion_applied),
+      condition_applied: Boolean(merged.condition_applied),
+      condition_reason: merged.condition_reason || null,
+      condition_resolved: merged.condition_resolved ?? true,
+      condition_result: merged.condition_result || null,
+      rule_source: merged.rule_source || "manual",
+      confidence_score: merged.confidence_score ?? 0,
+      evidence_text: merged.evidence_text || null,
+      approved_status: merged.approved_status || "needs_review",
+      classification_status: "exception",
       exception_type: "manual_review",
+      finalized_at: merged.finalized_at || null,
+      sent_to_cam: Boolean(merged.sent_to_cam),
+      cam_status: merged.cam_status || "needs_review",
+      cam_source: merged.cam_source || "none",
+      next_step: "Resolve exception",
+      notes: merged.notes || null,
       reviewed_at: now,
       reviewed_by: userId,
-      next_step: "Resolve exception",
+      classified_at: merged.classified_at || now,
+      classified_by: merged.classified_by || userId,
+    }, {
+      expensePatch: { recovery_status: recoveryStatus },
     });
 
-    return updatedExpense;
+    return { id: expenseId, recovery_status: recoveryStatus, updated_at: now };
   },
 
   async sendClassificationToCam(classificationOrId, { reason = "" } = {}) {

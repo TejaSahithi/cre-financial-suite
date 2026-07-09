@@ -461,8 +461,7 @@ export default function Expenses() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
-      const ok = await ExpenseService.delete(id);
-      if (!ok) throw new Error("Delete failed");
+      await expenseService.deleteExpensesWorkflow([id]);
       return id;
     },
     onSuccess: (id) => {
@@ -478,13 +477,8 @@ export default function Expenses() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids) => {
-      await Promise.all(
-        ids.map(async (id) => {
-          const ok = await ExpenseService.delete(id);
-          if (!ok) throw new Error("Delete failed");
-        })
-      );
-      return ids.length;
+      const result = await expenseService.deleteExpensesWorkflow(ids);
+      return result?.deleted_count ?? ids.length;
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries();
