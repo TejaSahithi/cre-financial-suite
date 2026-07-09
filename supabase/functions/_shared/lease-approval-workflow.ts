@@ -31,6 +31,20 @@ export async function generateApprovedRentSchedule(opts: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        // Kong's verify_jwt=true gate (compute-lease keeps this enabled)
+        // requires a valid Authorization: Bearer JWT before the request ever
+        // reaches the function code -- apikey/x-internal-service-key alone
+        // satisfy the function's own internal-call check (verifyUser's
+        // isInternalServiceRequest) but not the gateway. The service-role key
+        // is itself a validly-signed JWT for this project, so sending it as
+        // the Bearer token clears Kong's gate; verifyUser() still resolves
+        // this as an internal call via x-internal-service-key exactly as
+        // before (isInternalServiceRequest is checked first, ahead of any
+        // Authorization-based user lookup), so no application-level behavior
+        // changes. Matches the header shape already used by
+        // lease-extraction-worker/auth.ts's buildInternalFunctionHeaders for
+        // its own internal service-to-service calls.
+        "Authorization": `Bearer ${serviceKey}`,
         "apikey": serviceKey,
         "x-internal-service-key": serviceKey,
         "x-internal-org-id": orgId,
