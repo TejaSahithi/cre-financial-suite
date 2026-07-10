@@ -337,43 +337,67 @@ Deno.serve(async (req: Request) => {
         }, 422);
       }
 
-      // 5b. Download bytes from Supabase Storage
+      // 5b. Resolve the document source.
+      //
+      // Strict Azure mode (azure_document_intelligence, no legacy fallback)
+      // is URL-first: Azure fetches the document itself via a signed Supabase
+      // Storage URL, so downloading the file into Edge Function memory here
+      // only wastes heap. All other modes (legacy, azure_with_legacy_fallback,
+      // shadow_compare) still need real bytes for native/Docling/Vision parsing.
       const storagePath = fileRecord.file_url.replace(
         /^.*\/storage\/v1\/object\/public\/financial-uploads\//,
         "",
       );
+      const strictAzureMode = providerSelection.mode === "azure_document_intelligence";
 
-      console.log(
-        `[parse-pdf-docling] downloading file_id=${file_id} ` +
-        `size=${fileSizeBytes > 0 ? (fileSizeBytes / 1024 / 1024).toFixed(2) + " MB" : "unknown"} ` +
-        `hasDocling=${hasDocling} hasVision=${hasVision}`,
-      );
-
-      const { data: fileBlob, error: downloadError } = await supabaseAdmin
-        .storage
-        .from("financial-uploads")
-        .download(storagePath);
-
-      if (downloadError || !fileBlob) {
-        throw new Error(
-          `Failed to download file from storage: ${downloadError?.message ?? "File not found"}`,
-        );
-      }
-
-      const fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
       const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
         .storage
         .from("financial-uploads")
         .createSignedUrl(storagePath, 60 * 60);
 
       if (signedUrlError) {
+        if (strictAzureMode) {
+          // Azure-only mode has no byte fallback by design — fail loudly
+          // rather than handing Azure a public URL that may not be readable.
+          throw new Error(
+            `Failed to create signed extraction URL for Azure Document Intelligence: ${signedUrlError.message}`,
+          );
+        }
         console.warn(
           `[parse-pdf-docling] Could not create signed extraction URL for ${file_id}: ` +
           signedUrlError.message,
         );
       }
 
-      // 6. Delegate to the canonical parser (Docling → Gemini Vision fallback)
+      let fileBytes: Uint8Array | null = null;
+      if (strictAzureMode) {
+        console.log(
+          `[parse-pdf-docling] strict Azure mode for file_id=${file_id} — ` +
+          `skipping byte download, sending signed URL to Azure`,
+        );
+      } else {
+        console.log(
+          `[parse-pdf-docling] downloading file_id=${file_id} ` +
+          `size=${fileSizeBytes > 0 ? (fileSizeBytes / 1024 / 1024).toFixed(2) + " MB" : "unknown"} ` +
+          `hasDocling=${hasDocling} hasVision=${hasVision}`,
+        );
+
+        const { data: fileBlob, error: downloadError } = await supabaseAdmin
+          .storage
+          .from("financial-uploads")
+          .download(storagePath);
+
+        if (downloadError || !fileBlob) {
+          throw new Error(
+            `Failed to download file from storage: ${downloadError?.message ?? "File not found"}`,
+          );
+        }
+
+        fileBytes = new Uint8Array(await fileBlob.arrayBuffer());
+      }
+
+      // 6. Delegate to the canonical parser (Azure URL-first; Docling →
+      // Gemini Vision fallback in legacy modes)
       const doclingOutput = await parseDocument(fileBytes, fileName, mimeType, {
         fileUrl: signedUrlData?.signedUrl ?? fileRecord.file_url,
         providerOverride: provider_override,
@@ -389,8 +413,10 @@ Deno.serve(async (req: Request) => {
       // and keeps the Supabase JSONB column within sensible limits.
       const MAX_STORED_TEXT_CHARS  = 80_000;
       const MAX_STORED_BLOCKS      = 1000;
-      const MAX_STORED_TABLES      = 500;
+      const MAX_STORED_TABLES     = 500;
       const MAX_STORED_PAGES       = 150;
+      const MAX_STORED_FIELDS      = 500;
+      const MAX_STORED_WARNINGS    = 50;
       // Per-page and per-block text is capped at 3 K chars. For a dense
       // 4 K-char page this captures the first ~75 % of the text — more than
       // enough for field extraction and source-evidence matching in normalize.
@@ -402,21 +428,40 @@ Deno.serve(async (req: Request) => {
         typeof text === "string" && text.length > MAX_PAGE_TEXT_CHARS
           ? text.slice(0, MAX_PAGE_TEXT_CHARS)
           : text;
-      const trimmedDoclingRaw: Record<string, unknown> = {
-        ...doclingOutput,
-        full_text: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS
-          ? doclingOutput.full_text.slice(0, MAX_STORED_TEXT_CHARS) + "\n[truncated]"
-          : doclingOutput.full_text,
-        text_blocks: (Array.isArray(doclingOutput.text_blocks)
-          ? doclingOutput.text_blocks.slice(0, MAX_STORED_BLOCKS)
-          : []).map((b: any) => ({ ...b, text: trimDocText(b?.text) })),
-        tables: Array.isArray(doclingOutput.tables) && doclingOutput.tables.length > MAX_STORED_TABLES
-          ? doclingOutput.tables.slice(0, MAX_STORED_TABLES)
-          : doclingOutput.tables,
-        pages: (Array.isArray(doclingOutput.pages)
-          ? doclingOutput.pages.slice(0, MAX_STORED_PAGES)
-          : []).map((p: any) => ({ ...p, text: trimDocText(p?.text) })),
-      };
+      const capLongText = (text: unknown) =>
+        typeof text === "string" && text.length > MAX_STORED_TEXT_CHARS
+          ? text.slice(0, MAX_STORED_TEXT_CHARS) + "\n[truncated]"
+          : text;
+
+      // Counts computed from the raw parser output BEFORE building the capped
+      // persistence object, so truncation never skews the recorded totals.
+      const fullTextChars = countTextChars(doclingOutput.full_text);
+      const rawBlockCount = Array.isArray(doclingOutput.text_blocks) ? doclingOutput.text_blocks.length : 0;
+      const rawTableCount = Array.isArray(doclingOutput.tables) ? doclingOutput.tables.length : 0;
+      const rawFieldCount = Array.isArray(doclingOutput.fields) ? doclingOutput.fields.length : 0;
+
+      const cappedFullText = capLongText(doclingOutput.full_text);
+      const cappedMarkdown = capLongText((doclingOutput as any).markdown);
+      const cappedPages = (Array.isArray(doclingOutput.pages)
+        ? doclingOutput.pages.slice(0, MAX_STORED_PAGES)
+        : []).map((p: any) => ({ ...p, text: trimDocText(p?.text) }));
+      const cappedBlocks = (Array.isArray(doclingOutput.text_blocks)
+        ? doclingOutput.text_blocks.slice(0, MAX_STORED_BLOCKS)
+        : []).map((b: any) => ({ ...b, text: trimDocText(b?.text) }));
+      const cappedTables = (Array.isArray(doclingOutput.tables)
+        ? doclingOutput.tables.slice(0, MAX_STORED_TABLES)
+        : []).map((t: any) => ({
+          ...t,
+          rows: Array.isArray(t?.rows)
+            ? t.rows.map((row: any) => Array.isArray(row) ? row.map((cell: any) => trimDocText(cell)) : row)
+            : t?.rows,
+        }));
+      const cappedFields = Array.isArray(doclingOutput.fields)
+        ? doclingOutput.fields.slice(0, MAX_STORED_FIELDS)
+        : [];
+      const cappedWarnings = Array.isArray((doclingOutput as any).warnings)
+        ? (doclingOutput as any).warnings.slice(0, MAX_STORED_WARNINGS)
+        : [];
 
       const parserOutputMetadata =
         (doclingOutput as any)?._metadata && typeof (doclingOutput as any)._metadata === "object"
@@ -428,19 +473,18 @@ Deno.serve(async (req: Request) => {
         provider: parserOutputMetadata.provider ?? (extractionMethod === "azure_layout" ? "azure_document_intelligence" : null),
         file_format: mimeType,
         page_count: doclingOutput.page_count ?? null,
-        table_count: doclingOutput.tables?.length ?? 0,
-        field_count: doclingOutput.fields?.length ?? 0,
-        text_block_count: doclingOutput.text_blocks?.length ?? 0,
+        table_count: rawTableCount,
+        field_count: rawFieldCount,
+        text_block_count: rawBlockCount,
         has_content: !!(
           doclingOutput.full_text ||
-          (doclingOutput.tables?.length ?? 0) > 0 ||
-          (doclingOutput.fields?.length ?? 0) > 0
+          rawTableCount > 0 ||
+          rawFieldCount > 0
         ),
         extraction_timestamp: new Date().toISOString(),
         text_truncated: typeof doclingOutput.full_text === "string" && doclingOutput.full_text.length > MAX_STORED_TEXT_CHARS,
-        blocks_truncated: Array.isArray(doclingOutput.text_blocks) && doclingOutput.text_blocks.length > MAX_STORED_BLOCKS,
+        blocks_truncated: rawBlockCount > MAX_STORED_BLOCKS,
       };
-      const fullTextChars = countTextChars(doclingOutput.full_text);
       const parserStatus = parserStatusForTextLength(fullTextChars);
       const parserPipeline = buildPipelineMetadata({
         parser_status: parserStatus,
@@ -456,9 +500,42 @@ Deno.serve(async (req: Request) => {
         provider_used: extractionMethod,
         docling_raw_present: true,
         ocr_used: extractionMethod.includes("vision") || extractionMethod.includes("ocr"),
-        warnings: Array.isArray((doclingOutput as any).warnings) ? (doclingOutput as any).warnings : [],
+        warnings: cappedWarnings,
         stage: "parse",
       });
+
+      // Persistence object built explicitly from capped fields — never by
+      // spreading doclingOutput, which silently carries unknown heavy arrays
+      // (and an uncapped `markdown` duplicate of full_text) into JSONB and
+      // forces a second full serialization of the parser output.
+      // `raw_response` is only kept when the adapter explicitly recorded that
+      // STORE_FULL_AZURE_RAW_RESPONSE was enabled.
+      const shouldPersistFullRaw =
+        parserOutputMetadata.raw_response_stored === true &&
+        (doclingOutput as any).raw_response != null;
+      const persistedLayout: Record<string, unknown> = {
+        extraction_method: extractionMethod,
+        full_text: cappedFullText,
+        markdown: cappedMarkdown,
+        page_count: doclingOutput.page_count ?? null,
+        pages: cappedPages,
+        text_blocks: cappedBlocks,
+        tables: cappedTables,
+        fields: cappedFields,
+        warnings: cappedWarnings,
+        raw_response: shouldPersistFullRaw ? (doclingOutput as any).raw_response : null,
+        raw_response_summary: (doclingOutput as any).raw_response_summary ?? null,
+        _metadata: {
+          ...extractionMetadata,
+          ...parserPipeline,
+          pipeline: parserPipeline,
+          full_text_chars: fullTextChars,
+          text_block_count: rawBlockCount,
+          table_count: rawTableCount,
+          page_count: doclingOutput.page_count ?? cappedPages.length,
+          persisted_at: new Date().toISOString(),
+        },
+      };
 
       if (parserStatus !== PARSER_STATUSES.COMPLETED) {
         const errorCode = parserStatus === PARSER_STATUSES.EMPTY_TEXT ? "EMPTY_PARSE_TEXT" : "INSUFFICIENT_PARSE_TEXT";
@@ -472,8 +549,8 @@ Deno.serve(async (req: Request) => {
           fullTextChars,
           pageCount: doclingOutput.page_count ?? null,
           providerUsed: extractionMethod,
-          warnings: Array.isArray((doclingOutput as any).warnings) ? (doclingOutput as any).warnings : [],
-          doclingRaw: { ...trimmedDoclingRaw, _metadata: { ...extractionMetadata, pipeline: parserPipeline } },
+          warnings: cappedWarnings,
+          doclingRaw: persistedLayout,
         });
         return jsonResponse({
           error: true,
@@ -493,7 +570,7 @@ Deno.serve(async (req: Request) => {
         file_id,
         "pdf_parsed",
         {
-          docling_raw: { ...trimmedDoclingRaw, _metadata: { ...extractionMetadata, ...parserPipeline, pipeline: parserPipeline } },
+          docling_raw: persistedLayout,
           extraction_method: extractionMethod,
           parsed_data: [],
           row_count: (doclingOutput.tables ?? []).reduce(
@@ -523,7 +600,13 @@ Deno.serve(async (req: Request) => {
         duration_ms: parserPipeline.total_duration_ms,
       });
 
+      // Deliberately small response: the full layout is already persisted in
+      // uploaded_files.docling_raw. Returning it here forced a second multi-MB
+      // JSON serialization after the DB write had succeeded — the final
+      // allocation that pushed large leases over the Edge Function memory
+      // limit (546) and made the worker believe a successful parse failed.
       return jsonResponse({
+        ok: true,
         error: false,
         file_id,
         processing_status: "pdf_parsed",
@@ -531,6 +614,7 @@ Deno.serve(async (req: Request) => {
         file_format: mimeType,
         page_count: doclingOutput.page_count,
         parser_status: parserStatus,
+        full_text_chars: fullTextChars,
         table_count: extractionMetadata.table_count,
         field_count: extractionMetadata.field_count,
         text_block_count: extractionMetadata.text_block_count,
@@ -542,7 +626,6 @@ Deno.serve(async (req: Request) => {
           structured_data:
             extractionMetadata.table_count > 0 || extractionMetadata.field_count > 0,
         },
-        docling_output: doclingOutput,
       });
     } catch (extractionError) {
       console.error(

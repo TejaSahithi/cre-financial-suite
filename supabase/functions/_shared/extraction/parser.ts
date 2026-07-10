@@ -84,7 +84,7 @@ interface ParseContext {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export async function parseDocument(
-  fileBytes: Uint8Array,
+  fileBytes: Uint8Array | null,
   fileName: string,
   mimeType: string = "application/pdf",
   options: { fileUrl?: string; providerOverride?: string | null } = {},
@@ -94,7 +94,7 @@ export async function parseDocument(
     try {
       const config = getAzureDocumentIntelligenceConfig();
       const analyzeResult = await analyzeWithAzureLayout({
-        fileBytes,
+        fileBytes: fileBytes ?? null,
         fileUrl: options.fileUrl,
         mimeType,
       });
@@ -117,6 +117,16 @@ export async function parseDocument(
         throw azureErr;
       }
     }
+  }
+
+  // Bytes may be null only in strict azure_document_intelligence URL mode,
+  // which either returned or threw inside the Azure block above. Every
+  // legacy/fallback branch below requires real document bytes.
+  if (!fileBytes?.length) {
+    throw new Error(
+      "Document bytes are required for non-Azure parser modes " +
+      `(provider mode: ${provider.mode})`,
+    );
   }
 
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");

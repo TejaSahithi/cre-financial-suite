@@ -12,29 +12,38 @@ export function normalizeAzureLayoutToDoclingOutput(
   const tables = Array.isArray((analyzeResult as any)?.tables) ? (analyzeResult as any).tables : [];
   const textBlocks: DoclingTextBlock[] = [];
 
-  for (const page of pages) {
-    const pageNumber = positiveNumber(page?.pageNumber) ?? textBlocks.length + 1;
-    for (const line of Array.isArray(page?.lines) ? page.lines : []) {
-      const text = cleanText(line?.content);
+  // Paragraphs are the canonical text_blocks. Page lines are used only when
+  // Azure returned no paragraphs — storing both duplicates nearly all of the
+  // document text and doubles memory/JSONB size for long leases. Page-level
+  // text (normalizedPages below) still keeps per-page line text for evidence
+  // matching.
+  if (paragraphs.length > 0) {
+    for (const paragraph of paragraphs) {
+      const text = cleanText(paragraph?.content);
       if (!text) continue;
       textBlocks.push({
         block_index: textBlocks.length,
-        type: "line",
+        type: String(paragraph?.role || "paragraph"),
         text,
-        page: pageNumber,
+        page: firstBoundingPage(paragraph),
+        span: firstSpan(paragraph),
       });
     }
-  }
-
-  for (const paragraph of paragraphs) {
-    const text = cleanText(paragraph?.content);
-    if (!text) continue;
-    textBlocks.push({
-      block_index: textBlocks.length,
-      type: String(paragraph?.role || "paragraph"),
-      text,
-      page: firstBoundingPage(paragraph),
-    });
+  } else {
+    for (const page of pages) {
+      const pageNumber = positiveNumber(page?.pageNumber) ?? textBlocks.length + 1;
+      for (const line of Array.isArray(page?.lines) ? page.lines : []) {
+        const text = cleanText(line?.content);
+        if (!text) continue;
+        textBlocks.push({
+          block_index: textBlocks.length,
+          type: "line",
+          text,
+          page: pageNumber,
+          span: firstSpan(line),
+        });
+      }
+    }
   }
 
   const normalizedPages = pages.map((page: any, index: number) => {
@@ -146,6 +155,15 @@ function firstBoundingPage(value: Record<string, unknown>): number | undefined {
   const regions = Array.isArray(value?.boundingRegions) ? value.boundingRegions : [];
   const page = positiveNumber(regions[0]?.pageNumber);
   return page ?? undefined;
+}
+
+// Lightweight provenance: offset/length into analyzeResult.content. Metadata
+// only — never duplicates text.
+function firstSpan(value: Record<string, unknown>): { offset: number; length: number } | undefined {
+  const spans = Array.isArray((value as any)?.spans) ? (value as any).spans : [];
+  const offset = nonNegativeNumber(spans[0]?.offset);
+  const length = nonNegativeNumber(spans[0]?.length);
+  return offset != null && length != null ? { offset, length } : undefined;
 }
 
 function inferMaxIndex(cells: any[], key: string): number {

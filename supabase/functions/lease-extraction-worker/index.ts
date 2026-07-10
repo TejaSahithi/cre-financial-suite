@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient } from "../_shared/supabase.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
+import { MIN_LEASE_TEXT_CHARS } from "../_shared/extraction/pipeline-contract.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -230,6 +231,129 @@ async function failJobAndUpload(
   }
 }
 
+// Parser methods that prove a real (non-fallback) parse was durably persisted.
+const VALID_DURABLE_PARSER_METHODS = new Set([
+  "azure_layout",
+  "docling",
+  "gemini_vision",
+  "pdf_text",
+  "openxml",
+  "hybrid",
+]);
+
+// Statuses through which a durably-parsed file legitimately progresses after
+// parse-pdf-docling persisted its output.
+const POST_PARSE_STATUSES = new Set(["pdf_parsed", "validating", "validated", "review_required"]);
+
+/**
+ * A "transport-shaped" failure means the HTTP call to parse-pdf-docling died
+ * (timeout, connection loss, Edge Function compute/memory kill, gateway 5xx)
+ * — it says nothing about whether the parse itself succeeded before dying.
+ * 4xx contract errors are real failures and never reconciled.
+ */
+function isTransportShapedParseFailure(parseResult: any): boolean {
+  const status = Number(parseResult?.status || 0);
+  const errorCode = String(parseResult?.error_code || "");
+  const message = String(parseResult?.error || parseResult?.data?.message || "");
+  return (
+    status === 408 ||
+    status >= 500 ||
+    ["STAGE_TIMEOUT", "NETWORK_ERROR"].includes(errorCode) ||
+    /compute resources|WORKER_LIMIT/i.test(message)
+  );
+}
+
+/**
+ * Durable-state reconciliation: the database, not the HTTP response, is the
+ * authority on whether parsing succeeded. parse-pdf-docling persists
+ * docling_raw and flips status to pdf_parsed BEFORE serializing its HTTP
+ * response, so a transport failure can arrive after a fully successful parse.
+ *
+ * Reads only lightweight JSON-path projections — never the whole docling_raw.
+ */
+async function reconcileDurableParse(supabaseAdmin: any, fileId: string, orgId: string): Promise<{
+  durable: boolean;
+  status: string | null;
+  rawMethod: string;
+  fullTextChars: number;
+}> {
+  const none = { durable: false, status: null, rawMethod: "", fullTextChars: 0 };
+
+  let status: string | null = null;
+  let rawMethod = "";
+  let fullTextChars = 0;
+
+  const projected = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "id, status, processing_status, extraction_method, " +
+      "raw_extraction_method:docling_raw->>extraction_method, " +
+      "raw_provider:docling_raw->_metadata->>provider, " +
+      "metadata_full_text_chars:docling_raw->_metadata->>full_text_chars",
+    )
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (!projected.error && projected.data) {
+    status = projected.data.status ?? null;
+    rawMethod = String(projected.data.raw_extraction_method || "");
+    fullTextChars = Number(projected.data.metadata_full_text_chars || 0);
+  } else {
+    // Aliased JSON-path projection unsupported or failed — fall back to plain
+    // columns plus a non-aliased JSON-path query. Still never the full JSONB.
+    console.warn(
+      `[${WORKER_NAME}] aliased JSON-path reconciliation select failed ` +
+      `(${projected.error?.message ?? "no row"}); using fallback projection`,
+    );
+    const basic = await supabaseAdmin
+      .from("uploaded_files")
+      .select("id, status, processing_status, extraction_method")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (basic.error || !basic.data) return none;
+    status = basic.data.status ?? null;
+
+    const jsonPaths = await supabaseAdmin
+      .from("uploaded_files")
+      .select("docling_raw->>extraction_method, docling_raw->>full_text")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (jsonPaths.error || !jsonPaths.data) return none;
+    rawMethod = String(jsonPaths.data.extraction_method || "");
+    fullTextChars = String(jsonPaths.data.full_text || "").length;
+  }
+
+  // Older rows may lack _metadata.full_text_chars — measure the text string
+  // itself (a string projection, not the whole docling_raw object).
+  if (!fullTextChars && VALID_DURABLE_PARSER_METHODS.has(rawMethod)) {
+    const textOnly = await supabaseAdmin
+      .from("uploaded_files")
+      .select("docling_raw->>full_text")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!textOnly.error && textOnly.data) {
+      fullTextChars = String(textOnly.data.full_text || "").length;
+    }
+  }
+
+  const durable =
+    VALID_DURABLE_PARSER_METHODS.has(rawMethod) &&
+    fullTextChars >= MIN_LEASE_TEXT_CHARS &&
+    POST_PARSE_STATUSES.has(String(status));
+
+  return { durable, status, rawMethod, fullTextChars };
+}
+
+// Test hook (same pattern as _shared/extraction/parser.ts).
+export const __test__ = {
+  isTransportShapedParseFailure,
+  reconcileDurableParse,
+};
+
 function parserFailureAlreadyPersisted(parseResult: any): boolean {
   const parserErrorCode = String(parseResult?.data?.error_code || parseResult?.error_code || "");
   const parserStatus = String(parseResult?.data?.parser_status || parseResult?.data?.processing_status || "");
@@ -372,8 +496,98 @@ Deno.serve(async (req: Request) => {
         metadata: { job_id: job.id, attempt },
       });
 
-      const parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId, PARSE_TIMEOUT_MS);
-      if (!parseResult.ok) {
+      let parseResult: any;
+      try {
+        parseResult = await callInternalFunction("parse-pdf-docling", { file_id: fileId }, orgId, PARSE_TIMEOUT_MS);
+      } catch (transportErr: any) {
+        // callInternalFunction handles fetch/timeout errors internally today,
+        // but keep this guard so a future refactor can never bypass the
+        // durable-state reconciliation below by throwing instead.
+        parseResult = {
+          ok: false,
+          status: 500,
+          data: {},
+          error_code: "NETWORK_ERROR",
+          retryable: true,
+          error: transportErr?.message || "parse-pdf-docling transport failure",
+        };
+      }
+
+      // Durable-state reconciliation: a transport-shaped failure (timeout,
+      // 546 compute kill, gateway 5xx) can arrive AFTER parse-pdf-docling
+      // already persisted a successful parse. The database is authoritative —
+      // re-read it before treating the parse as failed, and never overwrite a
+      // durable success with manual_review_fallback.
+      let parseReconciledToNormalize = false;
+      if (!parseResult.ok && isTransportShapedParseFailure(parseResult)) {
+        const reconciled = await reconcileDurableParse(supabaseAdmin, fileId, orgId);
+        if (reconciled.durable) {
+          console.warn(
+            `[${WORKER_NAME}] parse_transport_failed_but_persisted file_id=${fileId} ` +
+            `durable_status=${reconciled.status} method=${reconciled.rawMethod} ` +
+            `chars=${reconciled.fullTextChars} http_status=${parseResult.status}`,
+          );
+          await logger.event("parse", "reconciled", {
+            provider: "lease-extraction-worker",
+            metadata: {
+              job_id: job.id,
+              reason: "parse_transport_failed_but_persisted",
+              durable_status: reconciled.status,
+              parser_method: reconciled.rawMethod,
+              full_text_chars: reconciled.fullTextChars,
+              transport_status: parseResult.status,
+              transport_error: String(parseResult.error || "").slice(0, 300),
+            },
+          });
+
+          if (reconciled.status === "pdf_parsed") {
+            // Parse persisted; continue to normalize via the guarded stage
+            // claim below (same path as a normal parse success).
+            parseReconciledToNormalize = true;
+          } else if (reconciled.status === "validated" || reconciled.status === "review_required") {
+            // The workflow already progressed past normalization (e.g. a
+            // previous attempt completed it). Nothing left for this job.
+            await supabaseAdmin
+              .from("pipeline_jobs")
+              .update({
+                status: "completed",
+                error_code: null,
+                error_message: null,
+                completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                metadata: {
+                  ...(job.metadata || {}),
+                  reconciled_from: "parse_transport_failed_but_persisted",
+                  reconciled_durable_status: reconciled.status,
+                },
+              })
+              .eq("id", job.id);
+            return jsonResponse({
+              error: false,
+              job_id: job.id,
+              stage: job.stage,
+              status: "completed",
+              reconciled: true,
+              durable_status: reconciled.status,
+            });
+          } else if (reconciled.status === "validating") {
+            // Another invocation is normalizing right now — do not dispatch a
+            // duplicate normalize call; the in-flight run owns job completion.
+            console.warn(`[${WORKER_NAME}] parse_reconciled_normalize_in_flight file_id=${fileId}`);
+            return jsonResponse({
+              error: false,
+              job_id: job.id,
+              stage: "normalize",
+              reconciled: true,
+              normalize_in_flight: true,
+              message: "Durable parse output found; normalization already in flight",
+            });
+          }
+          // Any other durable status falls through to the normal failure path.
+        }
+      }
+
+      if (!parseResult.ok && !parseReconciledToNormalize) {
         const message = parseResult.error || "Document parsing failed";
         const errorCode = parseResult.data?.error_code || parseResult.error_code || "PARSE_FAILED";
         const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
@@ -431,7 +645,11 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", message }, 200);
       }
 
-      await supabaseAdmin
+      // Concurrency guard: only advance parse → normalize if no other worker
+      // attempt already did. Without the stage predicate, two overlapping
+      // attempts (e.g. a retry racing a reconciled run) would both dispatch
+      // normalize-pdf-output.
+      const { data: claimedJob, error: claimError } = await supabaseAdmin
         .from("pipeline_jobs")
         .update({
           stage: "normalize",
@@ -442,12 +660,42 @@ Deno.serve(async (req: Request) => {
           metadata: {
             ...(job.metadata || {}),
             parse_completed_at: new Date().toISOString(),
+            ...(parseReconciledToNormalize
+              ? { reconciled_from: "parse_transport_failed_but_persisted" }
+              : {}),
           },
         })
-        .eq("id", job.id);
+        .eq("id", job.id)
+        .eq("stage", "parse")
+        .select("id")
+        .maybeSingle();
+
+      if (claimError || !claimedJob) {
+        const { data: latestJob } = await supabaseAdmin
+          .from("pipeline_jobs")
+          .select("id, stage, status")
+          .eq("id", job.id)
+          .maybeSingle();
+        console.warn(
+          `[${WORKER_NAME}] normalize stage claim not acquired for job=${job.id} ` +
+          `(stage=${latestJob?.stage ?? "?"} status=${latestJob?.status ?? "?"}); ` +
+          `another worker attempt advanced it — not dispatching a duplicate normalize`,
+        );
+        return jsonResponse({
+          error: false,
+          job_id: job.id,
+          stage: latestJob?.stage ?? "normalize",
+          status: latestJob?.status ?? "running",
+          stage_claim_lost: true,
+        });
+      }
 
       await logger.event("parse", "completed", {
-        metadata: { job_id: job.id, next_stage: "normalize" },
+        metadata: {
+          job_id: job.id,
+          next_stage: "normalize",
+          reconciled: parseReconciledToNormalize,
+        },
       });
 
       console.log(`[${WORKER_NAME}] parse done, proceeding directly to normalize for file_id=${fileId}`);

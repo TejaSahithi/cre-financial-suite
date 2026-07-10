@@ -51,6 +51,8 @@ export interface DoclingTextBlock {
   type: string;    // "paragraph" | "heading" | "list_item" | etc.
   text: string;
   page?: number;
+  /** Offset/length into the provider's full content string (provenance metadata only). */
+  span?: { offset: number; length: number };
 }
 
 export interface DoclingTable {
