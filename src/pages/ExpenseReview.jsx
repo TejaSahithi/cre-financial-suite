@@ -11,6 +11,7 @@ import useOrgQuery from "@/hooks/useOrgQuery";
 import { buildHierarchyScope, getScopeSubtitle, matchesHierarchyScope } from "@/lib/hierarchyScope";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { expenseService } from "@/services/expenseService";
+import { reviewExpenseClassification } from "@/services/expenseClassificationWorkflowService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,40 +31,6 @@ function normalizeBucket(expense) {
 
 function toAmount(expense) {
   return Number(expense?.amount || 0);
-}
-
-function amountBuckets(amount, recoveryStatus) {
-  const numericAmount = Number(amount) || 0;
-  return {
-    recoverable_amount: recoveryStatus === "recoverable" ? numericAmount : 0,
-    non_recoverable_amount: recoveryStatus === "non_recoverable" ? numericAmount : 0,
-    conditional_amount: recoveryStatus === "conditional" ? numericAmount : 0,
-    excluded_amount: recoveryStatus === "excluded" ? numericAmount : 0,
-  };
-}
-
-function buildClassificationReviewPatch(row, { recoveryStatus, approvedStatus }) {
-  const now = new Date().toISOString();
-  const nextStatus =
-    approvedStatus === "approved"
-      ? (["recoverable", "non_recoverable", "excluded"].includes(recoveryStatus) ? "finalized" : "conditional")
-      : recoveryStatus === "conditional"
-        ? "conditional"
-        : ["non_recoverable", "excluded"].includes(recoveryStatus)
-          ? "excluded"
-          : "matched";
-
-  return {
-    recoverability_result: recoveryStatus,
-    recovery_status: recoveryStatus,
-    approved_status: approvedStatus,
-    classification_status: nextStatus,
-    exception_type: ["finalized", "excluded"].includes(nextStatus) ? null : row?.exception_type || null,
-    reviewed_at: now,
-    finalized_at: nextStatus === "finalized" || nextStatus === "excluded" ? now : null,
-    ...amountBuckets(row?.amount, recoveryStatus),
-    next_step: nextStatus === "finalized" || nextStatus === "excluded" ? "Ready for projection" : "Finalize row",
-  };
 }
 
 function getRecoveryTone(bucket) {
@@ -264,11 +231,17 @@ export default function ExpenseReview() {
 
   const reviewMutation = useMutation({
     mutationFn: async ({ classificationId, recoveryStatus, approvedStatus }) => {
-      const row = reviewRows.find((item) => item.id === classificationId);
-      return expenseService.updateExpenseClassification(
+      // Server-owned as of review_expense_classification (20260710000000,
+      // extended 20260711000000): the RPC ports buildClassificationReviewPatch's
+      // full branching logic (classification_status depends on both
+      // recovery_status and approved_status) — see that migration for the
+      // exact SQL. Writes one canonical audit_logs row per call.
+      return reviewExpenseClassification({
         classificationId,
-        buildClassificationReviewPatch(row, { recoveryStatus, approvedStatus })
-      );
+        action: "approve",
+        recoveryStatus,
+        approvedStatus,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["Expense"] });
@@ -332,74 +305,24 @@ export default function ExpenseReview() {
 
   const exceptionMutation = useMutation({
     mutationFn: async ({ classificationId, action }) => {
+      // Server-owned as of review_expense_classification (20260710000000,
+      // extended 20260711000000) — each action below is now one audited RPC
+      // call instead of a direct, unaudited expense_classifications write.
       if (action === "approve") {
         const row = scopedClassifications.find((item) => item.id === classificationId);
-        await expenseService.updateExpenseClassification(
+        await reviewExpenseClassification({
           classificationId,
-          buildClassificationReviewPatch(row, {
-            recoveryStatus: row?.recoverability_result || row?.recovery_status || "recoverable",
-            approvedStatus: "approved",
-          })
-        );
-        return { classificationId, action };
-      }
-      if (action === "reject") {
-        const row = scopedClassifications.find((item) => item.id === classificationId);
-        await expenseService.updateExpenseClassification(classificationId, {
-          classification_status: "excluded",
-          recoverability_result: "excluded",
-          recovery_status: "excluded",
-          exception_type: null,
-          ...amountBuckets(row?.amount, "excluded"),
-          next_step: "Ready for projection",
+          action: "approve",
+          recoveryStatus: row?.recoverability_result || row?.recovery_status || "recoverable",
+          approvedStatus: "approved",
         });
         return { classificationId, action };
       }
-      if (action === "mark_na") {
-        const row = scopedClassifications.find((item) => item.id === classificationId);
-        await expenseService.updateExpenseClassification(classificationId, {
-          classification_status: "excluded",
-          recoverability_result: "non_recoverable",
-          recovery_status: "non_recoverable",
-          exception_type: null,
-          ...amountBuckets(row?.amount, "non_recoverable"),
-          next_step: "Ready for projection",
-        });
+      if (action === "reject" || action === "mark_na" || action === "resolve") {
+        await reviewExpenseClassification({ classificationId, action });
         return { classificationId, action };
       }
-      if (action === "resolve") {
-        await expenseService.updateExpenseClassification(classificationId, {
-          classification_status: "matched",
-          exception_type: null,
-          next_step: "Finalize row",
-        });
-        return { classificationId, action };
-      }
-      // Action → patch shape
-      // approve   → classification_status='finalized', reviewed/finalized timestamps
-      // reject    → classification_status='excluded', recoverability_result='excluded'
-      // mark_na   → classification_status='excluded', recoverability_result='non_recoverable'
-      // resolve   → classification_status='matched' (sends back to normal review)
-      const now = new Date().toISOString();
-      const patch = { reviewed_at: now };
-      if (action === "approve") {
-        patch.classification_status = "finalized";
-        patch.finalized_at = now;
-        patch.exception_type = null;
-      } else if (action === "reject") {
-        patch.classification_status = "excluded";
-        patch.recoverability_result = "excluded";
-        patch.exception_type = null;
-      } else if (action === "mark_na") {
-        patch.classification_status = "excluded";
-        patch.recoverability_result = "non_recoverable";
-        patch.exception_type = null;
-      } else if (action === "resolve") {
-        patch.classification_status = "matched";
-        patch.exception_type = null;
-      }
-      await expenseService.updateExpenseClassification(classificationId, patch);
-      return { classificationId, action };
+      throw new Error(`Unknown exception queue action: ${action}`);
     },
     onSuccess: ({ action }) => {
       const label = {

@@ -12,7 +12,6 @@ import { useComputeTrigger } from "@/hooks/useComputeTrigger";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { fetchPropertyCamConfig } from "@/services/camConfig";
 import { expenseService } from "@/services/expenseService";
-import { logAudit } from "@/services/audit";
 import { getCamScopeContext } from "@/lib/camScope";
 import { createPageUrl } from "@/utils";
 
@@ -214,26 +213,14 @@ export default function CAMCalculation() {
     };
 
     try {
+      // compute-cam itself writes an audit_logs row (action: "cam_computed")
+      // server-side after saving the snapshot — no client-side audit call
+      // needed here; a prior "cam_compute" entry from this page duplicated
+      // that same event under a different action name.
       await trigger("compute-cam", payload, {
         successMessage: `CAM calculated for ${scope.targetScopeLabel ?? "selected scope"}`,
       });
       await refreshAfterCompute();
-      try {
-        await logAudit({
-          entityType: "CamComputation",
-          entityId: scope.targetPropertyId,
-          action: "cam_compute",
-          fieldChanged: "fiscal_year",
-          newValue: String(fiscalYear),
-          details: {
-            scope_level: payload.scope_level,
-            scope_id: payload.scope_id,
-            overrides: overrideValues,
-          },
-        });
-      } catch (auditErr) {
-        console.warn("[CAMCalculation] audit log failed:", auditErr?.message || auditErr);
-      }
     } catch {
       /* toast handled by hook */
     }

@@ -376,8 +376,8 @@ async function runCloudVisionPdfOCR(
   }
 
   const accessToken = await getGoogleCloudAccessToken();
-  const pageLimit = Number(Deno.env.get("CLOUD_VISION_PDF_PAGE_LIMIT") || 5);
-  const pages = Array.from({ length: Math.max(1, Math.min(5, pageLimit || 5)) }, (_, i) => i + 1);
+  const pageLimit = Number(Deno.env.get("CLOUD_VISION_PDF_PAGE_LIMIT") || 15);
+  const pages = Array.from({ length: Math.max(1, Math.min(15, pageLimit || 15)) }, (_, i) => i + 1);
 
   console.log(`[ocr] Running Cloud Vision PDF OCR (${mimeType}, ${fileBytes.length} bytes, pages=${pages.join(",")})`);
   const response = await fetch("https://vision.googleapis.com/v1/files:annotate", {

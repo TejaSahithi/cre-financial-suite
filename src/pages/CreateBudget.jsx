@@ -4,11 +4,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FileText, Zap, TrendingUp, ArrowRight, Loader2, CheckCircle2, Lock, X, MessageSquare, AlertTriangle, XCircle } from "lucide-react";
 
 import { UnitService, BuildingService, PropertyService, LeaseService, BudgetService, PortfolioService } from "@/services/api";
-import { budgetService } from "@/services/budgetService";
 import { supabase } from "@/services/supabaseClient";
-import { logAudit } from "@/services/audit";
 import { buildHierarchyScope } from "@/lib/hierarchyScope";
-import { useAuth } from "@/lib/AuthContext";
 import { createPageUrl } from "@/utils";
 import ScenarioPlanner from "@/components/ScenarioPlanner";
 import FileUploader from "@/components/FileUploader";
@@ -68,7 +65,6 @@ export default function CreateBudget() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const [method, setMethod] = useState("lease_driven");
   const [generating, setGenerating] = useState(false);
   const [selectedBudgetId, setSelectedBudgetId] = useState(null);
@@ -113,37 +109,44 @@ export default function CreateBudget() {
     }));
   }, [scope.portfolioId, scope.propertyId, scope.buildingId, scope.unitId]);
 
+  // The official/persisted budget is created entirely server-side by
+  // compute-budget (gated, audited, snapshot-versioned) instead of a direct
+  // client-side insert via the Budget entity service. compute-budget requires
+  // revenue and expense computation_snapshots to exist for the property +
+  // fiscal year, so those are triggered first — mirroring how
+  // _shared/compute-orchestrator.ts already dispatches compute-revenue/
+  // compute-expense/compute-budget together elsewhere in the app, just
+  // wired into this manual "Generate Budget" action too.
   const createMutation = useMutation({
-    mutationFn: (data) => BudgetService.create(data),
+    mutationFn: async ({ propertyId, fiscalYear, allowGenerateWithoutCam, aiInsights }) => {
+      await invokeEdgeFunction("compute-revenue", { property_id: propertyId, fiscal_year: fiscalYear });
+      await invokeEdgeFunction("compute-expense", { property_id: propertyId, fiscal_year: fiscalYear });
+      return invokeEdgeFunction("compute-budget", {
+        action: "generate",
+        property_id: propertyId,
+        fiscal_year: fiscalYear,
+        allow_generate_without_cam: allowGenerateWithoutCam,
+        ai_insights: aiInsights || null,
+      });
+    },
     onSuccess: () => navigate(createPageUrl("BudgetDashboard") + location.search),
+    onError: (error) => {
+      toast.error(error?.message || "Failed to generate budget");
+    },
   });
 
-  const updateMutation = useMutation({
-    // Route through budgetService (guarded wrapper) so locked budgets are
-    // rejected with a clear user-facing error instead of silently writing.
-    mutationFn: ({ id, ...data }) => budgetService.update(id, data),
-    onSuccess: async (updated, variables) => {
+  // All budget status transitions (approve, lock, mark_reviewed, reject) are
+  // server-owned via compute-budget, which enforces each transition's
+  // precondition (e.g. "must be reviewed before approving", "cannot reject
+  // an approved/locked/signed budget") instead of a client-side check.
+  const computeBudgetActionMutation = useMutation({
+    mutationFn: ({ action, propertyId, fiscalYear, reason }) =>
+      invokeEdgeFunction("compute-budget", { action, property_id: propertyId, fiscal_year: fiscalYear, reason }),
+    onSuccess: async () => {
       await invalidateBudgetCaches(queryClient);
-      const nextStatus = String(variables?.status || "").toLowerCase();
-      if (["approved", "locked", "rejected", "archived"].includes(nextStatus)) {
-        try {
-          const prevStatus = budgets.find((b) => b.id === variables.id)?.status || null;
-          await logAudit({
-            entityType: "Budget",
-            entityId: variables.id,
-            action: `budget_${nextStatus}`,
-            orgId: updated?.org_id || null,
-            fieldChanged: "status",
-            oldValue: prevStatus,
-            newValue: nextStatus,
-          });
-        } catch (auditErr) {
-          console.warn("[CreateBudget] audit log failed:", auditErr?.message || auditErr);
-        }
-      }
     },
     onError: (error) => {
-      toast.error(error?.message || "Failed to update budget workflow");
+      toast.error(error?.message || "Failed to update budget status");
     },
   });
 
@@ -227,40 +230,24 @@ export default function CreateBudget() {
           });
           if (error) {
             console.error("[CreateBudget] generate-budget error:", error);
-            toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry. " + (error.message || ""));
+            toast.warning("AI insights preview failed — the budget will still be computed from actual lease/expense/CAM data. " + (error.message || ""));
           } else if (result?.error) {
             console.error("[CreateBudget] generate-budget returned error:", result);
-            toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry. " + (result.message || ""));
+            toast.warning("AI insights preview failed — the budget will still be computed from actual lease/expense/CAM data. " + (result.message || ""));
           } else if (result) {
             aiData = result;
           }
         } catch (aiError) {
           console.error("[CreateBudget] generate-budget exception:", aiError);
-          toast.warning("AI generation failed — budget will be saved as a blank draft for manual entry.");
+          toast.warning("AI insights preview failed — the budget will still be computed from actual lease/expense/CAM data.");
         }
       }
 
-      const derivedPortfolioId = selectedProperty?.portfolio_id || form.portfolio_id || null;
-
       createMutation.mutate({
-        name: form.name,
-        org_id: writableOrgId,
-        budget_year: form.budget_year,
-        scope: form.scope,
-        period: form.period,
-        portfolio_id: derivedPortfolioId,
-        property_id: form.property_id || undefined,
-        building_id: form.building_id || undefined,
-        unit_id: form.unit_id || undefined,
-        generation_method: method,
-        status: method === "manual" ? "draft" : aiData ? "ai_generated" : "draft",
-        cam_snapshot_id: latestCamSnapshot?.id || null,
-        total_revenue: aiData?.total_revenue ?? null,
-        total_expenses: aiData?.total_expenses ?? null,
-        cam_total: aiData?.cam_total ?? null,
-        noi: aiData?.noi ?? null,
-        ai_insights: aiData?.ai_insights || "",
-        manual_notes: generateWithoutCam && !latestCamSnapshot ? "Generated without CAM snapshot by explicit user override." : null,
+        propertyId: form.property_id,
+        fiscalYear: form.budget_year,
+        allowGenerateWithoutCam: generateWithoutCam || !latestCamSnapshot,
+        aiInsights: aiData?.ai_insights || null,
       });
     } finally {
       setGenerating(false);
@@ -357,12 +344,10 @@ export default function CreateBudget() {
     if (!budget) return;
 
     try {
-      await updateMutation.mutateAsync({
-        id: budget.id,
-        status: "reviewed",
-        reviewed_at: new Date().toISOString(),
-        reviewed_by: user?.id || undefined,
-        rejection_comment: null,
+      await computeBudgetActionMutation.mutateAsync({
+        action: "mark_reviewed",
+        propertyId: budget.property_id,
+        fiscalYear: budget.budget_year || budget.fiscal_year,
       });
       toast.success(`"${budget.name}" marked as reviewed`);
     } catch (error) {
@@ -382,16 +367,15 @@ export default function CreateBudget() {
     const comment = rejectComment.trim();
 
     try {
-      const updatedBudget = await updateMutation.mutateAsync({
-        id: rejectTargetId,
-        status: "draft",
-        rejection_comment: comment,
-        rejected_at: new Date().toISOString(),
-        rejected_by: user?.id || undefined,
+      await computeBudgetActionMutation.mutateAsync({
+        action: "reject",
+        propertyId: budget?.property_id,
+        fiscalYear: budget?.budget_year || budget?.fiscal_year,
+        reason: comment,
       });
 
       toast.success("Budget rejected and sent back for rework");
-      await notifyStakeholdersOfRework(updatedBudget || budget, comment);
+      await notifyStakeholdersOfRework(budget, comment);
       setRejectDialogOpen(false);
       setRejectComment("");
       setRejectTargetId(null);
@@ -743,21 +727,29 @@ export default function CreateBudget() {
                         {["draft", "ai_generated", "under_review"].includes(selectedBudget.status) && (
                           <Button
                             className="flex-1 bg-amber-500 hover:bg-amber-600"
-                            disabled={updateMutation.isPending}
+                            disabled={computeBudgetActionMutation.isPending}
                             onClick={() => handleReviewed(selectedBudget)}
                           >
-                            {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                            {computeBudgetActionMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                             Mark as Reviewed
                           </Button>
                         )}
                         {["reviewed"].includes(selectedBudget.status) && (
-                          <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ id: selectedBudget.id, status: "approved" })}>
+                          <Button
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                            disabled={computeBudgetActionMutation.isPending}
+                            onClick={() => computeBudgetActionMutation.mutate({ action: "approve", propertyId: selectedBudget.property_id, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
+                          >
                             <CheckCircle2 className="w-4 h-4 mr-2" />
                             Approve Budget
                           </Button>
                         )}
                         {["approved"].includes(selectedBudget.status) && (
-                          <Button className="flex-1 bg-slate-800 hover:bg-slate-900" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ id: selectedBudget.id, status: "locked" })}>
+                          <Button
+                            className="flex-1 bg-slate-800 hover:bg-slate-900"
+                            disabled={computeBudgetActionMutation.isPending}
+                            onClick={() => computeBudgetActionMutation.mutate({ action: "lock", propertyId: selectedBudget.property_id, fiscalYear: selectedBudget.budget_year || selectedBudget.fiscal_year })}
+                          >
                             <Lock className="w-4 h-4 mr-2" />
                             Lock Budget
                           </Button>
@@ -809,10 +801,10 @@ export default function CreateBudget() {
                 <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
                 <Button
                   className="bg-red-600 hover:bg-red-700 text-white"
-                  disabled={!rejectComment.trim() || updateMutation.isPending}
+                  disabled={!rejectComment.trim() || computeBudgetActionMutation.isPending}
                   onClick={handleRejectConfirm}
                 >
-                  {updateMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <X className="w-4 h-4 mr-2" />}
+                  {computeBudgetActionMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <X className="w-4 h-4 mr-2" />}
                   Reject & Notify Stakeholders
                 </Button>
               </DialogFooter>

@@ -15,7 +15,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { leaseService } from "@/services/leaseService";
+import { leaseService, updateLeaseExtractionField, sendLeaseBackForReextraction, linkLeaseSpaceAssignment } from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -449,20 +449,30 @@ export default function LeaseReview() {
         // linking a different-name candidate that happens to share the score.
         const chosen = (allTiedSameFile || highScoreSameFileMajority) ? sameFileTies[0] : top;
 
-        const nextExtraction = {
-          ...(lease.extraction_data || {}),
+        const autoLinkPatch = {
           source_file_id: chosen.file.id,
           source_file_name: chosen.file.file_name ?? null,
           auto_linked_at: new Date().toISOString(),
           auto_link_score: chosen.score,
           auto_link_reasons: chosen.reasons,
         };
-        const { error: updateErr } = await supabase
-          .from("leases")
-          .update({ extraction_data: nextExtraction })
-          .eq("id", lease.id);
-        if (updateErr) {
-          console.warn("[LeaseReview] auto-link write failed:", updateErr.message, updateErr.details || "");
+        const nextExtraction = {
+          ...(lease.extraction_data || {}),
+          ...autoLinkPatch,
+        };
+        try {
+          await updateLeaseExtractionField({
+            leaseId: lease.id,
+            fieldArea: "source_link",
+            action: "source_file_auto_linked",
+            patch: autoLinkPatch,
+          });
+        } catch (rpcErr) {
+          // Not a user-initiated action -- swallow silently, same as an
+          // RLS-denied direct write would have done before this RPC existed
+          // (e.g. a read-only viewer, or the lease's abstract just got
+          // approved out from under this effect).
+          console.warn("[LeaseReview] auto-link write failed:", rpcErr?.message || rpcErr);
           return;
         }
         console.log(`[LeaseReview] auto-linked lease ${lease.id} -> uploaded_files ${chosen.file.id} (score=${chosen.score}, file=${chosen.file.file_name}, reasons=${chosen.reasons.join("+")})`);
@@ -494,11 +504,16 @@ export default function LeaseReview() {
         source_file_name: picked?.file_name ?? null,
         manually_linked_at: new Date().toISOString(),
       };
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "source_link",
+        action: "source_file_manually_linked",
+        patch: {
+          source_file_id: fileId,
+          source_file_name: picked?.file_name ?? null,
+          manually_linked_at: nextExtraction.manually_linked_at,
+        },
+      });
       toast.success(`Linked to ${picked?.file_name || fileId}`);
       updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
@@ -878,16 +893,16 @@ export default function LeaseReview() {
   });
 
   const handleMarkAsFullLease = async () => {
+    // Phase 6R-1: server-owned, audited write -- replaces the prior direct
+    // supabase.from("leases").update() call (via the generic factory).
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            document_type_override: "full_lease",
-          },
-        },
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "lease_flag",
+        action: "document_type_override_set",
+        patch: { document_type_override: "full_lease" },
       });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Marked as full lease - banner dismissed.");
     } catch {
       toast.error("Could not save override. Try again.");
@@ -1509,20 +1524,18 @@ export default function LeaseReview() {
     setCustomFieldSaving(true);
     try {
       // Persist value + evidence into extraction_data so readFieldValue picks it up
-      const ed = lease.extraction_data || {};
-      const updatedEd = {
-        ...ed,
-        fields: {
-          ...(ed.fields || {}),
-          [key]: { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true },
+      // (Phase 6D-2: server-owned, audited write — replaces the prior direct
+      // supabase.from("leases").update() call.)
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "field_value",
+        action: "custom_field_added",
+        fieldKey: key,
+        patch: {
+          field: { value: value.trim() || null, source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added", manually_edited: true },
+          field_evidence: { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" },
         },
-        field_evidence: {
-          ...(ed.field_evidence || {}),
-          [key]: { source_text: sourceText.trim() || null, source_page: sourcePage ? Number(sourcePage) : null, extraction_status: "manually_added" },
-        },
-      };
-      const { error: saveErr } = await supabase.from("leases").update({ extraction_data: updatedEd }).eq("id", lease.id);
-      if (saveErr) throw saveErr;
+      });
       // Also add to fieldReviews so Accept/Reject work immediately
       const nextReviews = { ...fieldReviews, [key]: { status: REVIEW_STATUSES.PENDING, value: value.trim() || null, reviewed_at: new Date().toISOString() } };
       setFieldReviews(nextReviews);
@@ -1651,6 +1664,16 @@ export default function LeaseReview() {
     setEditValue(current == null ? "" : String(current));
   };
 
+  // Phase 6R-1 note: intentionally still direct (leaseService.update(), the
+  // audited generic factory) -- NOT migrated to update_lease_extraction_field.
+  // Unlike the sites that were migrated, this write combines typed lease
+  // columns (via resolveFieldColumns's large, schema-drift-tolerant alias
+  // map -- many aliases target columns whose existence on the current
+  // deployed schema has not been verified) with the extraction_data.fields
+  // merge in one atomic call. Safely covering this would need either a
+  // verified, exhaustive typed-column whitelist (a separate schema audit)
+  // or a dedicated RPC with its own missing-column tolerance -- both larger
+  // than this phase's scope. Flagged as a follow-up, not implemented here.
   const handleFieldSave = async () => {
     if (!editingField) return;
     const key = editingField.key;
@@ -1796,6 +1819,18 @@ export default function LeaseReview() {
       });
       const approvedLease = approvalResult.lease;
 
+      // approve-lease-workflow now generates the approved rent schedule
+      // synchronously (same request) instead of relying on the fiscal-year
+      // snapshot loop below to eventually populate it. That loop still runs
+      // for its own purpose (warming multi-year/multi-mode aggregate
+      // snapshots for the Rent Projection page) but the core rent_schedules
+      // rows for this lease no longer depend on it succeeding.
+      if (approvalResult.rent_schedule && approvalResult.rent_schedule.status !== "ok") {
+        toast.warning(
+          "Lease approved, but the rent schedule could not be generated automatically. Re-run it from Rent Projection.",
+        );
+      }
+
       updateLeaseQueryCache(queryClient, leaseId, approvedLease);
       queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       queryClient.invalidateQueries({ queryKey: ["leases"] });
@@ -1828,16 +1863,28 @@ export default function LeaseReview() {
           });
 
           if (Object.keys(updates).length > 0) {
-            const { error: linkErr } = await supabase
-              .from("leases")
-              .update(updates)
-              .eq("id", approvedLease.id);
-            if (linkErr) {
-              console.warn("[LeaseReview] building/unit auto-link skipped:", linkErr.message);
-            } else {
-              Object.assign(approvedLease, updates);
-              console.log("[LeaseReview] auto-linked building/unit:", updates);
-              queryClient.invalidateQueries({ queryKey: ["leases"] });
+            // Phase 6R-13: server-owned, audited persistence -- replaces the
+            // prior direct supabase.from("leases").update() call. The match
+            // itself (matchBuildingAndUnit, above) stays client-side.
+            try {
+              const linkResult = await linkLeaseSpaceAssignment({
+                leaseId: approvedLease.id,
+                buildingId: updates.building_id || null,
+                unitId: updates.unit_id || null,
+              });
+              if (linkResult?.changed) {
+                Object.assign(approvedLease, {
+                  building_id: linkResult.building_id,
+                  unit_id: linkResult.unit_id,
+                });
+                console.log("[LeaseReview] auto-linked building/unit:", {
+                  building_id: linkResult.building_id,
+                  unit_id: linkResult.unit_id,
+                });
+                queryClient.invalidateQueries({ queryKey: ["leases"] });
+              }
+            } catch (linkRpcErr) {
+              console.warn("[LeaseReview] building/unit auto-link skipped:", linkRpcErr?.message || linkRpcErr);
             }
           }
         }
@@ -1921,20 +1968,16 @@ export default function LeaseReview() {
   };
 
   const handleSendBack = async () => {
+    // Phase 6R-1: server-owned, audited write -- replaces the prior direct
+    // supabase.from("leases").update() call (via the generic factory). New,
+    // narrow RPC (send_lease_back_for_reextraction) since this sets a typed
+    // column (status='draft', a fixed literal) alongside extraction_data
+    // metadata -- doesn't fit update_lease_extraction_field's
+    // extraction_data-only scope, and is a lease-review verdict action
+    // (like reject_lease_abstract) rather than a field edit.
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          status: "draft",
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            send_back: {
-              reason: sendBackReason,
-              sent_back_at: new Date().toISOString(),
-            },
-          },
-        },
-      });
+      await sendLeaseBackForReextraction({ leaseId: lease.id, reason: sendBackReason });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Sent back for re-extraction");
       setShowSendBack(false);
       const params = new URLSearchParams();
@@ -3414,6 +3457,14 @@ export default function LeaseReview() {
           // left blank arrive as `undefined` and are NOT written, so
           // pre-existing extractor evidence is preserved. Synchronous prep
           // runs inside the try block so any throw surfaces as a toast.
+          //
+          // Phase 6R-1 note: intentionally still direct (leaseService.update(),
+          // the audited generic factory), same reason as handleFieldSave --
+          // this combines typed lease-column writes (resolveFieldColumns)
+          // with the extraction_data.fields/field_evidence/confidence_scores
+          // merge in one atomic call, which doesn't fit
+          // update_lease_extraction_field's extraction_data-only scope
+          // without a separately-verified typed-column whitelist.
           try {
             const columnUpdates = {};
             if (!f.dynamic_document_item) {
@@ -3514,7 +3565,6 @@ export default function LeaseReview() {
           // and (mirrored) in extraction_data.fields so every downstream reader
           // sees the same shape the extractor would have produced.
           try {
-            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
             const prevField = lease.extraction_data?.fields?.[f.key] || null;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
@@ -3551,27 +3601,26 @@ export default function LeaseReview() {
                 ...(confValue != null ? { [f.key]: confValue } : {}),
               },
             };
-            const { error: updateErr } = await supabase
-              .from("leases")
-              .update({ extraction_data: nextExtraction })
-              .eq("id", lease.id);
-            if (updateErr) throw updateErr;
+            // Server-owned, audited write (Phase 6D-2) — the RPC writes the
+            // canonical audit_logs row (action: 'field_evidence_edit') in the
+            // same transaction, so no separate client-side logAudit call here.
+            await updateLeaseExtractionField({
+              leaseId: lease.id,
+              fieldArea: "field_value",
+              action: "field_evidence_edit",
+              fieldKey: f.key,
+              patch: {
+                field: { ...cleanPatch, confidence: confValue, manually_edited_evidence: true, edited_at: new Date().toISOString() },
+                field_evidence: cleanPatch,
+                ...(confValue != null ? { confidence_score: confValue } : {}),
+              },
+            });
             // Seed the cache with the new extraction_data immediately so the
             // drawer / table re-render before the invalidation refetch
             // round-trips. Previously only invalidateQueries fired here,
             // which made the UI lag behind the actual save and looked like
             // "Save Evidence isn't reflecting".
             updateLeaseQueryCache(queryClient, leaseId, { extraction_data: nextExtraction });
-            await logAudit({
-              entityType: "LeaseFieldReview",
-              entityId: lease.id,
-              action: "field_evidence_edit",
-              orgId: lease.org_id,
-              fieldChanged: f.key,
-              oldValue: prevEvidence ? JSON.stringify(prevEvidence) : null,
-              newValue: JSON.stringify({ ...cleanPatch, confidence: confValue }),
-              propertyId: lease.property_id || null,
-            });
             toast.success(`Evidence saved for ${f.label}`);
             queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
           } catch (err) {

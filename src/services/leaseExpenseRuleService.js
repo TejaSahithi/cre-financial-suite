@@ -50,7 +50,7 @@ import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
-import { devLog, devTable, devWarn } from "./utils/logger";
+import { devLog, devWarn } from "./utils/logger";
 
 import {
   derivePublishedToCam,
@@ -280,46 +280,17 @@ function scorePersistedRuleForMerge(rule) {
   ].reduce((sum, score) => sum + score, 0);
 }
 
-function getMissingColumnName(error) {
-  const errorMessage = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`;
-  return (
-    errorMessage.match(/Could not find the '([^']+)' column/i)?.[1] ||
-    errorMessage.match(/column "?([a-zA-Z0-9_]+)"? of relation/i)?.[1] ||
-    errorMessage.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i)?.[1] ||
-    null
-  );
-}
-
-function isMissingColumnError(error) {
-  return error?.code === "PGRST204" || error?.code === "42703" || Boolean(getMissingColumnName(error));
-}
-
-async function updateWithMissingColumnFallback(makeQuery, patch, { maxAttempts = 12 } = {}) {
-  let nextPatch = { ...patch };
-  const droppedColumns = [];
-  let attemptsRemaining = maxAttempts;
-
-  while (Object.keys(nextPatch).length > 0 && attemptsRemaining > 0) {
-    const { data, error } = await makeQuery(nextPatch);
-    if (!error) {
-      return { data, droppedColumns, appliedPatch: nextPatch };
-    }
-
-    const missingColumn = getMissingColumnName(error);
-    if (!isMissingColumnError(error) || !missingColumn || !(missingColumn in nextPatch)) {
-      throw error;
-    }
-    droppedColumns.push(missingColumn);
-    const { [missingColumn]: _stripped, ...rest } = nextPatch;
-    nextPatch = rest;
-    attemptsRemaining -= 1;
-  }
-
-  return { data: null, droppedColumns, appliedPatch: nextPatch };
-}
-
-async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionVersion }) {
-  if (!leaseId || !ruleSetId) return { superseded: 0, deleted: 0, droppedColumns: [] };
+// Read + filter only -- computes which existing rule ids are stale/unresolved
+// (per isProtectedHumanRule's decision, unchanged) and therefore safe to
+// supersede. Does NOT delete or update anything itself: the mechanical
+// delete now happens server-side, folded into save_lease_expense_rule_set's
+// own transaction via its p_superseded_rule_ids param (Phase 6R-2) -- this
+// closes a real atomicity gap that existed when the delete was a separate,
+// unguarded call before the RPC ever ran. SECURITY DEFINER bypasses RLS, so
+// the RLS-denial marker-update fallback this function used to have is no
+// longer needed.
+async function computeSupersededRuleIds({ leaseId, ruleSetId }) {
+  if (!leaseId || !ruleSetId) return [];
 
   const { data: existingRows, error: existingError } = await supabase
     .from("lease_expense_rules")
@@ -328,79 +299,10 @@ async function supersedeUnresolvedRules({ leaseId, ruleSetId, orgId, extractionV
     .eq("rule_set_id", ruleSetId);
   if (existingError) throw existingError;
 
-  const targetIds = (existingRows || [])
+  return (existingRows || [])
     .filter((rule) => !isProtectedHumanRule(rule))
     .map((rule) => rule.id)
     .filter(Boolean);
-  if (targetIds.length === 0) return { superseded: 0, deleted: 0, droppedColumns: [] };
-
-  // Per spec: post-upsert count must reflect (new rules + preserved approved
-  // rows), not stale rows + new rows. Marking rows with row_status="superseded"
-  // leaves them physically present in the table — every downstream count and
-  // listing still sees them. So we DELETE stale unresolved rows first.
-  // If the delete fails (e.g. RLS), fall back to marker columns so at
-  // least the row state is updated; never silently succeed when both
-  // paths fail.
-  const deleteQuery = supabase
-    .from("lease_expense_rules")
-    .delete()
-    .in("id", targetIds)
-    .eq("lease_id", leaseId)
-    .eq("rule_set_id", ruleSetId);
-  const scopedDelete = orgId ? deleteQuery.eq("org_id", orgId) : deleteQuery;
-  const { data: deletedRows, error: deleteError } = await scopedDelete.select("id");
-
-  if (!deleteError) {
-    return { superseded: 0, deleted: deletedRows?.length || targetIds.length, droppedColumns: [] };
-  }
-
-  devWarn(
-    "[leaseExpenseRuleService] supersedeUnresolvedRules DELETE failed; falling back to marker update.",
-    {
-      code: deleteError.code,
-      message: deleteError.message,
-      details: deleteError.details,
-      hint: deleteError.hint,
-      targetIdCount: targetIds.length,
-    },
-  );
-
-  const now = new Date().toISOString();
-  const patch = {
-    row_status: "superseded",
-    status: "superseded",
-    extraction_status: "superseded",
-    review_status: "needs_review",
-    approval_status: "draft",
-    published_to_cam: false,
-    superseded_at: now,
-    superseded_by_version: extractionVersion || EVIDENCE_ALIGNED_EXTRACTION_VERSION,
-    updated_at: now,
-  };
-
-  const result = await updateWithMissingColumnFallback(
-    (nextPatch) => supabase
-      .from("lease_expense_rules")
-      .update(nextPatch)
-      .in("id", targetIds)
-      .eq("lease_id", leaseId)
-      .eq("rule_set_id", ruleSetId)
-      .select("id"),
-    patch,
-  );
-
-  const markerColumns = ["row_status", "status", "extraction_status"];
-  const appliedMarker = markerColumns.some((column) => Object.prototype.hasOwnProperty.call(result.appliedPatch || {}, column));
-  if (!appliedMarker) {
-    // Both DELETE and any marker-column UPDATE failed. Surface the original
-    // delete error so the caller knows cleanup is incomplete.
-    throw deleteError;
-  }
-
-  if (result.droppedColumns.length > 0) {
-    devWarn("[leaseExpenseRuleService] supersedeUnresolvedRules marker UPDATE stripped unsupported columns:", result.droppedColumns);
-  }
-  return { superseded: result.data?.length || targetIds.length, deleted: 0, droppedColumns: result.droppedColumns };
 }
 
 function normalizeRecoveryStatus(rule) {
@@ -1559,20 +1461,28 @@ export const leaseExpenseRuleService = {
       .eq("rule_set_id", ruleSetId);
     if (rulesError) throw rulesError;
 
-    const nextStatus = deriveRuleSetStatusFromRules(rules || []);
-    const patch = {
-      status: nextStatus,
-      approved_at: nextStatus === "approved" ? new Date().toISOString() : null,
-    };
-
-    const { data, error } = await supabase
+    const { data: ruleSet, error: ruleSetError } = await supabase
       .from("lease_expense_rule_sets")
-      .update(patch)
+      .select("id, lease_id")
       .eq("id", ruleSetId)
-      .select("*")
       .single();
-    if (error) throw error;
-    return data;
+    if (ruleSetError) throw ruleSetError;
+
+    // Status derivation (deriveRuleSetStatusFromRules) stays client-side --
+    // only the mechanical persistence moves server-side.
+    const nextStatus = deriveRuleSetStatusFromRules(rules || []);
+
+    const result = await invokeEdgeFunction("update-lease-expense-rule-set-status", {
+      rule_set_id: ruleSetId,
+      lease_id: ruleSet.lease_id,
+      status: nextStatus,
+    });
+
+    return {
+      id: result.rule_set_id,
+      status: result.status,
+      approved_at: result.approved_at,
+    };
   },
 
   // Diagnostic: dump the full state of the lease expense-rule pipeline for
@@ -2062,6 +1972,14 @@ export const leaseExpenseRuleService = {
     let ruleSetId = existingRuleSetId;
     let currentVersion = 1;
 
+    // ── Version-management DECISION only ────────────────────────────────
+    // This block decides which rule_set to target (reuse an existing id,
+    // or create a new one at the next version) and what version number to
+    // use. It no longer writes to lease_expense_rule_sets itself -- that
+    // mechanical write now happens inside save_lease_expense_rule_set (one
+    // transaction with the rules/values/clauses write + the audit row).
+    // ruleSetId stays null through this block exactly when a new rule_set
+    // row should be created (the RPC's p_rule_set_id contract).
     if (ruleSetId) {
       const { data: targetRuleSet } = await supabase
         .from("lease_expense_rule_sets")
@@ -2070,18 +1988,6 @@ export const leaseExpenseRuleService = {
         .eq("org_id", orgId)
         .maybeSingle();
       currentVersion = Number(targetRuleSet?.version) || currentVersion;
-      const { error: updateRuleSetError } = await supabase
-        .from("lease_expense_rule_sets")
-        .update({
-          status,
-          property_id: lease.property_id || null,
-          approved_at: status === "approved" ? now : null,
-          extraction_version: incomingExtractionVersion,
-        })
-        .eq("id", ruleSetId)
-        .eq("org_id", orgId);
-
-      if (updateRuleSetError) throw updateRuleSetError;
     } else {
       const { data: existingSets } = await supabase
         .from("lease_expense_rule_sets")
@@ -2115,70 +2021,14 @@ export const leaseExpenseRuleService = {
 
         if (shouldCreateNewVersion) {
           currentVersion = latestVersion + 1;
-          const { data: createdRuleSet, error: createRuleSetError } = await supabase
-            .from("lease_expense_rule_sets")
-            .insert({
-              org_id: orgId,
-              lease_id: lease.id,
-              property_id: lease.property_id || null,
-              version: currentVersion,
-              status,
-              approved_at: status === "approved" ? now : null,
-              extraction_version: incomingExtractionVersion,
-            })
-            .select("*")
-            .single();
-          if (createRuleSetError) throw createRuleSetError;
-          ruleSetId = createdRuleSet.id;
-          devLog(`${tag} created v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
+          devLog(`${tag} will create v${currentVersion} rule_set for ${incomingExtractionVersion}; preserving protected rows from prior set`);
         } else {
           ruleSetId = latestSet.id;
           currentVersion = latestVersion;
-          const { error: updateExistingSetError } = await supabase
-            .from("lease_expense_rule_sets")
-            .update({
-              status,
-              property_id: lease.property_id || null,
-              approved_at: status === "approved" ? now : null,
-              extraction_version: incomingExtractionVersion,
-            })
-            .eq("id", ruleSetId)
-            .eq("org_id", orgId);
-          if (updateExistingSetError) throw updateExistingSetError;
           devLog(`${tag} reusing rule_set ${ruleSetId} (v${currentVersion}) for ${incomingExtractionVersion}`);
         }
       } else {
         currentVersion = 1;
-        const { data: createdRuleSet, error: createRuleSetError } = await supabase
-          .from("lease_expense_rule_sets")
-          .insert({
-            org_id: orgId,
-            lease_id: lease.id,
-            property_id: lease.property_id || null,
-            version: currentVersion,
-            status,
-            approved_at: status === "approved" ? now : null,
-            extraction_version: incomingExtractionVersion,
-          })
-          .select("*")
-          .single();
-
-        if (createRuleSetError) {
-          const code = String(createRuleSetError.code || "");
-          const message = `${createRuleSetError.message || ""} ${createRuleSetError.details || ""}`;
-          if (code === "42501" || /row-level security/i.test(message)) {
-            const enhanced = new Error(
-              "RLS denied INSERT into lease_expense_rule_sets. " +
-              "Apply migration 20260518130000_fix_lease_expense_rls.sql in Supabase SQL editor — " +
-              "the existing policy requires is_super_admin()/can_write_org_data() which aren't returning true for this user. " +
-              `Underlying error: ${createRuleSetError.message}`,
-            );
-            enhanced.code = createRuleSetError.code;
-            throw enhanced;
-          }
-          throw createRuleSetError;
-        }
-        ruleSetId = createdRuleSet.id;
       }
     }
 
@@ -2209,6 +2059,11 @@ export const leaseExpenseRuleService = {
       const sourceKey = norm(ruleObj.source_field_key);
       return `${lease.id}_${type}_${category}_${subcategory}_${sourceKey}`;
     };
+    // Maps rule_key -> original source rule object, captured before dedup
+    // collapses rulePayloads, so the values/clauses builder below can still
+    // look up extracted_value/manual_value/frequency/clauses/etc. for
+    // whichever payload survives dedup.
+    const ruleSourceByKey = new Map();
     let rulePayloads = savableRules.map((rule) => {
       // Only include `id` when the rule actually has a UUID — sending
       // `id: undefined` in a PostgREST upsert payload triggers a 400 on
@@ -2217,6 +2072,7 @@ export const leaseExpenseRuleService = {
       // an unnecessary round-trip.
       const exactSourceText = deriveRuleExactSourceText(rule);
       const ruleKey = computeRuleKey(rule);
+      ruleSourceByKey.set(ruleKey, rule);
       const payload = {
         rule_set_id: ruleSetId,
         rule_key: ruleKey,
@@ -2306,7 +2162,13 @@ export const leaseExpenseRuleService = {
     // the user's approval.
     let preservedByKey = new Map();
     let protectedByCanonicalKey = new Map();
-    if (rulePayloads.length > 0 && ruleSetId) {
+    // Note: no longer gated on `ruleSetId` being already-known -- in the
+    // original code ruleSetId was always truthy by this point (the rule_set
+    // row was created synchronously above); now that creation is deferred
+    // to the RPC, ruleSetId can still be null here for a brand-new version.
+    // The query below is lease_id-scoped (not rule_set-scoped) anyway, so
+    // this always ran in practice -- keeping it ungated preserves that.
+    if (rulePayloads.length > 0) {
       try {
         const ruleKeys = rulePayloads.map((p) => p.rule_key).filter(Boolean);
         if (ruleKeys.length > 0) {
@@ -2407,99 +2269,30 @@ export const leaseExpenseRuleService = {
       }
     }
 
+    let supersededRuleIds = [];
     if (isEvidenceAlignedSave && ruleSetId) {
       try {
-        const supersedeResult = await supersedeUnresolvedRules({
-          leaseId: lease.id,
-          ruleSetId,
-          orgId,
-          extractionVersion: incomingExtractionVersion,
-        });
-        if (supersedeResult.superseded || supersedeResult.deleted) {
+        supersededRuleIds = await computeSupersededRuleIds({ leaseId: lease.id, ruleSetId });
+        if (supersededRuleIds.length > 0) {
           devLog(
-            `[leaseExpenseRuleService] saveRuleSet ${supersedeResult.superseded ? "superseded" : "deleted"} ` +
-            `${supersedeResult.superseded || supersedeResult.deleted} stale unresolved rule(s) before v3 upsert`,
+            `[leaseExpenseRuleService] saveRuleSet will supersede ${supersededRuleIds.length} stale unresolved rule(s) as part of the v3 upsert`,
           );
         }
       } catch (error) {
-        devWarn("[leaseExpenseRuleService] stale rule supersede warning:", error?.message || error);
+        devWarn("[leaseExpenseRuleService] stale rule supersede computation warning:", error?.message || error);
       }
     }
 
-    // Strip-missing-columns retry: if the DB hasn't been migrated yet with
-    // the latest spec columns (payment_treatment, cam_eligible, etc.),
-    // Postgres will return PGRST204 "Could not find column X". Rather than
-    // fail the whole approve flow, peel that column out of every payload
-    // and try again. Up to 12 retries — enough to clear several missing
-    // columns without spinning forever. Logs which columns were dropped so
-    // we know which migrations are missing.
-    let savedRules = [];
-    if (rulePayloads.length > 0) {
-      let payloadsForUpsert = rulePayloads;
-      const droppedColumns = [];
-      let attemptsRemaining = 12;
-      while (attemptsRemaining > 0) {
-        // Conflict target = (rule_set_id, rule_key). This is what makes
-        // re-extraction deterministic: clicking Extract twice with the
-        devLog(`[SAVE PAYLOAD BEFORE UPSERT] Lease ${payloadsForUpsert[0]?.lease_id}:`);
-        devTable(payloadsForUpsert.map(p => ({
-          lease_id: p.lease_id,
-          tenant_id: p.tenant_id,
-          rule_key: p.rule_key,
-          rule_type: p.rule_type,
-          expense_category: p.expense_category,
-          tenant_share_percent: p.tenant_share_percent,
-          estimated_annual_amount: p.estimated_annual_amount,
-          estimated_monthly_amount: p.estimated_monthly_amount,
-          admin_fee_percent: p.admin_fee_percent,
-          gross_up_percent: p.gross_up_percent,
-          cap_percent: p.cap_percent
-        })));
-
-        const { data, error: ruleError } = await supabase
-          .from("lease_expense_rules")
-          .upsert(payloadsForUpsert, {
-            onConflict: "lease_id,rule_key",
-            ignoreDuplicates: false,
-          })
-          .select("*");
-        devLog("[UPSERT RESULT]", { data, error: ruleError });
-        if (!ruleError) {
-          savedRules = data || [];
-          break;
-        }
-        // PGRST204 = no schema cache for that column; 42703 = column does not exist.
-        const errorMessage = `${ruleError.message || ""} ${ruleError.details || ""} ${ruleError.hint || ""}`;
-        const colMatch =
-          errorMessage.match(/Could not find the '([^']+)' column/i) ||
-          errorMessage.match(/column "?([a-zA-Z0-9_]+)"? of relation/i) ||
-          errorMessage.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
-        const missingCol = colMatch?.[1];
-        const isMissingCol = ruleError.code === "PGRST204" || ruleError.code === "42703" || !!missingCol;
-        if (!isMissingCol || !missingCol) throw ruleError;
-        droppedColumns.push(missingCol);
-        payloadsForUpsert = payloadsForUpsert.map((row) => {
-          const { [missingCol]: _stripped, ...rest } = row;
-          return rest;
-        });
-        attemptsRemaining -= 1;
-      }
-      if (droppedColumns.length > 0) {
-        devWarn(
-          `[leaseExpenseRuleService] saveRuleSet: dropped ${droppedColumns.length} missing column(s) before insert succeeded — apply latest migration to capture these fields:`,
-          droppedColumns,
-        );
-      }
-    }
-
-    const rulesByCategoryId = new Map(savedRules.map((rule) => [rule.expense_category_id, rule]));
+    // ── Values/clauses source data, keyed by rule_key ──────────────────
+    // The RPC hasn't run yet, so newly-created rules' DB ids aren't known
+    // client-side -- values/clauses reference rules by rule_key instead
+    // (a deliberate improvement over the prior expense_category_id-based
+    // matching, which wasn't guaranteed unique when multiple rules shared
+    // a category). ruleSourceByKey was captured above, before dedup.
     const valuePayloads = [];
     const clausePayloads = [];
-
-    for (const rule of resolvedRules) {
-      const savedRule = rulesByCategoryId.get(rule.expense_category_id);
-      if (!savedRule?.id) continue;
-
+    for (const payload of rulePayloads) {
+      const rule = ruleSourceByKey.get(payload.rule_key) || {};
       const finalValue = extractRuleValue(rule);
       const hasValuePayload =
         finalValue != null ||
@@ -2508,7 +2301,7 @@ export const leaseExpenseRuleService = {
 
       if (hasValuePayload) {
         valuePayloads.push({
-          rule_id: savedRule.id,
+          rule_key: payload.rule_key,
           base_year_amount: asNumber(rule.base_year_amount),
           extracted_value: asNumber(rule.extracted_value),
           manual_value: asNumber(rule.manual_value),
@@ -2518,35 +2311,42 @@ export const leaseExpenseRuleService = {
         });
       }
 
-      clausePayloads.push(...extractRuleClauses(rule, lease.id, savedRule.id));
+      clausePayloads.push(
+        ...extractRuleClauses(rule, lease.id, payload.rule_key).map((clause) => ({ ...clause, rule_key: payload.rule_key })),
+      );
     }
 
-    if (savedRules.length > 0) {
-      const savedRuleIds = savedRules.map((rule) => rule.id);
+    // ── Mechanical multi-table write, now server-owned ──────────────────
+    // save_lease_expense_rule_set (edge function -> SECURITY DEFINER RPC)
+    // upserts the rule_set row (creating one if ruleSetId is null), upserts
+    // lease_expense_rules on (lease_id, rule_key), replaces
+    // lease_expense_values/lease_expense_rule_clauses scoped to the saved
+    // rules, and writes one canonical audit_logs row -- all in one
+    // transaction. Everything above this point (derivation, versioning
+    // decision, protected-row preservation/merge, rule-key computation)
+    // is unchanged client-side logic; this call replaces only the mechanical
+    // persistence step that used to be 3+ independent, unguarded Supabase
+    // calls with zero audit logging.
+    const rpcResult = await invokeEdgeFunction("save-lease-expense-rule-set", {
+      lease_id: lease.id,
+      rule_set_id: ruleSetId,
+      version: currentVersion,
+      status,
+      extraction_version: incomingExtractionVersion,
+      property_id: lease.property_id || null,
+      rules: rulePayloads,
+      values: valuePayloads,
+      clauses: clausePayloads,
+      superseded_rule_ids: supersededRuleIds,
+    });
+    const resolvedRuleSetId = rpcResult?.rule_set_id || ruleSetId;
 
-      try {
-        await supabase.from("lease_expense_values").delete().in("rule_id", savedRuleIds);
-        if (valuePayloads.length > 0) {
-          const { error: valuesError } = await supabase.from("lease_expense_values").insert(valuePayloads);
-          if (valuesError) throw valuesError;
-        }
-      } catch (error) {
-        devWarn("[leaseExpenseRuleService] value persistence warning:", error);
-      }
-
-      try {
-        await supabase.from("lease_expense_rule_clauses").delete().in("lease_expense_rule_id", savedRuleIds);
-        if (clausePayloads.length > 0) {
-          const { error: clausesError } = await supabase.from("lease_expense_rule_clauses").insert(clausePayloads);
-          if (clausesError) throw clausesError;
-        }
-      } catch (error) {
-        devWarn("[leaseExpenseRuleService] clause persistence warning:", error);
-      }
-    }
-
+    // Status recalculation and the conditional lease-config sync stay
+    // separate, unchanged client-side calls -- both depend on decision
+    // logic (deriveRuleSetStatusFromRules / buildLeaseConfigFromRules) too
+    // large/risky to port into the RPC per the confirmed narrow scope.
     try {
-      await this.recalculateRuleSetStatus(ruleSetId);
+      await this.recalculateRuleSetStatus(resolvedRuleSetId);
     } catch (error) {
       devWarn("[leaseExpenseRuleService] rule set status recalculation warning:", error?.message || error);
     }
@@ -2562,7 +2362,7 @@ export const leaseExpenseRuleService = {
 
     return {
       ...persisted,
-      ruleSet: persisted.ruleSet || { id: ruleSetId, status, version: currentVersion },
+      ruleSet: persisted.ruleSet || { id: resolvedRuleSetId, status, version: currentVersion },
     };
   },
 

@@ -49,7 +49,29 @@ import {
   rejectLeaseExpenseRule,
 } from "@/services/leaseExpenseRuleWorkflowService";
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { createPageUrl } from "@/utils";
+
+const RULE_PATCH_KEYS = [
+  "expense_category",
+  "expense_subcategory",
+  "included_in_base_rent",
+  "operational_responsibility",
+  "payment_treatment",
+  "recoverable_from_tenant",
+  "cam_eligible",
+  "recovery_method",
+  "allocation_basis",
+  "cap_type",
+  "cap_percent",
+  "cap_amount",
+  "admin_fee_applicable",
+  "admin_fee_percent",
+  "gross_up_applicable",
+  "gross_up_percent",
+  "reconciliation_required",
+  "notes",
+];
 
 import {
   toNullableNumber,
@@ -327,17 +349,22 @@ export default function LeaseExpenseRules() {
   };
 
   const updateRuleMutation = useMutation({
-    mutationFn: async ({ ruleId, patch }) => {
+    mutationFn: async ({ ruleId, leaseId, patch }) => {
       if (!isUuid(ruleId) || String(ruleId).startsWith("workflow-rule-")) {
         throw new Error("Cannot approve unsaved rule. Regenerate rules first.");
       }
-      const { data, error } = await supabase
-        .from("lease_expense_rules")
-        .update(patch)
-        .eq("id", ruleId)
-        .select()
-        .single();
-      if (error) throw error;
+      // Only the 18 business fields the rule-editor dialog actually edits are
+      // sent to the RPC -- hierarchy fields (buildRuleHierarchyPatch) just
+      // re-stamp already-unchanged values and aren't in the RPC's whitelist.
+      const businessPatch = Object.fromEntries(
+        Object.entries(patch).filter(([key]) => RULE_PATCH_KEYS.includes(key)),
+      );
+      const result = await invokeEdgeFunction("update-lease-expense-rule", {
+        rule_id: ruleId,
+        lease_id: leaseId,
+        patch: businessPatch,
+      });
+      const data = result?.rule;
       if (data?.rule_set_id) {
         await leaseExpenseRuleService.recalculateRuleSetStatus(data.rule_set_id);
       }
@@ -513,6 +540,7 @@ export default function LeaseExpenseRules() {
     };
     await updateRuleMutation.mutateAsync({
       ruleId: editingRuleContext.rule.id,
+      leaseId: editingRuleContext.lease?.id || editingRuleContext.rule.lease_id,
       patch,
     });
     toast.success("Rule details updated");

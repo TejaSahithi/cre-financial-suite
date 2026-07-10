@@ -2,136 +2,135 @@ import { createEntityService } from '@/services/api';
 import { supabase } from '@/services/supabaseClient';
 import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
 import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
-import { logAudit } from '@/services/audit';
+import { invokeEdgeFunction } from '@/services/edgeFunctions';
 
 const baseService = createEntityService('Lease');
 
-function isMissingSchemaError(error) {
-  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return (
-    error?.code === "PGRST202" ||
-    error?.code === "PGRST204" ||
-    error?.code === "PGRST205" ||
-    error?.code === "42P01" ||
-    error?.code === "42703" ||
-    text.includes("schema cache") ||
-    text.includes("could not find the function") ||
-    text.includes("does not exist") ||
-    text.includes("not found")
-  );
-}
+const MISSING_SCHEMA_ERROR_CODES = new Set(["PGRST202", "PGRST204", "PGRST205", "42P01", "42703"]);
 
-async function ignoreMissingSchema(label, operation) {
-  const { error } = await operation();
-  if (error) {
-    if (isMissingSchemaError(error)) {
-      // Schema-cache misses are expected in environments where optional
-      // migrations haven't been applied yet. Log at debug level — the
-      // operation is already skipped gracefully so this is informational,
-      // not a warning that requires developer action on every page load.
-      console.debug(`[leaseService] ${label} skipped: ${error.message}`);
-      return false;
-    }
-    throw error;
+// Narrow, function-specific classifier: only "delete_lease_cascade is not
+// deployed/callable" shapes are treated as an unavailable-workflow error.
+// A bare "not found"/"does not exist" substring is NOT enough on its own —
+// the RPC's own business errors ("Lease not found") also contain "not
+// found" and must instead pass through unchanged (Phase 6R-10A: the prior,
+// broader text match misclassified that exact case).
+function isDeleteLeaseCascadeUnavailableError(error) {
+  if (MISSING_SCHEMA_ERROR_CODES.has(String(error?.code || "").toUpperCase())) {
+    return true;
   }
-  return true;
+  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  if (text.includes("schema cache")) return true;
+  if (text.includes("could not find the function")) return true;
+  if (text.includes("delete_lease_cascade") && text.includes("does not exist")) return true;
+  return false;
 }
 
-async function updateIfPresent(table, patch, column, value) {
-  return ignoreMissingSchema(`${table}.${column} update`, () =>
-    supabase.from(table).update(patch).eq(column, value)
-  );
-}
-
-async function deleteIfPresent(table, column, value) {
-  return ignoreMissingSchema(`${table}.${column} delete`, () =>
-    supabase.from(table).delete().eq(column, value)
-  );
-}
-
-async function deleteLeaseCascadeFallback(id) {
-  // Only update tables/columns that exist in the current schema.
-  // uploaded_files has no lease_id column; expense_classification_templates
-  // and cam_expense_inputs do not exist — omit them to avoid 400/404 noise.
-  await updateIfPresent("units", { lease_id: null }, "lease_id", id);
-  await updateIfPresent("documents", { lease_id: null }, "lease_id", id);
-
-  const childDeletes = [
-    ["expense_classifications", "lease_id"],
-    ["expenses", "lease_id"],
-    ["rent_projections", "lease_id"],
-    ["rent_schedules", "lease_id"],
-    ["revenues", "lease_id"],
-    ["lease_critical_dates", "lease_id"],
-    ["lease_clauses", "lease_id"],
-    ["lease_field_reviews", "lease_id"],
-    ["lease_config", "lease_id"],
-    ["cam_profiles", "lease_id"],
-    ["lease_amendments", "lease_id"],
-    ["lease_assignments", "lease_id"],
-    ["lease_expense_rule_clauses", "lease_id"],
-    ["lease_expense_rules", "lease_id"],
-    ["lease_expense_rule_sets", "lease_id"],
-  ];
-
-  for (const [table, column] of childDeletes) {
-    await deleteIfPresent(table, column, id);
-  }
-
-  const { error } = await supabase.from("leases").delete().eq("id", id);
-  if (error) throw error;
-}
-
-// Module-level cache: once we learn the RPC doesn't exist, skip the network
-// call entirely on subsequent deletes so no 404 appears in DevTools.
-let _cascadeRpcAvailable = null; // null=unknown, true=yes, false=no
+const LEASE_DELETE_UNAVAILABLE_MESSAGE =
+  "Lease deletion is temporarily unavailable because the server-side delete workflow is not deployed. Please contact support or retry after migrations are applied.";
 
 export const leaseService = {
   ...baseService,
   async delete(id) {
     if (!id) throw new Error("Lease ID is required for deletion");
     if (supabase) {
-      // 1. Fetch lease to know its org_id for the audit log
-      const lease = await baseService.get(id);
+      const { data: { user } = {} } = await supabase.auth.getUser().catch(() => ({ data: {} }));
 
-      // 2. Prefer the transactional cascade RPC only when it is known to exist.
-      //    If unknown, try once. On a 404/schema error, cache the failure so
-      //    subsequent deletes skip the failing network call entirely.
-      if (_cascadeRpcAvailable !== false) {
-        const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
-        if (!error) {
-          _cascadeRpcAvailable = true;
-        } else if (isMissingSchemaError(error)) {
-          _cascadeRpcAvailable = false;
-          console.debug(`[leaseService] delete_lease_cascade RPC not available; using client fallback.`);
-          await deleteLeaseCascadeFallback(id);
-        } else {
-          console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
-          throw error;
-        }
-      } else {
-        await deleteLeaseCascadeFallback(id);
+      // delete_lease_cascade owns the entire cascade (detach + delete
+      // children + delete lease + audit) in one transaction. There is no
+      // client-side fallback: a non-atomic, per-table cascade driven by the
+      // caller's own RLS session was a real correctness risk (partial
+      // deletes on failure, silent no-ops on tables with no DELETE policy,
+      // and a growing list of tables it had to be kept in sync with by
+      // hand) — see Phase 6R-9's investigation. If the RPC is genuinely
+      // unavailable (schema-cache-miss -- an incompletely migrated
+      // environment), fail clearly instead of attempting that cascade.
+      const { error } = await supabase.rpc('delete_lease_cascade', {
+        target_lease_id: id,
+        p_actor_user_id: user?.id || null,
+        p_actor_email: user?.email || null,
+      });
+      if (!error) {
+        return true;
       }
-
-      // 3. Log the audit manually since we bypassed baseService.delete
-      if (lease) {
-        logAudit({
-          entityType: 'Lease',
-          entityId: id,
-          action: 'delete',
-          orgId: lease.org_id
-        }).catch(() => { });
+      if (isDeleteLeaseCascadeUnavailableError(error)) {
+        console.error(`[leaseService] delete_lease_cascade RPC not available for lease ${id}:`, error);
+        throw new Error(LEASE_DELETE_UNAVAILABLE_MESSAGE);
       }
-
-      return true;
+      console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
+      throw error;
     }
 
     return baseService.delete(id);
   }
 };
 
+// Server-owned, audited replacement for the single-field-path direct writes
+// to leases.extraction_data (Phase 6D-2). See update_lease_extraction_field
+// RPC / update-lease-extraction-field edge function. Not for whole-object
+// rebuilds or the field_reviews map (those stay client-side for now).
+export async function updateLeaseExtractionField({ leaseId, fieldArea, action, fieldKey = null, patch }) {
+  return invokeEdgeFunction("update-lease-extraction-field", {
+    lease_id: leaseId,
+    field_area: fieldArea,
+    action,
+    field_key: fieldKey,
+    patch,
+  });
+}
+
+// Server-owned, audited replacement for the whole-field_reviews-map draft
+// save (Phase 6D-3). See save_lease_review_draft RPC / save-lease-review-draft
+// edge function. Called by leaseAbstractService.js's saveAbstractDraft, which
+// still computes the next fieldReviews map client-side (unchanged) and only
+// delegates the mechanical persistence step here.
+export async function saveLeaseReviewDraft({ leaseId, fieldReviews }) {
+  return invokeEdgeFunction("save-lease-review-draft", {
+    lease_id: leaseId,
+    field_reviews: fieldReviews,
+  });
+}
+
+// Server-owned, audited replacement for the "Reject Document" action
+// (Phase 6D-5). See reject_lease_abstract RPC / reject-lease-abstract edge
+// function. Called by leaseAbstractService.js's rejectLeaseAbstract.
+export async function rejectLeaseAbstract({ leaseId, reason, rejectedBy = null }) {
+  return invokeEdgeFunction("reject-lease-abstract", {
+    lease_id: leaseId,
+    reason,
+    rejected_by: rejectedBy,
+  });
+}
+
+// Server-owned, audited replacement for the "Send Back" (for re-extraction)
+// action (Phase 6R-1). See send_lease_back_for_reextraction RPC /
+// send-lease-back-for-reextraction edge function. Called by
+// LeaseReview.jsx's handleSendBack.
+export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
+  return invokeEdgeFunction("send-lease-back-for-reextraction", {
+    lease_id: leaseId,
+    reason,
+  });
+}
+
+// Server-owned, audited replacement for the post-approval building/unit
+// auto-link direct write (Phase 6R-13). See link_lease_space_assignment RPC
+// / link-lease-space-assignment edge function. The building/unit MATCH
+// itself (text-matching against candidate rows) stays entirely client-side,
+// unchanged -- see buildingUnitMatcher.js's matchBuildingAndUnit(). This
+// wrapper only persists whichever of building_id/unit_id was resolved. Not
+// folded into update_lease_extraction_field: that RPC rejects any write
+// once abstract_status='approved', and this always runs immediately after
+// approval succeeds.
+export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, unitId = null }) {
+  return invokeEdgeFunction("link-lease-space-assignment", {
+    lease_id: leaseId,
+    building_id: buildingId,
+    unit_id: unitId,
+  });
+}
+
 /**
- * Backfills missing top-level summary columns on the `leases` table using the 
+ * Backfills missing top-level summary columns on the `leases` table using the
  * generic lease field resolver to read from extraction_data, snapshot_json, etc.
  * 
  * @param {Object} options

@@ -5,6 +5,7 @@
  * time) with user-added reminders. Both behave identically once persisted.
  */
 import { supabase } from "@/services/supabaseClient";
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
 
 export const DATE_TYPES = [
   { value: "lease_date",            label: "Lease Date" },
@@ -44,18 +45,6 @@ function withOwnerEmailFallback(row) {
   return { ...row, owner_email: row?.owner_email || null, owner_name: row?.owner_name || null };
 }
 
-function stripMissingOwnerEmail(error, payload) {
-  if (isMissingOwnerEmailColumn(error)) {
-    const { owner_email, ...withoutOwnerEmail } = payload || {};
-    return withoutOwnerEmail;
-  }
-  if (isMissingOwnerNameColumn(error)) {
-    const { owner_email, owner_name, ...withoutOwners } = payload || {};
-    return withoutOwners;
-  }
-  return null;
-}
-
 export async function listCriticalDates({ orgId, propertyId, leaseId, status } = {}) {
   const runQuery = (columns) => {
     let q = supabase
@@ -86,81 +75,68 @@ export async function listCriticalDates({ orgId, propertyId, leaseId, status } =
   return (data || []).map(withOwnerEmailFallback);
 }
 
+// Server-owned, audited CRUD (Phase 6D-4: manage_lease_critical_date RPC /
+// manage-lease-critical-date edge function) -- replaces the prior direct
+// supabase.from("lease_critical_dates") calls, which had zero audit logging
+// and zero permission check anywhere. Note: approve_lease_workflow's own
+// derived-critical-date inserts (commencement/expiration/renewal_notice,
+// seeded from approved lease columns) are a completely separate code path
+// and are untouched by this change.
 export async function createCriticalDate(row) {
-  if (!row?.org_id || !row?.lease_id) {
-    throw new Error("createCriticalDate: org_id and lease_id are required");
+  if (!row?.lease_id) {
+    throw new Error("createCriticalDate: lease_id is required");
   }
-  const payload = {
-    org_id: row.org_id,
+  const data = await invokeEdgeFunction("manage-lease-critical-date", {
     lease_id: row.lease_id,
-    property_id: row.property_id || null,
-    date_type: row.date_type || "custom",
-    due_date: row.due_date,
-    owner_email: row.owner_email || null,
-    owner_name: row.owner_name || null,
-    status: row.status || "open",
-    reminder_days_before: row.reminder_days_before ?? null,
-    note: row.note || null,
-    source: row.source || "manual",
-  };
-  let { data, error } = await supabase
-    .from("lease_critical_dates")
-    .upsert(payload, { onConflict: "lease_id,date_type,due_date" })
-    .select()
-    .single();
-  const fallbackPayload = stripMissingOwnerEmail(error, payload);
-  if (fallbackPayload) {
-    ({ data, error } = await supabase
-      .from("lease_critical_dates")
-      .upsert(fallbackPayload, { onConflict: "lease_id,date_type,due_date" })
-      .select()
-      .single());
-  }
-  if (error) throw error;
-  return withOwnerEmailFallback(data);
-}
-
-export async function updateCriticalDate(id, patch) {
-  let { data, error } = await supabase
-    .from("lease_critical_dates")
-    .update(patch)
-    .eq("id", id)
-    .select()
-    .single();
-  let fallbackPatch = stripMissingOwnerEmail(error, patch);
-  if (fallbackPatch) {
-    ({ data, error } = await supabase
-      .from("lease_critical_dates")
-      .update(fallbackPatch)
-      .eq("id", id)
-      .select()
-      .single());
-    // Second-level fallback: owner_name also missing
-    const fallbackPatch2 = stripMissingOwnerEmail(error, fallbackPatch);
-    if (fallbackPatch2) {
-      ({ data, error } = await supabase
-        .from("lease_critical_dates")
-        .update(fallbackPatch2)
-        .eq("id", id)
-        .select()
-        .single());
-    }
-  }
-  if (error) throw error;
-  return withOwnerEmailFallback(data);
-}
-
-export async function markCriticalDateComplete(id, completedBy) {
-  return updateCriticalDate(id, {
-    status: "completed",
-    completed_at: new Date().toISOString(),
-    completed_by: completedBy || null,
+    action: "create",
+    patch: {
+      date_type: row.date_type || "custom",
+      due_date: row.due_date,
+      owner_email: row.owner_email || null,
+      owner_name: row.owner_name || null,
+      reminder_days_before: row.reminder_days_before ?? null,
+      note: row.note || null,
+    },
   });
+  return withOwnerEmailFallback(data.row);
 }
 
-export async function deleteCriticalDate(id) {
-  const { error } = await supabase.from("lease_critical_dates").delete().eq("id", id);
-  if (error) throw error;
+export async function updateCriticalDate({ id, leaseId, ownerEmail, ownerName }) {
+  if (!id || !leaseId) {
+    throw new Error("updateCriticalDate: id and leaseId are required");
+  }
+  const data = await invokeEdgeFunction("manage-lease-critical-date", {
+    lease_id: leaseId,
+    action: "update",
+    critical_date_id: id,
+    patch: { owner_email: ownerEmail ?? null, owner_name: ownerName ?? null },
+  });
+  return withOwnerEmailFallback(data.row);
+}
+
+export async function markCriticalDateComplete({ id, leaseId, completedBy }) {
+  if (!id || !leaseId) {
+    throw new Error("markCriticalDateComplete: id and leaseId are required");
+  }
+  const data = await invokeEdgeFunction("manage-lease-critical-date", {
+    lease_id: leaseId,
+    action: "mark_complete",
+    critical_date_id: id,
+    patch: { completed_by: completedBy || null },
+  });
+  return withOwnerEmailFallback(data.row);
+}
+
+export async function deleteCriticalDate({ id, leaseId }) {
+  if (!id || !leaseId) {
+    throw new Error("deleteCriticalDate: id and leaseId are required");
+  }
+  await invokeEdgeFunction("manage-lease-critical-date", {
+    lease_id: leaseId,
+    action: "delete",
+    critical_date_id: id,
+    patch: {},
+  });
   return id;
 }
 

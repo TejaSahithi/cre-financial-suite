@@ -213,7 +213,7 @@ function pickStrategy(args: {
       hasVision &&
       looksLikeScannedPdf(fileBytes)
     ) {
-      return "vision_first";
+      return "parallel";
     }
 
     // Inline Gemini Vision sends the full PDF as base64 inside one JSON
@@ -221,7 +221,7 @@ function pickStrategy(args: {
     if (fileBytes.length > MAX_INLINE_VISION_PDF_BYTES && hasDocling) {
       return "docling_only";
     }
-    return looksLikeScannedPdf(fileBytes) ? "vision_first" : "docling_only";
+    return looksLikeScannedPdf(fileBytes) ? "parallel" : "docling_only";
   }
 
   // 4. Unknown — race both, take the better result
@@ -482,7 +482,7 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
 
       const formData = new FormData();
       formData.append(
-        "file",
+        "files",
         new Blob([ctx.fileBytes], { type: ctx.mimeType }),
         ctx.fileName,
       );
@@ -492,7 +492,7 @@ async function callDocling(ctx: ParseContext): Promise<DoclingOutput | null> {
       if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      const timeoutId = setTimeout(() => controller.abort(), 38000);
 
       const response = await fetch(`${doclingUrl}/v1/convert/file`, {
         method: "POST",
