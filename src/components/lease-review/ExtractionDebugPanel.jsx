@@ -9,7 +9,7 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
-import { updateLeaseExtractionField } from "@/services/leaseService";
+import { updateLeaseExtractionField, persistLeaseExtractionMerge } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -526,8 +526,7 @@ export default function ExtractionDebugPanel({ lease }) {
         }
       }
 
-      const nextExtraction = {
-        ...(lease.extraction_data || {}),
+      const applyLatestPatch = {
         fields: mergedFields,
         field_evidence: mergedEvidence,
         confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
@@ -535,11 +534,11 @@ export default function ExtractionDebugPanel({ lease }) {
         evidence_refreshed_at: new Date().toISOString(),
       };
 
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      await persistLeaseExtractionMerge({
+        leaseId: lease.id,
+        action: "lease_extraction_debug_applied",
+        patch: applyLatestPatch,
+      });
       toast.success("Lease refreshed with latest extraction from source file.");
       queryClient.invalidateQueries({ queryKey: ["lease", lease.id] });
     } catch (err) {

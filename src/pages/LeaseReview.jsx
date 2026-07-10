@@ -1985,9 +1985,10 @@ export default function LeaseReview() {
         );
         // Still write evidence_refreshed_at so the auto-extract loop stops.
         try {
-          await supabase.from("leases").update({
-            extraction_data: {
-              ...(lease.extraction_data || {}),
+          await persistLeaseExtractionMerge({
+            leaseId: lease.id,
+            action: "lease_extraction_manual_review_recorded",
+            patch: {
               evidence_refreshed_at: new Date().toISOString(),
               extraction_debug: {
                 ...(lease.extraction_data?.extraction_debug || {}),
@@ -1997,7 +1998,7 @@ export default function LeaseReview() {
                 last_reextract_manual_review_reason: detail,
               },
             },
-          }).eq("id", lease.id);
+          });
           queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
         } catch (_writeErr) {
           // Non-fatal - loop will stop on next successful extraction
@@ -2397,16 +2398,14 @@ export default function LeaseReview() {
         merged_fields_total: Object.keys(mergedFields).length,
       };
 
-      const nextExtraction = overwriteBlockedReason
+      const reextractPatch = overwriteBlockedReason
         ? {
             // Preserve previous extraction entirely; only refresh the debug
             // breadcrumb so the reviewer can see this run was rejected.
-            ...(lease.extraction_data || {}),
             extraction_debug: extractionDebug,
             last_reextract_blocked_at: extractionDebug.last_reextract_at,
           }
         : {
-            ...(lease.extraction_data || {}),
             fields: mergedFields,
             field_evidence: mergedEvidence,
             confidence_scores: mergedConfidence,
@@ -2414,12 +2413,16 @@ export default function LeaseReview() {
             evidence_refreshed_at: new Date().toISOString(),
             extraction_debug: extractionDebug,
           };
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        ...reextractPatch,
+      };
 
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      await persistLeaseExtractionMerge({
+        leaseId: lease.id,
+        action: overwriteBlockedReason ? "lease_extraction_merge_blocked" : "lease_extraction_merged",
+        patch: reextractPatch,
+      });
 
       if (overwriteBlockedReason) {
         // Re-extract produced nothing usable. Surface the blocker clearly
