@@ -1,131 +1,27 @@
 import { createEntityService } from '@/services/api';
-import { supabase } from '@/services/supabaseClient';
-import { logAudit } from '@/services/audit';
 import { invokeEdgeFunction } from '@/services/edgeFunctions';
 
 const baseService = createEntityService('Lease');
 
-function isMissingSchemaError(error) {
-  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return (
-    error?.code === "PGRST202" ||
-    error?.code === "PGRST204" ||
-    error?.code === "PGRST205" ||
-    error?.code === "42P01" ||
-    error?.code === "42703" ||
-    text.includes("schema cache") ||
-    text.includes("could not find the function") ||
-    text.includes("does not exist") ||
-    text.includes("not found")
-  );
-}
-
-async function ignoreMissingSchema(label, operation) {
-  const { error } = await operation();
-  if (error) {
-    if (isMissingSchemaError(error)) {
-      // Schema-cache misses are expected in environments where optional
-      // migrations haven't been applied yet. Log at debug level — the
-      // operation is already skipped gracefully so this is informational,
-      // not a warning that requires developer action on every page load.
-      console.debug(`[leaseService] ${label} skipped: ${error.message}`);
-      return false;
-    }
-    throw error;
-  }
-  return true;
-}
-
-async function updateIfPresent(table, patch, column, value) {
-  return ignoreMissingSchema(`${table}.${column} update`, () =>
-    supabase.from(table).update(patch).eq(column, value)
-  );
-}
-
-async function deleteIfPresent(table, column, value) {
-  return ignoreMissingSchema(`${table}.${column} delete`, () =>
-    supabase.from(table).delete().eq(column, value)
-  );
-}
-
-async function deleteLeaseCascadeFallback(id) {
-  // Only update tables/columns that exist in the current schema.
-  // uploaded_files has no lease_id column; expense_classification_templates
-  // and cam_expense_inputs do not exist — omit them to avoid 400/404 noise.
-  await updateIfPresent("units", { lease_id: null }, "lease_id", id);
-  await updateIfPresent("documents", { lease_id: null }, "lease_id", id);
-
-  const childDeletes = [
-    ["expense_classifications", "lease_id"],
-    ["expenses", "lease_id"],
-    ["rent_projections", "lease_id"],
-    ["rent_schedules", "lease_id"],
-    ["revenues", "lease_id"],
-    ["lease_critical_dates", "lease_id"],
-    ["lease_clauses", "lease_id"],
-    ["lease_field_reviews", "lease_id"],
-    ["lease_config", "lease_id"],
-    ["cam_profiles", "lease_id"],
-    ["lease_amendments", "lease_id"],
-    ["lease_assignments", "lease_id"],
-    ["lease_expense_rule_clauses", "lease_id"],
-    ["lease_expense_rules", "lease_id"],
-    ["lease_expense_rule_sets", "lease_id"],
-  ];
-
-  for (const [table, column] of childDeletes) {
-    await deleteIfPresent(table, column, id);
-  }
-
-  const { error } = await supabase.from("leases").delete().eq("id", id);
-  if (error) throw error;
-}
-
-// Module-level cache: once we learn the RPC doesn't exist, skip the network
-// call entirely on subsequent deletes so no 404 appears in DevTools.
-let _cascadeRpcAvailable = null; // null=unknown, true=yes, false=no
-
 export const leaseService = {
   ...baseService,
+  // PRE-AZ-HOTFIX-1: lease cascade delete is now exclusively server-owned
+  // via the delete-lease-cascade edge function, which validates org
+  // ownership and calls delete_lease_cascade through the service-role
+  // client. This replaces the former direct
+  // supabase.rpc('delete_lease_cascade', ...) call (which the RPC's
+  // now-revoked anon/authenticated grant had allowed) and its
+  // deleteLeaseCascadeFallback direct-table-delete degraded path. There is
+  // deliberately no client-side fallback left: if the edge function is
+  // unavailable, deletion must fail loudly rather than silently falling
+  // back to an authenticated-client cascade delete. The RPC writes its own
+  // canonical audit_logs row (with the real actor identity now that the
+  // edge function passes it through), so no separate client-side
+  // logAudit() call is needed here.
   async delete(id) {
     if (!id) throw new Error("Lease ID is required for deletion");
-    if (supabase) {
-      // 1. Fetch lease to know its org_id for the audit log
-      const lease = await baseService.get(id);
-
-      // 2. Prefer the transactional cascade RPC only when it is known to exist.
-      //    If unknown, try once. On a 404/schema error, cache the failure so
-      //    subsequent deletes skip the failing network call entirely.
-      if (_cascadeRpcAvailable !== false) {
-        const { error } = await supabase.rpc('delete_lease_cascade', { target_lease_id: id });
-        if (!error) {
-          _cascadeRpcAvailable = true;
-        } else if (isMissingSchemaError(error)) {
-          _cascadeRpcAvailable = false;
-          console.debug(`[leaseService] delete_lease_cascade RPC not available; using client fallback.`);
-          await deleteLeaseCascadeFallback(id);
-        } else {
-          console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
-          throw error;
-        }
-      } else {
-        await deleteLeaseCascadeFallback(id);
-      }
-
-      // 3. Log the audit manually since we bypassed baseService.delete
-      if (lease) {
-        logAudit({
-          entityType: 'Lease',
-          entityId: id,
-          action: 'delete',
-          orgId: lease.org_id
-        }).catch(() => { });
-      }
-
-      return true;
-    }
-
-    return baseService.delete(id);
+    await invokeEdgeFunction("delete-lease-cascade", { lease_id: id });
+    return true;
   }
 };
 
