@@ -9,7 +9,6 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
-import { updateLeaseExtractionField } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -507,32 +506,40 @@ export default function ExtractionDebugPanel({ lease }) {
         }
       }
 
-      // Phase 6D-6A: same protection rule handleReextractLease applies
-      // (LeaseReview.jsx's isProtectedField) -- a manually-edited,
-      // manually-sourced, or accepted/edited/approved field must never be
-      // silently overwritten by this debug tool either. Extracted into a
-      // pure, unit-tested helper (mergeLatestExtraction) since this
-      // component only receives `lease` as a prop, not LeaseReview.jsx's
-      // local fieldReviews state -- review status is read from the
-      // persisted extraction_data.field_reviews instead, which
-      // save_lease_review_draft (Phase 6D-3) keeps in sync on every field
-      // action.
-      const { nextExtraction, protectedFieldsPreservedCount } = mergeLatestExtraction({
-        extractionData: lease.extraction_data,
-        fieldsWithEvidence,
-        evidenceMap,
-        confidenceMap,
-        workflowOutput: workflowOutputFromFile,
-      });
-      if (protectedFieldsPreservedCount > 0) {
-        console.log(`[ExtractionDebug] apply latest: preserved ${protectedFieldsPreservedCount} manually-edited/accepted field(s)`);
+      const isSourceBackedEntry = (entry) =>
+        entry && typeof entry === "object" && hasValidSourceEvidence({
+          sourcePage: entry.source_page,
+          sourceText: entry.source_text,
+        }) && !isCalculatedExtractionStatus(entry.extraction_status);
+      const mergedFields = { ...(lease.extraction_data?.fields || {}) };
+      const mergedEvidence = { ...(lease.extraction_data?.field_evidence || {}) };
+      for (const [key, entry] of Object.entries(fieldsWithEvidence)) {
+        const prev = mergedFields[key];
+        if (isSourceBackedEntry(entry) || !isSourceBackedEntry(prev)) {
+          mergedFields[key] = entry;
+        }
+      }
+      for (const [key, entry] of Object.entries(evidenceMap)) {
+        const prev = mergedEvidence[key];
+        if (isSourceBackedEntry(entry) || !isSourceBackedEntry(prev)) {
+          mergedEvidence[key] = entry;
+        }
       }
 
-      const { error: updateErr } = await supabase
-        .from("leases")
-        .update({ extraction_data: nextExtraction })
-        .eq("id", lease.id);
-      if (updateErr) throw updateErr;
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        fields: mergedFields,
+        field_evidence: mergedEvidence,
+        confidence_scores: { ...(lease.extraction_data?.confidence_scores || {}), ...confidenceMap },
+        ...(workflowOutputFromFile ? { workflow_output: workflowOutputFromFile } : {}),
+        evidence_refreshed_at: new Date().toISOString(),
+      };
+
+      await persistLeaseExtractionMerge({
+        leaseId: lease.id,
+        action: "lease_extraction_debug_applied",
+        patch: applyLatestPatch,
+      });
       toast.success("Lease refreshed with latest extraction from source file.");
       queryClient.invalidateQueries({ queryKey: ["lease", lease.id] });
     } catch (err) {

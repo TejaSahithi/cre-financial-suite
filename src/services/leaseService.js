@@ -2,7 +2,7 @@ import { createEntityService } from '@/services/api';
 import { supabase } from '@/services/supabaseClient';
 import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
 import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
-import { invokeEdgeFunction } from '@/services/edgeFunctions';
+import { logAudit } from '@/services/audit';
 
 const baseService = createEntityService('Lease');
 
@@ -130,7 +130,7 @@ export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, uni
 }
 
 /**
- * Backfills missing top-level summary columns on the `leases` table using the
+ * Backfills missing top-level summary columns on the `leases` table using the 
  * generic lease field resolver to read from extraction_data, snapshot_json, etc.
  * 
  * @param {Object} options
@@ -138,109 +138,155 @@ export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, uni
  * @param {boolean} options.force - If true, overwrites existing non-null fields.
  * @param {boolean} options.approvedOnly - If true, only processes approved leases.
  */
-export async function backfillLeaseSummaryFields({ dryRun = true, force = false, approvedOnly = true } = {}) {
-  console.log(`[backfillLeaseSummaryFields] Starting backfill... dryRun=${dryRun}, force=${force}, approvedOnly=${approvedOnly}`);
+export async function updateLeaseExtractionField({ leaseId, fieldArea, action, fieldKey = null, patch }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("update-lease-extraction-field", {
+    lease_id: leaseId,
+    field_area: fieldArea,
+    action,
+    field_key: fieldKey,
+    patch,
+  });
+}
 
-  let query = supabase.from("leases").select("*");
+/**
+ * Server-owned lease review draft save (Phase HARD-3B1 / 6D-3). Replaces
+ * leaseAbstractService.js's direct extraction_data.field_reviews write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {Object} params.fieldReviews
+ */
+export async function saveLeaseReviewDraftWorkflow({ leaseId, fieldReviews }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("save-lease-review-draft", {
+    lease_id: leaseId,
+    field_reviews: fieldReviews,
+  });
+}
 
-  if (approvedOnly) {
-    query = query.eq("abstract_status", "approved");
-  }
+/**
+ * Server-owned lease abstract rejection (Phase HARD-3B1 / 6D-5). Replaces
+ * leaseAbstractService.js's direct status/abstract_status/rejection write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string} params.reason
+ * @param {string|null} [params.rejectedBy]
+ */
+export async function rejectLeaseAbstractWorkflow({ leaseId, reason, rejectedBy = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("reject-lease-abstract", {
+    lease_id: leaseId,
+    reason,
+    rejected_by: rejectedBy,
+  });
+}
 
-  const { data: rawData, error } = await query;
-  if (error) {
-    console.error("[backfillLeaseSummaryFields] Failed to fetch leases:", error);
-    throw error;
-  }
+/**
+ * Server-owned "send back for re-extraction" verdict (Phase HARD-3B1 /
+ * 6R-1). Replaces LeaseReview.jsx's direct status='draft' +
+ * extraction_data.send_back write.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string|null} [params.reason]
+ */
+export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("send-lease-back-for-reextraction", {
+    lease_id: leaseId,
+    reason,
+  });
+}
 
-  const sourceFileIds = [...new Set(rawData.map(l => l.source_file_id).filter(Boolean))];
-  const fileMap = {};
-  if (sourceFileIds.length > 0) {
-    const { data: files } = await supabase
-      .from("uploaded_files")
-      .select("id, reviewed_output, ui_review_payload")
-      .in("id", sourceFileIds);
-    if (files) {
-      for (const f of files) fileMap[f.id] = f;
-    }
-  }
+/**
+ * Server-owned typed-column + extraction_data.fields[key] field save
+ * (Phase HARD-3B2). Replaces LeaseReview.jsx's handleFieldSave /
+ * FieldDetailDrawer.onSaveEdit direct writes. Server-side whitelists which
+ * columnUpdates keys are real, currently-existing lease columns and
+ * silently drops the rest.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string} params.fieldKey
+ * @param {Object} [params.columnUpdates] - {column_name: value}
+ * @param {Object} [params.patch] - {field, field_evidence, confidence_score}
+ */
+export async function updateLeaseFieldAndColumns({ leaseId, fieldKey, columnUpdates = {}, patch = {} }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("update-lease-field-and-columns", {
+    lease_id: leaseId,
+    field_key: fieldKey,
+    column_updates: columnUpdates,
+    patch,
+  });
+}
 
-  const leases = rawData.map(lease => ({
-    ...lease,
-    uploaded_files: fileMap[lease.source_file_id] || null,
-    uploaded_file: fileMap[lease.source_file_id] || null
-  }));
+/**
+ * Server-owned evidence-backfill bulk merge (Phase HARD-3B2). Replaces
+ * LeaseReview.jsx's evidence-backfill useEffect direct write. All
+ * evidence-matching computation stays client-side; this only persists the
+ * already-computed patch transactionally with one audit row.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {Object} [params.fieldsPatch]
+ * @param {Object} [params.fieldEvidencePatch]
+ * @param {Object|null} [params.workflowOutput]
+ */
+export async function backfillLeaseEvidence({ leaseId, fieldsPatch = {}, fieldEvidencePatch = {}, workflowOutput = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("backfill-lease-evidence", {
+    lease_id: leaseId,
+    fields_patch: fieldsPatch,
+    field_evidence_patch: fieldEvidencePatch,
+    workflow_output: workflowOutput,
+  });
+}
 
-  const summaryKeys = [
-    "tenant_name", "landlord_name", "lease_type", "commencement_date",
-    "expiration_date", "monthly_rent", "annual_rent", "square_footage",
-    "total_sf", "property_name"
-  ];
+/**
+ * Server-owned post-approval building/unit link (Phase HARD-3B2, reuses
+ * the already-deployed link_lease_space_assignment RPC from Phase 6R-13).
+ * Replaces LeaseReview.jsx's post-approval building/unit auto-link direct
+ * write. Client-side text matching (matchBuildingAndUnit) stays unchanged;
+ * this only persists the resolved building_id/unit_id.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string|null} [params.buildingId]
+ * @param {string|null} [params.unitId]
+ */
+export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, unitId = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("link-lease-space-assignment", {
+    lease_id: leaseId,
+    building_id: buildingId,
+    unit_id: unitId,
+  });
+}
 
-  const results = {
-    processed: 0,
-    updated: 0,
-    changes: []
-  };
-
-  for (const lease of leases) {
-    results.processed++;
-    const resolvedFields = resolveLeaseFields(lease, summaryKeys, { mode: "canonical" });
-    const updates = {};
-    const leaseChanges = { lease_id: lease.id, before: {}, after: {} };
-
-    for (const key of summaryKeys) {
-      const resolved = resolvedFields[key];
-      if (!resolved || !resolved.found || resolved.value == null) continue;
-
-      let value = resolved.value;
-      if (NUMERIC_REVIEW_FIELDS.has(key)) {
-        const n = typeof value === "number" ? value : Number(String(value).replace(/[$,%\s,]/g, ""));
-        if (!Number.isFinite(n)) continue;
-        value = n;
-      } else if (typeof value === "string") {
-        value = value.trim();
-        if (!value) continue;
-      }
-
-      const columns = resolveFieldColumns(key);
-      for (const column of columns) {
-        if (!force && lease[column] != null && lease[column] !== "") continue;
-
-        // Skip if the value is essentially the same
-        if (lease[column] === value) continue;
-
-        if (updates[column] === undefined) {
-          updates[column] = value;
-          leaseChanges.before[column] = lease[column];
-          leaseChanges.after[column] = value;
-        }
-      }
-    }
-
-    if (Object.keys(updates).length > 0) {
-      results.changes.push(leaseChanges);
-      if (!dryRun) {
-        const { error: updateError } = await supabase
-          .from("leases")
-          .update(updates)
-          .eq("id", lease.id);
-
-        if (updateError) {
-          console.error(`[backfillLeaseSummaryFields] Failed to update lease ${lease.id}:`, updateError);
-        } else {
-          results.updated++;
-        }
-      } else {
-        results.updated++;
-      }
-    }
-  }
-
-  console.log(`[backfillLeaseSummaryFields] Completed. Processed: ${results.processed}, ${dryRun ? 'Would update' : 'Updated'}: ${results.updated}`);
-  if (results.changes.length > 0) {
-    console.log("[backfillLeaseSummaryFields] Changes detail:", results.changes);
-  }
-
-  return results;
+/**
+ * Server-owned lease extraction-data merge persistence (Phase HARD-3B3A).
+ * Replaces the remaining direct leases UPDATE writes in
+ * LeaseReview.jsx's handleReextractLease (manual-review fallback + success/
+ * blocked merge) and ExtractionDebugPanel.jsx's handleApplyLatestExtraction.
+ * All field-matching/protection/merge computation stays entirely
+ * client-side, unchanged -- this only persists the already-computed patch
+ * (a subset of fields/field_evidence/confidence_scores/workflow_output/
+ * evidence_refreshed_at/extraction_debug/last_reextract_blocked_at)
+ * transactionally with one audit row.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {'lease_extraction_manual_review_recorded'|'lease_extraction_merged'|'lease_extraction_merge_blocked'|'lease_extraction_debug_applied'} params.action
+ * @param {Object} params.patch
+ */
+export async function persistLeaseExtractionMerge({ leaseId, action, patch }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("persist-lease-extraction-merge", {
+    lease_id: leaseId,
+    action,
+    patch,
+  });
 }

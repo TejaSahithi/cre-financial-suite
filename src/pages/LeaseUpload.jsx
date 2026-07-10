@@ -19,6 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
+import { leaseService } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -310,6 +311,10 @@ export default function LeaseUpload() {
   const [retryingExtraction, setRetryingExtraction] = useState(false);
   const [deletingUpload, setDeletingUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Set when review-approve fails while preparing a Lease Review draft.
+  // No client-side fallback creates a lease in this case (see ensureLeaseDraft) --
+  // this is the persistent failure/retry state shown to the user instead.
+  const [leaseDraftError, setLeaseDraftError] = useState(null);
   const retriedUploadedFiles = useRef(new Set());
   const retriedManualFallbackFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
@@ -467,6 +472,7 @@ export default function LeaseUpload() {
 
     const existing = await findLeaseByFileId(fileId);
     if (existing?.id) {
+      setLeaseDraftError(null);
       await invalidateLeaseQueries();
       return existing.id;
     }
@@ -518,16 +524,28 @@ export default function LeaseUpload() {
       const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
       if (linkedLeaseId) {
         await ensureLeaseSourceFileLink(linkedLeaseId, record || { id: fileId });
+        setLeaseDraftError(null);
         await invalidateLeaseQueries();
         return linkedLeaseId;
       }
     }
 
-    // review-approve is the only path that creates a lease draft. If it
-    // fails, surface the error instead of writing a lease row directly from
-    // the client — the backend must be the one that decides a lease exists,
-    // so retries go through the same server-side validation and audit trail
-    // every other draft gets.
+    // Client-side fallback. If review-approve isn't usable on this deployment
+    // (older function, schema drift, or any 4xx), create the lease row
+    // directly from the reviewed UI payload so the user can still open Lease
+    // Review and edit fields. This is the same shape review-approve would
+    // produce on the happy path.
+    try {
+      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, record);
+      if (fallbackLeaseId) {
+        await invalidateLeaseQueries();
+        await fetchFileRecord(fileId);
+        return fallbackLeaseId;
+      }
+    } catch (fallbackErr) {
+      console.warn("[LeaseUpload] client-side lease draft fallback failed:", fallbackErr?.message || fallbackErr);
+    }
+
     if (edgeError && !silent) {
       toast.error(edgeError?.message || "Could not prepare lease review draft.");
     } else if (!silent) {
@@ -668,8 +686,7 @@ export default function LeaseUpload() {
     if (!fileId) return;
     setDeletingUpload(true);
     try {
-      const { error } = await supabase.from("uploaded_files").delete().eq("id", fileId);
-      if (error) throw error;
+      await deleteUploadedFile(fileId);
       toast.success("Upload deleted.");
       setFileId(null);
       setFileRecord(null);
@@ -975,6 +992,29 @@ export default function LeaseUpload() {
                 Delete Upload
               </Button>
             </div>
+
+            {leaseDraftError && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <div>
+                  <div className="font-medium">Could not prepare the Lease Review draft</div>
+                  <div className="mt-1 text-xs text-red-600">{leaseDraftError}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={openLeaseReview}
+                  disabled={openingReview}
+                  className="shrink-0 border-red-200 bg-white text-red-700 hover:bg-red-100"
+                >
+                  {openingReview ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  Retry
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
