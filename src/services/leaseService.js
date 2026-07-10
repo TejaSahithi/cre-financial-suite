@@ -1,66 +1,27 @@
 import { createEntityService } from '@/services/api';
-import { supabase } from '@/services/supabaseClient';
-import { resolveLeaseFields } from '@/lib/leaseFieldResolver';
-import { NUMERIC_REVIEW_FIELDS, resolveFieldColumns } from '@/lib/leaseReviewSchema';
-import { logAudit } from '@/services/audit';
+import { invokeEdgeFunction } from '@/services/edgeFunctions';
 
 const baseService = createEntityService('Lease');
 
-const MISSING_SCHEMA_ERROR_CODES = new Set(["PGRST202", "PGRST204", "PGRST205", "42P01", "42703"]);
-
-// Narrow, function-specific classifier: only "delete_lease_cascade is not
-// deployed/callable" shapes are treated as an unavailable-workflow error.
-// A bare "not found"/"does not exist" substring is NOT enough on its own —
-// the RPC's own business errors ("Lease not found") also contain "not
-// found" and must instead pass through unchanged (Phase 6R-10A: the prior,
-// broader text match misclassified that exact case).
-function isDeleteLeaseCascadeUnavailableError(error) {
-  if (MISSING_SCHEMA_ERROR_CODES.has(String(error?.code || "").toUpperCase())) {
-    return true;
-  }
-  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  if (text.includes("schema cache")) return true;
-  if (text.includes("could not find the function")) return true;
-  if (text.includes("delete_lease_cascade") && text.includes("does not exist")) return true;
-  return false;
-}
-
-const LEASE_DELETE_UNAVAILABLE_MESSAGE =
-  "Lease deletion is temporarily unavailable because the server-side delete workflow is not deployed. Please contact support or retry after migrations are applied.";
-
 export const leaseService = {
   ...baseService,
+  // PRE-AZ-HOTFIX-1: lease cascade delete is now exclusively server-owned
+  // via the delete-lease-cascade edge function, which validates org
+  // ownership and calls delete_lease_cascade through the service-role
+  // client. This replaces the former direct
+  // supabase.rpc('delete_lease_cascade', ...) call (which the RPC's
+  // now-revoked anon/authenticated grant had allowed) and its
+  // deleteLeaseCascadeFallback direct-table-delete degraded path. There is
+  // deliberately no client-side fallback left: if the edge function is
+  // unavailable, deletion must fail loudly rather than silently falling
+  // back to an authenticated-client cascade delete. The RPC writes its own
+  // canonical audit_logs row (with the real actor identity now that the
+  // edge function passes it through), so no separate client-side
+  // logAudit() call is needed here.
   async delete(id) {
     if (!id) throw new Error("Lease ID is required for deletion");
-    if (supabase) {
-      const { data: { user } = {} } = await supabase.auth.getUser().catch(() => ({ data: {} }));
-
-      // delete_lease_cascade owns the entire cascade (detach + delete
-      // children + delete lease + audit) in one transaction. There is no
-      // client-side fallback: a non-atomic, per-table cascade driven by the
-      // caller's own RLS session was a real correctness risk (partial
-      // deletes on failure, silent no-ops on tables with no DELETE policy,
-      // and a growing list of tables it had to be kept in sync with by
-      // hand) — see Phase 6R-9's investigation. If the RPC is genuinely
-      // unavailable (schema-cache-miss -- an incompletely migrated
-      // environment), fail clearly instead of attempting that cascade.
-      const { error } = await supabase.rpc('delete_lease_cascade', {
-        target_lease_id: id,
-        p_actor_user_id: user?.id || null,
-        p_actor_email: user?.email || null,
-      });
-      if (!error) {
-        return true;
-      }
-      if (isDeleteLeaseCascadeUnavailableError(error)) {
-        console.error(`[leaseService] delete_lease_cascade RPC not available for lease ${id}:`, error);
-        throw new Error(LEASE_DELETE_UNAVAILABLE_MESSAGE);
-      }
-      console.error(`[leaseService] Cascade delete failed for lease ${id}:`, error);
-      throw error;
-    }
-
-    return baseService.delete(id);
+    await invokeEdgeFunction("delete-lease-cascade", { lease_id: id });
+    return true;
   }
 };
 
@@ -69,6 +30,7 @@ export const leaseService = {
 // RPC / update-lease-extraction-field edge function. Not for whole-object
 // rebuilds or the field_reviews map (those stay client-side for now).
 export async function updateLeaseExtractionField({ leaseId, fieldArea, action, fieldKey = null, patch }) {
+  if (!leaseId) throw new Error("Lease ID is required");
   return invokeEdgeFunction("update-lease-extraction-field", {
     lease_id: leaseId,
     field_area: fieldArea,
@@ -106,6 +68,7 @@ export async function rejectLeaseAbstract({ leaseId, reason, rejectedBy = null }
 // send-lease-back-for-reextraction edge function. Called by
 // LeaseReview.jsx's handleSendBack.
 export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
   return invokeEdgeFunction("send-lease-back-for-reextraction", {
     lease_id: leaseId,
     reason,
@@ -122,30 +85,11 @@ export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
 // once abstract_status='approved', and this always runs immediately after
 // approval succeeds.
 export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, unitId = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
   return invokeEdgeFunction("link-lease-space-assignment", {
     lease_id: leaseId,
     building_id: buildingId,
     unit_id: unitId,
-  });
-}
-
-/**
- * Backfills missing top-level summary columns on the `leases` table using the 
- * generic lease field resolver to read from extraction_data, snapshot_json, etc.
- * 
- * @param {Object} options
- * @param {boolean} options.dryRun - If true, only reports what would change.
- * @param {boolean} options.force - If true, overwrites existing non-null fields.
- * @param {boolean} options.approvedOnly - If true, only processes approved leases.
- */
-export async function updateLeaseExtractionField({ leaseId, fieldArea, action, fieldKey = null, patch }) {
-  if (!leaseId) throw new Error("Lease ID is required");
-  return invokeEdgeFunction("update-lease-extraction-field", {
-    lease_id: leaseId,
-    field_area: fieldArea,
-    action,
-    field_key: fieldKey,
-    patch,
   });
 }
 
@@ -180,23 +124,6 @@ export async function rejectLeaseAbstractWorkflow({ leaseId, reason, rejectedBy 
     lease_id: leaseId,
     reason,
     rejected_by: rejectedBy,
-  });
-}
-
-/**
- * Server-owned "send back for re-extraction" verdict (Phase HARD-3B1 /
- * 6R-1). Replaces LeaseReview.jsx's direct status='draft' +
- * extraction_data.send_back write.
- *
- * @param {Object} params
- * @param {string} params.leaseId
- * @param {string|null} [params.reason]
- */
-export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
-  if (!leaseId) throw new Error("Lease ID is required");
-  return invokeEdgeFunction("send-lease-back-for-reextraction", {
-    lease_id: leaseId,
-    reason,
   });
 }
 
@@ -242,27 +169,6 @@ export async function backfillLeaseEvidence({ leaseId, fieldsPatch = {}, fieldEv
     fields_patch: fieldsPatch,
     field_evidence_patch: fieldEvidencePatch,
     workflow_output: workflowOutput,
-  });
-}
-
-/**
- * Server-owned post-approval building/unit link (Phase HARD-3B2, reuses
- * the already-deployed link_lease_space_assignment RPC from Phase 6R-13).
- * Replaces LeaseReview.jsx's post-approval building/unit auto-link direct
- * write. Client-side text matching (matchBuildingAndUnit) stays unchanged;
- * this only persists the resolved building_id/unit_id.
- *
- * @param {Object} params
- * @param {string} params.leaseId
- * @param {string|null} [params.buildingId]
- * @param {string|null} [params.unitId]
- */
-export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, unitId = null }) {
-  if (!leaseId) throw new Error("Lease ID is required");
-  return invokeEdgeFunction("link-lease-space-assignment", {
-    lease_id: leaseId,
-    building_id: buildingId,
-    unit_id: unitId,
   });
 }
 
