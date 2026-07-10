@@ -222,6 +222,72 @@ export async function sendLeaseBackForReextraction({ leaseId, reason = null }) {
 }
 
 /**
+ * Server-owned typed-column + extraction_data.fields[key] field save
+ * (Phase HARD-3B2). Replaces LeaseReview.jsx's handleFieldSave /
+ * FieldDetailDrawer.onSaveEdit direct writes. Server-side whitelists which
+ * columnUpdates keys are real, currently-existing lease columns and
+ * silently drops the rest.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string} params.fieldKey
+ * @param {Object} [params.columnUpdates] - {column_name: value}
+ * @param {Object} [params.patch] - {field, field_evidence, confidence_score}
+ */
+export async function updateLeaseFieldAndColumns({ leaseId, fieldKey, columnUpdates = {}, patch = {} }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("update-lease-field-and-columns", {
+    lease_id: leaseId,
+    field_key: fieldKey,
+    column_updates: columnUpdates,
+    patch,
+  });
+}
+
+/**
+ * Server-owned evidence-backfill bulk merge (Phase HARD-3B2). Replaces
+ * LeaseReview.jsx's evidence-backfill useEffect direct write. All
+ * evidence-matching computation stays client-side; this only persists the
+ * already-computed patch transactionally with one audit row.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {Object} [params.fieldsPatch]
+ * @param {Object} [params.fieldEvidencePatch]
+ * @param {Object|null} [params.workflowOutput]
+ */
+export async function backfillLeaseEvidence({ leaseId, fieldsPatch = {}, fieldEvidencePatch = {}, workflowOutput = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("backfill-lease-evidence", {
+    lease_id: leaseId,
+    fields_patch: fieldsPatch,
+    field_evidence_patch: fieldEvidencePatch,
+    workflow_output: workflowOutput,
+  });
+}
+
+/**
+ * Server-owned post-approval building/unit link (Phase HARD-3B2, reuses
+ * the already-deployed link_lease_space_assignment RPC from Phase 6R-13).
+ * Replaces LeaseReview.jsx's post-approval building/unit auto-link direct
+ * write. Client-side text matching (matchBuildingAndUnit) stays unchanged;
+ * this only persists the resolved building_id/unit_id.
+ *
+ * @param {Object} params
+ * @param {string} params.leaseId
+ * @param {string|null} [params.buildingId]
+ * @param {string|null} [params.unitId]
+ */
+export async function linkLeaseSpaceAssignment({ leaseId, buildingId = null, unitId = null }) {
+  if (!leaseId) throw new Error("Lease ID is required");
+  return invokeEdgeFunction("link-lease-space-assignment", {
+    lease_id: leaseId,
+    building_id: buildingId,
+    unit_id: unitId,
+  });
+}
+
+/**
  * Backfills missing top-level summary columns on the `leases` table using the
  * generic lease field resolver to read from extraction_data, snapshot_json, etc.
  * 

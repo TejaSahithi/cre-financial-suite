@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -19,6 +19,9 @@ import {
   leaseService,
   updateLeaseExtractionField,
   sendLeaseBackForReextraction,
+  updateLeaseFieldAndColumns,
+  backfillLeaseEvidence,
+  linkLeaseSpaceAssignment,
 } from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
@@ -153,6 +156,11 @@ export default function LeaseReview() {
   const [activeTab, setActiveTab] = useState("summary");
   const [editingField, setEditingField] = useState(null);
   const [editValue, setEditValue] = useState("");
+  // True while handleFieldSave or FieldDetailDrawer's onSaveEdit is in
+  // flight (Phase HARD-3B2 -- replaces the removed generic lease-update
+  // mutation's isPending flag as the shared disabled/loading signal now
+  // that both call sites go through updateLeaseFieldAndColumns directly).
+  const [fieldSaving, setFieldSaving] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
   const [showPostApprovalBanner, setShowPostApprovalBanner] = useState(false);
@@ -735,20 +743,15 @@ export default function LeaseReview() {
           return;
         }
 
-        const nextExtraction = {
-          ...ed,
-          fields: { ...(ed.fields || {}), ...fieldsWithEvidence },
-          field_evidence: { ...(ed.field_evidence || {}), ...fieldEvidence },
-          ...(workflowOutput ? { workflow_output: workflowOutput } : {}),
-          evidence_backfilled_at: new Date().toISOString(),
-        };
-
-        const { error: updateErr } = await supabase
-          .from("leases")
-          .update({ extraction_data: nextExtraction })
-          .eq("id", lease.id);
-        if (updateErr) {
-          console.warn("[LeaseReview] evidence backfill update failed:", updateErr.message);
+        try {
+          await backfillLeaseEvidence({
+            leaseId: lease.id,
+            fieldsPatch: fieldsWithEvidence,
+            fieldEvidencePatch: fieldEvidence,
+            workflowOutput,
+          });
+        } catch (updateErr) {
+          console.warn("[LeaseReview] evidence backfill update failed:", updateErr?.message || updateErr);
           return;
         }
         queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
@@ -860,36 +863,6 @@ export default function LeaseReview() {
     },
     [leaseFull],
   );
-
-  const updateLeaseMutation = useMutation({
-    mutationFn: async ({ id, data }) => leaseService.update(id, data),
-    onSuccess: (updated) => {
-      // Seed the cache with the returned row so a chained read (e.g.
-      // Save edit -> Accept) sees the new evidence immediately, without
-      // waiting for the invalidation-triggered refetch to complete.
-      if (updated && updated.id === leaseId) {
-        updateLeaseQueryCache(queryClient, leaseId, updated);
-      }
-      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
-      queryClient.invalidateQueries({ queryKey: ["leases"] });
-      if (updated?.property_id) {
-        triggerCompute(
-          "compute-lease",
-          { property_id: updated.property_id, fiscal_year: new Date().getFullYear() },
-          { silent: true },
-        )
-          .then(() => {
-            queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
-            queryClient.invalidateQueries({ queryKey: ["snapshot", "revenue"] });
-          })
-          .catch(() => {});
-      }
-    },
-    onError: (err) => {
-      console.error("[LeaseReview] update failed:", err);
-      toast.error(`Update failed: ${err?.message ?? "Unknown error"}`);
-    },
-  });
 
   const handleMarkAsFullLease = async () => {
     try {
@@ -1690,20 +1663,35 @@ export default function LeaseReview() {
 
     const previousValue = readFieldValue(lease, key);
 
+    setFieldSaving(true);
     try {
-      const updatedLease = await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          ...columnUpdates,
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            fields: {
-              ...(lease.extraction_data?.fields || {}),
-              [key]: { value: val, manually_edited: true, edited_at: new Date().toISOString() },
-            },
-          },
-        },
+      const fieldPatch = { value: val, manually_edited: true, edited_at: new Date().toISOString() };
+      await updateLeaseFieldAndColumns({
+        leaseId: lease.id,
+        fieldKey: key,
+        columnUpdates,
+        patch: { field: fieldPatch },
       });
+      const nextExtraction = {
+        ...(lease.extraction_data || {}),
+        fields: { ...(lease.extraction_data?.fields || {}), [key]: fieldPatch },
+      };
+      updateLeaseQueryCache(queryClient, leaseId, { ...columnUpdates, extraction_data: nextExtraction });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+      queryClient.invalidateQueries({ queryKey: ["leases"] });
+      if (lease?.property_id) {
+        triggerCompute(
+          "compute-lease",
+          { property_id: lease.property_id, fiscal_year: new Date().getFullYear() },
+          { silent: true },
+        )
+          .then(() => {
+            queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
+            queryClient.invalidateQueries({ queryKey: ["snapshot", "revenue"] });
+          })
+          .catch(() => {});
+      }
+
       await persistFieldAction({
         field: editingField,
         status: REVIEW_STATUSES.EDITED,
@@ -1713,8 +1701,11 @@ export default function LeaseReview() {
 
       toast.success(`Updated ${editingField.label}`);
       setEditingField(null);
-    } catch {
-      /* toasted */
+    } catch (err) {
+      console.error("[LeaseReview] handleFieldSave failed:", err);
+      toast.error(err?.message || `Could not save ${editingField.label}`);
+    } finally {
+      setFieldSaving(false);
     }
   };
 
@@ -1841,16 +1832,17 @@ export default function LeaseReview() {
           });
 
           if (Object.keys(updates).length > 0) {
-            const { error: linkErr } = await supabase
-              .from("leases")
-              .update(updates)
-              .eq("id", approvedLease.id);
-            if (linkErr) {
-              console.warn("[LeaseReview] building/unit auto-link skipped:", linkErr.message);
-            } else {
+            try {
+              await linkLeaseSpaceAssignment({
+                leaseId: approvedLease.id,
+                buildingId: updates.building_id ?? null,
+                unitId: updates.unit_id ?? null,
+              });
               Object.assign(approvedLease, updates);
               console.log("[LeaseReview] auto-linked building/unit:", updates);
               queryClient.invalidateQueries({ queryKey: ["leases"] });
+            } catch (linkFnErr) {
+              console.warn("[LeaseReview] building/unit auto-link skipped:", linkFnErr?.message || linkFnErr);
             }
           }
         }
@@ -2839,7 +2831,7 @@ export default function LeaseReview() {
               variant="outline"
               className="shrink-0 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-xs"
               onClick={handleMarkAsFullLease}
-              disabled={updateLeaseMutation.isPending}
+              disabled={fieldSaving}
             >
               This is a full lease
             </Button>
@@ -3418,6 +3410,7 @@ export default function LeaseReview() {
           // left blank arrive as `undefined` and are NOT written, so
           // pre-existing extractor evidence is preserved. Synchronous prep
           // runs inside the try block so any throw surfaces as a toast.
+          setFieldSaving(true);
           try {
             const columnUpdates = {};
             if (!f.dynamic_document_item) {
@@ -3478,24 +3471,37 @@ export default function LeaseReview() {
                 }
               : (lease.extraction_data?.confidence_scores || undefined);
 
-            await updateLeaseMutation.mutateAsync({
-              id: lease.id,
-              data: {
-                ...columnUpdates,
-                extraction_data: {
-                  ...(lease.extraction_data || {}),
-                  fields: {
-                    ...(lease.extraction_data?.fields || {}),
-                    [f.key]: mergedFieldRecord,
-                  },
-                  field_evidence: {
-                    ...(lease.extraction_data?.field_evidence || {}),
-                    [f.key]: mergedEvidenceRecord,
-                  },
-                  ...(nextConfidenceScores ? { confidence_scores: nextConfidenceScores } : {}),
-                },
+            await updateLeaseFieldAndColumns({
+              leaseId: lease.id,
+              fieldKey: f.key,
+              columnUpdates,
+              patch: {
+                field: mergedFieldRecord,
+                field_evidence: mergedEvidenceRecord,
+                ...(evidencePatch.confidence !== undefined ? { confidence_score: evidencePatch.confidence } : {}),
               },
             });
+            const nextExtraction = {
+              ...(lease.extraction_data || {}),
+              fields: { ...(lease.extraction_data?.fields || {}), [f.key]: mergedFieldRecord },
+              field_evidence: { ...(lease.extraction_data?.field_evidence || {}), [f.key]: mergedEvidenceRecord },
+              ...(nextConfidenceScores ? { confidence_scores: nextConfidenceScores } : {}),
+            };
+            updateLeaseQueryCache(queryClient, leaseId, { ...columnUpdates, extraction_data: nextExtraction });
+            queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
+            queryClient.invalidateQueries({ queryKey: ["leases"] });
+            if (lease?.property_id) {
+              triggerCompute(
+                "compute-lease",
+                { property_id: lease.property_id, fiscal_year: new Date().getFullYear() },
+                { silent: true },
+              )
+                .then(() => {
+                  queryClient.invalidateQueries({ queryKey: ["snapshot", "lease"] });
+                  queryClient.invalidateQueries({ queryKey: ["snapshot", "revenue"] });
+                })
+                .catch(() => {});
+            }
             try {
               await persistFieldAction({
                 field: f,
@@ -3510,6 +3516,8 @@ export default function LeaseReview() {
           } catch (err) {
             console.error("[LeaseReview] onSaveEdit failed:", err);
             toast.error(err?.message || `Could not save ${f.label}`);
+          } finally {
+            setFieldSaving(false);
           }
         }}
         onViewInDocument={() => drawerField && viewInDocument(drawerField)}
@@ -3622,7 +3630,7 @@ export default function LeaseReview() {
             setFieldReviews(fieldReviews);
           }
         }}
-        isSaving={updateLeaseMutation.isPending}
+        isSaving={fieldSaving}
       />
 
       {/* Sticky bottom action bar - once the abstract is approved we collapse
@@ -3713,7 +3721,7 @@ export default function LeaseReview() {
                 <Button
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={savingDraft || updateLeaseMutation.isPending}
+                  disabled={savingDraft || fieldSaving}
                 >
                   {savingDraft && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
                   Save Review Draft
@@ -3802,10 +3810,10 @@ export default function LeaseReview() {
             </Button>
             <Button
               onClick={handleFieldSave}
-              disabled={updateLeaseMutation.isPending}
+              disabled={fieldSaving}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              {updateLeaseMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              {fieldSaving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Save
             </Button>
           </DialogFooter>
@@ -3898,7 +3906,7 @@ export default function LeaseReview() {
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={handleApproveAbstract}
-              disabled={approving || updateLeaseMutation.isPending}
+              disabled={approving || fieldSaving}
             >
               {approving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Confirm Approval
@@ -3933,9 +3941,9 @@ export default function LeaseReview() {
             <Button
               className="bg-red-600 hover:bg-red-700"
               onClick={handleRejectDocument}
-              disabled={updateLeaseMutation.isPending}
+              disabled={fieldSaving}
             >
-              {updateLeaseMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              {fieldSaving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Reject
             </Button>
           </DialogFooter>
@@ -4002,10 +4010,10 @@ export default function LeaseReview() {
             </Button>
             <Button
               onClick={handleSendBack}
-              disabled={updateLeaseMutation.isPending}
+              disabled={fieldSaving}
               className="bg-amber-600 hover:bg-amber-700"
             >
-              {updateLeaseMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              {fieldSaving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
               Send Back
             </Button>
           </DialogFooter>
