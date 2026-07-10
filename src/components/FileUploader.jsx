@@ -610,7 +610,7 @@ const ACTIVE_EXTRACTION_STATUSES = new Set([
 ]);
 
 function ExtractionStatusRow({ fileId, fileName, fileType }) {
-  const { status, isLoading } = useFileStatus(fileId);
+  const { status, isLoading, pollError } = useFileStatus(fileId);
   const [retrying, setRetrying] = useState(false);
 
   const handleRetry = async () => {
@@ -628,7 +628,9 @@ function ExtractionStatusRow({ fileId, fileName, fileType }) {
     }
   };
 
-  const info = EXTRACTION_STATUS_LABELS[status] || { label: status ?? "Processing...", color: "text-slate-500" };
+  const info = pollError
+    ? { label: pollError, color: "text-amber-600" }
+    : EXTRACTION_STATUS_LABELS[status] || { label: status ?? "Processing...", color: "text-slate-500" };
   const isActive = status && ACTIVE_EXTRACTION_STATUSES.has(status);
   const isFailed = status === "failed";
   const isReviewReady = status === "review_required";

@@ -25,6 +25,7 @@ import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { updateLeaseExtractionField } from "@/services/leaseService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { createPageUrl } from "@/utils";
 
 // Statuses that still need polling because a backend stage is in flight.
@@ -133,7 +134,10 @@ const MINIMAL_UPLOADED_FILE_SELECT = "id, file_name, file_url, status, error_mes
 async function fetchUploadedFileStatus(id) {
   if (!id) return { data: null, error: null };
 
-  const actingOrgId = getStoredActingOrgId();
+  // Super-admin / multi-org users have no stored acting org on a fresh
+  // session; without the header pipeline-status returns 400 on every call.
+  // Resolve the same fallback invokeEdgeFunction uses.
+  const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null).catch(() => null);
   const { data, error } = await supabase.functions.invoke("pipeline-status", {
     body: { file_id: id, include_details: true },
     headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},

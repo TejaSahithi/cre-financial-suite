@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/services/supabaseClient";
+import { getStoredActingOrgId } from "@/lib/actingOrg";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { createPageUrl } from "@/utils";
 import useOrgId from "@/hooks/useOrgId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,12 +143,16 @@ export default function FileHistory() {
       else setRefreshing(true);
 
       try {
+        // Super-admin / multi-org users need an explicit acting-org header or
+        // pipeline-status rejects the call with 400 before the file lookup.
+        const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null).catch(() => null);
         const { data, error } = await supabase.functions.invoke(
           "pipeline-status",
           {
             body: {
               ...(orgId && orgId !== "__none__" ? { org_id: orgId } : {}),
             },
+            headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},
           }
         );
 
