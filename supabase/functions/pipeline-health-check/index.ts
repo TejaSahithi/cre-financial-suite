@@ -17,6 +17,8 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser } from "../_shared/supabase.ts";
 import { callGeminiWithAPIKey, validateVertexAIAuth } from "../_shared/vertex-ai.ts";
+import { getAzureDocumentIntelligenceConfig } from "../_shared/azure/document-intelligence.ts";
+import { resolveExtractionProvider, shouldUseAzureLayout } from "../_shared/extraction/extraction-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +71,13 @@ function buildSecretPresenceMap(): Record<string, "present" | "missing"> {
     GOOGLE_SERVICE_ACCOUNT_KEY: (has("GOOGLE_SERVICE_ACCOUNT_KEY") || has("GOOGLE_PRIVATE_KEY")) ? "present" : "missing",
     GEMINI_API_KEY: (has("GEMINI_API_KEY") || has("GOOGLE_API_KEY")) ? "present" : "missing",
     DOCLING_API_URL: has("DOCLING_API_URL") ? "present" : "missing",
+    EXTRACTION_PROVIDER: has("EXTRACTION_PROVIDER") ? "present" : "missing",
+    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: has("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") ? "present" : "missing",
+    AZURE_DOCUMENT_INTELLIGENCE_KEY: has("AZURE_DOCUMENT_INTELLIGENCE_KEY") ? "present" : "missing",
+    AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: has("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION") ? "present" : "missing",
+    AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID: has("AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID") ? "present" : "missing",
+    AZURE_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT: has("AZURE_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT") ? "present" : "missing",
+    STORE_FULL_AZURE_RAW_RESPONSE: has("STORE_FULL_AZURE_RAW_RESPONSE") ? "present" : "missing",
   };
 }
 
@@ -122,13 +131,59 @@ function checkEnvVars(): Check[] {
     ...(hasGeminiKey ? {} : { fix: "supabase secrets set GEMINI_API_KEY=<google-ai-api-key>" }),
   });
 
+  const providerSelection = resolveExtractionProvider();
+  checks.push({
+    name: "env_extraction_provider",
+    status: providerSelection.mode === "legacy" ? "skip" : "pass",
+    message: `EXTRACTION_PROVIDER=${providerSelection.mode} (${providerSelection.source})`,
+  });
+
+  const azureConfig = getAzureDocumentIntelligenceConfig();
+  const azureConfigured = !!(azureConfig.endpoint && azureConfig.keyPresent);
+  const azureModeRequested = shouldUseAzureLayout(providerSelection.mode);
+  const azureOnlyMode = providerSelection.mode === "azure_document_intelligence";
+  const rawResponseStorageEnabled = Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true";
+  checks.push({
+    name: "env_azure_document_intelligence",
+    status: azureConfigured ? "pass" : azureModeRequested ? "fail" : "skip",
+    message: azureConfigured
+      ? `Azure Document Intelligence configured (model=${azureConfig.modelId}, api=${azureConfig.apiVersion}, effective_output=${azureConfig.effectiveOutputFormat})`
+      : azureModeRequested
+        ? "Azure provider mode requested but endpoint/key are missing"
+        : "Azure Document Intelligence not configured (optional provider)",
+    ...(azureConfigured ? {} : { fix: "Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY in Supabase secrets" }),
+  });
+  checks.push({
+    name: "env_azure_output_format",
+    status: azureConfig.effectiveOutputFormat === "markdown"
+      ? (azureConfig.outputFormatWasForced ? "warn" : "pass")
+      : azureModeRequested ? "fail" : "skip",
+    message: azureConfig.outputFormatWasForced
+      ? `AZURE_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT=${azureConfig.configuredOutputFormat} ignored; effective outputContentFormat=markdown`
+      : `Azure effective outputContentFormat=${azureConfig.effectiveOutputFormat}`,
+    ...(azureConfig.effectiveOutputFormat === "markdown" ? {} : { fix: "Azure outputContentFormat must be markdown" }),
+  });
+  checks.push({
+    name: "azure_raw_response_storage",
+    status: rawResponseStorageEnabled ? "warn" : azureModeRequested ? "pass" : "skip",
+    message: rawResponseStorageEnabled
+      ? "STORE_FULL_AZURE_RAW_RESPONSE=true; full Azure raw responses will be stored"
+      : "Full Azure raw_response storage disabled; only raw_response_summary is stored",
+  });
+  if (azureOnlyMode) {
+    checks.push({
+      name: "azure_only_mode",
+      status: "pass",
+      message: "Azure-only layout mode active; Docling/Gemini parser checks are legacy diagnostics",
+    });
+  }
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   checks.push({
     name: "env_docling_api_url",
     status: hasDocling ? "pass" : "skip",
     message: hasDocling
-      ? "DOCLING_API_URL is set"
-      : "DOCLING_API_URL not configured (optional — enables structured table extraction)",
+      ? (providerSelection.mode === "azure_document_intelligence" ? "DOCLING_API_URL is set (legacy parser diagnostic only in Azure-only mode)" : "DOCLING_API_URL is set")
+      : (providerSelection.mode === "azure_document_intelligence" ? "DOCLING_API_URL not configured (legacy parser diagnostic only in Azure-only mode)" : "DOCLING_API_URL not configured (optional legacy parser table extraction)"),
     ...(hasDocling ? {} : { fix: "supabase secrets set DOCLING_API_URL=http://your-docling-service:5001" }),
   });
 
@@ -698,13 +753,23 @@ Deno.serve(async (req: Request) => {
   const vertexAuthReady = hasStatus("vertex_auth", "pass");
   const geminiReady = hasStatus("gemini_api_key", "pass");
   const doclingReady = hasStatus("docling", "pass");
+  const providerSelection = resolveExtractionProvider();
+  const azureConfig = getAzureDocumentIntelligenceConfig();
+  const azureOnlyMode = providerSelection.mode === "azure_document_intelligence";
+  const azureReady =
+    hasStatus("env_azure_document_intelligence", "pass") &&
+    azureConfig.effectiveOutputFormat === "markdown";
 
   const ready_for_digital_pdf = dbTablesReady && dbColumnsReady && storageReady && parseReady;
   const ready_for_scanned_pdf = ready_for_digital_pdf && doclingReady;
   const ready_for_llm_extraction = ready_for_digital_pdf && ((vertexReady && vertexAuthReady) || geminiReady);
   const ready_for_docling_tables = dbTablesReady && dbColumnsReady && storageReady && doclingReady;
+  const ready_for_azure_layout = ready_for_digital_pdf && azureReady;
+  const ready_for_azure_business_extraction = ready_for_azure_layout && ((vertexReady && vertexAuthReady) || geminiReady);
 
-  const overallOk = !checks.some((c) => c.status === "fail");
+  const overallOk = !checks.some((c) =>
+    c.status === "fail" && !(azureOnlyMode && ["docling", "gemini_api_key"].includes(c.name))
+  );
 
   return jsonResponse({
     ok: overallOk,
@@ -714,6 +779,24 @@ Deno.serve(async (req: Request) => {
       ready_for_scanned_pdf,
       ready_for_llm_extraction,
       ready_for_docling_tables,
+      ready_for_azure_layout,
+      ready_for_azure_business_extraction,
+    },
+    extraction_provider: providerSelection.mode,
+    azure_document_intelligence: {
+      azure_only_mode: azureOnlyMode,
+      endpoint: azureConfig.endpoint ? "present" : "missing",
+      key: azureConfig.keyPresent ? "present" : "missing",
+      api_version: azureConfig.apiVersion,
+      model_id: azureConfig.modelId,
+      configured_output_format: azureConfig.configuredOutputFormat,
+      effective_output_format: azureConfig.effectiveOutputFormat,
+      output_format_forced_to_markdown: azureConfig.outputFormatWasForced,
+      store_full_raw_response: Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true" ? "enabled" : "disabled",
+      legacy_parser_diagnostics: {
+        docling: azureOnlyMode ? "legacy_diagnostic_not_azure_blocker" : "active_legacy_parser_check",
+        gemini_vision: azureOnlyMode ? "legacy_diagnostic_not_azure_blocker" : "active_legacy_parser_check",
+      },
     },
     secret_presence: buildSecretPresenceMap(),
     checks,

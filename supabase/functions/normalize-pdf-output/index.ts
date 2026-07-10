@@ -25,6 +25,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
@@ -1789,24 +1790,32 @@ Deno.serve(async (req: Request) => {
     // plain-text OCR fallback results (0 text_blocks but full_text ≥ 5000 chars)
     // — re-downloading the file in that case would be redundant and OOM the function.
     const doclingTextIsGood = doclingTextLength >= 2500 && (doclingBlockCount >= 5 || doclingTextLength >= 5000);
+    const azureLayoutMode =
+      Deno.env.get("EXTRACTION_PROVIDER") === "azure_document_intelligence" ||
+      isAzureLayoutOutput(fileRecord.docling_raw as Record<string, unknown>);
     const fileTooLargeForInlineVision =
       fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
 
     console.log(
       `[normalize-pdf-output] STAGE docling_check file_id=${file_id} ` +
       `doclingTextLength=${doclingTextLength} doclingBlockCount=${doclingBlockCount} ` +
-      `doclingTextIsGood=${doclingTextIsGood} fileSizeBytes=${fileSizeBytes}`,
+      `doclingTextIsGood=${doclingTextIsGood} azureLayoutMode=${azureLayoutMode} fileSizeBytes=${fileSizeBytes}`,
     );
 
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
-    let fileLoadStatus: string = doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
+    let fileLoadStatus: string = azureLayoutMode ? "skipped_azure_layout" : doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
     let fileLoadError: string | null = null;
     let fileBytesLength = 0;
     let detectedMagic: string | null = null;
 
-    if (doclingTextIsGood) {
+    if (azureLayoutMode) {
+      console.log(
+        `[normalize-pdf-output] Azure layout output active for file_id=${file_id}; ` +
+        `using docling_raw text only and skipping file bytes/fileBase64 fallback`,
+      );
+    } else if (doclingTextIsGood) {
       console.log(
         `[normalize-pdf-output] docling text is sufficient ` +
         `(${doclingTextLength} chars, ${doclingBlockCount} blocks) — ` +
@@ -1839,7 +1848,9 @@ Deno.serve(async (req: Request) => {
       return null;
     };
 
-    if (!doclingTextIsGood && extractionSkipped) {
+    if (azureLayoutMode) {
+      fileLoadStatus = "skipped_azure_layout";
+    } else if (!doclingTextIsGood && extractionSkipped) {
       fileLoadStatus = "skipped_extraction_not_configured";
       fileLoadError =
         (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ??
@@ -1957,7 +1968,7 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64}`);
+      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const result = await runExtractionPipeline(
@@ -1965,7 +1976,7 @@ Deno.serve(async (req: Request) => {
           moduleType: extractionModuleType,
           fileName,
           docling: fileRecord.docling_raw,
-          ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
+          ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
           // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
@@ -1986,6 +1997,7 @@ Deno.serve(async (req: Request) => {
         (result.metadata as any).extractionDebug = {
           ...((result.metadata as any).extractionDebug || {}),
           file_load_status: fileLoadStatus,
+          azure_layout_mode: azureLayoutMode,
           file_load_error: fileLoadError,
           file_url_present: !!fileRecord.file_url,
           file_size_bytes: fileSizeIsKnown ? fileSizeBytes : null,

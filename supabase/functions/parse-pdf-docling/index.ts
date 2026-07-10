@@ -19,6 +19,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { createAdminClient, verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { parseDocument } from "../_shared/extraction/parser.ts";
+import { getAzureDocumentIntelligenceConfig } from "../_shared/azure/document-intelligence.ts";
+import { resolveExtractionProvider, shouldUseAzureLayout } from "../_shared/extraction/extraction-provider.ts";
 import { setStatus } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import {
@@ -102,7 +104,7 @@ Deno.serve(async (req: Request) => {
 
     // 2. Parse request body
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run } = body;
+    const { file_id, dry_run, provider_override } = body;
 
     // dry_run=true: validate auth and config only — no file required, no DB writes.
     // Used by pipeline-health-check to verify internal worker auth is functional.
@@ -120,7 +122,21 @@ Deno.serve(async (req: Request) => {
         ok: true,
         dry_run: true,
         authenticated: true,
-        backends: { docling: hasDocling, vision: hasVision, gemini_api_key: hasGeminiKey },
+        extraction_provider: resolveExtractionProvider(provider_override).mode,
+        extraction_provider_source: resolveExtractionProvider(provider_override).source,
+        backends: {
+          docling: hasDocling,
+          vision: hasVision,
+          gemini_api_key: hasGeminiKey,
+          azure_document_intelligence: !!(getAzureDocumentIntelligenceConfig().endpoint && getAzureDocumentIntelligenceConfig().keyPresent),
+        },
+        azure: {
+          endpoint: getAzureDocumentIntelligenceConfig().endpoint ? "present" : "missing",
+          key: getAzureDocumentIntelligenceConfig().keyPresent ? "present" : "missing",
+          api_version: getAzureDocumentIntelligenceConfig().apiVersion,
+          model_id: getAzureDocumentIntelligenceConfig().modelId,
+          output_format: getAzureDocumentIntelligenceConfig().outputFormat,
+        },
         message: "Auth verified. dry_run=true — no file processed.",
       });
     }
@@ -287,8 +303,10 @@ Deno.serve(async (req: Request) => {
         Deno.env.get("GOOGLE_API_KEY")
       );
 
+      const providerSelection = resolveExtractionProvider(provider_override);
+      const azureProviderEnabled = shouldUseAzureLayout(providerSelection.mode);
       const fileTooLargeForNative = fileSizeBytes > 0 && fileSizeBytes > MAX_NATIVE_BYTES;
-      if (fileTooLargeForNative && !hasDocling && !hasVision) {
+      if (fileTooLargeForNative && !hasDocling && !hasVision && !azureProviderEnabled) {
         console.warn(
           `[parse-pdf-docling] file_id=${file_id} size=${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB — ` +
           `larger than native-text limit (${MAX_NATIVE_BYTES / 1024 / 1024} MB) and no Docling/Vision backend configured. ` +
@@ -358,6 +376,7 @@ Deno.serve(async (req: Request) => {
       // 6. Delegate to the canonical parser (Docling → Gemini Vision fallback)
       const doclingOutput = await parseDocument(fileBytes, fileName, mimeType, {
         fileUrl: signedUrlData?.signedUrl ?? fileRecord.file_url,
+        providerOverride: provider_override,
       });
       const extractionMethod = doclingOutput.extraction_method ?? "unknown";
 
@@ -399,8 +418,14 @@ Deno.serve(async (req: Request) => {
           : []).map((p: any) => ({ ...p, text: trimDocText(p?.text) })),
       };
 
+      const parserOutputMetadata =
+        (doclingOutput as any)?._metadata && typeof (doclingOutput as any)._metadata === "object"
+          ? ((doclingOutput as any)._metadata as Record<string, unknown>)
+          : {};
       const extractionMetadata = {
+        ...parserOutputMetadata,
         extraction_method: extractionMethod,
+        provider: parserOutputMetadata.provider ?? (extractionMethod === "azure_layout" ? "azure_document_intelligence" : null),
         file_format: mimeType,
         page_count: doclingOutput.page_count ?? null,
         table_count: doclingOutput.tables?.length ?? 0,

@@ -34,6 +34,13 @@ import type {
   DoclingPage,
 } from "./types.ts";
 import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
+import { analyzeWithAzureLayout, getAzureDocumentIntelligenceConfig } from "../azure/document-intelligence.ts";
+import { normalizeAzureLayoutToDoclingOutput } from "./azure-layout-adapter.ts";
+import {
+  resolveExtractionProvider,
+  shouldFallbackToLegacy,
+  shouldUseAzureLayout,
+} from "./extraction-provider.ts";
 
 // A PDF needs at least this many Docling text blocks to be trusted as
 // "digital" (non-scanned). 2 is intentionally low — a simple single-page
@@ -80,8 +87,38 @@ export async function parseDocument(
   fileBytes: Uint8Array,
   fileName: string,
   mimeType: string = "application/pdf",
-  options: { fileUrl?: string } = {},
+  options: { fileUrl?: string; providerOverride?: string | null } = {},
 ): Promise<DoclingOutput> {
+  const provider = resolveExtractionProvider(options.providerOverride);
+  if (shouldUseAzureLayout(provider.mode)) {
+    try {
+      const config = getAzureDocumentIntelligenceConfig();
+      const analyzeResult = await analyzeWithAzureLayout({
+        fileBytes,
+        fileUrl: options.fileUrl,
+        mimeType,
+      });
+      const azureOutput = normalizeAzureLayoutToDoclingOutput(analyzeResult, {
+        apiVersion: config.apiVersion,
+        modelId: config.modelId,
+      });
+
+      if (provider.mode !== "shadow_compare") {
+        return azureOutput;
+      }
+
+      console.log(
+        `[parser] shadow_compare Azure layout complete for "${fileName}" ` +
+        `chars=${azureOutput.full_text?.length ?? 0} pages=${azureOutput.page_count ?? "?"}; returning legacy output`,
+      );
+    } catch (azureErr) {
+      console.warn(`[parser] Azure layout provider failed (${azureErr?.message ?? azureErr})`);
+      if (!shouldFallbackToLegacy(provider.mode) && provider.mode !== "shadow_compare") {
+        throw azureErr;
+      }
+    }
+  }
+
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   const hasVision = !!(
     // Vertex AI service account path
