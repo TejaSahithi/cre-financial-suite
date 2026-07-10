@@ -15,7 +15,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { leaseService } from "@/services/leaseService";
+import { leaseService, persistLeaseExtractionMerge } from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";

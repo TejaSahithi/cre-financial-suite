@@ -9,6 +9,7 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { persistLeaseExtractionMerge } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
