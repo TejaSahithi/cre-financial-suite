@@ -196,3 +196,10 @@ export async function persistLeaseExtractionMerge({ leaseId, action, patch }) {
     patch,
   });
 }
+
+export async function deleteUploadedFile(fileId) {
+  if (!fileId) throw new Error('File ID is required');
+  return invokeEdgeFunction('delete-uploaded-file', {
+    file_id: fileId,
+  });
+}
