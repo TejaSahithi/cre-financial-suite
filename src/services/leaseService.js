@@ -20,7 +20,10 @@ export const leaseService = {
   // logAudit() call is needed here.
   async delete(id) {
     if (!id) throw new Error("Lease ID is required for deletion");
-    await invokeEdgeFunction("delete-lease-cascade", { lease_id: id });
+    const lease = await baseService.get(id);
+    if (!lease) throw new Error("Lease not found");
+    const customHeaders = lease.org_id ? { "x-acting-org-id": lease.org_id } : {};
+    await invokeEdgeFunction("delete-lease-cascade", { lease_id: id }, customHeaders);
     return true;
   }
 };
