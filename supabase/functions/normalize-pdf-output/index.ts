@@ -1234,6 +1234,18 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   return out;
 }
 
+// HTML/markup fragments occasionally leak into extracted values (e.g. a
+// table-cell dump misrouted into a field's plain-text value). No lease field
+// is legitimately an HTML tag — reject rather than publish as a confident
+// extraction. Applied once, centrally, in buildReviewField() so it covers
+// every field shape (minimal fast-path payload, standard fields, custom
+// fields) without touching each call site.
+const MARKUP_VALUE_RE = /<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?>/i;
+
+function rejectMarkupValue(value: unknown): boolean {
+  return typeof value === "string" && MARKUP_VALUE_RE.test(value);
+}
+
 function buildReviewField(opts: {
   recordIndex: number;
   fieldKey: string;
@@ -1249,24 +1261,31 @@ function buildReviewField(opts: {
   editable?: boolean;
   validationErrors?: string[];
 }) {
-  const blank = isBlank(opts.value);
+  const hasMarkup = rejectMarkupValue(opts.value);
+  const effectiveValue = hasMarkup ? null : (opts.value ?? null);
+  const blank = isBlank(effectiveValue);
+  const status = hasMarkup ? "needs_review" : opts.status;
+  const baseValidationErrors = Array.isArray(opts.validationErrors) ? opts.validationErrors : [];
+  const validationErrors = hasMarkup
+    ? [...baseValidationErrors, "Rejected: extracted value contained HTML/markup fragments"]
+    : baseValidationErrors;
   return {
     id: `${opts.recordIndex}:${opts.isStandard ? "standard" : "custom"}:${opts.fieldKey}`,
     field_key: opts.fieldKey,
     label: humanizeFieldName(opts.fieldKey),
-    value: opts.value ?? null,
-    original_value: opts.value ?? null,
+    value: effectiveValue,
+    original_value: effectiveValue,
     field_type: opts.fieldType,
     description: opts.description ?? null,
     required: opts.required,
     is_standard: opts.isStandard,
-    confidence: opts.confidence,
+    confidence: hasMarkup ? 0 : opts.confidence,
     source: blank ? "system" : opts.source,
-    evidence: opts.evidence ?? null,
+    evidence: hasMarkup ? null : (opts.evidence ?? null),
     editable: opts.editable ?? true,
-    extraction_status: opts.status ?? (blank ? "not_found" : "extracted"),
-    status: opts.status ?? (blank ? "missing" : "pending"),
-    validation_errors: Array.isArray(opts.validationErrors) ? opts.validationErrors : [],
+    extraction_status: status ?? (blank ? "not_found" : "extracted"),
+    status: status ?? (blank ? "missing" : "pending"),
+    validation_errors: validationErrors,
     accepted: false,
     rejected: false,
     user_edit: null,
@@ -2481,4 +2500,6 @@ Deno.serve(async (req: Request) => {
 export const __test__ = {
   buildPipelineLayoutInput,
   buildMinimalReviewPayload,
+  rejectMarkupValue,
+  buildReviewField,
 };
