@@ -7,14 +7,17 @@
  *   VERTEX_LOCATION            — Region (e.g. "us-central1")
  *   GOOGLE_SERVICE_ACCOUNT_KEY — Full service account JSON as a single-line string
  *
- * Model: gemini-1.5-pro-002  (best accuracy for structured extraction)
+ * Model: gemini-2.5-flash (verified available on Vertex AI). The 1.5-series
+ * models are deprecated/retired and kept only as a last-resort legacy
+ * fallback in buildVertexAttempts() — trying them first wasted 3-4 guaranteed
+ * 404 round-trips per call before ever reaching a working model.
  *
  * Usage:
  *   import { callVertexAI, callVertexAIJSON } from "../_shared/vertex-ai.ts";
  *   const result = await callVertexAIJSON({ systemPrompt, userPrompt });
  */
 
-const DEFAULT_MODEL = "gemini-1.5-pro-002";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 // ---------------------------------------------------------------------------
 // Service account → OAuth2 access token
@@ -714,6 +717,8 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 function buildVertexAttempts(primaryLocation: string, primaryModel: string) {
   const locations = uniqueStrings([primaryLocation, "us-central1", "us-east4", "global"]);
+  // Verified-available models first; deprecated/retired 1.5-series models
+  // last, as a legacy fallback only — they 404 on current Vertex deployments.
   const models = uniqueStrings([
     primaryModel,
     "gemini-2.5-flash",

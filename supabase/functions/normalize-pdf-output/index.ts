@@ -28,6 +28,7 @@ import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
+import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
@@ -48,6 +49,61 @@ import {
 // inline data limit — so any file small enough for parse to have processed inline
 // can also be processed inline here if Vision is needed as a fallback.
 const MAX_INLINE_VISION_BYTES = 20 * 1024 * 1024;
+
+const AZURE_PAGE_MARKER_RE = /\[\[\s*PAGE\s+\d+\s*\]\]/i;
+
+/**
+ * Build the exact minimal object handed to runExtractionPipeline — no
+ * top-level `markdown` duplicate (a 1:1 copy of full_text that rides through
+ * every downstream copy for zero benefit), and for azure_layout records
+ * persisted before the adapter started emitting [[PAGE n]] markers, repair
+ * full_text at read time by rebuilding it from the persisted pages array.
+ *
+ * This repair matters because Re-extract re-enters at normalize, not parse —
+ * a page-marker fix in the Azure adapter alone can never reach a record whose
+ * docling_raw was already persisted by the old adapter. Without markers the
+ * LLM extraction prompt's page-anchoring rule never fires, every field comes
+ * back with source_page=null, and normalize is forced into an expensive
+ * brute-force page-matching scan for every field.
+ *
+ * Never mutates the input — the caller still needs the original doclingRaw
+ * (pages/text_blocks arrays are marker-independent) for evidence lookups.
+ */
+function buildPipelineLayoutInput(
+  doclingRaw: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!doclingRaw) return doclingRaw;
+
+  let fullText = String((doclingRaw as any)?.full_text ?? "");
+  let repairStrategy: string | null = null;
+  const pages = Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : [];
+
+  if (isAzureLayoutOutput(doclingRaw) && !AZURE_PAGE_MARKER_RE.test(fullText) && pages.length > 0) {
+    fullText = pages
+      .map((page: any, index: number) => {
+        const pageNumber = Number.isFinite(Number(page?.page)) && Number(page.page) > 0 ? Number(page.page) : index + 1;
+        return `[[PAGE ${pageNumber}]]\n${page?.text ?? ""}`;
+      })
+      .join("\n\n");
+    repairStrategy = "page_lines";
+    console.log(
+      `[normalize-pdf-output] azure_page_marker_repair strategy=${repairStrategy} ` +
+      `pages=${pages.length} chars=${fullText.length}`,
+    );
+  }
+
+  return {
+    extraction_method: (doclingRaw as any)?.extraction_method,
+    full_text: fullText,
+    page_count: (doclingRaw as any)?.page_count,
+    pages: (doclingRaw as any)?.pages,
+    text_blocks: (doclingRaw as any)?.text_blocks,
+    tables: (doclingRaw as any)?.tables,
+    fields: (doclingRaw as any)?.fields,
+    warnings: (doclingRaw as any)?.warnings,
+    _metadata: (doclingRaw as any)?._metadata,
+  };
+}
 
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
@@ -119,133 +175,10 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
   }
 }
 
-function positivePageNumber(value: unknown): number | null {
-  const page = Number(value);
-  return Number.isFinite(page) && page > 0 ? page : null;
-}
-
-function normalizeForPageMatch(value: unknown): string {
-  return cleanEvidenceSnippet(value)
-    .toLowerCase()
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function compactForPageMatch(value: unknown): string {
-  return normalizeForPageMatch(value).replace(/[^a-z0-9]+/g, "");
-}
-
-// Both builder functions are called O(schema_fields) times per request for
-// the same doclingRaw reference (once per field in buildReviewPayload).
-// Rebuilding them on every call was creating ~300 × 520 KB of temporary
-// string objects — the primary cause of the 546 OOM error on large leases.
-// WeakMap keys on the object reference so the cache is naturally scoped to
-// the request and GC'd when doclingRaw goes out of scope.
-const _pageTextCandidatesCache = new WeakMap<object, Array<{ text: string; normalized: string; compact: string; page: number; source: string }>>();
+// Cache for buildEvidenceSearchBlocks() below — unrelated to EvidenceIndex's
+// own internal cache in evidence-index.ts (different candidate shape: this
+// one is used by the fallback needle-in-haystack search, not page scoring).
 const _evidenceSearchBlocksCache = new WeakMap<object, Array<{ text: string; lowered: string; page: number | null; source: string }>>();
-
-function buildPageTextCandidates(doclingRaw: Record<string, unknown> | null | undefined) {
-  if (doclingRaw && _pageTextCandidatesCache.has(doclingRaw)) {
-    return _pageTextCandidatesCache.get(doclingRaw)!;
-  }
-  const candidates: Array<{ text: string; normalized: string; compact: string; page: number; source: string }> = [];
-  const push = (value: unknown, pageValue: unknown, source: string) => {
-    const page = positivePageNumber(pageValue);
-    const text = cleanEvidenceSnippet(value);
-    if (!page || !text) return;
-    candidates.push({
-      text,
-      normalized: normalizeForPageMatch(text),
-      compact: compactForPageMatch(text),
-      page,
-      source,
-    });
-  };
-
-  const pages = Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : [];
-  pages.forEach((page: any, index: number) => {
-    push(
-      page?.text ?? page?.content ?? page?.markdown ?? page?.full_text,
-      page?.page ?? page?.page_number ?? page?.number ?? index + 1,
-      "page",
-    );
-  });
-
-  for (const block of Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : []) {
-    push(block?.text, block?.page ?? block?.page_number ?? block?.source_page, "text_block");
-  }
-
-  const seen = new Set<string>();
-  const result = candidates.filter((candidate) => {
-    const key = `${candidate.page}|${candidate.source}|${candidate.normalized.slice(0, 240)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  if (doclingRaw) _pageTextCandidatesCache.set(doclingRaw, result);
-  return result;
-}
-
-function pageMatchScore(candidate: { normalized: string; compact: string; source: string }, snippet: string): number {
-  const normalizedSnippet = normalizeForPageMatch(snippet);
-  if (normalizedSnippet.length < 8) return 0;
-  if (candidate.normalized.includes(normalizedSnippet)) return 1000 + Math.min(normalizedSnippet.length, 400);
-
-  const compactSnippet = compactForPageMatch(snippet);
-  if (compactSnippet.length >= 24 && candidate.compact.includes(compactSnippet)) {
-    return 900 + Math.min(compactSnippet.length, 300);
-  }
-
-  const anchors = [
-    normalizedSnippet.slice(0, Math.min(120, normalizedSnippet.length)),
-    normalizedSnippet.slice(Math.max(0, normalizedSnippet.length - 120)),
-  ].filter((anchor) => anchor.length >= 45);
-  for (const anchor of anchors) {
-    if (candidate.normalized.includes(anchor)) return 500 + anchor.length;
-  }
-
-  const tokens = [...new Set(normalizedSnippet.match(/[a-z0-9$%]{4,}/g) || [])]
-    .filter((token) => !["this", "that", "with", "from", "shall", "tenant", "landlord"].includes(token));
-  if (tokens.length < 6) return 0;
-  const matched = tokens.filter((token) => candidate.normalized.includes(token)).length;
-  const ratio = matched / tokens.length;
-  if (matched >= 6 && ratio >= 0.82) return 120 + matched * 8 + (candidate.source === "page" ? 6 : 0);
-  return 0;
-}
-
-/**
- * Find the parsed page containing a source snippet. This only trusts real
- * page/text blocks, not LLM field metadata, so a default source_page=1 does
- * not leak into review rows unless the snippet is actually found on page 1.
- */
-function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefined, snippet: string): number | null {
-  if (!doclingRaw || !snippet) return null;
-  let best: { page: number; score: number } | null = null;
-  for (const candidate of buildPageTextCandidates(doclingRaw)) {
-    const score = pageMatchScore(candidate, snippet);
-    if (score <= 0) continue;
-    if (!best || score > best.score) best = { page: candidate.page, score };
-  }
-  return best?.page ?? null;
-}
-
-function resolveVerifiedSourcePage(
-  doclingRaw: Record<string, unknown> | null | undefined,
-  sourceText: string | null,
-  proposedPage: unknown,
-): number | null {
-  if (sourceText) {
-    const verified = findPageForSnippet(doclingRaw, sourceText);
-    if (verified != null) return verified;
-  }
-
-  const page = positivePageNumber(proposedPage);
-  if (!page) return null;
-  const pageNumbers = new Set(buildPageTextCandidates(doclingRaw).map((candidate) => candidate.page));
-  return pageNumbers.size === 1 && pageNumbers.has(page) ? page : null;
-}
 
 function isGenericSourceText(value: unknown): boolean {
   const text = String(value ?? "").trim();
@@ -308,10 +241,6 @@ function capSourceText(text: string | null | undefined, maxChars = 350): string 
   }
   // Hard truncation as last resort
   return slice.trimEnd() + "…";
-}
-
-function cleanEvidenceSnippet(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 const SOURCE_SNIPPET_MAX_CHARS = 900;
@@ -853,6 +782,124 @@ function summarizeFieldTrace(fieldTrace: any[]) {
       display_label: trace.display_label,
       reason: trace.final_blank_reason,
     })),
+  };
+}
+
+/**
+ * Fast, low-cost payload built directly from rule/table/LLM values — no
+ * workflow abstraction (buildLeaseWorkflowAbstraction), no clause records,
+ * no per-field evidence-page verification. Persisted immediately after
+ * runExtractionPipeline succeeds, before the expensive buildReviewPayload()
+ * call below (which runs the full workflow/clause/evidence pass for every
+ * field — the measured hotspot behind "not enough compute resources" on long
+ * Azure-parsed leases). If the process dies anywhere between here and the
+ * final full-payload persist, this durable payload already has real
+ * extracted values and is visible in the UI instead of being lost with the
+ * whole request — the worker's reconciliation logic finds a non-fallback
+ * payload already exists and completes the job rather than parking it as
+ * manual_review_fallback.
+ */
+function buildMinimalReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string | null;
+  extractionMethod: string | null;
+  reviewRequired: boolean;
+  result: {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  };
+}) {
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, result } = opts;
+  const extractionModuleType = toExtractionModuleType(moduleType);
+  const schema = getSchema(extractionModuleType);
+  const schemaEntries = Object.entries(schema).filter(([, def]) => !def.derived);
+  const requiredFields = schemaEntries.filter(([, def]) => def.required).map(([key]) => key);
+  const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
+  const source = sourceFromMethod(extractionMethod ?? result.method);
+
+  const rows = result.rows.map((r, index) => {
+    const values = stripInternalKeys(r);
+    const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
+    const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
+    const rowConfidence = normalizeConfidence(r.confidence_score ?? result.metadata?.avgConfidence) ?? avgConfidence;
+
+    const standardFields = schemaEntries.map(([fieldKey, def]) => {
+      const value = cleanPartyAddressValue(fieldKey, values[fieldKey] ?? null);
+      const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
+      return buildReviewField({
+        recordIndex: index,
+        fieldKey,
+        value,
+        confidence: effectiveConfidence,
+        source: fieldSources[fieldKey] ?? source,
+        isStandard: true,
+        required: !!def.required,
+        fieldType: def.type ?? "string",
+        description: def.description,
+        evidence: null,
+        // No source_page/source_clause yet — evidence resolution runs in the
+        // full buildReviewPayload() pass. "pending_enrichment" tells the UI
+        // this value is real but not yet evidence-verified, distinct from
+        // the final "missing_source_evidence" status.
+        status: value == null || value === "" ? "missing" : "pending_enrichment",
+        editable: true,
+      });
+    });
+
+    const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
+
+    return {
+      row_index: index,
+      record_index: index,
+      values,
+      fields: Object.fromEntries(
+        standardFields.map((field) => [field.field_key, {
+          value: field.value,
+          confidence: field.confidence,
+          source: field.source,
+          evidence: field.evidence,
+          status: field.status,
+        }]),
+      ),
+      standard_fields: standardFields,
+      custom_fields: [],
+      missing_required: missingRequired,
+      rejected_fields: [],
+      warnings: missingRequired.length > 0
+        ? [`Missing required fields: ${missingRequired.join(", ")}`]
+        : [],
+      confidence: rowConfidence,
+      notes: (r.extraction_notes as string | undefined) ?? null,
+      workflow_output: null,
+    };
+  });
+
+  const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
+
+  return {
+    schema_version: 2,
+    file_id: fileId,
+    file_name: fileName,
+    module_type: moduleType,
+    document_subtype: documentSubtype,
+    extraction_method: extractionMethod ?? result.method,
+    pipeline_method: result.method,
+    avg_confidence: avgConfidence,
+    review_required: reviewRequired,
+    review_status: "pending",
+    enrichment_status: "pending",
+    records: rows,
+    rows,
+    global_warnings: userWarnings,
+    warnings: userWarnings,
+    validation_errors: result.validationErrors,
+    metadata: { ...(result.metadata ?? {}) },
+    built_at: new Date().toISOString(),
   };
 }
 
@@ -1971,11 +2018,12 @@ Deno.serve(async (req: Request) => {
       console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
+      const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
       const result = await runExtractionPipeline(
         {
           moduleType: extractionModuleType,
           fileName,
-          docling: fileRecord.docling_raw,
+          docling: pipelineDocling,
           ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
@@ -1990,6 +2038,12 @@ Deno.serve(async (req: Request) => {
         },
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
+
+      // Decide the next status based on the review gate decided at ingest.
+      // Computed once here (not re-derived later) so the minimal early
+      // persist below and the final full-payload persist land on
+      // consistent, FSM-legal statuses.
+      const reviewRequired = !!fileRecord.review_required;
 
       // Forward file-load status into the pipeline's extractionDebug so the
       // UI/debug panel can show why Vision did or didn't run.
@@ -2100,6 +2154,52 @@ Deno.serve(async (req: Request) => {
           ui_review_payload: payload,
         }, 422);
         } // end else (non-review-required modules)
+      }
+
+      // ── Fast core-field persist ─────────────────────────────────────────
+      // Persist a minimal, schema-versioned payload from the raw rule/table/
+      // LLM values BEFORE buildReviewPayload() runs its expensive workflow
+      // abstraction + clause records + per-field evidence-page verification
+      // pass. If the Edge Function is OOM-killed or times out anywhere after
+      // this point, real extracted field values are already durable and
+      // visible in the UI — the worker's normalize reconciliation finds this
+      // non-fallback payload and completes the job instead of overwriting it
+      // with manual_review_fallback.
+      console.log(`[normalize-pdf-output] STAGE minimal_payload_start file_id=${file_id}`);
+      const minimalPayload = buildMinimalReviewPayload({
+        fileId: file_id,
+        fileName,
+        moduleType,
+        documentSubtype: fileRecord.document_subtype ?? null,
+        extractionMethod: fileRecord.extraction_method ?? null,
+        reviewRequired,
+        result,
+      });
+      const { error: minimalPersistError } = await setStatus(
+        supabaseAdmin,
+        file_id,
+        reviewRequired ? "review_required" : "validated",
+        {
+          parsed_data: result.rows,
+          normalized_output: result,
+          ui_review_payload: minimalPayload,
+          row_count: result.rows.length,
+          valid_count: result.rows.length - (result.validationErrors?.length ?? 0),
+          error_count: result.validationErrors?.length ?? 0,
+          validation_errors: result.validationErrors ?? [],
+          error_message: null,
+          ...(reviewRequired ? { review_status: "pending" } : {}),
+        },
+      );
+      if (minimalPersistError) {
+        // Non-fatal — log and continue to the full enrichment pass below.
+        // Worst case this run loses the early-persist safety net; extraction
+        // still proceeds normally.
+        console.warn(
+          `[normalize-pdf-output] Could not persist minimal core payload for file_id=${file_id}: ${minimalPersistError.message}`,
+        );
+      } else {
+        console.log(`[normalize-pdf-output] STAGE minimal_payload_persisted file_id=${file_id}`);
       }
 
       console.log(`[normalize-pdf-output] STAGE review_payload_start file_id=${file_id}`);
@@ -2270,14 +2370,17 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Decide the next status based on the review gate decided at ingest.
-      const reviewRequired = !!fileRecord.review_required;
+      // reviewRequired was already computed and used for the minimal early
+      // persist above; status is currently review_required or validated
+      // (whichever that persist landed on) — both transition legally to
+      // 'validated' below (same-status is a no-op per isAllowedTransition,
+      // and review_required → validated is an allowed FSM edge), then back
+      // to 'review_required' if a human gate is required.
       const nextStatus = reviewRequired ? "review_required" : "validated";
+      // Full payload replaces the minimal one — mark enrichment complete so
+      // the UI can stop showing the "enriching evidence" affordance.
+      (uiReviewPayload as Record<string, unknown>).enrichment_status = "completed";
 
-      // FSM: 'validating' → 'validated' is allowed; 'validating' → 'review_required'
-      // is NOT a valid transition in the FSM (validated is the intermediate).
-      // So we always land on 'validated' first, then flip to 'review_required'
-      // if a human gate is required.
       const { error: validatedErr } = await setStatus(
         supabaseAdmin,
         file_id,
@@ -2373,3 +2476,9 @@ Deno.serve(async (req: Request) => {
     );
   }
 });
+
+// Test hook (same pattern as _shared/extraction/parser.ts).
+export const __test__ = {
+  buildPipelineLayoutInput,
+  buildMinimalReviewPayload,
+};

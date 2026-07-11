@@ -926,11 +926,13 @@ function tag(out: DoclingOutput, method: string): DoclingOutput {
 // are almost always binary content (fonts, images) rather than text operators.
 // Decompressing them can spike memory 5-10x and is the primary cause of 546.
 const MAX_STREAM_DECOMPRESS_BYTES = 128 * 1024; // 128 KB compressed
-// Stop processing streams once we've collected enough text.
-const MAX_NATIVE_EXTRACTED_CHARS = 50_000;
 // Hard limit on how many FlateDecode streams to attempt so a pathological
-// PDF with thousands of tiny streams can't exhaust the memory budget.
-const MAX_STREAM_ITERATIONS = 60;
+// PDF with thousands of tiny streams can't exhaust the memory budget. This
+// is a byte/iteration budget, not a character-count truncation — a long
+// legitimate lease (many pages, ~1-3 content streams per page) should never
+// have its back half silently dropped just because an earlier char-count
+// cap (MAX_NATIVE_EXTRACTED_CHARS, removed) was reached.
+const MAX_STREAM_ITERATIONS = 300;
 
 async function parseNativePdfText(
   fileBytes: Uint8Array,
@@ -948,10 +950,8 @@ async function parseNativePdfText(
     textParts.push(extractPdfOperatorText(rawPdf));
 
     let streamCount = 0;
-    let totalExtracted = textParts[0].length;
 
     for (const streamMatch of rawPdf.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-      if (totalExtracted >= MAX_NATIVE_EXTRACTED_CHARS) break;
       if (streamCount >= MAX_STREAM_ITERATIONS) break;
 
       const streamText = streamMatch[1] ?? "";
@@ -977,7 +977,6 @@ async function parseNativePdfText(
       const extracted = extractPdfOperatorText(decoder.decode(decodedStream));
       if (extracted.length > 0) {
         textParts.push(extracted);
-        totalExtracted += extracted.length;
       }
     }
 

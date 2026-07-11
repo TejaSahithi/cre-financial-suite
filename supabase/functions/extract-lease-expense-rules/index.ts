@@ -181,9 +181,19 @@ function normalizePromptText(value: unknown) {
 
 function buildExpenseFocusedText(sourceText: unknown, fullScan = false) {
   const text = normalizePromptText(sourceText);
-  // In full-scan mode, or when text fits within limit, send the entire document.
-  // Only apply keyword-based sentence filtering on very large documents.
-  if (fullScan || text.length <= MAX_EXPENSE_SOURCE_CHARS) return text.slice(0, MAX_EXPENSE_SOURCE_CHARS);
+  // fullScan sends the entire document — CAM/expense clauses can appear
+  // anywhere, including well past any fixed character offset. This branch
+  // used to hard-slice to MAX_EXPENSE_SOURCE_CHARS even when fullScan=true,
+  // silently dropping end-of-document expense/CAM clauses on long leases.
+  if (fullScan) return text;
+
+  // Non-full-scan: keyword-filtered sentence selection already scans the
+  // WHOLE document (not just a prefix) for CAM/expense-relevant sentences —
+  // a sentence's position in the document never excludes it from
+  // consideration, so this path was never position-truncating; only the
+  // MAX_EXPENSE_SOURCE_CHARS length check below is used as a "is this even
+  // worth filtering" threshold, not a truncation.
+  if (text.length <= MAX_EXPENSE_SOURCE_CHARS) return text;
 
   const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
   const selected: string[] = [];
@@ -198,9 +208,10 @@ function buildExpenseFocusedText(sourceText: unknown, fullScan = false) {
   }
 
   const focused = selected.filter(Boolean).join(" ");
-  return focused.length > 2000
-    ? focused.slice(0, MAX_EXPENSE_SOURCE_CHARS)
-    : text.slice(0, MAX_EXPENSE_SOURCE_CHARS);
+  // The relevance-filtered selection is normally far smaller than the raw
+  // document. Only fall back to the (untruncated) raw text if keyword
+  // filtering found essentially nothing — never truncate either result.
+  return focused.length > 2000 ? focused : text;
 }
 
 serve(async (req: Request) => {

@@ -106,12 +106,29 @@ async function parkLeaseForManualReview(
   supabaseAdmin: any,
   job: any,
   fileId: string,
+  orgId: string,
   fileName: string,
   moduleType: string,
   documentSubtype: string,
   errorCode: string,
   reason: string,
+  failedStage: "parse" | "normalize" = "parse",
 ) {
+  // Never overwrite a valid, already-persisted non-fallback payload — e.g.
+  // normalize-pdf-output's minimal early persist, or a fully enriched
+  // payload from a prior successful run. A transport failure on THIS
+  // attempt does not mean the durable data underneath it is gone.
+  const existing = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
+  if (existing.durable) {
+    console.warn(
+      `[${WORKER_NAME}] parkLeaseForManualReview skipped for file_id=${fileId} — ` +
+      `a valid non-fallback payload already exists (status=${existing.status}, ` +
+      `method=${existing.extractionMethod}); failing job without touching ui_review_payload`,
+    );
+    await failJob(supabaseAdmin, job, errorCode, reason);
+    return;
+  }
+
   await failJob(supabaseAdmin, job, errorCode, reason);
 
   const standardFields = LEASE_MANUAL_REVIEW_FIELDS.map((fieldKey) => ({
@@ -134,6 +151,7 @@ async function parkLeaseForManualReview(
     user_edit: null,
   }));
 
+  const failureStatus = failedStage === "normalize" ? "normalize_failed_manual_review" : "parse_failed_manual_review";
   const payload = {
     schema_version: 2,
     file_id: fileId,
@@ -141,7 +159,7 @@ async function parkLeaseForManualReview(
     module_type: moduleType,
     document_subtype: documentSubtype || "base_lease",
     extraction_method: "manual_review_fallback",
-    pipeline_method: "parse_failed_manual_review",
+    pipeline_method: failureStatus,
     avg_confidence: 0,
     review_required: true,
     review_status: "pending",
@@ -174,7 +192,8 @@ async function parkLeaseForManualReview(
       totalRecords: 1,
       avgConfidence: 0,
       manualReviewFallback: true,
-      parse_failed: true,
+      parse_failed: failedStage === "parse",
+      normalize_failed: failedStage === "normalize",
       error_code: errorCode,
       error_message: reason,
     },
@@ -184,11 +203,11 @@ async function parkLeaseForManualReview(
   const { error } = await setStatus(supabaseAdmin, fileId, "review_required", {
     review_required: true,
     review_status: "pending",
-    processing_status: "parse_failed_manual_review",
+    processing_status: failureStatus,
     extraction_method: "manual_review_fallback",
     ui_review_payload: payload,
     normalized_output: {
-      method: "parse_failed_manual_review",
+      method: failureStatus,
       rows: [{}],
       warnings: payload.global_warnings,
       validationErrors: [],
@@ -199,13 +218,13 @@ async function parkLeaseForManualReview(
     valid_count: 0,
     error_count: 1,
     error_message: reason,
-    failed_step: "parse",
+    failed_step: failedStage,
     processing_completed_at: new Date().toISOString(),
   });
 
   if (error && error.code !== "NO_ROW_UPDATED") {
     console.error(`[${WORKER_NAME}] parkLeaseForManualReview setStatus error:`, error.message);
-    await setFailed(supabaseAdmin, fileId, reason, "parse", 15);
+    await setFailed(supabaseAdmin, fileId, reason, failedStage, failedStage === "normalize" ? 45 : 15);
   }
 }
 
@@ -246,15 +265,16 @@ const VALID_DURABLE_PARSER_METHODS = new Set([
 const POST_PARSE_STATUSES = new Set(["pdf_parsed", "validating", "validated", "review_required"]);
 
 /**
- * A "transport-shaped" failure means the HTTP call to parse-pdf-docling died
- * (timeout, connection loss, Edge Function compute/memory kill, gateway 5xx)
- * — it says nothing about whether the parse itself succeeded before dying.
- * 4xx contract errors are real failures and never reconciled.
+ * A "transport-shaped" failure means the HTTP call to parse-pdf-docling or
+ * normalize-pdf-output died (timeout, connection loss, Edge Function
+ * compute/memory kill, gateway 5xx) — it says nothing about whether the
+ * stage itself succeeded before dying. 4xx contract errors are real
+ * failures and never reconciled.
  */
-function isTransportShapedParseFailure(parseResult: any): boolean {
-  const status = Number(parseResult?.status || 0);
-  const errorCode = String(parseResult?.error_code || "");
-  const message = String(parseResult?.error || parseResult?.data?.message || "");
+function isTransportShapedFailure(stageResult: any): boolean {
+  const status = Number(stageResult?.status || 0);
+  const errorCode = String(stageResult?.error_code || "");
+  const message = String(stageResult?.error || stageResult?.data?.message || "");
   return (
     status === 408 ||
     status >= 500 ||
@@ -348,10 +368,82 @@ async function reconcileDurableParse(supabaseAdmin: any, fileId: string, orgId: 
   return { durable, status, rawMethod, fullTextChars };
 }
 
+// Statuses through which a file legitimately holds a durably-persisted
+// ui_review_payload after normalize-pdf-output ran — either the C1.4 minimal
+// fast-path payload or the fully enriched one.
+const POST_NORMALIZE_STATUSES = new Set(["review_required", "validated", "approved"]);
+
+/**
+ * Check whether uploaded_files currently holds a real, non-fallback
+ * ui_review_payload. Used two ways:
+ *   1. To reconcile a transport-shaped normalize failure — if the minimal
+ *      or full payload already made it to the database before the process
+ *      died, the job is done; do not park for manual review.
+ *   2. As a guard inside parkLeaseForManualReview so a transport failure on
+ *      ANY stage can never stomp a payload that was already durably saved
+ *      (e.g. normalize's minimal early persist landing, then a later
+ *      transport failure on the same request or a retry).
+ *
+ * Reads only lightweight JSON-path projections — never the whole
+ * ui_review_payload/normalized_output objects.
+ */
+async function reconcileDurableNormalize(supabaseAdmin: any, fileId: string, orgId: string): Promise<{
+  durable: boolean;
+  status: string | null;
+  extractionMethod: string;
+  hasRecords: boolean;
+}> {
+  const none = { durable: false, status: null, extractionMethod: "", hasRecords: false };
+
+  let status: string | null = null;
+  let extractionMethod = "";
+  let hasRecords = false;
+
+  const projected = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "id, status, extraction_method, " +
+      "payload_method:ui_review_payload->>extraction_method, " +
+      "payload_records:ui_review_payload->records",
+    )
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (!projected.error && projected.data) {
+    status = projected.data.status ?? null;
+    extractionMethod = String(projected.data.payload_method || projected.data.extraction_method || "");
+    hasRecords = Array.isArray(projected.data.payload_records) && projected.data.payload_records.length > 0;
+  } else {
+    console.warn(
+      `[${WORKER_NAME}] aliased JSON-path normalize reconciliation select failed ` +
+      `(${projected.error?.message ?? "no row"}); using fallback projection`,
+    );
+    const basic = await supabaseAdmin
+      .from("uploaded_files")
+      .select("id, status, extraction_method, ui_review_payload")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (basic.error || !basic.data) return none;
+    status = basic.data.status ?? null;
+    const payload = basic.data.ui_review_payload || {};
+    extractionMethod = String(payload.extraction_method || basic.data.extraction_method || "");
+    hasRecords = Array.isArray(payload.records) && payload.records.length > 0;
+  }
+
+  const isFallback = !extractionMethod || extractionMethod === "manual_review_fallback";
+  const durable = POST_NORMALIZE_STATUSES.has(String(status)) && hasRecords && !isFallback;
+
+  return { durable, status, extractionMethod, hasRecords };
+}
+
 // Test hook (same pattern as _shared/extraction/parser.ts).
 export const __test__ = {
-  isTransportShapedParseFailure,
+  isTransportShapedFailure,
   reconcileDurableParse,
+  reconcileDurableNormalize,
+  parkLeaseForManualReview,
 };
 
 function parserFailureAlreadyPersisted(parseResult: any): boolean {
@@ -519,7 +611,7 @@ Deno.serve(async (req: Request) => {
       // re-read it before treating the parse as failed, and never overwrite a
       // durable success with manual_review_fallback.
       let parseReconciledToNormalize = false;
-      if (!parseResult.ok && isTransportShapedParseFailure(parseResult)) {
+      if (!parseResult.ok && isTransportShapedFailure(parseResult)) {
         const reconciled = await reconcileDurableParse(supabaseAdmin, fileId, orgId);
         if (reconciled.durable) {
           console.warn(
@@ -622,11 +714,11 @@ Deno.serve(async (req: Request) => {
           // For lease files, park for manual review so users can enter fields
           // manually instead of showing a hard failure with no path forward.
           await parkLeaseForManualReview(
-            supabaseAdmin, job, fileId,
+            supabaseAdmin, job, fileId, orgId,
             fileRecord.file_name ?? "Lease document",
             fileRecord.module_type ?? "leases",
             fileRecord.document_subtype ?? "base_lease",
-            errorCode, message,
+            errorCode, message, "parse",
           );
           await logger.event("parse", "failed", {
             error_code: errorCode,
@@ -732,13 +824,63 @@ Deno.serve(async (req: Request) => {
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
         const isLeaseModule = ["leases", "lease"].includes(fileRecord.module_type ?? "");
 
+        // Durable-state reconciliation: normalize-pdf-output now persists a
+        // minimal core-field payload BEFORE running its expensive
+        // workflow/clause/evidence pass. A transport-shaped failure (OOM,
+        // timeout, 546 compute kill) can arrive after that payload — or the
+        // full enriched one — already landed. Re-read before parking.
+        if (isTransportShapedFailure(normalizeResult)) {
+          const reconciled = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
+          if (reconciled.durable) {
+            console.warn(
+              `[${WORKER_NAME}] normalize_transport_failed_but_persisted file_id=${fileId} ` +
+              `durable_status=${reconciled.status} method=${reconciled.extractionMethod} ` +
+              `http_status=${normalizeResult.status}`,
+            );
+            await logger.event("normalize", "reconciled", {
+              provider: "lease-extraction-worker",
+              metadata: {
+                job_id: job.id,
+                reason: "normalize_transport_failed_but_persisted",
+                durable_status: reconciled.status,
+                extraction_method: reconciled.extractionMethod,
+                transport_status: normalizeResult.status,
+                transport_error: String(normalizeResult.error || "").slice(0, 300),
+              },
+            });
+            await supabaseAdmin
+              .from("pipeline_jobs")
+              .update({
+                status: "completed",
+                error_code: null,
+                error_message: null,
+                completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                metadata: {
+                  ...(job.metadata || {}),
+                  reconciled_from: "normalize_transport_failed_but_persisted",
+                  reconciled_durable_status: reconciled.status,
+                },
+              })
+              .eq("id", job.id);
+            return jsonResponse({
+              error: false,
+              job_id: job.id,
+              stage: "normalize",
+              status: "completed",
+              reconciled: true,
+              durable_status: reconciled.status,
+            });
+          }
+        }
+
         if (isLeaseModule) {
           await parkLeaseForManualReview(
-            supabaseAdmin, job, fileId,
+            supabaseAdmin, job, fileId, orgId,
             fileRecord.file_name ?? "Lease document",
             fileRecord.module_type ?? "leases",
             fileRecord.document_subtype ?? "base_lease",
-            errorCode, message,
+            errorCode, message, "normalize",
           );
           await logger.event("normalize", "failed", {
             error_code: errorCode,

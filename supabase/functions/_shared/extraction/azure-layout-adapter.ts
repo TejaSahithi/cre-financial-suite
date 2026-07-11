@@ -95,6 +95,18 @@ export function normalizeAzureLayoutToDoclingOutput(
   const normalizedTextBlocks = textBlocks.length > 0 ? textBlocks : fallbackBlocks;
   const rawResponseStored = Deno.env.get("STORE_FULL_AZURE_RAW_RESPONSE")?.toLowerCase() === "true";
   const pageCount = normalizedPages.length || positiveNumber((analyzeResult as any)?.pageCount) || null;
+
+  // Every legacy parser (native PDF text, Gemini Vision, Docling) emits
+  // full_text as `[[PAGE n]]\n<page text>` joined blocks. Azure's raw content
+  // has no such markers, so the LLM extraction prompt's page-anchoring rule
+  // (source_page is only required when [[PAGE n]] markers are present) never
+  // fires for Azure documents — every field comes back with source_page=null,
+  // forcing an expensive brute-force page-matching scan downstream. Insert
+  // markers using the most precise data Azure gave us, falling through
+  // progressively less precise strategies rather than ever silently
+  // returning unmarked content while any page mapping exists.
+  const markedContent = buildPageMarkedContent(content, pages, paragraphs);
+
   const rawResponseSummary = {
     provider: "azure_document_intelligence",
     extraction_method: "azure_layout",
@@ -111,7 +123,7 @@ export function normalizeAzureLayoutToDoclingOutput(
 
   const output: DoclingOutput & Record<string, unknown> = {
     extraction_method: "azure_layout",
-    full_text: content,
+    full_text: markedContent.text,
     markdown: content,
     page_count: pageCount,
     pages: normalizedPages,
@@ -131,10 +143,110 @@ export function normalizeAzureLayoutToDoclingOutput(
       raw_response_stored: rawResponseStored,
       layout_contract_version: "document_layout_v1",
       canonical_layout_present: true,
+      page_markers_present: markedContent.strategy !== "unmapped_content",
+      page_marker_strategy: markedContent.strategy,
+      page_mapping_coverage: markedContent.coverage,
     },
   };
 
   return output;
+}
+
+/**
+ * Insert [[PAGE n]] markers into Azure's document text, preferring the most
+ * precise page-mapping data available:
+ *   1. content_spans            — page.spans[] partition `content` exactly;
+ *                                  markers inserted directly into the
+ *                                  original markdown, preserving tables/
+ *                                  headings/lists verbatim.
+ *   2. paragraph_bounding_regions — paragraphs grouped by
+ *                                  boundingRegions[0].pageNumber, ordered by
+ *                                  their span offset within the page.
+ *   3. page_lines               — reconstructed from page.lines[] (always
+ *                                  available whenever Azure returned pages).
+ *   4. unmapped_content         — no page mapping exists at all; original
+ *                                  content is kept as-is and explicitly
+ *                                  flagged degraded via _metadata.
+ */
+function buildPageMarkedContent(
+  content: string,
+  pages: any[],
+  paragraphs: any[],
+): { text: string; strategy: string; coverage: number } {
+  if (!content) {
+    return { text: content, strategy: "unmapped_content", coverage: 0 };
+  }
+
+  const pageSpans = pages
+    .map((page: any, index: number) => {
+      const pageNumber = positiveNumber(page?.pageNumber) ?? index + 1;
+      const spans = Array.isArray(page?.spans) ? page.spans : [];
+      const offset = nonNegativeNumber(spans[0]?.offset);
+      const length = nonNegativeNumber(spans[0]?.length);
+      return offset != null && length != null ? { pageNumber, offset, length } : null;
+    })
+    .filter((p: any): p is { pageNumber: number; offset: number; length: number } => p != null)
+    .sort((a, b) => a.offset - b.offset);
+
+  if (pageSpans.length > 0) {
+    const totalSpanLength = pageSpans.reduce((sum, p) => sum + p.length, 0);
+    const coverage = content.length > 0 ? Math.min(1, totalSpanLength / content.length) : 0;
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const p of pageSpans) {
+      const end = p.offset + p.length;
+      parts.push(`[[PAGE ${p.pageNumber}]]\n${content.slice(p.offset, end)}`);
+      cursor = Math.max(cursor, end);
+    }
+    if (cursor < content.length) {
+      parts.push(content.slice(cursor));
+    }
+    return { text: parts.join("\n\n"), strategy: "content_spans", coverage };
+  }
+
+  if (paragraphs.length > 0) {
+    const byPage = new Map<number, Array<{ offset: number; text: string }>>();
+    let mapped = 0;
+    for (const para of paragraphs) {
+      const page = firstBoundingPage(para);
+      const text = cleanText(para?.content);
+      if (!page || !text) continue;
+      mapped++;
+      const spans = Array.isArray(para?.spans) ? para.spans : [];
+      const offset = nonNegativeNumber(spans[0]?.offset) ?? Number.MAX_SAFE_INTEGER;
+      if (!byPage.has(page)) byPage.set(page, []);
+      byPage.get(page)!.push({ offset, text });
+    }
+    if (byPage.size > 0) {
+      const coverage = paragraphs.length > 0 ? mapped / paragraphs.length : 0;
+      const pageNumbers = [...byPage.keys()].sort((a, b) => a - b);
+      const parts = pageNumbers.map((pageNumber) => {
+        const items = byPage.get(pageNumber)!.sort((a, b) => a.offset - b.offset);
+        return `[[PAGE ${pageNumber}]]\n${items.map((item) => item.text).join("\n\n")}`;
+      });
+      return { text: parts.join("\n\n"), strategy: "paragraph_bounding_regions", coverage };
+    }
+  }
+
+  if (pages.length > 0) {
+    const parts: string[] = [];
+    let mappedChars = 0;
+    pages.forEach((page: any, index: number) => {
+      const pageNumber = positiveNumber(page?.pageNumber) ?? index + 1;
+      const lines = Array.isArray(page?.lines) ? page.lines : [];
+      const pageText = lines.map((line: any) => cleanText(line?.content)).filter(Boolean).join("\n");
+      if (pageText) {
+        parts.push(`[[PAGE ${pageNumber}]]\n${pageText}`);
+        mappedChars += pageText.length;
+      }
+    });
+    if (parts.length > 0) {
+      const coverage = content.length > 0 ? Math.min(1, mappedChars / content.length) : 0;
+      return { text: parts.join("\n\n"), strategy: "page_lines", coverage };
+    }
+  }
+
+  return { text: content, strategy: "unmapped_content", coverage: 0 };
 }
 
 function cleanText(value: unknown): string {
