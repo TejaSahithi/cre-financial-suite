@@ -25,10 +25,15 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
+import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } from "../_shared/extraction/evidence-index.ts";
+import { detectFileMagic } from "../_shared/file-magic.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
+import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
+import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import {
   buildBlockedReviewPayload,
@@ -47,6 +52,61 @@ import {
 // inline data limit — so any file small enough for parse to have processed inline
 // can also be processed inline here if Vision is needed as a fallback.
 const MAX_INLINE_VISION_BYTES = 20 * 1024 * 1024;
+
+const AZURE_PAGE_MARKER_RE = /\[\[\s*PAGE\s+\d+\s*\]\]/i;
+
+/**
+ * Build the exact minimal object handed to runExtractionPipeline — no
+ * top-level `markdown` duplicate (a 1:1 copy of full_text that rides through
+ * every downstream copy for zero benefit), and for azure_layout records
+ * persisted before the adapter started emitting [[PAGE n]] markers, repair
+ * full_text at read time by rebuilding it from the persisted pages array.
+ *
+ * This repair matters because Re-extract re-enters at normalize, not parse —
+ * a page-marker fix in the Azure adapter alone can never reach a record whose
+ * docling_raw was already persisted by the old adapter. Without markers the
+ * LLM extraction prompt's page-anchoring rule never fires, every field comes
+ * back with source_page=null, and normalize is forced into an expensive
+ * brute-force page-matching scan for every field.
+ *
+ * Never mutates the input — the caller still needs the original doclingRaw
+ * (pages/text_blocks arrays are marker-independent) for evidence lookups.
+ */
+function buildPipelineLayoutInput(
+  doclingRaw: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!doclingRaw) return doclingRaw;
+
+  let fullText = String((doclingRaw as any)?.full_text ?? "");
+  let repairStrategy: string | null = null;
+  const pages = Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : [];
+
+  if (isAzureLayoutOutput(doclingRaw) && !AZURE_PAGE_MARKER_RE.test(fullText) && pages.length > 0) {
+    fullText = pages
+      .map((page: any, index: number) => {
+        const pageNumber = Number.isFinite(Number(page?.page)) && Number(page.page) > 0 ? Number(page.page) : index + 1;
+        return `[[PAGE ${pageNumber}]]\n${page?.text ?? ""}`;
+      })
+      .join("\n\n");
+    repairStrategy = "page_lines";
+    console.log(
+      `[normalize-pdf-output] azure_page_marker_repair strategy=${repairStrategy} ` +
+      `pages=${pages.length} chars=${fullText.length}`,
+    );
+  }
+
+  return {
+    extraction_method: (doclingRaw as any)?.extraction_method,
+    full_text: fullText,
+    page_count: (doclingRaw as any)?.page_count,
+    pages: (doclingRaw as any)?.pages,
+    text_blocks: (doclingRaw as any)?.text_blocks,
+    tables: (doclingRaw as any)?.tables,
+    fields: (doclingRaw as any)?.fields,
+    warnings: (doclingRaw as any)?.warnings,
+    _metadata: (doclingRaw as any)?._metadata,
+  };
+}
 
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
   switch (moduleType) {
@@ -118,133 +178,10 @@ function buildFallbackReviewRow(moduleType: string): Record<string, unknown> {
   }
 }
 
-function positivePageNumber(value: unknown): number | null {
-  const page = Number(value);
-  return Number.isFinite(page) && page > 0 ? page : null;
-}
-
-function normalizeForPageMatch(value: unknown): string {
-  return cleanEvidenceSnippet(value)
-    .toLowerCase()
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function compactForPageMatch(value: unknown): string {
-  return normalizeForPageMatch(value).replace(/[^a-z0-9]+/g, "");
-}
-
-// Both builder functions are called O(schema_fields) times per request for
-// the same doclingRaw reference (once per field in buildReviewPayload).
-// Rebuilding them on every call was creating ~300 × 520 KB of temporary
-// string objects — the primary cause of the 546 OOM error on large leases.
-// WeakMap keys on the object reference so the cache is naturally scoped to
-// the request and GC'd when doclingRaw goes out of scope.
-const _pageTextCandidatesCache = new WeakMap<object, Array<{ text: string; normalized: string; compact: string; page: number; source: string }>>();
+// Cache for buildEvidenceSearchBlocks() below — unrelated to EvidenceIndex's
+// own internal cache in evidence-index.ts (different candidate shape: this
+// one is used by the fallback needle-in-haystack search, not page scoring).
 const _evidenceSearchBlocksCache = new WeakMap<object, Array<{ text: string; lowered: string; page: number | null; source: string }>>();
-
-function buildPageTextCandidates(doclingRaw: Record<string, unknown> | null | undefined) {
-  if (doclingRaw && _pageTextCandidatesCache.has(doclingRaw)) {
-    return _pageTextCandidatesCache.get(doclingRaw)!;
-  }
-  const candidates: Array<{ text: string; normalized: string; compact: string; page: number; source: string }> = [];
-  const push = (value: unknown, pageValue: unknown, source: string) => {
-    const page = positivePageNumber(pageValue);
-    const text = cleanEvidenceSnippet(value);
-    if (!page || !text) return;
-    candidates.push({
-      text,
-      normalized: normalizeForPageMatch(text),
-      compact: compactForPageMatch(text),
-      page,
-      source,
-    });
-  };
-
-  const pages = Array.isArray((doclingRaw as any)?.pages) ? (doclingRaw as any).pages : [];
-  pages.forEach((page: any, index: number) => {
-    push(
-      page?.text ?? page?.content ?? page?.markdown ?? page?.full_text,
-      page?.page ?? page?.page_number ?? page?.number ?? index + 1,
-      "page",
-    );
-  });
-
-  for (const block of Array.isArray((doclingRaw as any)?.text_blocks) ? (doclingRaw as any).text_blocks : []) {
-    push(block?.text, block?.page ?? block?.page_number ?? block?.source_page, "text_block");
-  }
-
-  const seen = new Set<string>();
-  const result = candidates.filter((candidate) => {
-    const key = `${candidate.page}|${candidate.source}|${candidate.normalized.slice(0, 240)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  if (doclingRaw) _pageTextCandidatesCache.set(doclingRaw, result);
-  return result;
-}
-
-function pageMatchScore(candidate: { normalized: string; compact: string; source: string }, snippet: string): number {
-  const normalizedSnippet = normalizeForPageMatch(snippet);
-  if (normalizedSnippet.length < 8) return 0;
-  if (candidate.normalized.includes(normalizedSnippet)) return 1000 + Math.min(normalizedSnippet.length, 400);
-
-  const compactSnippet = compactForPageMatch(snippet);
-  if (compactSnippet.length >= 24 && candidate.compact.includes(compactSnippet)) {
-    return 900 + Math.min(compactSnippet.length, 300);
-  }
-
-  const anchors = [
-    normalizedSnippet.slice(0, Math.min(120, normalizedSnippet.length)),
-    normalizedSnippet.slice(Math.max(0, normalizedSnippet.length - 120)),
-  ].filter((anchor) => anchor.length >= 45);
-  for (const anchor of anchors) {
-    if (candidate.normalized.includes(anchor)) return 500 + anchor.length;
-  }
-
-  const tokens = [...new Set(normalizedSnippet.match(/[a-z0-9$%]{4,}/g) || [])]
-    .filter((token) => !["this", "that", "with", "from", "shall", "tenant", "landlord"].includes(token));
-  if (tokens.length < 6) return 0;
-  const matched = tokens.filter((token) => candidate.normalized.includes(token)).length;
-  const ratio = matched / tokens.length;
-  if (matched >= 6 && ratio >= 0.82) return 120 + matched * 8 + (candidate.source === "page" ? 6 : 0);
-  return 0;
-}
-
-/**
- * Find the parsed page containing a source snippet. This only trusts real
- * page/text blocks, not LLM field metadata, so a default source_page=1 does
- * not leak into review rows unless the snippet is actually found on page 1.
- */
-function findPageForSnippet(doclingRaw: Record<string, unknown> | null | undefined, snippet: string): number | null {
-  if (!doclingRaw || !snippet) return null;
-  let best: { page: number; score: number } | null = null;
-  for (const candidate of buildPageTextCandidates(doclingRaw)) {
-    const score = pageMatchScore(candidate, snippet);
-    if (score <= 0) continue;
-    if (!best || score > best.score) best = { page: candidate.page, score };
-  }
-  return best?.page ?? null;
-}
-
-function resolveVerifiedSourcePage(
-  doclingRaw: Record<string, unknown> | null | undefined,
-  sourceText: string | null,
-  proposedPage: unknown,
-): number | null {
-  if (sourceText) {
-    const verified = findPageForSnippet(doclingRaw, sourceText);
-    if (verified != null) return verified;
-  }
-
-  const page = positivePageNumber(proposedPage);
-  if (!page) return null;
-  const pageNumbers = new Set(buildPageTextCandidates(doclingRaw).map((candidate) => candidate.page));
-  return pageNumbers.size === 1 && pageNumbers.has(page) ? page : null;
-}
 
 function isGenericSourceText(value: unknown): boolean {
   const text = String(value ?? "").trim();
@@ -273,7 +210,7 @@ function isLlmSourceTextRelevantToField(fieldKey: string, sourceText: string | n
   if (!sourceText) return true;
   // Insurance fields must contain insurance-domain language
   if (["tenant_insurance_required", "general_liability_min", "property_insurance",
-       "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
+    "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
     return /\b(insurance|insure|insured|coverage|carrier|policy|certificate|liability limit)\b/i.test(sourceText);
   }
   // Party name fields: reject source text from assignment/transfer clauses
@@ -307,10 +244,6 @@ function capSourceText(text: string | null | undefined, maxChars = 350): string 
   }
   // Hard truncation as last resort
   return slice.trimEnd() + "…";
-}
-
-function cleanEvidenceSnippet(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 const SOURCE_SNIPPET_MAX_CHARS = 900;
@@ -429,17 +362,17 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
 
   const stopPatterns = fieldKey === "landlord_address"
     ? [
-        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
-        /\b(?:tenant|lessee)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
-        /\btenant_contact_/i,
-      ]
+      /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+      /\b(?:tenant|lessee)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+      /\btenant_contact_/i,
+    ]
     : [
-        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
-        /\b(?:landlord|lessor)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
-        /\blandlord_contact_/i,
-      ];
+      /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+      /\b(?:landlord|lessor)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+      /\blandlord_contact_/i,
+    ];
 
   let stopAt = text.length;
   for (const pattern of stopPatterns) {
@@ -692,11 +625,11 @@ function findSourceEvidenceForField(
 
   return best
     ? {
-        source_page: best.source_page,
-        source_clause: best.source_clause,
-        source_quality: best.source_quality,
-        matched_needle: best.matched_needle,
-      }
+      source_page: best.source_page,
+      source_clause: best.source_clause,
+      source_quality: best.source_quality,
+      matched_needle: best.matched_needle,
+    }
     : null;
 }
 
@@ -856,6 +789,164 @@ function summarizeFieldTrace(fieldTrace: any[]) {
 }
 
 /**
+ * Fast, low-cost payload built directly from rule/table/LLM values — no
+ * workflow abstraction (buildLeaseWorkflowAbstraction), no clause records,
+ * no per-field evidence-page verification. Persisted immediately after
+ * runExtractionPipeline succeeds, before the expensive buildReviewPayload()
+ * call below (which runs the full workflow/clause/evidence pass for every
+ * field — the measured hotspot behind "not enough compute resources" on long
+ * Azure-parsed leases). If the process dies anywhere between here and the
+ * final full-payload persist, this durable payload already has real
+ * extracted values and is visible in the UI instead of being lost with the
+ * whole request — the worker's reconciliation logic finds a non-fallback
+ * payload already exists and completes the job rather than parking it as
+ * manual_review_fallback.
+ */
+function buildMinimalReviewPayload(opts: {
+  fileId: string;
+  fileName: string;
+  moduleType: string;
+  documentSubtype: string | null;
+  extractionMethod: string | null;
+  reviewRequired: boolean;
+  result: {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  };
+}) {
+  const { fileId, fileName, moduleType, documentSubtype, extractionMethod, reviewRequired, result } = opts;
+  const extractionModuleType = toExtractionModuleType(moduleType);
+  const schema = getSchema(extractionModuleType);
+  const schemaEntries = Object.entries(schema).filter(([, def]) => !def.derived);
+  const requiredFields = schemaEntries.filter(([, def]) => def.required).map(([key]) => key);
+  const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
+  const source = sourceFromMethod(extractionMethod ?? result.method);
+
+  // P0.2: evidence-index resolution (buildReviewPayload's expensive pass)
+  // hasn't run yet at this point, but the pipeline already computed a cheap,
+  // pre-validation snapshot of per-field source_page/source_text/confidence
+  // during runExtractionPipeline() itself — merged_field_sources (post-merge,
+  // pre-validation) and llm_returned_field_details (raw LLM output) are both
+  // always present by the time this function runs. Hydrate from them instead
+  // of hard-coding evidence: null, so the minimal (fast, durable) payload is
+  // already useful for review before the deferred "enrich" pass ever runs.
+  const extractionDebug = (result.metadata as any)?.extractionDebug ?? {};
+  const mergedFieldSources = (extractionDebug.merged_field_sources ?? {}) as Record<string, any>;
+  const llmReturnedFieldDetails = (extractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+
+  const rows = result.rows.map((r, index) => {
+    const values = stripInternalKeys(r);
+    const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
+    const fieldSources = (r._field_sources ?? {}) as Record<string, string>;
+    const rowConfidence = normalizeConfidence(r.confidence_score ?? result.metadata?.avgConfidence) ?? avgConfidence;
+
+    const standardFields = schemaEntries.map(([fieldKey, def]) => {
+      const value = cleanPartyAddressValue(fieldKey, values[fieldKey] ?? null);
+      const debugEvidence = mergedFieldSources[fieldKey] ?? llmReturnedFieldDetails[fieldKey] ?? null;
+      const sourceText = debugEvidence?.source_text ?? null;
+      const sourcePage = debugEvidence?.source_page ?? null;
+      const hasEvidence = !!(sourceText || sourcePage != null);
+      const effectiveConfidence =
+        normalizeConfidence(fieldConfidences[fieldKey]) ??
+        normalizeConfidence(debugEvidence?.confidence) ??
+        rowConfidence;
+
+      let status: string;
+      if (value == null || value === "") {
+        status = "missing";
+      } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 0.9) {
+        // System-computed suggestion only — buildReviewField always sets
+        // accepted:false; acceptance is a separate, reviewer-driven action
+        // (guarantee 6), never implied by this status.
+        status = "auto_populated";
+      } else if (!hasEvidence) {
+        status = "needs_review";
+      } else {
+        status = "pending_enrichment";
+      }
+
+      return buildReviewField({
+        recordIndex: index,
+        fieldKey,
+        value,
+        confidence: effectiveConfidence,
+        source: fieldSources[fieldKey] ?? debugEvidence?.source ?? source,
+        isStandard: true,
+        required: !!def.required,
+        fieldType: def.type ?? "string",
+        description: def.description,
+        evidence: hasEvidence ? { source_text: sourceText, source_page: sourcePage, source_quality: "pending_enrichment" } : null,
+        status,
+        editable: true,
+      });
+    });
+
+    const missingRequired = requiredFields.filter((field) => isBlank(values[field]));
+
+    return {
+      row_index: index,
+      record_index: index,
+      values,
+      fields: Object.fromEntries(
+        standardFields.map((field) => [field.field_key, {
+          value: field.value,
+          confidence: field.confidence,
+          source: field.source,
+          evidence: field.evidence,
+          status: field.status,
+        }]),
+      ),
+      standard_fields: standardFields,
+      custom_fields: [],
+      missing_required: missingRequired,
+      rejected_fields: [],
+      warnings: missingRequired.length > 0
+        ? [`Missing required fields: ${missingRequired.join(", ")}`]
+        : [],
+      confidence: rowConfidence,
+      notes: (r.extraction_notes as string | undefined) ?? null,
+      workflow_output: null,
+    };
+  });
+
+  const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
+  const coreReady = computeCoreReady(rows[0]?.standard_fields ?? []);
+
+  return {
+    schema_version: 2,
+    file_id: fileId,
+    file_name: fileName,
+    module_type: moduleType,
+    document_subtype: documentSubtype,
+    extraction_method: extractionMethod ?? result.method,
+    pipeline_method: result.method,
+    avg_confidence: avgConfidence,
+    review_required: reviewRequired,
+    review_status: "pending",
+    enrichment_status: "pending",
+    // P0.2 guarantees 4 & 5: the backend, not the frontend, is the source of
+    // truth for whether this file is ready to open for review, and the
+    // minimal payload stamps its own contract version directly rather than
+    // relying solely on the (also-present, unconditional) nested
+    // metadata.extractionDebug.extraction_contract_version.
+    core_ready: coreReady,
+    records: rows,
+    rows,
+    global_warnings: userWarnings,
+    warnings: userWarnings,
+    validation_errors: result.validationErrors,
+    metadata: {
+      ...(result.metadata ?? {}),
+      extraction_contract_version: "lease-review-evidence-v3",
+    },
+    built_at: new Date().toISOString(),
+  };
+}
+
+/**
  * Build the review payload consumed by the frontend review screen.
  * Structured so the UI can render a field-by-field grid with source and
  * confidence badges, and so we can diff it after the reviewer edits.
@@ -888,14 +979,35 @@ function buildReviewPayload(opts: {
     .map(([key]) => key);
   const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
   const source = sourceFromMethod(extractionMethod ?? result.method);
+  // §7: genuinely unmapped-but-valued LLM keys, built once from the flat/
+  // global pipeline diagnostics (not per-row — a pre-existing limitation of
+  // these two debug fields) and passed only for the first/only row.
+  const reviewExtractionDebug = (result.metadata as any)?.extractionDebug ?? {};
+  const unmappedLlmKeys: string[] = Array.isArray(reviewExtractionDebug.unmapped_llm_keys)
+    ? reviewExtractionDebug.unmapped_llm_keys
+    : [];
+  const llmReturnedFieldDetailsForUnmapped = (reviewExtractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+  const unmappedLlmFields = unmappedLlmKeys
+    .map((key) => {
+      const detail = llmReturnedFieldDetailsForUnmapped[key];
+      return {
+        key,
+        value: detail?.value ?? null,
+        sourceText: detail?.source_text ?? null,
+        sourcePage: detail?.source_page ?? null,
+        confidence: detail?.confidence ?? null,
+      };
+    })
+    .filter((f) => f.value != null && f.value !== "");
   const workflowOutputs = extractionModuleType === "lease"
-    ? result.rows.map((row) =>
-        buildLeaseWorkflowAbstraction({
-          row,
-          doclingRaw: doclingRaw ?? null,
-          documentSubtype,
-        })
-      )
+    ? result.rows.map((row, rowIndex) =>
+      buildLeaseWorkflowAbstraction({
+        row,
+        doclingRaw: doclingRaw ?? null,
+        documentSubtype,
+        ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
+      })
+    )
     : [];
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
@@ -916,7 +1028,7 @@ function buildReviewPayload(opts: {
       let value = cleanPartyAddressValue(fieldKey, rawValue);
       // Guard: reject month names extracted as person contact names
       if (typeof value === "string" && fieldKey.endsWith("_name")) {
-        const MONTH_NAMES = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
         if (MONTH_NAMES.includes(value.trim().toLowerCase())) value = null;
       }
       // Guard: reject property_name values that are clause fragments containing "tenant"
@@ -1129,17 +1241,17 @@ function buildReviewPayload(opts: {
 
   const workflowSummary = extractionModuleType === "lease"
     ? {
-        records: workflowOutputs,
-        summary: {
-          extracted_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_field_count ?? 0), 0),
-          calculated_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.calculated_field_count ?? 0), 0),
-          manual_required_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.manual_required_count ?? 0), 0),
-          conflict_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.conflict_count ?? 0), 0),
-          clause_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.clause_count ?? 0), 0),
-          extracted_document_item_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_document_item_count ?? 0), 0),
-          expense_rule_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.expense_rule_count ?? 0), 0),
-        },
-      }
+      records: workflowOutputs,
+      summary: {
+        extracted_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_field_count ?? 0), 0),
+        calculated_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.calculated_field_count ?? 0), 0),
+        manual_required_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.manual_required_count ?? 0), 0),
+        conflict_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.conflict_count ?? 0), 0),
+        clause_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.clause_count ?? 0), 0),
+        extracted_document_item_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_document_item_count ?? 0), 0),
+        expense_rule_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.expense_rule_count ?? 0), 0),
+      },
+    }
     : null;
 
   const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
@@ -1186,6 +1298,18 @@ function filterUserWarnings(warnings: string[] = [], rowCount = 0): string[] {
   return out;
 }
 
+// HTML/markup fragments occasionally leak into extracted values (e.g. a
+// table-cell dump misrouted into a field's plain-text value). No lease field
+// is legitimately an HTML tag — reject rather than publish as a confident
+// extraction. Applied once, centrally, in buildReviewField() so it covers
+// every field shape (minimal fast-path payload, standard fields, custom
+// fields) without touching each call site.
+const MARKUP_VALUE_RE = /<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?>/i;
+
+function rejectMarkupValue(value: unknown): boolean {
+  return typeof value === "string" && MARKUP_VALUE_RE.test(value);
+}
+
 function buildReviewField(opts: {
   recordIndex: number;
   fieldKey: string;
@@ -1201,24 +1325,31 @@ function buildReviewField(opts: {
   editable?: boolean;
   validationErrors?: string[];
 }) {
-  const blank = isBlank(opts.value);
+  const hasMarkup = rejectMarkupValue(opts.value);
+  const effectiveValue = hasMarkup ? null : (opts.value ?? null);
+  const blank = isBlank(effectiveValue);
+  const status = hasMarkup ? "needs_review" : opts.status;
+  const baseValidationErrors = Array.isArray(opts.validationErrors) ? opts.validationErrors : [];
+  const validationErrors = hasMarkup
+    ? [...baseValidationErrors, "Rejected: extracted value contained HTML/markup fragments"]
+    : baseValidationErrors;
   return {
     id: `${opts.recordIndex}:${opts.isStandard ? "standard" : "custom"}:${opts.fieldKey}`,
     field_key: opts.fieldKey,
     label: humanizeFieldName(opts.fieldKey),
-    value: opts.value ?? null,
-    original_value: opts.value ?? null,
+    value: effectiveValue,
+    original_value: effectiveValue,
     field_type: opts.fieldType,
     description: opts.description ?? null,
     required: opts.required,
     is_standard: opts.isStandard,
-    confidence: opts.confidence,
+    confidence: hasMarkup ? 0 : opts.confidence,
     source: blank ? "system" : opts.source,
-    evidence: opts.evidence ?? null,
+    evidence: hasMarkup ? null : (opts.evidence ?? null),
     editable: opts.editable ?? true,
-    extraction_status: opts.status ?? (blank ? "not_found" : "extracted"),
-    status: opts.status ?? (blank ? "missing" : "pending"),
-    validation_errors: Array.isArray(opts.validationErrors) ? opts.validationErrors : [],
+    extraction_status: status ?? (blank ? "not_found" : "extracted"),
+    status: status ?? (blank ? "missing" : "pending"),
+    validation_errors: validationErrors,
     accepted: false,
     rejected: false,
     user_edit: null,
@@ -1517,6 +1648,148 @@ function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefin
   return count;
 }
 
+const ENRICH_READY_STATUSES = new Set(["review_required", "validated", "approved"]);
+
+/**
+ * §3 / P0.1: run the deferred evidence + clause pass (buildReviewPayload)
+ * against an already-persisted normalized_output, without re-running
+ * runExtractionPipeline (no re-parse, no re-LLM-call — guarantee 8) and
+ * without ever touching uploaded_files.status or clobbering the core
+ * standard_fields values on failure (guarantee 7).
+ */
+async function handleEnrichMode(args: {
+  supabaseAdmin: any;
+  orgId: string;
+  fileId: string;
+  jsonResponse: (body: unknown, status?: number) => Response;
+}): Promise<Response> {
+  const { supabaseAdmin, orgId, fileId, jsonResponse } = args;
+  const logger = createLogger(supabaseAdmin, fileId, orgId);
+
+  const { data: fileRecord, error: fetchError } = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
+      "extraction_method, docling_raw, normalized_output, ui_review_payload",
+    )
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (fetchError || !fileRecord) {
+    return jsonResponse(
+      { error: true, message: `File not found: ${fetchError?.message ?? "Invalid file_id"}`, error_code: "FILE_NOT_FOUND" },
+      404,
+    );
+  }
+
+  if (!ENRICH_READY_STATUSES.has(fileRecord.status)) {
+    return jsonResponse(
+      {
+        error: true,
+        message: `File status must be one of review_required/validated/approved for enrichment. Current: '${fileRecord.status}'`,
+        error_code: "INVALID_STATUS_FOR_ENRICH",
+      },
+      422,
+    );
+  }
+
+  const currentPayload = (fileRecord.ui_review_payload ?? {}) as Record<string, unknown>;
+  if (currentPayload.enrichment_status === "completed") {
+    // Idempotent no-op — a duplicate/racing enrich dispatch should never
+    // re-run the expensive pass twice.
+    return jsonResponse({ error: false, file_id: fileId, enrichment_status: "completed", already_enriched: true });
+  }
+
+  const result = fileRecord.normalized_output as {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  } | null;
+  if (!result || !Array.isArray(result.rows)) {
+    return jsonResponse(
+      { error: true, message: "No normalized_output found to enrich — run normalize first.", error_code: "NO_NORMALIZED_OUTPUT" },
+      422,
+    );
+  }
+
+  console.log(`[normalize-pdf-output] enrichment_started file_id=${fileId}`);
+  await supabaseAdmin
+    .from("uploaded_files")
+    .update({
+      ui_review_payload: { ...currentPayload, enrichment_status: "running" },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileId);
+  await logger.event("enrich", "running", {});
+
+  try {
+    const moduleType = fileRecord.module_type ?? "unknown";
+    const fileName = fileRecord.file_name ?? "document";
+
+    const enrichedPayload = buildReviewPayload({
+      fileId,
+      fileName,
+      moduleType,
+      documentSubtype: fileRecord.document_subtype ?? null,
+      extractionMethod: fileRecord.extraction_method ?? null,
+      reviewRequired: !!fileRecord.review_required,
+      doclingRaw: fileRecord.docling_raw ?? null,
+      result,
+    }) as Record<string, any>;
+
+    enrichedPayload.enrichment_status = "completed";
+    enrichedPayload.core_ready =
+      currentPayload.core_ready ?? computeCoreReady(enrichedPayload.records?.[0]?.standard_fields ?? []);
+    if (enrichedPayload.metadata && typeof enrichedPayload.metadata === "object") {
+      enrichedPayload.metadata.extraction_contract_version = "lease-review-evidence-v3";
+    }
+
+    const clauseCount = enrichedPayload.records?.[0]?.workflow_output?.lease_clauses?.length ?? 0;
+    const sourceBackedCount = (enrichedPayload.records?.[0]?.standard_fields ?? []).filter(
+      (f: any) => f?.evidence?.source_text || f?.evidence?.source_page != null,
+    ).length;
+
+    const { error: persistError } = await supabaseAdmin
+      .from("uploaded_files")
+      .update({ ui_review_payload: enrichedPayload, updated_at: new Date().toISOString() })
+      .eq("id", fileId);
+    if (persistError) {
+      throw new Error(`Could not persist enriched payload: ${persistError.message}`);
+    }
+
+    console.log(
+      `[normalize-pdf-output] enrichment_completed file_id=${fileId} clauses=${clauseCount} source_backed=${sourceBackedCount}`,
+    );
+    await logger.event("enrich", "completed", { metadata: { clauses: clauseCount, source_backed: sourceBackedCount } });
+
+    return jsonResponse({
+      error: false,
+      file_id: fileId,
+      enrichment_status: "completed",
+      clauses: clauseCount,
+      source_backed: sourceBackedCount,
+    });
+  } catch (enrichError: any) {
+    const message = enrichError?.message ?? String(enrichError);
+    console.error(`[normalize-pdf-output] enrichment_failed_preserved_core_payload file_id=${fileId}: ${message}`);
+    // Never call setFailed()/touch uploaded_files.status and never overwrite
+    // the core standard_fields — only patch enrichment_status, so the
+    // minimal payload's real values stay fully visible (guarantee 7).
+    await supabaseAdmin
+      .from("uploaded_files")
+      .update({
+        ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileId);
+    await logger.event("enrich", "failed", { error_message: message });
+    return jsonResponse({ error: true, message, error_code: "ENRICHMENT_FAILED" }, 500);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -1549,7 +1822,7 @@ Deno.serve(async (req: Request) => {
     const { user, supabaseAdmin } = await verifyUser(req);
 
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt } = body;
+    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt, mode } = body;
 
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
@@ -1606,6 +1879,17 @@ Deno.serve(async (req: Request) => {
         { error: true, message: "file_id is required", error_code: "MISSING_FILE_ID" },
         400,
       );
+    }
+
+    // §3 / P0.1: the deferred evidence + clause pass. Deliberately handled as
+    // an early, self-contained branch rather than threaded through the parse
+    // flow below — it has different status requirements (review_required/
+    // validated/approved, not pdf_parsed), reuses already-persisted
+    // normalized_output instead of re-running runExtractionPipeline, and
+    // must never call setFailed()/touch uploaded_files.status on error
+    // (guarantee 7).
+    if (mode === "enrich") {
+      return await handleEnrichMode({ supabaseAdmin, orgId, fileId: file_id, jsonResponse });
     }
 
     // Fetch only the columns this function actually uses.
@@ -1789,24 +2073,32 @@ Deno.serve(async (req: Request) => {
     // plain-text OCR fallback results (0 text_blocks but full_text ≥ 5000 chars)
     // — re-downloading the file in that case would be redundant and OOM the function.
     const doclingTextIsGood = doclingTextLength >= 2500 && (doclingBlockCount >= 5 || doclingTextLength >= 5000);
+    const azureLayoutMode =
+      Deno.env.get("EXTRACTION_PROVIDER") === "azure_document_intelligence" ||
+      isAzureLayoutOutput(fileRecord.docling_raw as Record<string, unknown>);
     const fileTooLargeForInlineVision =
       fileSizeIsKnown && fileSizeBytes > MAX_INLINE_VISION_BYTES;
 
     console.log(
       `[normalize-pdf-output] STAGE docling_check file_id=${file_id} ` +
       `doclingTextLength=${doclingTextLength} doclingBlockCount=${doclingBlockCount} ` +
-      `doclingTextIsGood=${doclingTextIsGood} fileSizeBytes=${fileSizeBytes}`,
+      `doclingTextIsGood=${doclingTextIsGood} azureLayoutMode=${azureLayoutMode} fileSizeBytes=${fileSizeBytes}`,
     );
 
     let fileBase64: string | null = null;
     let fileMimeType: string | null = fileRecord.mime_type
       ?? (fileRecord.file_name?.toLowerCase().endsWith(".pdf") ? "application/pdf" : null);
-    let fileLoadStatus: string = doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
+    let fileLoadStatus: string = azureLayoutMode ? "skipped_azure_layout" : doclingTextIsGood ? "skipped_good_docling" : "not_attempted";
     let fileLoadError: string | null = null;
     let fileBytesLength = 0;
     let detectedMagic: string | null = null;
 
-    if (doclingTextIsGood) {
+    if (azureLayoutMode) {
+      console.log(
+        `[normalize-pdf-output] Azure layout output active for file_id=${file_id}; ` +
+        `using docling_raw text only and skipping file bytes/fileBase64 fallback`,
+      );
+    } else if (doclingTextIsGood) {
       console.log(
         `[normalize-pdf-output] docling text is sufficient ` +
         `(${doclingTextLength} chars, ${doclingBlockCount} blocks) — ` +
@@ -1818,28 +2110,11 @@ Deno.serve(async (req: Request) => {
     // If the download silently returned an HTML error page (expired signed
     // URL, RLS deny rendered as HTML, etc.) we must NOT send that to
     // Gemini Vision and pretend it's the lease PDF.
-    const detectMagic = (bytes: Uint8Array): string | null => {
-      if (!bytes || bytes.length < 4) return null;
-      // %PDF
-      if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "pdf";
-      // JPEG: FF D8 FF
-      if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return "jpeg";
-      // PNG: 89 50 4E 47
-      if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return "png";
-      // GIF: 47 49 46 38
-      if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "gif";
-      // TIFF: 49 49 2A 00 or 4D 4D 00 2A
-      if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2A) ||
-          (bytes[0] === 0x4D && bytes[1] === 0x4D && bytes[3] === 0x2A)) return "tiff";
-      // WEBP: RIFF....WEBP
-      if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return "webp_or_riff";
-      // HTML error page leaked from CDN — anything starting with "<" or "<!"
-      const lead = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]).toLowerCase();
-      if (lead.startsWith("<!do") || lead.startsWith("<htm") || lead.startsWith("<?xm")) return "html_or_xml";
-      return null;
-    };
+    const detectMagic = detectFileMagic;
 
-    if (!doclingTextIsGood && extractionSkipped) {
+    if (azureLayoutMode) {
+      fileLoadStatus = "skipped_azure_layout";
+    } else if (!doclingTextIsGood && extractionSkipped) {
       fileLoadStatus = "skipped_extraction_not_configured";
       fileLoadError =
         (fileRecord.docling_raw as any)?._metadata?.extraction_skipped_reason ??
@@ -1893,47 +2168,46 @@ Deno.serve(async (req: Request) => {
             detectedMagic = detectMagic(bytes);
 
             if (!detectedMagic || detectedMagic === "html_or_xml") {
-            // Don't send a non-document to Vision. Mark load as failed and
-            // let extraction proceed with whatever Docling produced.
-            fileLoadStatus = "unexpected_content_type";
-            fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${
-              Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
-            })`;
-            console.warn(
-              `[normalize-pdf-output] file bytes failed magic check for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
-            );
-          } else {
-            // Deno base64 encoder is available; encode incrementally if large.
-            // For typical lease PDFs under the inline limit, conversion is fine.
-            let binary = "";
-            const CHUNK = 8 * 1024;
-            for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-              const slice = bytes.subarray(offset, offset + CHUNK);
-              // String.fromCharCode.apply rejects very large arrays; chunked
-              // conversion keeps each call within the JS arg limit.
-              binary += String.fromCharCode.apply(null, Array.from(slice));
+              // Don't send a non-document to Vision. Mark load as failed and
+              // let extraction proceed with whatever Docling produced.
+              fileLoadStatus = "unexpected_content_type";
+              fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
+                })`;
+              console.warn(
+                `[normalize-pdf-output] file bytes failed magic check for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
+              );
+            } else {
+              // Deno base64 encoder is available; encode incrementally if large.
+              // For typical lease PDFs under the inline limit, conversion is fine.
+              let binary = "";
+              const CHUNK = 8 * 1024;
+              for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+                const slice = bytes.subarray(offset, offset + CHUNK);
+                // String.fromCharCode.apply rejects very large arrays; chunked
+                // conversion keeps each call within the JS arg limit.
+                binary += String.fromCharCode.apply(null, Array.from(slice));
+              }
+              fileBase64 = btoa(binary);
+              // Resolve fileMimeType from magic when possible — this is more
+              // reliable than the column value or blob.type, which can be
+              // wrong for files re-uploaded via Storage REST.
+              const magicMime =
+                detectedMagic === "pdf" ? "application/pdf"
+                  : detectedMagic === "jpeg" ? "image/jpeg"
+                    : detectedMagic === "png" ? "image/png"
+                      : detectedMagic === "gif" ? "image/gif"
+                        : detectedMagic === "tiff" ? "image/tiff"
+                          : detectedMagic === "webp_or_riff" ? "image/webp"
+                            : null;
+              fileMimeType = magicMime || fileMimeType || (fileBlob as any).type || "application/pdf";
+              fileLoadStatus = "loaded";
+              console.log(
+                `[normalize-pdf-output] file bytes loaded for file_id=${file_id} ` +
+                `(${bytes.length} bytes, magic=${detectedMagic}, mime=${fileMimeType}) ` +
+                `— Vision fallback enabled if needed`,
+              );
             }
-            fileBase64 = btoa(binary);
-            // Resolve fileMimeType from magic when possible — this is more
-            // reliable than the column value or blob.type, which can be
-            // wrong for files re-uploaded via Storage REST.
-            const magicMime =
-              detectedMagic === "pdf" ? "application/pdf"
-              : detectedMagic === "jpeg" ? "image/jpeg"
-              : detectedMagic === "png" ? "image/png"
-              : detectedMagic === "gif" ? "image/gif"
-              : detectedMagic === "tiff" ? "image/tiff"
-              : detectedMagic === "webp_or_riff" ? "image/webp"
-              : null;
-            fileMimeType = magicMime || fileMimeType || (fileBlob as any).type || "application/pdf";
-            fileLoadStatus = "loaded";
-            console.log(
-              `[normalize-pdf-output] file bytes loaded for file_id=${file_id} ` +
-              `(${bytes.length} bytes, magic=${detectedMagic}, mime=${fileMimeType}) ` +
-              `— Vision fallback enabled if needed`,
-            );
           }
-        }
         }
       } catch (loadErr: any) {
         fileLoadStatus = "exception";
@@ -1957,15 +2231,16 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64}`);
+      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
+      const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
       const result = await runExtractionPipeline(
         {
           moduleType: extractionModuleType,
           fileName,
-          docling: fileRecord.docling_raw,
-          ...(fileBase64 ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
+          docling: pipelineDocling,
+          ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
         },
         {
           // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
@@ -1979,6 +2254,17 @@ Deno.serve(async (req: Request) => {
         },
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
+      console.log(
+        `[normalize-pdf-output] core_extraction_done file_id=${file_id} rows=${result.rows?.length ?? 0} ` +
+        `fields=${(result.metadata as any)?.extractionDebug?.fields_returned_count ?? 0} ` +
+        `source_backed=${(result.metadata as any)?.extractionDebug?.source_backed_fields_count ?? 0}`,
+      );
+
+      // Decide the next status based on the review gate decided at ingest.
+      // Computed once here (not re-derived later) so the minimal early
+      // persist below and the final full-payload persist land on
+      // consistent, FSM-legal statuses.
+      const reviewRequired = !!fileRecord.review_required;
 
       // Forward file-load status into the pipeline's extractionDebug so the
       // UI/debug panel can show why Vision did or didn't run.
@@ -1986,6 +2272,7 @@ Deno.serve(async (req: Request) => {
         (result.metadata as any).extractionDebug = {
           ...((result.metadata as any).extractionDebug || {}),
           file_load_status: fileLoadStatus,
+          azure_layout_mode: azureLayoutMode,
           file_load_error: fileLoadError,
           file_url_present: !!fileRecord.file_url,
           file_size_bytes: fileSizeIsKnown ? fileSizeBytes : null,
@@ -2000,6 +2287,32 @@ Deno.serve(async (req: Request) => {
 
       const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
       if (!result.rows || result.rows.length === 0 || meaningfulValueCount === 0) {
+        // P0.3 guarantee: this attempt produced nothing usable, but a prior
+        // successful run may already have persisted real values for this
+        // file (e.g. a re-extraction that regressed). Re-read before
+        // injecting an empty fallback row over them.
+        const { data: existingRow } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("ui_review_payload, parsed_data, normalized_output")
+          .eq("id", file_id)
+          .maybeSingle();
+        if (existingRow && uploadedFileRowHasMeaningfulValues(existingRow)) {
+          console.log(
+            `[normalize-pdf-output] fallback_aborted_existing_values_found file_id=${file_id} — ` +
+            `this attempt found nothing, but existing row already has real values; leaving it untouched`,
+          );
+          await logger.event("normalize", "blocked_write_skipped", {
+            reason: "existing_meaningful_values_found",
+          });
+          return jsonResponse({
+            error: false,
+            file_id,
+            processing_status: fileRecord.status,
+            module_type: moduleType,
+            message: "This extraction attempt found no usable values; the file's existing extracted data was left unchanged.",
+          });
+        }
+
         // For review-required files (all leases), inject a fallback empty row instead of
         // failing. This lets the reviewer manually fill in fields rather than hitting a
         // dead-end "failed" status. Without an LLM backend, rule/table extraction often
@@ -2020,74 +2333,173 @@ Deno.serve(async (req: Request) => {
           (result as any).metadata.avgConfidence = 0;
           // fall through to the normal review_required path below
         } else {
-        const reason =
-          `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
-        const pipeline = buildPipelineMetadata({
-          parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          ai_status: "ai_empty_output",
-          review_status: REVIEW_STATUSES.BLOCKED,
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          error_message: reason,
+          const reason =
+            `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
+          const pipeline = buildPipelineMetadata({
+            parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            ai_status: "ai_empty_output",
+            review_status: REVIEW_STATUSES.BLOCKED,
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            error_message: reason,
+            full_text_chars: doclingTextLength,
+            page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+            mapped_fields_count: 0,
+            dynamic_terms_count: 0,
+            source_backed_count: 0,
+            lease_clauses_count: 0,
+            expense_terms_count: 0,
+            cam_terms_count: 0,
+            stage: "normalize",
+          });
+          const payload = buildBlockedReviewPayload({
+            fileId: file_id,
+            fileName,
+            moduleType,
+            documentSubtype: fileRecord.document_subtype ?? null,
+            extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
+            message: "No usable lease values were extracted from the parsed document.",
+            pipeline,
+          });
+          await setStatus(supabaseAdmin, file_id, "failed", {
+            review_required: false,
+            review_status: REVIEW_STATUSES.BLOCKED,
+            processing_status: "failed_empty_extraction",
+            extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
+            ui_review_payload: payload,
+            normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
+              method: "blocked_pipeline_failure",
+              rows: [],
+              warnings: payload.global_warnings,
+              validationErrors: result.validationErrors ?? [],
+            }),
+            parsed_data: [],
+            row_count: 0,
+            valid_count: 0,
+            error_count: 1,
+            error_message: reason,
+            failed_step: "normalize",
+            processing_completed_at: new Date().toISOString(),
+          });
+          await logger.event("normalize", "blocked", {
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            ai_status: "ai_empty_output",
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            full_text_chars: doclingTextLength,
+            page_count: pipeline.page_count,
+            mapped_fields_count: 0,
+            dynamic_terms_count: 0,
+            lease_clauses_count: 0,
+          });
+          return jsonResponse({
+            error: true,
+            file_id,
+            processing_status: "failed",
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            message: reason,
+            ui_review_payload: payload,
+          }, 422);
+        } // end else (non-review-required modules)
+      }
+
+      // ── Fast core-field persist ─────────────────────────────────────────
+      // Persist a minimal, schema-versioned payload from the raw rule/table/
+      // LLM values BEFORE buildReviewPayload() runs its expensive workflow
+      // abstraction + clause records + per-field evidence-page verification
+      // pass. If the Edge Function is OOM-killed or times out anywhere after
+      // this point, real extracted field values are already durable and
+      // visible in the UI — the worker's normalize reconciliation finds this
+      // non-fallback payload and completes the job instead of overwriting it
+      // with manual_review_fallback.
+      console.log(`[normalize-pdf-output] STAGE minimal_payload_start file_id=${file_id}`);
+      const minimalPayload = buildMinimalReviewPayload({
+        fileId: file_id,
+        fileName,
+        moduleType,
+        documentSubtype: fileRecord.document_subtype ?? null,
+        extractionMethod: fileRecord.extraction_method ?? null,
+        reviewRequired,
+        result,
+      });
+      const { error: minimalPersistError } = await setStatus(
+        supabaseAdmin,
+        file_id,
+        reviewRequired ? "review_required" : "validated",
+        {
+          parsed_data: result.rows,
+          normalized_output: result,
+          ui_review_payload: minimalPayload,
+          row_count: result.rows.length,
+          valid_count: result.rows.length - (result.validationErrors?.length ?? 0),
+          error_count: result.validationErrors?.length ?? 0,
+          validation_errors: result.validationErrors ?? [],
+          error_message: null,
+          ...(reviewRequired ? { review_status: "pending" } : {}),
+        },
+      );
+      const minimalSourceBackedCount = (minimalPayload.records[0]?.standard_fields ?? [])
+        .filter((f: any) => f.status === "auto_populated" || f.status === "pending_enrichment").length;
+      const minimalValueCount = (minimalPayload.records[0]?.standard_fields ?? [])
+        .filter((f: any) => f.value != null && f.value !== "").length;
+      if (minimalPersistError) {
+        // Non-fatal — log and continue to the full enrichment pass below.
+        // Worst case this run loses the early-persist safety net; extraction
+        // still proceeds normally.
+        console.warn(
+          `[normalize-pdf-output] Could not persist minimal core payload for file_id=${file_id}: ${minimalPersistError.message}`,
+        );
+      } else {
+        console.log(
+          `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
+          `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
+        );
+      }
+
+      // ── P0.1: defer the expensive evidence/clause pass ───────────────────
+      // By default (NORMALIZE_INLINE_ENRICHMENT unset/false), return success
+      // right here — the minimal payload above is already durable and
+      // review-worthy (P0.2). The evidence/clause pass (buildReviewPayload,
+      // the documented compute hotspot per evidence-index.ts) runs as a
+      // separate, independently-retryable "enrich" job instead of inline in
+      // this same request, so it can never again crash a request that
+      // already contains good data. Setting NORMALIZE_INLINE_ENRICHMENT=true
+      // restores the old synchronous behavior — local debugging only, never
+      // set in a deployed environment.
+      const inlineEnrichment = Deno.env.get("NORMALIZE_INLINE_ENRICHMENT") === "true";
+      if (!inlineEnrichment) {
+        await enqueueEnrichmentJob({
+          supabaseAdmin,
+          orgId,
+          fileId: file_id,
+          moduleType,
+          logger,
+        });
+        console.log(`[normalize-pdf-output] normalize_returning_after_minimal_payload file_id=${file_id}`);
+        await logger.event("normalize", "completed", {
+          normalize_status: NORMALIZE_STATUSES.COMPLETED,
+          row_count: result.rows.length,
           full_text_chars: doclingTextLength,
           page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
-          mapped_fields_count: 0,
-          dynamic_terms_count: 0,
-          source_backed_count: 0,
-          lease_clauses_count: 0,
-          expense_terms_count: 0,
-          cam_terms_count: 0,
-          stage: "normalize",
-        });
-        const payload = buildBlockedReviewPayload({
-          fileId: file_id,
-          fileName,
-          moduleType,
-          documentSubtype: fileRecord.document_subtype ?? null,
-          extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
-          message: "No usable lease values were extracted from the parsed document.",
-          pipeline,
-        });
-        await setStatus(supabaseAdmin, file_id, "failed", {
-          review_required: false,
-          review_status: REVIEW_STATUSES.BLOCKED,
-          processing_status: "failed_empty_extraction",
-          extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
-          ui_review_payload: payload,
-          normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
-            method: "blocked_pipeline_failure",
-            rows: [],
-            warnings: payload.global_warnings,
-            validationErrors: result.validationErrors ?? [],
-          }),
-          parsed_data: [],
-          row_count: 0,
-          valid_count: 0,
-          error_count: 1,
-          error_message: reason,
-          failed_step: "normalize",
-          processing_completed_at: new Date().toISOString(),
-        });
-        await logger.event("normalize", "blocked", {
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          ai_status: "ai_empty_output",
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          full_text_chars: doclingTextLength,
-          page_count: pipeline.page_count,
-          mapped_fields_count: 0,
-          dynamic_terms_count: 0,
-          lease_clauses_count: 0,
+          method: result.method,
+          review_required: reviewRequired,
+          metadata: { deferred_enrichment: true },
         });
         return jsonResponse({
-          error: true,
+          error: false,
           file_id,
-          processing_status: "failed",
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          message: reason,
-          ui_review_payload: payload,
-        }, 422);
-        } // end else (non-review-required modules)
+          processing_status: reviewRequired ? "review_required" : "validated",
+          module_type: moduleType,
+          document_subtype: fileRecord.document_subtype,
+          review_required: reviewRequired,
+          method: result.method,
+          row_count: result.rows.length,
+          warnings: result.warnings,
+          validation_errors: result.validationErrors,
+          metadata: result.metadata,
+          core_ready: minimalPayload.core_ready,
+          enrichment_status: "pending",
+        });
       }
 
       console.log(`[normalize-pdf-output] STAGE review_payload_start file_id=${file_id}`);
@@ -2161,11 +2573,11 @@ Deno.serve(async (req: Request) => {
         const coreMappingFailed = Boolean(wfSummary.core_mapping_failed) || mappingFailureReason != null;
         const fieldTrace = firstRecord
           ? buildFieldTraceForRecord({
-              standardFields: (firstRecord as any).standard_fields || [],
-              workflowOutput: wf,
-              pipelineDebug,
-              moduleType,
-            })
+            standardFields: (firstRecord as any).standard_fields || [],
+            workflowOutput: wf,
+            pipelineDebug,
+            moduleType,
+          })
           : [];
         const fieldTraceSummary = summarizeFieldTrace(fieldTrace);
         const consolidated = {
@@ -2258,14 +2670,17 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Decide the next status based on the review gate decided at ingest.
-      const reviewRequired = !!fileRecord.review_required;
+      // reviewRequired was already computed and used for the minimal early
+      // persist above; status is currently review_required or validated
+      // (whichever that persist landed on) — both transition legally to
+      // 'validated' below (same-status is a no-op per isAllowedTransition,
+      // and review_required → validated is an allowed FSM edge), then back
+      // to 'review_required' if a human gate is required.
       const nextStatus = reviewRequired ? "review_required" : "validated";
+      // Full payload replaces the minimal one — mark enrichment complete so
+      // the UI can stop showing the "enriching evidence" affordance.
+      (uiReviewPayload as Record<string, unknown>).enrichment_status = "completed";
 
-      // FSM: 'validating' → 'validated' is allowed; 'validating' → 'review_required'
-      // is NOT a valid transition in the FSM (validated is the intermediate).
-      // So we always land on 'validated' first, then flip to 'review_required'
-      // if a human gate is required.
       const { error: validatedErr } = await setStatus(
         supabaseAdmin,
         file_id,
@@ -2361,3 +2776,11 @@ Deno.serve(async (req: Request) => {
     );
   }
 });
+
+// Test hook (same pattern as _shared/extraction/parser.ts).
+export const __test__ = {
+  buildPipelineLayoutInput,
+  buildMinimalReviewPayload,
+  rejectMarkupValue,
+  buildReviewField,
+};

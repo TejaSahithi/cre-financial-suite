@@ -1,12 +1,11 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeFunctions";
 import useOrgId from "@/hooks/useOrgId";
 import useFileStatus from "@/hooks/useFileStatus";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
-import { createPageUrl } from "@/utils";
+import { getFriendlyExtractionLabel, payloadHasMeaningfulFields } from "@/lib/extractionStatusLabels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileText, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Upload, FileText, Image as ImageIcon, Loader2, CheckCircle, XCircle, Ban } from "lucide-react";
 import { toast } from "sonner";
 
 const ALL_FILE_TYPES = [
@@ -54,22 +53,49 @@ function normalizeOptionalUuid(value) {
   return UUID_RE.test(trimmed) ? trimmed : null;
 }
 
-function getProcessingError(ingestData, ingestError) {
-  return (
-    ingestData?.message ||
-    ingestData?.error_details ||
-    ingestData?.steps?.normalization?.data?.message ||
-    ingestData?.steps?.extraction?.data?.message ||
-    ingestData?.steps?.validation?.data?.message ||
-    ingestData?.steps?.storage?.data?.message ||
-    ingestError?.message ||
-    "Processing could not be started."
-  );
+const DETECTED_TYPE_LABELS = {
+  pdf: "PDF document",
+  image: "Image",
+  office_document: "Word/Office document",
+  csv: "CSV",
+  spreadsheet: "Spreadsheet",
+  text: "Plain text",
+  unexpected_content: "Unrecognized content",
+  unknown: "Unknown",
+};
+
+// Signed preview URLs — short-lived, never logged, never persisted past the
+// component's own state. 15 minutes is enough to review a document before
+// deciding Proceed/Cancel without leaving a long-lived credential around.
+const PREVIEW_URL_TTL_SECONDS = 15 * 60;
+// Above this size, don't auto-load an <iframe>/<img> preview — show file
+// metadata and a manual "Open Preview" button instead.
+const LARGE_PREVIEW_BYTES = 25 * 1024 * 1024;
+
+async function getPreviewUrl(storagePath) {
+  if (!supabase || !storagePath) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from("financial-uploads")
+      .createSignedUrl(storagePath, PREVIEW_URL_TTL_SECONDS);
+    if (error || !data?.signedUrl) return null;
+    return data.signedUrl;
+  } catch {
+    // Never log the storage path/URL itself — only that signing failed.
+    return null;
+  }
 }
+
+// Re-exported for callers already importing these from FileUploader.jsx —
+// the implementations themselves live in a dependency-free lib module so
+// they can be unit tested without a browser/DOM environment.
+export { getFriendlyExtractionLabel, payloadHasMeaningfulFields };
 
 /**
  * Reusable file upload component that sends files to the upload-handler
- * Edge Function and auto-triggers ingestion on success.
+ * Edge Function, then pauses for explicit user confirmation (Proceed/Cancel)
+ * before extraction (ingest-file / parse-pdf-docling / Azure / normalize /
+ * Vertex / lease-extraction-worker) is ever triggered.
  *
  * @param {Object}   props
  * @param {Function} props.onUploadComplete
@@ -81,6 +107,11 @@ function getProcessingError(ingestData, ingestError) {
  * @param {string}   [props.orgId]
  * @param {boolean}  [props.multiple]
  * @param {string}   [props.accept]
+ * @param {Function} [props.onOpenReview] Called with (fileId) when the user
+ *   clicks "Open Lease Review" on a ready extraction. FileUploader has no
+ *   lease-specific knowledge (find-or-create-lease, navigation) — that logic
+ *   stays entirely in the caller (e.g. LeaseUpload.jsx) so this component
+ *   remains generic and reusable across upload contexts.
  */
 export default function FileUploader({
   onUploadComplete,
@@ -92,6 +123,7 @@ export default function FileUploader({
   orgId: orgIdOverride,
   multiple = false,
   accept = DEFAULT_ACCEPT,
+  onOpenReview,
 }) {
   const { orgId, isAdmin } = useOrgId();
   const resolvedOrgId = orgIdOverride ?? orgId;
@@ -127,11 +159,87 @@ export default function FileUploader({
   const [uploadResults, setUploadResults] = useState([]);
   const [uploadErrors, setUploadErrors] = useState([]);
   const [trackedFileIds, setTrackedFileIds] = useState([]);
+  // Files stored by upload-handler but awaiting the user's Proceed/Cancel
+  // decision. Extraction never starts for these until confirm-upload runs.
+  const [pendingConfirmations, setPendingConfirmations] = useState([]);
+  // file_id -> "confirming" | "cancelling", so a double-click on Proceed/
+  // Cancel is a client-side no-op layered on top of the server-side atomic
+  // idempotency guards in confirm-upload / cancel-upload.
+  const [confirmationActionState, setConfirmationActionState] = useState({});
 
   const normalizedAllowedTypes = useMemo(
     () => (allowedFileTypes || []).map((type) => normalizeFileType(type)),
     [allowedFileTypes]
   );
+
+  // Refresh recovery: pendingConfirmations is client-only React state, wiped
+  // on page reload. The uploaded_files row itself is the durable session
+  // (status='uploaded', confirmed_at IS NULL), so on mount we re-query for
+  // any such rows belonging to this org/scope and re-show the Proceed/Cancel
+  // prompt instead of silently losing track of an unconfirmed upload.
+  useEffect(() => {
+    if (!resolvedOrgId || resolvedOrgId === "__none__" || !supabase) return;
+    let cancelledEffect = false;
+
+    (async () => {
+      let query = supabase
+        .from("uploaded_files")
+        .select("id, file_name, file_size, mime_type, module_type, created_at")
+        .eq("org_id", resolvedOrgId)
+        .is("confirmed_at", null)
+        .eq("status", "uploaded")
+        .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .order("created_at", { ascending: false });
+
+      if (normalizedAllowedTypes.length > 0) {
+        query = query.in("module_type", normalizedAllowedTypes);
+      }
+
+      const { data, error } = await query;
+      if (cancelledEffect || error || !Array.isArray(data) || data.length === 0) return;
+
+      setPendingConfirmations((prev) => {
+        const existingIds = new Set(prev.map((p) => p.file_id));
+        const recovered = data
+          .filter((row) => !existingIds.has(row.id))
+          .map((row) => ({
+            file_id: row.id,
+            file_name: row.file_name,
+            file_size: row.file_size ?? 0,
+            mime_type: row.mime_type || "",
+            storage_path: `${resolvedOrgId}/${row.id}`,
+            detected_type: "unknown",
+            possible_duplicate: false,
+            module_type: row.module_type,
+            previewUrl: null,
+            previewState: "idle",
+          }));
+        // Refresh recovery only restores the pending-confirmation card itself
+        // — it never auto-confirms or auto-extracts a recovered upload; the
+        // user still has to click Proceed or Cancel explicitly.
+        if (recovered.length === 0) return prev;
+        const next = [...prev, ...recovered];
+        for (const item of recovered) {
+          if (item.file_size <= LARGE_PREVIEW_BYTES) {
+            getPreviewUrl(item.storage_path).then((url) => {
+              setPendingConfirmations((cur) =>
+                cur.map((p) =>
+                  p.file_id === item.file_id
+                    ? { ...p, previewUrl: url, previewState: url ? "ready" : "unavailable" }
+                    : p,
+                ),
+              );
+            });
+          }
+        }
+        return next;
+      });
+    })();
+
+    return () => { cancelledEffect = true; };
+    // Only re-run when the org scope changes (e.g. super-admin switching
+    // org) — not on every pendingConfirmations update.
+  }, [resolvedOrgId]);
 
   const typeOptions = normalizedAllowedTypes.length > 0
     ? ALL_FILE_TYPES.filter((fileTypeOption) => normalizedAllowedTypes.includes(fileTypeOption.value))
@@ -263,53 +371,116 @@ export default function FileUploader({
 
       const data = await invokeEdgeFunctionFormData("upload-handler", formData);
 
+      // Extraction does NOT start here. upload-handler only stores the file
+      // and runs cheap preflight checks; the file now sits at
+      // confirmation_required=true until the user clicks Proceed (which
+      // calls confirm-upload -> ingest-file) or Cancel (which deletes the
+      // temp row/object via cancel-upload). No parse-pdf-docling, Azure,
+      // normalize-pdf-output, Vertex, or lease-extraction-worker call
+      // happens as a side effect of this function.
       if (data?.file_id) {
-        setTrackedFileIds(prev => [...prev, { id: data.file_id, fileName: file.name, fileType: normalizeFileType(fileType) }]);
-        invokeEdgeFunction("ingest-file", {
-          file_id: data.file_id,
-          module_type: normalizeFileType(fileType),
-        })
-          .then((ingestData) => {
-            if (ingestData?.error) {
-              const processingError = getProcessingError(ingestData, null);
-              console.error("[FileUploader] ingest-file failed:", {
-                data: ingestData,
-                message: processingError,
-              });
-              toast.error(`${file.name}: ${processingError}`);
-              onUploadComplete?.({
-                ...data,
-                processing_started: false,
-                processing_error: processingError,
-                ingest_result: ingestData,
-              });
-            }
-          })
-          .catch((ingestError) => {
-            const processingError = getProcessingError(null, ingestError);
-            console.error("[FileUploader] ingest-file failed:", {
-              error: ingestError,
-              message: processingError,
-            });
-            toast.error(`${file.name}: ${processingError}`);
-            onUploadComplete?.({
-              ...data,
-              processing_started: false,
-              processing_error: processingError,
-              ingest_error: {
-                message: ingestError?.message || String(ingestError),
-              },
-            });
+        const storagePath = data.storage_path || `${resolvedOrgId}/${data.file_id}`;
+        const mimeType = data.mime_type || file.type || "";
+        setPendingConfirmations((prev) => [
+          ...prev,
+          {
+            file_id: data.file_id,
+            file_name: data.file_name || file.name,
+            file_size: data.file_size ?? file.size,
+            mime_type: mimeType,
+            storage_path: storagePath,
+            detected_type: data.detected_type || "unknown",
+            possible_duplicate: !!data.possible_duplicate,
+            module_type: normalizeFileType(fileType),
+            previewUrl: null,
+            previewState: "idle", // idle | loading | ready | unavailable
+          },
+        ]);
+        // Fire-and-forget: sign a preview URL for small files immediately;
+        // large files wait for an explicit "Open Preview" click instead.
+        if ((data.file_size ?? file.size ?? 0) <= LARGE_PREVIEW_BYTES) {
+          getPreviewUrl(storagePath).then((url) => {
+            setPendingConfirmations((prev) =>
+              prev.map((p) =>
+                p.file_id === data.file_id
+                  ? { ...p, previewUrl: url, previewState: url ? "ready" : "unavailable" }
+                  : p,
+              ),
+            );
           });
+        }
       }
 
       return {
         ...data,
-        processing_started: Boolean(data?.file_id),
+        processing_started: false,
+        awaiting_confirmation: Boolean(data?.file_id),
       };
     },
-    [buildingId, fileType, isAdmin, onUploadComplete, propertyId, resolvedOrgId, unitId]
+    [buildingId, fileType, isAdmin, propertyId, resolvedOrgId, unitId]
   );
+
+  const handleProceed = useCallback(async (fileId) => {
+    setConfirmationActionState((prev) => ({ ...prev, [fileId]: "confirming" }));
+    try {
+      const pending = pendingConfirmations.find((p) => p.file_id === fileId);
+      const result = await invokeEdgeFunction("confirm-upload", { file_id: fileId });
+      if (result?.error) {
+        throw new Error(result?.message || "Could not confirm upload");
+      }
+      setPendingConfirmations((prev) => prev.filter((p) => p.file_id !== fileId));
+      setTrackedFileIds((prev) => [
+        ...prev,
+        { id: fileId, fileName: pending?.file_name, fileType: pending?.module_type },
+      ]);
+      toast.success(`${pending?.file_name || "File"}: extraction started.`);
+      onUploadComplete?.({ file_id: fileId, processing_started: true });
+    } catch (error) {
+      console.error("[FileUploader] confirm-upload failed:", error);
+      toast.error(error?.message || "Could not confirm upload. Please try again.");
+    } finally {
+      setConfirmationActionState((prev) => {
+        const next = { ...prev };
+        delete next[fileId];
+        return next;
+      });
+    }
+  }, [onUploadComplete, pendingConfirmations]);
+
+  const handleOpenPreview = useCallback(async (fileId) => {
+    setPendingConfirmations((prev) =>
+      prev.map((p) => (p.file_id === fileId ? { ...p, previewState: "loading" } : p)),
+    );
+    const pending = pendingConfirmations.find((p) => p.file_id === fileId);
+    const url = pending ? await getPreviewUrl(pending.storage_path) : null;
+    setPendingConfirmations((prev) =>
+      prev.map((p) =>
+        p.file_id === fileId ? { ...p, previewUrl: url, previewState: url ? "ready" : "unavailable" } : p,
+      ),
+    );
+  }, [pendingConfirmations]);
+
+  const handleCancelUpload = useCallback(async (fileId) => {
+    setConfirmationActionState((prev) => ({ ...prev, [fileId]: "cancelling" }));
+    try {
+      const pending = pendingConfirmations.find((p) => p.file_id === fileId);
+      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId });
+      if (result?.error) {
+        throw new Error(result?.message || "Could not cancel upload");
+      }
+      setPendingConfirmations((prev) => prev.filter((p) => p.file_id !== fileId));
+      toast.info(`${pending?.file_name || "File"}: upload cancelled.`);
+    } catch (error) {
+      console.error("[FileUploader] cancel-upload failed:", error);
+      toast.error(error?.message || "Could not cancel upload. Please try again.");
+    } finally {
+      setConfirmationActionState((prev) => {
+        const next = { ...prev };
+        delete next[fileId];
+        return next;
+      });
+    }
+  }, [pendingConfirmations]);
 
   const handleUpload = useCallback(async () => {
     if (!files.length) {
@@ -346,7 +517,10 @@ export default function FileUploader({
 
     if (results.length > 0 && errors.length === 0) {
       setUploadState("success");
-      toast.success(`${results.length} file${results.length === 1 ? "" : "s"} uploaded. Extraction is running.`);
+      toast.success(
+        `${results.length} file${results.length === 1 ? "" : "s"} uploaded. ` +
+        `Review and confirm below to start extraction.`,
+      );
       if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
       return;
     }
@@ -524,7 +698,7 @@ export default function FileUploader({
                   uploadState === "success" ? "text-emerald-800" : "text-amber-800"
                 }`}>
                   {uploadState === "success"
-                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; extraction is running`
+                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; confirm below to start extraction`
                     : `Uploaded ${uploadResults.length} of ${files.length} files`}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-2">
@@ -578,11 +752,162 @@ export default function FileUploader({
           </div>
         )}
 
+        {pendingConfirmations.length > 0 && (
+          <div className="space-y-3 pt-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Confirm to Start Extraction
+            </p>
+            {pendingConfirmations.map((pending) => {
+              const actionState = confirmationActionState[pending.file_id];
+              const busy = !!actionState;
+              const isPdf = pending.detected_type === "pdf" || pending.mime_type === "application/pdf";
+              const isImage =
+                pending.detected_type === "image" || (pending.mime_type || "").startsWith("image/");
+              const isLarge = (pending.file_size || 0) > LARGE_PREVIEW_BYTES;
+              const canEmbedPreview = (isPdf || isImage) && !isLarge;
+
+              return (
+                <div
+                  key={pending.file_id}
+                  className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-800">{pending.file_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {formatFileSize(pending.file_size)} &middot; {DETECTED_TYPE_LABELS[pending.detected_type] || "Unknown type"}
+                      </p>
+                      {pending.possible_duplicate && (
+                        <p className="mt-1 text-xs font-medium text-amber-700">
+                          A file with this name and size was uploaded recently — possible duplicate.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-blue-100 bg-white p-2">
+                    {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isPdf && (
+                      <iframe
+                        src={pending.previewUrl}
+                        className="h-64 w-full rounded border-0"
+                        title={`Preview of ${pending.file_name}`}
+                      />
+                    )}
+                    {canEmbedPreview && pending.previewState === "ready" && pending.previewUrl && isImage && (
+                      <img
+                        src={pending.previewUrl}
+                        className="max-h-64 w-full rounded border border-slate-100 object-contain"
+                        alt={pending.file_name}
+                      />
+                    )}
+                    {canEmbedPreview && pending.previewState === "loading" && (
+                      <div className="flex h-32 items-center justify-center text-slate-400">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    )}
+                    {canEmbedPreview && pending.previewState === "unavailable" && (
+                      <div className="flex h-24 flex-col items-center justify-center gap-1 text-center">
+                        {isImage ? (
+                          <ImageIcon className="h-6 w-6 text-slate-300" />
+                        ) : (
+                          <FileText className="h-6 w-6 text-slate-300" />
+                        )}
+                        <p className="text-xs text-slate-500">Preview unavailable.</p>
+                      </div>
+                    )}
+                    {isLarge && (isPdf || isImage) && (
+                      <div className="flex h-24 flex-col items-center justify-center gap-2 text-center">
+                        <p className="text-xs text-slate-500">
+                          This file is large — preview isn't loaded automatically.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={pending.previewState === "loading"}
+                          onClick={() => handleOpenPreview(pending.file_id)}
+                        >
+                          {pending.previewState === "loading" ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            "Open Preview"
+                          )}
+                        </Button>
+                        {pending.previewState === "unavailable" && (
+                          <p className="text-xs text-slate-500">Preview unavailable.</p>
+                        )}
+                        {pending.previewState === "ready" && pending.previewUrl && isPdf && (
+                          <iframe
+                            src={pending.previewUrl}
+                            className="h-64 w-full rounded border-0"
+                            title={`Preview of ${pending.file_name}`}
+                          />
+                        )}
+                        {pending.previewState === "ready" && pending.previewUrl && isImage && (
+                          <img
+                            src={pending.previewUrl}
+                            className="max-h-64 w-full rounded border border-slate-100 object-contain"
+                            alt={pending.file_name}
+                          />
+                        )}
+                      </div>
+                    )}
+                    {!isPdf && !isImage && (
+                      <div className="flex h-24 flex-col items-center justify-center gap-1 text-center">
+                        <FileText className="h-6 w-6 text-slate-300" />
+                        <p className="text-xs text-slate-500">Preview not available.</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="text-sm font-medium text-slate-700">
+                    Is this the correct document to process?
+                  </p>
+
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={() => handleProceed(pending.file_id)}
+                    >
+                      {actionState === "confirming" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        "Proceed with Extraction"
+                      )}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={() => handleCancelUpload(pending.file_id)}
+                    >
+                      {actionState === "cancelling" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        "Cancel / Re-upload"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {trackedFileIds.length > 0 && (
           <div className="space-y-1.5 pt-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Extraction Status</p>
             {trackedFileIds.map(f => (
-              <ExtractionStatusRow key={f.id} fileId={f.id} fileName={f.fileName} fileType={f.fileType} />
+              <ExtractionStatusRow
+                key={f.id}
+                fileId={f.id}
+                fileName={f.fileName}
+                fileType={f.fileType}
+                onOpenReview={onOpenReview}
+              />
             ))}
           </div>
         )}
@@ -591,27 +916,73 @@ export default function FileUploader({
   );
 }
 
-const EXTRACTION_STATUS_LABELS = {
-  uploaded:        { label: "Queued for extraction",    color: "text-slate-500" },
-  parsing:         { label: "Parsing document...",      color: "text-blue-600"  },
-  pdf_parsed:      { label: "Extracting fields...",     color: "text-blue-600"  },
-  validating:      { label: "Validating...",            color: "text-blue-600"  },
-  validated:       { label: "Validated",                color: "text-blue-600"  },
-  storing:         { label: "Storing data...",          color: "text-blue-600"  },
-  stored:          { label: "Stored",                   color: "text-blue-600"  },
-  computing:       { label: "Running calculations...",  color: "text-blue-600"  },
-  review_required: { label: "Ready for Review",         color: "text-amber-700" },
-  completed:       { label: "Complete",                 color: "text-emerald-700" },
-  failed:          { label: "Extraction failed",        color: "text-red-700"   },
-};
-
 const ACTIVE_EXTRACTION_STATUSES = new Set([
   "uploaded", "parsing", "pdf_parsed", "validating", "validated", "storing", "computing",
 ]);
 
-function ExtractionStatusRow({ fileId, fileName, fileType }) {
-  const { status, isLoading } = useFileStatus(fileId);
+const STATUS_COLORS = {
+  review_required: "text-amber-700",
+  completed: "text-emerald-700",
+  failed: "text-red-700",
+  cancelled: "text-slate-500",
+};
+
+const SUMMARY_FIELD_KEYS = [
+  { key: "tenant_name", label: "Tenant" },
+  { key: "monthly_rent", label: "Rent" },
+  { key: "commencement_date", label: "Start" },
+  { key: "expiration_date", label: "End" },
+];
+
+/** Best-effort tenant/rent/dates/confidence summary from a saved review payload. */
+function buildFieldSummary(uiReviewPayload) {
+  const record = uiReviewPayload?.records?.[0];
+  if (!record) return null;
+  const fields = Array.isArray(record.standard_fields) ? record.standard_fields : [];
+  const byKey = new Map(fields.map((f) => [f.field_key, f]));
+
+  const items = SUMMARY_FIELD_KEYS
+    .map(({ key, label }) => {
+      const field = byKey.get(key);
+      const value = field?.value;
+      if (value == null || String(value).trim() === "") return null;
+      return { label, value: String(value) };
+    })
+    .filter(Boolean);
+
+  const confidences = fields.map((f) => f?.confidence).filter((c) => typeof c === "number");
+  const avgConfidence = confidences.length > 0
+    ? confidences.reduce((sum, c) => sum + c, 0) / confidences.length
+    : null;
+
+  if (items.length === 0 && avgConfidence == null) return null;
+  return { items, avgConfidence };
+}
+
+function ExtractionStatusRow({ fileId, fileName, fileType, onOpenReview }) {
+  const { status, isLoading, pollError, processingStatus, failedStep, errorMessage } = useFileStatus(fileId);
   const [retrying, setRetrying] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [reviewPayload, setReviewPayload] = useState(null);
+  const payloadFetchedRef = useRef(false);
+
+  // One-shot fetch of ui_review_payload once the pipeline parks for review —
+  // never polled, never re-fetched for the same file. pipeline-status only
+  // includes this (heavy) column when include_details=true is requested on
+  // every poll, so a single direct query here avoids dragging docling_raw
+  // into the 3-second polling loop.
+  useEffect(() => {
+    if (status !== "review_required" || payloadFetchedRef.current || !fileId || !supabase) return;
+    payloadFetchedRef.current = true;
+    (async () => {
+      const { data } = await supabase
+        .from("uploaded_files")
+        .select("ui_review_payload")
+        .eq("id", fileId)
+        .maybeSingle();
+      if (data?.ui_review_payload) setReviewPayload(data.ui_review_payload);
+    })();
+  }, [status, fileId]);
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -628,45 +999,122 @@ function ExtractionStatusRow({ fileId, fileName, fileType }) {
     }
   };
 
-  const info = EXTRACTION_STATUS_LABELS[status] || { label: status ?? "Processing...", color: "text-slate-500" };
+  const handleCancelExtraction = async () => {
+    setCancelling(true);
+    try {
+      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId });
+      if (result?.error) throw new Error(result?.message || "Could not cancel extraction");
+      toast.success(`${fileName || "File"}: extraction cancelled.`);
+    } catch (error) {
+      console.error("[FileUploader] cancel extraction failed:", error);
+      toast.error(error?.message || "Could not cancel extraction. Please try again.");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const isActive = status && ACTIVE_EXTRACTION_STATUSES.has(status);
   const isFailed = status === "failed";
-  const isReviewReady = status === "review_required";
+  const isCancelled = status === "cancelled";
   const isComplete = status === "completed";
+  const hasFields = payloadHasMeaningfulFields(reviewPayload);
+  const isReviewReady = status === "review_required" && hasFields;
+  const isPreparingReview = status === "review_required" && !hasFields;
+  // Once a record has valid extracted fields (or is otherwise terminal),
+  // never offer to cancel it from this generic upload row — only Lease
+  // Review's own flows may affect a record past this point.
+  const canCancelExtraction = isActive && !isReviewReady;
+
+  const label = pollError
+    ? pollError
+    : isReviewReady
+      ? "Extraction ready"
+      : getFriendlyExtractionLabel(status);
+  const color = pollError
+    ? "text-amber-600"
+    : STATUS_COLORS[status] || (isActive ? "text-blue-600" : "text-slate-500");
+
+  const summary = isReviewReady ? buildFieldSummary(reviewPayload) : null;
+  // The Open Lease Review handoff is lease-specific; other FileUploader
+  // callers (budgets, generic uploads) have no onOpenReview handler and no
+  // lease draft to open, so only show the ready-card CTA when both line up.
+  const showReadyCard = isReviewReady && fileType === "leases" && !!onOpenReview;
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 bg-slate-50/70 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        {(isActive || (isLoading && !status)) && (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
-        )}
-        {isReviewReady && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
-        {isComplete && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
-        {isFailed && <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />}
-        <span className="truncate text-xs text-slate-600">{fileName}</span>
+    <div className="space-y-1.5 rounded-md border border-slate-100 bg-slate-50/70 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          {(isActive || isPreparingReview || (isLoading && !status)) && (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+          )}
+          {isReviewReady && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+          {isComplete && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
+          {isFailed && <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />}
+          {isCancelled && <Ban className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+          <span className="truncate text-xs text-slate-600">{fileName}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className={`text-xs font-medium ${color}`}>{label}</span>
+          {isFailed && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={retrying}
+              onClick={handleRetry}
+              className="h-6 px-2 text-xs"
+            >
+              {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : "Retry"}
+            </Button>
+          )}
+          {canCancelExtraction && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={cancelling}
+              onClick={handleCancelExtraction}
+              className="h-6 px-2 text-xs"
+            >
+              {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : "Cancel Extraction"}
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <span className={`text-xs font-medium ${info.color}`}>{info.label}</span>
-        {isReviewReady && fileType === "leases" && (
-          <Link
-            to={createPageUrl("Leases", { view: "drafts" })}
-            className="text-xs font-medium text-teal-600 hover:text-teal-700 hover:underline"
-          >
-            Open Review →
-          </Link>
-        )}
-        {isFailed && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={retrying}
-            onClick={handleRetry}
-            className="h-6 px-2 text-xs"
-          >
-            {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : "Retry"}
+
+      {showReadyCard && (
+        <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/60 p-2.5">
+          <div>
+            <p className="text-sm font-medium text-amber-900">Extraction ready</p>
+            <p className="text-xs text-amber-700">Your lease fields are ready for review.</p>
+          </div>
+          {summary && summary.items.length > 0 && (
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
+              {summary.items.map((item) => (
+                <div key={item.label} className="truncate">
+                  <span className="text-slate-400">{item.label}:</span> {item.value}
+                </div>
+              ))}
+            </div>
+          )}
+          {summary && typeof summary.avgConfidence === "number" && (
+            <p className="text-xs text-slate-500">
+              Confidence: {Math.round(summary.avgConfidence * 100)}%
+            </p>
+          )}
+          <Button size="sm" className="h-7 text-xs" onClick={() => onOpenReview(fileId)}>
+            Open Lease Review
           </Button>
-        )}
-      </div>
+        </div>
+      )}
+
+      <details className="text-xs text-slate-400">
+        <summary className="cursor-pointer select-none">Advanced</summary>
+        <div className="mt-1 space-y-0.5 pl-2">
+          <p>status: {status ?? "—"}</p>
+          <p>processing_status: {processingStatus ?? "—"}</p>
+          <p>failed_step: {failedStep ?? "—"}</p>
+          <p>error_message: {errorMessage ?? "—"}</p>
+        </div>
+      </details>
     </div>
   );
 }

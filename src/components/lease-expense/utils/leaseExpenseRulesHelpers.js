@@ -1,4 +1,5 @@
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import { normalizeLeaseExpenseRule } from "@/services/utils/leaseExpenseRuleTaxonomy";
 
 export const ROW_STATUS_STYLE = {
   mapped: "bg-emerald-100 text-emerald-700",
@@ -490,8 +491,9 @@ export function buildDisplayRows(ruleSetsByLease, leaseById, categoryById, scope
     const property = lease?.property_id ? scopePropertyById.get(lease.property_id) ?? null : null;
     for (const rule of entry.rules || []) {
       if (isSupersededRule(rule)) continue;
+      const normalizedRule = normalizeLeaseExpenseRule(rule);
       rows.push({
-        rule,
+        rule: normalizedRule,
         ruleSet: entry.ruleSet,
         lease,
         property,
@@ -535,3 +537,4 @@ export function calculateRuleCounts(flattenedRows) {
 
   return summary;
 }
+

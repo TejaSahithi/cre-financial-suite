@@ -9,6 +9,7 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { persistLeaseExtractionMerge } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -20,7 +21,6 @@ import {
   isManualExtractionStatus,
   cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
-import { mergeLatestExtraction } from "@/components/lease-review/utils/applyLatestExtractionMerge";
 
 function prettyJson(value, limit = 4000) {
   try {

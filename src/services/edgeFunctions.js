@@ -31,7 +31,7 @@ async function getActingOrgHeaders() {
   return actingOrgId ? { "x-acting-org-id": actingOrgId } : {};
 }
 
-export async function invokeEdgeFunction(fnName, body) {
+export async function invokeEdgeFunction(fnName, body, customHeaders = {}) {
   const accessToken = await getFreshAccessToken();
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 
@@ -40,7 +40,7 @@ export async function invokeEdgeFunction(fnName, body) {
   // tenant. If we have an active org context (membership or app_metadata),
   // forward it; otherwise the function will fail loudly and ask the caller to
   // pick an organization first.
-  Object.assign(headers, await getActingOrgHeaders());
+  Object.assign(headers, await getActingOrgHeaders(), customHeaders);
 
   const { data, error } = await supabase.functions.invoke(fnName, { body, headers });
 
@@ -71,7 +71,7 @@ export async function invokeEdgeFunction(fnName, body) {
   return data || {};
 }
 
-export async function invokeEdgeFunctionFormData(fnName, formData) {
+export async function invokeEdgeFunctionFormData(fnName, formData, customHeaders = {}) {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
   const accessToken = await getFreshAccessToken();
@@ -88,6 +88,7 @@ export async function invokeEdgeFunctionFormData(fnName, formData) {
       Authorization: `Bearer ${accessToken}`,
       apikey: supabaseAnonKey,
       ...actingOrgHeaders,
+      ...customHeaders,
     },
     body: formData,
   });

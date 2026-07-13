@@ -7,6 +7,10 @@
  * not this file.
  */
 import { supabase } from "@/services/supabaseClient";
+import {
+  rejectLeaseAbstractWorkflow,
+  saveLeaseReviewDraftWorkflow,
+} from "@/services/leaseService";
 import { resolveLeaseField, resolveLeaseFields } from "@/lib/leaseFieldResolver";
 import {
   readFieldConfidence,
@@ -18,6 +22,53 @@ import {
 } from "@/lib/leaseReviewSchema";
 
 const mirrorLeaseFieldReviewsFromBrowser = false;
+const ABSTRACT_STATUS = {
+  APPROVED: "approved",
+  PENDING_REVIEW: "pending_review",
+  REJECTED: "rejected",
+};
+
+function extractMissingColumn(error) {
+  const message = [error?.message, error?.details, error?.hint].filter(Boolean).join(" ");
+  if (!message) return null;
+
+  let match = message.match(/Could not find the '([^']+)' column/i);
+  if (match?.[1]) return match[1];
+
+  match = message.match(/column\s+["']?([a-zA-Z0-9_.]+)["']?/i);
+  if (match?.[1]) return String(match[1]).split(".").pop();
+
+  return null;
+}
+
+function isMissingColumnError(error) {
+  return error?.code === "PGRST204" || error?.code === "42703" || !!extractMissingColumn(error);
+}
+
+async function updateLeaseStripMissing(leaseId, update) {
+  let payload = { ...update };
+  const stripped = new Set();
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("leases")
+      .update(payload)
+      .eq("id", leaseId)
+      .select()
+      .single();
+
+    if (!error) return data;
+    const missingColumn = isMissingColumnError(error) ? extractMissingColumn(error) : null;
+    if (!missingColumn || stripped.has(missingColumn) || !(missingColumn in payload)) {
+      throw error;
+    }
+
+    stripped.add(missingColumn);
+    const { [missingColumn]: _omitted, ...nextPayload } = payload;
+    payload = nextPayload;
+  }
+}
+
 
 function toText(value) {
   if (value === null || value === undefined) return null;
@@ -574,21 +625,22 @@ export async function syncApprovedAbstractExpenseTermsToRules(lease, approvedSna
  */
 export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
   if (!lease?.id) throw new Error("saveAbstractDraft: lease.id is required");
-  const nextExtraction = {
-    ...(lease.extraction_data || {}),
-    field_reviews: fieldReviews,
+  const data = await saveLeaseReviewDraftWorkflow({ leaseId: lease.id, fieldReviews });
+  const merged = {
+    ...lease,
+    ...(data || {}),
+    id: data?.id || data?.lease_id || lease.id,
+    property_id: data?.property_id || lease.property_id || null,
+    org_id: data?.org_id || lease.org_id || null,
+    extraction_data: data?.extraction_data || {
+      ...(lease.extraction_data || {}),
+      field_reviews: fieldReviews,
+    },
   };
-  const update = {
-    extraction_data: nextExtraction,
-    abstract_status: lease.abstract_status === ABSTRACT_STATUS.APPROVED
-      ? ABSTRACT_STATUS.APPROVED  // Keep approved status; new edits create the next version on approval.
-      : ABSTRACT_STATUS.PENDING_REVIEW,
-  };
-  const data = await updateLeaseStripMissing(lease.id, update);
-  await persistFieldReviews({ lease: { ...lease, ...data }, fieldReviews, reviewer }).catch((err) => {
+  await persistFieldReviews({ lease: merged, fieldReviews, reviewer }).catch((err) => {
     console.warn("[leaseAbstractService] persistFieldReviews skipped:", err?.message || err);
   });
-  return data;
+  return merged;
 }
 
 /**
@@ -596,19 +648,29 @@ export async function saveAbstractDraft({ lease, fieldReviews, reviewer }) {
  * "Reject Document" action in Lease Review.
  */
 export async function rejectLeaseAbstract({ lease, reason, reviewer }) {
-  const nextExtraction = {
-    ...(lease.extraction_data || {}),
-    rejection: {
-      reason,
-      rejected_at: new Date().toISOString(),
-      rejected_by: reviewer || null,
+  if (!lease?.id) throw new Error("rejectLeaseAbstract: lease.id is required");
+  const data = await rejectLeaseAbstractWorkflow({
+    leaseId: lease.id,
+    reason,
+    rejectedBy: reviewer || null,
+  });
+  return {
+    ...lease,
+    ...(data || {}),
+    id: data?.id || data?.lease_id || lease.id,
+    property_id: data?.property_id || lease.property_id || null,
+    org_id: data?.org_id || lease.org_id || null,
+    status: data?.status || "rejected",
+    abstract_status: data?.abstract_status || ABSTRACT_STATUS.REJECTED,
+    extraction_data: data?.extraction_data || {
+      ...(lease.extraction_data || {}),
+      rejection: {
+        reason,
+        rejected_at: new Date().toISOString(),
+        rejected_by: reviewer || null,
+      },
     },
   };
-  return updateLeaseStripMissing(lease.id, {
-    status: "rejected",
-    abstract_status: ABSTRACT_STATUS.REJECTED,
-    extraction_data: nextExtraction,
-  });
 }
 
 /**

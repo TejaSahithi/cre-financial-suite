@@ -1716,6 +1716,45 @@ function extractInsuranceStructure(text: string) {
 function buildClauseRecords(doclingRaw: any, fullText: string) {
   const textBlocks = asArray(doclingRaw?.text_blocks);
 
+  // Precompute each block's cleaned/lowercased text ONCE per call. The
+  // original implementation called blockText.toLowerCase() inside
+  // findClauseSnippet, which runs once per clause definition (×35 in
+  // CLAUSE_DEFINITIONS) — re-lowercasing the same unchanging block text 35
+  // times. This, plus the fullText paragraph/sentence re-splits below, was
+  // the dominant cost behind normalize-pdf-output's "not enough compute
+  // resources" failures on long leases.
+  const loweredBlocks = textBlocks.map((block: any) => {
+    const cleaned = cleanText(block?.text || "");
+    return { cleaned, lowered: cleaned.toLowerCase() };
+  });
+
+  // Paragraph/sentence splits of fullText are identical across all 35 clause
+  // definitions. Computed lazily — only clauses that miss the block search
+  // fall through to these — and cached so every subsequent clause that also
+  // falls through reuses the same split instead of re-splitting the whole
+  // document (up to 71K+ chars) from scratch.
+  let cachedParagraphs: Array<{ text: string; lowered: string }> | null = null;
+  const getParagraphs = () => {
+    if (cachedParagraphs === null) {
+      cachedParagraphs = fullText
+        .split(/\n{2,}|\n(?=[A-Z0-9\[\(])/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 10)
+        .map((text) => ({ text, lowered: text.toLowerCase() }));
+    }
+    return cachedParagraphs;
+  };
+  let cachedSentences: Array<{ text: string; lowered: string }> | null = null;
+  const getSentences = () => {
+    if (cachedSentences === null) {
+      cachedSentences = fullText.split(/(?<=[.!?])\s+/).map((part) => {
+        const trimmed = cleanText(part);
+        return { text: trimmed, lowered: trimmed.toLowerCase() };
+      });
+    }
+    return cachedSentences;
+  };
+
   function findClauseSnippet(
     keywords: string[],
     maxChars: number,
@@ -1723,18 +1762,17 @@ function buildClauseRecords(doclingRaw: any, fullText: string) {
     const loweredKeywords = keywords.map((k) => k.toLowerCase());
     const limit = Math.max(maxChars, 1600);
 
-    // 1. Search text_blocks â€” simple join of matching block + next 2 blocks.
+    // 1. Search text_blocks — simple join of matching block + next 2 blocks.
     //    Avoids the strict sentence-boundary rules of expandSourceSnippetFromMatch
     //    which returns null for OCR text that lacks clean `.!?` endings.
-    for (let i = 0; i < textBlocks.length; i++) {
-      const blockText = cleanText(textBlocks[i]?.text || "");
+    for (let i = 0; i < loweredBlocks.length; i++) {
+      const { cleaned: blockText, lowered: haystack } = loweredBlocks[i];
       if (!blockText) continue;
-      const haystack = blockText.toLowerCase();
       if (!loweredKeywords.some((kw) => haystack.includes(kw))) continue;
       const joined = [
         blockText,
-        cleanText(textBlocks[i + 1]?.text || ""),
-        cleanText(textBlocks[i + 2]?.text || ""),
+        loweredBlocks[i + 1]?.cleaned || "",
+        loweredBlocks[i + 2]?.cleaned || "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -1748,22 +1786,17 @@ function buildClauseRecords(doclingRaw: any, fullText: string) {
 
     // 2. Paragraph-based fallback on fullText (double-newline or
     //    newline-before-capital/digit splits produce paragraph-sized chunks).
-    const paragraphs = fullText
-      .split(/\n{2,}|\n(?=[A-Z0-9\[\(])/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 10);
-    for (const para of paragraphs) {
-      if (!loweredKeywords.some((kw) => para.toLowerCase().includes(kw))) continue;
-      const snippet = para.length <= limit ? para : para.slice(0, limit).trimEnd();
+    for (const para of getParagraphs()) {
+      if (!loweredKeywords.some((kw) => para.lowered.includes(kw))) continue;
+      const snippet = para.text.length <= limit ? para.text : para.text.slice(0, limit).trimEnd();
       return { clause_text: snippet || null, source_page: null };
     }
 
     // 3. Sentence-level fallback (last resort).
-    for (const part of fullText.split(/(?<=[.!?])\s+/)) {
-      const trimmed = cleanText(part);
-      if (!trimmed) continue;
-      if (!loweredKeywords.some((kw) => trimmed.toLowerCase().includes(kw))) continue;
-      return { clause_text: trimmed.length <= limit ? trimmed : null, source_page: null };
+    for (const sentence of getSentences()) {
+      if (!sentence.text) continue;
+      if (!loweredKeywords.some((kw) => sentence.lowered.includes(kw))) continue;
+      return { clause_text: sentence.text.length <= limit ? sentence.text : null, source_page: null };
     }
 
     return { clause_text: null, source_page: null };
@@ -2340,7 +2373,12 @@ function applyDocumentItemsToLeaseFields(
   }
 }
 
-function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, clauses: LeaseWorkflowClause[]) {
+function buildLeaseFieldMap(
+  row: Record<string, unknown>,
+  doclingRaw: any,
+  clauses: LeaseWorkflowClause[],
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>,
+) {
   const fullText = cleanText(doclingRaw?.full_text || "");
   const fieldMap: Record<string, LeaseWorkflowField> = {};
   const summaryPairs = extractSummaryLabelPairs(doclingRaw, String(doclingRaw?.full_text || ""));
@@ -3023,6 +3061,33 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         value: "Landlord consent required for assignment or transfer",
       };
     }
+  }
+
+  // §7: genuinely unmapped-but-valued LLM keys become dynamic discovered
+  // rows instead of being silently dropped. Scoped narrowly — only fields
+  // with a real, non-empty value and no existing standard-field key create
+  // a row, so this never produces noise from minor/blank unmapped keys.
+  for (const unmapped of unmappedLlmFields ?? []) {
+    if (isBlank(unmapped.value) || fieldMap[unmapped.key]) continue;
+    fieldMap[unmapped.key] = {
+      key: unmapped.key,
+      value: unmapped.value,
+      raw_value: unmapped.value,
+      normalized_value: unmapped.value,
+      source_page: unmapped.sourcePage ?? null,
+      source_clause: unmapped.sourceText ?? null,
+      exact_source_text: unmapped.sourceText ?? null,
+      confidence_score: typeof unmapped.confidence === "number" ? round2(unmapped.confidence) : null,
+      extraction_status: "extracted",
+      evidence_type: "llm_unmapped",
+      source_text_quality: unmapped.sourceText ? "derived" : "missing",
+      validation_errors: [],
+      requires_review: true,
+      review_reason: "Discovered field not in the standard lease schema — verify before relying on it.",
+      approval_blocking_reason: null,
+      editable: true,
+      field_group: "discovered",
+    } as LeaseWorkflowField;
   }
 
   return fieldMap;
@@ -4207,6 +4272,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   row: Record<string, unknown>;
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
 }) {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
@@ -4233,7 +4299,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const clauses = buildClauseRecords(doclingRaw, fullText);
   let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
   let documentProfile = profileDetection.selected_document_profile;
-  const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
+  const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses, args?.unmappedLlmFields);
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
     doclingRaw,
@@ -4620,3 +4686,8 @@ export function buildLeaseWorkflowAbstraction(args: {
     },
   };
 }
+
+// Test hook (same pattern as _shared/extraction/parser.ts).
+export const __test__ = {
+  buildClauseRecords,
+};

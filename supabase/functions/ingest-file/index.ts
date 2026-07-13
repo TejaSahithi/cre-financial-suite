@@ -11,6 +11,7 @@ import {
 } from "../_shared/file-detector.ts";
 import { ALLOWED_TRANSITIONS, setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
+import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import {
   buildBlockedReviewPayload,
   buildPipelineMetadata,
@@ -247,6 +248,12 @@ async function enqueueLeaseExtractionJob(args: {
   // When re-extracting, check whether we already have usable parsed text stored
   // in docling_raw. If yes, jump straight to the "normalize" stage so OCR is
   // not repeated — this makes re-extraction near-instant for scanned documents.
+  // P0.4: also require a known-good provider tag, not just a length
+  // threshold — a low-quality/partial parse could incidentally clear 200
+  // characters without being a real, reusable document parse.
+  const KNOWN_GOOD_PARSER_METHODS = new Set([
+    "azure_layout", "docling", "gemini_vision", "pdf_text", "openxml", "hybrid",
+  ]);
   let initialStage = "parse";
   if (forceReextract) {
     const { data: existingFile } = await supabaseAdmin
@@ -255,11 +262,12 @@ async function enqueueLeaseExtractionJob(args: {
       .eq("id", fileRecord.id)
       .maybeSingle();
     const existingText = String(existingFile?.docling_raw?.full_text ?? "").trim();
-    if (existingText.length >= 200) {
+    const existingMethod = String(existingFile?.docling_raw?.extraction_method ?? "");
+    if (existingText.length >= 200 && KNOWN_GOOD_PARSER_METHODS.has(existingMethod)) {
       initialStage = "normalize";
       console.log(
-        `[ingest-file] force_reextract: docling_raw has ${existingText.length} chars — ` +
-        `skipping OCR, starting at normalize stage for file_id=${fileRecord.id}`,
+        `[ingest-file] force_reextract: docling_raw has ${existingText.length} chars ` +
+        `(method=${existingMethod}) — skipping OCR, starting at normalize stage for file_id=${fileRecord.id}`,
       );
     }
   }
@@ -707,6 +715,25 @@ async function parkForBlockedPipeline(args: {
   fullTextChars?: number;
   pageCount?: number | null;
 }) {
+  // P0.3 guarantee: never overwrite a row that already has real extracted
+  // values with an empty/blocked payload — re-read the current row first.
+  const { data: currentRow } = await args.supabaseAdmin
+    .from("uploaded_files")
+    .select("ui_review_payload, parsed_data, normalized_output")
+    .eq("id", args.fileId)
+    .maybeSingle();
+  if (currentRow && uploadedFileRowHasMeaningfulValues(currentRow)) {
+    console.log(
+      `[ingest-file] fallback_aborted_existing_values_found file_id=${args.fileId} stage=${args.stage} — ` +
+      `skipping blocked-pipeline write, existing payload already has real values`,
+    );
+    await args.logger?.event?.(args.stage, "blocked_write_skipped", {
+      reason: "existing_meaningful_values_found",
+      error_code: args.errorCode,
+    });
+    return currentRow.ui_review_payload;
+  }
+
   const pipeline = buildPipelineMetadata({
     parser_status: args.parserStatus ?? null,
     review_status: REVIEW_STATUSES.BLOCKED,

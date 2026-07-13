@@ -12,19 +12,20 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import FileUploader from "@/components/FileUploader";
+import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
+import { computeCanOpenReview } from "@/lib/extractionStatusLabels";
 import ScopeSelector from "@/components/ScopeSelector";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clearCache } from "@/services/api";
-import { leaseService } from "@/services/leaseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { updateLeaseExtractionField } from "@/services/leaseService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
+import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { createPageUrl } from "@/utils";
 
 // Statuses that still need polling because a backend stage is in flight.
@@ -40,54 +41,11 @@ const ACTIVE_STATUSES = new Set([
   "computing",
 ]);
 
-// Visual processing pipeline shown to the user.
-const PIPELINE_STAGES = [
-  { key: "uploaded", label: "Uploaded" },
-  { key: "ocr", label: "OCR Processing" },
-  { key: "text_extracted", label: "Text Extracted" },
-  { key: "ai_extracting", label: "AI Extracting" },
-  { key: "ai_extracted", label: "AI Extracted" },
-  { key: "needs_review", label: "Needs Review" },
-];
-
-// Map raw uploaded_files.status to a stepper position.
-function pipelineProgress(status) {
-  switch (status) {
-    case "uploaded":
-      return { activeIndex: 0, failed: false };
-    case "parsing":
-      return { activeIndex: 1, failed: false };
-    case "parsed":
-    case "pdf_parsed":
-      return { activeIndex: 2, failed: false };
-    case "validating":
-      return { activeIndex: 3, failed: false };
-    case "validated":
-    case "storing":
-    case "stored":
-    case "computing":
-      return { activeIndex: 4, failed: false };
-    case "review_required":
-    case "completed":
-      return { activeIndex: 5, failed: false };
-    case "failed":
-      return { activeIndex: -1, failed: true };
-    default:
-      return { activeIndex: 0, failed: false };
-  }
-}
-
 function statusBadgeStyle(status) {
   if (status === "failed") return "bg-red-100 text-red-700";
   if (status === "completed") return "bg-emerald-100 text-emerald-700";
   if (status === "review_required") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";
-}
-
-function statusLabelFor(status) {
-  if (!status) return "Waiting";
-  if (status === "review_required") return "Needs Review";
-  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 const FAILURE_STAGE_LABELS = {
@@ -133,7 +91,10 @@ const MINIMAL_UPLOADED_FILE_SELECT = "id, file_name, file_url, status, error_mes
 async function fetchUploadedFileStatus(id) {
   if (!id) return { data: null, error: null };
 
-  const actingOrgId = getStoredActingOrgId();
+  // Super-admin / multi-org users have no stored acting org on a fresh
+  // session; without the header pipeline-status returns 400 on every call.
+  // Resolve the same fallback invokeEdgeFunction uses.
+  const actingOrgId = getStoredActingOrgId() || await resolveWritableOrgId(null).catch(() => null);
   const { data, error } = await supabase.functions.invoke("pipeline-status", {
     body: { file_id: id, include_details: true },
     headers: actingOrgId ? { "x-acting-org-id": actingOrgId } : {},
@@ -581,15 +542,41 @@ export default function LeaseUpload() {
       window.clearInterval(interval);
     };
     // Only recreate when fileId changes — NOT on every status change.
-  }, [fileId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fileId]);
 
   useEffect(() => {
     if (!fileId || fileRecord?.status !== "uploaded" || retriedUploadedFiles.current.has(fileId)) {
       return undefined;
     }
 
+    let cancelledEffect = false;
     retriedUploadedFiles.current.add(fileId);
-    const retryTimer = window.setTimeout(() => {
+    const retryTimer = window.setTimeout(async () => {
+      if (cancelledEffect) return;
+      // A file sitting at status='uploaded' is now the awaiting-confirmation
+      // state by design — it is NOT stuck, the user just hasn't clicked
+      // Proceed/Cancel yet. Only auto-retry ingest-file for a file that was
+      // already confirmed and somehow got stuck back at 'uploaded' (a
+      // genuine pipeline hiccup), never for one still awaiting the
+      // confirmation gate. If confirmed_at can't be read (e.g. the
+      // migration hasn't landed in this environment yet), default to NOT
+      // retrying — the whole point of this gate is to never call
+      // ingest-file without positive confirmation.
+      let confirmedAt = null;
+      try {
+        const { data: confirmRow, error: confirmCheckError } = await supabase
+          .from("uploaded_files")
+          .select("confirmed_at")
+          .eq("id", fileId)
+          .maybeSingle();
+        if (confirmCheckError) throw confirmCheckError;
+        confirmedAt = confirmRow?.confirmed_at ?? null;
+      } catch (checkErr) {
+        console.warn("[LeaseUpload] could not read confirmed_at for stuck-upload check:", checkErr?.message);
+        return;
+      }
+      if (cancelledEffect || !confirmedAt) return;
+
       invokeEdgeFunction("ingest-file", {
         file_id: fileId,
         module_type: "leases",
@@ -607,11 +594,22 @@ export default function LeaseUpload() {
         });
     }, 8000);
 
-    return () => window.clearTimeout(retryTimer);
+    return () => {
+      cancelledEffect = true;
+      window.clearTimeout(retryTimer);
+    };
   }, [fileId, fileRecord?.status]);
 
   const handleUploadComplete = (result) => {
     if (!result?.file_id) return;
+    if (result.awaiting_confirmation) {
+      // FileUploader's own Proceed/Cancel + preview prompt handles this step.
+      // Do NOT setFileId yet — doing so would immediately unmount
+      // FileUploader's confirmation card before the user ever sees it. This
+      // page only starts tracking the file once Proceed has actually been
+      // clicked and extraction has started.
+      return;
+    }
     setFileId(result.file_id);
     setFileRecord(null);
     if (result.processing_error) {
@@ -619,7 +617,10 @@ export default function LeaseUpload() {
       fetchFileRecord(result.file_id);
       return;
     }
-    toast.success("Lease uploaded. The extraction pipeline is running.");
+    if (result.processing_started) {
+      toast.success("Lease extraction started.");
+      fetchFileRecord(result.file_id);
+    }
   };
 
   const retryExtraction = useCallback(async () => {
@@ -803,7 +804,7 @@ export default function LeaseUpload() {
     return () => window.clearTimeout(retryTimer);
   }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings, retryExtraction]);
 
-  const { activeIndex, failed } = pipelineProgress(fileRecord?.status);
+  const failed = fileRecord?.status === "failed";
 
   // Detect a stuck pipeline: if the file has been in an intermediate active
   // status for more than 3 minutes without progressing, the backend likely
@@ -826,16 +827,18 @@ export default function LeaseUpload() {
     fileRecord?.ui_review_payload != null &&
     fileRecord?.status !== "failed";
 
-  const canOpenReview = hasValidReviewPayload || [
-    "review_required",
-    "validating",
-    "validated",
-    "approved",
-    "storing",
-    "stored",
-    "computing",
-    "completed",
-  ].includes(fileRecord?.status || "");
+  // §1 / guarantee 10: read the backend-computed core_ready flag directly
+  // (persisted on ui_review_payload by buildMinimalReviewPayload, P0.2)
+  // rather than re-deriving readiness client-side — see computeCanOpenReview
+  // (src/lib/extractionStatusLabels.js) for the shared, unit-tested logic.
+  // This intentionally drops "validating"/"pdf_parsed" from the old blind
+  // status allow-list — those statuses can never produce a payload with
+  // core_ready:true because no minimal payload exists yet at that point.
+  const canOpenReview = computeCanOpenReview({
+    hasValidReviewPayload,
+    uiReviewPayload: fileRecord?.ui_review_payload,
+    status: fileRecord?.status,
+  });
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -916,6 +919,7 @@ export default function LeaseUpload() {
           unitId={scopeUnit !== "all" ? scopeUnit : undefined}
           multiple={false}
           onUploadComplete={handleUploadComplete}
+          onOpenReview={openLeaseReview}
           title="Upload Lease Document"
           description="Upload a base lease, amendment, assignment, consent, extension, or addendum. Scanned PDFs are processed server-side with OCR."
         />
@@ -936,7 +940,9 @@ export default function LeaseUpload() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {loadingRecord && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
-                <Badge className={statusBadgeStyle(fileRecord?.status)}>{statusLabelFor(fileRecord?.status)}</Badge>
+                <Badge className={statusBadgeStyle(fileRecord?.status)}>
+                  {getFriendlyExtractionLabel(fileRecord?.status)}
+                </Badge>
                 {fileRecord?.document_subtype && (
                   <Badge className="bg-blue-50 text-blue-700">{fileRecord.document_subtype.replace(/_/g, " ")}</Badge>
                 )}
@@ -945,6 +951,13 @@ export default function LeaseUpload() {
                 )}
               </div>
             </div>
+
+            {hasValidReviewPayload && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-900">Extraction ready</p>
+                <p className="text-xs text-amber-700">Your lease fields are ready for review.</p>
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               {canOpenReview && (
@@ -1023,46 +1036,18 @@ export default function LeaseUpload() {
         <Card>
           <CardContent className="p-4">
             <h3 className="text-sm font-semibold text-slate-900">Processing Status</h3>
-            <p className="text-xs text-slate-500">
-              The intake pipeline runs automatically. Once extraction is ready, open Lease Review to inspect fields.
+            <p className="mt-1 text-sm font-medium text-blue-600">
+              {getFriendlyExtractionLabel(fileRecord?.status)}
             </p>
-            <ol className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              {PIPELINE_STAGES.map((stage, idx) => {
-                const isComplete = !failed && idx < activeIndex;
-                const isCurrent = !failed && idx === activeIndex;
-                return (
-                  <li
-                    key={stage.key}
-                    className={`flex items-start gap-2 rounded-lg border p-2 ${
-                      isCurrent
-                        ? "border-blue-200 bg-blue-50"
-                        : isComplete
-                        ? "border-emerald-200 bg-emerald-50/60"
-                        : "border-slate-200 bg-slate-50"
-                    }`}
-                  >
-                    <span
-                      className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
-                        isComplete
-                          ? "bg-emerald-500 text-white"
-                          : isCurrent
-                          ? "bg-blue-500 text-white"
-                          : "bg-slate-300 text-white"
-                      }`}
-                    >
-                      {isComplete ? "✓" : idx + 1}
-                    </span>
-                    <span
-                      className={`text-xs font-medium ${
-                        isCurrent ? "text-blue-700" : isComplete ? "text-emerald-700" : "text-slate-600"
-                      }`}
-                    >
-                      {stage.label}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
+            <details className="mt-3 text-xs text-slate-400">
+              <summary className="cursor-pointer select-none">Advanced</summary>
+              <div className="mt-1 space-y-0.5 pl-2">
+                <p>status: {fileRecord?.status ?? "—"}</p>
+                <p>processing_status: {fileRecord?.processing_status ?? "—"}</p>
+                <p>failed_step: {fileRecord?.failed_step ?? "—"}</p>
+                <p>error_message: {fileRecord?.error_message ?? "—"}</p>
+              </div>
+            </details>
             {failed && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 <div className="font-medium">

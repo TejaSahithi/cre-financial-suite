@@ -34,6 +34,13 @@ import type {
   DoclingPage,
 } from "./types.ts";
 import { extractDocumentWithVision } from "../ocr/vision-ocr.ts";
+import { analyzeWithAzureLayout, getAzureDocumentIntelligenceConfig } from "../azure/document-intelligence.ts";
+import { normalizeAzureLayoutToDoclingOutput } from "./azure-layout-adapter.ts";
+import {
+  resolveExtractionProvider,
+  shouldFallbackToLegacy,
+  shouldUseAzureLayout,
+} from "./extraction-provider.ts";
 
 // A PDF needs at least this many Docling text blocks to be trusted as
 // "digital" (non-scanned). 2 is intentionally low — a simple single-page
@@ -77,11 +84,51 @@ interface ParseContext {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export async function parseDocument(
-  fileBytes: Uint8Array,
+  fileBytes: Uint8Array | null,
   fileName: string,
   mimeType: string = "application/pdf",
-  options: { fileUrl?: string } = {},
+  options: { fileUrl?: string; providerOverride?: string | null } = {},
 ): Promise<DoclingOutput> {
+  const provider = resolveExtractionProvider(options.providerOverride);
+  if (shouldUseAzureLayout(provider.mode)) {
+    try {
+      const config = getAzureDocumentIntelligenceConfig();
+      const analyzeResult = await analyzeWithAzureLayout({
+        fileBytes: fileBytes ?? null,
+        fileUrl: options.fileUrl,
+        mimeType,
+      });
+      const azureOutput = normalizeAzureLayoutToDoclingOutput(analyzeResult, {
+        apiVersion: config.apiVersion,
+        modelId: config.modelId,
+      });
+
+      if (provider.mode !== "shadow_compare") {
+        return azureOutput;
+      }
+
+      console.log(
+        `[parser] shadow_compare Azure layout complete for "${fileName}" ` +
+        `chars=${azureOutput.full_text?.length ?? 0} pages=${azureOutput.page_count ?? "?"}; returning legacy output`,
+      );
+    } catch (azureErr) {
+      console.warn(`[parser] Azure layout provider failed (${azureErr?.message ?? azureErr})`);
+      if (!shouldFallbackToLegacy(provider.mode) && provider.mode !== "shadow_compare") {
+        throw azureErr;
+      }
+    }
+  }
+
+  // Bytes may be null only in strict azure_document_intelligence URL mode,
+  // which either returned or threw inside the Azure block above. Every
+  // legacy/fallback branch below requires real document bytes.
+  if (!fileBytes?.length) {
+    throw new Error(
+      "Document bytes are required for non-Azure parser modes " +
+      `(provider mode: ${provider.mode})`,
+    );
+  }
+
   const hasDocling = !!Deno.env.get("DOCLING_API_URL");
   const hasVision = !!(
     // Vertex AI service account path
@@ -879,11 +926,13 @@ function tag(out: DoclingOutput, method: string): DoclingOutput {
 // are almost always binary content (fonts, images) rather than text operators.
 // Decompressing them can spike memory 5-10x and is the primary cause of 546.
 const MAX_STREAM_DECOMPRESS_BYTES = 128 * 1024; // 128 KB compressed
-// Stop processing streams once we've collected enough text.
-const MAX_NATIVE_EXTRACTED_CHARS = 50_000;
 // Hard limit on how many FlateDecode streams to attempt so a pathological
-// PDF with thousands of tiny streams can't exhaust the memory budget.
-const MAX_STREAM_ITERATIONS = 60;
+// PDF with thousands of tiny streams can't exhaust the memory budget. This
+// is a byte/iteration budget, not a character-count truncation — a long
+// legitimate lease (many pages, ~1-3 content streams per page) should never
+// have its back half silently dropped just because an earlier char-count
+// cap (MAX_NATIVE_EXTRACTED_CHARS, removed) was reached.
+const MAX_STREAM_ITERATIONS = 300;
 
 async function parseNativePdfText(
   fileBytes: Uint8Array,
@@ -901,10 +950,8 @@ async function parseNativePdfText(
     textParts.push(extractPdfOperatorText(rawPdf));
 
     let streamCount = 0;
-    let totalExtracted = textParts[0].length;
 
     for (const streamMatch of rawPdf.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-      if (totalExtracted >= MAX_NATIVE_EXTRACTED_CHARS) break;
       if (streamCount >= MAX_STREAM_ITERATIONS) break;
 
       const streamText = streamMatch[1] ?? "";
@@ -930,7 +977,6 @@ async function parseNativePdfText(
       const extracted = extractPdfOperatorText(decoder.decode(decodedStream));
       if (extracted.length > 0) {
         textParts.push(extracted);
-        totalExtracted += extracted.length;
       }
     }
 

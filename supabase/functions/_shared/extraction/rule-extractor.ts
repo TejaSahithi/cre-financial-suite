@@ -113,37 +113,51 @@ export function parsePercent(s: string): number | null {
 /** Parse enum: match against allowed values (case-insensitive, fuzzy) */
 export function parseEnum(s: string, allowed: string[]): string | null {
   if (!s) return null;
-  const lower = s.toLowerCase().trim();
+  // Normalize separators before matching so "full_service" (underscore, as
+  // an LLM sometimes returns it) and "full-service"/"full service" all
+  // collapse to the same alias-map key, instead of requiring every
+  // separator variant to be hand-maintained below.
+  const lower = s.toLowerCase().trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 
   // Exact match
-  const exact = allowed.find((v) => v === lower);
+  const exact = allowed.find((v) => v === lower || v.replace(/_/g, " ") === lower);
   if (exact) return exact;
 
-  // Contains match
-  const partial = allowed.find((v) => lower.includes(v) || v.includes(lower));
-  if (partial) return partial;
-
-  // Special mappings
+  // Special mappings — checked BEFORE the loose "contains" match below,
+  // since a known multi-word phrase alias (e.g. "triple net") must win over
+  // an accidental substring hit (e.g. "triple net".includes("net")). Targets
+  // are the schema's own canonical enum values (see schemas.ts's per-field
+  // `description`, e.g. lease_type's "'Full Service' or 'Gross Lease' →
+  // gross"), not aliases of themselves.
   const ENUM_ALIASES: Record<string, string> = {
-    "triple net": "triple_net", "triple-net": "triple_net", "nnn": "triple_net",
-    "full service": "full_service", "full-service": "full_service",
-    "full service lease": "full_service", "full-service lease": "full_service",
-    "modified gross": "modified_gross", "modified-gross": "modified_gross",
-    "double net": "double_net", "double-net": "double_net",
-    "single net": "single_net", "single-net": "single_net",
-    "absolute net": "absolute_net", "absolute-net": "absolute_net",
+    "triple net": "nnn", "nnn": "nnn",
+    "full service": "gross", "full service lease": "gross", "gross lease": "gross",
+    "modified gross": "modified_gross",
+    "double net": "double_net",
+    "single net": "single_net",
+    "absolute net": "absolute_net",
     "ground lease": "ground", "percentage lease": "percentage",
-    "non recoverable": "non_recoverable", "non-recoverable": "non_recoverable",
-    "not recoverable": "non_recoverable",
+    "non recoverable": "non_recoverable", "not recoverable": "non_recoverable",
     "commercial office": "office",
     "office center": "office",
     "single family": "single_family",
-    "single-family": "single_family",
     "single family portfolio": "single_family",
-    "single-family portfolio": "single_family",
     "under renovation": "under_renovation",
   };
-  return ENUM_ALIASES[lower] ?? null;
+  const aliasTarget = ENUM_ALIASES[lower];
+  if (aliasTarget) {
+    // Never silently persist an alias target that isn't actually a legal
+    // value for THIS field's allowed list — a mismatch here should fall
+    // through rather than writing an out-of-schema value.
+    if (allowed.includes(aliasTarget)) return aliasTarget;
+    return null;
+  }
+
+  // Contains match — last resort, only for phrases with no exact alias.
+  const partial = allowed.find((v) => lower.includes(v) || lower.includes(v.replace(/_/g, " ")) || v.includes(lower));
+  if (partial) return partial;
+
+  return null;
 }
 
 /** Coerce raw string to the correct type based on FieldDef */

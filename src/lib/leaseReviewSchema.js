@@ -1280,3 +1280,29 @@ export function normalizeClauseType(type) {
   if (t.includes("guaranty") || t.includes("guarantor") || t.includes("guarantee")) return "guaranty";
   return type; // return original if no mapping found
 }
+
+// Must match the backend's extraction_contract_version string exactly
+// (supabase/functions/_shared/extraction/pipeline.ts, normalize-pdf-output).
+export const CURRENT_EXTRACTION_CONTRACT_VERSION = "lease-review-evidence-v3";
+
+/**
+ * §2: is this lease/uploadedFile pair showing an extraction produced by an
+ * older pipeline contract? Checks the nested metadata.extractionDebug path
+ * FIRST — it's set unconditionally as soon as ANY extraction runs (even the
+ * fast minimal payload, before the deferred evidence-enrichment pass ever
+ * completes). The top-level metadata.extraction_contract_version is only
+ * guaranteed once the minimal-payload builder stamps it directly or the
+ * enrich pass finishes — checking it first previously produced false
+ * "older extractor" positives for genuinely current-contract files whose
+ * enrichment simply hadn't completed yet. Uses equality, not string
+ * ordering (a lexicographic "<" comparison would misclassify a future
+ * "...-v10" as older than "...-v3").
+ */
+export function isStaleExtractionPayload(uploadedFile, lease) {
+  const version =
+    uploadedFile?.ui_review_payload?.metadata?.extractionDebug?.extraction_contract_version ??
+    uploadedFile?.ui_review_payload?.metadata?.extraction_contract_version ??
+    lease?.extraction_data?.extraction_debug?.extraction_contract_version ??
+    lease?.extraction_data?.extraction_debug?.extractionDebug?.extraction_contract_version;
+  return !version || version !== CURRENT_EXTRACTION_CONTRACT_VERSION;
+}

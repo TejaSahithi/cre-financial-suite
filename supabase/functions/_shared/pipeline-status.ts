@@ -26,7 +26,8 @@ export type PipelineStatus =
   | "stored"
   | "computing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";         // user-requested soft-cancel, observed by the worker
 
 export const STATUS_PROGRESS: Record<PipelineStatus, number> = {
   uploaded:         5,
@@ -42,26 +43,32 @@ export const STATUS_PROGRESS: Record<PipelineStatus, number> = {
   computing:        90,
   completed:        100,
   failed:           0,    // overridden at call-site with the last known progress
+  cancelled:        0,    // overridden at call-site with the last known progress
 };
 
 /** Valid forward transitions — prevents accidental status regression */
 export const ALLOWED_TRANSITIONS: Partial<Record<PipelineStatus, PipelineStatus[]>> = {
-  uploaded:         ["parsing", "review_required", "failed"],
-  parsing:          ["parsed", "pdf_parsed", "review_required", "failed"],
-  parsed:           ["validating", "failed"],
-  pdf_parsed:       ["validating", "review_required", "failed"],
-  validating:       ["validated", "review_required", "failed"],
+  // 'cancelled' is reachable from every active (non-terminal) state, exactly
+  // mirroring how 'failed' is already modeled — the worker observes
+  // pipeline_jobs.cancel_requested_at at each stage checkpoint and, if set,
+  // transitions here instead of dispatching the next stage.
+  uploaded:         ["parsing", "review_required", "failed", "cancelled"],
+  parsing:          ["parsed", "pdf_parsed", "review_required", "failed", "cancelled"],
+  parsed:           ["validating", "failed", "cancelled"],
+  pdf_parsed:       ["validating", "review_required", "failed", "cancelled"],
+  validating:       ["validated", "review_required", "failed", "cancelled"],
   // After validation we either park for review or go straight to storing.
-  validated:        ["validating", "review_required", "storing", "failed"],
+  validated:        ["validating", "review_required", "storing", "failed", "cancelled"],
   // Reviewer either approves (→ approved → storing) or rejects (→ failed).
-  review_required:  ["parsing", "pdf_parsed", "validated", "approved", "failed"],
-  approved:         ["validating", "storing", "failed"],
-  storing:          ["stored", "failed"],
-  stored:           ["computing", "failed"],
-  computing:        ["completed", "failed"],
+  review_required:  ["parsing", "pdf_parsed", "validated", "approved", "failed", "cancelled"],
+  approved:         ["validating", "storing", "failed", "cancelled"],
+  storing:          ["stored", "failed", "cancelled"],
+  stored:           ["computing", "failed", "cancelled"],
+  computing:        ["completed", "failed", "cancelled"],
   // terminal states — no further transitions
   completed:        [],
   failed:           ["parsing", "review_required"],
+  cancelled:        [],
 };
 
 const REVIEW_PIPELINE_COLUMNS = new Set([
@@ -255,7 +262,7 @@ export async function setStatus(
   }
 
   // Set processing_completed_at on terminal steps
-  if (status === "completed" || status === "failed") {
+  if (status === "completed" || status === "failed" || status === "cancelled") {
     patch.processing_completed_at = patch.processing_completed_at ?? now;
   }
 

@@ -223,10 +223,22 @@ export default function LeaseExpenseRules() {
       return [];
     }
     
-    // Direct DB rows are the source of truth for actionable rules
+    // Direct DB rows are the source of truth for actionable rules.
+    const persistedLeaseIdsWithRules = new Set();
     for (const entry of directRuleSets) {
       if (scopeIdSet.size > 0 && !scopeIdSet.has(entry.leaseId)) continue;
+      if (entry.rules && entry.rules.length > 0) persistedLeaseIdsWithRules.add(entry.leaseId);
       merged.push(entry);
+    }
+
+    // If no persisted rules exist yet, expose workflow_output.expense_rules as
+    // read-only fallback rows so freshly uploaded leases are visible before a
+    // reviewer action persists the draft set.
+    for (const lease of selectorFilteredLeases) {
+      if (!lease?.id || persistedLeaseIdsWithRules.has(lease.id)) continue;
+      if (scopeIdSet.size > 0 && !scopeIdSet.has(lease.id)) continue;
+      const fallback = leaseExpenseRuleService.buildWorkflowFallbackRuleSet(lease);
+      if (fallback?.rules?.length > 0) merged.push(fallback);
     }
 
     const finalMerged = merged.filter((m) => m.rules && m.rules.length > 0);
@@ -236,7 +248,7 @@ export default function LeaseExpenseRules() {
       after_scope_filter: finalMerged.length,
     });
     return finalMerged;
-  }, [directRuleSets, leaseIds, scopeProperty, scopeBuilding, scopeUnit]);
+  }, [directRuleSets, leaseIds, scopeProperty, scopeBuilding, scopeUnit, selectorFilteredLeases]);
 
   const isLoading = isLoadingDirect;
 
@@ -722,3 +734,4 @@ export default function LeaseExpenseRules() {
     </div>
   );
 }
+
