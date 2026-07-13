@@ -33,3 +33,24 @@ export function getFriendlyExtractionLabel(status) {
       return "Processing...";
   }
 }
+
+/**
+ * Does a ui_review_payload have at least one field with a real value?
+ * Used as a legacy-row fallback for readiness gating (rows persisted before
+ * the backend started stamping ui_review_payload.core_ready directly) — new
+ * rows should read core_ready instead of re-deriving this client-side.
+ */
+export function payloadHasMeaningfulFields(uiReviewPayload) {
+  const record = uiReviewPayload?.records?.[0];
+  if (!record) return false;
+  const fieldList = [
+    ...(Array.isArray(record?.standard_fields) ? record.standard_fields : []),
+    ...(Array.isArray(record?.custom_fields) ? record.custom_fields : []),
+  ];
+  return fieldList.some((field) => {
+    const value = field?.value;
+    if (value == null) return false;
+    const text = String(value).trim();
+    return text.length > 0 && !/^(n\/a|na|null|none|unknown)$/i.test(text);
+  });
+}

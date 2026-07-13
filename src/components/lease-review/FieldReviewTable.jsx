@@ -27,8 +27,10 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
+  readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  classifyConfidence,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
@@ -107,6 +109,15 @@ const SOURCE_QUALITY_BADGE = {
   manual_required: { label: "Manual Review", cls: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
+// §4: confidence badge colors, keyed off the same classifyConfidence()
+// bucket the summary cards already use (≥90 high, 75-89 medium, else low).
+const CONFIDENCE_BADGE_CLASS = {
+  high: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  medium: "bg-amber-50 text-amber-700 border-amber-200",
+  low: "bg-red-50 text-red-700 border-red-200",
+  unknown: "bg-slate-50 text-slate-500 border-slate-200",
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function FieldReviewTable({
@@ -146,6 +157,7 @@ export default function FieldReviewTable({
           <TableRow>
             <TableHead className="w-[190px] text-xs">Field</TableHead>
             <TableHead className="w-[220px] text-xs">Normalized Value</TableHead>
+            <TableHead className="w-[80px] text-xs text-center">Confidence</TableHead>
             <TableHead className="w-[70px] text-xs text-center">Page</TableHead>
             <TableHead className="min-w-[520px] text-xs">Source Text</TableHead>
             <TableHead className="w-[150px] text-xs text-right">Actions</TableHead>

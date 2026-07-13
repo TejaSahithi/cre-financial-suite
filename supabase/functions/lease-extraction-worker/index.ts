@@ -4,6 +4,8 @@ import { createAdminClient } from "../_shared/supabase.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { setFailed, setStatus } from "../_shared/pipeline-status.ts";
 import { MIN_LEASE_TEXT_CHARS } from "../_shared/extraction/pipeline-contract.ts";
+import { uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
+import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import {
   buildInternalFunctionHeaders,
   classifyDownstreamError,
@@ -15,6 +17,10 @@ import {
 const WORKER_NAME = "lease-extraction-worker";
 const PARSE_TIMEOUT_MS = 140_000;
 const NORMALIZE_TIMEOUT_MS = 240_000;
+// Dedicated, separate budget for the deferred evidence/clause pass (§3) —
+// distinct from NORMALIZE_TIMEOUT_MS so the now-fast normalize stage and the
+// still-potentially-slow enrich stage can be tuned independently.
+const ENRICH_TIMEOUT_MS = 240_000;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -183,10 +189,10 @@ async function parkLeaseForManualReview(
   // attempt does not mean the durable data underneath it is gone.
   const existing = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
   if (existing.durable) {
-    console.warn(
-      `[${WORKER_NAME}] parkLeaseForManualReview skipped for file_id=${fileId} — ` +
-      `a valid non-fallback payload already exists (status=${existing.status}, ` +
-      `method=${existing.extractionMethod}); failing job without touching ui_review_payload`,
+    console.log(
+      `[${WORKER_NAME}] fallback_aborted_existing_values_found file_id=${fileId} ` +
+      `status=${existing.status} method=${existing.extractionMethod} — ` +
+      `failing job without touching ui_review_payload/parsed_data/normalized_output`,
     );
     await failJob(supabaseAdmin, job, errorCode, reason);
     return;
@@ -447,58 +453,52 @@ const POST_NORMALIZE_STATUSES = new Set(["review_required", "validated", "approv
  *      (e.g. normalize's minimal early persist landing, then a later
  *      transport failure on the same request or a retry).
  *
- * Reads only lightweight JSON-path projections — never the whole
- * ui_review_payload/normalized_output objects.
+ * P0.3: content-based, not status-based. The prior version required
+ * status ∈ POST_NORMALIZE_STATUSES, which the retry/re-dispatch machinery
+ * resets to "parsing"/"pdf_parsed" BEFORE re-running normalize
+ * (enqueueLeaseExtractionJob, and the "fast re-extraction" pdf_parsed
+ * transition below) — so a retry's failure could see status outside that
+ * set even though real data from a prior run was still sitting untouched in
+ * the row, and incorrectly report not-durable. Checking parsed_data /
+ * normalized_output / ui_review_payload for actual meaningful values
+ * directly (guarantees 1-3) is independent of whatever status the retry
+ * machinery left behind.
  */
 async function reconcileDurableNormalize(supabaseAdmin: any, fileId: string, orgId: string): Promise<{
   durable: boolean;
   status: string | null;
   extractionMethod: string;
   hasRecords: boolean;
+  enrichmentStatus: string | null;
 }> {
-  const none = { durable: false, status: null, extractionMethod: "", hasRecords: false };
+  const none = { durable: false, status: null, extractionMethod: "", hasRecords: false, enrichmentStatus: null };
 
-  let status: string | null = null;
-  let extractionMethod = "";
-  let hasRecords = false;
-
-  const projected = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("uploaded_files")
-    .select(
-      "id, status, extraction_method, " +
-      "payload_method:ui_review_payload->>extraction_method, " +
-      "payload_records:ui_review_payload->records",
-    )
+    .select("id, status, extraction_method, ui_review_payload, parsed_data, normalized_output")
     .eq("id", fileId)
     .eq("org_id", orgId)
     .maybeSingle();
 
-  if (!projected.error && projected.data) {
-    status = projected.data.status ?? null;
-    extractionMethod = String(projected.data.payload_method || projected.data.extraction_method || "");
-    hasRecords = Array.isArray(projected.data.payload_records) && projected.data.payload_records.length > 0;
-  } else {
-    console.warn(
-      `[${WORKER_NAME}] aliased JSON-path normalize reconciliation select failed ` +
-      `(${projected.error?.message ?? "no row"}); using fallback projection`,
-    );
-    const basic = await supabaseAdmin
-      .from("uploaded_files")
-      .select("id, status, extraction_method, ui_review_payload")
-      .eq("id", fileId)
-      .eq("org_id", orgId)
-      .maybeSingle();
-    if (basic.error || !basic.data) return none;
-    status = basic.data.status ?? null;
-    const payload = basic.data.ui_review_payload || {};
-    extractionMethod = String(payload.extraction_method || basic.data.extraction_method || "");
-    hasRecords = Array.isArray(payload.records) && payload.records.length > 0;
-  }
+  if (error || !data) return none;
 
+  const status: string | null = data.status ?? null;
+  const payload = data.ui_review_payload || {};
+  const extractionMethod = String(payload.extraction_method || data.extraction_method || "");
+  const hasRecords = Array.isArray(payload.records) && payload.records.length > 0;
   const isFallback = !extractionMethod || extractionMethod === "manual_review_fallback";
-  const durable = POST_NORMALIZE_STATUSES.has(String(status)) && hasRecords && !isFallback;
+  const enrichmentStatus = payload.enrichment_status ?? null;
 
-  return { durable, status, extractionMethod, hasRecords };
+  const statusBasedDurable = POST_NORMALIZE_STATUSES.has(String(status)) && hasRecords && !isFallback;
+  const contentBasedDurable = uploadedFileRowHasMeaningfulValues({
+    ui_review_payload: data.ui_review_payload,
+    parsed_data: data.parsed_data,
+    normalized_output: data.normalized_output,
+  }) && !isFallback;
+
+  const durable = statusBasedDurable || contentBasedDurable;
+
+  return { durable, status, extractionMethod, hasRecords, enrichmentStatus };
 }
 
 // Test hook (same pattern as _shared/extraction/parser.ts).
@@ -612,7 +612,32 @@ Deno.serve(async (req: Request) => {
     const maxAttempts = Number(job.max_attempts || 3);
     if (currentAttempt >= maxAttempts) {
       const message = `Job exceeded max_attempts (${currentAttempt}/${maxAttempts})`;
-      await failJobAndUpload(supabaseAdmin, job, fileId, "MAX_ATTEMPTS_EXCEEDED", message, job.stage ?? "parse", 15);
+      if (job.stage === "enrich") {
+        // Guarantee 7: a maxed-out enrich job must never call
+        // failJobAndUpload()/setFailed() — that would clobber the good core
+        // payload with uploaded_files.status="failed". Only fail the job row
+        // and patch enrichment_status.
+        await failJob(supabaseAdmin, job, "MAX_ATTEMPTS_EXCEEDED", message);
+        await supabaseAdmin
+          .from("uploaded_files")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", fileId);
+        const { data: currentFile } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("ui_review_payload")
+          .eq("id", fileId)
+          .maybeSingle();
+        const currentPayload = currentFile?.ui_review_payload || {};
+        await supabaseAdmin
+          .from("uploaded_files")
+          .update({
+            ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
+          })
+          .eq("id", fileId);
+        console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId} reason=max_attempts_exceeded`);
+      } else {
+        await failJobAndUpload(supabaseAdmin, job, fileId, "MAX_ATTEMPTS_EXCEEDED", message, job.stage ?? "parse", 15);
+      }
       return jsonResponse({ error: true, error_code: "MAX_ATTEMPTS_EXCEEDED", job_id: job.id, message }, 200);
     }
 
@@ -1014,7 +1039,84 @@ Deno.serve(async (req: Request) => {
       await logger.event("normalize", "completed", {
         metadata: { job_id: job.id },
       });
+
+      // Defensive second dispatch path (P0.1/§3): normalize-pdf-output
+      // enqueues its own "enrich" job internally right before it returns
+      // success. If the process died between that enqueue call and this
+      // worker observing the response, re-check and re-dispatch here so an
+      // enrich job is never silently lost.
+      const postNormalizeCheck = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
+      if (postNormalizeCheck.durable && postNormalizeCheck.enrichmentStatus !== "completed" && postNormalizeCheck.enrichmentStatus !== "running") {
+        await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
+      }
+
       return jsonResponse({ error: false, job_id: job.id, stage: "normalize", status: "completed" });
+    }
+
+    if (currentStage === "enrich") {
+      // Checkpoint: an enrich job can be cancelled the same way any other
+      // stage can — never dispatch evidence resolution for a cancelled file.
+      if (await isCancelRequested(supabaseAdmin, job.id)) {
+        return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_enrich");
+      }
+
+      await logger.event("enrich", "running", {
+        provider: "lease-extraction-worker",
+        metadata: { job_id: job.id, attempt },
+      });
+
+      const enrichResult = await callInternalFunction(
+        "normalize-pdf-output",
+        { file_id: fileId, pipeline_job_id: job.id, worker_attempt: attempt, mode: "enrich" },
+        orgId,
+        ENRICH_TIMEOUT_MS,
+      );
+
+      if (!enrichResult.ok) {
+        const message = enrichResult.error || "Evidence enrichment failed";
+        const errorCode = enrichResult.error_code || enrichResult.data?.error_code || "ENRICHMENT_FAILED";
+
+        // Guarantee 7: never call parkLeaseForManualReview/failJobAndUpload
+        // for an enrich failure — only fail the job row and mark
+        // enrichment_status failed. The core minimal payload this job was
+        // meant to enhance must remain exactly as it was.
+        await failJob(supabaseAdmin, job, errorCode, message);
+        const { data: currentFile } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("ui_review_payload")
+          .eq("id", fileId)
+          .maybeSingle();
+        const currentPayload = currentFile?.ui_review_payload || {};
+        if (currentPayload.enrichment_status !== "completed") {
+          await supabaseAdmin
+            .from("uploaded_files")
+            .update({
+              ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", fileId);
+        }
+        console.log(`[${WORKER_NAME}] enrichment_failed_preserved_core_payload file_id=${fileId}: ${message}`);
+        await logger.event("enrich", "failed", {
+          error_code: errorCode,
+          error_message: message,
+          metadata: { job_id: job.id, status: enrichResult.status },
+        });
+        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "enrich", message }, 200);
+      }
+
+      await supabaseAdmin
+        .from("pipeline_jobs")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          metadata: { ...(job.metadata || {}), enrich_completed_at: new Date().toISOString() },
+        })
+        .eq("id", job.id);
+
+      await logger.event("enrich", "completed", { metadata: { job_id: job.id } });
+      return jsonResponse({ error: false, job_id: job.id, stage: "enrich", status: "completed" });
     }
 
     await failJob(supabaseAdmin, job, "UNKNOWN_STAGE", `Unsupported job stage: ${job.stage}`);

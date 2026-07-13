@@ -5,7 +5,7 @@ import { invokeEdgeFunction, invokeEdgeFunctionFormData } from "@/services/edgeF
 import useOrgId from "@/hooks/useOrgId";
 import useFileStatus from "@/hooks/useFileStatus";
 import { getStoredActingOrgId, setStoredActingOrgId } from "@/lib/actingOrg";
-import { getFriendlyExtractionLabel } from "@/lib/extractionStatusLabels";
+import { getFriendlyExtractionLabel, payloadHasMeaningfulFields } from "@/lib/extractionStatusLabels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,26 +86,10 @@ async function getPreviewUrl(storagePath) {
   }
 }
 
-// Re-exported for callers already importing this from FileUploader.jsx —
-// the implementation itself lives in a dependency-free lib module so it can
-// be unit tested without a browser/DOM environment.
-export { getFriendlyExtractionLabel };
-
-/** Does a ui_review_payload have at least one field with a real value? */
-function payloadHasMeaningfulFields(uiReviewPayload) {
-  const record = uiReviewPayload?.records?.[0];
-  if (!record) return false;
-  const fieldList = [
-    ...(Array.isArray(record?.standard_fields) ? record.standard_fields : []),
-    ...(Array.isArray(record?.custom_fields) ? record.custom_fields : []),
-  ];
-  return fieldList.some((field) => {
-    const value = field?.value;
-    if (value == null) return false;
-    const text = String(value).trim();
-    return text.length > 0 && !/^(n\/a|na|null|none|unknown)$/i.test(text);
-  });
-}
+// Re-exported for callers already importing these from FileUploader.jsx —
+// the implementations themselves live in a dependency-free lib module so
+// they can be unit tested without a browser/DOM environment.
+export { getFriendlyExtractionLabel, payloadHasMeaningfulFields };
 
 /**
  * Reusable file upload component that sends files to the upload-handler

@@ -78,9 +78,9 @@ function validateBoolean(value: unknown): boolean | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "boolean") return value;
   const s = String(value).toLowerCase().trim();
-  if (["true", "yes", "y", "1", "granted", "received", "approved"].includes(s)) return true;
+  if (["true", "yes", "y", "1", "granted", "received", "approved", "required"].includes(s)) return true;
   if (["false", "no", "n", "0", "denied", "not granted", "not approved"].includes(s)) return false;
-  if (/\b(consents?|consented|approval|approved|grants?|granted)\b/i.test(String(value))) return true;
+  if (/\b(consents?|consented|approval|approved|grants?|granted|required)\b/i.test(String(value))) return true;
   if (/\b(does not consent|not approved|denied|withheld)\b/i.test(String(value))) return false;
   return null;
 }
@@ -263,10 +263,6 @@ function sanitizeLeaseFieldValue(fieldName: string, field: any): unknown {
   }
 
   if (fieldName === "property_name" && looksLikeAddressOrPremisesClause(value)) {
-    return null;
-  }
-
-  if (fieldName === "landlord_consent" && /^\s*required\s*$/i.test(String(value))) {
     return null;
   }
 

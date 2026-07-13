@@ -744,6 +744,29 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
     null;
   const ufRecord0 = ufPayload?.records?.[0] ?? null;
 
+  // §1/§2 fallback rendering cascade: uploaded_files.normalized_output.rows[0]
+  // and .parsed_data[0] are plain flat {fieldKey: value} objects — durable as
+  // soon as the pipeline's fast minimal persist lands, even before
+  // ui_review_payload's evidence enrichment finishes. extractionDebug's
+  // merged_field_sources/llm_returned_field_details carry per-field
+  // source_page/source_text/confidence computed during extraction itself
+  // (always present) but were previously never consulted anywhere in the
+  // frontend — surfaced here as a last-resort, richly-annotated fallback so
+  // a field can still show its evidence even if it never made it onto
+  // ui_review_payload's own field-level `evidence` key.
+  const uploadedFileForFallback = lease?.uploaded_files || lease?.uploaded_file || null;
+  const normalizedOutputRow0 = Array.isArray(uploadedFileForFallback?.normalized_output?.rows)
+    ? uploadedFileForFallback.normalized_output.rows[0]
+    : null;
+  const parsedDataRow0 = Array.isArray(uploadedFileForFallback?.parsed_data)
+    ? uploadedFileForFallback.parsed_data[0]
+    : null;
+  const extractionDebugForFallback = ufPayload?.metadata?.extractionDebug ?? {};
+  const debugEvidenceEntries = [
+    ...Object.entries(extractionDebugForFallback.merged_field_sources ?? {}),
+    ...Object.entries(extractionDebugForFallback.llm_returned_field_details ?? {}),
+  ].map(([field_key, v]) => ({ field_key, ...v }));
+
   if (mode === "display") {
     // Display mode is the reviewer surface: trust the workflow evidence payload
     // before stale top-level lease columns. Top-level columns remain only as a
@@ -792,6 +815,9 @@ export function resolveLeaseField(lease, fieldKey, options = {}) {
       { path: "uf.records[0].custom_fields", data: ufRecord0?.custom_fields },
       { path: "uf.records[0]", data: ufRecord0 },
       { path: "uploaded_files.ui_review_payload", data: ufPayload },
+      { path: "uploaded_files.normalized_output.rows[0]", data: normalizedOutputRow0 },
+      { path: "uploaded_files.parsed_data[0]", data: parsedDataRow0 },
+      { path: "uploaded_files.ui_review_payload.metadata.extractionDebug", data: debugEvidenceEntries },
       { path: "lease (top-level)", data: lease },
     );
   }

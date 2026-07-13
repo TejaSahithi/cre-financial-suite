@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
+import FileUploader, { getFriendlyExtractionLabel, payloadHasMeaningfulFields } from "@/components/FileUploader";
 import ScopeSelector from "@/components/ScopeSelector";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Card, CardContent } from "@/components/ui/card";
@@ -826,16 +826,19 @@ export default function LeaseUpload() {
     fileRecord?.ui_review_payload != null &&
     fileRecord?.status !== "failed";
 
-  const canOpenReview = hasValidReviewPayload || [
-    "review_required",
-    "validating",
-    "validated",
-    "approved",
-    "storing",
-    "stored",
-    "computing",
-    "completed",
-  ].includes(fileRecord?.status || "");
+  // §1 / guarantee 10: read the backend-computed core_ready flag directly
+  // (persisted on ui_review_payload by buildMinimalReviewPayload, P0.2)
+  // rather than re-deriving readiness client-side. payloadHasMeaningfulFields
+  // remains only as a fallback for rows persisted before core_ready existed.
+  // This intentionally drops "validating"/"pdf_parsed" from the old blind
+  // status allow-list — those statuses can never produce a payload with
+  // core_ready:true because no minimal payload exists yet at that point.
+  const canOpenReview =
+    (hasValidReviewPayload && (
+      fileRecord?.ui_review_payload?.core_ready === true ||
+      payloadHasMeaningfulFields(fileRecord?.ui_review_payload)
+    )) ||
+    ["approved", "storing", "stored", "computing", "completed"].includes(fileRecord?.status || "");
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">

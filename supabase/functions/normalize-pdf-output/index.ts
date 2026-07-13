@@ -32,6 +32,8 @@ import { cleanEvidenceSnippet, findPageForSnippet, resolveVerifiedSourcePage } f
 import { detectFileMagic } from "../_shared/file-magic.ts";
 import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
+import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
+import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import {
   buildBlockedReviewPayload,
@@ -823,6 +825,18 @@ function buildMinimalReviewPayload(opts: {
   const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
   const source = sourceFromMethod(extractionMethod ?? result.method);
 
+  // P0.2: evidence-index resolution (buildReviewPayload's expensive pass)
+  // hasn't run yet at this point, but the pipeline already computed a cheap,
+  // pre-validation snapshot of per-field source_page/source_text/confidence
+  // during runExtractionPipeline() itself — merged_field_sources (post-merge,
+  // pre-validation) and llm_returned_field_details (raw LLM output) are both
+  // always present by the time this function runs. Hydrate from them instead
+  // of hard-coding evidence: null, so the minimal (fast, durable) payload is
+  // already useful for review before the deferred "enrich" pass ever runs.
+  const extractionDebug = (result.metadata as any)?.extractionDebug ?? {};
+  const mergedFieldSources = (extractionDebug.merged_field_sources ?? {}) as Record<string, any>;
+  const llmReturnedFieldDetails = (extractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
     const fieldConfidences = (r._field_confidences ?? {}) as Record<string, number>;
@@ -831,23 +845,41 @@ function buildMinimalReviewPayload(opts: {
 
     const standardFields = schemaEntries.map(([fieldKey, def]) => {
       const value = cleanPartyAddressValue(fieldKey, values[fieldKey] ?? null);
-      const effectiveConfidence = normalizeConfidence(fieldConfidences[fieldKey]) ?? rowConfidence;
+      const debugEvidence = mergedFieldSources[fieldKey] ?? llmReturnedFieldDetails[fieldKey] ?? null;
+      const sourceText = debugEvidence?.source_text ?? null;
+      const sourcePage = debugEvidence?.source_page ?? null;
+      const hasEvidence = !!(sourceText || sourcePage != null);
+      const effectiveConfidence =
+        normalizeConfidence(fieldConfidences[fieldKey]) ??
+        normalizeConfidence(debugEvidence?.confidence) ??
+        rowConfidence;
+
+      let status: string;
+      if (value == null || value === "") {
+        status = "missing";
+      } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 90) {
+        // System-computed suggestion only — buildReviewField always sets
+        // accepted:false; acceptance is a separate, reviewer-driven action
+        // (guarantee 6), never implied by this status.
+        status = "auto_populated";
+      } else if (!hasEvidence) {
+        status = "needs_review";
+      } else {
+        status = "pending_enrichment";
+      }
+
       return buildReviewField({
         recordIndex: index,
         fieldKey,
         value,
         confidence: effectiveConfidence,
-        source: fieldSources[fieldKey] ?? source,
+        source: fieldSources[fieldKey] ?? debugEvidence?.source ?? source,
         isStandard: true,
         required: !!def.required,
         fieldType: def.type ?? "string",
         description: def.description,
-        evidence: null,
-        // No source_page/source_clause yet — evidence resolution runs in the
-        // full buildReviewPayload() pass. "pending_enrichment" tells the UI
-        // this value is real but not yet evidence-verified, distinct from
-        // the final "missing_source_evidence" status.
-        status: value == null || value === "" ? "missing" : "pending_enrichment",
+        evidence: hasEvidence ? { source_text: sourceText, source_page: sourcePage, source_quality: "pending_enrichment" } : null,
+        status,
         editable: true,
       });
     });
@@ -881,6 +913,7 @@ function buildMinimalReviewPayload(opts: {
   });
 
   const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
+  const coreReady = computeCoreReady(rows[0]?.standard_fields ?? []);
 
   return {
     schema_version: 2,
@@ -894,12 +927,21 @@ function buildMinimalReviewPayload(opts: {
     review_required: reviewRequired,
     review_status: "pending",
     enrichment_status: "pending",
+    // P0.2 guarantees 4 & 5: the backend, not the frontend, is the source of
+    // truth for whether this file is ready to open for review, and the
+    // minimal payload stamps its own contract version directly rather than
+    // relying solely on the (also-present, unconditional) nested
+    // metadata.extractionDebug.extraction_contract_version.
+    core_ready: coreReady,
     records: rows,
     rows,
     global_warnings: userWarnings,
     warnings: userWarnings,
     validation_errors: result.validationErrors,
-    metadata: { ...(result.metadata ?? {}) },
+    metadata: {
+      ...(result.metadata ?? {}),
+      extraction_contract_version: "lease-review-evidence-v3",
+    },
     built_at: new Date().toISOString(),
   };
 }
@@ -937,12 +979,33 @@ function buildReviewPayload(opts: {
     .map(([key]) => key);
   const avgConfidence = normalizeConfidence(result.metadata?.avgConfidence);
   const source = sourceFromMethod(extractionMethod ?? result.method);
+  // §7: genuinely unmapped-but-valued LLM keys, built once from the flat/
+  // global pipeline diagnostics (not per-row — a pre-existing limitation of
+  // these two debug fields) and passed only for the first/only row.
+  const reviewExtractionDebug = (result.metadata as any)?.extractionDebug ?? {};
+  const unmappedLlmKeys: string[] = Array.isArray(reviewExtractionDebug.unmapped_llm_keys)
+    ? reviewExtractionDebug.unmapped_llm_keys
+    : [];
+  const llmReturnedFieldDetailsForUnmapped = (reviewExtractionDebug.llm_returned_field_details ?? {}) as Record<string, any>;
+  const unmappedLlmFields = unmappedLlmKeys
+    .map((key) => {
+      const detail = llmReturnedFieldDetailsForUnmapped[key];
+      return {
+        key,
+        value: detail?.value ?? null,
+        sourceText: detail?.source_text ?? null,
+        sourcePage: detail?.source_page ?? null,
+        confidence: detail?.confidence ?? null,
+      };
+    })
+    .filter((f) => f.value != null && f.value !== "");
   const workflowOutputs = extractionModuleType === "lease"
-    ? result.rows.map((row) =>
+    ? result.rows.map((row, rowIndex) =>
         buildLeaseWorkflowAbstraction({
           row,
           doclingRaw: doclingRaw ?? null,
           documentSubtype,
+          ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
         })
       )
     : [];
@@ -1585,6 +1648,148 @@ function countMeaningfulRowValues(rows: Array<Record<string, unknown>> | undefin
   return count;
 }
 
+const ENRICH_READY_STATUSES = new Set(["review_required", "validated", "approved"]);
+
+/**
+ * §3 / P0.1: run the deferred evidence + clause pass (buildReviewPayload)
+ * against an already-persisted normalized_output, without re-running
+ * runExtractionPipeline (no re-parse, no re-LLM-call — guarantee 8) and
+ * without ever touching uploaded_files.status or clobbering the core
+ * standard_fields values on failure (guarantee 7).
+ */
+async function handleEnrichMode(args: {
+  supabaseAdmin: any;
+  orgId: string;
+  fileId: string;
+  jsonResponse: (body: unknown, status?: number) => Response;
+}): Promise<Response> {
+  const { supabaseAdmin, orgId, fileId, jsonResponse } = args;
+  const logger = createLogger(supabaseAdmin, fileId, orgId);
+
+  const { data: fileRecord, error: fetchError } = await supabaseAdmin
+    .from("uploaded_files")
+    .select(
+      "id, org_id, file_name, module_type, status, review_required, document_subtype, " +
+      "extraction_method, docling_raw, normalized_output, ui_review_payload",
+    )
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (fetchError || !fileRecord) {
+    return jsonResponse(
+      { error: true, message: `File not found: ${fetchError?.message ?? "Invalid file_id"}`, error_code: "FILE_NOT_FOUND" },
+      404,
+    );
+  }
+
+  if (!ENRICH_READY_STATUSES.has(fileRecord.status)) {
+    return jsonResponse(
+      {
+        error: true,
+        message: `File status must be one of review_required/validated/approved for enrichment. Current: '${fileRecord.status}'`,
+        error_code: "INVALID_STATUS_FOR_ENRICH",
+      },
+      422,
+    );
+  }
+
+  const currentPayload = (fileRecord.ui_review_payload ?? {}) as Record<string, unknown>;
+  if (currentPayload.enrichment_status === "completed") {
+    // Idempotent no-op — a duplicate/racing enrich dispatch should never
+    // re-run the expensive pass twice.
+    return jsonResponse({ error: false, file_id: fileId, enrichment_status: "completed", already_enriched: true });
+  }
+
+  const result = fileRecord.normalized_output as {
+    rows: Record<string, unknown>[];
+    method: string;
+    warnings: string[];
+    validationErrors: unknown[];
+    metadata: Record<string, unknown>;
+  } | null;
+  if (!result || !Array.isArray(result.rows)) {
+    return jsonResponse(
+      { error: true, message: "No normalized_output found to enrich — run normalize first.", error_code: "NO_NORMALIZED_OUTPUT" },
+      422,
+    );
+  }
+
+  console.log(`[normalize-pdf-output] enrichment_started file_id=${fileId}`);
+  await supabaseAdmin
+    .from("uploaded_files")
+    .update({
+      ui_review_payload: { ...currentPayload, enrichment_status: "running" },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileId);
+  await logger.event("enrich", "running", {});
+
+  try {
+    const moduleType = fileRecord.module_type ?? "unknown";
+    const fileName = fileRecord.file_name ?? "document";
+
+    const enrichedPayload = buildReviewPayload({
+      fileId,
+      fileName,
+      moduleType,
+      documentSubtype: fileRecord.document_subtype ?? null,
+      extractionMethod: fileRecord.extraction_method ?? null,
+      reviewRequired: !!fileRecord.review_required,
+      doclingRaw: fileRecord.docling_raw ?? null,
+      result,
+    }) as Record<string, any>;
+
+    enrichedPayload.enrichment_status = "completed";
+    enrichedPayload.core_ready =
+      currentPayload.core_ready ?? computeCoreReady(enrichedPayload.records?.[0]?.standard_fields ?? []);
+    if (enrichedPayload.metadata && typeof enrichedPayload.metadata === "object") {
+      enrichedPayload.metadata.extraction_contract_version = "lease-review-evidence-v3";
+    }
+
+    const clauseCount = enrichedPayload.records?.[0]?.workflow_output?.lease_clauses?.length ?? 0;
+    const sourceBackedCount = (enrichedPayload.records?.[0]?.standard_fields ?? []).filter(
+      (f: any) => f?.evidence?.source_text || f?.evidence?.source_page != null,
+    ).length;
+
+    const { error: persistError } = await supabaseAdmin
+      .from("uploaded_files")
+      .update({ ui_review_payload: enrichedPayload, updated_at: new Date().toISOString() })
+      .eq("id", fileId);
+    if (persistError) {
+      throw new Error(`Could not persist enriched payload: ${persistError.message}`);
+    }
+
+    console.log(
+      `[normalize-pdf-output] enrichment_completed file_id=${fileId} clauses=${clauseCount} source_backed=${sourceBackedCount}`,
+    );
+    await logger.event("enrich", "completed", { metadata: { clauses: clauseCount, source_backed: sourceBackedCount } });
+
+    return jsonResponse({
+      error: false,
+      file_id: fileId,
+      enrichment_status: "completed",
+      clauses: clauseCount,
+      source_backed: sourceBackedCount,
+    });
+  } catch (enrichError: any) {
+    const message = enrichError?.message ?? String(enrichError);
+    console.error(`[normalize-pdf-output] enrichment_failed_preserved_core_payload file_id=${fileId}: ${message}`);
+    // Never call setFailed()/touch uploaded_files.status and never overwrite
+    // the core standard_fields — only patch enrichment_status, so the
+    // minimal payload's real values stay fully visible (guarantee 7).
+    await supabaseAdmin
+      .from("uploaded_files")
+      .update({
+        ui_review_payload: { ...currentPayload, enrichment_status: "failed", enrichment_error: message },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileId);
+    await logger.event("enrich", "failed", { error_message: message });
+    return jsonResponse({ error: true, message, error_code: "ENRICHMENT_FAILED" }, 500);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -1617,7 +1822,7 @@ Deno.serve(async (req: Request) => {
     const { user, supabaseAdmin } = await verifyUser(req);
 
     const body = await req.json().catch(() => ({}));
-    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt } = body;
+    const { file_id, dry_run, sample_text, job_id, pipeline_job_id, worker_attempt, mode } = body;
 
     // dry_run=true: validate auth and optionally run extraction on sample_text.
     // No file_id required and no DB writes — used by pipeline-health-check.
@@ -1674,6 +1879,17 @@ Deno.serve(async (req: Request) => {
         { error: true, message: "file_id is required", error_code: "MISSING_FILE_ID" },
         400,
       );
+    }
+
+    // §3 / P0.1: the deferred evidence + clause pass. Deliberately handled as
+    // an early, self-contained branch rather than threaded through the parse
+    // flow below — it has different status requirements (review_required/
+    // validated/approved, not pdf_parsed), reuses already-persisted
+    // normalized_output instead of re-running runExtractionPipeline, and
+    // must never call setFailed()/touch uploaded_files.status on error
+    // (guarantee 7).
+    if (mode === "enrich") {
+      return await handleEnrichMode({ supabaseAdmin, orgId, fileId: file_id, jsonResponse });
     }
 
     // Fetch only the columns this function actually uses.
@@ -2039,6 +2255,11 @@ Deno.serve(async (req: Request) => {
         },
       );
       console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
+      console.log(
+        `[normalize-pdf-output] core_extraction_done file_id=${file_id} rows=${result.rows?.length ?? 0} ` +
+        `fields=${(result.metadata as any)?.extractionDebug?.fields_returned_count ?? 0} ` +
+        `source_backed=${(result.metadata as any)?.extractionDebug?.source_backed_fields_count ?? 0}`,
+      );
 
       // Decide the next status based on the review gate decided at ingest.
       // Computed once here (not re-derived later) so the minimal early
@@ -2067,6 +2288,32 @@ Deno.serve(async (req: Request) => {
 
       const meaningfulValueCount = countMeaningfulRowValues(result.rows as Array<Record<string, unknown>>);
       if (!result.rows || result.rows.length === 0 || meaningfulValueCount === 0) {
+        // P0.3 guarantee: this attempt produced nothing usable, but a prior
+        // successful run may already have persisted real values for this
+        // file (e.g. a re-extraction that regressed). Re-read before
+        // injecting an empty fallback row over them.
+        const { data: existingRow } = await supabaseAdmin
+          .from("uploaded_files")
+          .select("ui_review_payload, parsed_data, normalized_output")
+          .eq("id", file_id)
+          .maybeSingle();
+        if (existingRow && uploadedFileRowHasMeaningfulValues(existingRow)) {
+          console.log(
+            `[normalize-pdf-output] fallback_aborted_existing_values_found file_id=${file_id} — ` +
+            `this attempt found nothing, but existing row already has real values; leaving it untouched`,
+          );
+          await logger.event("normalize", "blocked_write_skipped", {
+            reason: "existing_meaningful_values_found",
+          });
+          return jsonResponse({
+            error: false,
+            file_id,
+            processing_status: fileRecord.status,
+            module_type: moduleType,
+            message: "This extraction attempt found no usable values; the file's existing extracted data was left unchanged.",
+          });
+        }
+
         // For review-required files (all leases), inject a fallback empty row instead of
         // failing. This lets the reviewer manually fill in fields rather than hitting a
         // dead-end "failed" status. Without an LLM backend, rule/table extraction often
@@ -2192,6 +2439,10 @@ Deno.serve(async (req: Request) => {
           ...(reviewRequired ? { review_status: "pending" } : {}),
         },
       );
+      const minimalSourceBackedCount = (minimalPayload.records[0]?.standard_fields ?? [])
+        .filter((f: any) => f.status === "auto_populated" || f.status === "pending_enrichment").length;
+      const minimalValueCount = (minimalPayload.records[0]?.standard_fields ?? [])
+        .filter((f: any) => f.value != null && f.value !== "").length;
       if (minimalPersistError) {
         // Non-fatal — log and continue to the full enrichment pass below.
         // Worst case this run loses the early-persist safety net; extraction
@@ -2200,7 +2451,56 @@ Deno.serve(async (req: Request) => {
           `[normalize-pdf-output] Could not persist minimal core payload for file_id=${file_id}: ${minimalPersistError.message}`,
         );
       } else {
-        console.log(`[normalize-pdf-output] STAGE minimal_payload_persisted file_id=${file_id}`);
+        console.log(
+          `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
+          `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
+        );
+      }
+
+      // ── P0.1: defer the expensive evidence/clause pass ───────────────────
+      // By default (NORMALIZE_INLINE_ENRICHMENT unset/false), return success
+      // right here — the minimal payload above is already durable and
+      // review-worthy (P0.2). The evidence/clause pass (buildReviewPayload,
+      // the documented compute hotspot per evidence-index.ts) runs as a
+      // separate, independently-retryable "enrich" job instead of inline in
+      // this same request, so it can never again crash a request that
+      // already contains good data. Setting NORMALIZE_INLINE_ENRICHMENT=true
+      // restores the old synchronous behavior — local debugging only, never
+      // set in a deployed environment.
+      const inlineEnrichment = Deno.env.get("NORMALIZE_INLINE_ENRICHMENT") === "true";
+      if (!inlineEnrichment) {
+        await enqueueEnrichmentJob({
+          supabaseAdmin,
+          orgId,
+          fileId: file_id,
+          moduleType,
+          logger,
+        });
+        console.log(`[normalize-pdf-output] normalize_returning_after_minimal_payload file_id=${file_id}`);
+        await logger.event("normalize", "completed", {
+          normalize_status: NORMALIZE_STATUSES.COMPLETED,
+          row_count: result.rows.length,
+          full_text_chars: doclingTextLength,
+          page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+          method: result.method,
+          review_required: reviewRequired,
+          metadata: { deferred_enrichment: true },
+        });
+        return jsonResponse({
+          error: false,
+          file_id,
+          processing_status: reviewRequired ? "review_required" : "validated",
+          module_type: moduleType,
+          document_subtype: fileRecord.document_subtype,
+          review_required: reviewRequired,
+          method: result.method,
+          row_count: result.rows.length,
+          warnings: result.warnings,
+          validation_errors: result.validationErrors,
+          metadata: result.metadata,
+          core_ready: minimalPayload.core_ready,
+          enrichment_status: "pending",
+        });
       }
 
       console.log(`[normalize-pdf-output] STAGE review_payload_start file_id=${file_id}`);

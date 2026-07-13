@@ -133,6 +133,10 @@ import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel
 // considered "richer" than the previous one. Used only for debug diagnostics.
 const SOURCE_BACKED_MIN_THRESHOLD = 1;
 
+// Must match the backend's extraction_contract_version string exactly
+// (supabase/functions/_shared/extraction/pipeline.ts, normalize-pdf-output).
+const CURRENT_EXTRACTION_CONTRACT_VERSION = "lease-review-evidence-v3";
+
 export default function LeaseReview() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -226,6 +230,15 @@ export default function LeaseReview() {
       return data;
     },
     enabled: !!resolvedSourceFileId,
+    // §1/§2: while the deferred evidence/clause enrichment pass is still
+    // pending/running, poll so an already-open review screen picks up
+    // completion without a manual reload. Uses the function form (reads the
+    // latest fetched data directly) since enrichmentStatus/isEnrichmentInFlight
+    // are derived further down this component, after this query is declared.
+    refetchInterval: (query) => {
+      const status = query.state.data?.ui_review_payload?.enrichment_status;
+      return status === "pending" || status === "running" ? 4000 : false;
+    },
   });
 
   // Merged lease object used for display only (FieldReviewTable, summary stats).
@@ -244,9 +257,23 @@ export default function LeaseReview() {
   );
 
   const isStalePayload = useMemo(() => {
-    const version = uploadedFile?.ui_review_payload?.metadata?.extraction_contract_version ??
-                    lease?.extraction_data?.extraction_debug?.extraction_contract_version;
-    return !version || version < "lease-review-evidence-v3";
+    // §2: check the nested metadata.extractionDebug path FIRST — it's set
+    // unconditionally as soon as ANY extraction runs (pipeline.ts, inside
+    // runExtractionPipeline), including in the fast minimal payload, before
+    // the deferred enrich pass ever completes. The top-level
+    // metadata.extraction_contract_version is only guaranteed once the
+    // minimal payload builder stamps it directly (P0.2) or the enrich pass
+    // finishes — checking it first previously produced false "older
+    // extractor" positives for genuinely current-contract files whose
+    // enrichment just hadn't completed yet.
+    const version =
+      uploadedFile?.ui_review_payload?.metadata?.extractionDebug?.extraction_contract_version ??
+      uploadedFile?.ui_review_payload?.metadata?.extraction_contract_version ??
+      lease?.extraction_data?.extraction_debug?.extraction_contract_version ??
+      lease?.extraction_data?.extraction_debug?.extractionDebug?.extraction_contract_version;
+    // Equality check, not string ordering — a lexicographic "<" comparison
+    // would misclassify e.g. a future "...-v10" as older than "...-v3".
+    return !version || version !== CURRENT_EXTRACTION_CONTRACT_VERSION;
   }, [uploadedFile, lease]);
 
   // Per-tab "show missing fields" toggle. false = extracted only (default).
@@ -3343,7 +3370,7 @@ export default function LeaseReview() {
 
         {/* Clause Records - all meaningful lease clauses against a predefined checklist. */}
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <ClauseRecordsTable lease={lease} />
+          <ClauseRecordsTable lease={leaseFull} />
         </TabsContent>
 
         {/* Critical Dates - derived from approved abstract. */}

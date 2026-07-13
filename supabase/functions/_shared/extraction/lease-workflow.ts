@@ -2373,7 +2373,12 @@ function applyDocumentItemsToLeaseFields(
   }
 }
 
-function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, clauses: LeaseWorkflowClause[]) {
+function buildLeaseFieldMap(
+  row: Record<string, unknown>,
+  doclingRaw: any,
+  clauses: LeaseWorkflowClause[],
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>,
+) {
   const fullText = cleanText(doclingRaw?.full_text || "");
   const fieldMap: Record<string, LeaseWorkflowField> = {};
   const summaryPairs = extractSummaryLabelPairs(doclingRaw, String(doclingRaw?.full_text || ""));
@@ -3056,6 +3061,33 @@ function buildLeaseFieldMap(row: Record<string, unknown>, doclingRaw: any, claus
         value: "Landlord consent required for assignment or transfer",
       };
     }
+  }
+
+  // §7: genuinely unmapped-but-valued LLM keys become dynamic discovered
+  // rows instead of being silently dropped. Scoped narrowly — only fields
+  // with a real, non-empty value and no existing standard-field key create
+  // a row, so this never produces noise from minor/blank unmapped keys.
+  for (const unmapped of unmappedLlmFields ?? []) {
+    if (isBlank(unmapped.value) || fieldMap[unmapped.key]) continue;
+    fieldMap[unmapped.key] = {
+      key: unmapped.key,
+      value: unmapped.value,
+      raw_value: unmapped.value,
+      normalized_value: unmapped.value,
+      source_page: unmapped.sourcePage ?? null,
+      source_clause: unmapped.sourceText ?? null,
+      exact_source_text: unmapped.sourceText ?? null,
+      confidence_score: typeof unmapped.confidence === "number" ? round2(unmapped.confidence) : null,
+      extraction_status: "extracted",
+      evidence_type: "llm_unmapped",
+      source_text_quality: unmapped.sourceText ? "derived" : "missing",
+      validation_errors: [],
+      requires_review: true,
+      review_reason: "Discovered field not in the standard lease schema — verify before relying on it.",
+      approval_blocking_reason: null,
+      editable: true,
+      field_group: "discovered",
+    } as LeaseWorkflowField;
   }
 
   return fieldMap;
@@ -4240,6 +4272,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   row: Record<string, unknown>;
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
+  unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
 }) {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
@@ -4266,7 +4299,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const clauses = buildClauseRecords(doclingRaw, fullText);
   let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
   let documentProfile = profileDetection.selected_document_profile;
-  const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses);
+  const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses, args?.unmappedLlmFields);
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
     doclingRaw,
