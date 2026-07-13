@@ -27,10 +27,8 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
-  readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
-  classifyConfidence,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";

@@ -21,7 +21,6 @@ import {
   isManualExtractionStatus,
   cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
-import { mergeLatestExtraction } from "@/components/lease-review/utils/applyLatestExtractionMerge";
 
 function prettyJson(value, limit = 4000) {
   try {
