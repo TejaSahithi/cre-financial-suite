@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/services/supabaseClient";
@@ -54,22 +54,22 @@ function normalizeOptionalUuid(value) {
   return UUID_RE.test(trimmed) ? trimmed : null;
 }
 
-function getProcessingError(ingestData, ingestError) {
-  return (
-    ingestData?.message ||
-    ingestData?.error_details ||
-    ingestData?.steps?.normalization?.data?.message ||
-    ingestData?.steps?.extraction?.data?.message ||
-    ingestData?.steps?.validation?.data?.message ||
-    ingestData?.steps?.storage?.data?.message ||
-    ingestError?.message ||
-    "Processing could not be started."
-  );
-}
+const DETECTED_TYPE_LABELS = {
+  pdf: "PDF document",
+  image: "Image",
+  office_document: "Word/Office document",
+  csv: "CSV",
+  spreadsheet: "Spreadsheet",
+  text: "Plain text",
+  unexpected_content: "Unrecognized content",
+  unknown: "Unknown",
+};
 
 /**
  * Reusable file upload component that sends files to the upload-handler
- * Edge Function and auto-triggers ingestion on success.
+ * Edge Function, then pauses for explicit user confirmation (Proceed/Cancel)
+ * before extraction (ingest-file / parse-pdf-docling / Azure / normalize /
+ * Vertex / lease-extraction-worker) is ever triggered.
  *
  * @param {Object}   props
  * @param {Function} props.onUploadComplete
@@ -127,11 +127,65 @@ export default function FileUploader({
   const [uploadResults, setUploadResults] = useState([]);
   const [uploadErrors, setUploadErrors] = useState([]);
   const [trackedFileIds, setTrackedFileIds] = useState([]);
+  // Files stored by upload-handler but awaiting the user's Proceed/Cancel
+  // decision. Extraction never starts for these until confirm-upload runs.
+  const [pendingConfirmations, setPendingConfirmations] = useState([]);
+  // file_id -> "confirming" | "cancelling", so a double-click on Proceed/
+  // Cancel is a client-side no-op layered on top of the server-side atomic
+  // idempotency guards in confirm-upload / cancel-upload.
+  const [confirmationActionState, setConfirmationActionState] = useState({});
 
   const normalizedAllowedTypes = useMemo(
     () => (allowedFileTypes || []).map((type) => normalizeFileType(type)),
     [allowedFileTypes]
   );
+
+  // Refresh recovery: pendingConfirmations is client-only React state, wiped
+  // on page reload. The uploaded_files row itself is the durable session
+  // (status='uploaded', confirmed_at IS NULL), so on mount we re-query for
+  // any such rows belonging to this org/scope and re-show the Proceed/Cancel
+  // prompt instead of silently losing track of an unconfirmed upload.
+  useEffect(() => {
+    if (!resolvedOrgId || resolvedOrgId === "__none__" || !supabase) return;
+    let cancelledEffect = false;
+
+    (async () => {
+      let query = supabase
+        .from("uploaded_files")
+        .select("id, file_name, file_size, mime_type, module_type, created_at")
+        .eq("org_id", resolvedOrgId)
+        .is("confirmed_at", null)
+        .eq("status", "uploaded")
+        .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .order("created_at", { ascending: false });
+
+      if (normalizedAllowedTypes.length > 0) {
+        query = query.in("module_type", normalizedAllowedTypes);
+      }
+
+      const { data, error } = await query;
+      if (cancelledEffect || error || !Array.isArray(data) || data.length === 0) return;
+
+      setPendingConfirmations((prev) => {
+        const existingIds = new Set(prev.map((p) => p.file_id));
+        const recovered = data
+          .filter((row) => !existingIds.has(row.id))
+          .map((row) => ({
+            file_id: row.id,
+            file_name: row.file_name,
+            file_size: row.file_size ?? 0,
+            detected_type: "unknown",
+            possible_duplicate: false,
+            module_type: row.module_type,
+          }));
+        return recovered.length > 0 ? [...prev, ...recovered] : prev;
+      });
+    })();
+
+    return () => { cancelledEffect = true; };
+    // Only re-run when the org scope changes (e.g. super-admin switching
+    // org) — not on every pendingConfirmations update.
+  }, [resolvedOrgId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const typeOptions = normalizedAllowedTypes.length > 0
     ? ALL_FILE_TYPES.filter((fileTypeOption) => normalizedAllowedTypes.includes(fileTypeOption.value))
@@ -263,53 +317,84 @@ export default function FileUploader({
 
       const data = await invokeEdgeFunctionFormData("upload-handler", formData);
 
+      // Extraction does NOT start here. upload-handler only stores the file
+      // and runs cheap preflight checks; the file now sits at
+      // confirmation_required=true until the user clicks Proceed (which
+      // calls confirm-upload -> ingest-file) or Cancel (which deletes the
+      // temp row/object via cancel-upload). No parse-pdf-docling, Azure,
+      // normalize-pdf-output, Vertex, or lease-extraction-worker call
+      // happens as a side effect of this function.
       if (data?.file_id) {
-        setTrackedFileIds(prev => [...prev, { id: data.file_id, fileName: file.name, fileType: normalizeFileType(fileType) }]);
-        invokeEdgeFunction("ingest-file", {
-          file_id: data.file_id,
-          module_type: normalizeFileType(fileType),
-        })
-          .then((ingestData) => {
-            if (ingestData?.error) {
-              const processingError = getProcessingError(ingestData, null);
-              console.error("[FileUploader] ingest-file failed:", {
-                data: ingestData,
-                message: processingError,
-              });
-              toast.error(`${file.name}: ${processingError}`);
-              onUploadComplete?.({
-                ...data,
-                processing_started: false,
-                processing_error: processingError,
-                ingest_result: ingestData,
-              });
-            }
-          })
-          .catch((ingestError) => {
-            const processingError = getProcessingError(null, ingestError);
-            console.error("[FileUploader] ingest-file failed:", {
-              error: ingestError,
-              message: processingError,
-            });
-            toast.error(`${file.name}: ${processingError}`);
-            onUploadComplete?.({
-              ...data,
-              processing_started: false,
-              processing_error: processingError,
-              ingest_error: {
-                message: ingestError?.message || String(ingestError),
-              },
-            });
-          });
+        setPendingConfirmations((prev) => [
+          ...prev,
+          {
+            file_id: data.file_id,
+            file_name: data.file_name || file.name,
+            file_size: data.file_size ?? file.size,
+            detected_type: data.detected_type || "unknown",
+            possible_duplicate: !!data.possible_duplicate,
+            module_type: normalizeFileType(fileType),
+          },
+        ]);
       }
 
       return {
         ...data,
-        processing_started: Boolean(data?.file_id),
+        processing_started: false,
+        awaiting_confirmation: Boolean(data?.file_id),
       };
     },
-    [buildingId, fileType, isAdmin, onUploadComplete, propertyId, resolvedOrgId, unitId]
+    [buildingId, fileType, isAdmin, propertyId, resolvedOrgId, unitId]
   );
+
+  const handleProceed = useCallback(async (fileId) => {
+    setConfirmationActionState((prev) => ({ ...prev, [fileId]: "confirming" }));
+    try {
+      const pending = pendingConfirmations.find((p) => p.file_id === fileId);
+      const result = await invokeEdgeFunction("confirm-upload", { file_id: fileId });
+      if (result?.error) {
+        throw new Error(result?.message || "Could not confirm upload");
+      }
+      setPendingConfirmations((prev) => prev.filter((p) => p.file_id !== fileId));
+      setTrackedFileIds((prev) => [
+        ...prev,
+        { id: fileId, fileName: pending?.file_name, fileType: pending?.module_type },
+      ]);
+      toast.success(`${pending?.file_name || "File"}: extraction started.`);
+      onUploadComplete?.({ file_id: fileId, processing_started: true });
+    } catch (error) {
+      console.error("[FileUploader] confirm-upload failed:", error);
+      toast.error(error?.message || "Could not confirm upload. Please try again.");
+    } finally {
+      setConfirmationActionState((prev) => {
+        const next = { ...prev };
+        delete next[fileId];
+        return next;
+      });
+    }
+  }, [onUploadComplete, pendingConfirmations]);
+
+  const handleCancelUpload = useCallback(async (fileId) => {
+    setConfirmationActionState((prev) => ({ ...prev, [fileId]: "cancelling" }));
+    try {
+      const pending = pendingConfirmations.find((p) => p.file_id === fileId);
+      const result = await invokeEdgeFunction("cancel-upload", { file_id: fileId });
+      if (result?.error) {
+        throw new Error(result?.message || "Could not cancel upload");
+      }
+      setPendingConfirmations((prev) => prev.filter((p) => p.file_id !== fileId));
+      toast.info(`${pending?.file_name || "File"}: upload cancelled.`);
+    } catch (error) {
+      console.error("[FileUploader] cancel-upload failed:", error);
+      toast.error(error?.message || "Could not cancel upload. Please try again.");
+    } finally {
+      setConfirmationActionState((prev) => {
+        const next = { ...prev };
+        delete next[fileId];
+        return next;
+      });
+    }
+  }, [pendingConfirmations]);
 
   const handleUpload = useCallback(async () => {
     if (!files.length) {
@@ -346,7 +431,10 @@ export default function FileUploader({
 
     if (results.length > 0 && errors.length === 0) {
       setUploadState("success");
-      toast.success(`${results.length} file${results.length === 1 ? "" : "s"} uploaded. Extraction is running.`);
+      toast.success(
+        `${results.length} file${results.length === 1 ? "" : "s"} uploaded. ` +
+        `Review and confirm below to start extraction.`,
+      );
       if (onUploadComplete) onUploadComplete(multiple ? results : results[0]);
       return;
     }
@@ -524,7 +612,7 @@ export default function FileUploader({
                   uploadState === "success" ? "text-emerald-800" : "text-amber-800"
                 }`}>
                   {uploadState === "success"
-                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; extraction is running`
+                    ? `Uploaded ${uploadResults.length} file${uploadResults.length === 1 ? "" : "s"}; confirm below to start extraction`
                     : `Uploaded ${uploadResults.length} of ${files.length} files`}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-2">
@@ -575,6 +663,66 @@ export default function FileUploader({
                 Reset
               </Button>
             </div>
+          </div>
+        )}
+
+        {pendingConfirmations.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Confirm to Start Extraction
+            </p>
+            {pendingConfirmations.map((pending) => {
+              const actionState = confirmationActionState[pending.file_id];
+              const busy = !!actionState;
+              return (
+                <div
+                  key={pending.file_id}
+                  className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/60 p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-800">{pending.file_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {formatFileSize(pending.file_size)} &middot; {DETECTED_TYPE_LABELS[pending.detected_type] || "Unknown type"}
+                      </p>
+                      {pending.possible_duplicate && (
+                        <p className="mt-1 text-xs font-medium text-amber-700">
+                          A file with this name and size was uploaded recently — possible duplicate.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={() => handleProceed(pending.file_id)}
+                    >
+                      {actionState === "confirming" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        "Proceed"
+                      )}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={() => handleCancelUpload(pending.file_id)}
+                    >
+                      {actionState === "cancelling" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        "Cancel"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 

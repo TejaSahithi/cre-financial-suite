@@ -26,6 +26,7 @@ const TERMINAL_STATUSES = new Set([
   "review_required",
   "completed",
   "failed",
+  "cancelled",
 ]);
 
 const POLL_INTERVAL_MS = 3000;

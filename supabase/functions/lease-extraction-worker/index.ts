@@ -23,6 +23,69 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+/**
+ * Fresh read of pipeline_jobs.cancel_requested_at — never trust a
+ * previously-fetched `job` object for this check once any long-running call
+ * (parse can take up to 140s, normalize up to 240s) may have happened since
+ * it was read; cancel-upload can set the flag at any point mid-flight.
+ */
+async function isCancelRequested(supabaseAdmin: any, jobId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("pipeline_jobs")
+    .select("cancel_requested_at")
+    .eq("id", jobId)
+    .maybeSingle();
+  return !!data?.cancel_requested_at;
+}
+
+/**
+ * Stop the job in response to a soft-cancel request: mark both
+ * pipeline_jobs and uploaded_files 'cancelled' (the FSM allows this edge
+ * from every non-terminal status, mirroring 'failed'), log it, and never
+ * dispatch the next stage. docling_raw/normalized_output/ui_review_payload
+ * are left exactly as they were — nothing is deleted, preserving the audit
+ * trail for a post-confirmation cancel.
+ */
+async function stopForCancellation(
+  supabaseAdmin: any,
+  job: any,
+  fileId: string,
+  logger: any,
+  checkpoint: string,
+): Promise<Response> {
+  const now = new Date().toISOString();
+  await supabaseAdmin
+    .from("pipeline_jobs")
+    .update({ status: "cancelled", completed_at: now, updated_at: now })
+    .eq("id", job.id);
+
+  const { error: cancelStatusError } = await setStatus(supabaseAdmin, fileId, "cancelled", {
+    processing_status: "cancelled",
+  });
+  if (cancelStatusError) {
+    console.warn(
+      `[${WORKER_NAME}] could not transition uploaded_files to cancelled for file_id=${fileId}:`,
+      cancelStatusError.message,
+    );
+  }
+
+  console.log(`[${WORKER_NAME}] job=${job.id} file_id=${fileId} cancelled at checkpoint=${checkpoint}`);
+  await logger.event("cancel", "stopped", {
+    provider: "lease-extraction-worker",
+    metadata: { job_id: job.id, checkpoint },
+  });
+
+  return jsonResponse({
+    error: false,
+    job_id: job.id,
+    file_id: fileId,
+    status: "cancelled",
+    stage: job.stage,
+    cancelled: true,
+    checkpoint,
+  });
+}
+
 async function callInternalFunction(functionName: string, body: Record<string, unknown>, orgId: string, timeoutMs: number) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   let response: Response;
@@ -444,6 +507,8 @@ export const __test__ = {
   reconcileDurableParse,
   reconcileDurableNormalize,
   parkLeaseForManualReview,
+  isCancelRequested,
+  stopForCancellation,
 };
 
 function parserFailureAlreadyPersisted(parseResult: any): boolean {
@@ -564,6 +629,14 @@ Deno.serve(async (req: Request) => {
     }
 
     const logger = createLogger(supabaseAdmin, fileId, orgId);
+
+    // Checkpoint 0: a cancel may have been requested before this invocation
+    // even started (e.g. queued but not yet picked up). Stop here rather
+    // than claiming the job into 'running' first.
+    if (job.cancel_requested_at) {
+      return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_claim");
+    }
+
     const attempt = Number(job.attempt || 0) + 1;
     await supabaseAdmin
       .from("pipeline_jobs")
@@ -583,6 +656,13 @@ Deno.serve(async (req: Request) => {
     let currentStage = job.stage;
 
     if (currentStage === "parse") {
+      // Checkpoint 1: cancel-upload may have flagged this job between the
+      // initial fetch above and now. `job` was read moments ago in this same
+      // invocation, so no extra query is needed here.
+      if (job.cancel_requested_at) {
+        return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_parse");
+      }
+
       await logger.event("parse", "running", {
         provider: "lease-extraction-worker",
         metadata: { job_id: job.id, attempt },
@@ -759,15 +839,26 @@ Deno.serve(async (req: Request) => {
         })
         .eq("id", job.id)
         .eq("stage", "parse")
+        .is("cancel_requested_at", null)
         .select("id")
         .maybeSingle();
 
       if (claimError || !claimedJob) {
         const { data: latestJob } = await supabaseAdmin
           .from("pipeline_jobs")
-          .select("id, stage, status")
+          .select("id, stage, status, cancel_requested_at")
           .eq("id", job.id)
           .maybeSingle();
+
+        // Checkpoint 2: the claim's `.is("cancel_requested_at", null)`
+        // predicate makes a cancel requested mid-parse fail the claim the
+        // same way a losing concurrency race would — distinguish the two so
+        // a genuine cancel actually transitions to 'cancelled' instead of
+        // silently looking like "another worker already handled it".
+        if (latestJob?.cancel_requested_at) {
+          return await stopForCancellation(supabaseAdmin, job, fileId, logger, "parse_to_normalize_claim");
+        }
+
         console.warn(
           `[${WORKER_NAME}] normalize stage claim not acquired for job=${job.id} ` +
           `(stage=${latestJob?.stage ?? "?"} status=${latestJob?.status ?? "?"}); ` +
@@ -795,6 +886,14 @@ Deno.serve(async (req: Request) => {
     }
 
     if (currentStage === "normalize") {
+      // Checkpoint 3: fresh read, not the possibly-stale in-memory `job` —
+      // parse can take up to 140s and a job can also be enqueued directly at
+      // "normalize" (fast re-extraction path below), so cancel_requested_at
+      // set at any point up to now must be observed here.
+      if (await isCancelRequested(supabaseAdmin, job.id)) {
+        return await stopForCancellation(supabaseAdmin, job, fileId, logger, "before_normalize");
+      }
+
       // Fast re-extraction path: when the job is enqueued directly at the
       // "normalize" stage (docling_raw already had usable text, so OCR was
       // skipped), the file status is still "parsing" from enqueueLeaseExtractionJob

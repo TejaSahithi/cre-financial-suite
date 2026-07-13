@@ -592,8 +592,34 @@ export default function LeaseUpload() {
       return undefined;
     }
 
+    let cancelledEffect = false;
     retriedUploadedFiles.current.add(fileId);
-    const retryTimer = window.setTimeout(() => {
+    const retryTimer = window.setTimeout(async () => {
+      if (cancelledEffect) return;
+      // A file sitting at status='uploaded' is now the awaiting-confirmation
+      // state by design — it is NOT stuck, the user just hasn't clicked
+      // Proceed/Cancel yet. Only auto-retry ingest-file for a file that was
+      // already confirmed and somehow got stuck back at 'uploaded' (a
+      // genuine pipeline hiccup), never for one still awaiting the
+      // confirmation gate. If confirmed_at can't be read (e.g. the
+      // migration hasn't landed in this environment yet), default to NOT
+      // retrying — the whole point of this gate is to never call
+      // ingest-file without positive confirmation.
+      let confirmedAt = null;
+      try {
+        const { data: confirmRow, error: confirmCheckError } = await supabase
+          .from("uploaded_files")
+          .select("confirmed_at")
+          .eq("id", fileId)
+          .maybeSingle();
+        if (confirmCheckError) throw confirmCheckError;
+        confirmedAt = confirmRow?.confirmed_at ?? null;
+      } catch (checkErr) {
+        console.warn("[LeaseUpload] could not read confirmed_at for stuck-upload check:", checkErr?.message);
+        return;
+      }
+      if (cancelledEffect || !confirmedAt) return;
+
       invokeEdgeFunction("ingest-file", {
         file_id: fileId,
         module_type: "leases",
@@ -611,7 +637,10 @@ export default function LeaseUpload() {
         });
     }, 8000);
 
-    return () => window.clearTimeout(retryTimer);
+    return () => {
+      cancelledEffect = true;
+      window.clearTimeout(retryTimer);
+    };
   }, [fileId, fileRecord?.status]);
 
   const handleUploadComplete = (result) => {
@@ -623,7 +652,16 @@ export default function LeaseUpload() {
       fetchFileRecord(result.file_id);
       return;
     }
-    toast.success("Lease uploaded. The extraction pipeline is running.");
+    if (result.awaiting_confirmation) {
+      // FileUploader's own Proceed/Cancel prompt handles this step; just
+      // track the file_id so this page's status panel picks it up once
+      // confirmed. No extraction has started yet.
+      return;
+    }
+    if (result.processing_started) {
+      toast.success("Lease extraction started.");
+      fetchFileRecord(result.file_id);
+    }
   };
 
   const retryExtraction = useCallback(async () => {

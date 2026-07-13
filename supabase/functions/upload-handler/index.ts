@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
+import { createLogger } from "../_shared/logger.ts";
+import { guessDocumentType } from "../_shared/file-magic.ts";
 
 /**
  * Upload Handler Edge Function
@@ -8,9 +10,17 @@ import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
  * Single responsibility:
  *   1. Authenticate the user.
  *   2. Store the original file in the financial-uploads bucket.
- *   3. Register the file in uploaded_files with status='uploaded'.
+ *   3. Register the file in uploaded_files with status='uploaded',
+ *      confirmed_at left NULL — this row now doubles as the "awaiting
+ *      confirmation" session. Nothing here calls ingest-file / triggers
+ *      extraction; that only happens after the user explicitly confirms via
+ *      confirm-upload.
+ *   4. Run cheap preflight checks only (name/size/mime/extension, a
+ *      lightweight name+size duplicate heuristic, and a magic-byte doc-type
+ *      guess) and return them for the UI's confirm/cancel prompt.
  *
- * Parsing happens after this function returns.
+ * Parsing/extraction happens only after confirm-upload runs, which is only
+ * after this function returns and the user clicks Proceed.
  */
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -258,16 +268,55 @@ Deno.serve(async (req: Request) => {
       }, 500);
     }
 
+    // Cheap preflight signals — no parsing, no Docling/Azure/Vertex calls.
+    const detectedType = guessDocumentType(new Uint8Array(fileBuffer), file.type, file.name);
+
+    // Lightweight duplicate heuristic: same org, same file name + size,
+    // uploaded recently. No content hash is stored (would need a new
+    // column/migration); this is a "you may have already uploaded this"
+    // hint for the confirm prompt, not a hard block.
+    let possibleDuplicate = false;
+    try {
+      const { data: recentMatches } = await supabaseAdmin
+        .from("uploaded_files")
+        .select("id")
+        .eq("org_id", orgId)
+        .eq("file_name", file.name)
+        .eq("file_size", file.size)
+        .neq("id", fileId)
+        .gte("created_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+      possibleDuplicate = Array.isArray(recentMatches) && recentMatches.length > 0;
+    } catch (dupCheckErr) {
+      console.warn("[upload-handler] duplicate check failed (non-fatal):", dupCheckErr?.message ?? dupCheckErr);
+    }
+
+    const logger = createLogger(supabaseAdmin, fileId, orgId);
+    await logger.info("upload", "upload_preflight_created", {
+      file_id: fileId,
+      file_name: file.name,
+      file_size: file.size,
+      mime_type: file.type || "application/octet-stream",
+      detected_type: detectedType,
+      possible_duplicate: possibleDuplicate,
+    });
+
     return jsonResponse({
       error: false,
       file_id: fileId,
       storage_path: storagePath,
       file_name: file.name,
       file_size: file.size,
+      mime_type: file.type || "application/octet-stream",
       property_id: uploadRecord.property_id,
       building_id: uploadRecord.building_id ?? null,
       unit_id: uploadRecord.unit_id ?? null,
       processing_status: "uploaded",
+      // Awaiting explicit confirmation — the frontend must call confirm-upload
+      // (Proceed) or cancel-upload (Cancel) before extraction can start.
+      confirmation_required: true,
+      detected_type: detectedType,
+      possible_duplicate: possibleDuplicate,
       created_at: uploadRecord.created_at,
     });
   } catch (err) {
