@@ -50,6 +50,9 @@ const MAX_CONSECUTIVE_FAILURES = 10;
  *   errorCount: number,
  *   isLoading:  boolean,
  *   pollError:  string|null,
+ *   processingStatus: string|null,
+ *   failedStep: string|null,
+ *   errorMessage: string|null,
  *   refetch:    () => Promise<void>,
  * }}
  */
@@ -61,6 +64,9 @@ export default function useFileStatus(fileId) {
   const [errorCount, setErrorCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [pollError, setPollError] = useState(null);
+  const [processingStatus, setProcessingStatus] = useState(null);
+  const [failedStep, setFailedStep] = useState(null);
+  const [errorMessage, setErrorMessage] = useState(null);
 
   // Keep a ref to the timer so we can clear it on unmount / fileId change.
   const timerRef = useRef(null);
@@ -125,6 +131,9 @@ export default function useFileStatus(fileId) {
         setErrors(Array.isArray(data.validation_errors) ? data.validation_errors : []);
         setValidCount(typeof data.valid_count === "number" ? data.valid_count : 0);
         setErrorCount(typeof data.error_count === "number" ? data.error_count : 0);
+        setProcessingStatus(data.processing_status ?? null);
+        setFailedStep(data.failed_step ?? null);
+        setErrorMessage(data.error_message ?? null);
         setPollError(null);
       }
 
@@ -164,6 +173,9 @@ export default function useFileStatus(fileId) {
       setErrorCount(0);
       setIsLoading(false);
       setPollError(null);
+      setProcessingStatus(null);
+      setFailedStep(null);
+      setErrorMessage(null);
       return;
     }
 
@@ -231,6 +243,9 @@ export default function useFileStatus(fileId) {
     errorCount,
     isLoading,
     pollError,
+    processingStatus,
+    failedStep,
+    errorMessage,
     refetch,
   };
 }
