@@ -210,7 +210,7 @@ function isLlmSourceTextRelevantToField(fieldKey: string, sourceText: string | n
   if (!sourceText) return true;
   // Insurance fields must contain insurance-domain language
   if (["tenant_insurance_required", "general_liability_min", "property_insurance",
-       "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
+    "responsibility_insurance", "insurance_responsibility"].includes(fieldKey)) {
     return /\b(insurance|insure|insured|coverage|carrier|policy|certificate|liability limit)\b/i.test(sourceText);
   }
   // Party name fields: reject source text from assignment/transfer clauses
@@ -362,17 +362,17 @@ function cleanPartyAddressValue(fieldKey: string, value: unknown) {
 
   const stopPatterns = fieldKey === "landlord_address"
     ? [
-        /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
-        /\b(?:tenant|lessee)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
-        /\btenant_contact_/i,
-      ]
+      /\b\d+\.\s*(?:tenant|lessee)\b\s*[:;-]?/i,
+      /\b(?:tenant|lessee)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+tenant|tenant(?:'s)?\s+address)\b/i,
+      /\btenant_contact_/i,
+    ]
     : [
-        /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
-        /\b(?:landlord|lessor)\b\s*[:;-]/i,
-        /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
-        /\blandlord_contact_/i,
-      ];
+      /\b\d+\.\s*(?:landlord|lessor)\b\s*[:;-]?/i,
+      /\b(?:landlord|lessor)\b\s*[:;-]/i,
+      /\b(?:address\s+of\s+landlord|landlord(?:'s)?\s+address)\b/i,
+      /\blandlord_contact_/i,
+    ];
 
   let stopAt = text.length;
   for (const pattern of stopPatterns) {
@@ -625,11 +625,11 @@ function findSourceEvidenceForField(
 
   return best
     ? {
-        source_page: best.source_page,
-        source_clause: best.source_clause,
-        source_quality: best.source_quality,
-        matched_needle: best.matched_needle,
-      }
+      source_page: best.source_page,
+      source_clause: best.source_clause,
+      source_quality: best.source_quality,
+      matched_needle: best.matched_needle,
+    }
     : null;
 }
 
@@ -1001,13 +1001,13 @@ function buildReviewPayload(opts: {
     .filter((f) => f.value != null && f.value !== "");
   const workflowOutputs = extractionModuleType === "lease"
     ? result.rows.map((row, rowIndex) =>
-        buildLeaseWorkflowAbstraction({
-          row,
-          doclingRaw: doclingRaw ?? null,
-          documentSubtype,
-          ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
-        })
-      )
+      buildLeaseWorkflowAbstraction({
+        row,
+        doclingRaw: doclingRaw ?? null,
+        documentSubtype,
+        ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
+      })
+    )
     : [];
   const rows = result.rows.map((r, index) => {
     const values = stripInternalKeys(r);
@@ -1028,7 +1028,7 @@ function buildReviewPayload(opts: {
       let value = cleanPartyAddressValue(fieldKey, rawValue);
       // Guard: reject month names extracted as person contact names
       if (typeof value === "string" && fieldKey.endsWith("_name")) {
-        const MONTH_NAMES = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
         if (MONTH_NAMES.includes(value.trim().toLowerCase())) value = null;
       }
       // Guard: reject property_name values that are clause fragments containing "tenant"
@@ -1241,17 +1241,17 @@ function buildReviewPayload(opts: {
 
   const workflowSummary = extractionModuleType === "lease"
     ? {
-        records: workflowOutputs,
-        summary: {
-          extracted_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_field_count ?? 0), 0),
-          calculated_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.calculated_field_count ?? 0), 0),
-          manual_required_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.manual_required_count ?? 0), 0),
-          conflict_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.conflict_count ?? 0), 0),
-          clause_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.clause_count ?? 0), 0),
-          extracted_document_item_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_document_item_count ?? 0), 0),
-          expense_rule_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.expense_rule_count ?? 0), 0),
-        },
-      }
+      records: workflowOutputs,
+      summary: {
+        extracted_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_field_count ?? 0), 0),
+        calculated_field_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.calculated_field_count ?? 0), 0),
+        manual_required_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.manual_required_count ?? 0), 0),
+        conflict_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.conflict_count ?? 0), 0),
+        clause_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.clause_count ?? 0), 0),
+        extracted_document_item_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.extracted_document_item_count ?? 0), 0),
+        expense_rule_count: workflowOutputs.reduce((sum, item) => sum + (item?.summary?.expense_rule_count ?? 0), 0),
+      },
+    }
     : null;
 
   const userWarnings = filterUserWarnings(result.warnings, result.rows.length);
@@ -2168,47 +2168,46 @@ Deno.serve(async (req: Request) => {
             detectedMagic = detectMagic(bytes);
 
             if (!detectedMagic || detectedMagic === "html_or_xml") {
-            // Don't send a non-document to Vision. Mark load as failed and
-            // let extraction proceed with whatever Docling produced.
-            fileLoadStatus = "unexpected_content_type";
-            fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${
-              Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
-            })`;
-            console.warn(
-              `[normalize-pdf-output] file bytes failed magic check for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
-            );
-          } else {
-            // Deno base64 encoder is available; encode incrementally if large.
-            // For typical lease PDFs under the inline limit, conversion is fine.
-            let binary = "";
-            const CHUNK = 8 * 1024;
-            for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-              const slice = bytes.subarray(offset, offset + CHUNK);
-              // String.fromCharCode.apply rejects very large arrays; chunked
-              // conversion keeps each call within the JS arg limit.
-              binary += String.fromCharCode.apply(null, Array.from(slice));
+              // Don't send a non-document to Vision. Mark load as failed and
+              // let extraction proceed with whatever Docling produced.
+              fileLoadStatus = "unexpected_content_type";
+              fileLoadError = `Downloaded bytes do not look like a PDF/image (magic=${detectedMagic ?? "unknown"}, first 16 bytes hex=${Array.from(bytes.subarray(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("")
+                })`;
+              console.warn(
+                `[normalize-pdf-output] file bytes failed magic check for file_id=${file_id} — Vision fallback disabled. ${fileLoadError}`,
+              );
+            } else {
+              // Deno base64 encoder is available; encode incrementally if large.
+              // For typical lease PDFs under the inline limit, conversion is fine.
+              let binary = "";
+              const CHUNK = 8 * 1024;
+              for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+                const slice = bytes.subarray(offset, offset + CHUNK);
+                // String.fromCharCode.apply rejects very large arrays; chunked
+                // conversion keeps each call within the JS arg limit.
+                binary += String.fromCharCode.apply(null, Array.from(slice));
+              }
+              fileBase64 = btoa(binary);
+              // Resolve fileMimeType from magic when possible — this is more
+              // reliable than the column value or blob.type, which can be
+              // wrong for files re-uploaded via Storage REST.
+              const magicMime =
+                detectedMagic === "pdf" ? "application/pdf"
+                  : detectedMagic === "jpeg" ? "image/jpeg"
+                    : detectedMagic === "png" ? "image/png"
+                      : detectedMagic === "gif" ? "image/gif"
+                        : detectedMagic === "tiff" ? "image/tiff"
+                          : detectedMagic === "webp_or_riff" ? "image/webp"
+                            : null;
+              fileMimeType = magicMime || fileMimeType || (fileBlob as any).type || "application/pdf";
+              fileLoadStatus = "loaded";
+              console.log(
+                `[normalize-pdf-output] file bytes loaded for file_id=${file_id} ` +
+                `(${bytes.length} bytes, magic=${detectedMagic}, mime=${fileMimeType}) ` +
+                `— Vision fallback enabled if needed`,
+              );
             }
-            fileBase64 = btoa(binary);
-            // Resolve fileMimeType from magic when possible — this is more
-            // reliable than the column value or blob.type, which can be
-            // wrong for files re-uploaded via Storage REST.
-            const magicMime =
-              detectedMagic === "pdf" ? "application/pdf"
-              : detectedMagic === "jpeg" ? "image/jpeg"
-              : detectedMagic === "png" ? "image/png"
-              : detectedMagic === "gif" ? "image/gif"
-              : detectedMagic === "tiff" ? "image/tiff"
-              : detectedMagic === "webp_or_riff" ? "image/webp"
-              : null;
-            fileMimeType = magicMime || fileMimeType || (fileBlob as any).type || "application/pdf";
-            fileLoadStatus = "loaded";
-            console.log(
-              `[normalize-pdf-output] file bytes loaded for file_id=${file_id} ` +
-              `(${bytes.length} bytes, magic=${detectedMagic}, mime=${fileMimeType}) ` +
-              `— Vision fallback enabled if needed`,
-            );
           }
-        }
         }
       } catch (loadErr: any) {
         fileLoadStatus = "exception";
@@ -2334,73 +2333,73 @@ Deno.serve(async (req: Request) => {
           (result as any).metadata.avgConfidence = 0;
           // fall through to the normal review_required path below
         } else {
-        const reason =
-          `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
-        const pipeline = buildPipelineMetadata({
-          parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          ai_status: "ai_empty_output",
-          review_status: REVIEW_STATUSES.BLOCKED,
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          error_message: reason,
-          full_text_chars: doclingTextLength,
-          page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
-          mapped_fields_count: 0,
-          dynamic_terms_count: 0,
-          source_backed_count: 0,
-          lease_clauses_count: 0,
-          expense_terms_count: 0,
-          cam_terms_count: 0,
-          stage: "normalize",
-        });
-        const payload = buildBlockedReviewPayload({
-          fileId: file_id,
-          fileName,
-          moduleType,
-          documentSubtype: fileRecord.document_subtype ?? null,
-          extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
-          message: "No usable lease values were extracted from the parsed document.",
-          pipeline,
-        });
-        await setStatus(supabaseAdmin, file_id, "failed", {
-          review_required: false,
-          review_status: REVIEW_STATUSES.BLOCKED,
-          processing_status: "failed_empty_extraction",
-          extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
-          ui_review_payload: payload,
-          normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
-            method: "blocked_pipeline_failure",
-            rows: [],
-            warnings: payload.global_warnings,
-            validationErrors: result.validationErrors ?? [],
-          }),
-          parsed_data: [],
-          row_count: 0,
-          valid_count: 0,
-          error_count: 1,
-          error_message: reason,
-          failed_step: "normalize",
-          processing_completed_at: new Date().toISOString(),
-        });
-        await logger.event("normalize", "blocked", {
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          ai_status: "ai_empty_output",
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          full_text_chars: doclingTextLength,
-          page_count: pipeline.page_count,
-          mapped_fields_count: 0,
-          dynamic_terms_count: 0,
-          lease_clauses_count: 0,
-        });
-        return jsonResponse({
-          error: true,
-          file_id,
-          processing_status: "failed",
-          normalize_status: NORMALIZE_STATUSES.FAILED,
-          error_code: "FAILED_EMPTY_EXTRACTION",
-          message: reason,
-          ui_review_payload: payload,
-        }, 422);
+          const reason =
+            `Extraction produced no usable lease values. Warnings: ${(result.warnings ?? []).join("; ")}`;
+          const pipeline = buildPipelineMetadata({
+            parser_status: parserStatus ?? PARSER_STATUSES.COMPLETED,
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            ai_status: "ai_empty_output",
+            review_status: REVIEW_STATUSES.BLOCKED,
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            error_message: reason,
+            full_text_chars: doclingTextLength,
+            page_count: (fileRecord.docling_raw as any)?.page_count ?? parserPipeline?.page_count ?? null,
+            mapped_fields_count: 0,
+            dynamic_terms_count: 0,
+            source_backed_count: 0,
+            lease_clauses_count: 0,
+            expense_terms_count: 0,
+            cam_terms_count: 0,
+            stage: "normalize",
+          });
+          const payload = buildBlockedReviewPayload({
+            fileId: file_id,
+            fileName,
+            moduleType,
+            documentSubtype: fileRecord.document_subtype ?? null,
+            extractionMethod: fileRecord.extraction_method ?? result.method ?? null,
+            message: "No usable lease values were extracted from the parsed document.",
+            pipeline,
+          });
+          await setStatus(supabaseAdmin, file_id, "failed", {
+            review_required: false,
+            review_status: REVIEW_STATUSES.BLOCKED,
+            processing_status: "failed_empty_extraction",
+            extraction_method: fileRecord.extraction_method ?? result.method ?? "none",
+            ui_review_payload: payload,
+            normalized_output: mergePipelineIntoNormalizedOutput(result as Record<string, unknown>, pipeline, {
+              method: "blocked_pipeline_failure",
+              rows: [],
+              warnings: payload.global_warnings,
+              validationErrors: result.validationErrors ?? [],
+            }),
+            parsed_data: [],
+            row_count: 0,
+            valid_count: 0,
+            error_count: 1,
+            error_message: reason,
+            failed_step: "normalize",
+            processing_completed_at: new Date().toISOString(),
+          });
+          await logger.event("normalize", "blocked", {
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            ai_status: "ai_empty_output",
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            full_text_chars: doclingTextLength,
+            page_count: pipeline.page_count,
+            mapped_fields_count: 0,
+            dynamic_terms_count: 0,
+            lease_clauses_count: 0,
+          });
+          return jsonResponse({
+            error: true,
+            file_id,
+            processing_status: "failed",
+            normalize_status: NORMALIZE_STATUSES.FAILED,
+            error_code: "FAILED_EMPTY_EXTRACTION",
+            message: reason,
+            ui_review_payload: payload,
+          }, 422);
         } // end else (non-review-required modules)
       }
 
@@ -2574,11 +2573,11 @@ Deno.serve(async (req: Request) => {
         const coreMappingFailed = Boolean(wfSummary.core_mapping_failed) || mappingFailureReason != null;
         const fieldTrace = firstRecord
           ? buildFieldTraceForRecord({
-              standardFields: (firstRecord as any).standard_fields || [],
-              workflowOutput: wf,
-              pipelineDebug,
-              moduleType,
-            })
+            standardFields: (firstRecord as any).standard_fields || [],
+            workflowOutput: wf,
+            pipelineDebug,
+            moduleType,
+          })
           : [];
         const fieldTraceSummary = summarizeFieldTrace(fieldTrace);
         const consolidated = {
