@@ -14,6 +14,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/services/supabaseClient";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
+import {
+  getRuleGroupLabel,
+  isCamTaxonomyRule,
+  normalizeLeaseExpenseRule,
+} from "@/services/utils/leaseExpenseRuleTaxonomy";
 import { createPageUrl } from "@/utils";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import {
@@ -176,63 +181,85 @@ export function RentScheduleTable({ leaseId }) {
 }
 
 // ─── Expense Rules / CAM Rules ────────────────────────────────────────
-function useLeaseExpenseRules(leaseId) {
+function useLeaseExpenseRules(leaseOrId) {
+  const lease = leaseOrId && typeof leaseOrId === "object" ? leaseOrId : null;
+  const leaseId = lease?.id || leaseOrId;
+
   return useQuery({
-    queryKey: ["lease-expense-rules-detail", leaseId],
+    queryKey: ["lease-expense-rules-detail", leaseId, lease?.extraction_data?.workflow_output?.expense_rules?.length || 0],
     enabled: !!leaseId && !!supabase,
-    queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId),
+    queryFn: () => leaseExpenseRuleService.loadRuleSet(leaseId, {
+      lease,
+      includeWorkflowFallback: true,
+    }),
     retry: false,
   });
 }
 
-function isCamRule(rule) {
-  return Boolean(
-    rule?.gross_up_applicable || rule?.is_subject_to_cap || rule?.cap_type || rule?.admin_fee_applicable,
-  );
-}
-
-// Predefined enterprise rule checklists. When the extractor returns zero
-// rules, we still render a row per category so reviewers know what _should_
-// be captured from lease language even when no dollar amount exists.
 const PREDEFINED_EXPENSE_CATEGORIES = [
-  "Real Estate Taxes",
+  "Base Rent / Additional Rent",
+  "Taxes",
   "Insurance",
-  "Utilities — Electric",
-  "Utilities — Gas",
-  "Utilities — Water / Sewer",
-  "Trash / Janitorial",
-  "Repairs & Maintenance",
-  "HVAC Maintenance",
-  "Landscaping",
-  "Snow Removal",
-  "Security",
-  "Property Management",
-  "Capital Expenditures",
-  "Legal / Professional Fees",
+  "Utilities",
+  "Repairs and Maintenance",
+  "Services",
+  "Capital Expenses",
+  "Exclusions / Non-Recoverable Items",
+  "Other Tenant Charges",
 ];
 
 const PREDEFINED_CAM_CATEGORIES = [
-  "CAM Pool (general)",
+  "CAM / Operating Expenses",
+  "Allocation Rules",
+  "Expense Notices / Deadlines",
   "Gross-up Provision",
-  "Cap (Cumulative / Non-cumulative)",
-  "Admin Fee",
-  "Management Fee",
-  "Base Year",
-  "Expense Stop",
-  "Controllable vs Non-controllable split",
-  "Exclusions from CAM",
+  "Expense Cap",
+  "Admin / Management Fee",
+  "Reconciliation / True-up",
+  "Audit Rights",
 ];
 
-function ExpenseRuleSubsetTable({ leaseId, kind }) {
+function formatRuleConfidence(rule) {
+  const value = rule.confidence_score ?? rule.confidence;
+  if (value == null) return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return String(Math.round(numeric <= 1 ? numeric * 100 : numeric)) + "%";
+}
+
+function formatRecoverable(rule) {
+  if (rule.recoverable === true) return "Yes";
+  if (rule.recoverable === false) return "No";
+  return leaseExpenseRuleService.getRecoverableDecision(rule) || "unknown";
+}
+
+function SourceTextCell({ rule }) {
+  const text = rule.source_text || rule.exact_source_text || rule.source_clause || rule.source;
+  if (!text) return <span className="text-slate-400">No lease clause found.</span>;
+  return (
+    <span className="block max-w-[420px] whitespace-normal text-xs leading-snug text-slate-600">
+      {String(text).replace(/\s+/g, " ").trim()}
+    </span>
+  );
+}
+
+export function selectLeaseReviewExpenseRuleRows(rules = [], kind = "expense") {
+  const normalized = (rules || []).map(normalizeLeaseExpenseRule);
+  return kind === "cam"
+    ? normalized.filter(isCamTaxonomyRule)
+    : normalized.filter((rule) => !isCamTaxonomyRule(rule));
+}
+
+function ExpenseRuleSubsetTable({ leaseId, lease, kind }) {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useLeaseExpenseRules(leaseId);
+  const effectiveLease = lease || (leaseId ? { id: leaseId } : null);
+  const effectiveLeaseId = effectiveLease?.id || leaseId;
+  const { data, isLoading, error } = useLeaseExpenseRules(effectiveLease);
   const ruleSet = data?.ruleSet || null;
-  const rules = useMemo(() => {
-    const all = data?.rules || [];
-    return kind === "cam" ? all.filter(isCamRule) : all.filter((r) => !isCamRule(r));
-  }, [data, kind]);
+  const rules = useMemo(() => selectLeaseReviewExpenseRuleRows(data?.rules || [], kind), [data, kind]);
   const title = kind === "cam" ? "CAM Rules" : "Expense Rules";
   const tableMissing = error && /lease_expense/i.test(error?.message || "");
+  const checklist = kind === "cam" ? PREDEFINED_CAM_CATEGORIES : PREDEFINED_EXPENSE_CATEGORIES;
 
   return (
     <Card>
@@ -241,7 +268,7 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
           <CardTitle className="text-base">{title}</CardTitle>
           <p className="text-xs text-slate-500">
             Source: <code>{ruleSet?.is_fallback ? "workflow_output.expense_rules" : "lease_expense_rules"}</code>
-            {ruleSet ? ` · v${ruleSet.version} · ${ruleSet.status}` : " · no rule set yet"}
+            {ruleSet ? " - v" + ruleSet.version + " - " + ruleSet.status : " - no rule set yet"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -249,7 +276,7 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease=${leaseId}`)}
+            onClick={() => navigate(createPageUrl("LeaseExpenseRules") + "?lease=" + effectiveLeaseId)}
           >
             <ArrowUpRight className="mr-1 h-3.5 w-3.5" />
             Review {kind === "cam" ? "CAM Rules" : "Lease Expense Rules"}
@@ -259,7 +286,7 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
       <CardContent>
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading...
           </div>
         ) : tableMissing ? (
           <p className="text-sm text-amber-700">
@@ -267,23 +294,21 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
           </p>
         ) : rules.length === 0 ? (
           <div className="space-y-2">
-            <p className="text-sm text-slate-500">
-              No {kind === "cam" ? "CAM" : "expense"} rules extracted yet. The checklist below shows what should be captured from lease language — open “Review {kind === "cam" ? "CAM" : "Expense"} Rules” to extract rules even when no dollar amount is present.
-            </p>
+            <p className="text-sm text-slate-500">No lease clause found.</p>
             <div className="overflow-x-auto rounded-md border border-slate-200">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="text-xs">Category</TableHead>
-                    <TableHead className="w-[140px] text-xs">Status</TableHead>
+                    <TableHead className="w-[170px] text-xs">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(kind === "cam" ? PREDEFINED_CAM_CATEGORIES : PREDEFINED_EXPENSE_CATEGORIES).map((cat) => (
+                  {checklist.map((cat) => (
                     <TableRow key={cat}>
                       <TableCell className="text-xs text-slate-700">{cat}</TableCell>
                       <TableCell>
-                        <Badge className="bg-amber-50 text-[10px] text-amber-700">Not Found</Badge>
+                        <Badge className="bg-amber-50 text-[10px] text-amber-700">No lease clause found.</Badge>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -296,53 +321,31 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-xs">Category</TableHead>
+                  <TableHead className="text-xs">Group</TableHead>
+                  <TableHead className="text-xs">Rule</TableHead>
                   <TableHead className="text-xs">Status</TableHead>
+                  <TableHead className="text-xs">Responsible</TableHead>
                   <TableHead className="text-xs">Recoverable</TableHead>
-                  {kind === "cam" && <TableHead className="text-xs">Cap</TableHead>}
-                  {kind === "cam" && <TableHead className="text-xs">Admin Fee</TableHead>}
-                  {kind === "cam" && <TableHead className="text-xs">Gross-up</TableHead>}
+                  <TableHead className="text-xs">Page</TableHead>
+                  <TableHead className="text-xs">Source Text</TableHead>
                   <TableHead className="text-xs text-right">Confidence</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rules.map((rule) => (
-                  <TableRow key={rule.id}>
+                  <TableRow key={rule.id || rule.rule_key || rule.rule_group + "-" + (rule.source_text || "")}>
+                    <TableCell className="text-xs text-slate-700">{getRuleGroupLabel(rule)}</TableCell>
                     <TableCell className="text-xs font-medium text-slate-700">
-                      {rule.subcategory_name || rule.category_name || rule.expense_category || rule.expense_category_id}
+                      {rule.normalized_rule || rule.subcategory_name || rule.category_name || rule.expense_category || "Expense rule"}
                     </TableCell>
                     <TableCell className="text-xs">
-                      <Badge className="bg-slate-100 text-[10px] text-slate-700">{rule.row_status || "needs_review"}</Badge>
+                      <Badge className="bg-slate-100 text-[10px] text-slate-700">{rule.review_status || rule.status || "needs_review"}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs">
-                      {rule.is_excluded ? "Excluded" : leaseExpenseRuleService.getRecoverableDecision(rule)}
-                    </TableCell>
-                    {kind === "cam" && (
-                      <TableCell className="text-xs">
-                        {rule.is_subject_to_cap
-                          ? [
-                              rule.cap_type || "",
-                              rule.cap_percent != null ? `${rule.cap_percent}%` : null,
-                              rule.cap_amount != null ? `$${Number(rule.cap_amount).toLocaleString()}` : rule.cap_value ?? null,
-                            ].filter(Boolean).join(" ")
-                          : "—"}
-                      </TableCell>
-                    )}
-                    {kind === "cam" && (
-                      <TableCell className="text-xs">
-                        {rule.admin_fee_applicable ? `${rule.admin_fee_percent ?? 0}%` : "—"}
-                      </TableCell>
-                    )}
-                    {kind === "cam" && (
-                      <TableCell className="text-xs">{rule.gross_up_applicable ? "Yes" : "—"}</TableCell>
-                    )}
-                    <TableCell className="text-right text-xs">
-                      {rule.confidence_score != null
-                        ? `${Math.round(Number(rule.confidence_score) <= 1 ? Number(rule.confidence_score) * 100 : Number(rule.confidence_score))}%`
-                        : rule.confidence != null
-                          ? `${Math.round(Number(rule.confidence) <= 1 ? Number(rule.confidence) * 100 : Number(rule.confidence))}%`
-                          : "—"}
-                    </TableCell>
+                    <TableCell className="text-xs">{rule.responsible_party || "unknown"}</TableCell>
+                    <TableCell className="text-xs">{formatRecoverable(rule)}</TableCell>
+                    <TableCell className="text-xs">{rule.source_page || "-"}</TableCell>
+                    <TableCell><SourceTextCell rule={rule} /></TableCell>
+                    <TableCell className="text-right text-xs">{formatRuleConfidence(rule)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -354,20 +357,15 @@ function ExpenseRuleSubsetTable({ leaseId, kind }) {
   );
 }
 
-export function ExpenseRulesTable({ leaseId }) {
-  return <ExpenseRuleSubsetTable leaseId={leaseId} kind="expense" />;
+export function ExpenseRulesTable({ leaseId, lease }) {
+  return <ExpenseRuleSubsetTable leaseId={leaseId} lease={lease} kind="expense" />;
 }
 
-export function CamRulesTable({ leaseId }) {
-  return <ExpenseRuleSubsetTable leaseId={leaseId} kind="cam" />;
+export function CamRulesTable({ leaseId, lease }) {
+  return <ExpenseRuleSubsetTable leaseId={leaseId} lease={lease} kind="cam" />;
 }
 
-// ─── Clause Records ───────────────────────────────────────────────────
-// Reads from `lease_clauses` (populated by review-approve from the workflow
-// output). Falls back to extraction_data.lease_clauses on the lease record
-// when the table isn't present. Always renders the predefined clause
-// checklist so reviewers see what _should_ be captured even when extraction
-// didn't return a value.
+// --- Clause Records ---------------------------------------------------
 const STANDARD_CLAUSE_TYPES = [
   { key: "use_permitted_use", label: "Use / Permitted Use" },
   { key: "rent_clause", label: "Rent & Escalation" },

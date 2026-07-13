@@ -54,3 +54,29 @@ export function payloadHasMeaningfulFields(uiReviewPayload) {
     return text.length > 0 && !/^(n\/a|na|null|none|unknown)$/i.test(text);
   });
 }
+
+const POST_REVIEW_TERMINAL_STATUSES = ["approved", "storing", "stored", "computing", "completed"];
+
+/**
+ * Guarantee 10: "Open Lease Review" is enabled once the file is core_ready
+ * (or has reached a post-review terminal status), never before — in
+ * particular never while still "validating"/"pdf_parsed", regardless of how
+ * loosely a caller might otherwise be tempted to gate on status alone.
+ *
+ * Reads the backend-computed core_ready flag directly (persisted on
+ * ui_review_payload by buildMinimalReviewPayload) rather than re-deriving
+ * readiness client-side; payloadHasMeaningfulFields is only consulted as a
+ * fallback for legacy rows persisted before core_ready existed.
+ */
+export function computeCanOpenReview({ hasValidReviewPayload, uiReviewPayload, status }) {
+  // Only fall back to the legacy field-scan when core_ready is genuinely
+  // absent (a row persisted before the flag existed) — an explicit
+  // core_ready:false is an authoritative "not ready yet" from the backend
+  // and must never be overridden by the fallback.
+  const isCoreReady =
+    uiReviewPayload?.core_ready === undefined
+      ? payloadHasMeaningfulFields(uiReviewPayload)
+      : uiReviewPayload.core_ready === true;
+  if (hasValidReviewPayload && isCoreReady) return true;
+  return POST_REVIEW_TERMINAL_STATUSES.includes(status || "");
+}

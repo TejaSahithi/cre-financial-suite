@@ -857,7 +857,7 @@ function buildMinimalReviewPayload(opts: {
       let status: string;
       if (value == null || value === "") {
         status = "missing";
-      } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 90) {
+      } else if (hasEvidence && typeof effectiveConfidence === "number" && effectiveConfidence >= 0.9) {
         // System-computed suggestion only — buildReviewField always sets
         // accepted:false; acceptance is a separate, reviewer-driven action
         // (guarantee 6), never implied by this status.

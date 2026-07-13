@@ -27,8 +27,10 @@ import {
 } from "lucide-react";
 import {
   REVIEW_STATUSES,
+  readFieldConfidence,
   readFieldEvidence,
   readFieldValue,
+  classifyConfidence,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
 import { getLeaseFieldLabel, hasLeaseFieldOptions } from "@/lib/leaseFieldOptions";
@@ -200,6 +202,18 @@ export default function FieldReviewTable({
               isManualReview && sourceQualityKey === "missing" ? "manual_required" : sourceQualityKey
             ];
             const source = sourcePreview(sourceText, 900);
+            const hasValue = value != null && value !== "";
+            const hasSource = !!sourceText;
+            // §4: confidence badge — same classifyConfidence() bucket the
+            // summary cards use, so the column always agrees with them.
+            const confidenceScore = typeof field.confidence === "number"
+              ? field.confidence
+              : readFieldConfidence(lease, field.key);
+            const confidenceBucket = classifyConfidence(confidenceScore);
+            // §8: explicit messaging for the two "something's missing" cases
+            // the source-quality badge alone doesn't spell out in words.
+            const missingEvidenceMessage = hasValue && !hasSource ? "Value found, evidence missing." : null;
+            const noClauseFoundMessage = !hasValue && !hasSource && !source.text?.trim?.() ? "No supporting clause found." : null;
 
             const rowClass = isConflict
               ? "bg-red-50/40 hover:bg-red-50/70"
@@ -245,6 +259,17 @@ export default function FieldReviewTable({
                   )}
                 </TableCell>
 
+                {/* Confidence — same bucket/threshold as the summary cards */}
+                <TableCell className="text-xs text-center">
+                  {typeof confidenceScore === "number" ? (
+                    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${CONFIDENCE_BADGE_CLASS[confidenceBucket]}`}>
+                      {Math.round(confidenceScore)}%
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </TableCell>
+
                 {/* Page number */}
                 <TableCell className="text-xs text-center text-slate-500">
                   {sourcePage != null ? sourcePage : "—"}
@@ -253,9 +278,15 @@ export default function FieldReviewTable({
                 {/* Source text + quality badge */}
                 <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
-                    <p className="max-w-[920px] whitespace-pre-wrap break-words text-slate-600 leading-relaxed" title={sourceText ?? ""}>
-                      {highlightValueInSource(source.text, value)}
-                    </p>
+                    {missingEvidenceMessage ? (
+                      <p className="max-w-[920px] text-slate-500 leading-relaxed italic">{missingEvidenceMessage}</p>
+                    ) : noClauseFoundMessage ? (
+                      <p className="max-w-[920px] text-slate-400 leading-relaxed italic">{noClauseFoundMessage}</p>
+                    ) : (
+                      <p className="max-w-[920px] whitespace-pre-wrap break-words text-slate-600 leading-relaxed" title={sourceText ?? ""}>
+                        {highlightValueInSource(source.text, value)}
+                      </p>
+                    )}
                     {source.truncated && (
                       <button
                         type="button"

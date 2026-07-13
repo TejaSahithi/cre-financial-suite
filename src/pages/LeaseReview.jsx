@@ -86,6 +86,7 @@ import {
 } from "@/services/leaseApprovalWorkflowService";
 import { logAudit } from "@/services/audit";
 import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
+import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
 import { detectDocumentProfile } from "@/lib/documentProfile";
@@ -124,6 +125,8 @@ import { validateCrossFieldWarnings } from "@/components/lease-review/utils/cros
 
 import {
   RentScheduleTable,
+  ExpenseRulesTable,
+  CamRulesTable,
   CriticalDatesTable,
   ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
@@ -861,6 +864,36 @@ export default function LeaseReview() {
     },
   });
   const approvedRuleSet = ruleSetSummary?.ruleSet?.status === "approved" ? ruleSetSummary.ruleSet : null;
+  const workflowExpenseRulesCount = useMemo(() => {
+    const workflow = leaseFull?.extraction_data?.workflow_output || lease?.extraction_data?.workflow_output || null;
+    const output = Array.isArray(workflow?.records) ? workflow.records[0] : workflow;
+    return Array.isArray(output?.expense_rules) ? output.expense_rules.length : 0;
+  }, [leaseFull, lease]);
+
+  const workflowRulePersistAttemptsRef = useRef(new Set());
+  useEffect(() => {
+    const leaseForRules = leaseFull || lease;
+    if (!leaseForRules?.id || workflowExpenseRulesCount === 0) return;
+    if (ruleSetSummary?.tableMissing || ruleSetSummary?.ruleSet?.id) return;
+
+    const attemptKey = leaseForRules.id + ":" + workflowExpenseRulesCount;
+    if (workflowRulePersistAttemptsRef.current.has(attemptKey)) return;
+    workflowRulePersistAttemptsRef.current.add(attemptKey);
+
+    leaseExpenseRuleService.persistExpenseRulesFromWorkflow({
+      lease: leaseForRules,
+      status: "draft",
+      createdFrom: "workflow_upload",
+    }).then((result) => {
+      if ((result?.rules?.length || 0) > 0) {
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-summary", leaseForRules.id] });
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rules-detail", leaseForRules.id] });
+        queryClient.invalidateQueries({ queryKey: ["lease-expense-rule-sets-direct"] });
+      }
+    }).catch((error) => {
+      console.warn("[LeaseReview] workflow expense rule draft persistence skipped:", error?.message || error);
+    });
+  }, [leaseFull, lease, workflowExpenseRulesCount, ruleSetSummary?.ruleSet?.id, ruleSetSummary?.tableMissing, queryClient]);
 
   // Detect assignment/amendment-only documents so the rule-readiness banner
   // says something accurate. The pipeline tags these docs with
@@ -3336,6 +3369,7 @@ export default function LeaseReview() {
             conflictKeys={conflictKeySet}
             crossFieldWarnings={crossFieldWarnings}
           />
+          <ExpenseRulesTable leaseId={lease.id} lease={leaseFull || lease} />
         </TabsContent>
 
         {/* CAM Rules - single-value CAM lease fields + repeatable CAM rules. */}
@@ -3366,6 +3400,7 @@ export default function LeaseReview() {
             conflictKeys={conflictKeySet}
             crossFieldWarnings={crossFieldWarnings}
           />
+          <CamRulesTable leaseId={lease.id} lease={leaseFull || lease} />
         </TabsContent>
 
         {/* Clause Records - all meaningful lease clauses against a predefined checklist. */}
@@ -4157,3 +4192,4 @@ export default function LeaseReview() {
     </div>
   );
 }
+

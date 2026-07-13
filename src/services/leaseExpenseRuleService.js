@@ -51,6 +51,7 @@ import { getCurrentOrgId } from "@/services/api";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { saveLeaseConfig } from "@/services/camConfig";
 import { devLog, devWarn } from "./utils/logger";
+import { normalizeLeaseExpenseRule } from "./utils/leaseExpenseRuleTaxonomy";
 
 import {
   derivePublishedToCam,
@@ -1304,7 +1305,19 @@ export const leaseExpenseRuleService = {
     return "";
   },
 
-  async loadRuleSet(leaseId) {
+  buildWorkflowFallbackRuleSet(lease) {
+    const fallback = buildFallbackRuleSetEntry(lease);
+    if (!fallback) return { ruleSet: null, rules: [] };
+    return {
+      ...fallback,
+      rules: (fallback.rules || []).map((rule) => ({
+        ...normalizeLeaseExpenseRule(rule),
+        _is_fallback: true,
+      })),
+    };
+  },
+
+  async loadRuleSet(leaseId, { lease = null, includeWorkflowFallback = false } = {}) {
     if (!supabase || !leaseId) return { ruleSet: null, rules: [] };
 
     try {
@@ -1335,16 +1348,23 @@ export const leaseExpenseRuleService = {
 
       const ruleSet = selectPreferredRuleSet(ruleSets || [], rulesBySet);
       if (!ruleSet) {
+        if (includeWorkflowFallback && lease?.id) {
+          return this.buildWorkflowFallbackRuleSet(lease);
+        }
         return { ruleSet: null, rules: [] };
       }
 
       const { rules, valuesByRuleId, clausesByRuleId } = await loadRuleDependencies(ruleSet.id);
       const mergedRules = mergeRulesWithRelations(rules, valuesByRuleId, clausesByRuleId);
-      const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft");
+      const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet?.status || "draft")
+        .map(normalizeLeaseExpenseRule);
 
       return { ruleSet, rules: finalizedRules };
     } catch (error) {
       if (!isMissingExpenseRuleTable(error)) throw error;
+      if (includeWorkflowFallback && lease?.id) {
+        return this.buildWorkflowFallbackRuleSet(lease);
+      }
       return { ruleSet: null, rules: [] };
     }
   },
@@ -1435,7 +1455,8 @@ export const leaseExpenseRuleService = {
       const persistedEntries = latestRuleSets.map((ruleSet) => {
         const rulesForSet = (rules || []).filter((rule) => rule.rule_set_id === ruleSet.id);
         const mergedRules = mergeRulesWithRelations(rulesForSet, valuesByRuleId, clausesByRuleId);
-        const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft");
+        const finalizedRules = finalizeLeaseExpenseRules(mergedRules, ruleSet.status || "draft")
+          .map(normalizeLeaseExpenseRule);
         devLog(`${tag} lease ${ruleSet.lease_id?.slice(0, 8)} → ${rulesForSet.length} raw → ${finalizedRules.length} finalized (after dedup/exclude)`);
         return {
           leaseId: ruleSet.lease_id,

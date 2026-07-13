@@ -123,13 +123,12 @@ export function parseEnum(s: string, allowed: string[]): string | null {
   const exact = allowed.find((v) => v === lower || v.replace(/_/g, " ") === lower);
   if (exact) return exact;
 
-  // Contains match
-  const partial = allowed.find((v) => lower.includes(v) || lower.includes(v.replace(/_/g, " ")) || v.includes(lower));
-  if (partial) return partial;
-
-  // Special mappings — targets are the schema's own canonical enum values
-  // (see schemas.ts's per-field `description`, e.g. lease_type's "'Full
-  // Service' or 'Gross Lease' → gross"), not aliases of themselves.
+  // Special mappings — checked BEFORE the loose "contains" match below,
+  // since a known multi-word phrase alias (e.g. "triple net") must win over
+  // an accidental substring hit (e.g. "triple net".includes("net")). Targets
+  // are the schema's own canonical enum values (see schemas.ts's per-field
+  // `description`, e.g. lease_type's "'Full Service' or 'Gross Lease' →
+  // gross"), not aliases of themselves.
   const ENUM_ALIASES: Record<string, string> = {
     "triple net": "nnn", "nnn": "nnn",
     "full service": "gross", "full service lease": "gross", "gross lease": "gross",
@@ -145,12 +144,20 @@ export function parseEnum(s: string, allowed: string[]): string | null {
     "single family portfolio": "single_family",
     "under renovation": "under_renovation",
   };
-  const target = ENUM_ALIASES[lower] ?? null;
-  // Never silently persist an alias target that isn't actually a legal
-  // value for THIS field's allowed list — a mismatch here should fall
-  // through to null (needs_review) rather than writing an out-of-schema
-  // value.
-  return target && allowed.includes(target) ? target : null;
+  const aliasTarget = ENUM_ALIASES[lower];
+  if (aliasTarget) {
+    // Never silently persist an alias target that isn't actually a legal
+    // value for THIS field's allowed list — a mismatch here should fall
+    // through rather than writing an out-of-schema value.
+    if (allowed.includes(aliasTarget)) return aliasTarget;
+    return null;
+  }
+
+  // Contains match — last resort, only for phrases with no exact alias.
+  const partial = allowed.find((v) => lower.includes(v) || lower.includes(v.replace(/_/g, " ")) || v.includes(lower));
+  if (partial) return partial;
+
+  return null;
 }
 
 /** Coerce raw string to the correct type based on FieldDef */
