@@ -163,6 +163,10 @@ export default function LeaseReview() {
   const [approving, setApproving] = useState(false);
   const [reextracting, setReextracting] = useState(false);
   const [reextractStage, setReextractStage] = useState(""); // "running" | "polling" | "applying"
+  // Persistent error banner for a failed Re-extract - separate from the
+  // transient toast so the failure stays visible while old field values
+  // remain on screen (never blanked).
+  const [reextractError, setReextractError] = useState(null);
   const [showReextractConfirm, setShowReextractConfirm] = useState(false);
 
   // Approval form
@@ -212,7 +216,7 @@ export default function LeaseReview() {
       if (!resolvedSourceFileId) return null;
       const { data, error } = await supabase
         .from("uploaded_files")
-        .select("id, status, ui_review_payload, reviewed_output, normalized_output")
+        .select("id, status, ui_review_payload, reviewed_output, normalized_output, parsed_data")
         .eq("id", resolvedSourceFileId)
         .single();
       if (error) {
@@ -863,20 +867,59 @@ export default function LeaseReview() {
     }
   };
 
+  // Authoritative "does the review table already have something real to show"
+  // signal - the SAME predicate FieldReviewTable itself uses to decide
+  // whether to render rows or show "No extracted fields". Previously the
+  // auto-extract effect below maintained ~10 independent heuristics over
+  // lease.extraction_data / ui_review_payload shapes that could disagree with
+  // this one, so a legitimately-completed extraction whose payload didn't
+  // exactly match one of those heuristics (e.g. the normalize-pdf-output
+  // fast-path minimal payload) would fall through and auto-fire a full
+  // re-extract with no user click.
+  const hasDisplayableExtractedFields = useMemo(
+    () => allReviewRows.some((row) => isReviewRowDisplayable(row, { showMissing: false })),
+    [allReviewRows],
+  );
+
+  // Async evidence/CAM enrichment status written by normalize-pdf-output's
+  // fast-path persist (see uploaded_files.ui_review_payload.enrichment_status:
+  // "pending" | "running" | "completed" | "failed"). Not yet consumed
+  // anywhere else in this file before this change.
+  const enrichmentStatus = uploadedFile?.ui_review_payload?.enrichment_status ?? null;
+  const isEnrichmentInFlight = enrichmentStatus === "pending" || enrichmentStatus === "running";
+
+  // Temporary read-only fallback: when ui_review_payload hasn't landed yet
+  // (or has none of the field-map shapes buildLeaseReviewRowsByTab knows
+  // about) but the pipeline already persisted raw rule/table/LLM output to
+  // parsed_data or normalized_output, surface those values directly instead
+  // of showing nothing. These are flat { field_key: value } objects, not the
+  // canonical field shape, so this is intentionally a lightweight key/value
+  // list rather than a full FieldReviewTable integration.
+  const fallbackParsedFields = useMemo(() => {
+    if (hasDisplayableExtractedFields) return [];
+    if (uploadedFile?.ui_review_payload) return [];
+    const rawRow =
+      (Array.isArray(uploadedFile?.normalized_output?.rows) && uploadedFile.normalized_output.rows[0]) ||
+      (Array.isArray(uploadedFile?.parsed_data) && uploadedFile.parsed_data[0]) ||
+      null;
+    if (!rawRow || typeof rawRow !== "object") return [];
+    return Object.entries(rawRow)
+      .filter(([key, value]) => !key.startsWith("_") && value != null && value !== "")
+      .map(([key, value]) => ({
+        key,
+        label: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        value: typeof value === "object" ? JSON.stringify(value) : String(value),
+      }));
+  }, [hasDisplayableExtractedFields, uploadedFile]);
+
   // Auto-run extraction the first time we land on a lease that hasn't been
-  // through the full re-extract pipeline yet. The canonical "extraction has
-  // been finalized" marker is `evidence_refreshed_at`, which only
-  // handleReextractLease writes - review-approve creates the lease draft
-  // with workflow_output as a placeholder but does NOT pull per-field
-  // evidence from ui_review_payload.records[0].standard_fields the way
-  // re-extract does. So the gate now skips only when:
-  //   1. evidence_refreshed_at is already set (full pipeline ran), OR
-  //   2. there is no source_file_id (nothing to re-extract from), OR
-  //   3. there ARE meaningful fields with evidence (pre-existing lease that
-  //      has good evidence even without the marker - don't disturb it).
-  // This unifies the upload + re-extract paths so a freshly uploaded lease
-  // gets the same field-evidence enrichment and lease-expense-rule
-  // extraction as a manual Re-extract click.
+  // through the full re-extract pipeline yet, and that has no displayable
+  // data at all. The canonical "extraction has been finalized" marker is
+  // `evidence_refreshed_at`, which only handleReextractLease writes - but we
+  // now trust hasDisplayableExtractedFields as the primary, authoritative
+  // gate instead of re-deriving "does data exist" from scratch, so this
+  // effect's notion of "has data" can never drift out of sync with what the
+  // table actually renders.
   const autoExtractFiredRef = useRef(null);
   useEffect(() => {
     if (!lease?.id) return;
@@ -887,120 +930,53 @@ export default function LeaseReview() {
 
     // Wait until the uploadedFile query has resolved. `uploadedFile` is
     // `undefined` while the query is in-flight; it becomes null (not found /
-    // error) or a real row once settled. Firing before that means all payload
-    // checks (3b, 3c, 3d) see null and auto-re-extract fires incorrectly.
+    // error) or a real row once settled. Firing before that would false-negative
+    // hasDisplayableExtractedFields and auto-re-extract could fire incorrectly.
     if (isUploadedFileFetching || uploadedFile === undefined) return;
 
     // Helper: mark this lease as handled so the effect never fires twice.
     const done = () => { autoExtractFiredRef.current = lease.id; };
 
-    // 1. Pipeline already finalized this lease.
-    if (lease?.extraction_data?.evidence_refreshed_at) { done(); return; }
-
-    // 1b. Lease top-level columns have meaningful values AND there's actual
-    // extraction evidence - extraction already ran with real results.
-    // NOTE: top-level columns can be set from scope selection (unit/building
-    // context) without any LLM extraction running. We only skip if there's
-    // also real field evidence proving extraction occurred.
-    const leaseHasTopLevel = !!(
-      lease?.tenant_name || lease?.monthly_rent || lease?.start_date ||
-      lease?.end_date || lease?.commencement_date || lease?.expiration_date
-    );
-    const hasExtractionEvidence = !!(
-      lease?.extraction_data?.evidence_refreshed_at ||
-      (lease?.extraction_data?.field_evidence && Object.keys(lease.extraction_data.field_evidence || {}).length > 0)
-    );
-    if (leaseHasTopLevel && hasExtractionEvidence) {
-      console.log("[LeaseReview] auto-extract: skip - lease has top-level values with extraction evidence");
+    // 1. The review table already has real, displayable data - regardless of
+    //    which backend shape produced it (lease.extraction_data,
+    //    ui_review_payload.records[].standard_fields/fields/workflow_output,
+    //    or a fast-path minimal payload). Never disturb it automatically.
+    if (hasDisplayableExtractedFields) {
+      console.log("[LeaseReview] auto-extract: skip - review table already has displayable extracted fields");
       done(); return;
     }
 
-    // 1c. extraction_data.fields has at least one non-null value.
-    const edFields = lease?.extraction_data?.fields;
-    const hasEdFields = edFields && typeof edFields === "object" &&
-      Object.values(edFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
-    if (hasEdFields) {
-      console.log("[LeaseReview] auto-extract: skip - extraction_data.fields has meaningful values");
+    // 2. Evidence/CAM enrichment is still in flight server-side. Don't pile a
+    //    second full re-extract on top of it - the fast-path fields (if any)
+    //    are already covered by check 1; if there are truly none yet, wait
+    //    rather than racing the in-flight enrichment run.
+    if (isEnrichmentInFlight) {
+      console.log("[LeaseReview] auto-extract: skip - enrichment_status is pending/running");
       done(); return;
     }
 
-    // 1d. workflow_output.lease_fields has at least one non-null value.
-    const wfLeaseFields = lease?.extraction_data?.workflow_output?.lease_fields;
-    const hasWfFields = wfLeaseFields && typeof wfLeaseFields === "object" &&
-      Object.values(wfLeaseFields).some((f) => f && typeof f === "object" && f.value != null && f.value !== "");
-    if (hasWfFields) {
-      console.log("[LeaseReview] auto-extract: skip - workflow_output.lease_fields has meaningful values");
-      done(); return;
-    }
-
-    // 2. Lease already has per-field evidence stored (pre-evidence_refreshed_at
-    //    leases that were reviewed before the flag was introduced).
-    const fieldEvidence = lease?.extraction_data?.field_evidence;
-    const hasPersistedEvidence =
-      fieldEvidence &&
-      typeof fieldEvidence === "object" &&
-      Object.values(fieldEvidence).some(
-        (e) => e && typeof e === "object" && (e.source_page != null || (typeof e.source_text === "string" && e.source_text.trim().length > 0)),
-      );
-    if (hasPersistedEvidence) {
-      console.log("[LeaseReview] auto-extract: skip - lease already has per-field evidence");
-      done(); return;
-    }
-
-    // 3. The uploaded file's ui_review_payload already contains extracted field data.
+    // 3. Pipeline ran but core mapping failed - retrying automatically won't
+    //    help without a source-file change; require a manual Re-extract.
     const uiPayload = uploadedFile?.ui_review_payload;
-    const ufRecord0 = (uiPayload?.records?.[0]) ?? null;
-    const ufFieldMap =
-      ufRecord0?.workflow_output?.lease_fields ||
-      ufRecord0?.fields ||
-      ufRecord0?.standard_fields ||
-      null;
-    // Only treat the payload as having real data when at least one field has a
-    // non-null value. An all-null payload means the prior run had no LLM configured;
-    // allow a re-extract in case credentials have since been added.
-    const hasRealValues =
-      ufFieldMap &&
-      typeof ufFieldMap === "object" &&
-      Object.values(ufFieldMap).some(
-        (f) => f && typeof f === "object" && "value" in f && f.value != null && f.value !== "",
-      );
-    const hasUploadedFileData =
-      ufFieldMap &&
-      typeof ufFieldMap === "object" &&
-      Object.keys(ufFieldMap).length > 2 &&
-      hasRealValues;
-    if (hasUploadedFileData) {
-      console.log("[LeaseReview] auto-extract: skip - uploaded file already has extracted field data in ui_review_payload");
-      done(); return;
-    }
-
-    // 3b. Pipeline ran but core mapping failed - retrying won't help without a
-    // source-file change.
     if (uiPayload && (uiPayload.mapping_failed || uiPayload.metadata?.extractionDebug?.core_mapping_failed)) {
       console.log("[LeaseReview] auto-extract: skip - pipeline ran but core mapping failed");
       done(); return;
     }
 
-    // 3c. ui_review_payload.records exists with real values - pipeline ran with results.
-    if (uiPayload && Array.isArray(uiPayload.records) && uiPayload.records.length > 0 && hasRealValues) {
-      console.log("[LeaseReview] auto-extract: skip - ui_review_payload present with extracted values");
-      done(); return;
-    }
-
-    // 3d. Uploaded file already has a terminal status - pipeline ran.
-    // When there are no real extracted values (all-null prior run) we allow a
-    // one-shot auto-re-extract even from review_required so that newly configured
-    // Vertex AI / Docling credentials take effect without a manual click.
+    // 4. Uploaded file already reached a terminal status with no displayable
+    //    data (all-null prior run, e.g. no LLM was configured at the time) -
+    //    allow exactly one auto-re-extract from these terminal states so
+    //    newly configured Vertex AI / Docling credentials take effect without
+    //    a manual click, but never from a state that implies the document
+    //    still needs a human decision.
     const ufStatus = uploadedFile?.status ?? uploadedFile?.processing_status ?? null;
-    const terminalStatuses = hasRealValues
-      ? ["review_required", "validated", "approved", "completed", "failed", "stored"]
-      : ["validated", "approved", "completed", "stored"];
+    const terminalStatuses = ["validated", "approved", "completed", "stored"];
     if (ufStatus && terminalStatuses.includes(String(ufStatus))) {
       console.log(`[LeaseReview] auto-extract: skip - uploaded file status=${ufStatus} (pipeline already ran)`);
       done(); return;
     }
 
-    // 4. A recent auto-extract failure for this lease was recorded in
+    // 5. A recent auto-extract failure for this lease was recorded in
     //    sessionStorage. Don't hammer the edge function; wait for the user to
     //    manually trigger Re-extract Lease once resources are available.
     const failureKey = `lease_auto_extract_failed_${lease.id}`;
@@ -1019,8 +995,8 @@ export default function LeaseReview() {
     lease?.id,
     lease?.source_file_id,
     lease?.extraction_data?.source_file_id,
-    lease?.extraction_data?.evidence_refreshed_at,
-    lease?.extraction_data?.field_evidence,
+    hasDisplayableExtractedFields,
+    isEnrichmentInFlight,
     uploadedFile,
     isUploadedFileFetching,
     reextracting,
@@ -1971,6 +1947,7 @@ export default function LeaseReview() {
     setReextracting(true);
     setReextractStage("running");
     setShowReextractConfirm(false);
+    setReextractError(null);
     setFieldReviews({});
     try {
       // 1. Trigger re-extraction
@@ -1993,10 +1970,9 @@ export default function LeaseReview() {
         const detail = ingestData?.error_details || "Unknown error";
         console.warn(`[Re-extract] pipeline fell back to manual review at stage=${stage}:`, detail);
         const stageLabel = stage === "normalization" ? "normalization" : "document parsing";
-        toast.error(
-          `Re-extraction failed during ${stageLabel}: ${detail.length > 120 ? detail.slice(0, 120) + "-" : detail}. Check edge function logs in Supabase for details.`,
-          { duration: 8000 },
-        );
+        const reextractFailureMessage = `Re-extraction failed during ${stageLabel}: ${detail.length > 120 ? detail.slice(0, 120) + "-" : detail}. Check edge function logs in Supabase for details.`;
+        toast.error(reextractFailureMessage, { duration: 8000 });
+        setReextractError(reextractFailureMessage);
         // Still write evidence_refreshed_at so the auto-extract loop stops.
         try {
           await persistLeaseExtractionMerge({
@@ -2524,11 +2500,11 @@ export default function LeaseReview() {
     } catch (err) {
       console.error("[LeaseReview] re-extract failed:", err);
       const isOverload = /compute resources|resources exhausted|504|timed out|timeout/i.test(err?.message || "");
-      toast.error(
-        isOverload
-          ? "Extraction server is temporarily overloaded. Use 'Re-extract Lease' to retry manually when ready."
-          : (err?.message || "Could not re-extract lease"),
-      );
+      const reextractFailureMessage = isOverload
+        ? "Extraction server is temporarily overloaded. Use 'Re-extract Lease' to retry manually when ready."
+        : (err?.message || "Could not re-extract lease");
+      toast.error(reextractFailureMessage);
+      setReextractError(reextractFailureMessage);
       // Record the failure so the auto-extract effect doesn't immediately
       // retry on the next page load. The user can trigger Re-extract Lease
       // manually once backend resources are available.
@@ -2863,6 +2839,33 @@ export default function LeaseReview() {
         </div>
       )}
 
+      {/* Non-blocking evidence/CAM enrichment banner - fields stay visible underneath */}
+      {!reextracting && isEnrichmentInFlight && hasDisplayableExtractedFields && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-3">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
+          Evidence and CAM enrichment is still running.
+        </div>
+      )}
+
+      {/* Temporary read-only fallback view - ui_review_payload hasn't landed yet
+          but raw parsed_data/normalized_output already has values */}
+      {!reextracting && fallbackParsedFields.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">Detailed evidence is still being prepared.</p>
+          <p className="mt-1 text-xs text-amber-700">
+            Showing preliminary extracted values below. Source evidence, confidence scores, and clause records will appear once processing finishes.
+          </p>
+          <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+            {fallbackParsedFields.map((field) => (
+              <div key={field.key} className="flex justify-between gap-3 border-b border-amber-100 pb-1 text-xs">
+                <dt className="text-amber-700">{field.label}</dt>
+                <dd className="text-right font-medium text-amber-950">{field.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
       {/* Rule readiness banner - only for full leases */}
       {!isAssignmentOnlyDocument && !isStalePayload && (
         <div
@@ -2902,6 +2905,28 @@ export default function LeaseReview() {
                 This usually takes 30-60 seconds. The page will refresh automatically when complete. You don't need to do anything.
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-extract failure banner - persists after a failed manual Re-extract;
+          old field values remain visible underneath (never blanked). */}
+      {!reextracting && reextractError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <div className="flex-1">
+              <p className="font-semibold">Re-extract failed</p>
+              <p className="mt-1 text-xs text-red-700">{reextractError}</p>
+              <p className="mt-1 text-xs text-red-600">The previously extracted values below are unchanged.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReextractError(null)}
+              className="shrink-0 text-xs font-medium text-red-600 hover:text-red-800"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}
