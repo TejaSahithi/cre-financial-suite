@@ -541,7 +541,7 @@ export default function LeaseUpload() {
       window.clearInterval(interval);
     };
     // Only recreate when fileId changes — NOT on every status change.
-  }, [fileId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fileId]);
 
   useEffect(() => {
     if (!fileId || fileRecord?.status !== "uploaded" || retriedUploadedFiles.current.has(fileId)) {

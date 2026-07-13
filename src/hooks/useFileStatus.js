@@ -4,21 +4,6 @@ import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 
 /**
- * Statuses that indicate work is still in progress — keep polling.
- */
-const ACTIVE_STATUSES = new Set([
-  "uploaded",
-  "parsing",
-  "pdf_parsed",   // PDF extracted, normalization pending
-  "validating",
-  "validated",    // transitions to review_required or storing — not terminal
-  "storing",
-  "stored",       // transitions to computing — not terminal
-  "approved",
-  "computing",
-]);
-
-/**
  * Terminal statuses — stop polling once reached.
  */
 const TERMINAL_STATUSES = new Set([

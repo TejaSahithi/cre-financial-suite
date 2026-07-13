@@ -255,7 +255,7 @@ export default function FileUploader({
     return () => { cancelledEffect = true; };
     // Only re-run when the org scope changes (e.g. super-admin switching
     // org) — not on every pendingConfirmations update.
-  }, [resolvedOrgId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resolvedOrgId]);
 
   const typeOptions = normalizedAllowedTypes.length > 0
     ? ALL_FILE_TYPES.filter((fileTypeOption) => normalizedAllowedTypes.includes(fileTypeOption.value))
