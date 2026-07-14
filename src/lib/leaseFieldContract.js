@@ -5,8 +5,9 @@
  * Hand-ported, not shared-imported: the Vite frontend and Deno edge functions
  * have no shared build boundary today. If the backend file changes, this one
  * needs a matching update — the entry list below should stay identical in
- * content (canonicalKey/aliases/group/required*/evidenceRequired/inLeaseSchema/
- * computed/preferredForAutomatedLogic) to the backend's LEASE_FIELD_CONTRACT.
+ * content (canonicalKey, aliases, group, the three required-for-X flags,
+ * evidenceRequired, inLeaseSchema, computed, preferredForAutomatedLogic) to
+ * the backend's LEASE_FIELD_CONTRACT.
  *
  * Two distinct relationships are modeled, and they are NOT the same thing:
  *   - `aliases`: a different vocabulary's name for the exact same LEASE_SCHEMA
