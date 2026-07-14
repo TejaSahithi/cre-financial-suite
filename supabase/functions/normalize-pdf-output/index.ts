@@ -114,8 +114,21 @@ function buildPipelineLayoutInput(
  * Default is "legacy_hybrid" (runExtractionPipeline, unchanged) whenever
  * BUSINESS_EXTRACTION_PROVIDER is unset or any value other than the exact
  * string "vertex_fact_ledger" — vertex_fact_ledger is strictly opt-in.
+ *
+ * `internalDebugOverride` lets a scoped, single request pick the provider
+ * without touching the BUSINESS_EXTRACTION_PROVIDER project secret — the
+ * caller must only pass a value here when the request has already passed
+ * isInternalCall(req) (service-role/worker auth), so a normal browser/user
+ * request can never set it. Used for one-off live provider comparisons
+ * without making vertex_fact_ledger the project's live default.
  */
-function resolveBusinessExtractionProvider(): "legacy_hybrid" | "vertex_fact_ledger" {
+function resolveBusinessExtractionProvider(
+  internalDebugOverride?: string | null,
+): "legacy_hybrid" | "vertex_fact_ledger" {
+  const override = String(internalDebugOverride ?? "").trim().toLowerCase();
+  if (override === "vertex_fact_ledger" || override === "legacy_hybrid") {
+    return override;
+  }
   const raw = String(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER") ?? "").trim().toLowerCase();
   return raw === "vertex_fact_ledger" ? "vertex_fact_ledger" : "legacy_hybrid";
 }
@@ -1853,29 +1866,46 @@ Deno.serve(async (req: Request) => {
 
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
+        // Tier 1 (dry_run) live comparison support: an internal/service-role
+        // caller may request vertex_fact_ledger for this one sample_text call
+        // without touching the BUSINESS_EXTRACTION_PROVIDER project secret.
+        // No uploaded_files row exists in this branch, so there is nothing to
+        // write — this is the zero-DB-write comparison path.
+        const dryRunProvider = resolveBusinessExtractionProvider(
+          isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+        );
         try {
-          const result = await runExtractionPipeline(
-            {
+          const dryRunDocling = {
+            full_text: sample_text,
+            text_blocks: [],
+            tables: [],
+            fields: [],
+            page_count: 1,
+            extraction_method: "dry_run",
+          };
+          const result = dryRunProvider === "vertex_fact_ledger"
+            ? await runVertexFactLedgerPipeline({
               moduleType: "lease",
               fileName: "dry_run_sample.txt",
-              docling: {
-                full_text: sample_text,
-                text_blocks: [],
-                tables: [],
-                fields: [],
-                page_count: 1,
-                extraction_method: "dry_run",
+              docling: dryRunDocling,
+              documentSubtype: null,
+            })
+            : await runExtractionPipeline(
+              {
+                moduleType: "lease",
+                fileName: "dry_run_sample.txt",
+                docling: dryRunDocling,
               },
-            },
-            { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
-          );
+              { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
+            );
           extraction = {
             rows: result.rows?.length ?? 0,
             method: result.method ?? "unknown",
             warnings: result.warnings ?? [],
+            provider: dryRunProvider,
           };
         } catch (pipeErr: any) {
-          extraction = { error: pipeErr?.message ?? String(pipeErr) };
+          extraction = { error: pipeErr?.message ?? String(pipeErr), provider: dryRunProvider };
         }
       }
 
@@ -2250,7 +2280,9 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      const businessExtractionProvider = resolveBusinessExtractionProvider();
+      const businessExtractionProvider = resolveBusinessExtractionProvider(
+        isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+      );
       console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
