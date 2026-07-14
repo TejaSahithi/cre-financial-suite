@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
 import {
+  ensureLeaseReviewDraftForUpload,
   getLeaseReviewActionState,
   isLeaseUploadReviewReady,
   resolveLeaseReviewIdFromUploadRecord,
@@ -25,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
+import { updateLeaseExtractionField } from "@/services/leaseService";
 import { getStoredActingOrgId } from "@/lib/actingOrg";
 import { resolveWritableOrgId } from "@/lib/orgUtils";
 import { createPageUrl } from "@/utils";
@@ -285,6 +287,7 @@ export default function LeaseUpload() {
   const [deletingUpload, setDeletingUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [linkedLeaseId, setLinkedLeaseId] = useState(null);
+  const [leaseReviewHandoffError, setLeaseReviewHandoffError] = useState(null);
   const retriedUploadedFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
   // Ref keeps the latest fileRecord status visible inside the polling interval
@@ -564,25 +567,30 @@ export default function LeaseUpload() {
     }
   }, [fileId, fetchFileRecord]);
 
-  // Open Lease Review for the lease draft tied to this file. This action only
-  // navigates to an existing linked review record; it does not restart or
-  // prepare extraction.
+  // Open Lease Review for the lease draft tied to this file. The click path is
+  // find-or-create: use any existing linked lease first, otherwise ask the
+  // server-owned review-approve flow to prepare the draft from this upload.
   const openLeaseReview = async () => {
     if (!fileId) return;
     setOpeningReview(true);
+    setLeaseReviewHandoffError(null);
     try {
-      const leaseId =
-        leaseReviewAction.leaseId ||
-        resolveLeaseReviewIdFromUploadRecord(fileRecord) ||
-        (await findLeaseByFileId(fileId))?.id ||
-        null;
-      if (leaseId) {
-        navigate(createPageUrl("LeaseReview", { id: leaseId }));
-      } else {
-        toast.warning("Review is ready, but no Lease Review record is linked yet.");
-      }
+      const { leaseId } = await ensureLeaseReviewDraftForUpload({
+        fileId,
+        fileRecord,
+        linkedLeaseId,
+        findLeaseByFileId,
+        prepareLeaseReviewDraft: (body) => invokeEdgeFunction("review-approve", body),
+        linkLeaseToUploadedFile,
+      });
+
+      setLinkedLeaseId(leaseId);
+      navigate(createPageUrl("LeaseReview", { id: leaseId }));
     } catch (error) {
-      toast.error(error?.message || "Could not open Lease Review");
+      console.error("[LeaseUpload] Could not create Lease Review record from this upload:", error?.cause || error);
+      const message = "Could not create Lease Review record from this upload.";
+      setLeaseReviewHandoffError(message);
+      toast.error(message);
     } finally {
       setOpeningReview(false);
     }
@@ -835,7 +843,7 @@ export default function LeaseUpload() {
               {canOpenReview && (
                 <Button
                   onClick={openLeaseReview}
-                  disabled={openingReview || !leaseReviewAction.canNavigate}
+                  disabled={openingReview}
                   size="sm"
                   className="bg-teal-600 hover:bg-teal-700"
                 >
@@ -878,9 +886,9 @@ export default function LeaseUpload() {
               </Button>
             </div>
 
-            {leaseReviewAction.showMissingLinkWarning && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-900">
-                Review is ready, but no Lease Review record is linked yet.
+            {leaseReviewHandoffError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+                {leaseReviewHandoffError}
               </div>
             )}
 
@@ -1050,13 +1058,59 @@ export default function LeaseUpload() {
   );
 }
 
+async function linkLeaseToUploadedFile(leaseId, fileRecord) {
+  if (!leaseId || !fileRecord?.id) return null;
+
+  const sourceFileId = fileRecord.id;
+  const { data: lease, error: fetchError } = await supabase
+    .from("leases")
+    .select("id, source_file_id, extraction_data")
+    .eq("id", leaseId)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw new Error(`Could not inspect Lease Review source link: ${fetchError.message}`);
+  }
+
+  if (lease?.source_file_id !== sourceFileId) {
+    const { error: updateError } = await supabase
+      .from("leases")
+      .update({ source_file_id: sourceFileId })
+      .eq("id", leaseId);
+
+    if (updateError) {
+      throw new Error(`Could not link Lease Review to uploaded file: ${updateError.message}`);
+    }
+  }
+
+  const extractionSourceFileId = lease?.extraction_data?.source_file_id || null;
+  if (extractionSourceFileId !== sourceFileId) {
+    try {
+      await updateLeaseExtractionField({
+        leaseId,
+        fieldArea: "source_link",
+        action: "source_file_linked_on_upload",
+        patch: {
+          source_file_id: sourceFileId,
+          source_file_name: fileRecord.file_name ?? null,
+          document_subtype: fileRecord.document_subtype ?? null,
+          source_file_linked_at: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.warn("[LeaseUpload] Could not refresh extraction_data source link:", error?.message || error);
+    }
+  }
+
+  return leaseId;
+}
 async function findLeaseByFileId(fileId) {
   if (!fileId) return null;
 
   const attempts = [
+    (query) => query.eq("source_file_id", fileId),
     (query) => query.filter("extraction_data->>source_file_id", "eq", fileId),
     (query) => query.filter("extraction_data->>uploaded_file_id", "eq", fileId),
-    (query) => query.eq("source_file_id", fileId),
     (query) => query.eq("uploaded_file_id", fileId),
   ];
 

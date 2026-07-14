@@ -37,7 +37,70 @@ export function getLeaseReviewActionState(fileRecord, linkedLeaseId = null) {
     reviewReady,
     leaseId,
     showOpenButton: reviewReady,
-    canNavigate: reviewReady && Boolean(leaseId),
-    showMissingLinkWarning: reviewReady && !leaseId,
+    canNavigate: reviewReady,
+    needsDraftCreation: reviewReady && !leaseId,
   };
+}
+
+export function extractLeaseIdFromPrepareResponse(response) {
+  return firstMeaningfulId(
+    response?.lease_id,
+    response?.leaseId,
+    response?.id,
+    response?.store_result?.lease_id,
+    response?.store_result?.leaseId,
+    response?.store_result?.inserted_ids?.[0],
+    response?.store_result?.insertedIds?.[0],
+    response?.reviewed_output?.lease_review_ids?.[0],
+    response?.lease_review_ids?.[0],
+  );
+}
+
+export async function ensureLeaseReviewDraftForUpload({
+  fileId,
+  fileRecord,
+  linkedLeaseId = null,
+  findLeaseByFileId,
+  prepareLeaseReviewDraft,
+  linkLeaseToUploadedFile,
+}) {
+  if (!fileId) throw new Error("Upload file id is required");
+  if (!isLeaseUploadReviewReady(fileRecord)) {
+    throw new Error("Upload is not ready for Lease Review");
+  }
+
+  const resolvedLeaseId = firstMeaningfulId(resolveLeaseReviewIdFromUploadRecord(fileRecord), linkedLeaseId);
+  if (resolvedLeaseId) {
+    await linkLeaseToUploadedFile?.(resolvedLeaseId, fileRecord);
+    return { leaseId: resolvedLeaseId, created: false, source: "upload_record" };
+  }
+
+  const existingLease = await findLeaseByFileId?.(fileId);
+  if (existingLease?.id) {
+    await linkLeaseToUploadedFile?.(existingLease.id, fileRecord);
+    return { leaseId: existingLease.id, created: false, source: "linked_lease" };
+  }
+
+  let prepared;
+  try {
+    prepared = await prepareLeaseReviewDraft?.({
+      file_id: fileId,
+      action: "prepare",
+      review_payload: fileRecord?.ui_review_payload || null,
+    });
+  } catch (error) {
+    throw new Error("Could not create Lease Review record from this upload.", { cause: error });
+  }
+
+  if (prepared?.error) {
+    throw new Error(prepared?.message || "Could not create Lease Review record from this upload.");
+  }
+
+  const createdLeaseId = extractLeaseIdFromPrepareResponse(prepared) || (await findLeaseByFileId?.(fileId))?.id;
+  if (!createdLeaseId) {
+    throw new Error("Could not create Lease Review record from this upload.");
+  }
+
+  await linkLeaseToUploadedFile?.(createdLeaseId, fileRecord);
+  return { leaseId: createdLeaseId, created: true, source: "prepare" };
 }
