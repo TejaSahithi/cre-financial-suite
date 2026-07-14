@@ -139,6 +139,7 @@ import {
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 import StandardFieldsByGroup from "@/components/lease-review/StandardFieldsByGroup";
+import DynamicFindings from "@/components/lease-review/DynamicFindings";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 // Minimum number of source-backed fields required before a new extraction is
@@ -3108,6 +3109,11 @@ export default function LeaseReview() {
             }
           }}
         />
+      </div>
+
+      {/* Dynamic Findings — additive, sits above the tabs too. */}
+      <div className="mb-4">
+        <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
       </div>
 
       {/* Tabs */}
