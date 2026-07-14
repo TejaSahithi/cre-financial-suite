@@ -138,6 +138,8 @@ import {
   ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
+import StandardFieldsByGroup from "@/components/lease-review/StandardFieldsByGroup";
+import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -303,6 +305,15 @@ export default function LeaseReview() {
   }, [leaseFull, userCustomFields]);
 
   const allReviewRows = useMemo(() => Object.values(fieldsForTab).flat(), [fieldsForTab]);
+
+  // Additive, normalized view of the same underlying payload — grouped by
+  // the 17 standard field-model groups. Computed once here and passed down
+  // to the new grouped sections; does not replace fieldsForTab/allReviewRows,
+  // which still drive the original tab structure unchanged.
+  const normalized = useMemo(
+    () => normalizeLeaseReviewData(leaseFull, { fieldReviews }),
+    [leaseFull, fieldReviews],
+  );
   const reviewRowByKey = useMemo(() => {
     const map = new Map();
     allReviewRows.forEach((row) => {
@@ -3084,6 +3095,21 @@ export default function LeaseReview() {
       </div>
       )}
 
+      {/* Standard Fields by Group — additive grouped view, sits alongside the
+          tabs below (does not replace them). */}
+      <div className="mb-4">
+        <StandardFieldsByGroup
+          standardFields={normalized.standardFields}
+          onOpenDetail={(row) => {
+            const field = allReviewRows.find((f) => f.key === row.canonicalKey);
+            if (field) {
+              setDrawerField(field);
+              setDrawerMode("view");
+            }
+          }}
+        />
+      </div>
+
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
@@ -3498,7 +3524,7 @@ export default function LeaseReview() {
           }
         }}
         field={drawerField}
-        lease={lease}
+        lease={leaseFull}
         review={drawerReview}
         initialMode={drawerMode}
         onAccept={(f) => handleAccept(f)}
