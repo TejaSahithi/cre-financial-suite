@@ -147,3 +147,45 @@ describe("Old legacy payloads still render", () => {
     expect(buildingRsfRow.status).toBe("missing");
   });
 });
+
+describe("enterprise lease abstract row model", () => {
+  it("places monthly_rent only in Rent & Charges as editable and Budget Preview as read-only", () => {
+    const result = normalizeLeaseReviewData({ extraction_data: { fields: { monthly_rent: 27865 } } });
+    expect(result.tabs.rent_charges.some((row) => row.canonicalKey === "monthly_rent" && row.rowType === "standard" && row.editable)).toBe(true);
+    expect(result.tabs.budget_preview.some((row) => row.canonicalKey === "monthly_rent" && row.rowType === "read_only_reference" && row.editable === false)).toBe(true);
+    const editableAppearances = Object.values(result.tabs).flat().filter((row) => row.canonicalKey === "monthly_rent" && row.editable).length;
+    expect(editableAppearances).toBe(1);
+  });
+
+  it("splits expense and CAM rule rows into their related tabs", () => {
+    const result = normalizeLeaseReviewData({
+      extraction_data: {
+        workflow_output: {
+          expense_rules: [
+            { expense_category: "real_estate_taxes", requires_review: true, source_text: "Tenant shall pay taxes." },
+            { expense_category: "common_area_maintenance", requires_review: true, source_text: "Tenant shall pay CAM subject to cap." },
+          ],
+        },
+      },
+    });
+    expect(result.tabs.expenses_recoveries.some((row) => row.rowType === "expense_rule" && row.category === "real_estate_taxes")).toBe(true);
+    expect(result.tabs.cam_rules.some((row) => row.rowType === "cam_rule" && row.category === "common_area_maintenance")).toBe(true);
+    expect(result.debugCounts.expense_rules_count).toBe(1);
+    expect(result.debugCounts.cam_rules_count).toBe(1);
+  });
+
+  it("normalizes confidence scores from 0-1 and 0-100 scales", () => {
+    const result = normalizeLeaseReviewData({
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            { item_id: "d1", item_type: "parking_right", label: "Parking Right", value: "Two spaces", source_text: "Tenant has two spaces.", confidence: 0.96 },
+            { item_id: "d2", item_type: "special_notice", label: "Special Notice", value: "Copy lender", source_text: "Copy lender on notices.", confidence: 96 },
+          ],
+        },
+      },
+    });
+    const rows = Object.values(result.tabs).flat().filter((row) => row.rowType === "dynamic");
+    expect(rows.map((row) => row.confidencePercent).sort()).toEqual([96, 96]);
+  });
+});

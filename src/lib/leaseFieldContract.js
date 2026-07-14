@@ -183,6 +183,207 @@ function titleizeCanonicalKey(key) {
     .join(" ");
 }
 
+export const LEASE_REVIEW_CANONICAL_TABS = [
+  { key: "summary", label: "Summary", readOnly: true },
+  { key: "parties_premises", label: "Parties & Premises" },
+  { key: "dates_term", label: "Dates & Term" },
+  { key: "rent_charges", label: "Rent & Charges" },
+  { key: "expenses_recoveries", label: "Expenses / Recoveries" },
+  { key: "cam_rules", label: "CAM Rules" },
+  { key: "taxes", label: "Taxes" },
+  { key: "insurance", label: "Insurance" },
+  { key: "utilities", label: "Utilities" },
+  { key: "repairs_maintenance", label: "Repairs & Maintenance" },
+  { key: "legal_options", label: "Legal / Options" },
+  { key: "critical_dates", label: "Critical Dates" },
+  { key: "notices", label: "Notices" },
+  { key: "signatures", label: "Signatures" },
+  { key: "documents_exhibits", label: "Documents / Exhibits" },
+  { key: "clause_records", label: "Clause Records", readOnly: true },
+  { key: "budget_preview", label: "Budget Preview", readOnly: true },
+  { key: "extraction_debug", label: "Extraction Debug", readOnly: true },
+];
+
+const GROUP_TO_CANONICAL_TAB = {
+  document_identity: "summary",
+  parties: "parties_premises",
+  property_premises: "parties_premises",
+  term_dates: "dates_term",
+  rent_charges: "rent_charges",
+  expenses_recoveries: "expenses_recoveries",
+  cam_rules: "cam_rules",
+  taxes: "taxes",
+  insurance: "insurance",
+  utilities: "utilities",
+  repairs_maintenance: "repairs_maintenance",
+  legal_options: "legal_options",
+  critical_dates: "critical_dates",
+  notices: "notices",
+  signatures: "signatures",
+  budget_inputs: "budget_preview",
+  approval_controls: "summary",
+};
+
+const FIELD_TAB_OVERRIDES = {
+  lease_date: "dates_term",
+  lease_type: "expenses_recoveries",
+  tenant_signatory_name: "signatures",
+  landlord_signatory_name: "signatures",
+  landlord_address: "notices",
+  tenant_address: "notices",
+  building_rsf: "parties_premises",
+  tenant_pro_rata_share: "cam_rules",
+};
+
+const FIELD_REFERENCE_TABS = {
+  monthly_rent: ["summary", "budget_preview"],
+  annual_rent: ["summary", "budget_preview"],
+  square_footage: ["summary", "cam_rules", "budget_preview"],
+  commencement_date: ["summary", "critical_dates", "budget_preview"],
+  expiration_date: ["summary", "critical_dates", "budget_preview"],
+  lease_date: ["summary", "critical_dates"],
+  rent_commencement_date: ["critical_dates", "budget_preview"],
+  tenant_pro_rata_share: ["expenses_recoveries", "budget_preview"],
+  lease_type: ["summary", "budget_preview"],
+  property_name: ["summary"],
+  property_address: ["summary"],
+  tenant_name: ["summary"],
+  landlord_name: ["summary"],
+};
+
+const CORE_VISIBLE_FIELDS = new Set([
+  "document_profile",
+  "approval_status",
+  "lease_date",
+  "lease_type",
+  "tenant_name",
+  "landlord_name",
+  "property_name",
+  "property_address",
+  "unit_number",
+  "square_footage",
+  "permitted_use",
+  "commencement_date",
+  "expiration_date",
+  "rent_commencement_date",
+  "lease_term_months",
+  "monthly_rent",
+  "annual_rent",
+  "rent_per_sf",
+  "billing_frequency",
+  "security_deposit",
+  "responsibility_taxes",
+  "responsibility_insurance",
+  "responsibility_utilities",
+  "responsibility_repairs",
+  "base_year",
+  "expense_stop",
+  "cam_amount",
+  "cam_cap_type",
+  "cam_cap_pct",
+  "admin_fee_pct",
+  "management_fee_basis",
+  "gross_up_enabled",
+  "gross_up_threshold",
+  "tax_responsibility",
+  "insurance_responsibility",
+  "tenant_insurance_required",
+  "general_liability_min",
+  "electric_responsibility",
+  "water_sewer_responsibility",
+  "hvac_responsibility",
+  "renewal_options",
+  "renewal_type",
+  "assignment_provisions",
+  "option_exercise_deadline",
+  "renewal_notice_months",
+  "termination_notice_months",
+  "tenant_signature_date",
+  "landlord_signature_date",
+  "building_rsf",
+  "tenant_pro_rata_share",
+]);
+
+const FIELD_DATA_TYPES = {
+  monthly_rent: "money",
+  annual_rent: "money",
+  rent_per_sf: "number",
+  security_deposit: "money",
+  late_fee_amount: "money",
+  returned_payment_fee_amount: "money",
+  application_fee_amount: "money",
+  administrative_fee_amount: "money",
+  pet_fee_amount: "money",
+  pet_rent_amount: "money",
+  parking_fee_amount: "money",
+  ti_allowance: "money",
+  assignment_consideration: "money",
+  amended_base_rent_for_additional_year: "money",
+  expense_stop: "money",
+  cam_amount: "money",
+  general_liability_min: "money",
+  utility_reimbursement_amount: "money",
+  water_sewer_reimbursement_amount: "money",
+  square_footage: "number",
+  building_rsf: "number",
+  lease_term_months: "number",
+  escalation_rate: "percent",
+  cam_cap_pct: "percent",
+  admin_fee_pct: "percent",
+  gross_up_threshold: "percent",
+  tenant_pro_rata_share: "percent",
+  start_date: "date",
+  end_date: "date",
+  commencement_date: "date",
+  expiration_date: "date",
+  rent_commencement_date: "date",
+  lease_date: "date",
+  assignment_effective_date: "date",
+  option_exercise_deadline: "date",
+  tenant_signature_date: "date",
+  landlord_signature_date: "date",
+  gross_up_enabled: "boolean",
+  tenant_insurance_required: "boolean",
+  waiver_of_subrogation: "boolean",
+  additional_insureds_required: "boolean",
+  right_of_first_refusal: "boolean",
+  early_termination_option: "boolean",
+};
+
+function deriveCanonicalTab(entry) {
+  return entry.canonicalTab || FIELD_TAB_OVERRIDES[entry.canonicalKey] || GROUP_TO_CANONICAL_TAB[entry.group] || entry.group;
+}
+
+function deriveReadOnlyReferences(entry, canonicalTab) {
+  const refs = FIELD_REFERENCE_TABS[entry.canonicalKey] || [];
+  return refs.filter((tab) => tab && tab !== canonicalTab);
+}
+
+function deriveDataType(entry) {
+  return entry.dataType || FIELD_DATA_TYPES[entry.canonicalKey] || "text";
+}
+
+function enrichContractEntry(entry) {
+  const canonicalTab = deriveCanonicalTab(entry);
+  const defaultVisible = entry.defaultVisible ?? (
+    CORE_VISIBLE_FIELDS.has(entry.canonicalKey) ||
+    entry.requiredForApproval ||
+    entry.requiredForBudget ||
+    entry.requiredForCam
+  );
+  return {
+    ...entry,
+    canonicalTab,
+    displayLabel: entry.displayLabel || entry.label || titleizeCanonicalKey(entry.canonicalKey),
+    label: entry.label || entry.displayLabel || titleizeCanonicalKey(entry.canonicalKey),
+    defaultVisible,
+    advanced: entry.advanced ?? !defaultVisible,
+    requiredForExpenseRules: Boolean(entry.requiredForExpenseRules || entry.group === "expenses_recoveries"),
+    readOnlyReferences: entry.readOnlyReferences || deriveReadOnlyReferences(entry, canonicalTab),
+    dataType: deriveDataType(entry),
+    validationRule: entry.validationRule || null,
+  };
+}
 const _aliasIndex = new Map();
 const _contractIndex = new Map();
 for (const entry of LEASE_FIELD_CONTRACT) {
@@ -190,7 +391,7 @@ for (const entry of LEASE_FIELD_CONTRACT) {
   for (const alias of entry.aliases) {
     _aliasIndex.set(alias, entry.canonicalKey);
   }
-  _contractIndex.set(entry.canonicalKey, { ...entry, label: titleizeCanonicalKey(entry.canonicalKey) });
+  _contractIndex.set(entry.canonicalKey, enrichContractEntry(entry));
 }
 
 /** Resolve an alias (or the canonical key itself) to its canonical LEASE_SCHEMA

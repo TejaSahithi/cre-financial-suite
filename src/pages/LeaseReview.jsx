@@ -97,8 +97,6 @@ import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
 import { detectDocumentProfile } from "@/lib/documentProfile";
-import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
-import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import {
   SourceFileLink,
@@ -132,16 +130,11 @@ import { validateCrossFieldWarnings } from "@/components/lease-review/utils/cros
 
 import {
   RentScheduleTable,
-  ExpenseRulesTable,
-  CamRulesTable,
-  CriticalDatesTable,
-  ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
-import StandardFieldsByGroup from "@/components/lease-review/StandardFieldsByGroup";
-import DynamicFindings from "@/components/lease-review/DynamicFindings";
-import CamExpenseRulesPanel from "@/components/lease-review/CamExpenseRulesPanel";
 import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPanel";
+import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
+import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewReadinessSummary";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 // Minimum number of source-backed fields required before a new extraction is
@@ -3098,43 +3091,24 @@ export default function LeaseReview() {
       </div>
       )}
 
-      {/* Standard Fields by Group — additive grouped view, sits alongside the
-          tabs below (does not replace them). */}
       <div className="mb-4">
-        <StandardFieldsByGroup
-          standardFields={normalized.standardFields}
-          onOpenDetail={(row) => {
-            const field = allReviewRows.find((f) => f.key === row.canonicalKey);
-            if (field) {
-              setDrawerField(field);
-              setDrawerMode("view");
-            }
-          }}
+        <LeaseReviewReadinessSummary
+          summary={normalized.readinessSummary}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
         />
       </div>
 
-      {/* Dynamic Findings — additive, sits above the tabs too. */}
-      <div className="mb-4">
-        <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
-      </div>
-
-      {/* CAM / Expense Rules — additive. */}
-      <div className="mb-4">
-        <CamExpenseRulesPanel lease={leaseFull} />
-      </div>
-
-      {/* Advisory workflow blockers — additive, never enforced. */}
       <div className="mb-4">
         <ApprovalBlockersPanel approvalBlockers={normalized.approvalBlockers} />
       </div>
-
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
             if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
-            const tabFields = fieldsForTab[tab.key] || [];
-            const extractedInTab = tabFields.filter((f) => isReviewRowDisplayable(f, { showMissing: false })).length;
+            const tabFields = enterpriseTabs[tab.key] || [];
+            const extractedInTab = tabFields.filter((f) => isMeaningfulValue(f.value ?? f.normalized_value ?? f.normalizedValue) || f.sourceText || f.source_text).length;
             // Flag tabs that are inapplicable for assignment/amendment docs.
             // A tab is "not in this document" when: we're in assignment mode AND
             // every standard field in the tab is empty (no extracted value).
@@ -3315,172 +3289,68 @@ export default function LeaseReview() {
           </div>
         </TabsContent>
 
-        {/* Field tabs - table-first per business section. */}
+        {/* Business tabs - one spreadsheet-style table per section. */}
         {LEASE_REVIEW_TABS
           .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <FieldTableFilter
-                  showMissing={showMissingByTab[tab.key] || false}
-                  onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, [tab.key]: val }))}
-                />
+              <div className="flex justify-end">
                 <Button variant="outline" size="sm" className="h-7 text-xs"
                   onClick={() => { setCustomFieldDialog({ tabKey: tab.key }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
                   + Add Custom Field
                 </Button>
               </div>
-              <FieldReviewTable
-                fields={fieldsForTab[tab.key] || []}
-                lease={leaseFull}
-                fieldReviews={fieldReviews}
-                onOpenDetail={(field) => openDrawer(field, "view")}
-                onQuickAction={(field, action) => {
-                  if (action === "accept") handleAccept(field);
-                  else if (action === "edit") openDrawer(field, "edit");
-                  else if (action === "reject") handleReject(field);
-                  else if (action === "na") handleMarkNA(field);
-                  else if (action === "legal") handleNeedsLegal(field);
-                  else if (action === "manual") handleMarkManualRequired(field);
+              <LeaseReviewTabTable
+                rows={enterpriseTabs[tab.key] || []}
+                onOpenDetail={(row) => openDrawer(row, "view")}
+                onQuickAction={(row, action) => {
+                  if (action === "accept") handleAccept(row);
+                  else if (action === "edit") openDrawer(row, "edit");
+                  else if (action === "reject") handleReject(row);
+                  else if (action === "na") handleMarkNA(row);
+                  else if (action === "legal") handleNeedsLegal(row);
+                  else if (action === "manual") handleMarkManualRequired(row);
                 }}
-                showMissing={showMissingByTab[tab.key] || false}
-                conflictKeys={conflictKeySet}
-                crossFieldWarnings={crossFieldWarnings}
               />
             </TabsContent>
           ))}
-
-        {/* Rent & Charges - single-value rent fields + generated rent rows.
-            The rent_schedules table remains in the backend (rent projection,
-            billing, etc. read from it); we just surface the rows here so
-            reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.rent_charges || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, rent_charges: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <FieldReviewTable
-            fields={fieldsForTab.rent_charges || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.rent_charges || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
-        {/* Expense Rules - single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.expenses_recoveries || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, expenses_recoveries: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "expenses_recoveries" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
-          </div>
-          <FieldReviewTable
-            fields={fieldsForTab.expenses_recoveries || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.expenses_recoveries || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
-          <ExpenseRulesTable leaseId={lease.id} lease={leaseFull || lease} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
-        {/* CAM Rules - single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.cam_rules || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, cam_rules: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "cam_rules" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
-          </div>
-          <FieldReviewTable
-            fields={fieldsForTab.cam_rules || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.cam_rules || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
-          <CamRulesTable leaseId={lease.id} lease={leaseFull || lease} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
-        {/* Clause Records - all meaningful lease clauses against a predefined checklist. */}
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <ClauseRecordsTable lease={leaseFull} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} />
         </TabsContent>
 
-        {/* Critical Dates - derived from approved abstract. */}
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <CriticalDatesTable lease={leaseFull} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
         </TabsContent>
 
-        {/* Documents / Exhibits tab */}
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Source Document</CardTitle>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              {lease.approval_document_url ? (
-                <a
-                  href={lease.approval_document_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
-                >
-                  <FileText className="h-4 w-4" />
-                  Approved signed copy
-                </a>
-              ) : null}
+              {lease.approval_document_url ? <a href={lease.approval_document_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"><FileText className="h-4 w-4" />Approved signed copy</a> : null}
               <SourceFileLink lease={lease} />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Budget Preview tab */}
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 

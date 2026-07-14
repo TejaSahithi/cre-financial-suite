@@ -80,3 +80,21 @@ describe("normalizeDynamicFindings", () => {
     expect(rows.some((r) => r.value === "Delaware")).toBe(true);
   });
 });
+
+describe("dynamic row tab routing", () => {
+  it("routes parking findings to Parties & Premises and suppresses standard-field duplicates", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            { item_id: "parking", item_type: "reserved_parking_rights", label: "Reserved Parking", value: "Two reserved spaces", source_text: "Tenant has two reserved parking spaces.", maps_to_existing_field: false },
+            { item_id: "rent", item_type: "monthly_rent", value: "$10,000", source_text: "Monthly rent is $10,000", maps_to_existing_field: false },
+          ],
+        },
+      },
+    };
+    const rows = normalizeDynamicFindings(lease);
+    expect(rows.some((row) => row.label === "Reserved Parking" && row.tabKey === "parties_premises")).toBe(true);
+    expect(rows.some((row) => row.fieldKey === "monthly_rent" || row.category === "monthly_rent")).toBe(false);
+  });
+});

@@ -33,13 +33,64 @@ import {
   EXTRACTION_STATUSES,
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
-import { LEASE_FIELD_CONTRACT, getFieldContract } from "@/lib/leaseFieldContract";
+import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
 
 function titleize(key) {
   return String(key || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (ch) => ch.toUpperCase())
     .trim() || "Untitled";
+}
+
+function normalizeConfidencePercent(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) return null;
+  return score <= 1 ? Math.round(score * 100) : Math.round(score);
+}
+
+function hasRowValue(row) {
+  return isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue);
+}
+
+const DYNAMIC_TAB_RULES = [
+  { tabKey: "parties_premises", pattern: /parking|premises|suite|unit|floor|signage|storage|loading|rooftop|patio|use restriction/i },
+  { tabKey: "rent_charges", pattern: /rent|credit|abatement|charge|deposit|fee|breakpoint|percentage/i },
+  { tabKey: "expenses_recoveries", pattern: /expense|recover|reimburse|exclusion|non.?recover|audit|true.?up|reconciliation|operating/i },
+  { tabKey: "cam_rules", pattern: /\bcam\b|common area|gross.?up|cap|base year|expense stop|admin fee|management fee/i },
+  { tabKey: "taxes", pattern: /tax|assessment|appeal|protest|refund/i },
+  { tabKey: "insurance", pattern: /insurance|insured|liability|subrogation|deductible|certificate|carrier/i },
+  { tabKey: "utilities", pattern: /utility|utilities|electric|water|sewer|gas|hvac|trash|telecom|meter/i },
+  { tabKey: "repairs_maintenance", pattern: /repair|maintenance|hvac|roof|structural|janitorial|landscap|snow|pest|glass/i },
+  { tabKey: "legal_options", pattern: /assign|sublet|option|renewal|termination|exclusive|co.?tenancy|radius|default|holdover|alteration|snda|estoppel|indemn/i },
+  { tabKey: "critical_dates", pattern: /deadline|notice date|critical date|must open|delivery deadline|reporting date/i },
+  { tabKey: "notices", pattern: /notice|mail|courier|email|copy to|address/i },
+  { tabKey: "signatures", pattern: /signature|signatory|signed|counterpart|electronic/i },
+  { tabKey: "documents_exhibits", pattern: /exhibit|document|guaranty|snda|estoppel|assignment|work letter|site plan|attached|referenced/i },
+];
+
+export function routeDynamicRowToTab(fact = {}) {
+  const explicit = fact.tabKey || fact.tab_key || fact.display_tab || fact.business_area || fact.category;
+  if (explicit && LEASE_REVIEW_CANONICAL_TABS.some((tab) => tab.key === explicit)) return explicit;
+  const text = [
+    fact.label,
+    fact.item_type,
+    fact.field_key,
+    fact.category,
+    fact.value,
+    fact.normalized_value,
+    fact.source_text,
+    fact.exact_source_text,
+  ].filter(Boolean).join(" ");
+  const matched = DYNAMIC_TAB_RULES.find((rule) => rule.pattern.test(text));
+  return matched?.tabKey || "legal_options";
+}
+
+function normalizeRowStatus(status, fallback = "needs_review") {
+  const text = String(status || "").toLowerCase();
+  if (["approved", "accepted", "active"].includes(text)) return "approved";
+  if (["rejected", "ignored"].includes(text)) return "rejected";
+  if (["missing", "not_found"].includes(text)) return "missing";
+  if (["auto_populated", "extracted", "draft_from_extraction", "draft"].includes(text)) return text;
+  return fallback;
 }
 
 // ── Standard fields ───────────────────────────────────────────────────────
@@ -71,7 +122,8 @@ function computeFieldStatus({ hasValue, evidenceVerified, confidenceBucket, revi
  */
 export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
   const rows = [];
-  for (const contract of LEASE_FIELD_CONTRACT) {
+  for (const rawContract of LEASE_FIELD_CONTRACT) {
+    const contract = getFieldContract(rawContract.canonicalKey) || rawContract;
     if (contract.computed || !contract.inLeaseSchema) continue;
     const canonicalKey = contract.canonicalKey;
     const value = readFieldValue(lease, canonicalKey);
@@ -81,28 +133,51 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
     const evidenceVerified = hasValidSourceEvidence(evidence);
     const review = fieldReviews?.[canonicalKey];
     const hasValue = isMeaningfulValue(value);
+    const status = computeFieldStatus({
+      hasValue,
+      evidenceVerified,
+      confidenceBucket: classifyConfidence(confidence),
+      reviewStatus: review?.status,
+      extractionStatus,
+    });
 
     rows.push({
+      rowType: "standard",
+      typeLabel: "Standard",
       fieldKey: canonicalKey,
       canonicalKey,
-      label: contract.label,
+      key: canonicalKey,
+      field_key: canonicalKey,
+      label: contract.displayLabel || contract.label,
+      field_label: contract.displayLabel || contract.label,
       group: contract.group,
+      tabKey: contract.canonicalTab,
+      canonicalTab: contract.canonicalTab,
+      editable: true,
       value,
       normalizedValue: value,
+      normalized_value: value,
+      display_value: value,
       confidence,
-      status: computeFieldStatus({
-        hasValue,
-        evidenceVerified,
-        confidenceBucket: classifyConfidence(confidence),
-        reviewStatus: review?.status,
-        extractionStatus,
-      }),
+      confidencePercent: normalizeConfidencePercent(confidence),
+      status,
+      extraction_status: status,
       sourcePage: evidence?.sourcePage ?? null,
+      source_page: evidence?.sourcePage ?? null,
+      page_number: evidence?.sourcePage ?? null,
       sourceText: evidence?.sourceText ?? null,
+      source_text: evidence?.sourceText ?? null,
       evidenceVerified,
+      required: Boolean(contract.requiredForApproval),
       requiredForApproval: Boolean(contract.requiredForApproval),
       requiredForCam: Boolean(contract.requiredForCam),
       requiredForBudget: Boolean(contract.requiredForBudget),
+      requiredForExpenseRules: Boolean(contract.requiredForExpenseRules),
+      defaultVisible: Boolean(contract.defaultVisible),
+      advanced: Boolean(contract.advanced),
+      dataType: contract.dataType,
+      type: contract.dataType === "money" ? "currency" : contract.dataType === "percent" ? "number" : contract.dataType,
+      readOnlyReferences: contract.readOnlyReferences || [],
       approvalImpact: describeApprovalImpact(contract),
       validationMessage: evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null,
       sourceProvider: evidence?.extractionStatus
@@ -137,21 +212,41 @@ export function normalizeDynamicFindings(lease) {
   const rows = [];
   for (const item of merged) {
     if (!item || typeof item !== "object") continue;
-    if (item.maps_to_existing_field) continue; // genuinely unmapped only
+    if (item.maps_to_existing_field) continue;
+    const candidateKey = item.field_key || item.item_type || item.key;
+    const canonicalCandidate = resolveCanonicalFieldKey(candidateKey);
+    if (getFieldContract(canonicalCandidate)) continue;
     const sourceText = item.source_text ?? item.exact_source_text ?? null;
     const dedupeKey = `${item.item_type || item.field_key || ""}|${String(sourceText || item.value || "").toLowerCase().slice(0, 140)}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 
+    const tabKey = routeDynamicRowToTab(item);
+    const confidence = typeof item.confidence === "number" ? item.confidence : null;
     rows.push({
+      rowType: "dynamic",
+      typeLabel: "Dynamic",
+      key: item.item_id || item.id || `dynamic-${rows.length}`,
+      fieldKey: item.field_key || item.item_type || null,
       label: item.label || titleize(item.item_type || item.field_key || "Finding"),
       category: item.business_area || item.display_tab || item.item_type || "unknown_needs_review",
+      tabKey,
+      editable: false,
       value: item.normalized_value ?? item.value ?? null,
+      normalizedValue: item.normalized_value ?? item.value ?? null,
+      normalized_value: item.normalized_value ?? item.value ?? null,
       sourcePage: item.source_page ?? item.page_number ?? null,
+      source_page: item.source_page ?? item.page_number ?? null,
+      page_number: item.source_page ?? item.page_number ?? null,
       sourceText,
-      confidence: typeof item.confidence === "number" ? item.confidence : null,
+      source_text: sourceText,
+      confidence,
+      confidencePercent: normalizeConfidencePercent(confidence),
+      status: normalizeRowStatus(item.review_status || item.status || item.extraction_status),
       mapsToExistingField: Boolean(item.maps_to_existing_field),
       createsDynamicRow: item.creates_dynamic_row !== false,
+      defaultVisible: true,
+      advanced: false,
     });
   }
   return rows;
@@ -330,20 +425,54 @@ export function normalizeClauseRecords(lease) {
 
 // ── CAM / Expense rules ───────────────────────────────────────────────────
 
+function isCamRule(rule) {
+  const category = String(rule?.expense_category ?? rule?.category ?? rule?.normalized_key ?? rule?.rule_type ?? "").toLowerCase();
+  return /\bcam\b|common_area|operating_expenses|gross_up|cap|base_year|expense_stop|admin|management/.test(category)
+    || rule?.gross_up_threshold != null
+    || rule?.gross_up_percent != null
+    || rule?.cam_cap_pct != null
+    || rule?.cap_percent != null
+    || rule?.admin_fee_percent != null
+    || rule?.management_fee_percent != null
+    || rule?.tenant_share_percent != null;
+}
+
 function normalizeExpenseRuleShape(rule) {
+  const camRule = isCamRule(rule);
+  const confidence = rule?.confidence_score ?? rule?.confidence ?? null;
+  const needsReview = (rule?.review_status ?? rule?.row_status ?? "").toLowerCase() === "needs_review"
+    || Boolean(rule?.requires_review);
+  const recoverable = rule?.recoverable_from_tenant ?? rule?.recoverable_flag ?? rule?.is_recoverable ?? null;
+  const calculationIncomplete = needsReview && recoverable == null;
   return {
+    rowType: camRule ? "cam_rule" : "expense_rule",
+    typeLabel: camRule ? "CAM Rule" : "Expense Rule",
+    key: rule?.id || rule?.rule_key || `${camRule ? "cam" : "expense"}-${rule?.expense_category ?? rule?.category ?? "rule"}`,
     category: rule?.expense_category ?? rule?.category ?? rule?.normalized_key ?? "unknown",
-    recoverable: rule?.recoverable_from_tenant ?? rule?.recoverable_flag ?? rule?.is_recoverable ?? null,
+    label: rule?.normalized_rule || rule?.subcategory_name || rule?.category_name || rule?.expense_category || rule?.category || (camRule ? "CAM rule" : "Expense rule"),
+    tabKey: camRule ? "cam_rules" : "expenses_recoveries",
+    editable: false,
+    value: calculationIncomplete ? "Clause found - calculation needs review" : null,
+    normalizedValue: calculationIncomplete ? "Clause found - calculation needs review" : null,
+    normalized_value: calculationIncomplete ? "Clause found - calculation needs review" : null,
+    recoverable,
+    responsibleParty: rule?.responsible_party ?? rule?.responsibleParty ?? null,
     allocationMethod: rule?.recovery_method ?? rule?.allocation_method ?? null,
     cap: rule?.cap_percent ?? rule?.cam_cap_pct ?? null,
     floor: rule?.floor_percent ?? rule?.floor ?? null,
     adminFeePercent: rule?.admin_fee_percent ?? rule?.admin_fee_pct ?? null,
     exclusions: rule?.exclusions ?? rule?.excluded_items ?? null,
     sourcePage: rule?.source_page ?? rule?.page_number ?? null,
+    source_page: rule?.source_page ?? rule?.page_number ?? null,
+    page_number: rule?.source_page ?? rule?.page_number ?? null,
     sourceText: rule?.exact_source_text ?? rule?.source_clause ?? rule?.source_text ?? null,
-    confidence: rule?.confidence_score ?? rule?.confidence ?? null,
-    needsReview: (rule?.review_status ?? rule?.row_status ?? "").toLowerCase() === "needs_review"
-      || Boolean(rule?.requires_review),
+    source_text: rule?.exact_source_text ?? rule?.source_clause ?? rule?.source_text ?? null,
+    confidence,
+    confidencePercent: normalizeConfidencePercent(confidence),
+    status: normalizeRowStatus(rule?.review_status || rule?.row_status || rule?.status, "needs_review"),
+    needsReview,
+    defaultVisible: true,
+    advanced: false,
   };
 }
 
@@ -457,37 +586,151 @@ export function normalizeApprovalBlockers(lease, standardFields) {
 
 // ── Debug counts ───────────────────────────────────────────────────────────
 
-export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, criticalDates, approvalBlockers }) {
+export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates }) {
+  const tabs = LEASE_REVIEW_CANONICAL_TABS.reduce((acc, tab) => {
+    acc[tab.key] = [];
+    return acc;
+  }, {});
+
+  const toReadOnlyReference = (row, tabKey) => ({
+    ...row,
+    rowType: "read_only_reference",
+    typeLabel: "Reference",
+    tabKey,
+    editable: false,
+    key: `${row.canonicalKey}-${tabKey}-reference`,
+  });
+
+  for (const row of standardFields) {
+    if (tabs[row.tabKey]) tabs[row.tabKey].push(row);
+    for (const refTab of row.readOnlyReferences || []) {
+      if (tabs[refTab]) tabs[refTab].push(toReadOnlyReference(row, refTab));
+    }
+  }
+  for (const row of dynamicFindings) if (tabs[row.tabKey]) tabs[row.tabKey].push(row);
+  for (const row of expenseRules) tabs.expenses_recoveries.push(row);
+  for (const row of camRules) tabs.cam_rules.push(row);
+
+  for (const row of clauseRecords) {
+    tabs.clause_records.push({
+      rowType: "clause",
+      typeLabel: "Clause",
+      key: `${row.clauseType}-${row.sourcePage ?? "unknown"}-${String(row.summary || "").slice(0, 24)}`,
+      label: row.title || row.clauseType,
+      tabKey: "clause_records",
+      editable: false,
+      value: row.summary,
+      normalizedValue: row.summary,
+      normalized_value: row.summary,
+      status: row.reviewStatus || "pending",
+      confidence: row.confidence,
+      confidencePercent: normalizeConfidencePercent(row.confidence),
+      sourcePage: row.sourcePage,
+      source_page: row.sourcePage,
+      page_number: row.sourcePage,
+      sourceText: row.sourceText,
+      source_text: row.sourceText,
+      defaultVisible: true,
+    });
+  }
+
+  for (const row of criticalDates) {
+    if (!tabs.critical_dates.some((existing) => existing.canonicalKey === row.canonicalKey)) {
+      tabs.critical_dates.push(toReadOnlyReference(row, "critical_dates"));
+    }
+  }
+  return tabs;
+}
+
+export function buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs }) {
+  const requiredApproval = standardFields.filter((row) => row.requiredForApproval);
+  const missingRequired = requiredApproval.filter((row) => !hasRowValue(row));
+  const needsReview = standardFields.filter((row) => row.status === "needs_review" || row.status === "manual_required");
+  const sourceBacked = standardFields.filter((row) => row.evidenceVerified);
+  const tabSummaries = LEASE_REVIEW_CANONICAL_TABS.map((tab) => {
+    const rows = tabs?.[tab.key] || [];
+    const standardRows = rows.filter((row) => row.rowType === "standard");
+    return {
+      key: tab.key,
+      label: tab.label,
+      rows: rows.length,
+      complete: standardRows.filter(hasRowValue).length,
+      totalStandard: standardRows.length,
+      missingRequired: standardRows.filter((row) => row.requiredForApproval && !hasRowValue(row)).length,
+      needsReview: rows.filter((row) => row.status === "needs_review" || row.status === "manual_required").length,
+    };
+  });
+
+  return {
+    approvalReadiness: missingRequired.length === 0 && needsReview.length === 0 ? "ready" : "needs_review",
+    budgetReadiness: approvalBlockers.budgetBlockers.length === 0 ? "ready" : "blocked",
+    camReadiness: approvalBlockers.camBlockers.length === 0 ? "ready" : "needs_review",
+    expenseRulesReadiness: expenseRules.length > 0 ? "needs_review" : "no_rules_found",
+    missingRequiredFields: missingRequired.map((row) => row.canonicalKey),
+    budgetMissingInputsCount: approvalBlockers.budgetBlockers.length,
+    needsReviewFields: needsReview.map((row) => row.canonicalKey),
+    sourceBackedCount: sourceBacked.length,
+    dynamicRowsCount: dynamicFindings.length,
+    expenseRulesCount: expenseRules.length,
+    camRulesCount: camRules.length,
+    clauseRecordsCount: clauseRecords.length,
+    criticalDatesCount: criticalDates.length,
+    tabSummaries,
+  };
+}
+
+export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules = [], criticalDates, approvalBlockers, tabs = {} }) {
+  const visibleRows = Object.values(tabs).flat();
   return {
     standard_fields_total: standardFields.length,
     standard_fields_populated: standardFields.filter((f) => isMeaningfulValue(f.value)).length,
     standard_fields_source_backed: standardFields.filter((f) => f.evidenceVerified).length,
+    standard_fields_missing: standardFields.filter((f) => !isMeaningfulValue(f.value)).length,
+    standard_fields_needs_review: standardFields.filter((f) => f.status === "needs_review" || f.status === "manual_required").length,
+    dynamic_rows_count: dynamicFindings.length,
     dynamic_findings_count: dynamicFindings.length,
     clause_records_count: clauseRecords.length,
     expense_rules_count: expenseRules.length,
+    cam_rules_count: camRules.length,
     critical_dates_count: criticalDates.length,
+    visible_rows_count: visibleRows.length,
     approval_blockers_count: approvalBlockers.missingFields.length + approvalBlockers.warnings.length,
   };
 }
 
-// ── Top-level ────────────────────────────────────────────────────────────
+// Top-level -----------------------------------------------------------------
 
 /**
- * The single normalized view of a lease's review data. Synchronous —
+ * The single normalized view of a lease's review data. Synchronous -
  * DB-backed data (lease_clauses table rows, lease_expense_rules table rows)
  * is NOT included here; those stay in their existing async react-query hooks
- * and get layered on top by the components that already load them
- * (ClauseRecordsTable, ExpenseRulesTable/CamRulesTable). This function
- * covers everything derivable from the `lease` object alone.
+ * and get layered on top by the components that already load them.
  */
 export function normalizeLeaseReviewData(lease, { fieldReviews = {} } = {}) {
   const standardFields = normalizeStandardFields(lease, { fieldReviews });
   const dynamicFindings = normalizeDynamicFindings(lease);
   const clauseRecords = normalizeClauseRecords(lease);
-  const expenseRules = normalizeExpenseRuleFallback(lease);
+  const allRuleRows = normalizeExpenseRuleFallback(lease);
+  const expenseRules = allRuleRows.filter((row) => row.rowType !== "cam_rule");
+  const camRules = allRuleRows.filter((row) => row.rowType === "cam_rule");
   const criticalDates = normalizeCriticalDates(standardFields);
   const approvalBlockers = normalizeApprovalBlockers(lease, standardFields);
-  const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, criticalDates, approvalBlockers });
+  const tabs = buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates });
+  const readinessSummary = buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs });
+  const budgetPreview = tabs.budget_preview || [];
+  const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules, criticalDates, approvalBlockers, tabs });
 
-  return { standardFields, dynamicFindings, clauseRecords, expenseRules, criticalDates, approvalBlockers, debugCounts };
+  return {
+    readinessSummary,
+    tabs,
+    standardFields,
+    dynamicFindings,
+    clauseRecords,
+    expenseRules,
+    camRules,
+    criticalDates,
+    approvalBlockers,
+    budgetPreview,
+    debugCounts,
+  };
 }

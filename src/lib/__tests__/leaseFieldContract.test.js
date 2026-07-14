@@ -74,3 +74,21 @@ describe("leaseFieldContract", () => {
     expect(entry.inLeaseSchema).toBe(false);
   });
 });
+
+describe("leaseFieldContract: canonical tab ownership", () => {
+  it("assigns each standard field exactly one editable canonical tab", () => {
+    for (const entry of LEASE_FIELD_CONTRACT) {
+      const contract = getFieldContract(entry.canonicalKey);
+      expect(contract.canonicalTab).toBeTruthy();
+      expect(Array.isArray(contract.readOnlyReferences)).toBe(true);
+      expect(contract.readOnlyReferences).not.toContain(contract.canonicalTab);
+    }
+  });
+
+  it("keeps rent and square footage in one editable home with read-only references", () => {
+    expect(getFieldContract("monthly_rent").canonicalTab).toBe("rent_charges");
+    expect(getFieldContract("monthly_rent").readOnlyReferences).toContain("budget_preview");
+    expect(getFieldContract("square_footage").canonicalTab).toBe("parties_premises");
+    expect(getFieldContract("square_footage").readOnlyReferences).toContain("cam_rules");
+  });
+});
