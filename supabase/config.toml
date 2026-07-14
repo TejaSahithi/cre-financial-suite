@@ -1,5 +1,14 @@
 project_id = "cre-financial-suite-main"
 
+# The app's MFAGuard (src/components/MFAGuard.jsx) requires every
+# email/password user to enroll TOTP MFA. The Supabase CLI defaults
+# TOTP enrollment to disabled locally, so without this section local
+# dev logins get stuck on the MFA step with a 422 mfa_totp_enroll_not_enabled
+# error the moment MFAGuard tries to generate a QR code.
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
 [functions.save-security-questions]
 enabled = true
 verify_jwt = true
