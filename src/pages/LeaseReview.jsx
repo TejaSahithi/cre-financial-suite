@@ -15,7 +15,14 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { leaseService, persistLeaseExtractionMerge } from "@/services/leaseService";
+import {
+  leaseService,
+  persistLeaseExtractionMerge,
+  updateLeaseFieldAndColumns,
+  updateLeaseExtractionField,
+  backfillLeaseEvidence,
+  sendLeaseBackForReextraction,
+} from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -495,6 +502,7 @@ export default function LeaseReview() {
           auto_link_score: chosen.score,
           auto_link_reasons: chosen.reasons,
         };
+        const nextExtraction = { ...(lease.extraction_data || {}), ...autoLinkPatch };
         const { error: updateErr } = await supabase
           .from("leases")
           .update({ extraction_data: nextExtraction })
@@ -531,6 +539,7 @@ export default function LeaseReview() {
         source_file_name: picked?.file_name ?? null,
         manually_linked_at: new Date().toISOString(),
       };
+      const nextExtraction = { ...(lease.extraction_data || {}), ...manualLinkPatch };
       const { error: updateErr } = await supabase
         .from("leases")
         .update({ extraction_data: nextExtraction })
@@ -911,15 +920,16 @@ export default function LeaseReview() {
 
   const handleMarkAsFullLease = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            document_type_override: "full_lease",
-          },
-        },
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "lease_flag",
+        action: "document_type_override_set",
+        patch: { document_type_override: "full_lease" },
       });
+      updateLeaseQueryCache(queryClient, leaseId, {
+        extraction_data: { ...(lease.extraction_data || {}), document_type_override: "full_lease" },
+      });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Marked as full lease - banner dismissed.");
     } catch (err) {
       console.error("[LeaseReview] mark as full lease failed:", err);
@@ -1967,19 +1977,8 @@ export default function LeaseReview() {
 
   const handleSendBack = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          status: "draft",
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            send_back: {
-              reason: sendBackReason,
-              sent_back_at: new Date().toISOString(),
-            },
-          },
-        },
-      });
+      await sendLeaseBackForReextraction({ leaseId: lease.id, reason: sendBackReason });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Sent back for re-extraction");
       setShowSendBack(false);
       const params = new URLSearchParams();
@@ -3630,6 +3629,7 @@ export default function LeaseReview() {
           // sees the same shape the extractor would have produced.
           try {
             const prevField = lease.extraction_data?.fields?.[f.key] || null;
+            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
               source_page:
@@ -3682,11 +3682,11 @@ export default function LeaseReview() {
                 ...(confValue != null ? { [f.key]: confValue } : {}),
               },
             };
-            const { error: updateErr } = await supabase
-              .from("leases")
-              .update({ extraction_data: nextExtraction })
-              .eq("id", lease.id);
-            if (updateErr) throw updateErr;
+            // updateLeaseExtractionField() above already persisted this patch
+            // server-side (merged, not replaced, onto fields[key]/
+            // field_evidence[key]) — do not also write extraction_data
+            // directly here, that would be a redundant second write racing
+            // the server's own merge with a client-reconstructed object.
             // Seed the cache with the new extraction_data immediately so the
             // drawer / table re-render before the invalidation refetch
             // round-trips. Previously only invalidateQueries fired here,

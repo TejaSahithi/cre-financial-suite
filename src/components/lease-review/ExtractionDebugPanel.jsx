@@ -9,7 +9,7 @@ import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
-import { persistLeaseExtractionMerge } from "@/services/leaseService";
+import { persistLeaseExtractionMerge, updateLeaseExtractionField } from "@/services/leaseService";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -538,7 +538,7 @@ export default function ExtractionDebugPanel({ lease }) {
       await persistLeaseExtractionMerge({
         leaseId: lease.id,
         action: "lease_extraction_debug_applied",
-        patch: applyLatestPatch,
+        patch: nextExtraction,
       });
       toast.success("Lease refreshed with latest extraction from source file.");
       queryClient.invalidateQueries({ queryKey: ["lease", lease.id] });
