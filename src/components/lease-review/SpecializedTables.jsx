@@ -153,7 +153,7 @@ export function RentScheduleTable({ leaseId }) {
 }
 
 // ─── Expense Rules / CAM Rules ────────────────────────────────────────
-function useLeaseExpenseRules(leaseOrId) {
+export function useLeaseExpenseRules(leaseOrId) {
   const lease = leaseOrId && typeof leaseOrId === "object" ? leaseOrId : null;
   const leaseId = lease?.id || leaseOrId;
 

@@ -140,6 +140,8 @@ import {
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
 import StandardFieldsByGroup from "@/components/lease-review/StandardFieldsByGroup";
 import DynamicFindings from "@/components/lease-review/DynamicFindings";
+import CamExpenseRulesPanel from "@/components/lease-review/CamExpenseRulesPanel";
+import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPanel";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 // Minimum number of source-backed fields required before a new extraction is
@@ -3114,6 +3116,16 @@ export default function LeaseReview() {
       {/* Dynamic Findings — additive, sits above the tabs too. */}
       <div className="mb-4">
         <DynamicFindings dynamicFindings={normalized.dynamicFindings} />
+      </div>
+
+      {/* CAM / Expense Rules — additive. */}
+      <div className="mb-4">
+        <CamExpenseRulesPanel lease={leaseFull} />
+      </div>
+
+      {/* Advisory workflow blockers — additive, never enforced. */}
+      <div className="mb-4">
+        <ApprovalBlockersPanel approvalBlockers={normalized.approvalBlockers} />
       </div>
 
       {/* Tabs */}
