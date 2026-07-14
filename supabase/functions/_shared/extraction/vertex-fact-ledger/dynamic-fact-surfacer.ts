@@ -11,6 +11,7 @@
  */
 
 import { createDocumentItem } from "../lease-workflow.ts";
+import { LEASE_FIELD_CONTRACT } from "../field-contract.ts";
 import type { CanonicalDocumentIndex, DocumentProfile, Fact } from "./types.ts";
 
 function titleizeCategory(category: string): string {
@@ -20,6 +21,24 @@ function titleizeCategory(category: string): string {
     .filter(Boolean)
     .map((word) => word[0].toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+/**
+ * Diagnostic only — does not change what gets surfaced. fact-field-mapper.ts
+ * already checked every field's labels + aliases and this fact still didn't
+ * clear MIN_LABEL_SCORE, so this is a best-effort "near miss" signal (any
+ * alias substring, no score threshold) for a future extraction-tuning pass
+ * to have real data to work from instead of guessing why facts go unmapped.
+ */
+function findPossibleCanonicalMatch(fact: Fact): string | null {
+  const haystack = `${fact.sourceText} ${String(fact.value ?? "")}`.toLowerCase();
+  for (const entry of LEASE_FIELD_CONTRACT) {
+    for (const alias of entry.aliases) {
+      const needle = alias.toLowerCase().replace(/_/g, " ");
+      if (needle.length >= 3 && haystack.includes(needle)) return entry.canonicalKey;
+    }
+  }
+  return null;
 }
 
 /**
@@ -40,7 +59,18 @@ export function surfaceDynamicFacts(args: {
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 
-    items.push(createDocumentItem({
+    const possibleCanonicalMatch = findPossibleCanonicalMatch(fact);
+    if (possibleCanonicalMatch) {
+      console.log(
+        `[dynamic-fact-surfacer] near_miss category=${fact.category} possible_canonical_match=${possibleCanonicalMatch} ` +
+        `— fact-field-mapper.ts's label score didn't clear the threshold for this field`,
+      );
+    }
+
+    // createDocumentItem() returns a fixed-shape object (only reads specific
+    // named args keys) — the diagnostic tag below is added onto its RETURN
+    // value, not passed as an input arg, since it isn't part of that shape.
+    const item = createDocumentItem({
       item_id: `vertex_fact:${fact.category}:${dedupeKey.slice(0, 60)}`,
       document_profile: documentProfile,
       item_type: fact.category,
@@ -57,7 +87,11 @@ export function surfaceDynamicFacts(args: {
       maps_to_existing_field: false,
       maps_to_fixed_field: false,
       creates_dynamic_row: true,
-    }));
+    });
+
+    // Diagnostic only — does not affect dedup, display, or whether this
+    // surfaces as a dynamic row.
+    items.push(possibleCanonicalMatch ? { ...item, possible_canonical_match: possibleCanonicalMatch } : item);
   }
 
   return items;

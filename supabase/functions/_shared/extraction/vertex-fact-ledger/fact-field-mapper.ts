@@ -3,9 +3,16 @@
  * Vertex Fact Ledger — Fact → Standard Field Mapper
  *
  * Deterministic (no LLM). Scores each fact against every LEASE_SCHEMA field's
- * existing labels[] and picks the best match per field. Calls the existing,
- * unmodified validateRecords() from validator.ts so type/range/enum
- * enforcement and lease cross-field sanity checks are identical to
+ * labels[] PLUS field-contract.ts's aliases for that field (the other
+ * vocabularies' names for the same concept — e.g. a fact phrased using
+ * "tenant's notice address" should still map onto tenant_address even
+ * though that field's own LEASE_SCHEMA labels list is short). This is what
+ * closes the parity gap legacy_hybrid didn't have: legacy_hybrid's rule
+ * extractor and LLM groups already benefit from lease-workflow.ts's
+ * FIELD_SPECS aliases via buildLeaseFieldMap()'s getFirstValue(row,
+ * spec.aliases); this mapper previously had no equivalent. Calls the
+ * existing, unmodified validateRecords() from validator.ts so type/range/
+ * enum enforcement and lease cross-field sanity checks are identical to
  * legacy_hybrid — this module never reimplements validation.
  *
  * Facts that don't clear a real label match for any field pass through
@@ -14,16 +21,19 @@
 
 import { getSchema, type FieldDef } from "../schemas.ts";
 import { validateRecords } from "../validator.ts";
+import { getFieldContract } from "../field-contract.ts";
 import type { ExtractedField, ExtractedRecord, ModuleType } from "../types.ts";
 import type { Fact, FactFieldMappingResult } from "./types.ts";
 
 const MIN_LABEL_SCORE = 3; // shortest meaningful label match (e.g. "by:" is too weak alone)
 
-function scoreFactAgainstField(fact: Fact, def: FieldDef): number {
+function scoreFactAgainstField(fact: Fact, fieldName: string, def: FieldDef): number {
   const haystack = `${fact.sourceText} ${String(fact.value ?? "")}`.toLowerCase();
   let score = 0;
-  for (const label of def.labels || []) {
-    const needle = label.toLowerCase();
+  const contract = getFieldContract(fieldName);
+  const candidateLabels = [...(def.labels || []), ...(contract?.aliases || [])];
+  for (const label of candidateLabels) {
+    const needle = label.toLowerCase().replace(/_/g, " ");
     if (needle.length < 3) continue;
     if (haystack.includes(needle)) score = Math.max(score, needle.length);
   }
@@ -50,7 +60,7 @@ export function mapFactsToStandardFields(args: {
     let bestField: string | null = null;
     let bestScore = 0;
     for (const fieldName of fieldNames) {
-      const score = scoreFactAgainstField(fact, schema[fieldName]);
+      const score = scoreFactAgainstField(fact, fieldName, schema[fieldName]);
       if (score > bestScore) {
         bestScore = score;
         bestField = fieldName;
