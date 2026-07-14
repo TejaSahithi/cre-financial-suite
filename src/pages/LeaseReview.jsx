@@ -310,6 +310,7 @@ export default function LeaseReview() {
     () => normalizeLeaseReviewData(leaseFull, { fieldReviews }),
     [leaseFull, fieldReviews],
   );
+  const enterpriseTabs = normalized.tabs || {};
   const reviewRowByKey = useMemo(() => {
     const map = new Map();
     allReviewRows.forEach((row) => {
