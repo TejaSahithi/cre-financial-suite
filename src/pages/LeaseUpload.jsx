@@ -130,15 +130,21 @@ async function fetchUploadedFileStatus(id) {
 function normalizePipelineStatusRecord(data, id) {
   const fileMetadata = data?.file_metadata || {};
   const pipeline = data?.pipeline || {};
+  const status = data?.status || statusFromDisplayState(data?.display_state);
+  const readyForReview =
+    status === "review_required" ||
+    data?.display_state === "ready_for_review" ||
+    data?.next_action === "open_review" ||
+    data?.review_required === true;
   return {
     id: data?.id || data?.file_id || fileMetadata.id || id,
     org_id: data?.org_id || fileMetadata.org_id || null,
     file_name: data?.file_name || fileMetadata.file_name || "Lease document",
     file_url: data?.file_url || fileMetadata.file_url || null,
-    status: data?.status || statusFromDisplayState(data?.display_state),
+    status,
     processing_status: data?.processing_status || data?.display_state || null,
-    failed_step: data?.failed_step || pipeline.stage || data?.latest_job?.stage || null,
-    error_message: data?.error_message || data?.message || data?.latest_job?.error_message || null,
+    failed_step: readyForReview ? null : (data?.failed_step || pipeline.stage || data?.latest_job?.stage || null),
+    error_message: readyForReview ? null : (data?.error_message || data?.message || data?.latest_job?.error_message || null),
     review_required: data?.review_required ?? null,
     review_status: data?.review_status ?? null,
     document_subtype: data?.document_subtype || fileMetadata.document_subtype || null,

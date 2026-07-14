@@ -69,6 +69,8 @@ const POST_REVIEW_TERMINAL_STATUSES = ["approved", "storing", "stored", "computi
  * fallback for legacy rows persisted before core_ready existed.
  */
 export function computeCanOpenReview({ hasValidReviewPayload, uiReviewPayload, status }) {
+  if (hasValidReviewPayload && status === "review_required") return true;
+
   // Only fall back to the legacy field-scan when core_ready is genuinely
   // absent (a row persisted before the flag existed) — an explicit
   // core_ready:false is an authoritative "not ready yet" from the backend
