@@ -166,6 +166,45 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "If the lease reads 'Landlord: 224 Partners, LLC  By: Jane Doe', return '224 Partners, LLC', NOT 'Jane Doe'. " +
       "Look for two opening-clause formats: (1) 'between [Entity], or its assigns (referred to as \"Landlord\")' and (2) 'between [Entity] (\"Landlord\") and ...' — in both cases extract the entity name BEFORE the parenthetical.",
   },
+  // ─── Contact/notice addresses — added to close a gap flagged in
+  // docs/lease-standard-field-model.md: these already had working
+  // lease-workflow.ts FIELD_SPECS entries (real patterns/aliases) but no
+  // LEASE_SCHEMA entry, so they were captured for legacy_hybrid's workflow
+  // display but never validated, never part of getSchema()'s standard-field
+  // set, and unreachable by vertex_fact_ledger's fact-field-mapper.ts (which
+  // only scores against LEASE_SCHEMA labels). Patterns/labels below mirror
+  // the existing FIELD_SPECS entries (lease-workflow.ts) so both vocabularies
+  // agree on what these fields mean.
+  landlord_address: {
+    type: "string",
+    labels: ["landlord address", "landlord's address", "landlord notice address", "lessor address"],
+    tableHeaders: ["landlord_address", "landlord address"],
+    patterns: [/\blandlord(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i, /\baddress\s+of\s+landlord\b[:\s-]+([^\n]{6,180})/i],
+    description: "The landlord's mailing or notice address — NOT the leased premises address.",
+  },
+  tenant_address: {
+    type: "string",
+    labels: ["tenant address", "tenant's address"],
+    tableHeaders: ["tenant_address", "tenant address"],
+    patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i],
+    description: "The tenant's mailing or notice address — NOT the leased premises address.",
+  },
+  tenant_contact_name: {
+    type: "string",
+    labels: ["tenant contact", "tenant representative", "tenant contact name"],
+    tableHeaders: ["tenant_contact_name", "tenant contact"],
+    patterns: [/\btenant(?:\s+contact|\s+representative)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i],
+    description:
+      "The tenant's operational point of contact. Distinct from tenant_signatory_name (the individual who signed " +
+      "the lease in the signature block) — this is who to contact day-to-day, which may or may not be the same person.",
+  },
+  tenant_contact_phone: {
+    type: "string",
+    labels: ["tenant phone", "tenant contact phone", "tenant telephone"],
+    tableHeaders: ["tenant_contact_phone", "tenant phone"],
+    patterns: [/\btenant(?:'s)?\s+(?:contact\s+)?(?:phone|telephone)\b[:\s-]+([\d()+\-.\s]{7,20})/i],
+    description: "The tenant's contact phone number, if stated.",
+  },
   assignor_name: {
     type: "string",
     labels: ["assignor", "original tenant", "current tenant", "seller", "transferor"],
@@ -341,6 +380,24 @@ export const LEASE_SCHEMA: ModuleSchema = {
       "DO NOT use building totals, project totals, common area, or property-wide square footage. " +
       "If the lease says 'Premises containing approximately 1,110 rentable square feet', use 1110, NOT the building total.",
   },
+  // Added to close a CAM-accuracy gap flagged in docs/lease-standard-field-model.md:
+  // deriveCamProfile() (lease-workflow.ts) already reads fieldMap.building_rsf to
+  // compute tenant_pro_rata_share, but until now nothing gave it a real rule/LLM/
+  // fact-ledger extraction path — only a weak, LLM-blind regex in FIELD_SPECS
+  // (manualRequired: true there). Pattern below is that same FIELD_SPECS regex,
+  // now also reachable by rule-extractor.ts and both business-extraction providers.
+  building_rsf: {
+    type: "number",
+    min: 0,
+    labels: ["building rsf", "building square footage", "total building square feet", "building rentable square feet"],
+    tableHeaders: ["building_rsf", "building square footage", "building sf", "total building sf"],
+    patterns: [/building[^\n]{0,40}?([\d,]+)\s*(?:square\s*feet|sq\.?\s*ft\.?|\bRSF\b)/i],
+    description:
+      "The WHOLE BUILDING's total rentable square footage — NOT the leased premises (that's square_footage). " +
+      "Used to compute the tenant's pro rata share of the building for CAM/operating-expense allocation " +
+      "(tenant_pro_rata_share = square_footage / building_rsf, computed automatically — do not compute this yourself). " +
+      "Often only available in a rent roll or CAM reconciliation exhibit; if not explicitly stated, return null.",
+  },
   lease_type: {
     type: "enum",
     enumValues: ["nnn", "gross", "modified_gross", "nn", "net"],
@@ -505,21 +562,6 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["insurance_responsibility", "insurance", "ins resp"],
     patterns: [/(?:insurance|property insurance)\b[^.\n]{0,80}\b(?:landlord|lessor|tenant|lessee)\b/i],
     description: "Who is responsible for providing/paying for property insurance (e.g. 'tenant', 'landlord', 'shared').",
-  },
-  tenant_insurance_required: {
-    type: "boolean",
-    labels: ["tenant insurance required", "liability insurance", "tenant insurance"],
-    tableHeaders: ["tenant_insurance_required", "liability insurance"],
-    patterns: [/\btenant\s+shall\s+(?:maintain|carry|obtain|provide|keep\s+in\s+force)[^\n]{0,80}\b(?:insurance|liability)\b/i],
-    description: "True if the tenant is explicitly required to maintain liability or property insurance.",
-  },
-  general_liability_min: {
-    type: "number",
-    min: 0,
-    labels: ["general liability min", "liability min", "cgl limit", "liability amount"],
-    tableHeaders: ["general_liability_min", "liability limit", "cgl amount"],
-    patterns: [/(?:commercial\s+general\s+liability|cgl|general\s+liability)[^\n]{0,100}\$?\s*([\d,]+(?:\.\d{2})?)/i],
-    description: "Minimum required commercial general liability amount (e.g., 1000000).",
   },
   electric_responsibility: {
     type: "string",
@@ -929,6 +971,26 @@ export const LEASE_SCHEMA: ModuleSchema = {
     tableHeaders: ["default_cure_period"],
     patterns: [/\bdefault\b[^\n]{0,80}?(\d{1,3})\s*days?\s+(?:to\s+)?cure/i, /\bcure\b[^\n]{0,40}?(\d{1,3})\s*days?/i],
     description: "Days a defaulting party has to cure before remedies trigger",
+  },
+  // Added to close a gap flagged in docs/lease-standard-field-model.md: this
+  // field is already prompted for in LEASE_GROUPS' legal_options hint and
+  // already has downstream cleanup/humanization logic in lease-workflow.ts
+  // (buildLeaseFieldMap's GENERIC_SENTINEL_FIELDS filtering and the
+  // "Landlord consent required for assignment or transfer" humanizer), but
+  // had neither a LEASE_SCHEMA nor a FIELD_SPECS entry — the most fully
+  // unhomed field found during the field-model audit. String type (not
+  // enum) to match the existing free-text humanization logic that already
+  // consumes this field's value downstream.
+  landlord_consent_for_transfer: {
+    type: "string",
+    labels: ["landlord consent", "consent to assignment", "consent required", "landlord's consent"],
+    tableHeaders: ["landlord_consent_for_transfer", "landlord consent"],
+    patterns: [/\blandlord[^.\n]{0,40}consent[^.\n]{0,120}(?:assignment|transfer|sublet)/i],
+    description:
+      "Whether landlord consent is required for an assignment or transfer, e.g. 'Required', 'Not required', " +
+      "or 'Required but not unreasonably withheld'. Distinct from landlord_consent (boolean — whether consent " +
+      "was actually GIVEN for a specific assignment already in progress); this field describes the LEASE'S " +
+      "general rule about future assignments/transfers.",
   },
 };
 
@@ -1539,13 +1601,15 @@ const LEASE_GROUPS: FieldGroup[] = [
   },
   {
     name: "terms",
-    fields: ["square_footage", "lease_type", "permitted_use", "lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
+    fields: ["square_footage", "building_rsf", "lease_type", "permitted_use", "lease_term_months", "renewal_options", "renewal_type", "ti_allowance", "free_rent_months", "status"],
     hint:
       "Find the LEASED PREMISES square footage (tenant's space, not the whole building), " +
       "lease type, permitted use (e.g. 'IT work', 'general office'), term length, renewal type/terms, and TI allowance. " +
       "For lease_term_months: look for both numeric ('86 months') AND written-out forms " +
       "('eighty-six (86) months', 'for a period of eighty-six (86) months'). " +
-      "Extract the digit inside the parentheses from written-out forms.",
+      "Extract the digit inside the parentheses from written-out forms. " +
+      "building_rsf is the WHOLE BUILDING's total rentable square footage (often only in a rent roll or CAM " +
+      "reconciliation exhibit) — distinct from square_footage, which is the tenant's leased premises only.",
   },
   {
     name: "expense_recovery",
