@@ -202,6 +202,12 @@ const FIELD_SPECS = [
   { key: "assignee_name", group: "assignment_amendment", aliases: ["assignee_name", "assignee", "new_tenant", "transferee"], patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
   { key: "assignment_effective_date", group: "assignment_amendment", aliases: ["assignment_effective_date", "assignment_date"], patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { key: "landlord_consent", group: "assignment_amendment", aliases: ["landlord_consent"], patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
+  // Distinct from landlord_consent (boolean — was consent actually GIVEN for
+  // this specific assignment) — this is the lease's general rule about
+  // future assignments/transfers. Was previously referenced throughout this
+  // file's sentinel-filtering/humanization logic with no real extraction
+  // path of its own (see the LEASE_SCHEMA entry added alongside this one).
+  { key: "landlord_consent_for_transfer", group: "assignment_amendment", aliases: ["landlord_consent_for_transfer"], patterns: [/\blandlord[^.\n]{0,40}consent[^.\n]{0,120}(?:assignment|transfer|sublet)/i] },
   { key: "assumption_scope", group: "assignment_amendment", aliases: ["assumption_scope"], patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
   { key: "assignee_notice_address", group: "assignment_amendment", aliases: ["assignee_notice_address"], patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
   { key: "assignment_consideration", group: "assignment_amendment", aliases: ["assignment_consideration"], patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
@@ -212,6 +218,7 @@ const FIELD_SPECS = [
   // where the signer wasn't tagged explicitly.
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
+  { key: "tenant_contact_phone", group: "lease_header", aliases: ["tenant_contact_phone"], patterns: [/\btenant(?:'s)?\s+(?:contact\s+)?(?:phone|telephone)\b[:\s-]+([\d()+\-.\s]{7,20})/i] },
   { key: "property_name", group: "premises", aliases: ["property_name"], patterns: [/\bknown\s+as\s+(The\s+[A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i, /\bknown\s+as\s+([A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i] },
   { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\bpremises\s+located\s+at\s+([^\n.]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number", "space_number", "premises_suite"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
