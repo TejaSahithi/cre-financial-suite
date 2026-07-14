@@ -21,6 +21,7 @@ import {
   isManualExtractionStatus,
   cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
+import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
 
 function prettyJson(value, limit = 4000) {
   try {
@@ -157,6 +158,16 @@ export default function ExtractionDebugPanel({ lease }) {
     seenItemKeys.add(key);
     uniqueItems.push(item);
   }
+  // Single normalized source of truth (leaseReviewFieldNormalizer.js) — the
+  // same object StandardFieldsByGroup/DynamicFindings/ClauseRecordsTable/
+  // CamExpenseRulesPanel/ApprovalBlockersPanel all read. Previously this
+  // panel derived its own, narrower `uniqueItems` union (below) that omitted
+  // lease_clauses and the uploaded_files.ui_review_payload fallback tree
+  // entirely — which is exactly why "Mapped fields: 0 / Clause records: 0"
+  // could show here while the real tabs displayed data. dynamic_items_extracted
+  // and clause_records_count now read from this shared normalization instead.
+  const normalized = useMemo(() => normalizeLeaseReviewData(lease), [lease]);
+
   const extractionDebug = lease?.extraction_data?.extraction_debug || {};
   // The pipeline's full extractionDebug lives on the uploaded_files
   // normalized_output too. Fall back to it when the lease row's own
@@ -308,11 +319,24 @@ export default function ExtractionDebugPanel({ lease }) {
     vision_parser: visionParserLabel,
     vision_field_extraction: visionFieldLabel,
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
-    dynamic_items_extracted: workflowOutput?.summary?.dynamic_items_extracted ?? uniqueItems.length,
-    dynamic_items_displayed: workflowOutput?.summary?.dynamic_items_displayed ?? uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,
-    mapped_items_count: workflowOutput?.summary?.mapped_items_count ?? uniqueItems.filter((item) => item?.maps_to_fixed_field).length,
-    unmapped_items_count: workflowOutput?.summary?.unmapped_items_count ?? uniqueItems.filter((item) => !item?.maps_to_fixed_field).length,
-    clause_records_count: workflowOutput?.summary?.clause_records_count ?? uniqueItems.length,
+    // Previously `uniqueItems.length` — a narrower, independently-maintained
+    // union that omitted lease_clauses entirely (see the `normalized` note
+    // above). Now reads the same union ClauseRecordsTable/DynamicFindings use.
+    dynamic_items_extracted: normalized.dynamicFindings.length,
+    dynamic_items_displayed: uniqueItems.filter((item) => item?.creates_dynamic_row && item?.display_tab !== "clause_records").length,
+    mapped_items_count: uniqueItems.filter((item) => item?.maps_to_fixed_field).length,
+    unmapped_items_count: uniqueItems.filter((item) => !item?.maps_to_fixed_field).length,
+    clause_records_count: normalized.clauseRecords.length,
+    // New tiles (this task) — all read from the same shared `normalized`
+    // object every other Lease Review section now uses.
+    standard_fields_total: normalized.standardFields.length,
+    standard_fields_populated: normalized.debugCounts.standard_fields_populated,
+    standard_fields_source_backed: normalized.debugCounts.standard_fields_source_backed,
+    dynamic_findings_count: normalized.dynamicFindings.length,
+    expense_rules_count: normalized.expenseRules.length,
+    critical_dates_count: normalized.criticalDates.length,
+    approval_blockers_count: normalized.debugCounts.approval_blockers_count,
+    approval_blockers_source: normalized.approvalBlockers.source,
     lease_expense_rules_generated: workflowOutput?.summary?.lease_expense_rules_generated ?? (workflowOutput?.expense_rules?.length || 0),
     real_expense_rules_generated_count: workflowOutput?.summary?.real_expense_rules_generated_count
       ?? (workflowOutput?.expense_rules || []).filter((r) => r?.rule_type !== "coverage_gap" && r?.generation_source !== "original_lease_required").length,

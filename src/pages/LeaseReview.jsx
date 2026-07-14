@@ -3487,7 +3487,7 @@ export default function LeaseReview() {
         {/* Extraction Debug tab - superadmin only. */}
         {isSuperAdminUser && (
           <TabsContent value="extraction_debug" className="mt-4 space-y-3">
-            <ExtractionDebugPanel lease={lease} />
+            <ExtractionDebugPanel lease={leaseFull} />
           </TabsContent>
         )}
       </Tabs>
