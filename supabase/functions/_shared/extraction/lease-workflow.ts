@@ -155,7 +155,7 @@ const GENERIC_EXPENSE_RULE_SOURCE_PATTERNS = [
   /billable exception charge under/i,
 ];
 
-const CLAUSE_DEFINITIONS = [
+export const CLAUSE_DEFINITIONS = [
   { type: "rent_escalation", title: "Rent & Escalation", keywords: ["base rent", "monthly rent", "minimum rent", "rent shall", "annual rent", "escalation", "increase"], maxChars: 720 },
   { type: "security_deposit", title: "Security Deposit", keywords: ["security deposit", "deposit"], maxChars: 520 },
   { type: "operating_expense_recovery", title: "Operating Expense Recovery", keywords: ["operating expenses", "additional rent", "tenant shall reimburse", "tenant shall pay", "taxes, insurance", "common area maintenance"], maxChars: 820 },
@@ -2056,7 +2056,7 @@ function isStrongAmendmentSignal(fullText: string, documentSubtype?: string | nu
   return false;
 }
 
-function detectDocumentProfileSignals(
+export function detectDocumentProfileSignals(
   fullText: string,
   documentSubtype?: string | null,
   leaseFields?: Record<string, LeaseWorkflowField>,
@@ -2128,7 +2128,7 @@ function detectDocumentProfileSignals(
   };
 }
 
-function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
+export function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
   return detectDocumentProfileSignals(fullText, documentSubtype).selected_document_profile;
 }
 
@@ -2170,7 +2170,7 @@ function normalizeUniversalValue(itemType: string, raw: unknown) {
   return cleanText(raw);
 }
 
-function createDocumentItem(args: Record<string, unknown>) {
+export function createDocumentItem(args: Record<string, unknown>) {
   const sourceText = cleanText(args.source_text || "");
   const safeSourceText = cleanSourceText(sourceText);
   const fieldKey = args.field_key ? String(args.field_key) : null;
