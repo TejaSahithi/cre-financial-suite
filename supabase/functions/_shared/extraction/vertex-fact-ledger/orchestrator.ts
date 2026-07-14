@@ -130,7 +130,11 @@ export async function runVertexFactLedgerPipeline(
     const avgConfidence = flatRows.length > 0
       ? Math.round(flatRows.reduce((sum, r) => sum + ((r.confidence_score as number) || 0), 0) / flatRows.length)
       : 0;
-    const method: ExtractionPipelineResult["method"] = flatRows.length === 0 ? "fallback" : "llm_only";
+    // "llm_only" only when facts actually mapped to standard fields — a
+    // parsed-but-nothing-found row (e.g. Vertex unreachable, all chunks
+    // failed) must not falsely report a successful LLM run.
+    const method: ExtractionPipelineResult["method"] =
+      flatRows.length > 0 && llmFieldsExtracted > 0 ? "llm_only" : "fallback";
     const fieldSnapshot = snapshotFieldMap(mapped.records as any[]);
     const processingTimeMs = Date.now() - startTime;
 

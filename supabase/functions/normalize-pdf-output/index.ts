@@ -25,6 +25,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { runVertexFactLedgerPipeline } from "../_shared/extraction/vertex-fact-ledger/orchestrator.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
@@ -106,6 +107,17 @@ function buildPipelineLayoutInput(
     warnings: (doclingRaw as any)?.warnings,
     _metadata: (doclingRaw as any)?._metadata,
   };
+}
+
+/**
+ * Resolve which extraction/reasoning provider runs the pipeline.
+ * Default is "legacy_hybrid" (runExtractionPipeline, unchanged) whenever
+ * BUSINESS_EXTRACTION_PROVIDER is unset or any value other than the exact
+ * string "vertex_fact_ledger" — vertex_fact_ledger is strictly opt-in.
+ */
+function resolveBusinessExtractionProvider(): "legacy_hybrid" | "vertex_fact_ledger" {
+  const raw = String(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER") ?? "").trim().toLowerCase();
+  return raw === "vertex_fact_ledger" ? "vertex_fact_ledger" : "legacy_hybrid";
 }
 
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
@@ -999,6 +1011,9 @@ function buildReviewPayload(opts: {
       };
     })
     .filter((f) => f.value != null && f.value !== "");
+  // vertex_fact_ledger diagnostics (undefined for legacy_hybrid — both
+  // spreads below become no-ops, preserving existing behavior exactly).
+  const vertexFactLedgerDebug = (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
   const workflowOutputs = extractionModuleType === "lease"
     ? result.rows.map((row, rowIndex) =>
       buildLeaseWorkflowAbstraction({
@@ -1006,6 +1021,10 @@ function buildReviewPayload(opts: {
         doclingRaw: doclingRaw ?? null,
         documentSubtype,
         ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
+        ...(vertexFactLedgerDebug?.document_profile ? { documentProfileOverride: vertexFactLedgerDebug.document_profile } : {}),
+        ...(rowIndex === 0 && Array.isArray(vertexFactLedgerDebug?.dynamic_items)
+          ? { factLedgerDynamicItems: vertexFactLedgerDebug.dynamic_items }
+          : {}),
       })
     )
     : [];
@@ -2231,29 +2250,38 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode}`);
+      const businessExtractionProvider = resolveBusinessExtractionProvider();
+      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
-      const result = await runExtractionPipeline(
-        {
+      const result = businessExtractionProvider === "vertex_fact_ledger"
+        ? await runVertexFactLedgerPipeline({
           moduleType: extractionModuleType,
           fileName,
           docling: pipelineDocling,
+          documentSubtype: fileRecord.document_subtype ?? null,
           ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
-        },
-        {
-          // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
-          // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
-          // handles structured tables; LLM fills in fields rules couldn't resolve.
-          // Keeping this at 2 prevents accumulating too many Gemini response
-          // buffers in memory simultaneously (546 resource-exhaustion error).
-          maxLLMChunks: 2,
-          chunkSize: 3000,
-          llmTemperature: 0,
-        },
-      );
-      console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
+        })
+        : await runExtractionPipeline(
+          {
+            moduleType: extractionModuleType,
+            fileName,
+            docling: pipelineDocling,
+            ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
+          },
+          {
+            // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
+            // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
+            // handles structured tables; LLM fills in fields rules couldn't resolve.
+            // Keeping this at 2 prevents accumulating too many Gemini response
+            // buffers in memory simultaneously (546 resource-exhaustion error).
+            maxLLMChunks: 2,
+            chunkSize: 3000,
+            llmTemperature: 0,
+          },
+        );
+      console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
       console.log(
         `[normalize-pdf-output] core_extraction_done file_id=${file_id} rows=${result.rows?.length ?? 0} ` +
         `fields=${(result.metadata as any)?.extractionDebug?.fields_returned_count ?? 0} ` +
@@ -2781,6 +2809,8 @@ Deno.serve(async (req: Request) => {
 export const __test__ = {
   buildPipelineLayoutInput,
   buildMinimalReviewPayload,
+  buildReviewPayload,
   rejectMarkupValue,
   buildReviewField,
+  resolveBusinessExtractionProvider,
 };

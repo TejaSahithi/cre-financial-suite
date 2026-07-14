@@ -2215,8 +2215,12 @@ function buildUniversalDocumentItems(args: {
   documentProfile: string;
   leaseFields: Record<string, LeaseWorkflowField>;
   clauses: LeaseWorkflowClause[];
+  /** Already-built document items (e.g. from vertex-fact-ledger's
+   *  dynamic-fact-surfacer.ts) to merge in via this function's existing
+   *  addItem()/seen dedup — optional, backward compatible. */
+  externalItems?: any[];
 }) {
-  const { row, doclingRaw, fullText, documentProfile, leaseFields, clauses } = args;
+  const { row, doclingRaw, fullText, documentProfile, leaseFields, clauses, externalItems } = args;
   const items: any[] = [];
   const seen = new Set<string>();
   const addItem = (item: any) => {
@@ -2299,6 +2303,11 @@ function buildUniversalDocumentItems(args: {
       maps_to_existing_field: false,
       creates_lease_expense_rule: ["operating_expense_recovery", "cam_recoveries", "insurance_requirements", "repairs_maintenance", "late_fees"].includes(clauseType),
     }));
+  }
+
+  for (const externalItem of externalItems || []) {
+    if (!externalItem?.source_text) continue;
+    addItem({ ...externalItem, document_profile: externalItem.document_profile ?? documentProfile });
   }
 
   const hasExpenseClause = items.some((item) =>
@@ -4273,6 +4282,15 @@ export function buildLeaseWorkflowAbstraction(args: {
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
   unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
+  /** Optional — when present, short-circuits the regex-based profile
+   *  classifier (e.g. vertex_fact_ledger's Vertex-classified profile).
+   *  Undefined/null preserves existing regex-detection behavior exactly. */
+  documentProfileOverride?: string | null;
+  /** Optional — pre-built document items (e.g. from vertex_fact_ledger's
+   *  dynamic-fact-surfacer.ts) merged into extractedDocumentItems via the
+   *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
+   *  preserves existing behavior exactly. */
+  factLedgerDynamicItems?: any[];
 }) {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
@@ -4298,7 +4316,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const pagesDetected = doclingPagesParsed;
   const clauses = buildClauseRecords(doclingRaw, fullText);
   let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
-  let documentProfile = profileDetection.selected_document_profile;
+  let documentProfile = args?.documentProfileOverride || profileDetection.selected_document_profile;
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses, args?.unmappedLlmFields);
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
@@ -4307,6 +4325,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     documentProfile,
     leaseFields,
     clauses,
+    externalItems: args?.factLedgerDynamicItems,
   });
   applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
   const fieldEvidenceClauses = buildFieldEvidenceClauses(leaseFields, clauses);
@@ -4314,7 +4333,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const expenseCamEvidenceClauses = buildExpenseCamEvidenceClauses(leaseFields, clauses);
   if (expenseCamEvidenceClauses.length > 0) clauses.push(...expenseCamEvidenceClauses);
   profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null, leaseFields, extractedDocumentItems);
-  if (profileDetection.selected_document_profile !== documentProfile) {
+  if (!args?.documentProfileOverride && profileDetection.selected_document_profile !== documentProfile) {
     documentProfile = profileDetection.selected_document_profile;
   }
   extractedDocumentItems = buildUniversalDocumentItems({
@@ -4324,6 +4343,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     documentProfile,
     leaseFields,
     clauses,
+    externalItems: args?.factLedgerDynamicItems,
   });
   const genericSourceTextRejected = Object.values(leaseFields).reduce((count, field) => {
     if (field?.source_clause && isGenericSourceText(field.source_clause)) {
