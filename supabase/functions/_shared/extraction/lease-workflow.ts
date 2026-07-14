@@ -4717,4 +4717,8 @@ export function buildLeaseWorkflowAbstraction(args: {
 // Test hook (same pattern as _shared/extraction/parser.ts).
 export const __test__ = {
   buildClauseRecords,
+  buildLeaseFieldMap,
+  deriveCamProfile,
+  deriveBudgetPreview,
+  buildBudgetHandoffReadiness,
 };

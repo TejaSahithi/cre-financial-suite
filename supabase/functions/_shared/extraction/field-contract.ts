@@ -143,12 +143,23 @@ export const LEASE_FIELD_CONTRACT: FieldContractEntry[] = [
   { canonicalKey: "gross_up_threshold", aliases: [], group: "cam_rules", requiredForApproval: false, requiredForCam: true, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
 
   // ── taxes ───────────────────────────────────────────────────────────────
+  // responsibility_taxes' LEASE_SCHEMA labels ("real estate taxes", "property
+  // taxes", "taxes") are a strict subset of tax_responsibility's own labels
+  // (which also include "tax responsibility"), so without a distinguishing
+  // alias here, fact-field-mapper.ts's per-fact best-field scoring could
+  // never let responsibility_taxes win a tie — tax_responsibility, defined
+  // earlier in LEASE_SCHEMA, always wins ties on equal score. The
+  // self-referential alias below (normalized to "responsibility taxes" by
+  // scoreFactAgainstField) gives structured/tabular-style source text
+  // ("Responsibility Taxes: ...") a real path to the enum field specifically.
   { canonicalKey: "tax_responsibility", aliases: [], group: "taxes", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["responsibility_taxes"], preferredForAutomatedLogic: "responsibility_taxes" },
-  { canonicalKey: "responsibility_taxes", aliases: [], group: "taxes", requiredForApproval: false, requiredForCam: true, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["tax_responsibility"] },
+  { canonicalKey: "responsibility_taxes", aliases: ["responsibility_taxes"], group: "taxes", requiredForApproval: false, requiredForCam: true, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["tax_responsibility"] },
 
   // ── insurance ───────────────────────────────────────────────────────────
+  // Same overlapping-labels issue as tax_responsibility/responsibility_taxes
+  // above — see that comment.
   { canonicalKey: "insurance_responsibility", aliases: [], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["responsibility_insurance"], preferredForAutomatedLogic: "responsibility_insurance" },
-  { canonicalKey: "responsibility_insurance", aliases: [], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["insurance_responsibility"] },
+  { canonicalKey: "responsibility_insurance", aliases: ["responsibility_insurance"], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true, alternateFieldKeys: ["insurance_responsibility"] },
   { canonicalKey: "property_insurance_responsibility", aliases: [], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
   { canonicalKey: "tenant_insurance_required", aliases: [], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },
   { canonicalKey: "general_liability_min", aliases: [], group: "insurance", requiredForApproval: false, requiredForCam: false, requiredForBudget: false, requiredByDocumentProfile: [], evidenceRequired: true, inLeaseSchema: true },

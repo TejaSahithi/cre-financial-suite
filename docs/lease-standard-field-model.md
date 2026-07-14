@@ -211,3 +211,17 @@ Every profile-specific blocker rule in `approval-blockers.ts` is already capture
 ## Coverage check
 
 82 unique `LEASE_SCHEMA` field keys (84 definitions minus 2 shadowed duplicates — `tenant_insurance_required`, `general_liability_min`), each appearing exactly once across the 15 groups above that hold real schema fields (`document_identity` through `signatures`), plus 4 explicitly-flagged gap rows in `budget_inputs`/`approval_controls` that are **not** `LEASE_SCHEMA` fields today. No field is silently dropped; every gap is named as a gap, not glossed over.
+
+## Phase 1 status (field contract reconciliation — done)
+
+The gaps above are now closed at the code level (this doc's field list/table content is unchanged — it described `LEASE_SCHEMA` as of before this work, and is accurate again now that `LEASE_SCHEMA` has caught up to it):
+
+- **`supabase/functions/_shared/extraction/field-contract.ts`** (new) makes this document machine-readable — `LEASE_FIELD_CONTRACT`, `resolveCanonicalKey()`, `getFieldContract()`, `getFieldsForGroup()`.
+- **6 new `LEASE_SCHEMA` fields added**: `building_rsf`, `landlord_address`, `tenant_address`, `tenant_contact_name`, `tenant_contact_phone`, `landlord_consent_for_transfer` — all six were already referenced in `LEASE_GROUPS`' LLM-prompt field lists, so this makes that array internally consistent again, not just additive.
+- **The 2 shadowed duplicate definitions were merged** — `tenant_insurance_required` and `general_liability_min` now each have exactly one `LEASE_SCHEMA` definition (the one that was already winning at runtime; verified zero behavior change).
+- **`tenant_pro_rata_share` stays a computed-only field** — deliberately *not* added as an extractable `LEASE_SCHEMA` field. It's already correctly derived as `square_footage / building_rsf` in `buildLeaseFieldMap()`; making it independently extractable would create two competing sources of truth for a number that must equal that ratio.
+- **`vertex_fact_ledger`'s `fact-field-mapper.ts` now checks `field-contract.ts` aliases**, not just each field's own `LEASE_SCHEMA` labels — closing the parity gap where `legacy_hybrid` (via `FIELD_SPECS`' aliases) could resolve a field that `vertex_fact_ledger` could not.
+- **A real, previously-hidden ambiguity surfaced while writing tests for this phase**: `tax_responsibility` and `responsibility_taxes` (and the same pattern for `insurance_responsibility`/`responsibility_insurance`) have overlapping `LEASE_SCHEMA` labels — `responsibility_taxes`'s labels are a strict subset of `tax_responsibility`'s — so the enum field could never win a fact-mapping tie against its free-text sibling. Fixed with a distinguishing self-referential alias in `field-contract.ts`, not by reworking either field's `LEASE_SCHEMA` labels.
+- `buildBudgetHandoffReadiness()`, `deriveCamProfile()`, `orchestrator.ts`, and `pipeline.ts`'s snapshot/debug output needed **zero code changes** — confirmed by reading `buildLeaseFieldMap()` directly and by a regression test — they already read `leaseFields`/`row` generically via `FIELD_SPECS`' existing `aliases`-driven `getFirstValue()` bridge, which picks up the new fields automatically now that both `LEASE_SCHEMA` and `FIELD_SPECS` know about them.
+
+Still open (a separate, later task): LeaseReview UI alignment by these 17 groups, rendering Dynamic Findings/Clause Records/CAM-Expense Rules as distinct sections, and wiring `approval-blockers.ts`'s per-profile blockers into the actual UI.
