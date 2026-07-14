@@ -16,6 +16,9 @@ export function isLeaseUploadReviewReady(fileRecord) {
     fileRecord?.next_action === "open_review"
   );
 }
+export function getLeaseUploadReviewStatusLabel(fileRecord, fallbackLabel = "Processing...") {
+  return isLeaseUploadReviewReady(fileRecord) ? "Review completed" : fallbackLabel;
+}
 
 export function resolveLeaseReviewIdFromUploadRecord(fileRecord) {
   const payload = fileRecord?.ui_review_payload || {};

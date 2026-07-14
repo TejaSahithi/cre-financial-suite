@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureLeaseReviewDraftForUpload,
+  getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
 } from "../leaseUploadReviewAction";
 
@@ -46,6 +47,12 @@ describe("lease upload review action state", () => {
     expect(action.showOpenButton).toBe(true);
     expect(action.canNavigate).toBe(true);
     expect(action.leaseId).toBe("lease-from-metadata");
+  });
+  it("labels review_required uploads as Review completed on the Upload Lease page", () => {
+    expect(getLeaseUploadReviewStatusLabel({ status: "review_required", failed_step: "parse" }, "Preparing review"))
+      .toBe("Review completed");
+    expect(getLeaseUploadReviewStatusLabel({ status: "validating" }, "Extracting lease fields"))
+      .toBe("Extracting lease fields");
   });
 });
 

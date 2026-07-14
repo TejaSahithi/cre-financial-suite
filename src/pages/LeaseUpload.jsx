@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
 import {
   ensureLeaseReviewDraftForUpload,
+  getLeaseUploadReviewStatusLabel,
   getLeaseReviewActionState,
   isLeaseUploadReviewReady,
   resolveLeaseReviewIdFromUploadRecord,
@@ -715,6 +716,10 @@ export default function LeaseUpload() {
   const reviewReadyForAction = isLeaseUploadReviewReady(fileRecord);
   const leaseReviewAction = getLeaseReviewActionState(fileRecord, linkedLeaseId);
   const canOpenReview = leaseReviewAction.showOpenButton;
+  const uploadStatusLabel = getLeaseUploadReviewStatusLabel(
+    fileRecord,
+    getFriendlyExtractionLabel(fileRecord?.status),
+  );
   const hasValidReviewPayload =
     reviewReadyForAction &&
     fileRecord?.ui_review_payload != null &&
@@ -821,7 +826,7 @@ export default function LeaseUpload() {
               <div className="flex flex-wrap items-center gap-2">
                 {loadingRecord && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
                 <Badge className={statusBadgeStyle(fileRecord?.status)}>
-                  {getFriendlyExtractionLabel(fileRecord?.status)}
+                  {uploadStatusLabel}
                 </Badge>
                 {fileRecord?.document_subtype && (
                   <Badge className="bg-blue-50 text-blue-700">{fileRecord.document_subtype.replace(/_/g, " ")}</Badge>
@@ -901,7 +906,7 @@ export default function LeaseUpload() {
           <CardContent className="p-4">
             <h3 className="text-sm font-semibold text-slate-900">Processing Status</h3>
             <p className="mt-1 text-sm font-medium text-blue-600">
-              {getFriendlyExtractionLabel(fileRecord?.status)}
+              {uploadStatusLabel}
             </p>
             <details className="mt-3 text-xs text-slate-400">
               <summary className="cursor-pointer select-none">Advanced</summary>
@@ -1064,24 +1069,14 @@ async function linkLeaseToUploadedFile(leaseId, fileRecord) {
   const sourceFileId = fileRecord.id;
   const { data: lease, error: fetchError } = await supabase
     .from("leases")
-    .select("id, source_file_id, extraction_data")
+    .select("id, extraction_data")
     .eq("id", leaseId)
     .maybeSingle();
 
   if (fetchError) {
-    throw new Error(`Could not inspect Lease Review source link: ${fetchError.message}`);
+    console.warn("[LeaseUpload] Could not inspect Lease Review source link:", fetchError.message);
   }
 
-  if (lease?.source_file_id !== sourceFileId) {
-    const { error: updateError } = await supabase
-      .from("leases")
-      .update({ source_file_id: sourceFileId })
-      .eq("id", leaseId);
-
-    if (updateError) {
-      throw new Error(`Could not link Lease Review to uploaded file: ${updateError.message}`);
-    }
-  }
 
   const extractionSourceFileId = lease?.extraction_data?.source_file_id || null;
   if (extractionSourceFileId !== sourceFileId) {
@@ -1104,14 +1099,14 @@ async function linkLeaseToUploadedFile(leaseId, fileRecord) {
 
   return leaseId;
 }
+
+
 async function findLeaseByFileId(fileId) {
   if (!fileId) return null;
 
   const attempts = [
-    (query) => query.eq("source_file_id", fileId),
     (query) => query.filter("extraction_data->>source_file_id", "eq", fileId),
     (query) => query.filter("extraction_data->>uploaded_file_id", "eq", fileId),
-    (query) => query.eq("uploaded_file_id", fileId),
   ];
 
   for (const applyFilter of attempts) {
