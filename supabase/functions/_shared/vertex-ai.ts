@@ -439,6 +439,81 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
   throw lastError || new Error("All Vertex AI model attempts failed with 404");
 }
 
+export interface VertexAISingleRequestDiagnosticOptions extends VertexAIOptions {
+  /** Fixed model for the diagnostic request. Defaults to the primary Vertex model only. */
+  model?: string;
+  /** Fixed location for the diagnostic request. Defaults to VERTEX_LOCATION / GOOGLE_LOCATION / us-central1. */
+  location?: string;
+  /** Test-only escape hatch so unit tests never request an OAuth token. */
+  accessToken?: string;
+  /** Test-only fetch implementation. */
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/**
+ * Phase 52B diagnostic helper: one Vertex generateContent request, no model
+ * fallback, no location fallback, no retry loop, no Gemini/OpenAI fallback.
+ * This intentionally does not call callVertexAI(), whose production behavior
+ * retries across model/location attempts.
+ */
+export async function callVertexAISingleRequestDiagnostic(
+  opts: VertexAISingleRequestDiagnosticOptions,
+): Promise<VertexAIResponse & { location: string; latencyMs: number }> {
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+  if (!projectId) {
+    throw new Error("Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
+  }
+
+  const location = opts.location || Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
+  const model = opts.model || Deno.env.get("VERTEX_MODEL") || Deno.env.get("GEMINI_MODEL") || DEFAULT_MODEL;
+  const accessToken = opts.accessToken || await getAccessToken();
+  const fetchImpl = opts.fetchImpl || fetch;
+  const start = Date.now();
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  const requestBody: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: opts.userPrompt }] }],
+    generationConfig: {
+      maxOutputTokens: opts.maxOutputTokens ?? 1200,
+      temperature: opts.temperature ?? 0,
+      responseMimeType: opts.responseMimeType ?? "application/json",
+    },
+  };
+
+  if (opts.systemPrompt) {
+    requestBody.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
+  }
+
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 30000),
+  });
+
+  const latencyMs = Date.now() - start;
+  const textBody = await response.text().catch(() => "");
+  let data: any = null;
+  try {
+    data = textBody ? JSON.parse(textBody) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Vertex AI single diagnostic request failed with status ${response.status}: ${textBody.slice(0, 500)}`);
+  }
+
+  const content = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const inputTokens = data?.usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = data?.usageMetadata?.candidatesTokenCount ?? 0;
+  return { content, model, location, inputTokens, outputTokens, latencyMs };
+}
+
 /**
  * Call Vertex AI and parse the response as JSON.
  * Strips markdown code fences if present.

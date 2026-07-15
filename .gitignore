@@ -67,3 +67,6 @@ lint_*.txt
 current_lint_errors.txt
 *.xlsx
 
+
+# Local Phase 52 Vertex diagnostic secrets
+/.env.phase52.local

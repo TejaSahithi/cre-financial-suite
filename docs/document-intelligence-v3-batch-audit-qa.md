@@ -1600,3 +1600,68 @@ Report created: `docs/document-intelligence-v3-phase51D-provider-env-resolution.
 Recommendation remains: **No Gate**.
 
 Recommended Phase 52: choose the runtime mode first, then only after explicit one-provider-call approval run either a local no-DB harness with secure local credentials or an internal Supabase Edge dry-run sample-text comparison. Do not use the normal `file_id` normalize path for the first provider call.
+
+## Phase 52A: Internal Dry-Run Path
+
+Phase 52A prepared the internal Supabase Edge dry-run invocation path for a future provider test. No VertexAI, Gemini, OpenAI, Azure, parse, extraction, deploy, remote write, Supabase secret change, normal `file_id` normalize call, table write, provider output creation, or secret-value exposure occurred.
+
+Report created: `docs/document-intelligence-v3-phase52A-internal-dry-run-path.md`.
+
+### Phase 52A Results
+
+| Area | Result |
+| --- | --- |
+| existing exact safe caller found | no |
+| nearest existing caller | `pipeline-health-check`, admin-only and already calls `normalize-pdf-output` dry-run |
+| nearest caller gap | generic sample text only; does not pass `debug_business_extraction_provider="vertex_fact_ledger"` |
+| trusted internal caller pattern | `lease-extraction-worker` uses internal headers, but its normalize call is normal `file_id` path |
+| zero-DB branch | confirmed for `dry_run=true` + `sample_text` + no `file_id` |
+| scoped override | available only for internal calls |
+| one Vertex model request | not guaranteed by existing `vertex_fact_ledger` pipeline |
+| Gemini/OpenAI fallback | not called in inspected `vertex_fact_ledger` modules; risk exists only if debug override is not honored and legacy path runs |
+
+### Phase 52A Blocker
+
+One internal dry-run request is possible, but the existing provider pipeline can make multiple Vertex model requests: one profile-classifier call, one or more fact-extraction calls, and possible Vertex model/location retries. Therefore the currently inspected path does not satisfy the user's exact-one-provider-call constraint.
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52B: create a minimal admin-only diagnostic wrapper or one-request diagnostic option, with tests proving no `file_id`, no DB writes, no secret output, no Gemini/OpenAI/Azure path, and exactly one provider model request before any Vertex invocation is approved.
+
+## Phase 52B: Single-Request Diagnostic Wrapper
+
+Phase 52B implemented a minimal internal-only diagnostic path capable of making exactly one future Vertex model request. No VertexAI, Gemini, OpenAI, Azure, OCR, parse, extraction, deploy, remote write, Supabase table read/write, provider output creation, global provider flag change, or secret-value exposure occurred.
+
+Report created: `docs/document-intelligence-v3-phase52B-single-request-diagnostic-wrapper.md`.
+
+### Phase 52B Results
+
+| Area | Result |
+| --- | --- |
+| diagnostic endpoint | `supabase/functions/phase52-vertex-diagnostic/index.ts` |
+| low-level helper | `callVertexAISingleRequestDiagnostic(...)` in `supabase/functions/_shared/vertex-ai.ts` |
+| authentication | internal-only through existing `isInternalCall(req)` mechanisms |
+| accepted inputs | `sample_text`, optional `diagnostic_label` |
+| rejected inputs | `file_id`, `uploaded_file_id`, `lease_id`, DB-targeting fields, provider overrides |
+| DB access | none; no Supabase client import or table methods |
+| provider fallback | disabled; no model/location retry loop, no Gemini/OpenAI/Azure path |
+| model request bound | exactly one Vertex `generateContent` request per diagnostic invocation |
+| deployment status | not deployed |
+
+### Phase 52B Verification
+
+| Check | Result |
+| --- | --- |
+| Deno check | passed for focused Phase 52B test file |
+| Deno test | passed outside sandbox: 7 focused tests |
+| mocked Deno smoke | passed; endpoint/helper imported, `file_id` rejected, helper invoked once, one mocked fetch made |
+| `npm run lint` | passed |
+| `npm run typecheck` | passed |
+| `npm run build` | passed |
+| `npm run test` | passed outside sandbox after sandboxed `spawn EPERM`: 56 files / 657 tests |
+| provider call | none |
+| QA JSON parse | passed |
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52C: only after explicit approval, deploy or serve the diagnostic endpoint in an internal environment with configured Vertex credentials, invoke it exactly once with the approved Craven sample, capture sanitized output, and immediately stop.

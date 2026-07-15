@@ -1,10 +1,10 @@
 {
-  "phase": "51D",
+  "phase": "52B",
   "generated_at": "2026-07-15T15:30:00.000Z",
   "diagnostic_only": true,
   "phase_goal": "Run authenticated local visual verification of the Phase 36 Lease Review UI contract fixes and report results.",
   "backfill_performed": true,
-  "status": "phase51D_provider_env_resolution_completed",
+  "status": "phase52B_single_request_diagnostic_wrapper_implemented",
   "blocker": null,
   "recommendation": "no_gate",
   "approved_ids": {
@@ -3892,5 +3892,170 @@
       "docs/document-intelligence-v3-batch-audit-qa.json"
     ],
     "recommendation": "no_gate"
-  }
+  },
+  "phase52A_internal_dry_run_path": {
+    "performed": true,
+    "provider_calls_made": false,
+    "vertex_calls_made": false,
+    "gemini_calls_made": false,
+    "openai_calls_made": false,
+    "azure_calls_made": false,
+    "deployed": false,
+    "remote_write": false,
+    "changed_production_secrets": false,
+    "exposed_secret_values": false,
+    "used_supabase_service_role_key_locally": false,
+    "used_normal_file_id_normalize_path": false,
+    "wrote_supabase_tables": false,
+    "source_changed": false,
+    "existing_safe_caller_found_for_exact_required_invocation": false,
+    "nearest_existing_caller": {
+      "name": "pipeline-health-check",
+      "admin_only": true,
+      "calls_normalize_dry_run": true,
+      "uses_internal_service_auth": true,
+      "gaps": [
+        "uses generic sample text",
+        "does not send debug_business_extraction_provider=vertex_fact_ledger",
+        "does not constrain vertex_fact_ledger to exactly one model request"
+      ]
+    },
+    "trusted_internal_pattern": {
+      "lease_extraction_worker_call_internal_function": true,
+      "current_worker_normalize_call_is_file_id_path": true,
+      "current_worker_path_writes_db": true
+    },
+    "target_dry_run_payload_shape": {
+      "dry_run": true,
+      "sample_text": "<representative Craven lease sample text>",
+      "debug_business_extraction_provider": "vertex_fact_ledger",
+      "file_id": null
+    },
+    "zero_db_confirmation": {
+      "normalize_dry_run_branch_confirmed": true,
+      "requires_no_file_id": true,
+      "returns_before_file_id_path": true,
+      "code_message": "no file processed, no DB writes"
+    },
+    "one_call_confirmation": {
+      "exactly_one_vertex_model_request_guaranteed_by_existing_path": false,
+      "reasons": [
+        "classifyDocumentProfile makes one Vertex request",
+        "extractFactLedger makes one Vertex request per text chunk capped at four chunks",
+        "callVertexAI can retry model/location attempts on 404 or network conditions"
+      ]
+    },
+    "gemini_openai_fallback_confirmation": {
+      "inspected_vertex_fact_ledger_modules_call_openai": false,
+      "inspected_vertex_fact_ledger_modules_call_gemini_developer_api": false,
+      "risk_if_debug_override_not_honored": "legacy_hybrid path may run instead, so internal auth is mandatory"
+    },
+    "proposed_minimal_temporary_admin_function": {
+      "needed": true,
+      "name": "phase52-vertex-dry-run",
+      "deploy_now": false,
+      "accepts_file_id": false,
+      "uses_fixed_craven_sample_text": true,
+      "returns_secret_values": false,
+      "writes_tables": false
+    },
+    "recommended_phase_52b": "Create a minimal admin-only diagnostic wrapper or one-request diagnostic option with tests proving no file_id, no DB writes, no secret output, no Gemini/OpenAI/Azure path, and exactly one provider model request before any Vertex invocation is approved.",
+    "files_created": [
+      "docs/document-intelligence-v3-phase52A-internal-dry-run-path.md"
+    ],
+    "files_updated": [
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "recommendation": "no_gate"
+  },
+  "recommended_phase_52B": "Create a minimal admin-only diagnostic wrapper or one-request diagnostic option, with tests proving no file_id, no DB writes, no secret output, no Gemini/OpenAI/Azure path, and exactly one provider model request before any Vertex invocation is approved.",
+  "phase52B_single_request_diagnostic_wrapper": {
+    "performed": true,
+    "provider_calls_made": false,
+    "vertex_calls_made": false,
+    "gemini_calls_made": false,
+    "openai_calls_made": false,
+    "azure_calls_made": false,
+    "ocr_or_parse_rerun": false,
+    "deployed": false,
+    "remote_write": false,
+    "db_reads": false,
+    "db_writes": false,
+    "accepted_inputs": [
+      "sample_text",
+      "diagnostic_label"
+    ],
+    "rejected_inputs": [
+      "file_id",
+      "uploaded_file_id",
+      "lease_id",
+      "run_id",
+      "org_id",
+      "DB targeting fields",
+      "provider override fields"
+    ],
+    "implementation": {
+      "endpoint": "supabase/functions/phase52-vertex-diagnostic/index.ts",
+      "helper": "supabase/functions/_shared/vertex-ai.ts::callVertexAISingleRequestDiagnostic",
+      "tests": "supabase/functions/_tests/phase52-vertex-diagnostic.test.ts"
+    },
+    "authentication": {
+      "mechanism": "internal_only_isInternalCall",
+      "supabase_client_imported": false,
+      "admin_db_lookup_required": false,
+      "ordinary_unauthenticated_calls_rejected": true
+    },
+    "exactly_one_request_proof": {
+      "full_vertex_fact_ledger_orchestrator_called": false,
+      "classifier_called": false,
+      "chunking_called": false,
+      "low_level_helper_fetches_generate_content_once": true,
+      "model_fallback_disabled": true,
+      "location_fallback_disabled": true,
+      "retry_loop_disabled": true
+    },
+    "zero_db_proof": {
+      "no_create_client_import": true,
+      "no_table_read_methods": true,
+      "no_table_write_methods": true,
+      "rejects_file_identifiers_before_provider_call": true
+    },
+    "fallback_disabled_proof": {
+      "no_azure_path": true,
+      "no_gemini_developer_api_path": true,
+      "no_openai_path": true,
+      "no_ocr_or_parse_path": true,
+      "no_file_mode_vertex_path": true
+    },
+    "safe_response": {
+      "returns_success_failure": true,
+      "returns_provider_model_location_latency_tokens": true,
+      "returns_sanitized_response_or_error": true,
+      "returns_secret_values": false,
+      "returns_stack_traces": false
+    },
+    "verification": {
+      "deno_check_phase52_test": "passed",
+      "deno_test_phase52_test": "passed_outside_sandbox_7_tests",
+      "mocked_deno_smoke": "passed",
+      "npm_lint": "passed",
+      "npm_typecheck": "passed",
+      "npm_build": "passed",
+      "npm_test": "passed_outside_sandbox_after_spawn_eperm_56_files_657_tests",
+      "qa_json_parse": "passed"
+    },
+    "files_created": [
+      "supabase/functions/phase52-vertex-diagnostic/index.ts",
+      "supabase/functions/_tests/phase52-vertex-diagnostic.test.ts",
+      "docs/document-intelligence-v3-phase52B-single-request-diagnostic-wrapper.md"
+    ],
+    "files_updated": [
+      "supabase/functions/_shared/vertex-ai.ts",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "recommendation": "no_gate"
+  },
+  "recommended_phase_52C": "Only after explicit approval, deploy or serve the internal-only diagnostic endpoint in an environment with configured Vertex credentials, invoke it exactly once with the approved Craven sample, capture sanitized output, and stop."
 }
