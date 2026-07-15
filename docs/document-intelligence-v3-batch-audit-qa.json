@@ -1,0 +1,131 @@
+﻿{
+  "phase": 24,
+  "generated_at": "2026-07-15T00:00:00.000Z",
+  "diagnostic_only": true,
+  "phase_goal": "Perform a local-only no-LLM diagnostic v3 backfill from approved JSON exports, creating a completed local v3 run for advisory audit.",
+  "backfill_performed": false,
+  "status": "blocked_before_write",
+  "blocker": "missing_local_source_fk_rows",
+  "recommendation": "no_gate",
+  "approved_ids": {
+    "uploaded_file_ids": [
+      "fc8181e6-766d-49c7-b81b-b5d961160207"
+    ],
+    "lease_ids": [
+      "7b21f353-579d-48e8-b3dd-8e8c49743fe2"
+    ],
+    "run_ids": []
+  },
+  "local_target_proof": {
+    "supabase_rest_url": "http://127.0.0.1:54321",
+    "database_host_port": "127.0.0.1:54322",
+    "loopback_only": true,
+    "hosted_project_used": false,
+    "remote_write_endpoint_used": false,
+    "service_key_used": false,
+    "supabase_access_token_used": false
+  },
+  "export_scope_validation": {
+    "rows_accepted": 23,
+    "rows_rejected_or_ignored": 0,
+    "out_of_scope_rows": 0,
+    "uploaded_file_id_matches": true,
+    "lease_id_matches": true,
+    "pipeline_logs_match_approved_upload_via_file_id": true,
+    "export_org_ids_match": true,
+    "org_id": "1307dd95-e7c5-4e08-833e-749444e8f4c8"
+  },
+  "export_files_inspected": [
+    {
+      "path": "C:\\Users\\tejas\\v3-phase-exports\\uploaded_files_fc8181e6.json",
+      "accepted_type": "uploaded_files",
+      "rows": 1,
+      "scope_result": "accepted"
+    },
+    {
+      "path": "C:\\Users\\tejas\\v3-phase-exports\\leases_7b21f353.json",
+      "accepted_type": "leases",
+      "rows": 1,
+      "scope_result": "accepted"
+    },
+    {
+      "path": "C:\\Users\\tejas\\v3-phase-exports\\pipeline_logs_fc8181e6.json",
+      "accepted_type": "pipeline_logs",
+      "rows": 21,
+      "scope_result": "accepted"
+    },
+    {
+      "path": "C:\\Users\\tejas\\v3-phase-exports\\document_intelligence_runs_fc8181e6_schema_missing.json",
+      "accepted_type": "document_intelligence_runs_missing_marker",
+      "rows": 0,
+      "scope_result": "accepted_as_missing_v3_run_evidence",
+      "status": "relation_missing",
+      "error_code": "42P01"
+    }
+  ],
+  "local_prerequisite_checks": {
+    "uploaded_files_row_exists_locally": false,
+    "leases_row_exists_locally": false,
+    "prior_document_intelligence_run_exists_locally": false,
+    "document_intelligence_runs_uploaded_file_fk_requires_local_uploaded_file": true,
+    "document_intelligence_runs_lease_fk_requires_local_lease_if_lease_id_is_set": true
+  },
+  "source_artifacts_available": {
+    "uploaded_files_docling_raw": true,
+    "uploaded_files_normalized_output": true,
+    "uploaded_files_ui_review_payload": true,
+    "uploaded_files_parsed_data": true,
+    "uploaded_files_reviewed_output": true,
+    "leases_extraction_data": true,
+    "leases_extracted_fields": true,
+    "leases_abstract_snapshot": true,
+    "pipeline_log_metadata": true
+  },
+  "local_run_summary": {
+    "run_id": null,
+    "status": "not_created",
+    "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+    "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+    "profile_key": null,
+    "claims_count": 0,
+    "evidence_count": 0,
+    "projections_count": 0,
+    "validation_drops_count": 0,
+    "package_graph_rows_created": 0,
+    "layout_summary_present": false,
+    "advisory_readiness_available": false,
+    "limitations": [
+      "local source FK rows are missing",
+      "Phase 24 forbids writing uploaded_files or leases",
+      "no local v3 run was created"
+    ]
+  },
+  "local_tables_written": [],
+  "phase17_audit_can_now_run": false,
+  "completed_v3_run_now_available_locally": false,
+  "external_calls_made": {
+    "azure": false,
+    "vertex_or_gemini": false,
+    "parse": false,
+    "extraction": false,
+    "normalize_pdf_output": false
+  },
+  "production_writes": false,
+  "constraints_honored": {
+    "deployed": false,
+    "remote_reads": false,
+    "wrote_production_data": false,
+    "touched_secrets_or_service_keys": false,
+    "used_supabase_access_token": false,
+    "called_azure": false,
+    "called_vertex_or_gemini": false,
+    "reran_parse": false,
+    "reran_extraction": false,
+    "changed_approval_behavior": false,
+    "changed_lease_review_business_rows": false,
+    "enabled_vertex_fact_ledger_globally": false,
+    "changed_business_extraction_provider": false,
+    "replaced_ui_review_payload_or_normalized_output": false
+  },
+  "recommended_phase_25": "Explicitly choose either local staging of approved uploaded_files/leases export rows into a verified local database, then rerun v3 diagnostic backfill, or a FK-free scratch diagnostic report that does not write v3 tables."
+}

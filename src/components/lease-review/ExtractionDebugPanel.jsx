@@ -5,11 +5,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, RefreshCw, Link2, Wand2 } from "lucide-react";
+import { Loader2, RefreshCw, Link2, Wand2, Copy, Download } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
 import { persistLeaseExtractionMerge, updateLeaseExtractionField } from "@/services/leaseService";
+import {
+  fetchDocumentIntelligenceV3Readiness,
+  fetchDocumentIntelligenceV3AdvisoryAudit,
+  fetchDocumentIntelligenceV3AdvisoryAuditBatch,
+} from "@/services/documentIntelligenceV3Service";
 import {
   LEASE_REVIEW_FIELDS,
   readFieldValue,
@@ -22,12 +27,21 @@ import {
   cleanSourceEvidenceText,
 } from "@/lib/leaseReviewSchema";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
+import {
+  resolveUploadedFileIdForV3Diagnostics,
+  summarizeV3Diagnostics,
+  summarizeAdvisoryAudit,
+  summarizeAdvisoryAuditBatch,
+  buildV3DiagnosticsFilename,
+  buildV3AdvisoryAuditFilename,
+  buildV3AdvisoryAuditBatchFilename,
+} from "@/components/lease-review/utils/documentIntelligenceV3Diagnostics";
 
 function prettyJson(value, limit = 4000) {
   try {
     const s = JSON.stringify(value, null, 2);
-    if (!s) return "—";
-    return s.length > limit ? `${s.slice(0, limit)}\n…[truncated, ${s.length - limit} more chars]` : s;
+    if (!s) return "â€”";
+    return s.length > limit ? `${s.slice(0, limit)}\nâ€¦[truncated, ${s.length - limit} more chars]` : s;
   } catch {
     return String(value);
   }
@@ -55,7 +69,7 @@ function Section({ title, count, children, badge }) {
  *   1. Docling page text (from uploaded_files.docling_raw)
  *   2. Raw Gemini / pipeline JSON (workflow_output)
  *   3. Normalized mapped fields (extraction_data.fields)
- *   4. Review table rows (per LEASE_REVIEW_FIELDS — what the operator sees)
+ *   4. Review table rows (per LEASE_REVIEW_FIELDS â€” what the operator sees)
  *   5. Field mapping warnings (extraction_data.workflow_output.validations)
  *   6. Source matching results (per-field source_text + source_page)
  *
@@ -113,7 +127,179 @@ export default function ExtractionDebugPanel({ lease }) {
     retry: false,
   });
 
-  const doclingRaw = uploadedFile?.docling_raw || null;
+  // â”€â”€ Document Intelligence v3 Diagnostics (Phase 4) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Resolved defensively (not just sourceFileId) because the debug
+  // uploadedFile row above, once loaded, is the ground truth if the lease's
+  // own source_file_id is stale. Fetched strictly on button click (enabled:
+  // false) -- never automatically on render.
+  const v3UploadedFileId = resolveUploadedFileIdForV3Diagnostics(lease, uploadedFile) || sourceFileId;
+  const {
+    data: v3Response,
+    isFetching: v3Loading,
+    refetch: refetchV3Diagnostics,
+  } = useQuery({
+    queryKey: ["debug-v3-readiness", v3UploadedFileId],
+    enabled: false,
+    queryFn: () => fetchDocumentIntelligenceV3Readiness({ uploadedFileId: v3UploadedFileId }),
+    retry: false,
+  });
+  const v3Diagnostics = v3Response && !v3Response.error ? summarizeV3Diagnostics(v3Response.readiness) : null;
+  const v3FetchError = v3Response?.error ? v3Response.message : null;
+  const {
+    data: v3AuditResponse,
+    isFetching: v3AuditLoading,
+    refetch: refetchV3AdvisoryAudit,
+  } = useQuery({
+    queryKey: ["debug-v3-advisory-audit", v3UploadedFileId, lease?.id],
+    enabled: false,
+    queryFn: () => fetchDocumentIntelligenceV3AdvisoryAudit({
+      uploadedFileId: v3UploadedFileId,
+      leaseId: lease?.id ?? null,
+    }),
+    retry: false,
+  });
+  const v3AdvisoryAudit = v3AuditResponse && !v3AuditResponse.error
+    ? summarizeAdvisoryAudit(v3AuditResponse.advisoryAudit)
+    : null;
+  const v3AuditFetchError = v3AuditResponse?.error ? v3AuditResponse.message : null;
+  const {
+    data: v3BatchAuditResponse,
+    isFetching: v3BatchAuditLoading,
+    refetch: refetchV3AdvisoryAuditBatch,
+  } = useQuery({
+    queryKey: ["debug-v3-advisory-audit-batch", v3UploadedFileId, lease?.id],
+    enabled: false,
+    queryFn: () => fetchDocumentIntelligenceV3AdvisoryAuditBatch({
+      uploadedFileIds: v3UploadedFileId ? [v3UploadedFileId] : [],
+      leaseIds: !v3UploadedFileId && lease?.id ? [lease.id] : [],
+      limit: 25,
+    }),
+    retry: false,
+  });
+  const v3AdvisoryAuditBatch = v3BatchAuditResponse && !v3BatchAuditResponse.error
+    ? summarizeAdvisoryAuditBatch(v3BatchAuditResponse.batchAudit)
+    : null;
+  const v3BatchAuditFetchError = v3BatchAuditResponse?.error ? v3BatchAuditResponse.message : null;
+
+  const handleLoadV3Diagnostics = async () => {
+    if (!v3UploadedFileId) {
+      toast.error("No source file linked to this lease â€” cannot load v3 diagnostics.");
+      return;
+    }
+    const result = await refetchV3Diagnostics();
+    if (result?.data?.error) {
+      console.error("[ExtractionDebug] v3 readiness fetch failed:", result.data.message);
+    }
+  };
+
+  const handleCopyV3DiagnosticsJson = async () => {
+    if (!v3Diagnostics) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(v3Diagnostics, null, 2));
+      toast.success("v3 diagnostic JSON copied to clipboard.");
+    } catch (err) {
+      console.error("[ExtractionDebug] copy v3 diagnostics failed:", err);
+      toast.error("Could not copy to clipboard.");
+    }
+  };
+
+  const handleDownloadV3DiagnosticsJson = () => {
+    if (!v3Diagnostics) return;
+    try {
+      const blob = new Blob([JSON.stringify(v3Diagnostics, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = buildV3DiagnosticsFilename(v3Diagnostics.uploadedFileId || v3UploadedFileId);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[ExtractionDebug] download v3 diagnostics failed:", err);
+      toast.error("Could not download JSON.");
+    }
+  };
+
+  const handleLoadV3AdvisoryAudit = async () => {
+    if (!v3UploadedFileId && !lease?.id) {
+      toast.error("No source file or lease id available for this advisory audit.");
+      return;
+    }
+    const result = await refetchV3AdvisoryAudit();
+    if (result?.data?.error) {
+      console.error("[ExtractionDebug] v3 advisory audit fetch failed:", result.data.message);
+    }
+  };
+
+  const handleCopyV3AdvisoryAuditJson = async () => {
+    if (!v3AdvisoryAudit) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(v3AdvisoryAudit.raw ?? v3AdvisoryAudit, null, 2));
+      toast.success("v3 advisory audit JSON copied to clipboard.");
+    } catch (err) {
+      console.error("[ExtractionDebug] copy v3 advisory audit failed:", err);
+      toast.error("Could not copy to clipboard.");
+    }
+  };
+
+  const handleDownloadV3AdvisoryAuditJson = () => {
+    if (!v3AdvisoryAudit) return;
+    try {
+      const blob = new Blob([JSON.stringify(v3AdvisoryAudit.raw ?? v3AdvisoryAudit, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = buildV3AdvisoryAuditFilename(v3AdvisoryAudit.uploadedFileId || v3UploadedFileId);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[ExtractionDebug] download v3 advisory audit failed:", err);
+      toast.error("Could not download JSON.");
+    }
+  };
+
+  const handleLoadV3AdvisoryAuditBatch = async () => {
+    if (!v3UploadedFileId && !lease?.id) {
+      toast.error("No source file or lease id available for this batch advisory audit.");
+      return;
+    }
+    const result = await refetchV3AdvisoryAuditBatch();
+    if (result?.data?.error) {
+      console.error("[ExtractionDebug] v3 batch advisory audit fetch failed:", result.data.message);
+    }
+  };
+
+  const handleCopyV3AdvisoryAuditBatchJson = async () => {
+    if (!v3AdvisoryAuditBatch) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(v3AdvisoryAuditBatch.raw ?? v3AdvisoryAuditBatch, null, 2));
+      toast.success("v3 batch advisory audit JSON copied to clipboard.");
+    } catch (err) {
+      console.error("[ExtractionDebug] copy v3 batch advisory audit failed:", err);
+      toast.error("Could not copy to clipboard.");
+    }
+  };
+
+  const handleDownloadV3AdvisoryAuditBatchJson = () => {
+    if (!v3AdvisoryAuditBatch) return;
+    try {
+      const blob = new Blob([JSON.stringify(v3AdvisoryAuditBatch.raw ?? v3AdvisoryAuditBatch, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = buildV3AdvisoryAuditBatchFilename(v3UploadedFileId || lease?.id);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[ExtractionDebug] download v3 batch advisory audit failed:", err);
+      toast.error("Could not download JSON.");
+    }
+  };  const doclingRaw = uploadedFile?.docling_raw || null;
   const fullText = doclingRaw?.full_text || "";
   const textBlocks = Array.isArray(doclingRaw?.text_blocks) ? doclingRaw.text_blocks : [];
   const doclingFields = Array.isArray(doclingRaw?.fields) ? doclingRaw.fields : [];
@@ -158,12 +344,12 @@ export default function ExtractionDebugPanel({ lease }) {
     seenItemKeys.add(key);
     uniqueItems.push(item);
   }
-  // Single normalized source of truth (leaseReviewFieldNormalizer.js) — the
+  // Single normalized source of truth (leaseReviewFieldNormalizer.js) â€” the
   // same object StandardFieldsByGroup/DynamicFindings/ClauseRecordsTable/
   // CamExpenseRulesPanel/ApprovalBlockersPanel all read. Previously this
   // panel derived its own, narrower `uniqueItems` union (below) that omitted
   // lease_clauses and the uploaded_files.ui_review_payload fallback tree
-  // entirely — which is exactly why "Mapped fields: 0 / Clause records: 0"
+  // entirely â€” which is exactly why "Mapped fields: 0 / Clause records: 0"
   // could show here while the real tabs displayed data. dynamic_items_extracted
   // and clause_records_count now read from this shared normalization instead.
   const normalized = useMemo(() => normalizeLeaseReviewData(lease), [lease]);
@@ -189,8 +375,8 @@ export default function ExtractionDebugPanel({ lease }) {
     ?? lease?.extraction_data?.docling_raw?.page_count
     ?? null;
 
-  // ── Vision Parser (Stage 1: PDF/image → text) ─────────────────────────
-  // The parser tags its output via `extraction_method` on docling_raw —
+  // â”€â”€ Vision Parser (Stage 1: PDF/image â†’ text) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // The parser tags its output via `extraction_method` on docling_raw â€”
   // "gemini_vision" or "hybrid" means Gemini Vision read the document.
   // We probe several sources because the field is set by parser.ts and
   // surfaces in different places depending on which write path ran.
@@ -217,7 +403,7 @@ export default function ExtractionDebugPanel({ lease }) {
       : `used${visionParserPages ? ` (${visionParserPages} pages)` : ""}`)
     : (parserSource ? `not used (parser: ${parserSource})` : "not used");
 
-  // ── Vision Field Extraction (Stage 2: file bytes → LLM JSON) ──────────
+  // â”€â”€ Vision Field Extraction (Stage 2: file bytes â†’ LLM JSON) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const visionTriggered = Boolean(
     debugRead("vision_field_extraction_used")
     ?? debugRead("vision_fallback_triggered")
@@ -237,13 +423,13 @@ export default function ExtractionDebugPanel({ lease }) {
   const visionFieldLabel = visionTriggered
     ? `used${typeof llmFieldsCount === "number" ? ` (${llmFieldsCount} fields)` : ""}`
     : (visionFieldSkipReason === "parser_text_sufficient"
-      ? "not run — parser text sufficient"
+      ? "not run â€” parser text sufficient"
       : visionFieldSkipReason === "file_bytes_unavailable"
-        ? "skipped — file bytes unavailable"
+        ? "skipped â€” file bytes unavailable"
         : visionFieldSkipReason === "llm_returned_zero_fields"
           ? "attempted, returned zero fields"
           : visionFieldSkipReason
-            ? `skipped — ${visionFieldSkipReason}`
+            ? `skipped â€” ${visionFieldSkipReason}`
             : "not run");
 
   const debugSummary = {
@@ -269,7 +455,7 @@ export default function ExtractionDebugPanel({ lease }) {
     pipeline_duration_ms: pipelineMeta?.total_duration_ms ?? "-",
     docling_raw_present: pipelineMeta?.docling_raw_present ?? Boolean(doclingRaw),
     ocr_used: pipelineMeta?.ocr_used ?? "-",
-    // Headline mapping diagnostics — first so a failure is immediately visible.
+    // Headline mapping diagnostics â€” first so a failure is immediately visible.
     mapping_failure_reason:
       debugRead("mapping_failure_reason")
       ?? workflowOutput?.mapping_failure_reason
@@ -302,7 +488,7 @@ export default function ExtractionDebugPanel({ lease }) {
       debugRead("fields_rejected_missing_source_count")
       ?? workflowOutput?.summary?.fields_rejected_missing_source_count
       ?? 0,
-    ui_review_payload_fields_count: debugRead("ui_review_payload_fields_count") ?? "—",
+    ui_review_payload_fields_count: debugRead("ui_review_payload_fields_count") ?? "â€”",
     document_profile: workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
     selected_document_profile: workflowOutput?.selected_document_profile || workflowOutput?.summary?.selected_document_profile || workflowOutput?.document_profile || workflowOutput?.summary?.document_profile || "unknown",
     assignment_signal_count: workflowOutput?.assignment_signal_count ?? workflowOutput?.summary?.assignment_signal_count ?? 0,
@@ -311,15 +497,15 @@ export default function ExtractionDebugPanel({ lease }) {
     // Show both metrics so reviewers don't mistake Docling's per-page text
     // count for the actual PDF page count. Vision reads multi-page PDFs
     // natively when file bytes are sent (see vision_processed flag).
-    pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "—",
+    pdf_page_count_total: pdfPageCountTotal != null ? pdfPageCountTotal : "â€”",
     docling_pages_parsed: doclingPagesParsed,
-    // Two distinct Vision stages — keeping them separate so reviewers can
+    // Two distinct Vision stages â€” keeping them separate so reviewers can
     // tell whether Gemini read the document at all (parser) from whether
     // it pulled structured fields from the bytes (field extraction).
     vision_parser: visionParserLabel,
     vision_field_extraction: visionFieldLabel,
     fixed_fields_extracted: workflowOutput?.summary?.fixed_fields_extracted ?? Object.values(workflowOutput?.lease_fields || {}).filter((field) => field?.extraction_status === "extracted").length,
-    // Previously `uniqueItems.length` — a narrower, independently-maintained
+    // Previously `uniqueItems.length` â€” a narrower, independently-maintained
     // union that omitted lease_clauses entirely (see the `normalized` note
     // above). Now reads the same union ClauseRecordsTable/DynamicFindings use.
     dynamic_items_extracted: normalized.dynamicFindings.length,
@@ -327,7 +513,7 @@ export default function ExtractionDebugPanel({ lease }) {
     mapped_items_count: uniqueItems.filter((item) => item?.maps_to_fixed_field).length,
     unmapped_items_count: uniqueItems.filter((item) => !item?.maps_to_fixed_field).length,
     clause_records_count: normalized.clauseRecords.length,
-    // New tiles (this task) — all read from the same shared `normalized`
+    // New tiles (this task) â€” all read from the same shared `normalized`
     // object every other Lease Review section now uses.
     standard_fields_total: normalized.standardFields.length,
     standard_fields_populated: normalized.debugCounts.standard_fields_populated,
@@ -443,7 +629,7 @@ export default function ExtractionDebugPanel({ lease }) {
   debugSummary.rejected_fields_with_reasons = JSON.stringify(debugRead("rejected_fields_with_reasons") || []);
   debugSummary.persisted_but_not_rendered_fields = JSON.stringify(debugRead("persisted_but_not_rendered_fields") || []);
 
-  // ── Actions ──────────────────────────────────────────────────────────
+  // â”€â”€ Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleRerunExtraction = async () => {
     if (!sourceFileId) {
@@ -691,6 +877,799 @@ export default function ExtractionDebugPanel({ lease }) {
         </Card>
       )}
 
+      <Section
+        title="Document Intelligence v3 Diagnostics"
+        badge="diagnostic_only"
+        count={v3Diagnostics ? (v3Diagnostics.available ? "loaded" : "not available") : "not loaded"}
+      >
+        <p className="text-slate-500">
+          Opt-in, read-only diagnostic from the Document Intelligence v3 pipeline. Advisory only â€” does
+          not affect Lease Review fields, blockers, or the approval workflow.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleLoadV3Diagnostics}
+            disabled={v3Loading || !v3UploadedFileId}
+            title={v3UploadedFileId ? "Fetch document-intelligence-v3-readiness for this document" : "No source file linked"}
+          >
+            {v3Loading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Load v3 Diagnostics
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleLoadV3AdvisoryAudit}
+            disabled={v3AuditLoading || (!v3UploadedFileId && !lease?.id)}
+            title={v3UploadedFileId || lease?.id ? "Compare v3 advisory with current review snapshot" : "No source file or lease id linked"}
+          >
+            {v3AuditLoading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Load v3 Advisory Audit
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleLoadV3AdvisoryAuditBatch}
+            disabled={v3BatchAuditLoading || (!v3UploadedFileId && !lease?.id)}
+            title={v3UploadedFileId || lease?.id ? "Run a diagnostic-only batch audit for this document" : "No source file or lease id linked"}
+          >
+            {v3BatchAuditLoading && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Run Batch Advisory Audit
+          </Button>
+          {v3AdvisoryAuditBatch && (
+            <>
+              <Button size="sm" variant="outline" onClick={handleCopyV3AdvisoryAuditBatchJson}>
+                <Copy className="mr-1 h-3.5 w-3.5" />
+                Copy Batch JSON
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleDownloadV3AdvisoryAuditBatchJson}>
+                <Download className="mr-1 h-3.5 w-3.5" />
+                Download Batch JSON
+              </Button>
+            </>
+          )}
+        {v3AdvisoryAudit && (
+            <>
+              <Button size="sm" variant="outline" onClick={handleCopyV3AdvisoryAuditJson}>
+                <Copy className="mr-1 h-3.5 w-3.5" />
+                Copy Audit JSON
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleDownloadV3AdvisoryAuditJson}>
+                <Download className="mr-1 h-3.5 w-3.5" />
+                Download Audit JSON
+              </Button>
+            </>
+          )}
+          {v3Diagnostics && (
+            <>
+              <Button size="sm" variant="outline" onClick={handleCopyV3DiagnosticsJson}>
+                <Copy className="mr-1 h-3.5 w-3.5" />
+                Copy v3 Diagnostic JSON
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleDownloadV3DiagnosticsJson}>
+                <Download className="mr-1 h-3.5 w-3.5" />
+                Download v3 Diagnostic JSON
+              </Button>
+            </>
+          )}
+        </div>
+
+        {v3FetchError && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+            Could not load v3 diagnostics: {v3FetchError}
+          </div>
+        )}
+
+        {!v3Diagnostics && !v3FetchError && (
+          <p className="text-slate-500">
+            Click &ldquo;Load v3 Diagnostics&rdquo; to fetch the readiness diagnostic for this document.
+          </p>
+        )}
+
+        {v3Diagnostics && !v3Diagnostics.available && (
+          <p className="text-slate-500">{v3Diagnostics.notAvailableMessage}</p>
+        )}
+
+        {v3AuditFetchError && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+            Could not load v3 advisory audit: {v3AuditFetchError}
+          </div>
+        )}
+          {v3BatchAuditFetchError && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+            Could not load v3 batch advisory audit: {v3BatchAuditFetchError}
+          </div>
+        )}
+
+        {v3AdvisoryAuditBatch && (
+          <div className="space-y-2 rounded border border-slate-200 bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">V3 Batch Advisory Audit Report</div>
+              <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+            </div>
+            <p className="text-xs text-slate-500">
+              Current-document batch report for admin QA. It is read-only and does not call approval workflows.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {[
+                ["total", v3AdvisoryAuditBatch.total],
+                ["generated_at", v3AdvisoryAuditBatch.generatedAt || "-"],
+                ["agreement_counts", prettyJson(v3AdvisoryAuditBatch.agreementCounts, 500)],
+                ["discrepancy_counts", prettyJson(v3AdvisoryAuditBatch.discrepancyCounts, 700)],
+                ["risk_summary", prettyJson(v3AdvisoryAuditBatch.riskSummary, 500)],
+              ].map(([key, value]) => (
+                <div key={key} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                  <pre className="mt-1 whitespace-pre-wrap text-[11px] font-semibold text-slate-900">{String(value ?? "-")}</pre>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-2 lg:grid-cols-2">
+              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Advisory Status Counts</div>
+                <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3AdvisoryAuditBatch.advisoryStatusCounts, 700)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Current Status Counts</div>
+                <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3AdvisoryAuditBatch.currentStatusCounts, 700)}</pre>
+              </div>
+            </div>
+            <div className="max-h-64 overflow-auto rounded border border-slate-200">
+              <table className="w-full text-[11px]">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Uploaded File</th>
+                    <th className="px-2 py-1 text-left">Run</th>
+                    <th className="px-2 py-1 text-left">Lease</th>
+                    <th className="px-2 py-1 text-left">Profile</th>
+                    <th className="px-2 py-1 text-left">v3 Advisory</th>
+                    <th className="px-2 py-1 text-left">Current</th>
+                    <th className="px-2 py-1 text-left">Agreement</th>
+                    <th className="px-2 py-1 text-left">Discrepancies</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {v3AdvisoryAuditBatch.results.map((row, index) => (
+                    <tr key={`${row.uploaded_file_id || row.run_id || row.lease_id || index}`} className="border-t border-slate-100">
+                      <td className="px-2 py-1 text-slate-600">{row.uploaded_file_id || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.run_id || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.lease_id || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.profile_key || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.v3_advisory_status || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600">{row.current_status || "-"}</td>
+                      <td className="px-2 py-1 font-medium text-slate-700">{row.agreement_level || "-"}</td>
+                      <td className="px-2 py-1 text-slate-600" title={prettyJson(row.discrepancies, 1200)}>{row.discrepancy_count ?? 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+
+        {v3AdvisoryAudit && (
+          <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">V3 Advisory Audit / Current Review Comparison</div>
+              <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+            </div>
+            <p className="text-xs text-slate-500">
+              Read-only comparison only. This does not change Lease Review approval behavior or call approve_lease_workflow.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {[
+                ["v3_advisory_status", v3AdvisoryAudit.v3Status],
+                ["current_review_status", v3AdvisoryAudit.currentStatus],
+                ["agreement_level", v3AdvisoryAudit.agreementLevel],
+                ["discrepancy_count", v3AdvisoryAudit.discrepancyCount],
+                ["audit_status", v3AdvisoryAudit.auditStatus],
+              ].map(([key, value]) => (
+                <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{String(value ?? "-")}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-2 lg:grid-cols-2">
+              {[
+                ["Discrepancies by Type", v3AdvisoryAudit.discrepancies.map((item) => ({ type: item.type, severity: item.severity, message: item.message }))],
+                ["False Positive Risks", v3AdvisoryAudit.falsePositiveRisks],
+                ["False Negative Risks", v3AdvisoryAudit.falseNegativeRisks],
+                ["Recommendations", v3AdvisoryAudit.recommendations],
+                ["Missing Inputs", v3AdvisoryAudit.missingInputs],
+                ["Current Review Snapshot", v3AdvisoryAudit.currentReviewSnapshot],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">{label}</div>
+                  {Array.isArray(value) && value.length === 0 ? (
+                    <p className="mt-1 text-xs text-slate-500">None</p>
+                  ) : (
+                    <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(value, 1400)}</pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {v3Diagnostics && v3Diagnostics.available && (
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["diagnostic_only", String(v3Diagnostics.diagnosticOnly)],
+                ["run_id", v3Diagnostics.runId || "â€”"],
+                ["uploaded_file_id", v3Diagnostics.uploadedFileId || "â€”"],
+                ["lease_id", v3Diagnostics.leaseId || "â€”"],
+                ["profile_key", v3Diagnostics.profile.profile_key || "â€”"],
+                ["policy_key", v3Diagnostics.profile.policy_key],
+                ["profile_confidence", v3Diagnostics.profile.confidence ?? "â€”"],
+                ["profile_status", v3Diagnostics.profile.status],
+                ["readiness_status", v3Diagnostics.readinessStatus],
+                ["readiness_reason", v3Diagnostics.readinessReason || "â€”"],
+                ["blockers_count", v3Diagnostics.blockers.length],
+                ["advisories_count", v3Diagnostics.advisories.length],
+              ].map(([key, value]) => (
+                <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                </div>
+              ))}
+            </div>
+
+            {v3Diagnostics.profileEnsemble && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Profile Ensemble</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  {[
+                    ["selected_profile", v3Diagnostics.profileEnsemble.selectedProfileKey || "-"],
+                    ["selected_policy", v3Diagnostics.profileEnsemble.selectedPolicyKey || "-"],
+                    ["confidence", v3Diagnostics.profileEnsemble.confidence ?? "-"],
+                    ["status", v3Diagnostics.profileEnsemble.status || "-"],
+                    ["source", v3Diagnostics.profileEnsemble.source || "-"],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                {v3Diagnostics.profileEnsemble.candidates.length > 0 && (
+                  <div className="max-h-44 overflow-auto rounded border border-slate-200 bg-white">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-2 py-1 text-left">Candidate</th>
+                          <th className="px-2 py-1 text-left">Confidence</th>
+                          <th className="px-2 py-1 text-left">Source</th>
+                          <th className="px-2 py-1 text-left">Signals</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {v3Diagnostics.profileEnsemble.candidates.map((candidate, index) => (
+                          <tr key={`${candidate.profile_key}-${candidate.source}-${index}`} className="border-t border-slate-100">
+                            <td className="px-2 py-1 font-medium text-slate-700">{candidate.profile_key}</td>
+                            <td className="px-2 py-1 text-slate-600">{candidate.confidence ?? "-"}</td>
+                            <td className="px-2 py-1 text-slate-600">{candidate.source || "-"}</td>
+                            <td className="max-w-[360px] truncate px-2 py-1 font-mono text-slate-500" title={prettyJson(candidate.signals, 2000)}>{prettyJson(candidate.signals, 180)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {(v3Diagnostics.profileEnsemble.disagreements.length > 0 || v3Diagnostics.profileEnsemble.fallbackReason) && (
+                  <pre className="max-h-36 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-amber-700">
+                    {prettyJson({ disagreements: v3Diagnostics.profileEnsemble.disagreements, fallback_reason: v3Diagnostics.profileEnsemble.fallbackReason }, 1200)}
+                  </pre>
+                )}
+              </div>
+            )}
+
+            {v3Diagnostics.extractionPlan && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Extraction Plan</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["profile", v3Diagnostics.extractionPlan.profileKey || "-"],
+                    ["status", v3Diagnostics.extractionPlan.status || "planned"],
+                    ["modules_to_run", v3Diagnostics.modulesToRunCount],
+                    ["modules_skipped", v3Diagnostics.modulesSkippedCount],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase text-slate-500">Modules To Run</div>
+                    <ul className="max-h-48 space-y-1 overflow-auto rounded border border-slate-200 bg-white p-2">
+                      {v3Diagnostics.extractionPlan.modulesToRun.map((module) => (
+                        <li key={module.module_key} className="text-xs text-slate-700">
+                          <span className="font-semibold">{module.module_key}</span>
+                          <span className="text-slate-500"> - {module.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase text-slate-500">Modules Skipped</div>
+                    {v3Diagnostics.extractionPlan.modulesSkipped.length === 0 ? (
+                      <p className="rounded border border-slate-200 bg-white p-2 text-xs text-slate-500">None</p>
+                    ) : (
+                      <ul className="max-h-48 space-y-1 overflow-auto rounded border border-slate-200 bg-white p-2">
+                        {v3Diagnostics.extractionPlan.modulesSkipped.map((module) => (
+                          <li key={module.module_key} className="text-xs text-slate-700">
+                            <span className="font-semibold">{module.module_key}</span>
+                            <span className="text-amber-700"> - {module.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+                {(v3Diagnostics.relatedDocumentsNeeded.length > 0 || v3Diagnostics.plannerWarnings.length > 0) && (
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">Related Documents Needed</div>
+                      <div className="mt-1 text-xs text-slate-700">{v3Diagnostics.relatedDocumentsNeeded.join(", ") || "None"}</div>
+                    </div>
+                    <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">Planner Warnings</div>
+                      <div className="mt-1 text-xs text-amber-700">{v3Diagnostics.plannerWarnings.join(", ") || "None"}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {v3Diagnostics.packageGraph && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Document Package Graph</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["package_id", v3Diagnostics.packageGraph.packageId || "-"],
+                    ["package_key", v3Diagnostics.packageGraph.packageKey || "-"],
+                    ["graph_status", v3Diagnostics.packageGraph.graphStatus || "not_available"],
+                    ["diagnostic_only", String(v3Diagnostics.packageGraph.diagnosticOnly)],
+                    ["documents", v3Diagnostics.packageGraph.documents.length],
+                    ["requirements", v3Diagnostics.relatedDocumentRequirements.length],
+                    ["relationships", v3Diagnostics.packageGraph.relationships.length],
+                    ["candidates", v3Diagnostics.candidateRelatedDocuments.length],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                {v3Diagnostics.packageGraph.error && (
+                  <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                    Package graph unavailable: {v3Diagnostics.packageGraph.error}
+                  </p>
+                )}
+                <div className="grid gap-2 lg:grid-cols-2">
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Package Documents</div>
+                    {v3Diagnostics.packageGraph.documents.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">No package documents recorded.</p>
+                    ) : (
+                      <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.packageGraph.documents, 1200)}</pre>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Related Document Requirements</div>
+                    {v3Diagnostics.relatedDocumentRequirements.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.relatedDocumentRequirements, 1200)}</pre>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Document Relationships</div>
+                    {v3Diagnostics.packageGraph.relationships.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.packageGraph.relationships, 1200)}</pre>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Candidate Related Documents</div>
+                    {v3Diagnostics.candidateRelatedDocuments.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.candidateRelatedDocuments, 1200)}</pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {v3Diagnostics.temporalSupersession && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Temporal / Supersession Diagnostics</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["temporal_status", v3Diagnostics.temporalSupersession.temporalStatus || "not_available"],
+                    ["timeline_items", v3Diagnostics.temporalSupersession.documentTimeline.length],
+                    ["effective_periods", v3Diagnostics.temporalSupersession.effectivePeriods.length],
+                    ["supersession_candidates", v3Diagnostics.temporalSupersession.supersessionCandidates.length],
+                    ["current_truth_candidates", v3Diagnostics.temporalSupersession.currentTruthCandidates.length],
+                    ["unresolved_conflicts", v3Diagnostics.temporalSupersession.unresolvedTemporalConflicts.length],
+                    ["missing_inputs", v3Diagnostics.temporalSupersession.missingTemporalInputs.length],
+                    ["diagnostic_only", String(v3Diagnostics.temporalSupersession.diagnosticOnly)],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {[
+                    ["Document Timeline", v3Diagnostics.temporalSupersession.documentTimeline],
+                    ["Effective Periods", v3Diagnostics.temporalSupersession.effectivePeriods],
+                    ["Supersession Candidates", v3Diagnostics.temporalSupersession.supersessionCandidates],
+                    ["Current Truth Candidates", v3Diagnostics.temporalSupersession.currentTruthCandidates],
+                    ["Unresolved Temporal Conflicts", v3Diagnostics.temporalSupersession.unresolvedTemporalConflicts],
+                    ["Missing Temporal Inputs", v3Diagnostics.temporalSupersession.missingTemporalInputs],
+                    ["Temporal Warnings", v3Diagnostics.temporalSupersession.warnings],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{label}</div>
+                      {Array.isArray(value) && value.length === 0 ? (
+                        <p className="mt-1 text-xs text-slate-500">None</p>
+                      ) : (
+                        <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(value, 1200)}</pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {v3Diagnostics.approvalAdvisory && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-semibold uppercase text-slate-500">V3 Approval Advisory Simulation</div>
+                  <Badge className="bg-slate-100 text-slate-700">diagnostic_only</Badge>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Advisory simulation only. This does not change Lease Review approval behavior or call approve_lease_workflow.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["advisory_status", v3Diagnostics.approvalAdvisory.advisoryStatus],
+                    ["would_block_approval", String(v3Diagnostics.approvalAdvisory.wouldBlockApproval)],
+                    ["would_allow_approval", String(v3Diagnostics.approvalAdvisory.wouldAllowApproval)],
+                    ["policy_key", v3Diagnostics.approvalAdvisory.policyKey || "-"],
+                    ["blocking_if_enforced", v3Diagnostics.approvalAdvisory.blockerCountsBySeverity.blocking_if_enforced || 0],
+                    ["needs_review", v3Diagnostics.approvalAdvisory.blockerCountsBySeverity.needs_review || 0],
+                    ["advisory", v3Diagnostics.approvalAdvisory.blockerCountsBySeverity.advisory || 0],
+                    ["informational", v3Diagnostics.approvalAdvisory.blockerCountsBySeverity.informational || 0],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                {v3Diagnostics.approvalAdvisory.advisoryReason && (
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <span className="font-semibold uppercase text-slate-500">Advisory Reason: </span>
+                    {v3Diagnostics.approvalAdvisory.advisoryReason}
+                  </div>
+                )}
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {[
+                    ["Missing Critical Fields", v3Diagnostics.approvalAdvisory.missingCriticalFields],
+                    ["Evidence Issues", v3Diagnostics.approvalAdvisory.evidenceIssues],
+                    ["Validation Issues", v3Diagnostics.approvalAdvisory.validationIssues],
+                    ["Coverage Issues", v3Diagnostics.approvalAdvisory.coverageIssues],
+                    ["Related Document Issues", v3Diagnostics.approvalAdvisory.relatedDocumentIssues],
+                    ["Temporal Issues", v3Diagnostics.approvalAdvisory.temporalIssues],
+                    ["Recommended Actions", v3Diagnostics.approvalAdvisory.blockers.map((item) => ({
+                      blocker_type: item.blocker_type,
+                      severity: item.severity,
+                      field_key: item.field_key,
+                      recommended_action: item.recommended_action,
+                    }))],
+                    ["Future Gate Inputs", v3Diagnostics.approvalAdvisory.futureGateInputs],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{label}</div>
+                      {Array.isArray(value) && value.length === 0 ? (
+                        <p className="mt-1 text-xs text-slate-500">None</p>
+                      ) : (
+                        <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(value, 1200)}</pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {v3Diagnostics.coverage && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Coverage Diagnostics</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["Processing Coverage", v3Diagnostics.coverage.processing],
+                    ["Evidence Coverage", v3Diagnostics.coverage.evidence],
+                    ["Expected Information Coverage", v3Diagnostics.coverage.expectedInformation],
+                    ["Module Coverage", v3Diagnostics.coverage.module],
+                    ["Related Document Coverage", v3Diagnostics.coverage.relatedDocument],
+                    ["Validation Coverage", v3Diagnostics.coverage.validation],
+                    ["Overall Coverage", v3Diagnostics.coverage.overall],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{label}</div>
+                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(value, 700)}</pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {v3Diagnostics.importance && (
+              <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-semibold uppercase text-slate-500">Importance Diagnostics</div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Importance Summary</div>
+                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.importance.summary, 900)}</pre>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Critical/high Missing Fields</div>
+                    {v3Diagnostics.importantMissingFields.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <ul className="mt-1 max-h-40 space-y-1 overflow-auto text-xs text-slate-700">
+                        {v3Diagnostics.importantMissingFields.map((field) => (
+                          <li key={field.field_key}>
+                            <span className="font-semibold">{field.field_key}</span>
+                            <span className="text-amber-700"> - {field.importance_level}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Critical/high Validation Drops</div>
+                    {v3Diagnostics.importantValidationDrops.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <ul className="mt-1 max-h-40 space-y-1 overflow-auto text-xs text-slate-700">
+                        {v3Diagnostics.importantValidationDrops.map((drop, index) => (
+                          <li key={`${drop.field_key}-${index}`}>
+                            <span className="font-semibold">{drop.field_key || "unknown_field"}</span>
+                            <span className="text-amber-700"> - {drop.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">High-importance Advisories</div>
+                    {v3Diagnostics.importance.highImportanceAdvisories.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <ul className="mt-1 max-h-40 space-y-1 overflow-auto text-xs text-slate-700">
+                        {v3Diagnostics.importance.highImportanceAdvisories.map((advisory, index) => (
+                          <li key={index}>{advisory.message}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Unmapped High-importance Claims</div>
+                    {v3Diagnostics.unmappedHighImportanceClaims.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.unmappedHighImportanceClaims, 900)}</pre>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">Important Related Documents Missing</div>
+                    {v3Diagnostics.importantRelatedDocumentsMissing.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">None</p>
+                    ) : (
+                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.importantRelatedDocumentsMissing, 900)}</pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {v3Diagnostics.blockers.length > 0 && (
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Blockers</div>
+                <ul className="space-y-0.5">
+                  {v3Diagnostics.blockers.map((b, i) => (
+                    <li key={`${b.field_key}-${i}`} className="rounded bg-red-50 px-2 py-1 text-red-700">
+                      <span className="font-medium">{b.field_key}</span> â€” {b.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {v3Diagnostics.advisories.length > 0 && (
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Advisories</div>
+                <ul className="space-y-0.5">
+                  {v3Diagnostics.advisories.map((a, i) => (
+                    <li key={i} className="rounded bg-amber-50 px-2 py-1 text-amber-800">
+                      {a.message}
+                      {a.fields?.length ? <span className="text-amber-600"> ({a.fields.join(", ")})</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Required Fields</div>
+                <div className="mt-1 text-sm text-slate-900">
+                  {v3Diagnostics.requiredFieldsSummary.total} total â€” {v3Diagnostics.requiredFieldsSummary.sourceBacked} source-backed,{" "}
+                  {v3Diagnostics.requiredFieldsSummary.missing} missing, {v3Diagnostics.requiredFieldsSummary.needsReview} needs review
+                </div>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Optional Fields</div>
+                <div className="mt-1 text-sm text-slate-900">
+                  {v3Diagnostics.optionalFieldsSummary.total} total â€” {v3Diagnostics.optionalFieldsSummary.sourceBacked} source-backed,{" "}
+                  {v3Diagnostics.optionalFieldsSummary.missing} missing, {v3Diagnostics.optionalFieldsSummary.needsReview} needs review
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Evidence Sufficiency Summary</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {v3Diagnostics.evidenceSufficiencySummary.map((item) => (
+                  <div key={item.key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase text-slate-500">{item.label}</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900">{item.count}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {(v3Diagnostics.requiredFieldsSummary.total > 0 || v3Diagnostics.optionalFieldsSummary.total > 0) && (
+              <details>
+                <summary className="cursor-pointer text-slate-700 hover:text-slate-900">Field-level detail</summary>
+                <div className="mt-2 max-h-72 overflow-auto rounded border border-slate-200">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Field</th>
+                        <th className="px-2 py-1 text-left">Required</th>
+                        <th className="px-2 py-1 text-left">Status</th>
+                        <th className="px-2 py-1 text-left">Source-backed</th>
+                        <th className="px-2 py-1 text-left">Evidence Sufficiency</th>
+                        <th className="px-2 py-1 text-left">Evidence Warnings</th>
+                        <th className="px-2 py-1 text-left">Confidence</th>
+                        <th className="px-2 py-1 text-left">Missing Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...v3Diagnostics.requiredFieldsSummary.fields, ...v3Diagnostics.optionalFieldsSummary.fields].map((f) => (
+                        <tr key={f.field_key} className="border-t border-slate-100">
+                          <td className="px-2 py-1 font-medium text-slate-700">{f.field_key}</td>
+                          <td className="px-2 py-1 text-slate-600">{f.required ? "yes" : "no"}</td>
+                          <td className="px-2 py-1 text-slate-600">{f.status}</td>
+                          <td className="px-2 py-1 text-slate-600">{f.source_backed ? "yes" : "no"}</td>
+                          <td className="px-2 py-1 text-slate-600">{f.evidence_sufficiency || "none"}</td>
+                          <td className="max-w-[260px] px-2 py-1 text-amber-700">
+                            {Array.isArray(f.evidence_warnings) && f.evidence_warnings.length > 0 ? f.evidence_warnings.join(", ") : "-"}
+                          </td>
+                          <td className="px-2 py-1 text-slate-600">{typeof f.confidence === "number" ? f.confidence : "â€”"}</td>
+                          <td className="px-2 py-1 text-amber-700">{f.missing_reason || "â€”"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">
+                Validation Drops ({v3Diagnostics.validationDrops.length})
+              </div>
+              {v3Diagnostics.validationDrops.length === 0 ? (
+                <p className="text-emerald-700">No validation drops recorded for this run.</p>
+              ) : (
+                <ul className="space-y-0.5">
+                  {v3Diagnostics.validationDrops.map((d, i) => (
+                    <li key={`${d.field_key}-${i}`} className="rounded bg-amber-50 px-2 py-1 text-amber-800">
+                      <span className="font-medium">{d.field_key}</span>{" "}
+                      <span className="font-mono text-[10px]">{d.reason}</span>{" "}
+                      {d.bad_value != null && <span className="text-amber-600">= {String(d.bad_value)}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Claim Counts</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.claimCounts, 500)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Evidence Counts</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.evidenceCounts, 500)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Validation Drop Counts</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.validationDropCounts, 500)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Source-backed Counts</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.sourceBackedCounts, 500)}</pre>
+              </div>
+              <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase text-slate-500">Evidence Sufficiency Counts</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-700">{prettyJson(v3Diagnostics.evidenceSufficiencyCounts, 700)}</pre>
+              </div>
+            </div>
+
+            {v3Diagnostics.layoutSummary && (
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Canonical Layout Summary</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["page_count", v3Diagnostics.layoutSummary.pageCount ?? "â€”"],
+                    ["full_text_chars", v3Diagnostics.layoutSummary.fullTextChars],
+                    ["text_blocks", v3Diagnostics.layoutSummary.textBlockCount],
+                    ["tables", v3Diagnostics.layoutSummary.tableCount],
+                    ["figures", v3Diagnostics.layoutSummary.figureCount],
+                    ["signature_regions", v3Diagnostics.layoutSummary.signatureRegionCount],
+                    ["page_markers_present", String(v3Diagnostics.layoutSummary.pageMarkersPresent)],
+                    ["layout_provider", v3Diagnostics.layoutSummary.layoutProvider || "â€”"],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                {v3Diagnostics.layoutSummary.warnings.length > 0 && (
+                  <p className="mt-1 text-amber-700">
+                    Layout warnings: {v3Diagnostics.layoutSummary.warnings.join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {v3Diagnostics.evidenceAnchorDiagnostics && (
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Evidence Anchor Diagnostics</div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  {[
+                    ["with_block_ids", v3Diagnostics.evidenceAnchorDiagnostics.withBlockIds],
+                    ["with_polygon", v3Diagnostics.evidenceAnchorDiagnostics.withPolygon],
+                    ["with_source_text", v3Diagnostics.evidenceAnchorDiagnostics.withSourceText],
+                    ["without_source_text", v3Diagnostics.evidenceAnchorDiagnostics.withoutSourceText],
+                    ["anchor_source", v3Diagnostics.evidenceAnchorDiagnostics.anchorSource],
+                  ].map(([key, value]) => (
+                    <div key={key} className="rounded border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase text-slate-500">{key.replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <details>
+              <summary className="cursor-pointer text-slate-700 hover:text-slate-900">Coverage summary</summary>
+              <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[11px] text-slate-700">{prettyJson(v3Diagnostics.coverageSummary)}</pre>
+            </details>
+          </div>
+        )}
+      </Section>
+
       <Section title="Extraction Summary" count={`${debugSummary.dynamic_items_extracted} discovered items`}>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {Object.entries(debugSummary).map(([key, value]) => (
@@ -791,12 +1770,12 @@ export default function ExtractionDebugPanel({ lease }) {
                       <td className="px-2 py-1 text-amber-700">{trace.final_blank_reason || "ok"}</td>
                       <td className="px-2 py-1 text-slate-600">{trace.requested_from_llm ? "yes" : "no"}</td>
                       <td className="max-w-[180px] truncate px-2 py-1 text-slate-600" title={trace.llm_source_text || ""}>
-                        {trace.llm_returned_aliases?.length ? trace.llm_returned_aliases.join(", ") : "—"}
+                        {trace.llm_returned_aliases?.length ? trace.llm_returned_aliases.join(", ") : "â€”"}
                       </td>
-                      <td className="px-2 py-1 text-slate-600" title={trace.validator_rejection_reason || ""}>{trace.validator_status || "—"}</td>
-                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.workflow_value ?? "—"}</td>
-                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.persisted_value ?? "—"}</td>
-                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.resolver_value ?? "—"}</td>
+                      <td className="px-2 py-1 text-slate-600" title={trace.validator_rejection_reason || ""}>{trace.validator_status || "â€”"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.workflow_value ?? "â€”"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.persisted_value ?? "â€”"}</td>
+                      <td className="max-w-[160px] truncate px-2 py-1 text-slate-600">{trace.resolver_value ?? "â€”"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -813,7 +1792,7 @@ export default function ExtractionDebugPanel({ lease }) {
       >
         {fileLoading ? (
           <div className="flex items-center gap-2 text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading source file…
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading source fileâ€¦
           </div>
         ) : !sourceFileId ? (
           <p className="text-slate-500">No source file linked to this lease.</p>
@@ -890,10 +1869,10 @@ export default function ExtractionDebugPanel({ lease }) {
               {reviewTableRows.map((row) => (
                 <tr key={row.key} className="border-t border-slate-100">
                   <td className="px-2 py-1 font-medium text-slate-700">{row.label}{row.required && <span className="ml-1 text-red-500">*</span>}</td>
-                  <td className="px-2 py-1 text-slate-900">{row.value == null ? "—" : String(row.value)}</td>
-                  <td className="px-2 py-1 text-slate-600">{typeof row.confidence === "number" ? `${Math.round(row.confidence)}%` : "—"}</td>
-                  <td className="px-2 py-1 text-slate-600">{row.sourcePage ?? "—"}</td>
-                  <td className="max-w-[260px] truncate px-2 py-1 italic text-slate-500" title={row.sourceText ?? ""}>{row.sourceText ?? "—"}</td>
+                  <td className="px-2 py-1 text-slate-900">{row.value == null ? "â€”" : String(row.value)}</td>
+                  <td className="px-2 py-1 text-slate-600">{typeof row.confidence === "number" ? `${Math.round(row.confidence)}%` : "â€”"}</td>
+                  <td className="px-2 py-1 text-slate-600">{row.sourcePage ?? "â€”"}</td>
+                  <td className="max-w-[260px] truncate px-2 py-1 italic text-slate-500" title={row.sourceText ?? ""}>{row.sourceText ?? "â€”"}</td>
                   <td className="px-2 py-1 text-slate-600">{row.status}</td>
                 </tr>
               ))}
@@ -912,7 +1891,7 @@ export default function ExtractionDebugPanel({ lease }) {
           <ul className="space-y-1">
             {validations.map((v, i) => (
               <li key={i} className={`rounded px-2 py-1 ${v?.pass === false ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
-                <span className="font-mono text-[10px]">{v?.rule || "rule"}</span>{" — "}
+                <span className="font-mono text-[10px]">{v?.rule || "rule"}</span>{" â€” "}
                 {v?.message || ""}
               </li>
             ))}
@@ -931,7 +1910,7 @@ export default function ExtractionDebugPanel({ lease }) {
           <p className="text-emerald-700">Every populated field has source page or source text.</p>
         ) : (
           <div>
-            <p className="mb-1 text-amber-800">Fields with a value but no source evidence — these cannot be auto-accepted:</p>
+            <p className="mb-1 text-amber-800">Fields with a value but no source evidence â€” these cannot be auto-accepted:</p>
             <ul className="space-y-0.5">
               {missingEvidence.map((row) => (
                 <li key={row.key} className="rounded bg-amber-50 px-2 py-1 text-amber-800">
@@ -950,3 +1929,9 @@ export default function ExtractionDebugPanel({ lease }) {
     </div>
   );
 }
+
+
+
+
+
+

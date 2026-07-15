@@ -26,7 +26,7 @@ import { parseDocument } from "../parser.ts";
 import { flattenRecords } from "../validator.ts";
 import { computeDerivedFields } from "../calculator.ts";
 import { snapshotFieldMap } from "../pipeline.ts";
-import { buildCanonicalDocumentIndex } from "./document-index.ts";
+import { resolveDocumentIndex, enrichFactWithBlockEvidence } from "./document-index-v3.ts";
 import { classifyDocumentProfile } from "./profile-classifier.ts";
 import { extractFactLedger } from "./fact-ledger-extractor.ts";
 import { mapFactsToStandardFields } from "./fact-field-mapper.ts";
@@ -87,7 +87,12 @@ export async function runVertexFactLedgerPipeline(
 
   try {
     const doclingRaw = await resolveDocling(input);
-    const docIndex = buildCanonicalDocumentIndex(doclingRaw);
+    // Phase 6: opt-in canonical-layout-backed index (ENABLE_DOCUMENT_INTELLIGENCE_V3
+    // only), falling straight back to the existing legacy_evidence_index path
+    // (document-index.ts, untouched) on any failure. Default/flag-off
+    // behavior is byte-for-byte what this line did before Phase 6.
+    const indexResolution = await resolveDocumentIndex(doclingRaw);
+    const docIndex = indexResolution.index;
 
     if (docIndex.fullText.trim().length < 10 && !input.fileBase64) {
       return fallbackResult("Document text is too short for extraction", startTime);
@@ -107,8 +112,21 @@ export async function runVertexFactLedgerPipeline(
       fileModeOverride: options.fileMode,
     });
 
+    // Phase 6 Task E: when the canonical layout index was actually used,
+    // enrich each fact with block-level evidence (never fabricated -- a
+    // fact whose page/source_text doesn't match a real block gets empty
+    // blockIds/polygon, exactly as if no enrichment had run). Facts
+    // themselves (category/value/sourceText/sourcePage/confidence) are
+    // unchanged either way, so mapping/dedup behavior downstream is
+    // identical regardless of which index resolved.
+    const canonicalLayoutForEnrichment =
+      indexResolution.indexSource === "canonical_layout" ? (docIndex as any).canonicalLayout ?? null : null;
+    const enrichedFacts = canonicalLayoutForEnrichment
+      ? factLedger.facts.map((fact) => enrichFactWithBlockEvidence(fact, canonicalLayoutForEnrichment))
+      : factLedger.facts;
+
     const mapped = mapFactsToStandardFields({
-      facts: factLedger.facts,
+      facts: enrichedFacts,
       moduleType: input.moduleType,
     });
 
@@ -169,6 +187,24 @@ export async function runVertexFactLedgerPipeline(
             facts_unmapped_count: mapped.unmappedFacts.length,
             approval_blockers: approvalBlockers.blockers,
             dynamic_items: dynamicItems,
+            // Phase 6 Task G: diagnostic-only, not read by any business logic.
+            document_index_source: indexResolution.indexSource,
+            document_index_fallback_reason: indexResolution.fallbackReason,
+            // Phase 6 Task E: available whenever the canonical layout index
+            // ran, so a future phase can persist block-level evidence into
+            // document_claim_evidence without re-deriving it. Empty array
+            // (not populated at all) when the legacy index was used, or when
+            // enrichment found no block match for a given fact.
+            evidence_anchors: canonicalLayoutForEnrichment
+              ? enrichedFacts.map((fact) => ({
+                category: fact.category,
+                source_text: fact.sourceText,
+                source_page: fact.sourcePage,
+                block_ids: fact.blockIds,
+                polygon: fact.polygon,
+                support_type: fact.supportType,
+              }))
+              : [],
           },
         },
       },

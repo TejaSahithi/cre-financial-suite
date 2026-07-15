@@ -35,6 +35,7 @@ import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
+import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import {
   buildBlockedReviewPayload,
@@ -2513,6 +2514,34 @@ Deno.serve(async (req: Request) => {
         console.log(
           `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
           `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
+        );
+      }
+
+      // ── Document Intelligence v3 side-write (Phase 2, opt-in) ────────────
+      // Runs only when ENABLE_DOCUMENT_INTELLIGENCE_V3=true (checked first
+      // thing inside runDocumentIntelligenceV3SideWrite -- zero DB calls
+      // when unset, matching current default behavior exactly). Placed
+      // after the minimal ui_review_payload/normalized_output persist above
+      // so the durable, UI-visible write this endpoint exists to make has
+      // already happened before any v3-only side effect is attempted. Never
+      // throws: a v3 side-write failure is caught and logged inside the
+      // helper itself, and defensively caught again here, so it can never
+      // change this request's outcome.
+      try {
+        await runDocumentIntelligenceV3SideWrite({
+          supabaseAdmin,
+          orgId,
+          uploadedFileId: file_id,
+          uploadedFile: fileRecord,
+          leaseId: null,
+          pipelineJobId: finalPipelineJobId ?? null,
+          result,
+          logger,
+        });
+      } catch (v3SideWriteError: any) {
+        console.warn(
+          `[normalize-pdf-output] document_intelligence_v3 side-write threw unexpectedly for file_id=${file_id}: ` +
+          `${v3SideWriteError?.message ?? v3SideWriteError} — current normalize flow continues unaffected.`,
         );
       }
 

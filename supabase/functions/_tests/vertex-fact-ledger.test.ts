@@ -221,6 +221,33 @@ Deno.test("runVertexFactLedgerPipeline: no Vertex credentials configured — deg
   assert(result.warnings.length > 0, "should carry a warning explaining why nothing was extracted");
 });
 
+// Phase 6 Task H.7: legacy_hybrid never touches this file at all (it has no
+// import of runVertexFactLedgerPipeline anywhere in pipeline.ts), so its
+// default behavior is unaffected by construction. What Phase 6 DOES need
+// proving here is that vertex_fact_ledger's OWN default (flag unset) is
+// unchanged: document indexing still resolves via legacy_evidence_index.
+Deno.test("runVertexFactLedgerPipeline: ENABLE_DOCUMENT_INTELLIGENCE_V3 unset uses legacy_evidence_index by default (Task H.7)", async () => {
+  Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
+  Deno.env.delete("VERTEX_PROJECT_ID");
+  Deno.env.delete("GOOGLE_PROJECT_ID");
+  Deno.env.delete("GOOGLE_SERVICE_ACCOUNT_KEY");
+  Deno.env.delete("GOOGLE_CLIENT_EMAIL");
+  Deno.env.delete("GOOGLE_PRIVATE_KEY");
+
+  const result = await runVertexFactLedgerPipeline({
+    moduleType: "lease",
+    fileName: "flag-off.txt",
+    docling: sampleDocling(),
+    documentSubtype: null,
+  });
+
+  const vfl = (result.metadata as any)?.extractionDebug?.vertex_fact_ledger;
+  assert(vfl, "vertex_fact_ledger debug object must still be present");
+  assertEquals(vfl.document_index_source, "legacy_evidence_index");
+  assertEquals(vfl.document_index_fallback_reason, null);
+  assertEquals(vfl.evidence_anchors, []);
+});
+
 Deno.test("runVertexFactLedgerPipeline: mocked successful Vertex call — return-shape contract and field mapping", async () => {
   // Generate a throwaway RSA keypair so the real signJWT() code path in
   // vertex-ai.ts runs against a fake-but-structurally-valid service account,
@@ -308,8 +335,80 @@ Deno.test("runVertexFactLedgerPipeline: mocked successful Vertex call — return
       "the unmapped Delaware fact must be preserved as a dynamic item, not discarded",
     );
     assert(Array.isArray(vfl.approval_blockers));
+
+    // Phase 6: still legacy_evidence_index here -- the flag was never set
+    // in this test, proving the opt-in gate actually gates (not just
+    // "works when explicitly forced" as document-index-v3.test.ts already
+    // covers at the unit level).
+    assertEquals(vfl.document_index_source, "legacy_evidence_index");
   } finally {
     globalThis.fetch = realFetch;
+    Deno.env.delete("VERTEX_PROJECT_ID");
+    Deno.env.delete("GOOGLE_CLIENT_EMAIL");
+    Deno.env.delete("GOOGLE_PRIVATE_KEY");
+  }
+});
+
+Deno.test("runVertexFactLedgerPipeline: ENABLE_DOCUMENT_INTELLIGENCE_V3=true resolves via canonical_layout and reports evidence_anchors (Phase 6 Task H.1/H.3)", async () => {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${(b64.match(/.{1,64}/g) ?? [b64]).join("\n")}\n-----END PRIVATE KEY-----`;
+
+  Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+  Deno.env.set("VERTEX_PROJECT_ID", "test-project");
+  Deno.env.set("GOOGLE_CLIENT_EMAIL", "test@test-project.iam.gserviceaccount.com");
+  Deno.env.set("GOOGLE_PRIVATE_KEY", pem);
+
+  const realFetch = globalThis.fetch;
+  let generateContentCallCount = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = input.toString();
+    if (url.includes("oauth2.googleapis.com/token")) {
+      return new Response(JSON.stringify({ access_token: "fake-access-token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("aiplatform.googleapis.com") && url.includes("generateContent")) {
+      generateContentCallCount++;
+      const isProfileCall = generateContentCallCount === 1;
+      const responseText = isProfileCall
+        ? JSON.stringify({ document_profile: "full_lease", confidence: 0.9, reasoning: "test fixture" })
+        : JSON.stringify([
+          { category: "clause:rent_escalation", value: 5000, source_text: "Base Rent: $5,000 per month.", source_page: 1, confidence: 0.9 },
+        ]);
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: responseText }] } }],
+          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const result = await runVertexFactLedgerPipeline({
+      moduleType: "lease",
+      fileName: "flag-on.txt",
+      docling: sampleDocling(),
+      documentSubtype: null,
+    });
+
+    const vfl = (result.metadata as any)?.extractionDebug?.vertex_fact_ledger;
+    assert(vfl, "vertex_fact_ledger debug object must be present");
+    assertEquals(vfl.document_index_source, "canonical_layout");
+    assertEquals(vfl.document_index_fallback_reason, null);
+    assert(Array.isArray(vfl.evidence_anchors), "evidence_anchors must be present when canonical_layout resolved");
+  } finally {
+    globalThis.fetch = realFetch;
+    Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
     Deno.env.delete("VERTEX_PROJECT_ID");
     Deno.env.delete("GOOGLE_CLIENT_EMAIL");
     Deno.env.delete("GOOGLE_PRIVATE_KEY");
