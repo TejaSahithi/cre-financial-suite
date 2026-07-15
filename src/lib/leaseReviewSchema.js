@@ -660,7 +660,10 @@ export function hasNaturalSourceBoundary(value) {
   return true;
 }
 
-function normalizeEvidenceComparable(value) {
+// Exported for reuse by clause-record content-based dedup
+// (leaseReviewFieldNormalizer.js) - same normalization used here to compare
+// evidence text against extracted values.
+export function normalizeEvidenceComparable(value) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[()]/g, " ")
@@ -701,9 +704,18 @@ function isoDateSupportTokens(value) {
   };
 }
 
+// Phase 44A-Fix: several of these keywords are verbs whose conjugated forms
+// ("consents", "waived", "renewing", "terminated") were missing entirely
+// under the old exact-word \b(...)\b matching - a real boolean-topic
+// sentence like "Landlord hereby consents to..." never matched "consent".
+// Widened to a word-stem (\w*) match for exactly the verb-like keywords;
+// the non-verb keywords (shall, must, insurance, additional insured,
+// option, not required, no right, none) are left as literal words since
+// they don't have the same conjugation problem and broadening them further
+// would risk over-matching unrelated text.
 function booleanSourceSupportsValue(sourceText) {
   const source = normalizeEvidenceComparable(sourceText);
-  return /\b(shall|must|required|insurance|additional insured|waiver|consent|option|renewal|terminate|not required|no right|none)\b/.test(source);
+  return /\b(shall|must|requir\w*|insurance|additional insured|waiv\w*|consent\w*|option|renew\w*|terminat\w*|not required|no right|none)\b/.test(source);
 }
 
 function sourceTextSupportsValue({ value, rawValue, sourceText, evidenceType, extractionStatus } = {}) {
@@ -967,6 +979,19 @@ export function readFieldEvidence(lease, key) {
       (sourceTextQuality === SOURCE_TEXT_QUALITIES.MISSING || sourceTextQuality === SOURCE_TEXT_QUALITIES.INCONSISTENT));
 
   return {
+    // Phase 44A-Fix: without this, callers that recompute
+    // resolveSourceTextQuality/sourceTextSupportsValue from this returned
+    // evidence object (e.g. hasValidSourceEvidence(evidence) in
+    // normalizeStandardFields) only ever see `rawValue`, which
+    // buildResolverOutput (leaseFieldResolver.js) stringifies via
+    // String(value) whenever there's no dedicated raw-text source on the
+    // entry - turning boolean `true` into the string "true". That silently
+    // defeats sourceTextSupportsValue's `typeof candidate === "boolean"`
+    // check, so booleanSourceSupportsValue never runs for real boolean
+    // fields. Threading the properly-typed value through fixes that at the
+    // source; non-boolean fields are unaffected since String(value) and
+    // value stringify identically for substring matching.
+    value: resolved?.value ?? null,
     rawValue: evRawValue,
     sourcePage: normalizeSourcePage(evSourcePage),
     sourceText: evSourceText ?? null,

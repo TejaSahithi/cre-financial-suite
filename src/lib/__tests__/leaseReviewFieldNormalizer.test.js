@@ -6,6 +6,7 @@ import {
   normalizeExpenseRuleFallback,
   isSignatureDateSourcedFromLeaseReference,
   resolveLeaseReviewExtractionMode,
+  normalizeClauseRecords,
 } from "@/lib/leaseReviewFieldNormalizer";
 import { isMarkupArtifactValue, EXTRACTION_MODES, REVIEW_STATUSES } from "@/lib/leaseReviewSchema";
 
@@ -458,5 +459,369 @@ describe("Phase 40: extraction mode resolver", () => {
     const result = normalizeLeaseReviewData(lease);
     const criticalDateRow = result.criticalDates.find((r) => r.canonicalKey === "commencement_date");
     expect(criticalDateRow.extractionMode).toBe(EXTRACTION_MODES.EXPLICIT);
+  });
+});
+
+describe("Phase 44A-Fix: landlord_consent evidence integrity (fixture regression)", () => {
+  it("landlord_consent becomes evidenceVerified true only because the real source text genuinely supports it", () => {
+    const lease = {
+      extraction_data: {
+        fields: { landlord_consent: true },
+        field_evidence: {
+          landlord_consent: {
+            source_text:
+              "Landlord hereby consents to the assignment and assumption of the Lease as set forth herein, subject to the terms and conditions of this Agreement.",
+            source_page: 1,
+          },
+        },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_consent");
+    expect(row.value).toBe(true);
+    expect(row.evidenceVerified).toBe(true);
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.EXPLICIT);
+  });
+
+  it("landlord_consent remains advisory, not a hard blocker, once evidence-verified", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: "assignment" } },
+        fields: {
+          assignee_name: "New Tenant LLC",
+          assignment_effective_date: "2026-01-15",
+          landlord_consent: true,
+        },
+        field_evidence: {
+          assignee_name: { source_text: "assignee_name: New Tenant LLC", source_page: 1 },
+          assignment_effective_date: { source_text: "assignment_effective_date: 2026-01-15", source_page: 1 },
+          landlord_consent: {
+            source_text: "Landlord hereby consents to the assignment and assumption of the Lease.",
+            source_page: 1,
+          },
+        },
+      },
+    };
+    const result = normalizeLeaseReviewData(lease);
+    const landlordConsentRow = result.standardFields.find((r) => r.canonicalKey === "landlord_consent");
+    expect(landlordConsentRow.evidenceVerified).toBe(true);
+    expect(result.currentReviewPolicy.requiredFieldKeys).not.toContain("landlord_consent");
+    expect(result.approvalBlockers.missingFields).not.toContain("landlord_consent");
+    expect(result.currentReviewPolicy.advisoryGaps.map((g) => g.key)).toContain("landlord_consent_assignment_advisory");
+  });
+});
+
+describe("Phase 44A-Fix: Clause Records content-based dedup", () => {
+  it("dedupes the same field appearing in two payload maps, keeping the page-bearing copy", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            landlord_consent: { value: true, source_page: 1, source_text: "Landlord hereby consents to the assignment." },
+          },
+        },
+        fields: {
+          landlord_consent: { value: true, source_text: "Landlord hereby consents to the assignment." },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease).filter((r) => r.title === "Landlord Consent");
+    expect(rows.length).toBe(1);
+    expect(rows[0].sourcePage).toBe(1);
+  });
+
+  it("merges a truncated copy with its fuller counterpart, keeping the longer text", () => {
+    const fullText =
+      "DDDD ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE by and among MONTVUE LLC, a Tennessee limited liability company (Landlord), RYSHER INC, a Tennessee corporation (Assignor), and NARENDRA PYDI, a resident of (Assignee).";
+    const truncatedText =
+      "DDDD ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE by and among MONTVUE LLC, a Tennessee limited liability company (Landlord)";
+    const lease = {
+      extraction_data: {
+        workflow_output: { lease_fields: { tenant_name: { value: "X", source_page: 1, source_text: truncatedText } } },
+        fields: { tenant_name: { value: "X", source_text: fullText } },
+      },
+    };
+    const rows = normalizeClauseRecords(lease).filter((r) => r.title === "Tenant Name");
+    expect(rows.length).toBe(1);
+    expect(rows[0].summary.length).toBeGreaterThan(truncatedText.length);
+  });
+
+  it("does not merge two same-label rows whose text is genuinely different (not a prefix relationship)", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            assignment_provisions: { value: "A", source_page: 1, source_text: "ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE" },
+          },
+        },
+        fields: {
+          assignment_provisions: {
+            value: "B",
+            source_text: "Assignor hereby assigns all of its right, title and interest in the Lease to Assignee.",
+          },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease).filter((r) => r.title === "Assignment Provisions");
+    expect(rows.length).toBe(2);
+  });
+
+  it("does not merge distinct clauses just because they mention the same party/date", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            assignment_effective_date: {
+              value: "2023-11-07",
+              source_page: 1,
+              source_text: "This Agreement is entered into as of November 7, 2023.",
+            },
+            tenant_signatory_name: {
+              value: "Doug Fleming",
+              source_page: 3,
+              source_text: "By: Doug Fleming, signed November 7, 2023.",
+            },
+          },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease);
+    expect(rows.length).toBe(2);
+  });
+});
+
+describe("Phase 44A-Fix: Clause Records rejected-evidence handling", () => {
+  it("suppresses a rejected markup artifact from ever becoming a clause row", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: { landlord_name: { value: "<figure>", source_page: 1, source_text: "LANDLORD:\n\n<figure>" } },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease);
+    expect(rows.some((r) => r.title === "Landlord Name")).toBe(false);
+  });
+
+  it("suppresses a clause row whose text is exactly a bare markup tag", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: { some_field: { value: "<table>", source_page: 1, source_text: "<table>" } },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease);
+    expect(rows.some((r) => r.summary === "<table>")).toBe(false);
+  });
+
+  it("flags a clause row sourced from the original lease date as needs_review, not a clean pending summary", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            tenant_signature_date: {
+              value: "2018-02-01",
+              source_page: 1,
+              source_text: "Tenant, entered into that certain Lease dated February 1, 2018",
+            },
+          },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease).filter((r) => r.title === "Tenant Signature Date");
+    expect(rows.length).toBe(1);
+    expect(rows[0].reviewStatus).toBe("needs_review");
+  });
+
+  it("does not flag an ordinary clause as needs_review", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          lease_fields: {
+            security_deposit: {
+              value: 8575,
+              source_page: 2,
+              source_text: "Assignee shall pay to Landlord, as a Security Deposit, an amount equal to $8,575.00.",
+            },
+          },
+        },
+      },
+    };
+    const rows = normalizeClauseRecords(lease).filter((r) => r.title === "Security Deposit");
+    expect(rows.length).toBe(1);
+    expect(rows[0].reviewStatus).toBe("pending");
+  });
+});
+
+describe("Phase 46: base-lease required-field alias resolution", () => {
+  function baseLeaseFixture(standardFields) {
+    const uploadedFile = {
+      document_subtype: "base_lease",
+      ui_review_payload: {
+        document_subtype: "base_lease",
+        records: [{ standard_fields: standardFields, row_index: 0 }],
+      },
+    };
+    return {
+      id: "phase46-base-lease-fixture",
+      org_id: "1307dd95-e7c5-4e08-833e-749444e8f4c8",
+      status: "draft",
+      uploaded_files: uploadedFile,
+      uploaded_file: uploadedFile,
+    };
+  }
+
+  it("premises_address resolves via property_address when populated + evidence-verified", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "property_address", value: "224 S Peters Road Knoxville, TN 37923", source: "llm", status: "auto_populated", evidence: { source_page: 1, source_text: "located at 224 S Peters Road Knoxville, TN 37923" } },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    const row = result.standardFields.find((r) => r.canonicalKey === "property_address");
+    expect(row.evidenceVerified).toBe(true);
+    expect(result.approvalBlockers.missingFields).not.toContain("premises_address");
+    expect(result.readinessSummary.missingRequiredFields).not.toContain("premises_address");
+  });
+
+  it("premises_use resolves via permitted_use when populated + evidence-verified", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "permitted_use", value: "IT work", source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "Permitted Use: IT work" } },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).not.toContain("premises_use");
+  });
+
+  it("lease_term resolves via lease_term_months when populated", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "lease_term_months", value: 60, source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "a term of sixty (60) months" } },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).not.toContain("lease_term");
+  });
+
+  it("missing canonical field still creates the legacy blocker (property_address absent)", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "tenant_name", value: "Acme Inc", source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "Tenant: Acme Inc" } },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).toContain("premises_address");
+    expect(result.readinessSummary.missingRequiredFields).toContain("premises_address");
+  });
+
+  it("a rejected/markup-artifact alias row (value null) does not satisfy the requirement", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "permitted_use", value: null, source: "system", status: "needs_review", evidence: null, validation_errors: ["Rejected: extracted value contained HTML/markup fragments"] },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).toContain("premises_use");
+  });
+
+  it("a needs_review alias row with no meaningful value and no invalidValueRejected flag does not satisfy the requirement", () => {
+    const lease = baseLeaseFixture([
+      { field_key: "property_address", value: null, source: "system", status: "needs_review", evidence: null },
+    ]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).toContain("premises_address");
+  });
+
+  it("with no matching row at all (canonical field never extracted), the legacy alias still blocks", () => {
+    const lease = baseLeaseFixture([]);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).toContain("premises_address");
+  });
+
+  it("Phase 39 invalidValueRejected carve-out (markup-artifact value on the canonical field) still applies through the alias path exactly as it did for direct-key lookups - no new leniency, no new blocker", () => {
+    // Real Phase 39/45 shape: property_address's extracted value was a bare
+    // HTML tag artifact ("</td>") - normalizeStandardFields rejects it
+    // (invalidValueRejected: true, value -> null) rather than treating it
+    // as a real value. The pre-Phase-39 behavior for a required field in
+    // this state was NOT to add a new blocker (see hasRowValue's
+    // invalidValueRejected carve-out) - this proves the alias-aware lookup
+    // preserves that exact behavior for the legacy key name too.
+    const lease = {
+      id: "phase46-invalid-value-carveout",
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: "base_lease" } },
+        fields: { property_address: "</td>" },
+        field_evidence: { property_address: { source_text: "2. Landlord:</td>", source_page: null } },
+      },
+    };
+    const propertyAddressRow = normalizeStandardFields(lease).find((r) => r.canonicalKey === "property_address");
+    expect(propertyAddressRow.invalidValueRejected).toBe(true);
+    expect(propertyAddressRow.value).toBeNull();
+
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields).not.toContain("premises_address");
+  });
+
+  it("real Phase 45 base-lease fixture: missingFields drops from 7 to 6 (only premises_address removed)", () => {
+    const standardFields = [
+      { field_key: "tenant_name", value: "Mindful Tech Solutions Inc", source: "rule", status: "auto_populated", evidence: { source_page: 16, source_text: "TENANT: Mindful Tech Solutions Inc." } },
+      { field_key: "landlord_name", value: null, source: "system", status: "needs_review", evidence: null, validation_errors: ["Rejected: extracted value contained HTML/markup fragments"] },
+      { field_key: "property_address", value: "224 S Peters Road Knoxville, TN 37923", source: "llm", status: "auto_populated", evidence: { source_page: 1, source_text: "located at 224 S Peters Road Knoxville, TN 37923" } },
+      { field_key: "permitted_use", value: null, source: "system", status: "needs_review", evidence: null, validation_errors: ["Rejected: extracted value contained HTML/markup fragments"] },
+      { field_key: "square_footage", value: 1110, source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "approximately 1,110 rentable square feet" } },
+      { field_key: "lease_date", value: null, source: "system", status: "missing", evidence: null },
+      { field_key: "lease_term_months", value: null, source: "system", status: "missing", evidence: null },
+      { field_key: "commencement_date", value: null, source: "system", status: "missing", evidence: null },
+      { field_key: "expiration_date", value: null, source: "system", status: "missing", evidence: null },
+      { field_key: "monthly_rent", value: 1400, source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "$1,400 per month" } },
+      { field_key: "security_deposit", value: 1400, source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "Security Deposit $1,400" } },
+      { field_key: "lease_type", value: "gross", source: "rule", status: "auto_populated", evidence: { source_page: 1, source_text: "Full Service" } },
+    ];
+    const lease = baseLeaseFixture(standardFields);
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.approvalBlockers.missingFields.slice().sort()).toEqual(
+      ["commencement_date", "expiration_date", "landlord_name", "lease_date", "lease_term", "premises_use"].sort()
+    );
+    expect(result.approvalBlockers.missingFields).not.toContain("premises_address");
+  });
+});
+
+describe("Phase 46: assignment document behavior is unaffected by the alias fix", () => {
+  it("real Phase 44A-Fix assignment fixture: blocker set stays exactly [assignor_name]", () => {
+    const lease = {
+      id: "phase46-assignment-regression",
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: "assignment" } },
+        fields: {
+          tenant_name: "NARENDRA PYDI",
+          assignee_name: "NARENDRA PYDI",
+          assignment_effective_date: "2023-11-07",
+          landlord_consent: true,
+          assumption_scope: "Assignee hereby assumes the obligations",
+          assignment_provisions: "ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE",
+          all_other_terms_remain_same: "All other terms of the Lease shall remain the same.",
+          tenant_signatory_name: "Doug Fleming",
+          // assignor_name intentionally has no resolvable value below - only
+          // weak clause-level signal (matching the real approved document,
+          // where "Assignor Name" has a clause row but never resolves to a
+          // clean field value) - the one real, expected blocker.
+        },
+        field_evidence: {
+          tenant_name: { source_text: "MONTVUE, LLC ... RYSHER, INC. ... NARENDRA PYDI", source_page: 1 },
+          assignee_name: { source_text: "NARENDRA PYDI, a resident of (\"Assignee\").", source_page: 1 },
+          assignment_effective_date: { source_text: "entered into as of the 7th day of November, 2023", source_page: 1 },
+          landlord_consent: { source_text: "Landlord hereby consents to the assignment and assumption of the Lease.", source_page: 1 },
+          assumption_scope: { source_text: "Assignee hereby assumes the obligations", source_page: 1 },
+          assignment_provisions: { source_text: "ASSIGNMENT, ASSUMPTION AND AMENDMENT OF LEASE", source_page: 1 },
+          all_other_terms_remain_same: { source_text: "All other terms of the Lease shall remain the same.", source_page: 1 },
+          tenant_signatory_name: { source_text: "By: Doug Fleming", source_page: null },
+          // Weak signal only (source_page, no resolvable value) - gives
+          // assignor_name "signal" so it enters the assignment profile's
+          // required-key set (ASSIGNMENT_REQUIRED_IF_PRESENT_KEYS) without
+          // ever satisfying it, exactly like the real approved document.
+          assignor_name: { source_text: "Assignor and Assignee desire to enter into this Agreement to, among", source_page: 1 },
+        },
+      },
+    };
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.currentReviewPolicy.profile).toBe("assignment");
+    expect(result.approvalBlockers.missingFields).toEqual(["assignor_name"]);
+    expect(result.approvalBlockers.budgetBlockers).toEqual([]);
+    expect(result.approvalBlockers.camBlockers).toEqual([]);
+    const advisoryKeys = result.currentReviewPolicy.advisoryGaps.map((g) => g.key);
+    expect(advisoryKeys).toContain("original_lease_missing");
+    expect(advisoryKeys).toContain("tenant_name_assignment_advisory");
+    expect(advisoryKeys).toContain("landlord_consent_assignment_advisory");
   });
 });

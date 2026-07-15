@@ -1140,3 +1140,213 @@ Recommendation remains: **No Gate**.
 ## Phase 44 Recommendation
 
 Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33–42) can pause here — 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point; further requirements-matrix reruns against the same single document would be low-value until either a business/legal decision lands or new document data exists (Track 1) or real provider-backed evidence becomes available to compare against (Track 2).
+
+## Phase 44A Lease Review Hardening
+
+Phase 44A resolved the two open Phase 42 partials via root-cause analysis and a full audit — no source code was changed.
+
+Approved IDs:
+
+- uploaded_file_id: `fc8181e6-766d-49c7-b81b-b5d961160207`
+- lease_id: `7b21f353-579d-48e8-b3dd-8e8c49743fe2`
+- local diagnostic run_id: `6d175b40-8f60-429f-8a29-a047e2a2e333`
+
+### `landlord_consent` Root Cause
+
+**Validation rule too strict.** `booleanSourceSupportsValue()` (`src/lib/leaseReviewSchema.js`) requires the exact word "consent" (`\bconsent\b`), but the source text uses the conjugated form "consents" — the word-boundary regex doesn't match it, so `resolveSourceTextQuality` returns `INCONSISTENT` instead of `EXACT`, and `evidenceVerified` becomes `false`. Confirmed as the complete explanation (page present, natural boundary would pass). A fix (broaden the regex to match common verb conjugations) is described but not implemented — requires separate approval.
+
+### Clause Records Audited Count
+
+**35 of 35** (full audit, not a sample).
+
+| Classification | Count |
+| --- | ---: |
+| Valid legal summary | 1 |
+| Duplicate standard field | 12 |
+| Noisy / low value | 19 |
+| Needs review | 3 |
+
+19 of the 35 "noisy" rows include 16 near-exact internal duplicates (same clause shown twice, differing only by a missing page number) — traced to `computeFallbackClauseRows()` unioning 5 separate `lease_fields`-shaped payload maps without deduping on content when the map index differs. A fix is described but not implemented.
+
+### Partials Resolved
+
+- **Partial 1 (`landlord_consent`): root-caused, not resolved.**
+- **Partial 2 (Clause Records): audited — the audit task is complete; the audit result found real duplication/noise, now a well-scoped Track 1 follow-up item, not an open unknown.**
+
+### Controlled Staging Review Still Appropriate
+
+**Yes.** Both findings are display/content-quality issues, not correctness or safety issues.
+
+### Approval Gating
+
+**Still no.** `approvalBlockers.missingFields` unchanged (`["assignor_name"]` only).
+
+### Recommendation
+
+Recommendation remains: **No Gate**.
+
+## Phase 44B Recommendation (candidate)
+
+Two small, independent, low-risk fixes are ready for approval as isolated follow-ups if the business wants to act before the rest of Track 1: (1) the `booleanSourceSupportsValue` regex fix, (2) a Clause Records dedup fix (collapse near-exact duplicates, prefer the copy with a non-null `source_page`). Neither is authorized by this report.
+
+## Phase 44A-Fix: landlord_consent + Clause Records Fixes
+
+Phase 44A-Fix implemented both fixes recommended in Phase 44A. No approval-gating behavior changed.
+
+Approved IDs:
+
+- uploaded_file_id: `fc8181e6-766d-49c7-b81b-b5d961160207`
+- lease_id: `7b21f353-579d-48e8-b3dd-8e8c49743fe2`
+- local diagnostic run_id: `6d175b40-8f60-429f-8a29-a047e2a2e333`
+
+### landlord_consent Regex Fixed
+
+**Yes** — and a second, deeper pre-existing bug was also found and fixed. The planned `booleanSourceSupportsValue()` word-stem widening was necessary but not sufficient: `readFieldEvidence()` never carried a properly-typed `.value` in its returned evidence object (only a stringified `rawValue`, e.g. `"true"` for a `true` boolean), so `sourceTextSupportsValue()`'s `typeof candidate === "boolean"` check silently failed for every boolean field going through the real production path — the regex fix was correct but unreachable there. Fixed by adding `value: resolved?.value ?? null` to `readFieldEvidence()`'s return object, scoped narrowly to `leaseReviewSchema.js` (does not touch `leaseFieldResolver.js`, which is used by several other pages/services). No regression for non-boolean fields (confirmed by full suite).
+
+### Clause Records Dedup Fixed
+
+**Yes.** Root cause confirmed precisely: the old dedup key included `source_page`, so the same field appearing in two of the 5 unioned payload maps with different page-number completeness produced different keys and both survived. Dedup now keys on normalized type+title+text (with a truncated-prefix match helper), preferring the page-bearing/longer copy. Distinct clauses are not merged (verified by dedicated tests).
+
+### Rejected Evidence Handling Fixed
+
+**Yes.** Markup-artifact clause text is suppressed (checked against both resolved value and source text); rows matching the signature-date-from-original-lease pattern get `reviewStatus: "needs_review"` instead of `"pending"` — reusing the existing status vocabulary, no table-contract changes needed.
+
+### Before/After Clause Records Counts
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Total rows | 35 | 19 |
+| `pending` / `needs_review` | 35 / 0 | 16 / 3 |
+
+### Before/After Duplicate/Noisy Counts
+
+16 internal near-exact duplicates removed (exactly matching the Phase 44A audit's finding). 3 rows now correctly flagged `needs_review` instead of shown as clean facts (both signature-date rows, plus "Lease Term Months" which legitimately shares the same original-lease-reference text pattern).
+
+### Approved Document Verification
+
+`landlord_consent`: `evidenceVerified` false→true, status `needs_review`→`auto_populated`, extractionMode `unknown`→`explicit`, value unchanged (`true`). `approvalBlockers.missingFields` remains `["assignor_name"]` — unchanged. `budgetReadiness`/`camReadiness` remain `ready`/`ready`. Original lease missing remains advisory. Assignment/full-lease behavior, Extraction Mode resolver, and table/action contract are all unchanged (not touched this phase).
+
+### Remaining Gaps
+
+`landlord_consent`'s own Clause Records row still duplicates the standard field verbatim (Clause-Records-vs-standard-field duplication was out of scope for this fix, which targeted internal Clause Records duplication only); `tenant_name`'s Clause Records row (also a verbatim duplicate carrying a known weak-evidence concern) wasn't targeted by the two named rejected-evidence guards. Track 1's remaining items (second curated document type, multi-document QA set) are still outstanding.
+
+### Recommendation
+
+Recommendation remains: **No Gate**.
+
+## Phase 44A-Fix Recommended Next Step
+
+Continue Track 1: test at least one more curated document type to check whether these fixes generalize, and begin building a small multi-document QA set. Separately, consider whether the two residual duplication items above warrant their own follow-up.
+
+## Phase 45: Second Document Test (Base Lease)
+
+Phase 45 tested the profile-aware policy against a genuinely second document — no source changes were made or planned this phase (test/verification only). Full report: `docs/document-intelligence-v3-phase45-second-document-base-lease-test.md`.
+
+Candidate: uploaded_file_id `f26f2cb5-4764-496c-a68f-484fc7a41085`, same org as the approved assignment document, `document_subtype: "base_lease"`, unapproved (`review_status: pending`), `enrichment_status: "failed"`. No matching local `leases` row existed for this document; a `leases` row initially provided (`8f41718d-...`) was found to be unrelated (its dates/tenant_name match the *assignment* document's original-lease reference, not this base lease) and was not used.
+
+### Profile Resolution
+
+**Correct.** Resolved to `base_lease` via `document_subtype` and the `uploaded_files` fallback paths in `collectProfileCandidates()`.
+
+### Base-Lease Blockers Apply — Confirmed, With One Real Finding
+
+`applyBaseLeaseBlockers: true` activates correctly. But projecting real data through it surfaced a genuine, pre-existing bug: `normalizeApprovalBlockers()`'s supplementary `policyRequiredKeys` pass (`leaseReviewFieldNormalizer.js:794-806`) checks the base-lease profile's legacy required keys (`premises_address`, `premises_use`, `lease_term`, from `REQUIRED_FIELD_KEYS` in `leaseReviewSchema.js`) directly against `standardFields`, which is keyed by `LEASE_FIELD_CONTRACT`'s newer canonical names (`property_address`, `permitted_use`, `lease_term_months`) — without ever applying the alias table `readFieldValue()` already uses for exactly this mapping. Result: `premises_address` is **structurally always missing**, regardless of whether `property_address` has a real value.
+
+Proven concretely on this document: `property_address` = `"224 S Peters Road Knoxville, TN 37923"`, `status: needs_review` (not missing), `evidenceVerified: true` — yet `approvalBlockers.missingFields` still lists `premises_address`.
+
+**Not fixed this phase** (test/verification only, no source changes made). This gap was invisible in every prior phase because the assignment profile's required-key list never included these three legacy names — it only surfaced once tested against a base-lease document, which is exactly why Track 1's "second document type" step mattered. Recommended as a narrowly-scoped follow-up: alias `policyRequiredKeys` through the same alias table, verified against both this document and the approved assignment document (which must remain unchanged).
+
+### Assignment-Only Policy Correctly Does Not Apply
+
+Zero assignment-specific advisory items (`original_lease_missing`, tenant-name/landlord-consent-in-assignment-context warnings) — all correctly absent for this base lease.
+
+### Economics/CAM/Budget — Correctly Differentiated
+
+| | Assignment (Phase 44A-Fix) | Base lease (Phase 45) |
+| --- | --- | --- |
+| `budgetReadiness` | `ready` | `blocked` |
+| `camReadiness` | `ready` | `needs_review` |
+| `budgetBlockers` | 0 | 5 |
+| `camBlockers` | 0 | 15 |
+
+The assignment profile treats missing CAM/budget inputs as advisory-only; the base-lease profile correctly treats them as real blockers — this document genuinely has no CAM structure (its own `ui_review_payload.warnings` independently confirms `cam_structure` parsed with all-null values).
+
+### Extraction Mode, Evidence Integrity, Clause Records, Enrichment
+
+- Extraction mode distribution: 16 `explicit` / 72 `unknown` of 88 standard fields.
+- Evidence integrity held on two independent real-world rejected values (`landlord_name`, `permitted_use` — both HTML/markup-fragment artifacts, e.g. `"2. Landlord:</td>"`); both correctly surfaced as `missing`/`needs_review`, never as clean values.
+- Clause Records count: 0 — this document's payload has no `lease_clauses` array; `computeFallbackClauseRows()` correctly produced zero rows rather than fabricating or crashing.
+- `enrichment_status: "failed"` (two Vertex AI 429 resource-exhausted errors) — a genuinely different condition than the approved document; `normalizeLeaseReviewData()` ran cleanly against it with no special-casing needed.
+
+Presentation-only items (Type column hidden, Action dropdown, debug/admin gating, enrichment banner visual rendering) were not independently re-verified via a live UI session this phase (no deploy) — flagged plainly as not re-tested rather than claimed confirmed.
+
+### Comparison Table
+
+| | Assignment (`fc8181e6-...`, approved) | Base lease (`f26f2cb5-...`, unapproved) |
+| --- | --- | --- |
+| Profile resolved | `assignment` | `base_lease` |
+| `approvalBlockers.missingFields` | 1 (`assignor_name`) | 7 (6 genuine, 1 false positive) |
+| Advisory gaps | 3 | 0 |
+| `budgetReadiness` / `camReadiness` | ready / ready | blocked / needs_review |
+| Clause Records | 19 | 0 |
+| Extraction mode (explicit/unknown of 88) | 13 / 75 | 16 / 72 |
+
+### Regression Check
+
+No change to the approved assignment document's behavior — this phase made no source changes.
+
+### Recommendation
+
+Recommendation remains: **No Gate**.
+
+## Phase 45 Recommended Next Step
+
+Scope and implement the `premises_address`/`premises_use`/`lease_term` alias fix as its own focused follow-up phase, verified against both documents. Continue building the multi-document QA set (this phase adds one real base-lease data point). Consider approving this base-lease document through the normal review flow if a second fully end-to-end verified (approved) document is wanted — out of scope for this phase, no writes were made.
+
+## Phase 46: Base-Lease Required-Field Alias Fix
+
+Fixed the alias gap found in Phase 45. Full report: `docs/document-intelligence-v3-phase46-base-lease-alias-fix.md`.
+
+**Root cause**: `normalizeApprovalBlockers()` and `buildReadinessSummary()` (`leaseReviewFieldNormalizer.js`) checked required field keys using legacy names (`premises_address`, `premises_use`, `lease_term`) directly against `standardFields`, which is keyed by `LEASE_FIELD_CONTRACT`'s newer canonical names (`property_address`, `permitted_use`, `lease_term_months`) — with no alias resolution, unlike `readFieldValue`/`readFieldEvidence`, which already resolve these exact aliases via the existing `getFieldAliases()` table (`leaseFieldResolver.js`).
+
+**Fix**: added one shared helper, `requiredFieldHasValue(byKey, key)`, that checks every alias from the existing `getFieldAliases()` through the existing `hasRowValue()` gate — reusing the alias table already used elsewhere rather than building a second one. Used in exactly the two call sites with the bug; nothing else touched.
+
+### Alias Bug Fixed
+
+**Yes.**
+
+### Assignment Regression
+
+**None.** Re-ran the real approved-document field/evidence shape (`fc8181e6-.../7b21f353-...`): `missingFields` stays exactly `["assignor_name"]`, `budgetBlockers`/`camBlockers` stay `[]`/`[]`, all three advisory gaps unchanged.
+
+### Base Lease Regression
+
+**None — requiredness preserved, only the false positive removed.** Corrected expectation (only one of the three named keys actually clears for this document's real data):
+
+| Legacy key | Alias | Alias state (real data) | Result |
+| --- | --- | --- | --- |
+| `premises_address` | `property_address` | populated, evidence-verified | **cleared** |
+| `premises_use` | `permitted_use` | rejected markup artifact (null) | still blocks |
+| `lease_term` | `lease_term_months` | genuinely null | still blocks |
+
+`approvalBlockers.missingFields`: 7 → **6** (only `premises_address` removed). `budgetBlockers`/`camBlockers` unaffected (different fields entirely).
+
+### Remaining Blockers (base lease, post-fix)
+
+`lease_date`, `landlord_name`, `commencement_date`, `expiration_date`, `premises_use`, `lease_term` — all genuine, no populated alias exists for any of them in this document's real extraction.
+
+### Tests Added
+
+`src/lib/__tests__/leaseReviewFieldNormalizer.test.js` — 9 new tests across 2 `describe` blocks (full file: 52/52 passing): alias resolution for all 3 named pairs; missing-canonical-still-blocks; rejected/markup-artifact and needs_review-with-no-value alias rows do not satisfy; the Phase 39 `invalidValueRejected` carve-out preserved through the alias path with no new leniency; the real Phase 45 base-lease fixture (7→6); and the real approved assignment fixture (`missingFields` stays `["assignor_name"]`).
+
+### Files Changed
+
+`src/lib/leaseReviewFieldNormalizer.js` (the fix), `src/lib/__tests__/leaseReviewFieldNormalizer.test.js` (tests), plus this phase's three doc files.
+
+### Recommendation
+
+**No Gate.**
+
+## Phase 46 Recommended Next Step
+
+Continue Track 1's multi-document QA set. Consider a small follow-up for the `tabSummaries[].missingRequired` per-tab cosmetic under-count noted in the full report (no blocker/gating impact, low priority — not fixed this phase). Consider approving the base-lease document through the normal review flow now that its `premises_address` false positive is resolved.

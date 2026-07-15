@@ -33,6 +33,7 @@ import {
   isMarkupArtifactValue,
   isCalculatedExtractionStatus,
   isManualExtractionStatus,
+  normalizeEvidenceComparable,
   REVIEW_STATUSES,
   EXTRACTION_STATUSES,
   SOURCE_TEXT_QUALITIES,
@@ -42,6 +43,7 @@ import {
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
 import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
 import { buildCurrentReviewPolicy } from "@/lib/leaseReviewCurrentPolicy";
+import { getFieldAliases } from "@/lib/leaseFieldResolver";
 
 function titleize(key) {
   return String(key || "")
@@ -66,6 +68,22 @@ function hasRowValue(row) {
   // widens beyond that one flag.
   if (row?.invalidValueRejected) return true;
   return isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue);
+}
+
+// Phase 46: some required-field keys use a legacy name (e.g. premises_address,
+// premises_use, lease_term - from REQUIRED_FIELD_KEYS in leaseReviewSchema.js)
+// while `standardFields`/`byKey` is keyed by LEASE_FIELD_CONTRACT's newer
+// canonical name (property_address, permitted_use, lease_term_months).
+// readFieldValue/readFieldEvidence already resolve this via getFieldAliases()
+// (leaseFieldResolver.js) when reading the raw lease payload directly, but
+// normalizeApprovalBlockers/buildReadinessSummary check `standardFields` rows
+// instead and never applied the same aliasing - so a populated, evidence-backed
+// canonical field could still show as a missing legacy-named blocker. This
+// checks every alias's row through the same hasRowValue() gate used
+// everywhere else, so weak/rejected/valueless alias rows still block exactly
+// as before - it only recognizes a REAL value under a different key name.
+function requiredFieldHasValue(byKey, key) {
+  return getFieldAliases(key).some((aliasKey) => hasRowValue(byKey.get(aliasKey)));
 }
 
 // Phase 39: signature-date fields whose only evidence describes when the
@@ -491,31 +509,56 @@ export function computeFallbackClauseRows(lease) {
   const list = [fromWorkflow, fromTopLevel, fromUploadMeta, fromUploadRecord, recordOutput.lease_clauses]
     .flatMap((rows) => (Array.isArray(rows) ? rows : []));
   const clauseRows = list
-    .map((c, idx) => ({
-      id: c.id || c.item_id || `extract-${idx}`,
-      clause_type: normalizeClauseType(c.clause_type || c.type || c.item_type || "clause_records"),
-      clause_title: c.clause_title || c.title || c.label || c.section_title || "Extracted Clause",
-      clause_text: cleanDocumentItemSource(c.clause_text || c.exact_text || c.exact_source_text || c.source_text || c.source_clause),
-      source_page: c.source_page ?? c.page_number ?? c.page ?? null,
-      confidence_score: c.confidence_score ?? c.confidence ?? null,
-      structured_fields_json: c.structured_fields_json || {
+    .map((c, idx) => {
+      const clauseText = cleanDocumentItemSource(c.clause_text || c.exact_text || c.exact_source_text || c.source_text || c.source_clause);
+      const baseStructuredFields = c.structured_fields_json || {
         normalized_meaning: c.normalized_meaning || c.normalized_value || c.value || null,
         evidence_type: c.evidence_type || null,
         requires_review: c.requires_review ?? null,
-      },
-    }))
-    .filter((row) => cleanDocumentItemSource(row.clause_text));
+      };
+      return {
+        id: c.id || c.item_id || `extract-${idx}`,
+        clause_type: normalizeClauseType(c.clause_type || c.type || c.item_type || "clause_records"),
+        clause_title: c.clause_title || c.title || c.label || c.section_title || "Extracted Clause",
+        clause_text: clauseText,
+        source_page: c.source_page ?? c.page_number ?? c.page ?? null,
+        confidence_score: c.confidence_score ?? c.confidence ?? null,
+        _raw_value: c.normalized_value ?? c.value ?? null,
+        // Phase 44A-Fix: same rejected-evidence guard as discoveredRows below
+        // - do not let a signature date sourced from the original lease
+        // reference read as a clean legal summary via this path either.
+        structured_fields_json: {
+          ...baseStructuredFields,
+          requires_review: baseStructuredFields.requires_review || isSignatureDateSourcedFromLeaseReference(clauseText) || undefined,
+        },
+      };
+    })
+    // Phase 44A-Fix: same markup-artifact rejection as discoveredRows below,
+    // checked against both the resolved value and the clause text.
+    .filter((row) => !isMarkupArtifactValue(row._raw_value) && !isMarkupArtifactValue(row.clause_text))
+    .filter((row) => cleanDocumentItemSource(row.clause_text))
+    .map(({ _raw_value, ...row }) => row);
 
   const discoveredRows = [...itemRows, ...fieldMapRows]
     .filter((item) => documentItemSource(item))
+    // Phase 44A-Fix: never surface a rejected layout/markup artifact (e.g.
+    // "<figure>") as a clause row - same rejection rule Phase 39 applies to
+    // standard fields (isMarkupArtifactValue), just reused here so Clause
+    // Records can't become a second, unguarded path for the same garbage.
+    // Checked against both the resolved value and the source text, since a
+    // clause's source text can wrap the artifact in surrounding context
+    // (e.g. "LANDLORD:\n\n<figure>") where the artifact only shows up
+    // cleanly in the resolved value.
+    .filter((item) => !isMarkupArtifactValue(documentItemValue(item)) && !isMarkupArtifactValue(documentItemSource(item)))
     .map((item, idx) => {
       const semanticType = String(item.item_type || item.field_key || item.clause_type || item.business_area || item.display_tab || "clause_records").replace(/^clause[_-]/i, "");
+      const clauseText = documentItemSource(item);
       return {
         id: item.item_id || item.id || `document-item-${idx}`,
         is_document_item: true,
         clause_type: normalizeClauseType(semanticType),
         clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
-        clause_text: documentItemSource(item),
+        clause_text: clauseText,
         source_page: item.source_page ?? item.page_number ?? item.page ?? null,
         confidence_score: item.confidence_score ?? item.confidence ?? null,
         structured_fields_json: {
@@ -526,20 +569,61 @@ export function computeFallbackClauseRows(lease) {
           evidence_type: item.evidence_type || null,
           maps_to_fixed_field: item.maps_to_fixed_field ?? null,
           creates_dynamic_row: item.creates_dynamic_row ?? null,
+          // Phase 44A-Fix: text that is itself the exact evidence Phase 39
+          // already rejected as a signature date sourced from the original
+          // lease reference (not this document's own execution) must not
+          // read as a clean legal summary either - flag it the same way,
+          // reusing the same predicate rather than re-deriving the rule.
+          requires_review: isSignatureDateSourcedFromLeaseReference(clauseText) || undefined,
         },
       };
     });
 
-  const dedupedDiscovered = [];
-  const seenDiscovered = new Set();
-  for (const row of discoveredRows) {
-    const key = `${row.clause_title}|${row.source_page ?? ""}|${row.clause_text}`;
-    if (seenDiscovered.has(key)) continue;
-    seenDiscovered.add(key);
-    dedupedDiscovered.push(row);
+  // Phase 44A-Fix: dedup on normalized content (type + title + text), not
+  // on an exact key that includes source_page. computeFallbackClauseRows
+  // unions 5 separate lease_fields-shaped payload maps (see fieldMapRows
+  // above); when the same field appears in two of them, one copy often
+  // carries a real source_page and the other doesn't, which used to defeat
+  // the old page-inclusive dedup key entirely (Phase 44A audit: 16 of 35
+  // rows were exactly this). A short cached copy can also be a truncated
+  // prefix of a fuller one from a different map (isNearDuplicateClauseText
+  // handles that case) rather than byte-identical. When two rows collide,
+  // keep whichever has a real source_page, or the longer text if both/
+  // neither do.
+  function isNearDuplicateClauseText(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length <= b.length ? b : a;
+    return shorter.length >= 40 && longer.startsWith(shorter);
   }
 
-  return [...clauseRows, ...dedupedDiscovered];
+  const normalizedDiscovered = discoveredRows.map((row) => ({
+    row,
+    normalizedTitle: normalizeEvidenceComparable(row.clause_title),
+    normalizedText: normalizeEvidenceComparable(row.clause_text),
+  }));
+
+  const dedupedDiscovered = [];
+  for (const entry of normalizedDiscovered) {
+    const existingIndex = dedupedDiscovered.findIndex(
+      (candidate) =>
+        candidate.row.clause_type === entry.row.clause_type &&
+        candidate.normalizedTitle === entry.normalizedTitle &&
+        isNearDuplicateClauseText(candidate.normalizedText, entry.normalizedText),
+    );
+    if (existingIndex === -1) {
+      dedupedDiscovered.push(entry);
+      continue;
+    }
+    const existing = dedupedDiscovered[existingIndex];
+    const preferEntry =
+      (existing.row.source_page == null && entry.row.source_page != null) ||
+      existing.normalizedText.length < entry.normalizedText.length;
+    if (preferEntry) dedupedDiscovered[existingIndex] = entry;
+  }
+
+  return [...clauseRows, ...dedupedDiscovered.map((entry) => entry.row)];
 }
 
 /** Phase-6 UI shape, sync/payload-only (no `lease_clauses` DB table rows —
@@ -726,12 +810,15 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
   }
   if (policyRequiredKeys) {
     for (const key of policyRequiredKeys) {
-      const policyRow = byKey.get(key);
       // Phase 39: same narrow invalidValueRejected carve-out as above -
       // this supplementary pass covers policy-required keys not iterated by
       // LEASE_FIELD_CONTRACT above and must not re-add a rejected-artifact
       // field as a blocker either.
-      const policyHasValue = isMeaningfulValue(policyRow?.value) || policyRow?.invalidValueRejected === true;
+      // Phase 46: resolve through requiredFieldHasValue() so a legacy key
+      // name (e.g. premises_address) is satisfied by its populated,
+      // evidence-backed canonical alias (e.g. property_address) - see
+      // requiredFieldHasValue() above.
+      const policyHasValue = requiredFieldHasValue(byKey, key);
       if (!missingFields.includes(key) && !policyHasValue) {
         missingFields.push(key);
       }
@@ -817,7 +904,11 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
   const requiredKeys = currentReviewPolicy?.requiredFieldKeys || REQUIRED_FIELD_KEYS;
   const requiredKeySet = new Set(requiredKeys);
   const byKey = new Map(standardFields.map((row) => [row.canonicalKey, row]));
-  const missingRequired = requiredKeys.filter((key) => !hasRowValue(byKey.get(key)));
+  // Phase 46: same alias-aware lookup as normalizeApprovalBlockers, so this
+  // independent missing-required-fields computation doesn't reproduce the
+  // same legacy-key-name false positive (e.g. premises_address vs.
+  // property_address).
+  const missingRequired = requiredKeys.filter((key) => !requiredFieldHasValue(byKey, key));
   const needsReview = standardFields.filter((row) => row.status === "needs_review" || row.status === "manual_required");
   const sourceBacked = standardFields.filter((row) => row.evidenceVerified);
   const tabSummaries = LEASE_REVIEW_CANONICAL_TABS.map((tab) => {

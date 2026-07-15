@@ -1975,5 +1975,277 @@
     "lease_review_requirements_track_can_pause": true,
     "recommended_phase_44": "Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33-42) can pause here - 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point."
   },
-  "recommended_phase_44": "Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33-42) can pause here - 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point."
+  "recommended_phase_44": "Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33-42) can pause here - 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point.",
+  "phase44a_lease_review_hardening": {
+    "phase44a_performed": true,
+    "phase_type": "root_cause_and_audit_only",
+    "source_code_changed": false,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "landlord_consent_root_cause": {
+      "classification": "validation_rule_too_strict",
+      "function": "booleanSourceSupportsValue",
+      "file": "src/lib/leaseReviewSchema.js",
+      "explanation": "Regex \\bconsent\\b does not match the conjugated form 'consents' present in the source text, so sourceTextSupportsValue returns false, resolveSourceTextQuality returns INCONSISTENT instead of EXACT, and evidenceVerified becomes false. Confirmed complete explanation (page present, natural boundary would pass).",
+      "fix_implemented_this_phase": false,
+      "recommended_fix": "Broaden booleanSourceSupportsValue's keyword matching to cover common verb conjugations (e.g. consent\\w* instead of \\bconsent\\b), and apply the same treatment to other verb-like keywords in the same list.",
+      "requires_separate_approval": true
+    },
+    "clause_records_audit": {
+      "rows_audited": 35,
+      "rows_sampled_previously": 5,
+      "classification_counts": {
+        "valid_legal_summary": 1,
+        "duplicate_standard_field": 12,
+        "noisy_low_value": 19,
+        "needs_review": 3
+      },
+      "internal_near_exact_duplicates": 16,
+      "internal_duplicate_mechanism": "computeFallbackClauseRows() unions 5 separate lease_fields-shaped payload maps into fieldMapRows with item_id keyed by map index, so the same field key present in two maps (differing only in source_page completeness) produces two non-deduped rows.",
+      "fix_implemented_this_phase": false,
+      "recommended_fix": "Dedupe Clause Records on normalized clause text (not just item_id), preferring the copy with a non-null source_page when a duplicate pair is found.",
+      "requires_separate_approval": true
+    },
+    "partials_resolved": {
+      "partial_1_landlord_consent": "root_caused_not_resolved",
+      "partial_2_clause_records": "audited_task_complete_result_found_real_duplication"
+    },
+    "controlled_staging_review_still_appropriate": true,
+    "approval_gating_still_no": true,
+    "approval_blockers_missing_fields_unchanged": ["assignor_name"],
+    "files_changed": [
+      "docs/document-intelligence-v3-phase44A-lease-review-hardening.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "src_changes_introduced_this_phase": false,
+      "temp_vitest_file_deleted": true,
+      "note": "Only docs/JSON changed this phase; lint/typecheck/build/test were not required per Task E since no source code changed."
+    },
+    "recommendation": "no_gate",
+    "recommended_next_step": "Two small, independent, low-risk fixes are ready for separate approval as isolated follow-ups: (1) the booleanSourceSupportsValue regex fix, (2) a Clause Records dedup fix. Neither is authorized by this report. Otherwise proceed to Track 1's remaining items (second curated document type, multi-document QA set) or Track 2 (provider-backed evidence)."
+  },
+  "recommended_phase_44b": "Two small, independent, low-risk fixes are ready for separate approval as isolated follow-ups: (1) the booleanSourceSupportsValue regex fix, (2) a Clause Records dedup fix. Neither is authorized by this report.",
+  "phase44a_fix_consent_clause_records": {
+    "phase44a_fix_performed": true,
+    "phase_type": "bug_fix",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "landlord_consent_regex_fixed": true,
+    "second_bug_found_and_fixed": {
+      "description": "readFieldEvidence() never carried a properly-typed .value in its returned evidence object, only a stringified rawValue (e.g. \"true\" for boolean true), so sourceTextSupportsValue()'s typeof candidate === \"boolean\" check silently failed for every boolean field on the real production path - the regex fix was correct but unreachable there.",
+      "fix": "Added value: resolved?.value ?? null to readFieldEvidence()'s return object in leaseReviewSchema.js. Did not touch leaseFieldResolver.js (used by LeaseDetail.jsx, Leases.jsx, leaseAbstractService.js, leaseRulePipelineService.js) to keep blast radius minimal.",
+      "regression_risk": "none observed - non-boolean fields unaffected since typed value and stringified rawValue produce identical substring-matchable text; confirmed by full test suite"
+    },
+    "clause_records_dedup_fixed": true,
+    "clause_records_dedup_root_cause": "Old dedup key included source_page, so the same field appearing in two of the 5 unioned lease_fields-shaped payload maps with different page-number completeness produced different keys and both rows survived.",
+    "rejected_evidence_handling_fixed": true,
+    "clause_records_before_after": {
+      "total_rows": { "before": 35, "after": 19 },
+      "pending_count": { "before": 35, "after": 16 },
+      "needs_review_count": { "before": 0, "after": 3 },
+      "internal_duplicates_removed": 16
+    },
+    "landlord_consent_before_after": {
+      "value": { "before": true, "after": true },
+      "status": { "before": "needs_review", "after": "auto_populated" },
+      "evidenceVerified": { "before": false, "after": true },
+      "extractionMode": { "before": "unknown", "after": "explicit" },
+      "in_required_field_keys": { "before": false, "after": false },
+      "in_approval_blockers_missing_fields": { "before": false, "after": false },
+      "in_advisory_gaps": { "before": true, "after": true }
+    },
+    "approval_blockers_missing_fields_unchanged": ["assignor_name"],
+    "budget_readiness_unchanged": "ready",
+    "cam_readiness_unchanged": "ready",
+    "phase42_partials_now_fixed": {
+      "partial_1_landlord_consent": "fixed",
+      "partial_2_clause_records": "fixed"
+    },
+    "tests_added": {
+      "leaseReviewSchema_test_new_file": 6,
+      "leaseReviewFieldNormalizer_test": 10,
+      "total": 16
+    },
+    "files_changed": [
+      "src/lib/leaseReviewSchema.js",
+      "src/lib/leaseReviewFieldNormalizer.js",
+      "src/lib/__tests__/leaseReviewSchema.test.js",
+      "src/lib/__tests__/leaseReviewFieldNormalizer.test.js",
+      "docs/document-intelligence-v3-phase44A-fix-consent-clause-records.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "remaining_gaps": [
+      "landlord_consent_clause_records_row_still_duplicates_standard_field_verbatim",
+      "tenant_name_clause_records_row_not_flagged_despite_known_weak_evidence",
+      "track_1_second_curated_document_type_and_multi_document_qa_set_still_outstanding"
+    ],
+    "verification": {
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed with pre-existing Vite chunk-size warnings only",
+      "test": "passed: 56 files / 631 tests (615 prior + 16 new)",
+      "focused_leaseReviewSchema_test": "6/6 passed",
+      "focused_leaseReviewFieldNormalizer_test": "42/42 passed",
+      "focused_regression_suite": "19/19 passed (leaseReviewCurrentPolicy/leaseReviewTabTableContract/leaseReviewUiState, untouched this phase)",
+      "qa_json_parse_check": "passed"
+    },
+    "staging_review_remains_appropriate": true,
+    "recommendation": "no_gate",
+    "recommended_next_step": "Continue Track 1: test at least one more curated document type to check whether these fixes generalize, and begin building a small multi-document QA set. Separately, consider whether the two residual duplication items warrant their own follow-up."
+  },
+  "phase45_second_document_base_lease_test": {
+    "phase_type": "test_verification_only",
+    "source_changes_made": false,
+    "candidate_search": {
+      "local_db_scan": "org has exactly one uploaded_files/leases row locally (the approved assignment document) - no second candidate found",
+      "first_user_paste_was_duplicate": "same assignment document (fc8181e6-.../7b21f353-...) re-exported, flagged back to user rather than used",
+      "second_user_paste_truncated": "50,000-char message limit cut off before normalized_output/ui_review_payload; user re-pasted complete data"
+    },
+    "candidate_ids": {
+      "uploaded_file_id": "f26f2cb5-4764-496c-a68f-484fc7a41085",
+      "org_id": "1307dd95-e7c5-4e08-833e-749444e8f4c8",
+      "document_subtype": "base_lease",
+      "file_name": "NAREN - EXECUTED LEASE...01162024 (1).pdf",
+      "approved": false,
+      "review_status": "pending",
+      "enrichment_status": "failed"
+    },
+    "unrelated_leases_row_flagged": {
+      "leases_id": "8f41718d-192d-4e2f-9e11-75c8bbfc06fd",
+      "reason": "tenant_name/dates match the ASSIGNMENT document's original-lease reference (2018-02-01 to 2029-09-30), not this base lease; not used as test input"
+    },
+    "method": "temporary Vitest file (deleted after use) built a lease fixture mirroring LeaseReview.jsx's real leaseFull shape (minimal leases-row stub + uploaded_files/uploaded_file = real ui_review_payload/normalized_output data); ran normalizeLeaseReviewData()/resolveCurrentReviewProfile() unmodified; git status --short showed zero net src/ diff after cleanup",
+    "profile_resolution": "correct - resolved to base_lease via document_subtype/uploaded_files fallback paths",
+    "base_lease_blockers_apply": true,
+    "finding_key_mismatch_bug": {
+      "description": "normalizeApprovalBlockers()'s supplementary policyRequiredKeys pass (leaseReviewFieldNormalizer.js:794-806) checks byKey.get(key) using legacy REQUIRED_FIELD_KEYS names (premises_address, premises_use, lease_term) directly against standardFields, which is keyed by LEASE_FIELD_CONTRACT's newer canonical names (property_address, permitted_use, lease_term_months). It never applies the alias table readFieldValue() already uses (leaseReviewSchema.js:210-211), so these three keys are structurally always-missing regardless of whether the aliased field has a real value.",
+      "proof": "this document's property_address = '224 S Peters Road Knoxville, TN 37923', status needs_review (not missing), evidenceVerified true, yet approvalBlockers.missingFields still lists premises_address as missing",
+      "fixed_this_phase": false,
+      "reason_not_fixed": "Phase 45 is a testing/verification phase only - no source changes planned or made",
+      "never_surfaced_before": "the assignment profile's requiredFieldKeys list does not include these three legacy names, so this gap was invisible until tested against a base-lease document",
+      "recommended_fix": "alias policyRequiredKeys through the same alias table readFieldValue() uses, or unify both key schemes to one canonical set; verify against both the assignment document (must remain unchanged) and this base-lease document (premises_address should stop appearing once property_address is populated)"
+    },
+    "assignment_only_policy_correctly_absent": true,
+    "budget_cam_comparison": {
+      "assignment": { "budgetReadiness": "ready", "camReadiness": "ready", "budgetBlockers": 0, "camBlockers": 0 },
+      "base_lease": { "budgetReadiness": "blocked", "camReadiness": "needs_review", "budgetBlockers": 5, "camBlockers": 15 }
+    },
+    "approval_blockers_missing_fields": {
+      "count": 7,
+      "keys": ["lease_date", "landlord_name", "commencement_date", "expiration_date", "premises_address", "premises_use", "lease_term"],
+      "false_positives_from_key_mismatch": ["premises_address"],
+      "genuine_blockers": ["lease_date", "landlord_name", "commencement_date", "expiration_date", "premises_use", "lease_term"]
+    },
+    "extraction_mode_distribution": { "explicit": 16, "unknown": 72, "total_standard_fields": 88 },
+    "clause_records_count": 0,
+    "clause_records_note": "no lease_clauses array in this document's payload; computeFallbackClauseRows correctly produced zero rows rather than fabricating or crashing",
+    "evidence_integrity_confirmed": {
+      "landlord_name": "rejected - HTML/markup fragment artifact ('2. Landlord:</td>')",
+      "permitted_use": "rejected - HTML/markup fragment artifact ('10. Permitted Use:</td>')",
+      "both_surfaced_as": "missing/needs_review, never as clean auto_populated values"
+    },
+    "enrichment_state_handled_cleanly": true,
+    "presentation_only_items_not_reverified": [
+      "Type column hidden",
+      "Action dropdown present",
+      "debug/admin gating",
+      "enrichment banner visual rendering"
+    ],
+    "regression_in_approved_document": false,
+    "comparison_table_summary": {
+      "assignment": { "document_subtype": "assignment", "profile": "assignment", "missingFields": 1, "advisoryGaps": 3, "clauseRecords": 19, "approved": true },
+      "base_lease": { "document_subtype": "base_lease", "profile": "base_lease", "missingFields": 7, "advisoryGaps": 0, "clauseRecords": 0, "approved": false }
+    },
+    "staging_review_remains_appropriate": true,
+    "recommendation": "no_gate",
+    "recommended_next_step": "Scope and implement the premises_address/premises_use/lease_term alias fix as its own focused follow-up phase; continue building the multi-document QA set (this phase adds one real base-lease data point); consider approving this base-lease document through the normal review flow if a second fully end-to-end verified document is wanted."
+  },
+  "phase46_base_lease_alias_fix": {
+    "phase46_performed": true,
+    "phase_type": "bug_fix",
+    "alias_bug_fixed": true,
+    "root_cause": "normalizeApprovalBlockers()'s supplementary policyRequiredKeys pass and buildReadinessSummary()'s missingRequired computation (both in leaseReviewFieldNormalizer.js) checked required field keys (legacy names: premises_address, premises_use, lease_term) directly against standardFields (keyed by LEASE_FIELD_CONTRACT's newer canonical names: property_address, permitted_use, lease_term_months) with no alias resolution, unlike readFieldValue/readFieldEvidence which already resolve aliases via getFieldAliases().",
+    "fix": {
+      "description": "Added requiredFieldHasValue(byKey, key) helper that checks every alias from the existing getFieldAliases() (leaseFieldResolver.js) through the existing hasRowValue() gate, reusing the alias table already used by readFieldValue/readFieldEvidence rather than creating a second alias system.",
+      "call_sites_changed": [
+        "normalizeApprovalBlockers() supplementary policyRequiredKeys loop",
+        "buildReadinessSummary() missingRequired computation"
+      ],
+      "call_sites_not_changed": [
+        "normalizeApprovalBlockers() main LEASE_FIELD_CONTRACT loop (no alias ambiguity - checks contract rows against their own canonicalKey)",
+        "tabSummaries[].missingRequired per-tab cosmetic count (pre-existing minor under-count, not a blocker, out of scope)"
+      ],
+      "disclosed_side_effect": "getFieldAliases already also aliases commencement_date<->start_date and expiration_date<->end_date (same shared table, not hand-picked) - can only turn a false-positive missing into a correctly-recognized present value, never the reverse; had no effect on the Phase 45 base-lease document since both start_date and end_date are also null there."
+    },
+    "task_a_reproduction": {
+      "method": "temporary Vitest fixture (deleted after use), built from real Phase 45 standard_fields data",
+      "confirmed_pre_fix": "premises_address in missingFields despite property_address populated and evidenceVerified true"
+    },
+    "task_c_assignment_regression": {
+      "document_ids": {
+        "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+        "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2"
+      },
+      "profile": "assignment",
+      "missing_fields_before": ["assignor_name"],
+      "missing_fields_after": ["assignor_name"],
+      "budget_blockers": [],
+      "cam_blockers": [],
+      "advisory_gaps_unchanged": ["original_lease_missing", "tenant_name_assignment_advisory", "landlord_consent_assignment_advisory"],
+      "regression": false
+    },
+    "task_d_base_lease_verification": {
+      "document_ids": { "uploaded_file_id": "f26f2cb5-4764-496c-a68f-484fc7a41085" },
+      "profile": "base_lease",
+      "alias_results": {
+        "premises_address": { "alias": "property_address", "alias_state": "populated, evidenceVerified true", "result": "cleared" },
+        "premises_use": { "alias": "permitted_use", "alias_state": "rejected markup artifact, value null", "result": "still_blocks" },
+        "lease_term": { "alias": "lease_term_months", "alias_state": "genuinely null", "result": "still_blocks" }
+      },
+      "missing_fields_before": ["lease_date", "landlord_name", "commencement_date", "expiration_date", "premises_address", "premises_use", "lease_term"],
+      "missing_fields_after": ["lease_date", "landlord_name", "commencement_date", "expiration_date", "premises_use", "lease_term"],
+      "missing_fields_count_before": 7,
+      "missing_fields_count_after": 6,
+      "only_premises_address_removed": true,
+      "budget_cam_blockers_unaffected": true,
+      "requiredness_preserved": true
+    },
+    "tests_added": {
+      "file": "src/lib/__tests__/leaseReviewFieldNormalizer.test.js",
+      "describe_blocks": [
+        "Phase 46: base-lease required-field alias resolution (8 tests)",
+        "Phase 46: assignment document behavior is unaffected by the alias fix (1 test)"
+      ],
+      "total_new_tests": 9,
+      "weak_invalid_evidence_does_not_satisfy_tests": [
+        "rejected markup-artifact alias row does not satisfy",
+        "needs_review with no value and no invalidValueRejected does not satisfy",
+        "no matching row at all still blocks",
+        "Phase 39 invalidValueRejected carve-out preserved through alias path (no new leniency)"
+      ]
+    },
+    "files_changed": [
+      "src/lib/leaseReviewFieldNormalizer.js",
+      "src/lib/__tests__/leaseReviewFieldNormalizer.test.js",
+      "docs/document-intelligence-v3-phase46-base-lease-alias-fix.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "remaining_blockers_base_lease": ["lease_date", "landlord_name", "commencement_date", "expiration_date", "premises_use", "lease_term"],
+    "assignment_behavior_preserved": true,
+    "base_lease_requiredness_preserved": true,
+    "staging_review_remains_appropriate": true,
+    "recommendation": "no_gate",
+    "recommended_next_step": "Continue Track 1 multi-document QA set. Consider a small follow-up for the tabSummaries[].missingRequired per-tab cosmetic under-count (no blocker/gating impact, low priority). Consider approving the base-lease document through the normal review flow now that its premises_address false positive is resolved."
+  }
 }
