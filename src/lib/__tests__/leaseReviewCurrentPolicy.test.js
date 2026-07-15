@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REVIEW_STATUSES, REQUIRED_FIELD_KEYS, isResolvedReview } from "../leaseReviewSchema";
 import { normalizeLeaseReviewData } from "../leaseReviewFieldNormalizer";
+import { detectDocumentProfile } from "../documentProfile";
 import {
   buildCurrentReviewPolicy,
   normalizeCurrentReviewProfile,
@@ -150,5 +151,55 @@ describe("leaseReviewCurrentPolicy", () => {
     expect(source).toContain("const handleMarkManualRequired = (field) =>");
     expect(source).toContain("isLeaseReviewEnrichmentInFlight(enrichmentStatus)");
     expect(source).toContain("Evidence and CAM enrichment is still running.");
+  });
+});
+
+describe("Phase 39: profile detection reconciliation", () => {
+  it("reproduces the split-brain bug: detectDocumentProfile disagrees with currentReviewPolicy for the same object", () => {
+    // Only the top-level `document_profile` candidate carries the signal -
+    // detectDocumentProfile only checks workflow_output.document_profile.*
+    // (and a few other primary paths), none of which are set here, and this
+    // fixture has no full-lease signals either, so it falls through to
+    // "unknown". currentReviewPolicy's resolveCurrentReviewProfile scans a
+    // wider candidate list (including plain `lease.document_profile`) and
+    // correctly finds the assignment signal.
+    const fixture = {
+      id: "lease-splitbrain",
+      document_profile: "assignment_assumption_amendment",
+      extraction_data: { fields: {}, field_evidence: {} },
+    };
+
+    expect(detectDocumentProfile(fixture)).toBe("unknown");
+    expect(buildCurrentReviewPolicy(fixture).profile).toBe("assignment");
+  });
+
+  it("LeaseReview.jsx derives isAssignmentOnlyDocument from currentReviewPolicy.profile, not a separate detectDocumentProfile call", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/pages/LeaseReview.jsx"), "utf8");
+
+    expect(source).not.toContain("import { detectDocumentProfile }");
+    expect(source).not.toMatch(/isAssignmentOnlyDocument[\s\S]{0,200}detectDocumentProfile\(/);
+    expect(source).toContain('normalized.currentReviewPolicy?.profile === "assignment"');
+  });
+
+  it("base lease documents still resolve as base_lease (full-lease-signal override preserved)", () => {
+    // AI mis-stamped this as "assignment", but 3 full-lease signals
+    // (commencement, expiration, rent) are present, so detectDocumentProfile
+    // must still override to "full_lease" and the policy must still resolve
+    // to "base_lease" - Phase 39 must not weaken this.
+    const fixture = leaseWithDocumentType("assignment", {
+      commencement_date: { value: "2025-01-01" },
+      expiration_date: { value: "2030-12-31" },
+      monthly_rent: { value: 5000 },
+    });
+
+    expect(detectDocumentProfile(fixture)).toBe("full_lease");
+    expect(buildCurrentReviewPolicy(fixture).profile).toBe("base_lease");
+  });
+
+  it("unknown CRE documents with no signals anywhere still resolve as unknown, not assignment or base lease", () => {
+    const fixture = { id: "lease-nothing", extraction_data: {} };
+
+    expect(detectDocumentProfile(fixture)).toBe("unknown");
+    expect(buildCurrentReviewPolicy(fixture).profile).toBe("unknown_cre_document");
   });
 });

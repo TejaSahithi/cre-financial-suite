@@ -25,12 +25,18 @@ import {
   readFieldEvidence,
   readFieldConfidence,
   resolveExtractionStatus,
+  resolveSourceTextQuality,
   hasValidSourceEvidence,
   classifyConfidence,
   normalizeClauseType,
   isMeaningfulValue,
+  isMarkupArtifactValue,
+  isCalculatedExtractionStatus,
+  isManualExtractionStatus,
   REVIEW_STATUSES,
   EXTRACTION_STATUSES,
+  SOURCE_TEXT_QUALITIES,
+  EXTRACTION_MODES,
   REQUIRED_FIELD_KEYS,
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
@@ -50,7 +56,87 @@ function normalizeConfidencePercent(score) {
 }
 
 function hasRowValue(row) {
+  // Phase 39: a required field whose only extracted value was rejected as a
+  // layout/markup artifact (see normalizeStandardFields/isMarkupArtifactValue)
+  // must not silently become a NEW missing/incomplete signal as a side
+  // effect of that display fix - it already had signal before the fix (that
+  // is why it was required), and this phase intentionally preserves the
+  // existing approval-blocker set. This is the ONLY place besides
+  // normalizeApprovalBlockers that reads invalidValueRejected, and it never
+  // widens beyond that one flag.
+  if (row?.invalidValueRejected) return true;
   return isMeaningfulValue(row?.value ?? row?.normalized_value ?? row?.normalizedValue);
+}
+
+// Phase 39: signature-date fields whose only evidence describes when the
+// ORIGINAL lease was entered into (not this document's own execution) must
+// not be treated as an accepted/evidence-verified signature fact. Scoped to
+// exactly these two canonical keys - not a general date-field rule.
+const SIGNATURE_DATE_KEYS_REQUIRING_EXECUTION_CONTEXT = new Set([
+  "tenant_signature_date",
+  "landlord_signature_date",
+]);
+
+const LEASE_REFERENCE_DATE_PATTERN =
+  /\b(?:entered\s+into\s+(?:that\s+certain\s+)?lease|that\s+certain\s+lease\s+dated|the\s+lease\s+dated|pursuant\s+to\s+(?:that\s+certain\s+)?lease|under\s+(?:that\s+certain\s+)?lease)\b/i;
+const SIGNATURE_EXECUTION_CONTEXT_PATTERN =
+  /\b(?:in\s+witness\s+whereof|executed[\s\S]{0,20}as\s+of|signed\s+as\s+of|\/s\/|date\s+of\s+signature|signature\s+date)\b/i;
+
+export function isSignatureDateSourcedFromLeaseReference(sourceText) {
+  if (!sourceText) return false;
+  const text = String(sourceText);
+  return LEASE_REFERENCE_DATE_PATTERN.test(text) && !SIGNATURE_EXECUTION_CONTEXT_PATTERN.test(text);
+}
+
+/**
+ * Phase 40: resolves the user-facing "how did this value come to exist"
+ * extraction mode (EXTRACTION_MODES) from signals that are ALREADY computed
+ * by the existing resolvers - resolveExtractionStatus, hasValidSourceEvidence
+ * / resolveSourceTextQuality, and review status. It never invents a mode:
+ * every branch is grounded in a real, already-trusted signal, and anything
+ * it can't confidently classify falls through to "unknown" rather than
+ * guessing "explicit".
+ *
+ * Order matters:
+ *   1. A human explicitly edited the value (REVIEW_STATUSES.EDITED) -
+ *      reviewer_entered, regardless of what extraction said.
+ *   2. A human flagged it for manual entry (REVIEW_STATUSES.MANUAL_REQUIRED)
+ *      or the backend/system already tagged it manual - manual.
+ *   3. This field's evidence was explicitly rejected this session (Phase 39
+ *      invalid-markup or signature-date-from-original-lease demotions) -
+ *      unknown. Never explicit/normalized/inferred for a value the system
+ *      just finished saying it doesn't trust.
+ *   4. No meaningful value - unknown (nothing to describe a mode for).
+ *   5. Backend/system says calculated/derived/computed - calculated.
+ *   6. Backend/system says inferred - inferred.
+ *   7. No valid source evidence at all - unknown.
+ *   8. Source-text quality (exact/partial -> explicit, derived -> normalized,
+ *      inferred -> inferred) - otherwise unknown.
+ */
+export function resolveLeaseReviewExtractionMode({
+  hasValue,
+  extractionStatus,
+  evidenceVerified,
+  evidence,
+  reviewStatus,
+  invalidValueRejected = false,
+  evidenceOverrideReason = null,
+} = {}) {
+  if (reviewStatus === REVIEW_STATUSES.EDITED) return EXTRACTION_MODES.REVIEWER_ENTERED;
+  if (reviewStatus === REVIEW_STATUSES.MANUAL_REQUIRED) return EXTRACTION_MODES.MANUAL;
+  if (isManualExtractionStatus(extractionStatus)) return EXTRACTION_MODES.MANUAL;
+
+  if (invalidValueRejected || evidenceOverrideReason) return EXTRACTION_MODES.UNKNOWN;
+  if (!hasValue) return EXTRACTION_MODES.UNKNOWN;
+  if (isCalculatedExtractionStatus(extractionStatus)) return EXTRACTION_MODES.CALCULATED;
+  if (extractionStatus === EXTRACTION_STATUSES.INFERRED) return EXTRACTION_MODES.INFERRED;
+  if (!evidenceVerified) return EXTRACTION_MODES.UNKNOWN;
+
+  const quality = resolveSourceTextQuality(evidence);
+  if (quality === SOURCE_TEXT_QUALITIES.EXACT || quality === SOURCE_TEXT_QUALITIES.PARTIAL) return EXTRACTION_MODES.EXPLICIT;
+  if (quality === SOURCE_TEXT_QUALITIES.DERIVED) return EXTRACTION_MODES.NORMALIZED;
+  if (quality === SOURCE_TEXT_QUALITIES.INFERRED) return EXTRACTION_MODES.INFERRED;
+  return EXTRACTION_MODES.UNKNOWN;
 }
 
 const DYNAMIC_TAB_RULES = [
@@ -128,11 +214,40 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
     const contract = getFieldContract(rawContract.canonicalKey) || rawContract;
     if (contract.computed || !contract.inLeaseSchema) continue;
     const canonicalKey = contract.canonicalKey;
-    const value = readFieldValue(lease, canonicalKey);
+    let value = readFieldValue(lease, canonicalKey);
     const evidence = readFieldEvidence(lease, canonicalKey);
     const confidence = readFieldConfidence(lease, canonicalKey);
+
+    // Phase 39: reject layout/markup artifacts (e.g. "<figure>") before they
+    // can be displayed as an accepted value. invalidValueRejected is read
+    // downstream by hasRowValue/normalizeApprovalBlockers ONLY to keep this
+    // display fix from silently creating a new approval blocker - it is not
+    // a general "field is fine" signal.
+    let invalidValueRejected = false;
+    let evidenceOverrideReason = null;
+    if (isMarkupArtifactValue(value)) {
+      evidenceOverrideReason = `Extracted value "${value}" was a layout/markup artifact, not a real field value, and was rejected.`;
+      invalidValueRejected = true;
+      value = null;
+    }
+
     const extractionStatus = resolveExtractionStatus(lease, canonicalKey, { value, confidence, evidence });
-    const evidenceVerified = hasValidSourceEvidence(evidence);
+    let evidenceVerified = invalidValueRejected ? false : hasValidSourceEvidence(evidence);
+
+    // Phase 39: signature dates sourced from original-lease-reference text
+    // (not this document's own execution) must not read as accepted facts.
+    // Value is retained (not fabricated away) - only evidenceVerified/status
+    // are demoted, via the existing computeFieldStatus needs_review branch.
+    if (
+      !evidenceOverrideReason &&
+      SIGNATURE_DATE_KEYS_REQUIRING_EXECUTION_CONTEXT.has(canonicalKey) &&
+      isSignatureDateSourcedFromLeaseReference(evidence?.sourceText)
+    ) {
+      evidenceVerified = false;
+      evidenceOverrideReason =
+        "Source text describes when the original lease was entered into, not this document's signature date. Needs manual verification.";
+    }
+
     const review = fieldReviews?.[canonicalKey];
     const hasValue = isMeaningfulValue(value);
     const status = computeFieldStatus({
@@ -141,6 +256,15 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
       confidenceBucket: classifyConfidence(confidence),
       reviewStatus: review?.status,
       extractionStatus,
+    });
+    const extractionMode = resolveLeaseReviewExtractionMode({
+      hasValue,
+      extractionStatus,
+      evidenceVerified,
+      evidence,
+      reviewStatus: review?.status,
+      invalidValueRejected,
+      evidenceOverrideReason,
     });
 
     rows.push({
@@ -170,6 +294,9 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
       sourceText: evidence?.sourceText ?? null,
       source_text: evidence?.sourceText ?? null,
       evidenceVerified,
+      invalidValueRejected,
+      extractionMode,
+      extraction_mode: extractionMode,
       required: Boolean(contract.requiredForApproval),
       requiredForApproval: Boolean(contract.requiredForApproval),
       requiredForCam: Boolean(contract.requiredForCam),
@@ -181,7 +308,7 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
       type: contract.dataType === "money" ? "currency" : contract.dataType === "percent" ? "number" : contract.dataType,
       readOnlyReferences: contract.readOnlyReferences || [],
       approvalImpact: describeApprovalImpact(contract),
-      validationMessage: evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null,
+      validationMessage: evidenceOverrideReason ?? (evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null),
       sourceProvider: evidence?.extractionStatus
         ?? lease?.extraction_data?.workflow_output?.extraction_provider
         ?? "unknown",
@@ -245,6 +372,12 @@ export function normalizeDynamicFindings(lease) {
       confidence,
       confidencePercent: normalizeConfidencePercent(confidence),
       status: normalizeRowStatus(item.review_status || item.status || item.extraction_status),
+      // Phase 40: dynamic-finding items don't carry the same structured
+      // extraction-status/evidence-quality metadata standard fields do, so
+      // resolveLeaseReviewExtractionMode's inputs can't be built reliably
+      // here. Defaulting to unknown rather than guessing "explicit".
+      extractionMode: EXTRACTION_MODES.UNKNOWN,
+      extraction_mode: EXTRACTION_MODES.UNKNOWN,
       mapsToExistingField: Boolean(item.maps_to_existing_field),
       createsDynamicRow: item.creates_dynamic_row !== false,
       defaultVisible: true,
@@ -473,6 +606,12 @@ function normalizeExpenseRuleShape(rule) {
     confidencePercent: normalizeConfidencePercent(confidence),
     status: normalizeRowStatus(rule?.review_status || rule?.row_status || rule?.status, "needs_review"),
     needsReview,
+    // Phase 40: expense/CAM rule rows don't carry the same structured
+    // extraction-status/evidence-quality metadata standard fields do (see
+    // normalizeDynamicFindings above for the same reasoning) - unknown
+    // rather than a guessed mode.
+    extractionMode: EXTRACTION_MODES.UNKNOWN,
+    extraction_mode: EXTRACTION_MODES.UNKNOWN,
     defaultVisible: true,
     advanced: false,
   };
@@ -575,7 +714,10 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
       ? policyRequiredKeySet.has(contract.canonicalKey)
       : (documentProfile ? contract.requiredByDocumentProfile?.includes(documentProfile) : false);
     const row = byKey.get(contract.canonicalKey);
-    const hasValue = row ? isMeaningfulValue(row.value) : false;
+    // Phase 39: same narrow carve-out as hasRowValue() above - a required
+    // field whose value was rejected as an invalid layout/markup artifact
+    // must not become a NEW blocker as a side effect of that display fix.
+    const hasValue = row ? (isMeaningfulValue(row.value) || row.invalidValueRejected === true) : false;
     if (appliesToProfile && !hasValue) missingFields.push(contract.canonicalKey);
     if (currentReviewPolicy?.applyBaseLeaseBlockers !== false) {
       if (contract.requiredForBudget && !hasValue) budgetBlockers.push(contract.canonicalKey);
@@ -584,7 +726,13 @@ export function normalizeApprovalBlockers(lease, standardFields, currentReviewPo
   }
   if (policyRequiredKeys) {
     for (const key of policyRequiredKeys) {
-      if (!missingFields.includes(key) && !isMeaningfulValue(byKey.get(key)?.value)) {
+      const policyRow = byKey.get(key);
+      // Phase 39: same narrow invalidValueRejected carve-out as above -
+      // this supplementary pass covers policy-required keys not iterated by
+      // LEASE_FIELD_CONTRACT above and must not re-add a rejected-artifact
+      // field as a blocker either.
+      const policyHasValue = isMeaningfulValue(policyRow?.value) || policyRow?.invalidValueRejected === true;
+      if (!missingFields.includes(key) && !policyHasValue) {
         missingFields.push(key);
       }
     }
@@ -648,6 +796,11 @@ export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, 
       page_number: row.sourcePage,
       sourceText: row.sourceText,
       source_text: row.sourceText,
+      // Phase 40: clause records are legal summaries, not field extractions -
+      // same reasoning as normalizeDynamicFindings above, unknown rather
+      // than a guessed mode.
+      extractionMode: EXTRACTION_MODES.UNKNOWN,
+      extraction_mode: EXTRACTION_MODES.UNKNOWN,
       defaultVisible: true,
     });
   }

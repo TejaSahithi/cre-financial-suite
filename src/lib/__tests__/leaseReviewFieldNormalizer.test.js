@@ -4,7 +4,10 @@ import {
   normalizeStandardFields,
   normalizeExpenseRuleRows,
   normalizeExpenseRuleFallback,
+  isSignatureDateSourcedFromLeaseReference,
+  resolveLeaseReviewExtractionMode,
 } from "@/lib/leaseReviewFieldNormalizer";
+import { isMarkupArtifactValue, EXTRACTION_MODES, REVIEW_STATUSES } from "@/lib/leaseReviewSchema";
 
 describe("leaseReviewFieldNormalizer smoke test", () => {
   it("does not throw on an empty lease", () => {
@@ -187,5 +190,273 @@ describe("enterprise lease abstract row model", () => {
     });
     const rows = Object.values(result.tabs).flat().filter((row) => row.rowType === "dynamic");
     expect(rows.map((row) => row.confidencePercent).sort()).toEqual([96, 96]);
+  });
+});
+
+describe("Phase 39: signature date evidence-integrity", () => {
+  it("reproduces the bug: tenant_signature_date sourced from original-lease-reference text is not accepted", () => {
+    const lease = {
+      extraction_data: {
+        fields: { tenant_signature_date: "2018-02-01" },
+        field_evidence: {
+          tenant_signature_date: {
+            source_text: "Tenant, entered into that certain Lease dated February\n1, 2018",
+            source_page: 1,
+          },
+        },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "tenant_signature_date");
+    expect(row.value).toBe("2018-02-01");
+    expect(row.evidenceVerified).toBe(false);
+    expect(row.status).not.toBe("auto_populated");
+    expect(row.status).toBe("needs_review");
+    expect(row.validationMessage).toMatch(/original lease/i);
+  });
+
+  it("reproduces the bug: landlord_signature_date sourced from original-lease-reference text is not accepted", () => {
+    const lease = {
+      extraction_data: {
+        fields: { landlord_signature_date: "2018-02-01" },
+        field_evidence: {
+          landlord_signature_date: {
+            source_text: "Landlord and Assignor, as Tenant, entered into that certain Lease dated February\n1, 2018",
+            source_page: 1,
+          },
+        },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_signature_date");
+    expect(row.evidenceVerified).toBe(false);
+    expect(row.status).toBe("needs_review");
+  });
+
+  it("keeps a genuinely valid signature date accepted when source text describes actual execution", () => {
+    const sourceText = "IN WITNESS WHEREOF, Tenant has executed this Agreement as of November 7, 2023.";
+    expect(isSignatureDateSourcedFromLeaseReference(sourceText)).toBe(false);
+
+    const lease = {
+      extraction_data: {
+        fields: { tenant_signature_date: "2023-11-07" },
+        field_evidence: { tenant_signature_date: { source_text: sourceText, source_page: 3 } },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "tenant_signature_date");
+    expect(row.value).toBe("2023-11-07");
+  });
+
+  it("isSignatureDateSourcedFromLeaseReference: direct unit coverage", () => {
+    expect(isSignatureDateSourcedFromLeaseReference("entered into that certain Lease dated February 1, 2018")).toBe(true);
+    expect(isSignatureDateSourcedFromLeaseReference("pursuant to that certain Lease dated January 1, 2020")).toBe(true);
+    expect(isSignatureDateSourcedFromLeaseReference("IN WITNESS WHEREOF, executed as of November 7, 2023.")).toBe(false);
+    expect(isSignatureDateSourcedFromLeaseReference(null)).toBe(false);
+    expect(isSignatureDateSourcedFromLeaseReference("")).toBe(false);
+    expect(isSignatureDateSourcedFromLeaseReference("Base Rent shall be $5,000 per month.")).toBe(false);
+  });
+});
+
+describe("Phase 39: invalid markup value sanitizer", () => {
+  it("reproduces the bug: landlord_name '<figure>' is rejected, not shown as an accepted value", () => {
+    const lease = {
+      extraction_data: {
+        fields: { landlord_name: "<figure>" },
+        field_evidence: { landlord_name: { source_text: "LANDLORD:\n\n<figure>", source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_name");
+    expect(row.value).toBeNull();
+    expect(row.status).toBe("missing");
+    expect(row.evidenceVerified).toBe(false);
+    expect(row.invalidValueRejected).toBe(true);
+    expect(row.validationMessage).toMatch(/layout\/markup artifact/i);
+  });
+
+  it("keeps a normal landlord_name value accepted when evidence supports it", () => {
+    const lease = {
+      extraction_data: {
+        fields: { landlord_name: "Montvue, LLC" },
+        field_evidence: {
+          landlord_name: { source_text: "LANDLORD: Montvue, LLC, a Tennessee limited liability company", source_page: 1 },
+        },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_name");
+    expect(row.value).toBe("Montvue, LLC");
+    expect(row.invalidValueRejected).toBe(false);
+  });
+
+  it("isMarkupArtifactValue: rejects bare layout tags generically, not real text", () => {
+    for (const artifact of ["<figure>", "<table>", "<tr>", "<td>", "</figure>"]) {
+      expect(isMarkupArtifactValue(artifact)).toBe(true);
+    }
+    expect(isMarkupArtifactValue("Montvue, LLC")).toBe(false);
+    expect(isMarkupArtifactValue(null)).toBe(false);
+    expect(isMarkupArtifactValue("")).toBe(false);
+  });
+
+  it("does not create a new approval blocker for the assignment profile as a side effect of rejecting the invalid value", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: "assignment" } },
+        fields: {
+          assignee_name: "New Tenant LLC",
+          assignment_effective_date: "2026-01-15",
+          landlord_name: "<figure>",
+        },
+        field_evidence: {
+          assignee_name: { source_text: "assignee_name: New Tenant LLC", source_page: 1 },
+          assignment_effective_date: { source_text: "assignment_effective_date: 2026-01-15", source_page: 1 },
+          landlord_name: { source_text: "LANDLORD:\n\n<figure>", source_page: 1 },
+        },
+      },
+    };
+    const result = normalizeLeaseReviewData(lease);
+    const landlordRow = result.standardFields.find((r) => r.canonicalKey === "landlord_name");
+
+    // landlord_name already has "signal" (source text) so it's still in the
+    // assignment profile's requiredFieldKeys - confirm that, then confirm
+    // rejecting its garbage value doesn't turn it into a NEW blocker.
+    expect(result.currentReviewPolicy.requiredFieldKeys).toContain("landlord_name");
+    expect(landlordRow.value).toBeNull();
+    expect(landlordRow.invalidValueRejected).toBe(true);
+    expect(result.approvalBlockers.missingFields).not.toContain("landlord_name");
+    expect(result.readinessSummary.missingRequiredFields).not.toContain("landlord_name");
+  });
+});
+
+describe("Phase 40: extraction mode resolver", () => {
+  it("explicit requires a real value AND valid, page-anchored source evidence - not just a value", () => {
+    const lease = {
+      extraction_data: {
+        fields: { assignee_name: "NARENDRA PYDI" },
+        field_evidence: { assignee_name: { source_text: 'NARENDRA PYDI, a resident of the state ("Assignee").', source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "assignee_name");
+    expect(row.value).toBe("NARENDRA PYDI");
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.EXPLICIT);
+  });
+
+  it("does not claim explicit for a value with no source evidence at all", () => {
+    const lease = { extraction_data: { fields: { assignee_name: "NARENDRA PYDI" }, field_evidence: {} } };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "assignee_name");
+    expect(row.value).toBe("NARENDRA PYDI");
+    expect(row.extractionMode).not.toBe(EXTRACTION_MODES.EXPLICIT);
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.UNKNOWN);
+  });
+
+  it("rejected markup-artifact rows (landlord_name '<figure>') are unknown, never explicit", () => {
+    const lease = {
+      extraction_data: {
+        fields: { landlord_name: "<figure>" },
+        field_evidence: { landlord_name: { source_text: "LANDLORD:\n\n<figure>", source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "landlord_name");
+    expect(row.invalidValueRejected).toBe(true);
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.UNKNOWN);
+  });
+
+  it("signature dates sourced from the original lease date are unknown, never explicit", () => {
+    const lease = {
+      extraction_data: {
+        fields: { tenant_signature_date: "2018-02-01" },
+        field_evidence: {
+          tenant_signature_date: {
+            source_text: "Tenant, entered into that certain Lease dated February\n1, 2018",
+            source_page: 1,
+          },
+        },
+      },
+    };
+    const row = normalizeStandardFields(lease).find((r) => r.canonicalKey === "tenant_signature_date");
+    expect(row.evidenceVerified).toBe(false);
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.UNKNOWN);
+  });
+
+  it("reviewer-edited values resolve to reviewer_entered", () => {
+    const lease = {
+      extraction_data: {
+        fields: { tenant_name: "Old Value LLC" },
+        field_evidence: { tenant_name: { source_text: "Tenant: Old Value LLC", source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease, {
+      fieldReviews: { tenant_name: { status: REVIEW_STATUSES.EDITED, value: "New Value LLC" } },
+    }).find((r) => r.canonicalKey === "tenant_name");
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.REVIEWER_ENTERED);
+  });
+
+  it("manual-required review status resolves to manual", () => {
+    const lease = {
+      extraction_data: {
+        fields: { tenant_name: "Some Value LLC" },
+        field_evidence: { tenant_name: { source_text: "Tenant: Some Value LLC", source_page: 1 } },
+      },
+    };
+    const row = normalizeStandardFields(lease, {
+      fieldReviews: { tenant_name: { status: REVIEW_STATUSES.MANUAL_REQUIRED } },
+    }).find((r) => r.canonicalKey === "tenant_name");
+    expect(row.extractionMode).toBe(EXTRACTION_MODES.MANUAL);
+  });
+
+  it("backend-tagged calculated/manual extraction statuses resolve accordingly", () => {
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, extractionStatus: "calculated", evidenceVerified: false }),
+    ).toBe(EXTRACTION_MODES.CALCULATED);
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, extractionStatus: "manual_required", evidenceVerified: false }),
+    ).toBe(EXTRACTION_MODES.MANUAL);
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, extractionStatus: "inferred", evidenceVerified: true }),
+    ).toBe(EXTRACTION_MODES.INFERRED);
+  });
+
+  it("unknown is the safe default when the mode cannot be determined - never fabricated", () => {
+    expect(resolveLeaseReviewExtractionMode()).toBe(EXTRACTION_MODES.UNKNOWN);
+    expect(resolveLeaseReviewExtractionMode({ hasValue: false })).toBe(EXTRACTION_MODES.UNKNOWN);
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, evidenceVerified: false, extractionStatus: "extracted" }),
+    ).toBe(EXTRACTION_MODES.UNKNOWN);
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, invalidValueRejected: true, evidenceVerified: true }),
+    ).toBe(EXTRACTION_MODES.UNKNOWN);
+    expect(
+      resolveLeaseReviewExtractionMode({ hasValue: true, evidenceOverrideReason: "demoted", evidenceVerified: true }),
+    ).toBe(EXTRACTION_MODES.UNKNOWN);
+  });
+
+  it("non-standard row types (dynamic findings, clause records, expense/CAM rules) default to unknown, not a guessed mode", () => {
+    const lease = {
+      extraction_data: {
+        workflow_output: {
+          extracted_document_items: [
+            { item_id: "d1", item_type: "parking_right", label: "Parking Right", value: "Two spaces", source_text: "Tenant has two spaces.", confidence: 0.96 },
+          ],
+          expense_rules: [
+            { expense_category: "real_estate_taxes", requires_review: true, source_text: "Tenant shall pay taxes." },
+          ],
+        },
+      },
+    };
+    const result = normalizeLeaseReviewData(lease);
+    expect(result.dynamicFindings.every((row) => row.extractionMode === EXTRACTION_MODES.UNKNOWN)).toBe(true);
+    expect(result.expenseRules.every((row) => row.extractionMode === EXTRACTION_MODES.UNKNOWN)).toBe(true);
+    const clauseRows = result.tabs.clause_records || [];
+    if (clauseRows.length > 0) {
+      expect(clauseRows.every((row) => row.extractionMode === EXTRACTION_MODES.UNKNOWN)).toBe(true);
+    }
+  });
+
+  it("critical dates and budget preview reference rows inherit the standard field's real extraction mode (not unknown by default)", () => {
+    const lease = {
+      extraction_data: {
+        fields: { commencement_date: "2025-01-01" },
+        field_evidence: { commencement_date: { source_text: "Commencement Date: January 1, 2025", source_page: 1 } },
+      },
+    };
+    const result = normalizeLeaseReviewData(lease);
+    const criticalDateRow = result.criticalDates.find((r) => r.canonicalKey === "commencement_date");
+    expect(criticalDateRow.extractionMode).toBe(EXTRACTION_MODES.EXPLICIT);
   });
 });

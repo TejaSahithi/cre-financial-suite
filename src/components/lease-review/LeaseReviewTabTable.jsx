@@ -29,6 +29,20 @@ const STATUS_META = {
   pending: { label: "Pending", className: "bg-slate-100 text-slate-700 border-slate-200" },
 };
 
+// Phase 40: "how did this value come to exist" — distinct from STATUS_META
+// ("is this row usable right now"). Values are resolved by
+// resolveLeaseReviewExtractionMode() (leaseReviewFieldNormalizer.js), never
+// guessed here — this map is presentation-only.
+const EXTRACTION_MODE_META = {
+  explicit: { label: "Explicit", className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
+  normalized: { label: "Normalized", className: "bg-blue-50 text-blue-700 border-blue-100" },
+  inferred: { label: "Inferred", className: "bg-amber-50 text-amber-800 border-amber-100" },
+  calculated: { label: "Calculated", className: "bg-cyan-50 text-cyan-700 border-cyan-100" },
+  reviewer_entered: { label: "Reviewer Entered", className: "bg-purple-50 text-purple-700 border-purple-100" },
+  manual: { label: "Manual", className: "bg-purple-50 text-purple-700 border-purple-100" },
+  unknown: { label: "Unknown", className: "bg-slate-100 text-slate-600 border-slate-200" },
+};
+
 function formatValue(value) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -117,6 +131,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
               <TableHead className="w-[220px] text-xs">Value</TableHead>
               <TableHead className="w-[120px] text-xs">Status</TableHead>
               <TableHead className="w-[90px] text-xs text-center">Confidence</TableHead>
+              <TableHead className="w-[130px] text-xs">Extraction Mode</TableHead>
               <TableHead className="w-[70px] text-xs text-center">Page</TableHead>
               <TableHead className="min-w-[360px] text-xs">Source Text</TableHead>
               <TableHead className="w-[120px] text-xs text-right">Action</TableHead>
@@ -125,10 +140,11 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
           <TableBody>
             {visibleRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-sm text-slate-500">No rows match the current filters.</TableCell>
+                <TableCell colSpan={8} className="py-8 text-center text-sm text-slate-500">No rows match the current filters.</TableCell>
               </TableRow>
             ) : visibleRows.map((row, index) => {
               const statusMeta = STATUS_META[row.status] || STATUS_META.pending;
+              const extractionModeMeta = EXTRACTION_MODE_META[row.extractionMode] || EXTRACTION_MODE_META.unknown;
               const confidence = row.confidencePercent ?? normalizeConfidence(row.confidence);
               const canFieldAction = row.rowType === "standard" && row.editable !== false;
               const canRuleAction = row.rowType === "expense_rule" || row.rowType === "cam_rule";
@@ -146,6 +162,7 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                   <TableCell className="text-xs text-slate-700">{formatValue(row.value ?? row.normalized_value ?? row.normalizedValue)}</TableCell>
                   <TableCell className="text-xs"><Badge variant="outline" className={statusMeta.className}>{statusMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{confidence == null ? "-" : `${confidence}%`}</TableCell>
+                  <TableCell className="text-xs"><Badge variant="outline" className={extractionModeMeta.className}>{extractionModeMeta.label}</Badge></TableCell>
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>
                   <TableCell className="text-xs text-slate-600"><span title={row.sourceText ?? row.source_text ?? ""}>{sourcePreview(row.sourceText ?? row.source_text)}</span></TableCell>
                   <TableCell className="text-right">

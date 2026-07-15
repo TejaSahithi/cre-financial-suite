@@ -96,7 +96,6 @@ import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
-import { detectDocumentProfile } from "@/lib/documentProfile";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import {
   SourceFileLink,
@@ -924,17 +923,23 @@ export default function LeaseReview() {
   }, [leaseFull, lease, workflowExpenseRulesCount, ruleSetSummary?.ruleSet?.id, ruleSetSummary?.tableMissing, queryClient]);
 
   // Detect assignment/amendment-only documents so the rule-readiness banner
-  // says something accurate. The pipeline tags these docs with
-  // Classify the document using leaseFull so uploaded-file payload data
-  // (ui_review_payload.records[0].*) is included in the signal check.
-  // detectDocumentProfile uses full-lease signals (commencement, expiration,
-  // rent) to override an incorrect AI-stamped "assignment" documentType.
+  // says something accurate. Phase 39: derive this from
+  // normalized.currentReviewPolicy.profile (leaseReviewCurrentPolicy.js)
+  // instead of calling detectDocumentProfile(leaseFull) directly. The two
+  // used to disagree - detectDocumentProfile only checks the primary
+  // workflow_output.document_profile.documentType path and falls back to
+  // "unknown" when that's empty, while currentReviewPolicy additionally
+  // scans a wider set of payload paths before giving up. Reusing the same
+  // resolved profile here keeps the assignment banner and
+  // FULL_LEASE_ONLY_TABS hiding below in sync with the blocker/readiness
+  // logic instead of running a second, weaker classifier. Base-lease
+  // documents are unaffected: currentReviewPolicy still calls
+  // detectDocumentProfile first and short-circuits on its full-lease-signal
+  // override, so a genuine full lease (or a reviewer's "mark as full lease"
+  // override) still resolves to "base_lease" here too.
   const isAssignmentOnlyDocument = useMemo(
-    () => {
-      const profile = detectDocumentProfile(leaseFull);
-      return profile === "assignment" || profile === "amendment" || profile === "estoppel" || profile === "consent";
-    },
-    [leaseFull],
+    () => normalized.currentReviewPolicy?.profile === "assignment",
+    [normalized.currentReviewPolicy],
   );
 
   const handleMarkAsFullLease = async () => {

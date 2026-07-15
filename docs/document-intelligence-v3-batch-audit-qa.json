@@ -1551,5 +1551,365 @@
       "vitest_sandbox_note": "Initial non-elevated Vitest runs failed before test execution with Windows spawn EPERM; elevated local reruns passed."
     }
   },
-  "recommended_phase_38": "Run business/legal review of the verified assignment Lease Review behavior before any approval-gating change."
+  "recommended_phase_38": "Run business/legal review of the verified assignment Lease Review behavior before any approval-gating change.",
+  "phase38_lease_review_requirements_projection": {
+    "phase38_performed": true,
+    "phase_type": "code_and_data_requirements_verification",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "method": {
+      "browser_automation_tool_available_this_session": false,
+      "reason": "No Playwright/Puppeteer/CDP-capable tool was registered in this session and none is installed in the repo (package.json/node_modules confirmed clean).",
+      "substituted_method": "code_and_local_data_verification",
+      "user_approved_substitution": true,
+      "real_production_function_executed": "normalizeLeaseReviewData (src/lib/leaseReviewFieldNormalizer.js)",
+      "execution_path": "temporary vitest file, deleted immediately after run; git status confirmed clean of src changes afterward",
+      "data_source": "local Postgres 127.0.0.1:54322, read-only SELECT on leases and uploaded_files for the approved IDs only",
+      "static_ui_facts_confirmed_by": "direct source read this session (LeaseReviewTabTable.jsx, LeaseReview.jsx, documentProfile.js, leaseReviewSchema.js, BudgetPreviewCard.jsx)",
+      "not_a_fresh_browser_dom_capture": true
+    },
+    "local_environment_verified": {
+      "app_url": "http://127.0.0.1:5173",
+      "frontend_supabase_url": "http://127.0.0.1:54321",
+      "local_db": "127.0.0.1:54322",
+      "hosted_endpoint_used": false,
+      "production_write_endpoint_used": false,
+      "service_role_key_used": false,
+      "supabase_access_token_used": false,
+      "called_azure": false,
+      "called_vertex_or_gemini": false,
+      "reran_parse": false,
+      "reran_extraction": false,
+      "deployed": false
+    },
+    "requirements_matrix": {
+      "requirements_tested": 35,
+      "passed": 28,
+      "partial": 4,
+      "failed": 3,
+      "report_file": "docs/document-intelligence-v3-phase38-lease-review-requirements-projection.md"
+    },
+    "top_gaps_found": [
+      {
+        "id": "1b",
+        "finding": "split_brain_profile_detection",
+        "classification": "bug",
+        "summary": "detectDocumentProfile(leaseFull) returns 'unknown' for the approved document while currentReviewPolicy.profile correctly returns 'assignment' from the same object; the assignment banner and FULL_LEASE_ONLY_TABS hiding in LeaseReview.jsx are gated on the former and do not engage for this document."
+      },
+      {
+        "id": "4d",
+        "finding": "signature_dates_sourced_from_original_lease_date_shown_as_accepted",
+        "classification": "bug",
+        "summary": "tenant_signature_date and landlord_signature_date both resolve to 2018-02-01 with status auto_populated and evidenceVerified true, sourced from original-lease-date text, violating the architecture doc's own validation rule. The v3 diagnostic layer already drops these two fields correctly; the fix was never ported to the current-review path users see."
+      },
+      {
+        "id": "4e",
+        "finding": "landlord_name_invalid_markup_value",
+        "classification": "bug",
+        "summary": "landlord_name resolves to the literal string '<figure>' and is displayed as the field value instead of being rejected/dropped, per the architecture doc's own invalid-markup rule and its unresolved item in the doc's immediate-fix list."
+      },
+      {
+        "id": "5a",
+        "finding": "extraction_mode_column_and_data_model_missing",
+        "classification": "bug_plus_missing_data_model",
+        "summary": "The tab table renders 7 columns, not the required 8 (Extraction Mode absent). Most standard fields also carry no independent explicit/inferred/calculated/reviewer-entered tag in the row model, so the column can't be populated correctly even if added without further work, some of which may be provider-backed."
+      }
+    ],
+    "lease_review_projects_requirements_correctly": "mostly_for_profile_aware_blockers_not_for_full_contract",
+    "recommendation": "no_gate",
+    "recommended_phase_39": "Fix the two evidence-integrity bugs (signature-date-from-original-lease-date acceptance, <figure> invalid markup value) without changing approval-gating behavior; reconcile detectDocumentProfile with currentReviewPolicy's profile resolution; scope the Extraction Mode column/data-model work as a distinct follow-up.",
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "src_changes_in_final_diff": false,
+      "temp_vitest_file_deleted": true,
+      "note": "Only docs/JSON changed this phase; lint/typecheck/build/test were not required as mandatory gates, but the temporary vitest run itself passed (1 file / 1 test) while exercising the real normalizeLeaseReviewData function."
+    }
+  },
+  "recommended_phase_39": "Fix the two evidence-integrity bugs (signature-date-from-original-lease-date acceptance, <figure> invalid markup value) without changing approval-gating behavior; reconcile detectDocumentProfile with currentReviewPolicy's profile resolution; scope the Extraction Mode column/data-model work as a distinct follow-up.",
+  "phase39_evidence_profile_fixes": {
+    "phase39_performed": true,
+    "phase_type": "bug_fix",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "bugs_reproduced_and_fixed": [
+      {
+        "id": "split_brain_profile_detection",
+        "reproduced": true,
+        "fixed": true,
+        "summary": "detectDocumentProfile(leaseFull) returns 'unknown' for the approved document while currentReviewPolicy.profile correctly returns 'assignment'. isAssignmentOnlyDocument in LeaseReview.jsx now derives from currentReviewPolicy.profile instead of a separate detectDocumentProfile call."
+      },
+      {
+        "id": "signature_date_evidence_integrity",
+        "reproduced": true,
+        "fixed": true,
+        "summary": "tenant_signature_date/landlord_signature_date sourced from original-lease-reference text are demoted to needs_review with evidenceVerified false; value retained, not fabricated away."
+      },
+      {
+        "id": "invalid_markup_value",
+        "reproduced": true,
+        "fixed": true,
+        "summary": "landlord_name '<figure>' is rejected via isMarkupArtifactValue; value nulled, invalidValueRejected true, validationMessage explains rejection."
+      }
+    ],
+    "files_changed": [
+      "src/pages/LeaseReview.jsx",
+      "src/lib/leaseReviewSchema.js",
+      "src/lib/leaseReviewFieldNormalizer.js",
+      "src/lib/__tests__/leaseReviewCurrentPolicy.test.js",
+      "src/lib/__tests__/leaseReviewFieldNormalizer.test.js",
+      "docs/document-intelligence-v3-phase39-evidence-profile-fixes.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "profile_split_fixed": true,
+    "signature_date_bug_fixed": true,
+    "figure_markup_bug_fixed": true,
+    "blocker_carveout": {
+      "flag": "invalidValueRejected",
+      "set_sites": 1,
+      "set_site_location": "normalizeStandardFields markup-artifact rejection branch",
+      "read_sites": ["hasRowValue", "normalizeApprovalBlockers (both missingFields push sites)"],
+      "purpose": "prevent the landlord_name display fix from silently creating a new approval blocker",
+      "additive_only": true,
+      "used_by_signature_date_fix": false,
+      "narrowly_scoped_per_user_requirement": true
+    },
+    "tests_added": {
+      "leaseReviewCurrentPolicy_test": 4,
+      "leaseReviewFieldNormalizer_test": 8,
+      "total": 12
+    },
+    "phase38_style_rerun_result": {
+      "method": "real normalizeLeaseReviewData() run via temporary vitest file against fresh read-only local Postgres dump of approved rows; temp file deleted after run",
+      "is_assignment_only_document_would_resolve_to": true,
+      "landlord_name_value": null,
+      "landlord_name_status": "missing",
+      "landlord_name_invalid_value_rejected": true,
+      "tenant_signature_date_status": "needs_review",
+      "tenant_signature_date_evidence_verified": false,
+      "tenant_signature_date_value_retained": "2018-02-01",
+      "landlord_signature_date_status": "needs_review",
+      "landlord_signature_date_evidence_verified": false,
+      "landlord_signature_date_value_retained": "2018-02-01",
+      "approval_blockers_missing_fields": ["assignor_name"],
+      "readiness_missing_required_fields": ["assignor_name"],
+      "blocker_set_unchanged_from_phase38": true,
+      "budget_readiness": "ready",
+      "cam_readiness": "ready",
+      "tenant_name_landlord_consent_still_advisory": true,
+      "original_lease_missing_still_advisory": true
+    },
+    "remaining_gaps": [
+      "extraction_mode_column_and_data_model_deferred_to_phase_40",
+      "tenant_name_source_less_pre_existing_correct_not_a_bug",
+      "landlord_consent_evidence_verified_false_pre_existing_not_addressed_this_phase"
+    ],
+    "extraction_mode_status": "explicitly_out_of_scope_untouched_deferred_to_phase_40",
+    "verification": {
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed with pre-existing Vite chunk-size warnings only",
+      "test": "passed: 55 files / 602 tests (590 prior + 12 new)",
+      "focused_leaseReviewCurrentPolicy_test": "13/13 passed",
+      "focused_leaseReviewFieldNormalizer_test": "22/22 passed",
+      "qa_json_parse_check": "passed"
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_40": "Scope and implement the Extraction Mode column and its underlying explicit/inferred/calculated/reviewer-entered data model; likely needs extractor-side (provider-backed) support beyond a client-only column add. Do not conflate with approval-gating changes."
+  },
+  "recommended_phase_40": "Scope and implement the Extraction Mode column and its underlying explicit/inferred/calculated/reviewer-entered data model; likely needs extractor-side (provider-backed) support beyond a client-only column add. Do not conflate with approval-gating changes.",
+  "phase40_extraction_mode_column": {
+    "phase40_performed": true,
+    "phase_type": "feature_add",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "extraction_mode_vocabulary": [
+      "explicit",
+      "normalized",
+      "inferred",
+      "calculated",
+      "reviewer_entered",
+      "manual",
+      "unknown"
+    ],
+    "resolver": {
+      "function": "resolveLeaseReviewExtractionMode",
+      "location": "src/lib/leaseReviewFieldNormalizer.js",
+      "grounded_in_existing_signals_only": true,
+      "never_fabricates_mode": true,
+      "safe_default": "unknown"
+    },
+    "files_changed": [
+      "src/lib/leaseReviewSchema.js",
+      "src/lib/leaseReviewFieldNormalizer.js",
+      "src/components/lease-review/LeaseReviewTabTable.jsx",
+      "src/lib/__tests__/leaseReviewFieldNormalizer.test.js",
+      "src/lib/__tests__/leaseReviewTabTableContract.test.js",
+      "docs/document-intelligence-v3-phase40-extraction-mode-column.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "extraction_mode_column_added": true,
+    "type_column_still_hidden": true,
+    "column_order_matches_spec": true,
+    "action_dropdown_intact": true,
+    "tests_added": {
+      "leaseReviewFieldNormalizer_test": 10,
+      "leaseReviewTabTableContract_test": 3,
+      "total": 13
+    },
+    "phase38_style_rerun_result": {
+      "method": "real normalizeLeaseReviewData() run via temporary vitest file against fresh read-only local Postgres dump of approved rows; temp file deleted after run",
+      "landlord_name_extraction_mode": "unknown",
+      "tenant_signature_date_extraction_mode": "unknown",
+      "landlord_signature_date_extraction_mode": "unknown",
+      "assignee_name_extraction_mode": "explicit",
+      "assignment_effective_date_extraction_mode": "explicit",
+      "security_deposit_extraction_mode": "explicit",
+      "tenant_name_extraction_mode": "unknown",
+      "landlord_consent_extraction_mode": "unknown",
+      "extraction_mode_distribution": { "explicit": 11, "unknown": 77 },
+      "approval_blockers_missing_fields": ["assignor_name"],
+      "readiness_missing_required_fields": ["assignor_name"],
+      "blocker_set_unchanged_from_phase39": true,
+      "budget_readiness": "ready",
+      "cam_readiness": "ready",
+      "original_lease_missing_still_advisory": true,
+      "type_column_absent": true,
+      "action_dropdown_intact": true
+    },
+    "remaining_unknown_mode_fields": [
+      "status",
+      "tenant_name",
+      "lease_term_months",
+      "landlord_consent",
+      "all_other_terms_remain_same",
+      "tenant_signature_date",
+      "landlord_signature_date"
+    ],
+    "remaining_gaps": [
+      "dynamic_findings_clause_records_expense_cam_rows_default_to_unknown_by_design",
+      "calculated_inferred_coverage_limited_to_existing_backend_tags_broader_coverage_needs_provider_backed_work"
+    ],
+    "verification": {
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed with pre-existing Vite chunk-size warnings only",
+      "test": "passed: 55 files / 615 tests (602 prior + 13 new)",
+      "focused_leaseReviewFieldNormalizer_test": "32/32 passed",
+      "focused_leaseReviewTabTableContract_test": "5/5 passed",
+      "focused_leaseReviewCurrentPolicy_test": "13/13 passed",
+      "focused_leaseReviewUiState_test": "1/1 passed",
+      "qa_json_parse_check": "passed"
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_41": "Business/legal review of the extraction-mode vocabulary and coverage: confirm the unknown default is acceptable for dynamic findings/clause records/expense-CAM rules for now, and decide whether broader calculated/inferred coverage for standard fields is worth extractor-side (provider-backed) investment."
+  },
+  "recommended_phase_41": "Business/legal review of the extraction-mode vocabulary and coverage: confirm the unknown default is acceptable for dynamic findings/clause records/expense-CAM rules for now, and decide whether broader calculated/inferred coverage for standard fields is worth extractor-side (provider-backed) investment.",
+  "phase41_extraction_mode_business_review": {
+    "phase41_performed": true,
+    "phase_type": "review_reporting_only",
+    "source_code_changed": false,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "extraction_mode_review_completed": true,
+    "distribution": {
+      "standard_fields": { "total": 88, "explicit": 11, "unknown": 77, "normalized": 0, "inferred": 0, "calculated": 0, "reviewer_entered": 0, "manual": 0 },
+      "clause_records": { "total": 35, "explicit": 0, "unknown": 35 },
+      "critical_dates": { "total": 7, "explicit": 0, "unknown": 7 },
+      "budget_preview": { "total": 7, "explicit": 1, "unknown": 6 },
+      "all_tab_rows_combined": { "total": 148, "explicit": 15, "unknown": 133 }
+    },
+    "explicit_count": 11,
+    "unknown_count": 77,
+    "modes_not_observed_in_this_document": ["normalized", "inferred", "calculated", "reviewer_entered", "manual"],
+    "modes_not_observed_reason": "fact about this document's data (no backend-tagged calculated/inferred field, no normalization-derived value, no reviewer-touched field yet), not a resolver defect - all five modes have direct unit test coverage from Phase 40",
+    "business_legal_decisions_needed": [
+      "should_unknown_be_allowed_for_populated_fields",
+      "should_unknown_require_needs_review",
+      "should_explicit_require_source_text_and_page_only_no_partial_exception",
+      "should_normalized_require_persisting_raw_and_normalized_values",
+      "should_inferred_require_reasoning_metadata_before_display",
+      "should_calculated_require_formula_and_provenance_before_display",
+      "should_reviewer_entered_manual_rows_show_visible_attribution",
+      "should_extraction_mode_reach_exports_audit_logs",
+      "should_extraction_mode_affect_approval_readiness",
+      "should_non_standard_rows_get_real_extraction_mode_later"
+    ],
+    "provider_side_investment_recommended": false,
+    "provider_side_investment_rationale": "Keep the conservative client-side resolver and route the business/legal decision table to its decision owners first - investing in provider-side extraction-mode metadata before the vocabulary itself is signed off risks building the wrong thing twice.",
+    "files_changed": [
+      "docs/document-intelligence-v3-phase41-extraction-mode-business-review.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "src_changes_in_final_diff_this_phase": false,
+      "temp_vitest_file_deleted": true,
+      "note": "Only docs/JSON changed this phase; lint/typecheck/build/test were not required as mandatory gates per Task H, since no unexpected source change occurred."
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_42": "Route the Phase 41 decision table to its actual decision owners (Product, Legal, Compliance, Engineering) for sign-off. Do not resolve these decisions unilaterally in code. If decisions can't be collected yet, scope the smallest safe next step that doesn't presuppose an answer (e.g., persisting raw+normalized value pairs for normalized rows)."
+  },
+  "recommended_phase_42": "Route the Phase 41 decision table to its actual decision owners (Product, Legal, Compliance, Engineering) for sign-off. Do not resolve these decisions unilaterally in code. If decisions can't be collected yet, scope the smallest safe next step that doesn't presuppose an answer (e.g., persisting raw+normalized value pairs for normalized rows).",
+  "phase42_final_lease_review_regression": {
+    "phase42_performed": true,
+    "phase_type": "reporting_regression_verification_only",
+    "source_code_changed": false,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "final_requirements_matrix": {
+      "requirements_tested": 20,
+      "passed": 18,
+      "partial": 2,
+      "failed": 0,
+      "partial_requirement_ids": [5, 11],
+      "partial_reasons": {
+        "5": "landlord_consent evidenceVerified: false despite clear-looking source text, never root-caused",
+        "11": "Clause Records content de-duplication only spot-checked on 5 of 35 rows, not a full audit"
+      },
+      "report_file": "docs/document-intelligence-v3-phase42-final-lease-review-regression.md"
+    },
+    "controlled_staging_review_readiness": true,
+    "approval_gating_readiness": false,
+    "provider_backed_gate_readiness": false,
+    "remaining_business_legal_decisions": "See docs/document-intelligence-v3-phase41-extraction-mode-business-review.md section 7 (10-item decision table); none block staging review of the current document, all gate future use of extraction mode beyond display.",
+    "remaining_technical_gaps": [
+      "landlord_consent_evidence_quality_root_cause_needed",
+      "clause_records_full_35_row_content_audit_incomplete",
+      "richer_inferred_calculated_normalized_coverage_provider_backed",
+      "dynamic_clause_expense_cam_rows_stuck_at_unknown_extraction_mode_provider_backed",
+      "no_real_vertex_fact_ledger_provider_run_has_ever_executed",
+      "no_multi_document_curated_qa_set_exists"
+    ],
+    "files_changed": [
+      "docs/document-intelligence-v3-phase42-final-lease-review-regression.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "src_changes_introduced_this_phase": false,
+      "note": "Only docs/JSON changed this phase; lint/typecheck/build/test were not required per Task F since no source code changed."
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_43": "Two independent tracks: (1) business/legal - collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical - root-cause the landlord_consent evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real vertex_fact_ledger provider run without explicit, separate user approval."
+  },
+  "recommended_phase_43": "Two independent tracks: (1) business/legal - collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical - root-cause the landlord_consent evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real vertex_fact_ledger provider run without explicit, separate user approval."
 }
