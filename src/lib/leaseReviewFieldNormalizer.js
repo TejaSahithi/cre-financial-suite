@@ -42,7 +42,7 @@ import {
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
 import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
-import { buildCurrentReviewPolicy } from "@/lib/leaseReviewCurrentPolicy";
+import { buildCurrentReviewPolicy, resolveCurrentReviewProfile } from "@/lib/leaseReviewCurrentPolicy";
 import { getFieldAliases } from "@/lib/leaseFieldResolver";
 
 function titleize(key) {
@@ -55,6 +55,167 @@ function titleize(key) {
 function normalizeConfidencePercent(score) {
   if (typeof score !== "number" || Number.isNaN(score)) return null;
   return score <= 1 ? Math.round(score * 100) : Math.round(score);
+}
+
+const NO_PROVIDER_FALLBACK_SOURCE = "no_provider_payload_fallback";
+
+function compactText(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text || null;
+}
+
+function normalizeComparableText(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(?:suite|suites|ste)\b/g, "suite")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function moneyNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const match = String(value ?? "").match(/[\d,]+(?:\.\d{2})?/);
+  if (!match) return null;
+  const parsed = Number(match[0].replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function moneyDisplay(value) {
+  const numeric = moneyNumber(value);
+  if (numeric == null) return null;
+  return "$" + numeric.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function sourceSnippet(text, index = 0, radius = 520) {
+  const raw = String(text ?? "");
+  const start = Math.max(0, index - radius);
+  const end = Math.min(raw.length, index + radius);
+  return compactText(raw.slice(start, end));
+}
+
+function readDoclingPages(lease) {
+  const candidates = [
+    lease?.docling_raw,
+    lease?.extraction_data?.docling_raw,
+    lease?.uploaded_files?.docling_raw,
+    lease?.uploaded_file?.docling_raw,
+    lease?.uploaded_files?.parsed_data?.docling_raw,
+    lease?.uploaded_file?.parsed_data?.docling_raw,
+  ];
+  for (const docling of candidates) {
+    const pages = Array.isArray(docling?.pages) ? docling.pages : null;
+    if (!pages?.length) continue;
+    return pages
+      .map((page, idx) => ({
+        page: page?.page ?? page?.page_number ?? idx + 1,
+        text: compactText(page?.text ?? page?.markdown ?? page?.content ?? ""),
+      }))
+      .filter((page) => page.text);
+  }
+  return [];
+}
+
+function isLikelyContactAddressSource(text) {
+  const value = String(text ?? "").toLowerCase();
+  if (!value) return false;
+  const contactSignal = /\b(?:tenant contact information|notice address|notices? to tenant|tenant address|guarantor|personal contact|mailing address|address:\s*)\b/i.test(value);
+  const premisesSignal = /\b(?:premises|demised premises|shopping center|center|building|suite|leased premises)\b/i.test(value);
+  return contactSignal && !premisesSignal;
+}
+
+function findPremisesAddressFallback(lease, existingValue, existingEvidence) {
+  const pages = readDoclingPages(lease);
+  if (!pages.length) return null;
+    const addressPattern = /\b\d{3,6}\s+[A-Z][A-Za-z0-9.'? \-]+?\s*,\s*[A-Za-z.'? \-]+,\s*[A-Z]{2}\s*\d{5}\b/g;
+  const candidates = [];
+  for (const page of pages) {
+    for (const match of page.text.matchAll(addressPattern)) {
+      const value = compactText(match[0].replace(/\s+,/g, ","));
+      if (!value) continue;
+      const snippet = sourceSnippet(page.text, match.index, 620);
+      const lower = String(snippet || "").toLowerCase();
+      let score = 0;
+      if (/\b(?:premises|demised premises|leased premises)\b/i.test(lower)) score += 8;
+      if (/\b(?:shopping center|center|the markets at choto|markets at choto)\b/i.test(lower)) score += 6;
+      if (/\b(?:building|suite|suites)\b/i.test(lower)) score += 4;
+      if (Number(page.page) <= 2) score += 2;
+      if (isLikelyContactAddressSource(snippet)) score -= 12;
+      candidates.push({ value, sourceText: snippet, sourcePage: page.page, score });
+    }
+  }
+  const best = candidates.sort((a, b) => b.score - a.score)[0];
+  if (!best || best.score < 8) return null;
+
+  const comparableExisting = normalizeComparableText(existingValue);
+  const comparableBest = normalizeComparableText(best.value);
+  if (comparableExisting && comparableExisting === comparableBest) return null;
+
+  const existingLooksContact = isLikelyContactAddressSource(existingEvidence?.sourceText);
+  if (!comparableExisting || existingLooksContact || best.score >= 14) {
+    return {
+      value: best.value,
+      confidence: 0.84,
+      sourceProvider: NO_PROVIDER_FALLBACK_SOURCE,
+      reviewReason: comparableExisting
+        ? "No-provider fallback replaced a likely tenant/contact address with stronger premises address evidence. Needs reviewer confirmation."
+        : "No-provider fallback supplied premises address from source text. Needs reviewer confirmation.",
+      evidence: {
+        value: best.value,
+        rawValue: best.value,
+        sourcePage: best.sourcePage,
+        sourceText: best.sourceText,
+        extractionStatus: EXTRACTION_STATUSES.EXTRACTED,
+        evidenceType: "extracted",
+        sourceTextQuality: SOURCE_TEXT_QUALITIES.PARTIAL,
+        requiresReview: true,
+      },
+    };
+  }
+  return null;
+}
+
+function findSecurityDepositFallback(lease) {
+  for (const page of readDoclingPages(lease)) {
+    if (!/security deposit addendum|security deposit/i.test(page.text)) continue;
+    const totalMatch =
+      page.text.match(/(?:for\s+a\s+total\s+of|total\s+of)[\s\S]{0,180}?\$([\d,]+(?:\.\d{2})?)/i)
+      || page.text.match(/security deposit[\s\S]{0,420}?\$([\d,]+(?:\.\d{2})?)/i);
+    if (!totalMatch) continue;
+    const value = moneyNumber(totalMatch[1]);
+    if (value == null) continue;
+    const snippet = sourceSnippet(page.text, totalMatch.index ?? 0, 560);
+    const amountCount = (snippet?.match(/\$[\d,]+(?:\.\d{2})?/g) || []).length;
+    return {
+      value,
+      confidence: amountCount > 1 ? 0.86 : 0.9,
+      sourceProvider: NO_PROVIDER_FALLBACK_SOURCE,
+      reviewReason: amountCount > 1
+        ? "No-provider fallback selected the total security deposit from multiple addendum amounts. Needs reviewer confirmation."
+        : "No-provider fallback supplied security deposit from addendum text. Needs reviewer confirmation.",
+      evidence: {
+        value,
+        rawValue: moneyDisplay(value),
+        sourcePage: page.page,
+        sourceText: snippet,
+        extractionStatus: EXTRACTION_STATUSES.EXTRACTED,
+        evidenceType: "extracted",
+        sourceTextQuality: SOURCE_TEXT_QUALITIES.PARTIAL,
+        requiresReview: true,
+      },
+    };
+  }
+  return null;
+}
+
+function standardFieldFallback(lease, canonicalKey, { value, evidence } = {}) {
+  if (canonicalKey === "property_address") {
+    return findPremisesAddressFallback(lease, value, evidence);
+  }
+  if (canonicalKey === "security_deposit" && !isMeaningfulValue(value)) {
+    return findSecurityDepositFallback(lease);
+  }
+  return null;
 }
 
 function hasRowValue(row) {
@@ -233,8 +394,18 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
     if (contract.computed || !contract.inLeaseSchema) continue;
     const canonicalKey = contract.canonicalKey;
     let value = readFieldValue(lease, canonicalKey);
-    const evidence = readFieldEvidence(lease, canonicalKey);
-    const confidence = readFieldConfidence(lease, canonicalKey);
+    let evidence = readFieldEvidence(lease, canonicalKey);
+    let confidence = readFieldConfidence(lease, canonicalKey);
+    let fallbackReviewReason = null;
+    let fallbackSourceProvider = null;
+    const fallback = standardFieldFallback(lease, canonicalKey, { value, evidence });
+    if (fallback) {
+      value = fallback.value;
+      evidence = fallback.evidence;
+      confidence = fallback.confidence;
+      fallbackReviewReason = fallback.reviewReason;
+      fallbackSourceProvider = fallback.sourceProvider;
+    }
 
     // Phase 39: reject layout/markup artifacts (e.g. "<figure>") before they
     // can be displayed as an accepted value. invalidValueRejected is read
@@ -326,8 +497,9 @@ export function normalizeStandardFields(lease, { fieldReviews = {} } = {}) {
       type: contract.dataType === "money" ? "currency" : contract.dataType === "percent" ? "number" : contract.dataType,
       readOnlyReferences: contract.readOnlyReferences || [],
       approvalImpact: describeApprovalImpact(contract),
-      validationMessage: evidenceOverrideReason ?? (evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null),
-      sourceProvider: evidence?.extractionStatus
+      validationMessage: evidenceOverrideReason ?? fallbackReviewReason ?? (evidence?.reviewReason ?? evidence?.approvalBlockingReason ?? null),
+      fallbackApplied: Boolean(fallbackSourceProvider),
+      sourceProvider: fallbackSourceProvider ?? evidence?.extractionStatus
         ?? lease?.extraction_data?.workflow_output?.extraction_provider
         ?? "unknown",
     });
@@ -402,7 +574,7 @@ export function normalizeDynamicFindings(lease) {
       advanced: false,
     });
   }
-  return rows;
+  return mergeDynamicFallbackRows(rows, normalizeNoProviderDynamicFallbackRows(lease));
 }
 
 // ── Clause records ────────────────────────────────────────────────────────
@@ -444,6 +616,115 @@ function documentItemValue(item) {
   const value = item.normalized_value ?? item.normalizedValue ?? item.normalized_meaning ?? item.normalizedMeaning ?? item.value ?? item.raw_value ?? item.rawValue ?? null;
   return looksLikeClauseEvidence(value) ? null : value;
 }
+const CLAUSE_DUPLICATE_TYPES = new Set([
+  "rent_clause",
+  "security_deposit",
+  "operating_expense_recovery",
+  "cam_recoveries",
+  "late_fees",
+  "insurance_requirements",
+  "use_permitted_use",
+  "repairs_maintenance",
+  "notices",
+  "broker_commission",
+]);
+
+const HIGH_VALUE_LEGAL_CLAUSE_TYPES = new Set([
+  "assignment_subletting",
+  "defaults_remedies",
+  "renewal_option",
+  "termination",
+  "indemnification",
+  "alterations",
+  "holdover",
+  "subordination",
+  "estoppel",
+  "guaranty",
+]);
+
+const HIGH_VALUE_LEGAL_FIELD_KEYS = new Set([
+  "assignment_provisions",
+  "default_cure_period",
+  "renewal_options",
+  "renewal_type",
+  "right_of_first_refusal",
+  "early_termination_option",
+  "landlord_consent",
+  "landlord_consent_for_transfer",
+  "assumption_scope",
+]);
+
+function clauseTitleToFieldKey(title) {
+  return String(title || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+}
+
+function clauseSemanticFieldKey(row) {
+  const candidates = [
+    row?.structured_fields_json?.item_type,
+    row?.structured_fields_json?.field_key,
+    row?.structured_fields_json?.key,
+    row?.field_key,
+    row?.item_type,
+    row?.clause_type,
+    clauseTitleToFieldKey(row?.clause_title),
+  ];
+  for (const candidate of candidates) {
+    const canonical = resolveCanonicalFieldKey(candidate);
+    if (getFieldContract(canonical)) return canonical;
+  }
+  return null;
+}
+
+function clauseCombinedText(row) {
+  return compactText([row?.clause_title, row?.clause_type, row?.clause_text].filter(Boolean).join(" ")) || "";
+}
+
+function isExpenseCamRentOrSecurityClause(row) {
+  const text = clauseCombinedText(row);
+  return /\b(?:security deposit|rent addendum|minimum rent|monthly rent|base rent|rent schedule|months?\s*[- ]?\d|cam estimate|common area maintenance|common areas?|operating expenses?|expense recover(?:y|ies)|real estate taxes?|insurance premiums?|pro[-\s]?rata|management costs?|administrative fee|admin fee|five percent of rent collected)\b/i.test(text);
+}
+
+function isGenericLegalBoilerplateClause(row) {
+  const text = String(row?.clause_text || "");
+  const normalized = normalizeEvidenceComparable(text);
+  if (!normalized || normalized.length < 35) return true;
+  if (/^(?:by|date|address|tenant|landlord|suite|building|consideration received|located in a shopping center)\b/i.test(text.trim())) return true;
+  if (/\b(?:whereas|hereto|thereof|hereof|pursuant to|notwithstanding)\b/i.test(text) && text.length < 120) return true;
+  return false;
+}
+
+function isRetainableHighValueLegalClause(row, semanticKey) {
+  const type = row?.clause_type;
+  const text = clauseCombinedText(row);
+  if (HIGH_VALUE_LEGAL_CLAUSE_TYPES.has(type) || HIGH_VALUE_LEGAL_FIELD_KEYS.has(semanticKey)) {
+    return /\b(?:assign|subleas|transfer|default|remed|cure|renew|option|terminat|indemn|holdover|subordination|estoppel|guarant|consent|alteration|improvement)\b/i.test(text);
+  }
+  return /\b(?:exclusive use|co-tenancy|continuous operation|go dark|relocation|radius restriction|non-compete|indemnif|holdover|subordination|estoppel|guaranty|default remedies|early termination|renewal option)\b/i.test(text);
+}
+
+function shouldKeepClauseRecord(row, { profile } = {}) {
+  if (!cleanDocumentItemSource(row?.clause_text)) return false;
+
+  // Assignment clause behavior was intentionally broadened in Phase 44A; keep
+  // that path stable. The Phase 50 noise regression is specific to base-lease
+  // fact echoes that already have dedicated standard/rule rows.
+  if (profile !== "base_lease") return true;
+
+  const semanticKey = clauseSemanticFieldKey(row);
+  const type = row?.clause_type;
+
+  if (isExpenseCamRentOrSecurityClause(row)) return false;
+  if (CLAUSE_DUPLICATE_TYPES.has(type)) return false;
+  if (semanticKey && getFieldContract(semanticKey) && !isRetainableHighValueLegalClause(row, semanticKey)) return false;
+  if (isGenericLegalBoilerplateClause(row) && !isRetainableHighValueLegalClause(row, semanticKey)) return false;
+
+  return isRetainableHighValueLegalClause(row, semanticKey) || !semanticKey;
+}
+
 
 /**
  * Ported verbatim from SpecializedTables.jsx's `fallbackClauses` useMemo body
@@ -628,8 +909,10 @@ export function computeFallbackClauseRows(lease) {
 
 /** Phase-6 UI shape, sync/payload-only (no `lease_clauses` DB table rows —
  *  ClauseRecordsTable layers those in separately since that query is async). */
-export function normalizeClauseRecords(lease) {
-  const rows = computeFallbackClauseRows(lease).filter((c) => cleanDocumentItemSource(c.clause_text));
+export function normalizeClauseRecords(lease, { profile = resolveCurrentReviewProfile(lease) } = {}) {
+  const rows = computeFallbackClauseRows(lease)
+    .filter((c) => cleanDocumentItemSource(c.clause_text))
+    .filter((c) => shouldKeepClauseRecord(c, { profile }));
   return rows.map((c) => ({
     clauseType: c.clause_type,
     title: c.clause_title,
@@ -638,11 +921,214 @@ export function normalizeClauseRecords(lease) {
     sourceText: c.clause_text,
     confidence: c.confidence_score ?? null,
     businessArea: c.structured_fields_json?.display_tab || c.clause_type,
-    reviewStatus: c.structured_fields_json?.requires_review ? "needs_review" : "pending",
+    reviewStatus: c.structured_fields_json?.requires_review || profile === "base_lease" ? "needs_review" : "pending",
   }));
 }
 
 // ── CAM / Expense rules ───────────────────────────────────────────────────
+
+function findPageSnippet(lease, pattern, { radius = 560, preferredPagePattern = null } = {}) {
+  const pages = readDoclingPages(lease);
+  const matches = [];
+  for (const page of pages) {
+    const match = page.text.match(pattern);
+    if (!match) continue;
+    let score = 1;
+    if (preferredPagePattern?.test(page.text)) score += 5;
+    matches.push({ page: page.page, text: page.text, match, index: match.index ?? 0, score });
+  }
+  const best = matches.sort((a, b) => b.score - a.score)[0];
+  if (!best) return null;
+  return {
+    page: best.page,
+    sourceText: sourceSnippet(best.text, best.index, radius),
+    match: best.match,
+  };
+}
+
+function findCamEstimateFallback(lease) {
+  const found = findPageSnippet(
+    lease,
+    /CAM\s+estimate(?:\s+for\s+(\d{4}))?\s+is\s+\$([\d,]+(?:\.\d{2})?)\s+per\s+(leasable\s+)?square\s+foot/i,
+    { preferredPagePattern: /rent addendum|common area maintenance|CAM estimate/i },
+  );
+  if (!found) return null;
+  const year = found.match[1] || null;
+  const amount = moneyNumber(found.match[2]);
+  if (amount == null) return null;
+  return {
+    id: "fallback-cam-estimate",
+    rule_key: "fallback_cam_estimate_psf",
+    expense_category: "common_area_maintenance_estimate",
+    normalized_rule: year
+      ? "CAM estimate " + year + ": " + moneyDisplay(amount) + " per leasable square foot"
+      : "CAM estimate: " + moneyDisplay(amount) + " per leasable square foot",
+    value: moneyDisplay(amount) + " per leasable square foot",
+    amount,
+    basis: "per_leasable_square_foot",
+    recoverable_from_tenant: true,
+    recovery_method: "estimate_per_leasable_square_foot",
+    source_page: found.page,
+    source_text: found.sourceText,
+    confidence_score: 0.86,
+    review_status: "needs_review",
+    requires_review: true,
+    source: NO_PROVIDER_FALLBACK_SOURCE,
+  };
+}
+
+function findProRataExpenseSnippet(lease) {
+  return findPageSnippet(
+    lease,
+    /Pro-rata\s+Share\s+of\s+Real\s+Estate\s+Taxes[\s\S]{0,1400}?Tenant\s+shall\s+pay\s+its\s+Pro-Rata\s+Share[\s\S]{0,160}?expenses/i,
+    { preferredPagePattern: /Pro-rata\s+Share\s+of\s+Real\s+Estate\s+Taxes/i, radius: 760 },
+  );
+}
+
+function buildProRataExpenseRules(lease) {
+  const found = findProRataExpenseSnippet(lease);
+  if (!found) return [];
+  const base = {
+    recoverable_from_tenant: true,
+    responsible_party: "tenant",
+    recovery_method: "pro_rata_share",
+    source_page: found.page,
+    source_text: found.sourceText,
+    confidence_score: 0.84,
+    review_status: "needs_review",
+    requires_review: true,
+    source: NO_PROVIDER_FALLBACK_SOURCE,
+  };
+  return [
+    { ...base, id: "fallback-pro-rata-taxes", rule_key: "fallback_pro_rata_real_estate_taxes", expense_category: "real_estate_taxes", normalized_rule: "Tenant pays pro-rata share of real estate taxes as Additional Rent", value: "Tenant pro-rata share" },
+    { ...base, id: "fallback-pro-rata-insurance", rule_key: "fallback_pro_rata_insurance_premiums", expense_category: "insurance_premiums", normalized_rule: "Tenant pays pro-rata share of insurance premiums as Additional Rent", value: "Tenant pro-rata share" },
+    { ...base, id: "fallback-pro-rata-cam", rule_key: "fallback_pro_rata_common_area_maintenance", expense_category: "common_area_maintenance", normalized_rule: "Tenant pays pro-rata share of common area maintenance expenses as Additional Rent", value: "Tenant pro-rata share" },
+  ];
+}
+
+function buildAdminFeeRule(lease) {
+  const adminFee = readFieldValue(lease, "admin_fee_pct");
+  const numeric = typeof adminFee === "number" ? adminFee : moneyNumber(adminFee);
+  if (numeric == null) return null;
+  const evidence = readFieldEvidence(lease, "admin_fee_pct");
+  const sourceText = evidence?.sourceText || findPageSnippet(
+    lease,
+    /not\s+to\s+exceed\s+[^.]{0,80}five\s+percent[\s\S]{0,240}?Common\s+Areas/i,
+    { preferredPagePattern: /common area maintenance expenses/i },
+  )?.sourceText;
+  if (!sourceText || !/common areas?|shopping center|management costs/i.test(sourceText)) return null;
+  return {
+    id: "fallback-admin-fee",
+    rule_key: "fallback_admin_fee_pct",
+    expense_category: "administrative_fee",
+    normalized_rule: "Admin / management fee: " + numeric + "% of rent collected for Common Area operations",
+    value: numeric + "%",
+    admin_fee_percent: numeric,
+    recoverable_from_tenant: true,
+    recovery_method: "percentage_of_rent_collected",
+    source_page: evidence?.sourcePage ?? evidence?.source_page ?? null,
+    source_text: sourceText,
+    confidence_score: 0.82,
+    review_status: "needs_review",
+    requires_review: true,
+    source: NO_PROVIDER_FALLBACK_SOURCE,
+  };
+}
+
+function normalizeNoProviderExpenseRuleFallbacks(lease) {
+  return [
+    findCamEstimateFallback(lease),
+    ...buildProRataExpenseRules(lease),
+    buildAdminFeeRule(lease),
+  ].filter(Boolean);
+}
+
+function expenseRuleComparable(rule) {
+  return [
+    rule?.expense_category ?? rule?.category ?? rule?.normalized_key ?? rule?.rule_type ?? "unknown",
+    rule?.rule_key ?? rule?.id ?? "",
+    normalizeComparableText(rule?.normalized_rule ?? rule?.source_text ?? rule?.source_clause ?? rule?.value ?? ""),
+  ].join("|");
+}
+
+function mergeExpenseRuleInputs(rules, fallbackRules) {
+  const merged = [];
+  const seen = new Set();
+  for (const rule of [...(Array.isArray(rules) ? rules : []), ...(Array.isArray(fallbackRules) ? fallbackRules : [])]) {
+    if (!rule || typeof rule !== "object") continue;
+    const category = String(rule.expense_category ?? rule.category ?? rule.normalized_key ?? rule.rule_type ?? "unknown").toLowerCase();
+    const categoryAlreadyStructured = merged.some((existing) => {
+      if (existing?.source === NO_PROVIDER_FALLBACK_SOURCE) return false;
+      const existingCategory = String(existing.expense_category ?? existing.category ?? existing.normalized_key ?? existing.rule_type ?? "unknown").toLowerCase();
+      return existingCategory === category;
+    });
+    if (rule.source === NO_PROVIDER_FALLBACK_SOURCE && categoryAlreadyStructured) continue;
+    const key = expenseRuleComparable(rule);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rule);
+  }
+  return merged;
+}
+
+function normalizeRentScheduleFallbackRows(lease) {
+  const rows = [];
+  for (const page of readDoclingPages(lease)) {
+    if (!/rent addendum/i.test(page.text)) continue;
+    const rentPattern = /Months?\s*-?\s*(\d{1,3})\s*-\s*(\d{1,3})\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/gi;
+    for (const match of page.text.matchAll(rentPattern)) {
+      const startMonth = Number(match[1]);
+      const endMonth = Number(match[2]);
+      const psf = moneyNumber(match[3]);
+      const monthly = moneyNumber(match[4]);
+      if (!startMonth || !endMonth || psf == null || monthly == null) continue;
+      const sourceText = sourceSnippet(page.text, match.index, 500);
+      rows.push({
+        rowType: "dynamic",
+        typeLabel: "Rent Schedule",
+        key: "fallback-rent-schedule-" + startMonth + "-" + endMonth,
+        fieldKey: "rent_schedule",
+        label: "Rent Addendum Months " + startMonth + "-" + endMonth,
+        category: "rent_schedule",
+        tabKey: "rent_charges",
+        editable: false,
+        value: moneyDisplay(monthly) + " per month / " + moneyDisplay(psf) + " PSF",
+        normalizedValue: { startMonth, endMonth, monthlyRent: monthly, rentPsf: psf },
+        normalized_value: { startMonth, endMonth, monthlyRent: monthly, rentPsf: psf },
+        sourcePage: page.page,
+        source_page: page.page,
+        page_number: page.page,
+        sourceText,
+        source_text: sourceText,
+        confidence: 0.82,
+        confidencePercent: normalizeConfidencePercent(0.82),
+        status: "needs_review",
+        extractionMode: EXTRACTION_MODES.UNKNOWN,
+        extraction_mode: EXTRACTION_MODES.UNKNOWN,
+        defaultVisible: true,
+        advanced: false,
+        sourceProvider: NO_PROVIDER_FALLBACK_SOURCE,
+      });
+    }
+  }
+  return rows;
+}
+
+function normalizeNoProviderDynamicFallbackRows(lease) {
+  return normalizeRentScheduleFallbackRows(lease);
+}
+
+function mergeDynamicFallbackRows(rows, fallbackRows) {
+  const merged = [];
+  const seen = new Set();
+  for (const row of [...(rows || []), ...(fallbackRows || [])]) {
+    const key = [row?.tabKey, row?.category, row?.label, normalizeComparableText(row?.sourceText ?? row?.value ?? "")].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
 
 function isCamRule(rule) {
   const category = String(rule?.expense_category ?? rule?.category ?? rule?.normalized_key ?? rule?.rule_type ?? "").toLowerCase();
@@ -663,6 +1149,7 @@ function normalizeExpenseRuleShape(rule) {
     || Boolean(rule?.requires_review);
   const recoverable = rule?.recoverable_from_tenant ?? rule?.recoverable_flag ?? rule?.is_recoverable ?? null;
   const calculationIncomplete = needsReview && recoverable == null;
+  const rowValue = rule?.display_value ?? rule?.value ?? rule?.normalized_value ?? rule?.amount ?? null;
   return {
     rowType: camRule ? "cam_rule" : "expense_rule",
     typeLabel: camRule ? "CAM Rule" : "Expense Rule",
@@ -671,9 +1158,11 @@ function normalizeExpenseRuleShape(rule) {
     label: rule?.normalized_rule || rule?.subcategory_name || rule?.category_name || rule?.expense_category || rule?.category || (camRule ? "CAM rule" : "Expense rule"),
     tabKey: camRule ? "cam_rules" : "expenses_recoveries",
     editable: false,
-    value: calculationIncomplete ? "Clause found - calculation needs review" : null,
-    normalizedValue: calculationIncomplete ? "Clause found - calculation needs review" : null,
-    normalized_value: calculationIncomplete ? "Clause found - calculation needs review" : null,
+    value: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
+    normalizedValue: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
+    normalized_value: calculationIncomplete ? "Clause found - calculation needs review" : rowValue,
+    amount: rule?.amount ?? null,
+    basis: rule?.basis ?? null,
     recoverable,
     responsibleParty: rule?.responsible_party ?? rule?.responsibleParty ?? null,
     allocationMethod: rule?.recovery_method ?? rule?.allocation_method ?? null,
@@ -716,7 +1205,8 @@ export function normalizeExpenseRuleFallback(lease) {
   const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
   const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
   const rules = workflowOutput?.expense_rules;
-  return normalizeExpenseRuleRows(rules);
+  const fallbackRules = normalizeNoProviderExpenseRuleFallbacks(lease);
+  return normalizeExpenseRuleRows(mergeExpenseRuleInputs(rules, fallbackRules));
 }
 
 // ── Critical dates ────────────────────────────────────────────────────────
@@ -978,7 +1468,7 @@ export function normalizeLeaseReviewData(lease, { fieldReviews = {} } = {}) {
     legacyRequiredFieldKeys: REQUIRED_FIELD_KEYS,
   });
   const dynamicFindings = normalizeDynamicFindings(lease);
-  const clauseRecords = normalizeClauseRecords(lease);
+  const clauseRecords = normalizeClauseRecords(lease, { profile: currentReviewPolicy.profile });
   const allRuleRows = normalizeExpenseRuleFallback(lease);
   const expenseRules = allRuleRows.filter((row) => row.rowType !== "cam_rule");
   const camRules = allRuleRows.filter((row) => row.rowType === "cam_rule");

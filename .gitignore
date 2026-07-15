@@ -1,4 +1,4 @@
-# Dependencies
+﻿# Dependencies
 node_modules/
 .pnp
 .pnp.js
@@ -50,6 +50,10 @@ __pycache__/
 supabase/functions/debug-*
 scratch/root-artifacts/
 
+# Local provider diagnostic artifacts
+/tmp/phase52-*.json
+/tmp/phase52-*.md
+
 /mingit/
 *.log
 build_output*.txt
@@ -62,3 +66,4 @@ eslint-output.txt
 lint_*.txt
 current_lint_errors.txt
 *.xlsx
+

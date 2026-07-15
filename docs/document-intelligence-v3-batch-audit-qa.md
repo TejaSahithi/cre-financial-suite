@@ -1,8 +1,8 @@
 ﻿# Document Intelligence v3 Batch Advisory Audit QA
 
 Generated: 2026-07-15
-Phase: 37
-Status: Authenticated local UI verification completed - No Gate
+Phase: 47
+Status: Phase 47 third-document uploaded-file-only QA completed - No Gate
 
 ## 1. Executive Summary
 
@@ -1350,3 +1350,231 @@ Fixed the alias gap found in Phase 45. Full report: `docs/document-intelligence-
 ## Phase 46 Recommended Next Step
 
 Continue Track 1's multi-document QA set. Consider a small follow-up for the `tabSummaries[].missingRequired` per-tab cosmetic under-count noted in the full report (no blocker/gating impact, low priority — not fixed this phase). Consider approving the base-lease document through the normal review flow now that its `premises_address` false positive is resolved.
+
+## Phase 47: Third Document CAM-Heavy Base Lease QA
+
+Phase 47 ran uploaded-file-only Lease Review QA against **Craven Wings Lease Executed 1.pdf**, uploaded_file_id 0155251a-b911-408c-ae83-469d8d6eb534, org_id 1307dd95-e7c5-4e08-833e-749444e8f4c8.
+
+No reliable matching leases row exists, so the run was explicitly labeled uploaded-file-only. It did not use unrelated Narendra Pydi rows 7b21f353 or 8f41718d, did not remote read/write, did not deploy, did not call any provider, and did not rerun parse or extraction.
+
+### Phase 47 Results
+
+| Check | Result |
+| --- | --- |
+| candidate valid | yes; real Craven Wings / Markets at Choto base lease |
+| document_subtype | base_lease |
+| parse / normalize | completed |
+| enrichment | failed due compute resources, expected for this phase |
+| resolved profile | base_lease |
+| assignment downgrades applied | no |
+| base lease blockers active | yes |
+| Phase 46 alias fix | holds; premises_address and lease_term clear via aliases |
+| approval readiness | needs_review |
+| budget readiness | blocked |
+| CAM readiness | needs_review |
+| expense/CAM structured rules | 0 expense rules / 0 CAM rules |
+| clause records | 0 |
+| recommendation | No Gate |
+
+Main gaps found:
+
+- Premises/property address is wrong in normalized output: 3826 MAUpin DR instead of the source premises location at 12350 South Northshore / The Markets at Choto.
+- CAM estimate source text contains $5.25 per leasable square foot, but cam_amount is missing.
+- Rent Addendum and Security Deposit Addendum exist in source text, but rent and security deposit fields remain missing.
+- No structured expense/CAM rule rows or clause records were produced for a CAM-heavy base lease, likely because enrichment failed and fallback coverage is insufficient.
+- Several populated fields have source text but are not evidence-verified, or have source text without page numbers.
+
+Report created: docs/document-intelligence-v3-phase47-third-document-test.md.
+
+Recommendation remains: **No Gate**.
+
+## Phase 48 Recommendation
+
+Run a focused CAM/expense-heavy base lease extraction coverage phase. Improve no-provider fallback for CAM estimate, pro-rata taxes/insurance/CAM recoveries, rent addendum, security deposit addendum, and clause summaries; keep approval behavior unchanged until business review confirms quality.
+
+## Phase 48A: CAM-Heavy Base Lease Root Cause
+
+Phase 48A root-caused the Phase 47 gaps for **Craven Wings Lease Executed 1.pdf** using only the approved uploaded file export and pipeline logs. No source code changed, no remote read/write occurred, no provider was called, and parse/extraction were not rerun.
+
+Report created: `docs/document-intelligence-v3-phase48A-cam-heavy-root-cause.md`.
+
+### Phase 48A Findings
+
+| Issue | Classification | Finding |
+| --- | --- | --- |
+| wrong `property_address` | extraction_wrong_value | Source has the correct premises at 12350 South Northshore / The Markets at Choto, but structured payload selected tenant contact address 3826 MAUpin DR. |
+| missing CAM estimate | extraction_missing / fallback_rule_gap | Source contains $5.25 per leasable square foot, but `cam_amount` is null through parsed, normalized, UI payload, and standard fields. |
+| missing rent fields | extraction_missing / fallback_rule_gap | Rent Addendum exists in source text, but monthly/annual/rent schedule fields are not projected. |
+| missing security deposit | extraction_missing / fallback_rule_gap | Security Deposit Addendum includes $15,535.36 total deposit, but `security_deposit` is null. |
+| missing expense/CAM rules | fallback_rule_gap / extraction_missing | Flat tax/insurance/admin fee fields exist, but no structured workflow expense/CAM rule rows are present. |
+| missing clause records | extraction_missing / fallback_rule_gap | Source has clause-rich CAM/base-lease language, but no clause records are produced. |
+| evidence gaps | evidence_mapping_gap | Some populated fields have source text but lack verified evidence or page numbers after enrichment failure. |
+
+### Phase 48B Proposed Scope
+
+P0: fix property/premises selection so tenant/contact addresses do not satisfy premises address.
+
+P1: add no-provider CAM/expense rule fallback for CAM estimate, pro-rata taxes, insurance, CAM, and admin/management fee language.
+
+P1: add rent addendum and security deposit addendum projection.
+
+P2: add clause-record fallback coverage for CAM-heavy leases.
+
+P2: improve page/evidence completeness when enrichment fails.
+
+Recommendation remains: **No Gate**.
+
+## Phase 48B: CAM-Heavy No-Provider Fallback Fix
+
+Phase 48B implemented narrow Lease Review fallback/projection fixes for the Craven Wings CAM-heavy base lease. No provider call, extraction rerun, deployment, remote read/write, service-key access, global v3 provider change, or approval-gating change occurred.
+
+Report created: `docs/document-intelligence-v3-phase48B-cam-heavy-fallback-fix.md`.
+
+### Phase 48B Results
+
+| Area | Before | After |
+| --- | --- | --- |
+| property_address | 3826 MAUpin DR | 12350 South Northshore, Knoxville, TN 37922, needs_review |
+| security_deposit | missing | 15535.36 from Security Deposit Addendum, needs_review |
+| CAM estimate | missing | CAM rule row: $5.25 per leasable square foot |
+| expense rules | 0 | 2 fallback rows: taxes and insurance |
+| CAM rules | 0 | 3 fallback rows: CAM estimate, pro-rata CAM, admin fee |
+| rent schedule | 0 | Rent Addendum schedule rows; monthly_rent not flattened |
+| clause records | 0 | 0 by design; no noisy generic clause rows added |
+
+Regression checks passed for the approved assignment document and the Phase 45 base lease. Focused tests were added in `src/lib/__tests__/leaseReviewFieldNormalizer.test.js`.
+
+Recommendation remains: **No Gate**.
+
+## Phase 49: Multi-Document Fallback Regression
+
+Phase 49 regression-tested the Phase 48B no-provider Lease Review fallbacks across the curated local/exported payload set:
+
+- approved assignment: `fc8181e6-766d-49c7-b81b-b5d961160207` / `7b21f353-579d-48e8-b3dd-8e8c49743fe2`
+- Phase 45 base lease: `f26f2cb5-4764-496c-a68f-484fc7a41085`
+- Craven CAM-heavy base lease: `0155251a-b911-408c-ae83-469d8d6eb534`
+
+No deployment, remote read/write, provider call, parse rerun, extraction rerun, or production write occurred. The phase used only existing local/exported payloads and the existing normalizer.
+
+Report created: `docs/document-intelligence-v3-phase49-multidoc-fallback-regression.md`.
+
+### Phase 49 Results
+
+| Area | Result |
+| --- | --- |
+| assignment profile/readiness | stable; profile `assignment`, only hard blocker `assignor_name` |
+| assignment fallback noise | none; no CAM/rent/security fallback rows created |
+| Phase 45 base lease | stable; profile `base_lease`, Phase 46 alias fix still holds |
+| Phase 45 fallback noise | none; Phase 48B fallbacks did not create unrelated CAM/rent rows |
+| Craven property address | improved to `12350 South Northshore, Knoxville, TN 37922`, `needs_review` |
+| Craven security deposit | improved to `$15,535.36`, `needs_review` |
+| Craven CAM estimate | present as CAM rule: `$5.25 per leasable square foot` |
+| Craven expense/CAM rows | pro-rata taxes, insurance, CAM, and 5 percent admin fee rows present |
+| Craven rent schedule | 8 Rent Addendum rows present; `monthly_rent` scalar remains missing by design |
+| duplicate CAM/expense rows | none found |
+| Clause Records | regression/noise gap remains: Craven produced 34 clause rows |
+
+### Phase 49 Remaining Gaps
+
+- Craven Clause Records did not meet the non-noisy expectation; `clauseRecordsCount = 34`.
+- Craven still lacks scalar `monthly_rent`, `square_footage`, `commencement_date`, `expiration_date`, `lease_type`, and `premises_use`.
+- Evidence/page completeness remains honest but incomplete for some source-backed fields.
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 50: run a narrow Clause Records quality/filtering phase that keeps approval behavior unchanged.
+
+## Phase 50: Clause Record Quality Fix
+
+Phase 50 fixed the Clause Records noise regression found in Phase 49. The root cause was `computeFallbackClauseRows` unioning `lease_fields` and extracted document-item payloads into Clause Records even when those facts already belonged in standard fields, Expense/CAM rows, Rent Addendum rows, or Security Deposit rows.
+
+No deployment, remote read/write, provider call, parse rerun, extraction rerun, approval-gating change, or required-field blocker weakening occurred.
+
+Report created: `docs/document-intelligence-v3-phase50-clause-record-quality-fix.md`.
+
+### Phase 50 Results
+
+| Document | Clause Records Before | Clause Records After | Result |
+| --- | ---: | ---: | --- |
+| approved assignment | 18 | 18 | unchanged; Phase 44A assignment behavior preserved |
+| Phase 45 base lease | 27 | 3 | noisy standard-field echoes filtered |
+| Craven CAM-heavy base lease | 34 | 3 | regression fixed; low defensible retained summaries |
+
+Retained Craven clauses are distinct legal summaries: assignment/subletting restriction, default cure/remedies, and renewal notice. Craven Expense/CAM/Rent/Security fallback rows remain intact.
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 51: continue no-provider QA with one more real base lease or run a narrow evidence/page-completeness phase for retained fallback rows, without approval behavior changes.
+
+## Phase 51A: Vertex Provider Preflight
+
+Phase 51A performed a provider-backed extraction preflight only. No VertexAI, Gemini, OpenAI, Azure, parse, extraction, deploy, remote write, production write, or secret-value exposure occurred.
+
+Report created: `docs/document-intelligence-v3-phase51A-vertex-preflight.md`.
+
+### Phase 51A Results
+
+| Area | Result |
+| --- | --- |
+| safest target environment | local first; staging possible later; production not recommended for first provider call |
+| local config presence | required provider keys missing in process env and local env files |
+| remote/staging config presence | unknown / inaccessible; not read under this phase's constraints |
+| provider test possible now | no |
+| preferred one-document target | Craven Wings Lease Executed 1.pdf, uploaded_file_id `0155251a-b911-408c-ae83-469d8d6eb534` |
+| provider selection path | `normalize-pdf-output` resolves `BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger` or internal debug override; default remains `legacy_hybrid` |
+| expected writes if later approved | `uploaded_files` payloads/status/counts, v3 run/claims/evidence/projections/drops, package graph rows if available, pipeline logs |
+| approval needed next | explicit one-provider-call approval plus scoped local/staging credentials/config confirmation |
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 51B: configure scoped local/staging provider credentials and choose one execution mode. Do not run the provider until explicitly approved for exactly one call.
+
+## Phase 51B: Provider Test Setup
+
+Phase 51B prepared the safe provider-backed extraction test environment shape without making any provider call. No VertexAI, Gemini, OpenAI, Azure, parse, extraction, deploy, remote read/write, production write, service-role use, global provider flag change, or secret-value exposure occurred.
+
+Report created: `docs/document-intelligence-v3-phase51B-provider-test-setup.md`.
+
+### Phase 51B Results
+
+| Area | Result |
+| --- | --- |
+| chosen execution mode | no-DB direct diagnostic harness |
+| deferred alternative | DB-writing `normalize-pdf-output` path only if explicitly approved later |
+| future target | Craven Wings Lease Executed 1.pdf, uploaded_file_id `0155251a-b911-408c-ae83-469d8d6eb534` |
+| local provider config | missing for required provider/project/model/credential keys |
+| remote/staging config | unknown / inaccessible; not inspected |
+| existing no-DB harness | not found |
+| secret hygiene | `.env*` ignored; no tracked credential/private-key/service-account filenames found except `.env.example` template |
+| output path readiness | top-level `tmp/` is not currently ignored; Phase 52 must confirm/add an ignored local artifact path before writing diagnostics |
+| Phase 52 can run now | no |
+
+### Phase 51B Blockers
+
+1. Required provider configuration is missing locally.
+2. Remote/staging secret readiness is unknown.
+3. No no-DB direct diagnostic harness exists yet.
+4. The future diagnostic output path must be confirmed as ignored before writing `tmp/phase52-vertex-craven-diagnostic.json`.
+5. The user has not approved exactly one provider call for Phase 52.
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52: only after explicit approval and scoped provider configuration, implement/run a no-DB direct diagnostic harness for exactly one Craven provider call and write only a local ignored diagnostic artifact.
+
+## Phase 51C: Local Artifact Path Hygiene
+
+Phase 51C prepared a safe ignored local artifact path for the future Phase 52 no-DB provider diagnostic output. No provider call, deploy, remote read/write, parse, extraction, secret access, provider behavior change, production write, or diagnostic output creation occurred.
+
+### Phase 51C Results
+
+| Area | Result |
+| --- | --- |
+| existing suitable ignored path | none specific to Phase 52 provider diagnostics |
+| ignore rule added | `/tmp/phase52-*.json` and `/tmp/phase52-*.md` |
+| scope | narrow local provider diagnostic artifacts only |
+| diagnostic output created | no |
+| provider behavior changed | no |
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52: only after explicit provider-call approval and scoped provider configuration, write any no-DB diagnostic output under the newly ignored `tmp/phase52-*` artifact path.

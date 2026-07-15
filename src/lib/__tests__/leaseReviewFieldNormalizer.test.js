@@ -825,3 +825,248 @@ describe("Phase 46: assignment document behavior is unaffected by the alias fix"
     expect(advisoryKeys).toContain("landlord_consent_assignment_advisory");
   });
 });
+
+
+describe("Phase 50: Clause Records quality filtering", () => {
+  function baseLeaseWithLeaseFields(leaseFields) {
+    return {
+      document_subtype: "base_lease",
+      extraction_data: {
+        workflow_output: {
+          document_profile: { documentType: "base_lease" },
+          lease_fields: leaseFields,
+        },
+      },
+    };
+  }
+
+  it("does not duplicate standard field facts as base-lease Clause Records", () => {
+    const rows = normalizeClauseRecords(baseLeaseWithLeaseFields({
+      tenant_name: { value: "Cress Family Restaurants, LLC", source_page: 12, source_text: "TENANT: CRESS FAMILY RESTAURANTS, LLC" },
+      property_address: { value: "3826 MAUpin DR", source_text: "Address: 3826 MAUpin DR" },
+    }));
+    expect(rows).toEqual([]);
+  });
+
+  it("does not duplicate Expense/CAM rule facts as Clause Records", () => {
+    const rows = normalizeClauseRecords(baseLeaseWithLeaseFields({
+      responsibility_taxes: { value: "Tenant", source_page: 2, source_text: "Real Estate Taxes, Insurance Premiums and Common Area Maintenance Expenses: Tenant shall remit to Landlord its Pro-Rata Share." },
+      admin_fee_pct: { value: 5, source_page: 3, source_text: "a reasonable sum not to exceed five percent of Rent collected to cover the management costs relative to the Common Areas" },
+    }));
+    expect(rows).toEqual([]);
+  });
+
+  it("does not duplicate Rent Addendum schedule facts as Clause Records", () => {
+    const rows = normalizeClauseRecords(baseLeaseWithLeaseFields({
+      monthly_rent: { value: 6004, source_page: 14, source_text: "RENT ADDENDUM Months-3-12 $ 24.00 $ 6,004.00 Months 13 - 24 $ 24.48 $ 6,124.08" },
+    }));
+    expect(rows).toEqual([]);
+  });
+
+  it("does not duplicate Security Deposit fallback facts as Clause Records", () => {
+    const rows = normalizeClauseRecords(baseLeaseWithLeaseFields({
+      security_deposit: { value: 15535.36, source_page: 16, source_text: "SECURITY DEPOSIT ADDENDUM for a total of Fifteen Thousand, Five Hundred Thirty Five and 30/100 Dollars ($15,535.36)" },
+    }));
+    expect(rows).toEqual([]);
+  });
+
+  it("filters generic legal boilerplate from base-lease Clause Records", () => {
+    const rows = normalizeClauseRecords({
+      document_subtype: "base_lease",
+      extraction_data: {
+        workflow_output: {
+          document_profile: { documentType: "base_lease" },
+          clause_records: [
+            { item_type: "miscellaneous", label: "Generic", source_text: "Notwithstanding the foregoing", source_page: 5 },
+          ],
+        },
+      },
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("retains a distinct high-value legal summary with reviewer status", () => {
+    const rows = normalizeClauseRecords(baseLeaseWithLeaseFields({
+      default_cure_period: { value: "30 days", source_page: 10, source_text: "Failure by Tenant to perform any covenant for thirty (30) days after notice shall constitute a default and Landlord may pursue remedies." },
+    }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("Default Cure Period");
+    expect(rows[0].reviewStatus).toBe("needs_review");
+  });
+
+  it("keeps assignment Clause Records behavior unchanged", () => {
+    const rows = normalizeClauseRecords({
+      document_subtype: "assignment",
+      extraction_data: {
+        workflow_output: {
+          document_profile: { documentType: "assignment" },
+          lease_fields: {
+            landlord_consent: { value: true, source_page: 1, source_text: "Landlord hereby consents to the assignment and assumption of the Lease." },
+          },
+        },
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("Landlord Consent");
+  });
+});
+
+
+describe("Phase 48B: no-provider CAM-heavy base lease fallbacks", () => {
+  const premisesPage = {
+    page: 1,
+    text: 'Premises: Landlord hereby leases Premises to Tenant, and Tenant leases and accepts certain Premises (Building 9, Suites 3 and 4) and further described as 12350 South Northshore , Knoxville, TN 37922, located in a shopping center known as The Markets at Choto in Knoxville, Tennessee, the Demised Premises herein being approximately Three thousand and two (3,002) rentable square feet.',
+  };
+  const rentAddendumPage = {
+    page: 14,
+    text: 'RENT ADDENDUM The monthly Minimum Rent payable by Tenant hereunder shall be as follows: Months-3-12 $ 24.00 $ 6,004.00 Months 13 - 24 $ 24.48 $ 6,124.08 Months-25-36 $ 24.97 $ 6,246.56 Minimum Rent is exclusive of all Common Area Maintenance (CAM) Charges due by Tenant. CAM estimate for 2021 is $5.25 per leasable square foot.',
+  };
+  const securityDepositPage = {
+    page: 16,
+    text: 'SECURITY DEPOSIT ADDENDUM As security for the prompt and punctual performance of all obligations required to be performed hereunder by Tenant, Tenant shall, upon Lease execution, deposit with Landlord the total of what equals the sum of the third month rent of the base term plus CAM and the eighty-sixth month rent of the base term plus CAM, or Twelve Thousand, Nine Hundred Eight and 60/100 Dollars ($12,908.60) in Base Rent and Two Thousand, Six Hundred Twenty Six and 76/100 Dollars ($2,626.76) in CAM, for a total of Fifteen Thousand, Five Hundred Thirty Five and 30/100 Dollars ($15,535.36), which shall be held as a security deposit.',
+  };
+  const expensePage = {
+    page: 2,
+    text: 'Pro-rata Share of Real Estate Taxes, Insurance Premiums and Common Area Maintenance Expenses: Tenant shall remit to Landlord as Additional Rent its Pro-Rata Share, as hereinafter defined, multiplied by the real estate taxes, insurance premiums, and common area maintenance expenses incurred by the Landlord in connection with the operation of the Shopping Center. Tenant shall pay its Pro-Rata Share of the above expenses within twenty (20) days after receipt of a bill therefor.',
+  };
+  const adminPage = {
+    page: 3,
+    text: 'The term common area maintenance expenses shall mean the total cost and expense incurred in operating, maintaining, cleaning and repairing the Common Areas and a reasonable sum (not to exceed five percent of Rent collected) to cover the management costs relative to the operation of the Common Areas and the Shopping Center.',
+  };
+
+  const camHeavyLease = (overrides = {}) => ({
+    document_subtype: 'base_lease',
+    extraction_data: {
+      workflow_output: { document_profile: { documentType: 'base_lease' } },
+      fields: {
+        tenant_name: 'CRESS FAMILY RESTAURANTS, LLC',
+        landlord_name: 'MARKETS AT CHOTO, LLC',
+        property_address: '3826 MAUpin DR',
+        admin_fee_pct: 5,
+        ...(overrides.fields || {}),
+      },
+      field_evidence: {
+        tenant_name: { source_text: 'Tenant: CRESS FAMILY RESTAURANTS, LLC', source_page: 12 },
+        landlord_name: { source_text: 'Landlord: MARKETS AT CHOTO, LLC', source_page: 11 },
+        property_address: { source_text: 'Tenant Contact Information Address: 3826 MAUpin DR', source_page: null },
+        admin_fee_pct: { source_text: adminPage.text, source_page: 3 },
+        ...(overrides.field_evidence || {}),
+      },
+      ...(overrides.extraction_data || {}),
+    },
+    uploaded_file: {
+      docling_raw: { pages: overrides.pages || [premisesPage, expensePage, adminPage, rentAddendumPage, securityDepositPage] },
+    },
+  });
+
+  it('does not let a tenant/contact address satisfy property_address when stronger premises evidence exists', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease());
+    const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
+    expect(row.value).toBe('12350 South Northshore, Knoxville, TN 37922');
+    expect(row.status).toBe('needs_review');
+    expect(row.sourcePage).toBe(1);
+    expect(row.sourceProvider).toBe('no_provider_payload_fallback');
+    expect(row.validationMessage).toMatch(/tenant\/contact address/i);
+  });
+
+  it('prefers premises/demised-premises source text when property_address is missing', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease({ fields: { property_address: null }, field_evidence: { property_address: null } }));
+    const row = result.standardFields.find((r) => r.canonicalKey === 'property_address');
+    expect(row.value).toBe('12350 South Northshore, Knoxville, TN 37922');
+    expect(row.sourceText).toMatch(/Demised Premises|Premises/i);
+  });
+
+  it('creates CAM and expense recovery fallback rules with evidence from stored text', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease());
+    expect(result.camRules.some((row) => row.category === 'common_area_maintenance_estimate' && row.value === '$5.25 per leasable square foot' && row.sourcePage === 14)).toBe(true);
+    expect(result.camRules.some((row) => row.category === 'common_area_maintenance' && row.responsibleParty === 'tenant')).toBe(true);
+    expect(result.camRules.some((row) => row.category === 'administrative_fee' && row.adminFeePercent === 5)).toBe(true);
+    expect(result.expenseRules.some((row) => row.category === 'real_estate_taxes' && row.sourcePage === 2)).toBe(true);
+    expect(result.expenseRules.some((row) => row.category === 'insurance_premiums' && row.sourcePage === 2)).toBe(true);
+  });
+
+  it('creates Rent Addendum schedule rows without flattening the schedule into monthly_rent', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease());
+    const scheduleRows = result.tabs.rent_charges.filter((row) => row.rowType === 'dynamic' && row.category === 'rent_schedule');
+    expect(scheduleRows.map((row) => row.label)).toContain('Rent Addendum Months 3-12');
+    expect(scheduleRows[0].status).toBe('needs_review');
+    expect(scheduleRows[0].sourcePage).toBe(14);
+    const monthlyRent = result.standardFields.find((row) => row.canonicalKey === 'monthly_rent');
+    expect(monthlyRent.value).toBeNull();
+  });
+
+  it('projects Security Deposit Addendum total with evidence and review status', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease());
+    const row = result.standardFields.find((r) => r.canonicalKey === 'security_deposit');
+    expect(row.value).toBe(15535.36);
+    expect(row.status).toBe('needs_review');
+    expect(row.sourcePage).toBe(16);
+    expect(row.sourceText).toMatch(/\$12,908\.60/);
+    expect(row.sourceText).toMatch(/\$15,535\.36/);
+  });
+
+  it('does not duplicate fallback expense/CAM rows when structured rows already exist', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease({
+      extraction_data: {
+        workflow_output: {
+          document_profile: { documentType: 'base_lease' },
+          expense_rules: [
+            { expense_category: 'common_area_maintenance_estimate', normalized_rule: 'Existing CAM estimate', recoverable_flag: true, source_page: 14 },
+          ],
+        },
+      },
+    }));
+    expect(result.camRules.filter((row) => row.category === 'common_area_maintenance_estimate')).toHaveLength(1);
+  });
+
+  it('keeps existing assignment behavior unchanged', () => {
+    const result = normalizeLeaseReviewData({
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: 'assignment' } },
+        fields: { assignee_name: 'NARENDRA PYDI', assignment_effective_date: '2023-11-07' },
+        field_evidence: {
+          assignee_name: { source_text: 'NARENDRA PYDI, Assignee', source_page: 1 },
+          assignment_effective_date: { source_text: 'as of November 7, 2023', source_page: 1 },
+          assignor_name: { source_text: 'Assignor and Assignee desire to enter into this Agreement', source_page: 1 },
+        },
+      },
+    });
+    expect(result.currentReviewPolicy.profile).toBe('assignment');
+    expect(result.approvalBlockers.missingFields).toEqual(['assignor_name']);
+    expect(result.approvalBlockers.budgetBlockers).toEqual([]);
+    expect(result.approvalBlockers.camBlockers).toEqual([]);
+  });
+
+  it('keeps Craven-style fallback rows intact when Clause Records are filtered', () => {
+    const result = normalizeLeaseReviewData(camHeavyLease());
+    expect(result.clauseRecords).toEqual([]);
+    expect(result.expenseRules.some((row) => row.category === 'real_estate_taxes')).toBe(true);
+    expect(result.expenseRules.some((row) => row.category === 'insurance_premiums')).toBe(true);
+    expect(result.camRules.some((row) => row.category === 'common_area_maintenance_estimate' && row.value === '$5.25 per leasable square foot')).toBe(true);
+    expect(result.camRules.some((row) => row.category === 'common_area_maintenance')).toBe(true);
+    expect(result.camRules.some((row) => row.category === 'administrative_fee' && row.adminFeePercent === 5)).toBe(true);
+    expect(result.tabs.rent_charges.filter((row) => row.category === 'rent_schedule')).toHaveLength(3);
+    const securityDeposit = result.standardFields.find((row) => row.canonicalKey === 'security_deposit');
+    expect(securityDeposit.value).toBe(15535.36);
+  });
+
+  it('keeps Phase 46 base-lease alias behavior unchanged', () => {
+    const result = normalizeLeaseReviewData({
+      document_subtype: 'base_lease',
+      extraction_data: {
+        workflow_output: { document_profile: { documentType: 'base_lease' } },
+        fields: {
+          property_address: '224 S Peters Road Knoxville, TN 37923',
+          monthly_rent: 1400,
+          security_deposit: 1400,
+        },
+        field_evidence: {
+          property_address: { source_text: 'located at 224 S Peters Road Knoxville, TN 37923', source_page: 1 },
+          monthly_rent: { source_text: '$1,400 per month', source_page: 1 },
+          security_deposit: { source_text: 'Security Deposit $1,400', source_page: 1 },
+        },
+      },
+    });
+    expect(result.approvalBlockers.missingFields).not.toContain('premises_address');
+  });
+});
