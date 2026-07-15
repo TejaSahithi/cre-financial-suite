@@ -1578,3 +1578,25 @@ Phase 51C prepared a safe ignored local artifact path for the future Phase 52 no
 Recommendation remains: **No Gate**.
 
 Recommended Phase 52: only after explicit provider-call approval and scoped provider configuration, write any no-DB diagnostic output under the newly ignored `tmp/phase52-*` artifact path.
+
+## Phase 51D: Provider Env Resolution
+
+Phase 51D documented provider env-name resolution and confirmed the safe path for a first Vertex provider test. No VertexAI, Gemini, OpenAI, Azure, parse, extraction, deploy, remote write, Supabase secret change, provider behavior change, diagnostic output creation, or secret-value exposure occurred.
+
+Report created: `docs/document-intelligence-v3-phase51D-provider-env-resolution.md`.
+
+### Phase 51D Results
+
+| Area | Result |
+| --- | --- |
+| business extraction provider flag | `BUSINESS_EXTRACTION_PROVIDER`; selects `vertex_fact_ledger`, default remains `legacy_hybrid` |
+| parser/layout provider flag | `EXTRACTION_PROVIDER`; separate Azure/parser/layout mode flag and should not be reused for `vertex_fact_ledger` |
+| scoped override | `debug_business_extraction_provider` exists, internal-call only |
+| zero-DB Edge path | `dry_run=true` + `sample_text` can use scoped override without uploaded-file DB writes, but only tests sample text |
+| normal `file_id` normalize path | can use scoped override but writes status, payloads, counts, and possibly v3 side-write; not suitable for first provider call |
+| local no-DB harness | possible without DB writes if it imports `runVertexFactLedgerPipeline(...)` directly and uses securely supplied local env credentials |
+| Supabase secrets boundary | hosted Supabase secrets require running inside Supabase Edge Function runtime; local harness cannot use them without separately supplying credentials locally |
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52: choose the runtime mode first, then only after explicit one-provider-call approval run either a local no-DB harness with secure local credentials or an internal Supabase Edge dry-run sample-text comparison. Do not use the normal `file_id` normalize path for the first provider call.

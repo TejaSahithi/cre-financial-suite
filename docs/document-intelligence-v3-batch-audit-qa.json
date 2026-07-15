@@ -1,10 +1,10 @@
 {
-  "phase": "51C",
+  "phase": "51D",
   "generated_at": "2026-07-15T15:30:00.000Z",
   "diagnostic_only": true,
   "phase_goal": "Run authenticated local visual verification of the Phase 36 Lease Review UI contract fixes and report results.",
   "backfill_performed": true,
-  "status": "phase51C_artifact_path_hygiene_completed",
+  "status": "phase51D_provider_env_resolution_completed",
   "blocker": null,
   "recommendation": "no_gate",
   "approved_ids": {
@@ -3801,7 +3801,7 @@
     ],
     "recommendation": "no_gate"
   },
-  "recommended_phase_52": "Only after explicit provider-call approval and scoped provider configuration, implement/run the no-DB direct diagnostic harness for exactly one Craven provider call and write diagnostic output under the ignored tmp/phase52-* artifact path.",
+  "recommended_phase_52": "Choose the runtime mode first, then only after explicit one-provider-call approval run either a local no-DB harness with secure local credentials or an internal Supabase Edge dry-run sample-text comparison. Do not use the normal file_id normalize path for the first provider call.",
   "phase51C_artifact_path_hygiene": {
     "performed": true,
     "provider_calls_made": false,
@@ -3821,6 +3821,73 @@
     "scope": "narrow local provider diagnostic artifacts only",
     "changed_files": [
       ".gitignore",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "recommendation": "no_gate"
+  },
+  "phase51D_provider_env_resolution": {
+    "performed": true,
+    "provider_calls_made": false,
+    "deployed": false,
+    "remote_write": false,
+    "touched_supabase_secrets": false,
+    "changed_supabase_secrets": false,
+    "set_business_extraction_provider_globally": false,
+    "changed_extraction_provider": false,
+    "parse_rerun": false,
+    "extraction_rerun": false,
+    "printed_secret_values": false,
+    "provider_output_created": false,
+    "code_paths_inspected": [
+      "supabase/functions/normalize-pdf-output/index.ts",
+      "supabase/functions/_shared/extraction/extraction-provider.ts",
+      "supabase/functions/_shared/vertex-ai.ts",
+      "supabase/functions/_shared/extraction/vertex-fact-ledger/document-index-v3.ts",
+      "supabase/functions/_shared/internal-auth.ts"
+    ],
+    "correct_env_names": {
+      "business_extraction_provider": "BUSINESS_EXTRACTION_PROVIDER",
+      "parser_layout_provider": "EXTRACTION_PROVIDER",
+      "v3_side_write_and_canonical_layout": "ENABLE_DOCUMENT_INTELLIGENCE_V3",
+      "vertex_project": [
+        "VERTEX_PROJECT_ID",
+        "GOOGLE_PROJECT_ID"
+      ],
+      "vertex_location": [
+        "VERTEX_LOCATION",
+        "GOOGLE_LOCATION"
+      ],
+      "vertex_credentials_json": "GOOGLE_SERVICE_ACCOUNT_KEY",
+      "vertex_credentials_split": [
+        "GOOGLE_CLIENT_EMAIL",
+        "GOOGLE_PRIVATE_KEY"
+      ]
+    },
+    "extraction_provider_should_not_be_reused_for_vertex_fact_ledger": true,
+    "scoped_override": {
+      "field": "debug_business_extraction_provider",
+      "available": true,
+      "requires_internal_call": true,
+      "avoids_global_business_extraction_provider_secret_change": true,
+      "normal_browser_requests_can_use": false
+    },
+    "write_behavior": {
+      "normalize_dry_run_sample_text": "zero_uploaded_file_db_writes_but_sample_text_only",
+      "normalize_file_id_path": "db_writing_status_payload_counts_and_possible_v3_side_write",
+      "direct_local_harness": "no_db_possible_if_no_supabase_client_or_side_write_helpers_are_used"
+    },
+    "supabase_secrets_runtime_boundary": {
+      "hosted_supabase_secrets_require_edge_function_runtime": true,
+      "local_no_db_harness_can_use_hosted_secrets_without_copying": false,
+      "local_no_db_harness_requires_secure_local_env_if_provider_call_is_approved": true
+    },
+    "safe_first_vertex_test_path": "Do not use normal file_id normalize path. Prefer local no-DB harness with securely supplied local env, or internal Supabase Edge dry_run sample_text if hosted secrets must be used without local copying.",
+    "exact_next_step_before_phase52": "Choose runtime mode and explicitly approve exactly one provider call with scoped credentials/configuration; keep output under ignored tmp/phase52-* and do not use DB-writing normalize file_id path.",
+    "files_created": [
+      "docs/document-intelligence-v3-phase51D-provider-env-resolution.md"
+    ],
+    "files_updated": [
       "docs/document-intelligence-v3-batch-audit-qa.md",
       "docs/document-intelligence-v3-batch-audit-qa.json"
     ],
