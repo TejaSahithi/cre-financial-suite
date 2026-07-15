@@ -136,6 +136,8 @@ import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPan
 import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
 import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewReadinessSummary";
 import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
+import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
+import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -245,7 +247,7 @@ export default function LeaseReview() {
     // are derived further down this component, after this query is declared.
     refetchInterval: (query) => {
       const status = query.state.data?.ui_review_payload?.enrichment_status;
-      return status === "pending" || status === "running" ? 4000 : false;
+      return isLeaseReviewEnrichmentInFlight(status) ? 4000 : false;
     },
   });
 
@@ -319,6 +321,15 @@ export default function LeaseReview() {
     });
     return map;
   }, [allReviewRows]);
+
+  const standardRowByKey = useMemo(() => {
+    const map = new Map();
+    (normalized.standardFields || []).forEach((row) => {
+      if (row?.canonicalKey && !map.has(row.canonicalKey)) map.set(row.canonicalKey, row);
+      if (row?.key && !map.has(row.key)) map.set(row.key, row);
+    });
+    return map;
+  }, [normalized.standardFields]);
 
   const crossFieldWarnings = useMemo(
     () => validateCrossFieldWarnings(reviewRowByKey, leaseFull),
@@ -964,7 +975,7 @@ export default function LeaseReview() {
   // "pending" | "running" | "completed" | "failed"). Not yet consumed
   // anywhere else in this file before this change.
   const enrichmentStatus = uploadedFile?.ui_review_payload?.enrichment_status ?? null;
-  const isEnrichmentInFlight = enrichmentStatus === "pending" || enrichmentStatus === "running";
+  const isEnrichmentInFlight = isLeaseReviewEnrichmentInFlight(enrichmentStatus);
 
   // Temporary read-only fallback: when ui_review_payload hasn't landed yet
   // (or has none of the field-map shapes buildLeaseReviewRowsByTab knows
@@ -1114,12 +1125,15 @@ export default function LeaseReview() {
   }
 
   // --- Derived data --------------------------------------------------------
-  const requiredReviewedKeys = REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k]));
-  const requiredPendingKeys = REQUIRED_FIELD_KEYS.filter((k) => !isResolvedReview(fieldReviews[k]));
+  const currentReviewPolicy = normalized.currentReviewPolicy || {};
+  const requiredFieldKeys = currentReviewPolicy.requiredFieldKeys || REQUIRED_FIELD_KEYS;
+  const requiredFieldKeySet = new Set(requiredFieldKeys);
+  const requiredReviewedKeys = requiredFieldKeys.filter((k) => isResolvedReview(fieldReviews[k]));
+  const requiredPendingKeys = requiredFieldKeys.filter((k) => !isResolvedReview(fieldReviews[k]));
   const requiredResolved = requiredPendingKeys.length === 0;
 
   if (import.meta.env.DEV) {
-    const requiredLogs = REQUIRED_FIELD_KEYS.map(k => {
+    const requiredLogs = requiredFieldKeys.map(k => {
       const resolved = resolveLeaseField(lease, k, { mode: "canonical" });
       return {
         field: k,
@@ -1268,7 +1282,7 @@ export default function LeaseReview() {
     pass: requiredResolved,
     label: "Required fields reviewed",
     detail: requiredResolved
-      ? `All ${REQUIRED_FIELD_KEYS.length} required fields are resolved`
+      ? `All ${requiredFieldKeys.length} required fields are resolved`
       : `${requiredPendingKeys.length} required field(s) pending review`,
   });
   validationChecks.push({
@@ -1296,6 +1310,7 @@ export default function LeaseReview() {
       if (f.key) allKnownKeys.add(f.key);
       if (f.field_key) allKnownKeys.add(f.field_key);
     });
+    requiredFieldKeys.forEach((key) => allKnownKeys.add(key));
 
     const eligibleFields = [];
     const requiredBlockers = [];
@@ -1306,9 +1321,9 @@ export default function LeaseReview() {
     const validationBlockers = [];
 
     allKnownKeys.forEach((key) => {
-      const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
-      const row = reviewRowByKey.get(key) || fieldDef;
-      const isRequired = REQUIRED_FIELD_KEYS.includes(key);
+      const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { key, label: getFieldPolicyLabel(key) };
+      const row = reviewRowByKey.get(key) || standardRowByKey.get(key) || fieldDef;
+      const isRequired = requiredFieldKeySet.has(key);
       const isDynamic = !fieldDef.key;
       
       const review = fieldReviews[key];
@@ -1645,6 +1660,16 @@ export default function LeaseReview() {
       status: REVIEW_STATUSES.MANUAL_REQUIRED,
       previousReview: fieldReviews[field.key],
     });
+
+  const handleTabRowQuickAction = (row, action) => {
+    if (action === "accept") handleAccept(row);
+    else if (action === "edit") openDrawer(row, "edit");
+    else if (action === "reject") handleReject(row);
+    else if (action === "na") handleMarkNA(row);
+    else if (action === "needs_review" || action === "legal") handleNeedsLegal(row);
+    else if (action === "manual_required" || action === "manual") handleMarkManualRequired(row);
+    else if (action === "view_source") openDrawer(row, "view");
+  };
   const handleResetField = async (field) => {
     const previousReview = fieldReviews[field.key];
     const next = { ...fieldReviews };
@@ -2674,7 +2699,7 @@ export default function LeaseReview() {
 
   // --- Render --------------------------------------------------------------
   const leaseStatus = lease.status || "draft";
-  const requiredCounterTitle = `Required Reviewed ${requiredReviewedKeys.length} / ${REQUIRED_FIELD_KEYS.length}`;
+  const requiredCounterTitle = `Required Reviewed ${requiredReviewedKeys.length} / ${requiredFieldKeys.length}`;
   const requiredCounterPendingLabel = requiredResolved
     ? "All required fields reviewed"
     : `Required Pending ${requiredPendingKeys.length}`;
@@ -3271,8 +3296,8 @@ export default function LeaseReview() {
                   Approval is blocked until every required field is accepted, edited, marked N/A, or marked manual_required.
                 </p>
                 <ul className="mt-2 space-y-1 text-xs">
-                  {REQUIRED_FIELD_KEYS.map((key) => {
-                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
+                  {requiredFieldKeys.map((key) => {
+                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { label: getFieldPolicyLabel(key) };
                     const review = fieldReviews[key];
                     const resolved = isResolvedReview(review);
                     return (
@@ -3304,14 +3329,7 @@ export default function LeaseReview() {
               <LeaseReviewTabTable
                 rows={enterpriseTabs[tab.key] || []}
                 onOpenDetail={(row) => openDrawer(row, "view")}
-                onQuickAction={(row, action) => {
-                  if (action === "accept") handleAccept(row);
-                  else if (action === "edit") openDrawer(row, "edit");
-                  else if (action === "reject") handleReject(row);
-                  else if (action === "na") handleMarkNA(row);
-                  else if (action === "legal") handleNeedsLegal(row);
-                  else if (action === "manual") handleMarkManualRequired(row);
-                }}
+                onQuickAction={handleTabRowQuickAction}
               />
             </TabsContent>
           ))}
@@ -3319,16 +3337,16 @@ export default function LeaseReview() {
           <div className="flex justify-end">
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
         <TabsContent value="clause_records" className="mt-4 space-y-3">
@@ -3336,11 +3354,11 @@ export default function LeaseReview() {
         </TabsContent>
 
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
         </TabsContent>
 
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
-          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={(row, action) => { if (action === "accept") handleAccept(row); else if (action === "edit") openDrawer(row, "edit"); else if (action === "reject") handleReject(row); }} />
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">

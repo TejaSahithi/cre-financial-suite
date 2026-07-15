@@ -31,9 +31,11 @@ import {
   isMeaningfulValue,
   REVIEW_STATUSES,
   EXTRACTION_STATUSES,
+  REQUIRED_FIELD_KEYS,
 } from "@/lib/leaseReviewSchema";
 import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
 import { LEASE_FIELD_CONTRACT, LEASE_REVIEW_CANONICAL_TABS, getFieldContract, resolveCanonicalFieldKey } from "@/lib/leaseFieldContract";
+import { buildCurrentReviewPolicy } from "@/lib/leaseReviewCurrentPolicy";
 
 function titleize(key) {
   return String(key || "")
@@ -541,8 +543,8 @@ function readServerApprovalBlockers(lease) {
  * profile-aware content for legacy_hybrid leases too, without inventing any
  * new backend logic or enforcing anything.
  */
-export function normalizeApprovalBlockers(lease, standardFields) {
-  const documentProfile = readDocumentProfile(lease);
+export function normalizeApprovalBlockers(lease, standardFields, currentReviewPolicy = null) {
+  const documentProfile = currentReviewPolicy?.profile || readDocumentProfile(lease);
   const serverBlockers = readServerApprovalBlockers(lease);
 
   if (serverBlockers) {
@@ -550,35 +552,51 @@ export function normalizeApprovalBlockers(lease, standardFields) {
       documentProfile,
       source: "server",
       missingFields: serverBlockers.map((b) => b.fieldKey ?? b.field_key ?? b.label ?? String(b)),
-      warnings: [],
+      warnings: currentReviewPolicy?.advisoryGaps?.map((gap) => gap.detail || gap.title).filter(Boolean) || [],
       budgetBlockers: [],
       camBlockers: [],
     };
   }
 
-  // Client-side advisory estimate: which fields does the field contract say
-  // are required for THIS document's profile, and are they populated?
+  // Client-side advisory estimate: use the current-review policy when it
+  // exists so assignment documents do not inherit field-contract hard blockers
+  // that the profile-aware policy intentionally downgraded to advisory.
   const byKey = new Map(standardFields.map((row) => [row.canonicalKey, row]));
+  const policyRequiredKeys = Array.isArray(currentReviewPolicy?.requiredFieldKeys)
+    ? currentReviewPolicy.requiredFieldKeys
+    : null;
+  const policyRequiredKeySet = policyRequiredKeys ? new Set(policyRequiredKeys) : null;
   const missingFields = [];
   const budgetBlockers = [];
   const camBlockers = [];
   for (const contract of LEASE_FIELD_CONTRACT) {
     if (!contract.inLeaseSchema || contract.computed) continue;
-    const appliesToProfile = documentProfile
-      ? contract.requiredByDocumentProfile?.includes(documentProfile)
-      : false;
+    const appliesToProfile = policyRequiredKeySet
+      ? policyRequiredKeySet.has(contract.canonicalKey)
+      : (documentProfile ? contract.requiredByDocumentProfile?.includes(documentProfile) : false);
     const row = byKey.get(contract.canonicalKey);
     const hasValue = row ? isMeaningfulValue(row.value) : false;
     if (appliesToProfile && !hasValue) missingFields.push(contract.canonicalKey);
-    if (contract.requiredForBudget && !hasValue) budgetBlockers.push(contract.canonicalKey);
-    if (contract.requiredForCam && !hasValue) camBlockers.push(contract.canonicalKey);
+    if (currentReviewPolicy?.applyBaseLeaseBlockers !== false) {
+      if (contract.requiredForBudget && !hasValue) budgetBlockers.push(contract.canonicalKey);
+      if (contract.requiredForCam && !hasValue) camBlockers.push(contract.canonicalKey);
+    }
+  }
+  if (policyRequiredKeys) {
+    for (const key of policyRequiredKeys) {
+      if (!missingFields.includes(key) && !isMeaningfulValue(byKey.get(key)?.value)) {
+        missingFields.push(key);
+      }
+    }
   }
 
   return {
     documentProfile,
     source: "client_estimate",
     missingFields,
-    warnings: documentProfile ? [] : ["Document profile not classified — advisory estimate uses no profile filter (all fields advisory)."],
+    warnings: currentReviewPolicy?.advisoryGaps?.length
+      ? currentReviewPolicy.advisoryGaps.map((gap) => gap.detail || gap.title).filter(Boolean)
+      : (documentProfile ? [] : ["Document profile not classified - advisory estimate uses no profile filter (all fields advisory)."]),
     budgetBlockers,
     camBlockers,
   };
@@ -642,9 +660,11 @@ export function buildRowsByTab({ standardFields, dynamicFindings, expenseRules, 
   return tabs;
 }
 
-export function buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs }) {
-  const requiredApproval = standardFields.filter((row) => row.requiredForApproval);
-  const missingRequired = requiredApproval.filter((row) => !hasRowValue(row));
+export function buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs, currentReviewPolicy }) {
+  const requiredKeys = currentReviewPolicy?.requiredFieldKeys || REQUIRED_FIELD_KEYS;
+  const requiredKeySet = new Set(requiredKeys);
+  const byKey = new Map(standardFields.map((row) => [row.canonicalKey, row]));
+  const missingRequired = requiredKeys.filter((key) => !hasRowValue(byKey.get(key)));
   const needsReview = standardFields.filter((row) => row.status === "needs_review" || row.status === "manual_required");
   const sourceBacked = standardFields.filter((row) => row.evidenceVerified);
   const tabSummaries = LEASE_REVIEW_CANONICAL_TABS.map((tab) => {
@@ -656,7 +676,7 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
       rows: rows.length,
       complete: standardRows.filter(hasRowValue).length,
       totalStandard: standardRows.length,
-      missingRequired: standardRows.filter((row) => row.requiredForApproval && !hasRowValue(row)).length,
+      missingRequired: standardRows.filter((row) => requiredKeySet.has(row.canonicalKey) && !hasRowValue(row)).length,
       needsReview: rows.filter((row) => row.status === "needs_review" || row.status === "manual_required").length,
     };
   });
@@ -666,7 +686,7 @@ export function buildReadinessSummary({ standardFields, dynamicFindings, expense
     budgetReadiness: approvalBlockers.budgetBlockers.length === 0 ? "ready" : "blocked",
     camReadiness: approvalBlockers.camBlockers.length === 0 ? "ready" : "needs_review",
     expenseRulesReadiness: expenseRules.length > 0 ? "needs_review" : "no_rules_found",
-    missingRequiredFields: missingRequired.map((row) => row.canonicalKey),
+    missingRequiredFields: missingRequired,
     budgetMissingInputsCount: approvalBlockers.budgetBlockers.length,
     needsReviewFields: needsReview.map((row) => row.canonicalKey),
     sourceBackedCount: sourceBacked.length,
@@ -708,15 +728,20 @@ export function buildDebugCounts({ standardFields, dynamicFindings, clauseRecord
  */
 export function normalizeLeaseReviewData(lease, { fieldReviews = {} } = {}) {
   const standardFields = normalizeStandardFields(lease, { fieldReviews });
+  const currentReviewPolicy = buildCurrentReviewPolicy(lease, {
+    rows: standardFields,
+    fieldReviews,
+    legacyRequiredFieldKeys: REQUIRED_FIELD_KEYS,
+  });
   const dynamicFindings = normalizeDynamicFindings(lease);
   const clauseRecords = normalizeClauseRecords(lease);
   const allRuleRows = normalizeExpenseRuleFallback(lease);
   const expenseRules = allRuleRows.filter((row) => row.rowType !== "cam_rule");
   const camRules = allRuleRows.filter((row) => row.rowType === "cam_rule");
   const criticalDates = normalizeCriticalDates(standardFields);
-  const approvalBlockers = normalizeApprovalBlockers(lease, standardFields);
+  const approvalBlockers = normalizeApprovalBlockers(lease, standardFields, currentReviewPolicy);
   const tabs = buildRowsByTab({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates });
-  const readinessSummary = buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs });
+  const readinessSummary = buildReadinessSummary({ standardFields, dynamicFindings, expenseRules, camRules, clauseRecords, criticalDates, approvalBlockers, tabs, currentReviewPolicy });
   const budgetPreview = tabs.budget_preview || [];
   const debugCounts = buildDebugCounts({ standardFields, dynamicFindings, clauseRecords, expenseRules, camRules, criticalDates, approvalBlockers, tabs });
 
@@ -730,6 +755,7 @@ export function normalizeLeaseReviewData(lease, { fieldReviews = {} } = {}) {
     camRules,
     criticalDates,
     approvalBlockers,
+    currentReviewPolicy,
     budgetPreview,
     debugCounts,
   };

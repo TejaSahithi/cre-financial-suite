@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
-import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send } from "lucide-react";
+import { Search, SlidersHorizontal, Check, Pencil, X, Eye, Ban, Send, MoreHorizontal, AlertTriangle, CircleSlash } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { isMeaningfulValue } from "@/lib/leaseReviewSchema";
 
@@ -109,33 +110,35 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
       </div>
 
       <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
-        <Table className="min-w-[1180px]">
+        <Table className="min-w-[1080px]">
           <TableHeader className="sticky top-0 z-10 bg-slate-50">
             <TableRow>
-              <TableHead className="w-[130px] text-xs">Type</TableHead>
               <TableHead className="w-[220px] text-xs">Field / Term</TableHead>
               <TableHead className="w-[220px] text-xs">Value</TableHead>
               <TableHead className="w-[120px] text-xs">Status</TableHead>
               <TableHead className="w-[90px] text-xs text-center">Confidence</TableHead>
               <TableHead className="w-[70px] text-xs text-center">Page</TableHead>
               <TableHead className="min-w-[360px] text-xs">Source Text</TableHead>
-              <TableHead className="w-[170px] text-xs text-right">Actions</TableHead>
+              <TableHead className="w-[120px] text-xs text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {visibleRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-sm text-slate-500">No rows match the current filters.</TableCell>
+                <TableCell colSpan={7} className="py-8 text-center text-sm text-slate-500">No rows match the current filters.</TableCell>
               </TableRow>
             ) : visibleRows.map((row, index) => {
-              const typeMeta = TYPE_META[row.rowType] || TYPE_META.standard;
               const statusMeta = STATUS_META[row.status] || STATUS_META.pending;
               const confidence = row.confidencePercent ?? normalizeConfidence(row.confidence);
               const canFieldAction = row.rowType === "standard" && row.editable !== false;
               const canRuleAction = row.rowType === "expense_rule" || row.rowType === "cam_rule";
+              const hasSourceEvidence = Boolean(row.sourceText || row.source_text || row.sourcePage || row.source_page || row.page_number);
+              const viewSource = () => {
+                if (onQuickAction) onQuickAction(row, "view_source");
+                else onOpenDetail?.(row);
+              };
               return (
                 <TableRow key={row.key || row.fieldKey || `${row.rowType}-${index}`} className="align-top hover:bg-slate-50/70">
-                  <TableCell className="text-xs"><Badge variant="outline" className={typeMeta.className}>{typeMeta.label}</Badge></TableCell>
                   <TableCell className="text-xs font-medium text-slate-800">
                     {row.label || row.fieldKey || "Untitled"}
                     {row.rowType === "read_only_reference" && <div className="mt-1 text-[10px] font-normal text-slate-500">Read-only reference</div>}
@@ -146,20 +149,27 @@ export default function LeaseReviewTabTable({ rows = [], onOpenDetail, onQuickAc
                   <TableCell className="text-center text-xs text-slate-600">{row.sourcePage ?? row.source_page ?? row.page_number ?? "-"}</TableCell>
                   <TableCell className="text-xs text-slate-600"><span title={row.sourceText ?? row.source_text ?? ""}>{sourcePreview(row.sourceText ?? row.source_text)}</span></TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onOpenDetail?.(row)} title="Open detail">
-                        <Eye className="h-3.5 w-3.5" />
-                      </Button>
-                      {canFieldAction && (
-                        <>
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onQuickAction?.(row, "accept")} title="Accept"><Check className="h-3.5 w-3.5 text-emerald-600" /></Button>
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onQuickAction?.(row, "edit")} title="Edit"><Pencil className="h-3.5 w-3.5 text-blue-600" /></Button>
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onQuickAction?.(row, "reject")} title="Reject"><X className="h-3.5 w-3.5 text-red-600" /></Button>
-                        </>
-                      )}
-                      {row.rowType === "dynamic" && <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onQuickAction?.(row, "ignore")} title="Ignore"><Ban className="h-3.5 w-3.5 text-slate-500" /></Button>}
-                      {canRuleAction && <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => onNavigateRules?.(row)} title="Review rule"><Send className="h-3.5 w-3.5 text-slate-600" /></Button>}
-                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Action" aria-label={`Action menu for ${row.label || row.fieldKey || "row"}`}>
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        {canFieldAction && (
+                          <>
+                            <DropdownMenuItem onSelect={() => onQuickAction?.(row, "accept")}><Check className="text-emerald-600" />Accept</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => onQuickAction?.(row, "edit")}><Pencil className="text-blue-600" />Edit</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => onQuickAction?.(row, "needs_review")}><AlertTriangle className="text-amber-600" />Mark Needs Review</DropdownMenuItem>
+                            <DropdownMenuItem disabled={row.allowNA === false} onSelect={() => onQuickAction?.(row, "na")}><CircleSlash className="text-slate-600" />Mark N/A</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => onQuickAction?.(row, "reject")}><X className="text-red-600" />Reject</DropdownMenuItem>
+                          </>
+                        )}
+                        <DropdownMenuItem disabled={!hasSourceEvidence} onSelect={viewSource}><Eye className="text-slate-600" />View Source</DropdownMenuItem>
+                        {row.rowType === "dynamic" && <DropdownMenuItem onSelect={() => onQuickAction?.(row, "ignore")}><Ban className="text-slate-600" />Ignore</DropdownMenuItem>}
+                        {canRuleAction && <DropdownMenuItem onSelect={() => onNavigateRules?.(row)}><Send className="text-slate-600" />Review rule</DropdownMenuItem>}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               );

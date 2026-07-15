@@ -1,25 +1,35 @@
-﻿{
-  "phase": 24,
-  "generated_at": "2026-07-15T00:00:00.000Z",
+{
+  "phase": "37",
+  "generated_at": "2026-07-15T02:45:00.000Z",
   "diagnostic_only": true,
-  "phase_goal": "Perform a local-only no-LLM diagnostic v3 backfill from approved JSON exports, creating a completed local v3 run for advisory audit.",
-  "backfill_performed": false,
-  "status": "blocked_before_write",
-  "blocker": "missing_local_source_fk_rows",
+  "phase_goal": "Run authenticated local visual verification of the Phase 36 Lease Review UI contract fixes and report results.",
+  "backfill_performed": true,
+  "status": "phase37_authenticated_ui_verification_completed",
+  "blocker": null,
   "recommendation": "no_gate",
   "approved_ids": {
+    "org_ids": [
+      "1307dd95-e7c5-4e08-833e-749444e8f4c8"
+    ],
     "uploaded_file_ids": [
       "fc8181e6-766d-49c7-b81b-b5d961160207"
     ],
     "lease_ids": [
       "7b21f353-579d-48e8-b3dd-8e8c49743fe2"
     ],
-    "run_ids": []
+    "run_ids": [
+      "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    ]
   },
   "local_target_proof": {
     "supabase_rest_url": "http://127.0.0.1:54321",
     "database_host_port": "127.0.0.1:54322",
     "loopback_only": true,
+    "docker_local_stack": {
+      "kong_container": "supabase_kong_cre-financial-suite-main",
+      "db_container": "supabase_db_cre-financial-suite-main",
+      "db_port_mapping": "0.0.0.0:54322->5432/tcp"
+    },
     "hosted_project_used": false,
     "remote_write_endpoint_used": false,
     "service_key_used": false,
@@ -64,11 +74,14 @@
     }
   ],
   "local_prerequisite_checks": {
-    "uploaded_files_row_exists_locally": false,
-    "leases_row_exists_locally": false,
-    "prior_document_intelligence_run_exists_locally": false,
-    "document_intelligence_runs_uploaded_file_fk_requires_local_uploaded_file": true,
-    "document_intelligence_runs_lease_fk_requires_local_lease_if_lease_id_is_set": true
+    "approved_org_row_exists_locally_before_phase26": false,
+    "approved_org_row_exists_locally_after_phase26": true,
+    "uploaded_files_row_exists_locally_after_phase26": true,
+    "leases_row_exists_locally_after_phase26": true,
+    "document_intelligence_run_exists_locally_after_phase26": true,
+    "package_graph_tables_available_locally": false,
+    "package_graph_tables_available_locally_before_phase28": false,
+    "package_graph_tables_available_locally_after_phase28": true
   },
   "source_artifacts_available": {
     "uploaded_files_docling_raw": true,
@@ -82,27 +95,66 @@
     "pipeline_log_metadata": true
   },
   "local_run_summary": {
-    "run_id": null,
-    "status": "not_created",
+    "run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+    "idempotency_key": "phase26:1307dd95-e7c5-4e08-833e-749444e8f4c8:fc8181e6-766d-49c7-b81b-b5d961160207:7b21f353-579d-48e8-b3dd-8e8c49743fe2:b05904d2cd617b6db022e587ad0c6dac67862810122816fc51f3f7d6ea07022e:document_intelligence_v3.phase26_local_diagnostic:phase26_no_llm_local_v1",
+    "status": "completed",
     "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
     "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
-    "profile_key": null,
+    "profile_key": "assignment",
     "claims_count": 0,
     "evidence_count": 0,
-    "projections_count": 0,
-    "validation_drops_count": 0,
+    "projections_count": 82,
+    "validation_drops_count": 4,
     "package_graph_rows_created": 0,
-    "layout_summary_present": false,
-    "advisory_readiness_available": false,
+    "layout_summary_present": true,
+    "advisory_readiness_available": true,
     "limitations": [
-      "local source FK rows are missing",
-      "Phase 24 forbids writing uploaded_files or leases",
-      "no local v3 run was created"
+      "No fact ledger metadata was present in the approved exports, so no claims or evidence rows were fabricated.",
+      "Field projections were derived only from stored ui_review_payload/normalized_output data.",
+      "Validation drops were derived only from existing validation/debug errors.",
+      "Package graph rows were skipped because the package graph tables are not present in this local database.",
+      "The run is local diagnostic QA only and remains No Gate."
     ]
   },
-  "local_tables_written": [],
-  "phase17_audit_can_now_run": false,
-  "completed_v3_run_now_available_locally": false,
+  "local_tables_written": [
+    {
+      "table": "organizations",
+      "rows": 1,
+      "scope": "approved org fixture only"
+    },
+    {
+      "table": "uploaded_files",
+      "rows": 1,
+      "scope": "approved uploaded_file_id only"
+    },
+    {
+      "table": "leases",
+      "rows": 1,
+      "scope": "approved lease_id only"
+    },
+    {
+      "table": "pipeline_logs",
+      "rows": 21,
+      "scope": "approved file_id only"
+    },
+    {
+      "table": "document_intelligence_runs",
+      "rows": 1,
+      "scope": "phase26 deterministic diagnostic run"
+    },
+    {
+      "table": "document_canonical_field_projections",
+      "rows": 82,
+      "scope": "derived from approved ui_review_payload fields"
+    },
+    {
+      "table": "document_validation_drops",
+      "rows": 4,
+      "scope": "derived from approved validation/debug errors"
+    }
+  ],
+  "phase17_audit_can_now_run": true,
+  "completed_v3_run_now_available_locally": true,
   "external_calls_made": {
     "azure": false,
     "vertex_or_gemini": false,
@@ -127,5 +179,1377 @@
     "changed_business_extraction_provider": false,
     "replaced_ui_review_payload_or_normalized_output": false
   },
-  "recommended_phase_25": "Explicitly choose either local staging of approved uploaded_files/leases export rows into a verified local database, then rerun v3 diagnostic backfill, or a FK-free scratch diagnostic report that does not write v3 tables."
+  "source_fixture_staging_performed": true,
+  "phase25_audit_can_now_run": true,
+  "cleanup_reset_instructions": {
+    "rows_inserted_or_upserted": [
+      "organizations: 1 approved fixture row",
+      "uploaded_files: 1 approved source row",
+      "leases: 1 approved source row",
+      "pipeline_logs: 21 approved source rows with phase26_local_fixture metadata marker",
+      "document_intelligence_runs: 1 deterministic local diagnostic run",
+      "document_canonical_field_projections: 82 derived projection rows",
+      "document_validation_drops: 4 derived diagnostic drop rows"
+    ],
+    "cleanup_required": false,
+    "cleanup_sql": [
+      "BEGIN;",
+      "DELETE FROM public.document_canonical_field_projections WHERE run_id = '6d175b40-8f60-429f-8a29-a047e2a2e333';",
+      "DELETE FROM public.document_validation_drops WHERE run_id = '6d175b40-8f60-429f-8a29-a047e2a2e333';",
+      "DELETE FROM public.document_claims WHERE run_id = '6d175b40-8f60-429f-8a29-a047e2a2e333';",
+      "DELETE FROM public.document_intelligence_runs WHERE id = '6d175b40-8f60-429f-8a29-a047e2a2e333' AND org_id = '1307dd95-e7c5-4e08-833e-749444e8f4c8' AND idempotency_key = 'phase26:1307dd95-e7c5-4e08-833e-749444e8f4c8:fc8181e6-766d-49c7-b81b-b5d961160207:7b21f353-579d-48e8-b3dd-8e8c49743fe2:b05904d2cd617b6db022e587ad0c6dac67862810122816fc51f3f7d6ea07022e:document_intelligence_v3.phase26_local_diagnostic:phase26_no_llm_local_v1';",
+      "DELETE FROM public.pipeline_logs WHERE file_id = 'fc8181e6-766d-49c7-b81b-b5d961160207' AND org_id = '1307dd95-e7c5-4e08-833e-749444e8f4c8' AND metadata->>'phase26_local_fixture' = 'true';",
+      "DELETE FROM public.leases WHERE id = '7b21f353-579d-48e8-b3dd-8e8c49743fe2' AND org_id = '1307dd95-e7c5-4e08-833e-749444e8f4c8' AND source_file_id = 'fc8181e6-766d-49c7-b81b-b5d961160207';",
+      "DELETE FROM public.uploaded_files WHERE id = 'fc8181e6-766d-49c7-b81b-b5d961160207' AND org_id = '1307dd95-e7c5-4e08-833e-749444e8f4c8';",
+      "DELETE FROM public.organizations WHERE id = '1307dd95-e7c5-4e08-833e-749444e8f4c8' AND name = 'Phase 26 Local QA Organization';",
+      "COMMIT;"
+    ],
+    "note": "Cleanup is optional. If used, run only against the verified local database and only for this approved diagnostic fixture."
+  },
+  "local_fixture_staging": {
+    "organization_fixture_staged": true,
+    "organization_fixture_result": "inserted",
+    "organization_columns_written": [
+      "id",
+      "name",
+      "status",
+      "enabled_modules",
+      "created_at",
+      "updated_at"
+    ],
+    "uploaded_files_staged": true,
+    "uploaded_files_result": "inserted",
+    "leases_staged": true,
+    "leases_result": "inserted",
+    "pipeline_logs_staged": true,
+    "pipeline_logs_result": "inserted",
+    "pipeline_logs_rows": 21,
+    "source_artifact_fingerprint": "b05904d2cd617b6db022e587ad0c6dac67862810122816fc51f3f7d6ea07022e"
+  },
+  "local_v3_diagnostic_backfill_performed": true,
+  "phase26_advisory_audit_can_now_run": true,
+  "phase27_read_only_audit_performed": true,
+  "phase27_advisory_audit": {
+    "audit_performed": true,
+    "read_only": true,
+    "local_run_audited": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+    "rows_read": {
+      "document_intelligence_runs": 1,
+      "uploaded_files": 1,
+      "leases": 1,
+      "document_canonical_field_projections": 82,
+      "document_validation_drops": 4,
+      "document_claims": 0,
+      "document_claim_evidence": 0,
+      "package_graph_rows": 0
+    },
+    "current_review_snapshot": {
+      "status": "review_required",
+      "processing_status": "review_required",
+      "current_review_status": "blocks_approval",
+      "field_counts": {
+        "total": 82,
+        "missing": 64,
+        "needs_review": 2,
+        "auto_populated": 17
+      },
+      "full_lease_false_blocker_fields": [
+        "annual_rent",
+        "base_year",
+        "cam_amount",
+        "expense_stop",
+        "lease_type",
+        "monthly_rent",
+        "rent_per_sf"
+      ]
+    },
+    "v3_advisory_snapshot": {
+      "profile_key": "assignment",
+      "stored_readiness_advisory_status": "no_gate",
+      "derived_audit_status": "advisory_needs_review",
+      "core_ready": false,
+      "review_required": true,
+      "missing_required": [
+        "landlord_name",
+        "start_date",
+        "end_date"
+      ],
+      "projections": 82,
+      "populated_projections": 18,
+      "projections_with_source_text": 18,
+      "projection_status_counts": {
+        "missing": 64,
+        "needs_review": 18
+      }
+    },
+    "agreement": {
+      "level": "partial_agreement_with_v3_more_profile_aware",
+      "summary": "Both paths require human review, but the current review path still carries full-base-lease-style blockers for an assignment profile while v3 keeps the run advisory and profile-aware."
+    },
+    "discrepancy_count": 4,
+    "discrepancies": [
+      {
+        "type": "assignment_false_full_lease_blocker",
+        "severity": "medium",
+        "finding": "Current review data still exposes base-lease economics and CAM fields as missing blockers for an assignment document.",
+        "fields": [
+          "annual_rent",
+          "base_year",
+          "cam_amount",
+          "expense_stop",
+          "lease_type",
+          "monthly_rent",
+          "rent_per_sf"
+        ]
+      },
+      {
+        "type": "evidence_requirement_mismatch",
+        "severity": "medium",
+        "finding": "The diagnostic run has 82 canonical projections but zero durable claim and evidence rows because the approved exports did not include fact-ledger metadata."
+      },
+      {
+        "type": "related_document_policy_gap",
+        "severity": "medium",
+        "finding": "Original lease/current-truth gaps remain advisory because local package graph tables are unavailable; they are not hard approval gates."
+      },
+      {
+        "type": "validation_drop_review_needed",
+        "severity": "low",
+        "finding": "Validation drops flag missing start_date and end_date twice each; no invalid markup, signature-date mismatch, unsupported inference, or missing-source-evidence drop was present."
+      }
+    ],
+    "validation_drop_summary": {
+      "total": 4,
+      "by_field": {
+        "start_date": 2,
+        "end_date": 2
+      },
+      "by_action": {
+        "flagged": 4
+      },
+      "reasons": [
+        "Required field \"end_date\" is missing",
+        "Required field \"end_date\" is missing",
+        "Required field \"start_date\" is missing",
+        "Required field \"start_date\" is missing"
+      ],
+      "invalid_markup_drops": 0,
+      "missing_source_evidence_drops": 0,
+      "signature_date_mismatch_drops": 0,
+      "unsupported_inferred_value_drops": 0
+    },
+    "assignment_document_findings": {
+      "assignment_false_full_lease_blockers_remain_in_current_path": true,
+      "v3_profile_avoids_hard_full_lease_gate": true,
+      "needs_business_review": true
+    },
+    "evidence_mismatch_findings": {
+      "projections_without_durable_claims": 82,
+      "durable_claims": 0,
+      "durable_evidence_rows": 0,
+      "evidence_mismatch_remains": true,
+      "reason": "No durable fact-ledger metadata was present in approved exports and no claims/evidence were fabricated."
+    },
+    "related_document_findings": {
+      "package_graph_tables_available_locally": false,
+      "related_document_gap_correctly_advisory": true,
+      "missing_original_lease_current_truth_gap": "advisory_limitation",
+      "hard_gate_applied": false
+    },
+    "temporal_supersession_findings": {
+      "supersession_tables_available_locally": false,
+      "temporal_current_truth_diagnostics_available": false,
+      "finding": "Temporal/current-truth graph audit cannot be completed from this local fixture."
+    },
+    "risk_summary": {
+      "false_positive_risks": [
+        "Assignment documents may still be over-blocked by full-base-lease economic/CAM requirements in the current review path.",
+        "Missing original lease/current-truth context may appear as missing field blockers instead of related-document advisory context."
+      ],
+      "false_negative_risks": [
+        "A future current review path could appear complete without durable claim/evidence support unless v3 diagnostics remain visible.",
+        "Package graph and supersession limitations could hide current-truth conflicts until those tables and exports are available."
+      ],
+      "top_risks": [
+        "Current review remains more permissive about durable evidence than the v3 diagnostic ideal.",
+        "Current review remains less profile-aware for assignment documents than the v3 advisory model.",
+        "Related document and temporal gaps are diagnostic-only because package graph data is unavailable locally."
+      ]
+    },
+    "business_review_questions": [
+      "Is v3 stricter for the right reasons?",
+      "Is current review too permissive anywhere?",
+      "Are assignment documents no longer falsely blocked as full leases?",
+      "Are missing original leases treated as related-document/current-truth gaps?",
+      "Are evidence issues useful and actionable?",
+      "Are high-importance missing fields correctly surfaced?"
+    ],
+    "phase17_audit_result": {
+      "documents_successfully_audited": 1,
+      "documents_skipped": 0,
+      "aggregate_agreement_counts": {
+        "partial_agreement_with_v3_more_profile_aware": 1
+      },
+      "aggregate_discrepancy_counts": {
+        "assignment_false_full_lease_blocker": 1,
+        "evidence_requirement_mismatch": 1,
+        "related_document_policy_gap": 1,
+        "validation_drop_review_needed": 1
+      },
+      "recommendation": "no_gate"
+    }
+  },
+  "phase28_schema_alignment": {
+    "performed": true,
+    "local_only": true,
+    "migration_applied": "supabase/migrations/20260823000000_document_intelligence_v3_package_graph.sql",
+    "migration_already_existing_in_repo": true,
+    "new_migration_created": false,
+    "remote_migration_applied": false,
+    "tables_aligned": {
+      "document_packages": true,
+      "document_package_documents": true,
+      "document_relationships": true,
+      "document_related_document_requirements": true
+    },
+    "temporal_supersession_extra_tables_required": false,
+    "notes": [
+      "Temporal/supersession diagnostics are computed from readiness/package graph data and do not require a separate local supersession table in the current repo migration set.",
+      "The historical document_supersession_edges table check remains false because no such migration exists in the current package graph migration."
+    ]
+  },
+  "phase28_package_graph": {
+    "performed": true,
+    "approved_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+    "approved_uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+    "approved_lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+    "package_id": "b1f0045e-839c-4371-b455-c17043517893",
+    "package_key": "lease:7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+    "document_id": "898acf6c-4bc0-4729-ba26-41f05508914f",
+    "requirement_id": "8214b920-4931-46c9-ade8-1afa698712db",
+    "rows_created_or_updated": {
+      "document_packages": 1,
+      "document_package_documents": 1,
+      "document_related_document_requirements": 1,
+      "document_relationships": 0
+    },
+    "row_counts_after_rerun": {
+      "document_packages": 1,
+      "document_package_documents": 1,
+      "document_related_document_requirements": 1,
+      "document_relationships": 0,
+      "candidate_relationships": 0
+    },
+    "related_document_requirement": {
+      "required_document_type": "original_lease",
+      "status": "missing",
+      "importance_level": "high",
+      "reason": "Original lease required for full assignment, CAM, expense recovery, and budget diagnostics.",
+      "required_for": [
+        "assignment_review",
+        "cam",
+        "expense_recovery",
+        "budget_diagnostics",
+        "current_truth"
+      ],
+      "candidate_document_ids": [],
+      "evidence_claim_ids": []
+    },
+    "no_fabricated_related_document_presence": true,
+    "no_candidate_relationships_without_evidence": true,
+    "local_tables_written": [
+      "document_packages",
+      "document_package_documents",
+      "document_related_document_requirements"
+    ]
+  },
+  "phase28_rerun_diagnostics": {
+    "advisory_audit_result": {
+      "documents_successfully_audited": 1,
+      "documents_skipped": 0,
+      "agreement_level": "partial_agreement_with_v3_more_profile_aware_and_related_document_gap_visible",
+      "discrepancy_count": 4,
+      "recommendation": "no_gate"
+    },
+    "assignment_false_full_lease_blocker": {
+      "current_path_still_has_false_full_lease_blockers": true,
+      "v3_still_avoids_hard_full_lease_gate": true,
+      "blocker_fields": [
+        "annual_rent",
+        "base_year",
+        "cam_amount",
+        "expense_stop",
+        "lease_type",
+        "monthly_rent",
+        "rent_per_sf"
+      ]
+    },
+    "related_document_gap": {
+      "original_lease_requirement_present": true,
+      "status": "missing",
+      "candidate_found": false,
+      "linked": false,
+      "treated_as_advisory_current_truth_gap": true,
+      "hard_gate_applied": false
+    },
+    "temporal_supersession": {
+      "timeline_available": false,
+      "temporal_status": "blocked_missing_related_document",
+      "blocked_by_missing_original_lease": true,
+      "assignment_current_truth_limitations": [
+        "The assignment document cannot fully establish current lease economics/CAM/budget truth without the original lease.",
+        "No document_date or effective_date is available in the local package document row.",
+        "No candidate original lease or relationship evidence is available locally."
+      ],
+      "diagnostic_only": true,
+      "hard_gate_applied": false
+    },
+    "evidence_mismatch": {
+      "claims_still_zero": true,
+      "evidence_still_zero": true,
+      "projections": 82,
+      "phase28_solves_claims_or_evidence": false,
+      "note": "Phase 28 aligns package graph diagnostics only; it does not create durable claims or evidence."
+    },
+    "related_document_coverage": {
+      "related_documents_needed": [
+        "original_lease"
+      ],
+      "related_documents_present": [],
+      "related_documents_missing": [
+        "original_lease"
+      ],
+      "related_documents_candidate_found": []
+    },
+    "approval_advisory": {
+      "advisory_only": true,
+      "no_approval_rpc_called": true,
+      "approval_state_mutated": false,
+      "no_gate": true
+    }
+  },
+  "phase28_constraints_honored": {
+    "deployed": false,
+    "remote_reads": false,
+    "wrote_production_data": false,
+    "touched_secrets_or_service_keys": false,
+    "used_supabase_access_token": false,
+    "called_azure": false,
+    "called_vertex_or_gemini": false,
+    "reran_parse": false,
+    "reran_extraction": false,
+    "changed_approval_behavior": false,
+    "changed_lease_review_business_rows": false,
+    "enabled_vertex_fact_ledger_globally": false,
+    "changed_business_extraction_provider": false,
+    "made_v3_advisory_hard_gate": false
+  },
+  "phase29_legacy_evidence_reconstruction": {
+    "performed": true,
+    "local_only": true,
+    "diagnostic_reconstruction_version": "phase29_legacy_source_v1",
+    "external_calls_made": {
+      "azure": false,
+      "vertex_or_gemini": false,
+      "parse": false,
+      "extraction": false
+    },
+    "approved_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+    "approved_uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+    "approved_lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+    "before_counts": {
+      "projections": 82,
+      "source_backed_projection_candidates": 17,
+      "claims": 0,
+      "evidence": 0,
+      "validation_drops": 4
+    },
+    "after_counts": {
+      "projections": 82,
+      "claims": 13,
+      "evidence": 13,
+      "validation_drops": 8,
+      "phase29_claims": 13,
+      "phase29_evidence": 13
+    },
+    "claims_created": 13,
+    "evidence_rows_created": 13,
+    "validation_drops_added": 4,
+    "claim_type": "legacy_field_projection",
+    "claim_shape": {
+      "subject": {
+        "type": "document",
+        "role": "unknown"
+      },
+      "predicate": "has_field_value",
+      "object": "{ field_key, value, normalized_value }",
+      "extraction_mode": "explicit_or_normalized_from_projection",
+      "evidence_sufficiency": "partial",
+      "support_type": "direct_quote"
+    },
+    "fields_reconstructed": [
+      "all_other_terms_remain_same",
+      "amended_base_rent_for_additional_year",
+      "assignee_name",
+      "assignee_notice_address",
+      "assignment_consideration",
+      "assignment_effective_date",
+      "assignment_provisions",
+      "assumption_scope",
+      "landlord_consent",
+      "property_address",
+      "security_deposit",
+      "square_footage",
+      "tenant_signatory_name"
+    ],
+    "fields_skipped_or_dropped": [
+      {
+        "field_key": "landlord_signature_date",
+        "reason": "signature_date_sourced_from_original_lease_date"
+      },
+      {
+        "field_key": "lease_term_months",
+        "reason": "source_text_does_not_support_numeric_term_months"
+      },
+      {
+        "field_key": "status",
+        "reason": "source_text_does_not_support_status_value"
+      },
+      {
+        "field_key": "tenant_signature_date",
+        "reason": "signature_date_sourced_from_original_lease_date"
+      }
+    ],
+    "populated_fields_still_source_less": [
+      "tenant_name"
+    ],
+    "important_source_less_fields": [
+      "tenant_name"
+    ],
+    "idempotency": {
+      "deterministic_claim_ids": true,
+      "deterministic_evidence_ids": true,
+      "key_inputs": [
+        "run_id",
+        "field_key",
+        "value_hash",
+        "source_text_hash",
+        "diagnostic_reconstruction_version"
+      ],
+      "retry_behavior": "Replace only Phase 29 legacy_field_projection claims/evidence for the approved run."
+    },
+    "no_fabricated_claims": true,
+    "no_legal_obligations_or_business_rules_inferred": true,
+    "no_cam_or_expense_rules_created": true,
+    "no_clause_claims_created": true,
+    "local_tables_written": [
+      "document_claims",
+      "document_claim_evidence",
+      "document_validation_drops",
+      "document_intelligence_runs"
+    ]
+  },
+  "phase29_rerun_diagnostics": {
+    "advisory_audit_result": {
+      "documents_successfully_audited": 1,
+      "documents_skipped": 0,
+      "agreement_level": "partial_agreement_with_v3_more_profile_aware_and_evidence_mismatch_reduced",
+      "discrepancy_count": 4,
+      "recommendation": "no_gate"
+    },
+    "assignment_false_full_lease_blocker": {
+      "current_path_still_has_false_full_lease_blockers": true,
+      "v3_still_avoids_hard_full_lease_gate": true,
+      "blocker_fields": [
+        "annual_rent",
+        "base_year",
+        "cam_amount",
+        "expense_stop",
+        "lease_type",
+        "monthly_rent",
+        "rent_per_sf"
+      ]
+    },
+    "evidence_mismatch": {
+      "before": {
+        "projections": 82,
+        "claims": 0,
+        "evidence": 0
+      },
+      "after": {
+        "projections": 82,
+        "claims": 13,
+        "evidence": 13
+      },
+      "reduced": true,
+      "resolved": false,
+      "remaining_gap": "69 projections still do not have reconstructed durable claims/evidence; one populated field, tenant_name, remains source-less."
+    },
+    "profile": {
+      "profile_key": "assignment",
+      "should_remain_assignment": true,
+      "assignment_assumption_amendment_signal_present": true,
+      "profile_change_performed": false,
+      "note": "The title/source text indicates assignment, assumption, and amendment language, but Phase 29 did not change the profile because it is a diagnostic evidence reconstruction phase only."
+    },
+    "related_document": {
+      "original_lease_requirement_status": "missing",
+      "advisory_current_truth_gap": true,
+      "hard_gate_applied": false
+    },
+    "temporal_supersession": {
+      "temporal_status": "blocked_missing_related_document",
+      "timeline_available": false,
+      "blocked_by_missing_original_lease": true,
+      "diagnostic_only": true
+    },
+    "validation_drops": {
+      "before_count": 4,
+      "after_count": 8,
+      "added_count": 4,
+      "reasons_after": {
+        "Required field \"end_date\" is missing": 2,
+        "Required field \"start_date\" is missing": 2,
+        "signature_date_sourced_from_original_lease_date": 2,
+        "source_text_does_not_support_numeric_term_months": 1,
+        "source_text_does_not_support_status_value": 1
+      },
+      "added": [
+        {
+          "field_key": "landlord_signature_date",
+          "reason": "signature_date_sourced_from_original_lease_date"
+        },
+        {
+          "field_key": "lease_term_months",
+          "reason": "source_text_does_not_support_numeric_term_months"
+        },
+        {
+          "field_key": "status",
+          "reason": "source_text_does_not_support_status_value"
+        },
+        {
+          "field_key": "tenant_signature_date",
+          "reason": "signature_date_sourced_from_original_lease_date"
+        }
+      ]
+    }
+  },
+  "phase29_constraints_honored": {
+    "deployed": false,
+    "remote_reads": false,
+    "wrote_production_data": false,
+    "touched_secrets_or_service_keys": false,
+    "used_supabase_access_token": false,
+    "called_azure": false,
+    "called_vertex_or_gemini": false,
+    "reran_parse": false,
+    "reran_extraction": false,
+    "changed_approval_behavior": false,
+    "changed_lease_review_business_rows": false,
+    "enabled_vertex_fact_ledger_globally": false,
+    "changed_business_extraction_provider": false,
+    "made_v3_advisory_hard_gate": false
+  },
+  "phase30_business_review": {
+    "report_created": true,
+    "report_path": "docs/document-intelligence-v3-phase30-business-review.md",
+    "claims_reviewed": 13,
+    "evidence_rows_reviewed": 13,
+    "validation_drops_reviewed": 5,
+    "source_less_fields_reviewed": [
+      "tenant_name"
+    ],
+    "profile_key": "assignment",
+    "key_business_findings": [
+      "Current review path still applies false full-lease blockers to an assignment document.",
+      "v3 profile-aware path avoids a hard full-lease gate.",
+      "Original lease is missing and should remain an advisory/current-truth related-document gap.",
+      "Reconstructed legacy evidence is useful but incomplete and not sufficient for approval gating.",
+      "tenant_name remains source-less and should not be promoted to a claim without usable evidence."
+    ],
+    "option_comparison": {
+      "continue_reconstructed_legacy_evidence": {
+        "pros": [
+          "no LLM/API calls",
+          "no extraction rerun",
+          "safe local QA"
+        ],
+        "cons": [
+          "incomplete durable claims/evidence",
+          "cannot prove full v3 fact-ledger behavior",
+          "still weak for approval gating"
+        ]
+      },
+      "controlled_one_document_vertex_fact_ledger_test": {
+        "pros": [
+          "real claim/evidence ledger",
+          "tests intended architecture",
+          "better approval advisory quality"
+        ],
+        "cons": [
+          "requires explicit provider/model approval",
+          "may involve Vertex/Gemini cost",
+          "must remain non-global and non-production"
+        ]
+      }
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_31": "After business review, explicitly approve or reject a one-document non-global vertex_fact_ledger test in local/staging. If approved, define provider flags, cost boundaries, and rollback/reporting rules before any provider call."
+  },
+  "phase30_constraints_honored": {
+    "deployed": false,
+    "remote_reads": false,
+    "wrote_production_data": false,
+    "touched_secrets_or_service_keys": false,
+    "used_supabase_access_token": false,
+    "called_azure": false,
+    "called_vertex_or_gemini": false,
+    "reran_parse": false,
+    "reran_extraction": false,
+    "changed_approval_behavior": false,
+    "changed_lease_review_business_rows": false,
+    "enabled_vertex_fact_ledger_globally": false,
+    "changed_business_extraction_provider": false,
+    "made_v3_advisory_hard_gate": false
+  },
+  "recommended_phase_31": "After business review, explicitly approve or reject a one-document non-global vertex_fact_ledger test in local/staging. If approved, define provider flags, cost boundaries, and rollback/reporting rules before any provider call.",
+  "phase31a_preflight": {
+    "preflight_completed": true,
+    "phase_type": "preflight_planning_only",
+    "approved_ids": {
+      "org_id": "1307dd95-e7c5-4e08-833e-749444e8f4c8",
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "current_local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "source_data_availability": {
+      "uploaded_file_exists": true,
+      "lease_exists": true,
+      "run_exists": true,
+      "docling_raw_present": true,
+      "docling_raw_has_pages": true,
+      "docling_raw_has_markdown": true,
+      "canonical_layout_buildable": true,
+      "normalized_output_present": true,
+      "ui_review_payload_present": true,
+      "lease_linkage_present": true,
+      "canonical_field_projections_count": 82,
+      "validation_drops_count": 8,
+      "reconstructed_claims_count": 13,
+      "reconstructed_evidence_count": 13,
+      "package_documents_count": 1,
+      "related_document_requirements_count": 1,
+      "sufficient_for_one_document_vertex_fact_ledger_test": true
+    },
+    "execution_path": {
+      "entrypoint": "supabase/functions/normalize-pdf-output/index.ts",
+      "provider_selection": "resolveBusinessExtractionProvider(internalDebugOverride) or BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger selects runVertexFactLedgerPipeline instead of runExtractionPipeline.",
+      "pipeline_function": "runVertexFactLedgerPipeline(input, options) from supabase/functions/_shared/extraction/vertex-fact-ledger/orchestrator.ts",
+      "input_payload_expected": {
+        "docling": "uploaded_files.docling_raw, preferably Azure/canonical-layout shaped with pages/text_blocks/full_text",
+        "moduleType": "lease/leases resolved to extraction module type lease",
+        "documentSubtype": "uploaded_files.document_subtype, currently assignment",
+        "fileName": "uploaded_files.file_name",
+        "fileBase64": "optional; not required for default text mode",
+        "fileMode": "optional and only enabled by VERTEX_FACT_LEDGER_FILE_MODE or explicit option"
+      },
+      "output_shape": "ExtractionPipelineResult: { rows, method, warnings, validationErrors, metadata } with metadata.extractionDebug.vertex_fact_ledger.",
+      "model_calls": [
+        "profile-classifier.ts calls callVertexAIJSON once over head/tail text, with regex fallback on failure.",
+        "fact-ledger-extractor.ts calls callVertexAIJSON for up to four text chunks by default.",
+        "file mode calls callVertexAIFileJSON only if explicitly enabled and fileBase64/fileMimeType are supplied."
+      ],
+      "raw_model_output_storage": "Not stored as raw full response by the current vertex_fact_ledger path; parsed facts and debug metadata are retained in normalized_output.metadata.extractionDebug.vertex_fact_ledger and side-written v3 tables.",
+      "fact_evidence_storage": "runDocumentIntelligenceV3SideWrite writes document_claims, document_claim_evidence, document_validation_drops, document_canonical_field_projections, coverage/readiness/package graph diagnostics.",
+      "side_write_mapper": "document-intelligence-v3/fact-mapper.ts maps vertex_fact_ledger field snapshots and dynamic_items into claims/evidence/projections. It returns zero claims if vertex_fact_ledger did not run."
+    },
+    "provider_model_preflight": {
+      "checked_without_printing_values": true,
+      "secret_files_or_service_keys_read": false,
+      "process_env_presence": {
+        "ENABLE_DOCUMENT_INTELLIGENCE_V3": false,
+        "BUSINESS_EXTRACTION_PROVIDER": false,
+        "VERTEX_FACT_LEDGER_FILE_MODE": false,
+        "VERTEX_PROJECT_ID": false,
+        "GOOGLE_PROJECT_ID": false,
+        "VERTEX_LOCATION": false,
+        "GOOGLE_LOCATION": false,
+        "GOOGLE_SERVICE_ACCOUNT_KEY": false,
+        "GOOGLE_CLIENT_EMAIL": false,
+        "GOOGLE_PRIVATE_KEY": false,
+        "GEMINI_API_KEY": false,
+        "GOOGLE_API_KEY": false
+      },
+      "expected_provider": "vertex_fact_ledger",
+      "expected_model": "gemini-2.5-flash by default, with fallback attempts in vertex-ai.ts",
+      "expected_api": "Vertex AI Gemini via service account by default; Gemini Developer API fallback exists only for code paths that explicitly call callGeminiWithAPIKey, not the default fact-ledger path.",
+      "provider_call_would_occur_in_phase31b": true,
+      "credentials_present_in_current_process_env": false,
+      "credentials_missing_summary": [
+        "Need VERTEX_PROJECT_ID or GOOGLE_PROJECT_ID.",
+        "Need GOOGLE_SERVICE_ACCOUNT_KEY, or GOOGLE_CLIENT_EMAIL plus GOOGLE_PRIVATE_KEY.",
+        "Need ENABLE_DOCUMENT_INTELLIGENCE_V3=true scoped to the one execution.",
+        "Need BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger scoped to the one execution."
+      ],
+      "staging_config_verified": false,
+      "staging_config_note": "Not checked because Phase 31A forbids remote reads and secret inspection."
+    },
+    "phase31b_guardrails": {
+      "approved_uploaded_file_id_only": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "approved_lease_id_only": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_or_staging_only": true,
+      "enable_document_intelligence_v3_scoped": true,
+      "business_extraction_provider_scoped": "vertex_fact_ledger",
+      "no_global_env_change": true,
+      "no_deploy": true,
+      "no_production_writes": true,
+      "no_approval_behavior_change": true,
+      "no_lease_review_business_row_change": true,
+      "no_v3_hard_gate": true
+    },
+    "cost_safety_boundary": {
+      "max_documents": 1,
+      "max_extraction_attempts": 1,
+      "controlled_retry_allowed_only_with_explicit_approval": true,
+      "no_batch": true,
+      "log_provider_model_used": true,
+      "log_prompt_bundle_or_pipeline_version_if_available": true,
+      "log_token_cost_metadata_if_available": true,
+      "stop_on_provider_auth_or_config_failure": true,
+      "stop_on_malformed_output_without_repeated_calls": true,
+      "default_text_mode_max_chunks": 4,
+      "file_mode_default": false
+    },
+    "phase31b_expected_local_writes": {
+      "document_intelligence_runs": "new idempotent run for the scoped vertex_fact_ledger execution; do not overwrite Phase 26/29 diagnostic run",
+      "document_claims": "delete-and-replace only rows tied to the new Phase 31B run idempotency key on retry",
+      "document_claim_evidence": "evidence rows tied to the new claims/run only",
+      "document_canonical_field_projections": "projections tied to the new run only",
+      "document_validation_drops": "validation drops tied to the new run only",
+      "package_graph_rows": "package graph rows tied to the new run/package if produced",
+      "qa_report_files": "append/update advisory report artifacts after execution",
+      "explicitly_not_mutated": [
+        "approval state",
+        "review status",
+        "hosted data",
+        "Lease Review business rows",
+        "Phase 26/29 diagnostic rows unless explicitly approved"
+      ]
+    },
+    "rollback_plan": {
+      "identify_by": "Phase 31B idempotency key containing approved org/upload/lease, provider vertex_fact_ledger, and the Phase 31B pipeline/job marker.",
+      "delete_order": [
+        "DELETE FROM document_claim_evidence WHERE claim_id IN (SELECT id FROM document_claims WHERE run_id = <phase31b_run_id>);",
+        "DELETE FROM document_validation_drops WHERE run_id = <phase31b_run_id>;",
+        "DELETE FROM document_canonical_field_projections WHERE run_id = <phase31b_run_id>;",
+        "DELETE FROM document_relationships WHERE package_id IN (<phase31b_package_ids>);",
+        "DELETE FROM document_related_document_requirements WHERE package_id IN (<phase31b_package_ids>);",
+        "DELETE FROM document_package_documents WHERE document_intelligence_run_id = <phase31b_run_id>;",
+        "DELETE FROM document_packages WHERE metadata->>'phase31b_marker' = 'true' AND primary_uploaded_file_id = approved uploaded_file_id;",
+        "DELETE FROM document_claims WHERE run_id = <phase31b_run_id>;",
+        "DELETE FROM document_intelligence_runs WHERE id = <phase31b_run_id> AND idempotency_key = <phase31b_idempotency_key>;"
+      ],
+      "protect_existing_rows": [
+        "Do not delete current local diagnostic run 6d175b40-8f60-429f-8a29-a047e2a2e333 unless explicitly approved.",
+        "Do not delete approved uploaded_files/leases source fixture rows unless explicitly approved.",
+        "Do not delete Phase 26/29 diagnostic claims/evidence unless explicitly approved."
+      ]
+    },
+    "decision": {
+      "phase31b_source_ready": true,
+      "phase31b_provider_config_ready_in_current_process_env": false,
+      "phase31b_safe_to_approve_now": false,
+      "blocker": "Provider credentials and scoped execution flags are not present in current process env and staging secrets were not checked by design.",
+      "safe_when": "Business explicitly approves one-document provider call and the execution environment has scoped v3/provider flags plus Vertex credentials configured without global/default changes."
+    },
+    "external_calls_made": {
+      "azure": false,
+      "vertex_or_gemini": false,
+      "remote_reads": false
+    },
+    "recommendation": "no_gate"
+  },
+  "recommended_phase_31b": "Do not proceed until the user explicitly approves one provider call for the approved upload/lease and confirms scoped local/staging Vertex credentials/flags are configured. Then run exactly one vertex_fact_ledger extraction attempt with ENABLE_DOCUMENT_INTELLIGENCE_V3=true and BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger scoped to that execution only.",
+  "phase31b_execution": {
+    "phase31b_attempted": true,
+    "phase_type": "gated_provider_execution",
+    "stopped_before_provider_call": true,
+    "provider_call_made": false,
+    "provider_attempts": 0,
+    "retry_occurred": false,
+    "new_run_id": null,
+    "idempotency_key": null,
+    "approved_ids": {
+      "org_id": "1307dd95-e7c5-4e08-833e-749444e8f4c8",
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "prior_local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "safe_target": {
+      "database_api_target": "local Supabase Docker stack: REST/API 127.0.0.1:54321, DB 127.0.0.1:54322",
+      "target_type": "local",
+      "production_target": false,
+      "production_write_endpoint_used": false,
+      "service_key_used": false,
+      "supabase_access_token_used": false,
+      "scoped_to_approved_uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "scoped_to_approved_lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2"
+    },
+    "scoped_provider_config": {
+      "required_flags_present": false,
+      "enable_document_intelligence_v3_present": false,
+      "business_extraction_provider_present": false,
+      "business_extraction_provider_value_verified_as_vertex_fact_ledger": false,
+      "vertex_or_gemini_credentials_present": false,
+      "model_provider_name_available": false,
+      "credentials_printed": false,
+      "missing": [
+        "ENABLE_DOCUMENT_INTELLIGENCE_V3=true",
+        "BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger",
+        "VERTEX_PROJECT_ID or GOOGLE_PROJECT_ID",
+        "GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_CLIENT_EMAIL plus GOOGLE_PRIVATE_KEY",
+        "Optional fallback GEMINI_API_KEY or GOOGLE_API_KEY was also absent"
+      ]
+    },
+    "source_data_confirmation": {
+      "uploaded_file_exists": true,
+      "lease_exists": true,
+      "prior_run_exists": true,
+      "docling_raw_present": true,
+      "docling_raw_has_pages": true,
+      "docling_raw_has_markdown": true,
+      "document_text_available": true,
+      "canonical_layout_buildable": true,
+      "normalized_output_present": true,
+      "ui_review_payload_present": true,
+      "lease_linkage_present": true,
+      "no_azure_needed": true,
+      "no_parse_needed": true,
+      "counts": {
+        "projections": 82,
+        "validation_drops": 8,
+        "claims": 13,
+        "evidence": 13,
+        "package_documents": 1,
+        "related_requirements": 1
+      },
+      "related_document_requirement": {
+        "required_document_type": "original_lease",
+        "status": "missing",
+        "importance_level": "high"
+      }
+    },
+    "execution_result": {
+      "executed": false,
+      "stop_reason": "Required scoped provider flags and Vertex/Gemini credentials were missing in the current process environment.",
+      "provider_model_used": null,
+      "token_or_cost_metadata_available": false,
+      "malformed_output": false,
+      "provider_failure_details": "No provider call was made; failure was preflight configuration gating only."
+    },
+    "comparison_to_prior_run": {
+      "prior_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+      "new_run_created": false,
+      "prior_counts_remain": {
+        "projections": 82,
+        "claims": 13,
+        "evidence": 13,
+        "validation_drops": 8
+      },
+      "tenant_name_evidence_status": "unchanged_source_less_from_phase30_business_review",
+      "invalid_signature_dates_status": "unchanged_dropped_from_phase29",
+      "original_lease_status": "missing",
+      "related_document_gap_remains_advisory": true,
+      "current_review_false_full_lease_blockers_remain": true
+    },
+    "advisory_audit": {
+      "run_performed_against_new_run": false,
+      "reason": "No provider-backed run was created.",
+      "recommendation": "no_gate"
+    },
+    "rollback_instructions": {
+      "needed": false,
+      "reason": "No Phase 31B provider-backed v3 rows were created.",
+      "if_future_run_created": [
+        "Identify the future Phase 31B run by new run_id and idempotency_key.",
+        "Delete document_claim_evidence rows whose claim_id belongs to the Phase 31B run.",
+        "Delete document_validation_drops where run_id = <phase31b_run_id>.",
+        "Delete document_canonical_field_projections where run_id = <phase31b_run_id>.",
+        "Delete package graph rows tied to the Phase 31B run/package only.",
+        "Delete document_claims where run_id = <phase31b_run_id>.",
+        "Delete document_intelligence_runs where id = <phase31b_run_id> and idempotency_key = <phase31b_idempotency_key>.",
+        "Do not delete approved source fixture rows or prior diagnostic run 6d175b40-8f60-429f-8a29-a047e2a2e333 unless explicitly approved."
+      ]
+    },
+    "external_calls_made": {
+      "azure": false,
+      "vertex_or_gemini": false,
+      "remote_reads": false
+    },
+    "local_tables_written": [],
+    "qa_report_files_updated": true,
+    "recommendation": "no_gate",
+    "recommended_phase_32": "Configure scoped local/staging provider flags and credentials without global/default changes, then repeat Phase 31B with exactly one provider attempt; or provide proof of staging secret readiness for the same approved upload/lease."
+  },
+  "recommended_phase_32": "Configure scoped local/staging provider flags and credentials without global/default changes, then repeat Phase 31B with exactly one provider attempt; or provide proof of staging secret readiness for the same approved upload/lease.",
+  "phase32_execution": {
+    "phase32_attempted": true,
+    "phase_type": "gated_provider_execution",
+    "stopped_before_provider_call": true,
+    "provider_call_made": false,
+    "provider_attempts": 0,
+    "retry_occurred": false,
+    "new_run_id": null,
+    "idempotency_key": null,
+    "approved_ids": {
+      "org_id": "1307dd95-e7c5-4e08-833e-749444e8f4c8",
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "prior_local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "safe_target": {
+      "rest_api_port_54321_reachable": true,
+      "database_port_54322_reachable": true,
+      "database_api_target": "local Supabase Docker stack: REST/API 127.0.0.1:54321, DB 127.0.0.1:54322",
+      "docker_kong_container": "supabase_kong_cre-financial-suite-main maps 0.0.0.0:54321->8000/tcp",
+      "docker_db_container": "supabase_db_cre-financial-suite-main maps 0.0.0.0:54322->5432/tcp",
+      "target_type": "local",
+      "production_target": false,
+      "production_write_endpoint_used": false,
+      "service_key_used": false,
+      "supabase_access_token_used": false,
+      "scoped_to_approved_uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "scoped_to_approved_lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2"
+    },
+    "scoped_provider_config": {
+      "checked_without_printing_values": true,
+      "secret_files_or_service_keys_read": false,
+      "enable_document_intelligence_v3_true": false,
+      "business_extraction_provider_is_vertex_fact_ledger": false,
+      "vertex_project_present": false,
+      "vertex_location_present": false,
+      "vertex_service_account_present": false,
+      "vertex_split_credentials_present": false,
+      "gemini_fallback_present": false,
+      "required_provider_config_ready": false,
+      "missing": [
+        "ENABLE_DOCUMENT_INTELLIGENCE_V3=true",
+        "BUSINESS_EXTRACTION_PROVIDER=vertex_fact_ledger",
+        "VERTEX_PROJECT_ID or GOOGLE_PROJECT_ID",
+        "GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_CLIENT_EMAIL plus GOOGLE_PRIVATE_KEY"
+      ],
+      "optional_missing": [
+        "GEMINI_API_KEY or GOOGLE_API_KEY fallback"
+      ]
+    },
+    "source_data_confirmation": {
+      "uploaded_file_exists": true,
+      "lease_exists": true,
+      "prior_run_exists": true,
+      "docling_raw_present": true,
+      "docling_raw_has_pages": true,
+      "docling_raw_has_markdown": true,
+      "document_text_available": true,
+      "canonical_layout_buildable": true,
+      "normalized_output_present": true,
+      "ui_review_payload_present": true,
+      "lease_linkage_present": true,
+      "no_azure_needed": true,
+      "no_parse_needed": true,
+      "counts": {
+        "projections": 82,
+        "validation_drops": 8,
+        "claims": 13,
+        "evidence": 13,
+        "package_documents": 1,
+        "related_requirements": 1
+      },
+      "profile": {
+        "status": "completed",
+        "profile_key": "assignment",
+        "contract_version": "document_intelligence_v3.phase26_local_diagnostic"
+      },
+      "related_document_requirement": {
+        "required_document_type": "original_lease",
+        "status": "missing",
+        "importance_level": "high"
+      }
+    },
+    "execution_result": {
+      "executed": false,
+      "stop_reason": "Required scoped provider flags and Vertex credentials were missing in the current process environment.",
+      "provider_model_used": null,
+      "token_or_cost_metadata_available": false,
+      "malformed_output": false,
+      "provider_failure_details": "No provider call was made; failure was preflight configuration gating only."
+    },
+    "comparison_to_prior_run": {
+      "prior_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333",
+      "new_run_created": false,
+      "prior_counts_remain": {
+        "projections": 82,
+        "claims": 13,
+        "evidence": 13,
+        "validation_drops": 8
+      },
+      "tenant_name_evidence_status": "unchanged_source_less_from_phase30_business_review",
+      "invalid_signature_dates_status": "unchanged_dropped_from_phase29",
+      "original_lease_status": "missing",
+      "related_document_gap_remains_advisory": true,
+      "current_review_false_full_lease_blockers_remain": true
+    },
+    "advisory_audit": {
+      "run_performed_against_new_run": false,
+      "reason": "No provider-backed run was created.",
+      "recommendation": "no_gate"
+    },
+    "rollback_instructions": {
+      "needed": false,
+      "reason": "No Phase 32 provider-backed v3 rows were created.",
+      "if_future_run_created": [
+        "Identify the future run by new run_id and idempotency_key.",
+        "Delete document_claim_evidence rows whose claim_id belongs to the new provider-backed run.",
+        "Delete document_validation_drops where run_id = <provider_run_id>.",
+        "Delete document_canonical_field_projections where run_id = <provider_run_id>.",
+        "Delete package graph rows tied to the provider run/package only.",
+        "Delete document_claims where run_id = <provider_run_id>.",
+        "Delete document_intelligence_runs where id = <provider_run_id> and idempotency_key = <provider_idempotency_key>.",
+        "Do not delete approved source fixture rows or prior diagnostic run 6d175b40-8f60-429f-8a29-a047e2a2e333 unless explicitly approved."
+      ]
+    },
+    "external_calls_made": {
+      "azure": false,
+      "vertex_or_gemini": false,
+      "remote_reads": false,
+      "parse": false,
+      "extraction": false
+    },
+    "local_tables_written": [],
+    "qa_report_files_updated": true,
+    "recommendation": "no_gate",
+    "recommended_phase_33": "Fix current Lease Review readiness blockers so assignment documents do not inherit full base-lease blocker noise."
+  },
+  "phase33_current_review_profile_policy": {
+    "phase33_performed": true,
+    "phase_type": "current_review_profile_aware_blocker_fix",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "false_full_lease_blocker_fix": true,
+    "blocker_logic_changed": {
+      "previous_source": "LeaseReview.jsx and readiness summary consumed global REQUIRED_FIELD_KEYS for all documents.",
+      "new_source": "leaseReviewCurrentPolicy builds required blockers from the detected current-review document profile.",
+      "base_lease_behavior": "Existing REQUIRED_FIELD_KEYS remain hard blockers.",
+      "assignment_behavior": "Assignment-like profiles do not inherit base-lease economics/CAM fields as hard blockers.",
+      "unknown_behavior": "Unknown CRE documents do not default to base-lease blockers; they produce advisory review context."
+    },
+    "approved_assignment_expected_behavior": {
+      "profile": "assignment",
+      "policy": "assignment_document",
+      "apply_base_lease_blockers": false,
+      "base_lease_noise_still_required": [],
+      "missing_required_fields_after_policy": [
+        "assignor_name"
+      ],
+      "original_lease_gap": "advisory_current_truth_gap",
+      "budget_blockers": [],
+      "cam_blockers": []
+    },
+    "tests_added_or_updated": [
+      "src/lib/__tests__/leaseReviewCurrentPolicy.test.js"
+    ],
+    "files_changed": [
+      "src/lib/leaseReviewCurrentPolicy.js",
+      "src/lib/leaseReviewFieldNormalizer.js",
+      "src/pages/LeaseReview.jsx",
+      "src/lib/__tests__/leaseReviewCurrentPolicy.test.js",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "constraints_honored": {
+      "deployed": false,
+      "remote_reads": false,
+      "wrote_production_data": false,
+      "touched_secrets_or_service_keys": false,
+      "used_supabase_access_token": false,
+      "called_azure": false,
+      "called_vertex_or_gemini": false,
+      "reran_parse": false,
+      "reran_extraction": false,
+      "enabled_vertex_fact_ledger_globally": false,
+      "changed_business_extraction_provider": false,
+      "made_v3_advisory_a_hard_gate": false,
+      "changed_persisted_approval_state": false
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_34": "Manually verify the approved assignment Lease Review screen and have business/legal confirm the assignment-specific required-field policy before any approval-gating changes."
+  },
+  "recommended_phase_34": "Manually verify the approved assignment Lease Review screen and have business/legal confirm the assignment-specific required-field policy before any approval-gating changes.",
+  "phase34_manual_verification": {
+    "phase34_performed": true,
+    "manual_ui_verification_performed": false,
+    "manual_ui_blocker": "Isolated local browser redirected to Login for the approved Lease Review route; no authenticated local browser session was available.",
+    "local_app_started": true,
+    "local_route_opened": true,
+    "local_route_result": "redirected_to_login",
+    "local_environment_verified": {
+      "app_url": "http://127.0.0.1:5173/LeaseReview?id=7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "supabase_url_host": "127.0.0.1",
+      "supabase_url_port": 54321,
+      "local_kong_running": true,
+      "local_db_running": true,
+      "hosted_endpoint_used": false,
+      "remote_read_performed": false,
+      "provider_or_extraction_call_made": false,
+      "production_write_performed": false,
+      "secrets_or_service_keys_touched": false,
+      "supabase_access_token_used": false
+    },
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "local_policy_verification_performed": true,
+    "assignment_false_full_lease_blockers_removed_in_ui": "not_visually_confirmed_auth_blocked",
+    "assignment_false_full_lease_blockers_removed_in_local_policy": true,
+    "policy_result": {
+      "profile": "assignment",
+      "policy": "assignment_document",
+      "apply_base_lease_blockers": false,
+      "base_lease_noise_still_required": [],
+      "missing_required_fields": [
+        "assignor_name"
+      ],
+      "advisory_gaps": [
+        "original_lease_missing"
+      ],
+      "budget_blockers": [],
+      "cam_blockers": []
+    },
+    "evidence_issues": {
+      "claims_with_evidence": 13,
+      "source_backed_projections": 18,
+      "tenant_name": "source_less_needs_review",
+      "invalid_signature_dates": "validation_drops_not_accepted_facts",
+      "validation_drops_by_field": {
+        "end_date": 2,
+        "landlord_signature_date": 1,
+        "lease_term_months": 1,
+        "start_date": 2,
+        "status": 1,
+        "tenant_signature_date": 1
+      }
+    },
+    "business_legal_signoff_status": "not_obtained_visual_ui_auth_blocked",
+    "report_file": "docs/document-intelligence-v3-phase34-manual-verification.md",
+    "recommendation": "no_gate",
+    "recommended_phase_35": "Run authenticated local visual verification for the approved assignment Lease Review screen using a user-approved local test session; keep advisory-only until business/legal signoff."
+  },
+  "recommended_phase_35": "Run authenticated local visual verification for the approved assignment Lease Review screen using a user-approved local test session; keep advisory-only until business/legal signoff.",
+  "phase35_authenticated_ui_verification": {
+    "phase35_attempted": true,
+    "authenticated_local_session_established": true,
+    "authenticated_lease_review_screen_reached": true,
+    "local_test_user_created": true,
+    "local_mfa_completed": true,
+    "production_credentials_used": false,
+    "service_role_key_used": false,
+    "supabase_access_token_used": false,
+    "hosted_data_changed": false,
+    "production_write_performed": false,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "ui_result": {
+      "assignment_false_full_lease_blockers_removed_in_ui": true,
+      "authenticated_route": "http://127.0.0.1:5173/LeaseReview?id=7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "profile_visible": "assignment",
+      "assignment_policy_copy_visible": true,
+      "budget_blockers_visible": false,
+      "cam_blockers_visible": false,
+      "base_lease_economic_blockers_visible": false,
+      "original_lease_advisory_shown": true,
+      "tenant_name_source_less_issue_status": "visible_as_hard_blocker_despite_visible_source_text",
+      "action_controls_verified": "partial_icon_buttons_only",
+      "action_dropdown_verified": false,
+      "mark_needs_review_visible": false,
+      "mark_na_visible": false,
+      "view_source_visible": false,
+      "enrichment_banner_verified": true,
+      "unexpected_type_column_present": true
+    },
+    "remaining_hard_blockers": [
+      "Tenant Name - value present but no valid supporting source text",
+      "Assignor Name - missing value",
+      "Landlord Consent - needs review"
+    ],
+    "remaining_ui_issues": [
+      "Type column remains visible in tab table.",
+      "Row actions are icon buttons for Accept/Edit/Reject instead of the requested action dropdown.",
+      "Mark Needs Review, Mark N/A, and View Source were not visually confirmed in the tab table.",
+      "Tenant Name source-evidence validation conflicts with visible source text and needs follow-up.",
+      "Business/legal should confirm whether Tenant Name and Landlord Consent should be hard blockers for assignment documents."
+    ],
+    "report_file": "docs/document-intelligence-v3-phase35-authenticated-ui-verification.md",
+    "recommendation": "no_gate",
+    "recommended_phase_36": "Fix remaining Lease Review UI contract gaps without changing approval behavior: Type column, action dropdown/options, Tenant Name evidence validation, and business review of assignment hard blockers."
+  },
+  "recommended_phase_36": "Fix remaining Lease Review UI contract gaps without changing approval behavior: Type column, action dropdown/options, Tenant Name evidence validation, and business review of assignment hard blockers.",
+  "phase36_ui_contract_fix": {
+    "phase36_performed": true,
+    "phase_type": "current_review_ui_contract_fix",
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "fixes": {
+      "visible_type_column_removed": true,
+      "row_action_dropdown_added": true,
+      "required_dropdown_options": [
+        "Accept",
+        "Edit",
+        "Mark Needs Review",
+        "Mark N/A",
+        "Reject",
+        "View Source"
+      ],
+      "tenant_name_hard_assignment_blocker_removed": true,
+      "landlord_consent_hard_assignment_blocker_removed": true,
+      "assignor_assignment_essential_blocker_preserved": true,
+      "enrichment_banner_pending_running_only": true
+    },
+    "browser_verification": {
+      "local_server_started": true,
+      "route_checked": "http://127.0.0.1:5173/LeaseReview?id=7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "authenticated_visual_verification_completed": false,
+      "blocker": "Local headless Edge profile redirected to Login; no reusable authenticated local browser state was available.",
+      "production_credentials_used": false,
+      "service_role_key_used": false,
+      "supabase_access_token_used": false
+    },
+    "verification": {
+      "focused_tests": "passed: 3 files / 12 tests",
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed with existing Vite warnings",
+      "test": "passed: 55 files / 590 tests"
+    },
+    "files_changed": [
+      "src/components/lease-review/LeaseReviewTabTable.jsx",
+      "src/lib/leaseReviewCurrentPolicy.js",
+      "src/lib/leaseReviewUiState.js",
+      "src/pages/LeaseReview.jsx",
+      "src/lib/__tests__/leaseReviewCurrentPolicy.test.js",
+      "src/lib/__tests__/leaseReviewUiState.test.js",
+      "src/lib/__tests__/leaseReviewTabTableContract.test.js",
+      "docs/document-intelligence-v3-phase36-ui-contract-verification.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "constraints_honored": {
+      "deployed": false,
+      "remote_reads": false,
+      "wrote_production_data": false,
+      "touched_secrets_or_service_keys": false,
+      "used_supabase_access_token": false,
+      "called_azure": false,
+      "called_vertex_or_gemini": false,
+      "reran_parse": false,
+      "reran_extraction": false,
+      "enabled_vertex_fact_ledger_globally": false,
+      "changed_business_extraction_provider": false,
+      "made_v3_advisory_a_hard_gate": false,
+      "changed_persisted_approval_state": false
+    },
+    "recommendation": "no_gate",
+    "recommended_phase_37": "Run authenticated local visual verification again after providing or recreating an approved local-only auth session."
+  },
+  "recommended_phase_37": "Run authenticated local visual verification again after providing or recreating an approved local-only auth session.",
+  "phase37_authenticated_ui_verification": {
+    "phase37_attempted": true,
+    "authenticated_local_session_established": true,
+    "authenticated_lease_review_screen_reached": true,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "local_environment_verified": {
+      "app_url": "http://127.0.0.1:5173",
+      "frontend_supabase_url": "http://127.0.0.1:54321",
+      "local_db": "127.0.0.1:54322",
+      "hosted_endpoint_used": false,
+      "production_write_endpoint_used": false,
+      "service_role_key_used": false,
+      "supabase_access_token_used": false,
+      "called_azure": false,
+      "called_vertex_or_gemini": false,
+      "reran_parse": false,
+      "reran_extraction": false,
+      "deployed": false
+    },
+    "ui_result": {
+      "authenticated_route": "http://127.0.0.1:5173/LeaseReview?id=7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "type_column_removed_in_ui": true,
+      "table_headers": [
+        "Field / Term",
+        "Value",
+        "Status",
+        "Confidence",
+        "Page",
+        "Source Text",
+        "Action"
+      ],
+      "action_dropdown_verified": true,
+      "action_dropdown_options": [
+        "Accept",
+        "Edit",
+        "Mark Needs Review",
+        "Mark N/A",
+        "Reject",
+        "View Source"
+      ],
+      "assignment_blockers_reduced_in_ui": true,
+      "remaining_hard_blockers": [
+        "Assignor Name"
+      ],
+      "tenant_name_hard_blocker_visible": false,
+      "landlord_consent_hard_blocker_visible": false,
+      "landlord_consent_for_transfer_hard_blocker_visible": false,
+      "base_lease_economic_blockers_visible": false,
+      "cam_blockers_visible": false,
+      "budget_blockers_visible": false,
+      "original_lease_advisory_verified": true,
+      "source_page_columns_visible": true,
+      "enrichment_banner_exactness_verified": "visible for current pending/running fixture; hidden states covered by focused UI tests",
+      "console_error_count": 0
+    },
+    "regression_found_and_fixed": {
+      "found": true,
+      "issue": "normalizeApprovalBlockers still used the raw field contract path for advisory blockers, allowing assignment advisory fields to leak into the profile-required panel.",
+      "fix": "normalizeApprovalBlockers now uses currentReviewPolicy.requiredFieldKeys and policy advisory gaps; assignment Budget/CAM blockers remain suppressed when applyBaseLeaseBlockers is false.",
+      "tests_updated": [
+        "src/lib/__tests__/leaseReviewCurrentPolicy.test.js"
+      ]
+    },
+    "report_file": "docs/document-intelligence-v3-phase37-authenticated-ui-verification.md",
+    "recommendation": "no_gate",
+    "recommended_phase_38": "Run business/legal review of the verified assignment Lease Review behavior before any approval-gating change.",
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "focused_tests": "passed: 3 files / 12 tests",
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed with existing Vite warnings",
+      "test": "passed: 55 files / 590 tests",
+      "vitest_sandbox_note": "Initial non-elevated Vitest runs failed before test execution with Windows spawn EPERM; elevated local reruns passed."
+    }
+  },
+  "recommended_phase_38": "Run business/legal review of the verified assignment Lease Review behavior before any approval-gating change."
 }
