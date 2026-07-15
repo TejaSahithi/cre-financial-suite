@@ -1102,3 +1102,41 @@ Recommendation remains: **No Gate**.
 ## Phase 43 Recommendation
 
 Two independent tracks: (1) business/legal — collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical — root-cause the `landlord_consent` evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real `vertex_fact_ledger` provider run without explicit, separate user approval.
+
+## Phase 43 Signoff Decision Packet
+
+Phase 43 is decision/reporting only — no source code was changed. It packages Phase 42's final result (18 Pass / 2 Partial / 0 Fail across 20 requirements) into a signoff packet for business/legal/product/engineering decision owners, and defines two independent next tracks. No new technical requirements were created and the Phase 42 requirements matrix was not reopened or re-scored.
+
+Approved IDs:
+
+- uploaded_file_id: `fc8181e6-766d-49c7-b81b-b5d961160207`
+- lease_id: `7b21f353-579d-48e8-b3dd-8e8c49743fe2`
+- local diagnostic run_id: `6d175b40-8f60-429f-8a29-a047e2a2e333`
+
+### Signoff Packet Created
+
+Yes — `docs/document-intelligence-v3-phase43-signoff-decision-packet.md`.
+
+### Staging Review Readiness
+
+**Yes**, for the approved assignment document.
+
+### Approval Gating Readiness
+
+**No.** Extraction mode has zero effect on approval gating by design; the v3 provider-backed claim/evidence architecture has never completed a real provider run (Phase 31A/31B both stopped at the credential gate).
+
+### Business/Legal Decisions Open
+
+10-item checklist in the Phase 43 packet §6. 6 items have a clear recommendation (Assignor Name hard blocker, Tenant Name advisory, Transfer/consent advisory, Original Lease advisory, conservative Extraction Mode vocabulary acceptable, Extraction Mode not affecting approval readiness yet); 4 remain genuinely open pending actual owner decisions (Landlord Consent tightening, whether Unknown should force Needs Review, exports/audit-log inclusion timing, and full closure of the Clause Records audit).
+
+### Technical Tracks Recommended
+
+Two independent tracks, neither chosen over the other by this phase: **Track 1** (Lease Review hardening — root-cause `landlord_consent`, complete the Clause Records audit, test a second curated document type, build a small multi-document QA set) and **Track 2** (v3 provider-backed evidence — scoped local/staging Vertex/Gemini credentials, exactly one provider-backed `vertex_fact_ledger` attempt, compare against Phase 29's reconstructed diagnostic claims). Track 2 requires its own separate future user approval before any real provider call.
+
+### Recommendation
+
+Recommendation remains: **No Gate**.
+
+## Phase 44 Recommendation
+
+Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33–42) can pause here — 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point; further requirements-matrix reruns against the same single document would be low-value until either a business/legal decision lands or new document data exists (Track 1) or real provider-backed evidence becomes available to compare against (Track 2).

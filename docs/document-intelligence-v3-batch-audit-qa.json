@@ -1911,5 +1911,69 @@
     "recommendation": "no_gate",
     "recommended_phase_43": "Two independent tracks: (1) business/legal - collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical - root-cause the landlord_consent evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real vertex_fact_ledger provider run without explicit, separate user approval."
   },
-  "recommended_phase_43": "Two independent tracks: (1) business/legal - collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical - root-cause the landlord_consent evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real vertex_fact_ledger provider run without explicit, separate user approval."
+  "recommended_phase_43": "Two independent tracks: (1) business/legal - collect actual decisions on Phase 41's 10-item table from their named owners; (2) technical - root-cause the landlord_consent evidence-quality gap, complete the Clause Records content audit, and begin building a second curated document fixture to test generalization beyond the single approved document. Do not attempt a real vertex_fact_ledger provider run without explicit, separate user approval.",
+  "phase43_signoff_decision_packet": {
+    "phase43_performed": true,
+    "phase_type": "decision_reporting_only",
+    "source_code_changed": false,
+    "new_technical_requirements_created": false,
+    "phase42_matrix_reopened_or_rescored": false,
+    "approved_ids": {
+      "uploaded_file_id": "fc8181e6-766d-49c7-b81b-b5d961160207",
+      "lease_id": "7b21f353-579d-48e8-b3dd-8e8c49743fe2",
+      "local_diagnostic_run_id": "6d175b40-8f60-429f-8a29-a047e2a2e333"
+    },
+    "signoff_packet_created": true,
+    "signoff_packet_file": "docs/document-intelligence-v3-phase43-signoff-decision-packet.md",
+    "staging_review_readiness": true,
+    "broad_production_release_readiness": false,
+    "approval_gating_readiness": false,
+    "business_legal_decisions": {
+      "total": 10,
+      "recommended_with_clear_answer": [
+        "assignor_name_hard_blocker_correct",
+        "tenant_name_advisory",
+        "transfer_consent_advisory",
+        "original_lease_advisory",
+        "conservative_extraction_mode_vocabulary_acceptable",
+        "extraction_mode_not_affecting_approval_readiness_yet"
+      ],
+      "genuinely_open_pending_owner_decision": [
+        "landlord_consent_advisory_vs_conditional_vs_hard",
+        "should_unknown_force_needs_review",
+        "extraction_mode_in_exports_audit_logs_timing",
+        "clause_records_acceptable_pending_full_audit_completion"
+      ]
+    },
+    "recommended_next_tracks": {
+      "track_1_lease_review_hardening": [
+        "root_cause_landlord_consent_evidence_verified_false",
+        "complete_clause_records_full_35_row_content_audit",
+        "test_second_curated_document_type",
+        "build_small_multi_document_qa_set"
+      ],
+      "track_2_v3_provider_backed_evidence": [
+        "configure_scoped_local_staging_vertex_gemini_credentials",
+        "run_exactly_one_provider_backed_vertex_fact_ledger_attempt",
+        "compare_provider_backed_vs_reconstructed_diagnostic_claims",
+        "only_then_consider_broader_v3_claim_evidence_qa"
+      ],
+      "track_2_requires_separate_future_user_approval_for_provider_call": true,
+      "track_chosen_by_this_phase": null
+    },
+    "files_changed": [
+      "docs/document-intelligence-v3-phase43-signoff-decision-packet.md",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "verification": {
+      "qa_json_parse_check": "passed",
+      "src_changes_introduced_this_phase": false,
+      "note": "Only docs/JSON changed this phase; lint/typecheck/build/test were not required per Task F since no source code changed."
+    },
+    "recommendation": "no_gate",
+    "lease_review_requirements_track_can_pause": true,
+    "recommended_phase_44": "Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33-42) can pause here - 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point."
+  },
+  "recommended_phase_44": "Pick Track 1 and/or Track 2 from the Phase 43 signoff packet based on business priority. The Lease Review requirements regression track (Phases 33-42) can pause here - 18/20 pass with 2 narrow, already-understood partials is a legitimate stopping point."
 }
