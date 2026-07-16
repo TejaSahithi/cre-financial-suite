@@ -207,7 +207,7 @@ export function azureAnalyzeResultToCanonicalLayout(
   for (const page of azurePages) {
     if (pageSkeletons.has(page.pageNumber)) {
       warnings.push({
-        code: "duplicate_azure_page_number",
+        code: "duplicate_page_number",
         path: `pages[${page.pageNumber}]`,
         message: `Azure returned more than one page with pageNumber ${page.pageNumber}`,
         severity: "recoverable",

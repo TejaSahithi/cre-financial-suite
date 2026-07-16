@@ -220,7 +220,7 @@ Deno.test("resolveCanonicalDocumentLayout: canonical + Azure conflicting source 
   });
 
   assertEquals(result.source, "azure_analyze_result");
-  assert(result.warnings.some((w) => w.code === "canonical_layout_superseded_by_newer_azure_result"));
+  assert(result.warnings.some((w) => w.code === "canonical_layout_superseded_by_newer_source"));
   assertNotStrictEquals(result.layout, layout);
 });
 
@@ -235,7 +235,7 @@ Deno.test("resolveCanonicalDocumentLayout: canonical older than Azure based on g
   });
 
   assertEquals(result.source, "azure_analyze_result");
-  assert(result.warnings.some((w) => w.code === "canonical_layout_superseded_by_newer_azure_result"));
+  assert(result.warnings.some((w) => w.code === "canonical_layout_superseded_by_newer_source"));
 });
 
 Deno.test("resolveCanonicalDocumentLayout: missing metadata where authority cannot be established -- Azure used as safer default, loudly flagged as undetermined (not silently guessed)", async () => {
@@ -250,7 +250,7 @@ Deno.test("resolveCanonicalDocumentLayout: missing metadata where authority cann
   });
 
   assertEquals(result.source, "azure_analyze_result");
-  assert(result.warnings.some((w) => w.code === "canonical_azure_authority_undetermined" && w.severity === "recoverable"));
+  assert(result.warnings.some((w) => w.code === "canonical_source_authority_undetermined" && w.severity === "recoverable"));
 });
 
 // ── Validation errors preserved ──────────────────────────────────────────────

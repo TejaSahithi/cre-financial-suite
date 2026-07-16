@@ -284,7 +284,7 @@ async function resolveFromDoclingRaw(
  *      - undetermined (missing hash and missing/unparseable timestamps on
  *        either side) -> the Azure result wins as the safer,
  *        freshly-supplied default, but a loud `severity: "recoverable"`
- *        conflict warning is always attached (`canonical_azure_authority_undetermined`)
+ *        conflict warning is always attached (`canonical_source_authority_undetermined`)
  *        so a caller can investigate rather than the ambiguity being
  *        invisible.
  *
@@ -327,7 +327,7 @@ export async function resolveCanonicalDocumentLayout(
       const warnings: CanonicalWarning[] = [];
       pushWarning(
         warnings,
-        "canonical_layout_superseded_by_newer_azure_result",
+        "canonical_layout_superseded_by_newer_source",
         "Provided canonicalLayout's provenance (content_hash or metadata.generated_at) indicates it predates the newly supplied Azure analyzeResult; the Azure result was used instead of the stale canonical layout",
         "recoverable",
       );
@@ -338,7 +338,7 @@ export async function resolveCanonicalDocumentLayout(
     const warnings: CanonicalWarning[] = [];
     pushWarning(
       warnings,
-      "canonical_azure_authority_undetermined",
+      "canonical_source_authority_undetermined",
       "Both canonicalLayout and azureAnalyzeResult were supplied, but authority between them could not be established (no matching/comparable content_hash or generated_at metadata); the Azure result was used as the safer freshly-supplied default -- this conflict should be investigated by the caller",
       "recoverable",
     );
