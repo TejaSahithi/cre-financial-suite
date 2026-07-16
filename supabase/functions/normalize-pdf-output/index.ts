@@ -2304,12 +2304,11 @@ Deno.serve(async (req: Request) => {
             ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
           },
           {
-            // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
-            // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
-            // handles structured tables; LLM fills in fields rules couldn't resolve.
-            // Keeping this at 2 prevents accumulating too many Gemini response
-            // buffers in memory simultaneously (546 resource-exhaustion error).
-            maxLLMChunks: 2,
+            // maxLLMChunks: 50 — Increased per user request to ensure the entire document
+            // is read by the LLM so deep expense/CAM clauses are not missed.
+            // Note: Very large leases may occasionally hit the Edge Function 546
+            // memory limit due to accumulating Gemini response buffers.
+            maxLLMChunks: 50,
             chunkSize: 3000,
             llmTemperature: 0,
           },
