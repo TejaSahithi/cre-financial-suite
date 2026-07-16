@@ -9,8 +9,12 @@
 import { assert, assertEquals, assertFalse } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildCanonicalLayoutFromAzureLikeOutput,
+  legacyDoclingToCanonicalLayout,
   summarizeCanonicalLayout,
   buildEvidenceAnchor,
+  validateCanonicalLayout,
+  CANONICAL_LAYOUT_SCHEMA_VERSION,
+  MINIMUM_SUPPORTED_SCHEMA_VERSION,
 } from "../_shared/extraction/document-intelligence-v3/canonical-layout.ts";
 
 function azureLike3PageDoclingRaw(overrides: Record<string, unknown> = {}) {
@@ -219,4 +223,152 @@ Deno.test("buildEvidenceAnchor: table_cell support_type carries table_id and cel
   assertEquals(anchor.table_id, "table-0");
   assertEquals(anchor.cell_ids, ["table-0-r1-c1"]);
   assertEquals(anchor.support_type, "table_cell");
+});
+
+// ── Phase 1, Task E: legacy compatibility regression ─────────────────────────
+// Proves the Phase 1 rename (buildCanonicalLayoutFromAzureLikeOutput ->
+// legacyDoclingToCanonicalLayout) changed nothing an existing consumer reads.
+
+Deno.test("Phase 1 compatibility: buildCanonicalLayoutFromAzureLikeOutput is the exact same function reference as legacyDoclingToCanonicalLayout", () => {
+  assertEquals(buildCanonicalLayoutFromAzureLikeOutput, legacyDoclingToCanonicalLayout);
+});
+
+Deno.test("Phase 1 compatibility: alias and renamed function produce deep-equal output for the same legacy fixture", async () => {
+  const raw = azureLike3PageDoclingRaw();
+  const viaAlias = await buildCanonicalLayoutFromAzureLikeOutput(raw, { uploadedFileId: "uf-1", orgId: "org-1", contentHash: "sha256:fixed" });
+  const viaRenamed = await legacyDoclingToCanonicalLayout(raw, { uploadedFileId: "uf-1", orgId: "org-1", contentHash: "sha256:fixed" });
+  assertEquals(viaAlias, viaRenamed);
+});
+
+Deno.test("Phase 1 compatibility: content_hash is exactly unchanged for a fixed contentHash context (document-index/side-write idempotency input)", async () => {
+  const raw = azureLike3PageDoclingRaw();
+  const layout = await legacyDoclingToCanonicalLayout(raw, { uploadedFileId: "uf-1", contentHash: "sha256:deterministic-fixture-hash" });
+  assertEquals(layout.content_hash, "sha256:deterministic-fixture-hash");
+});
+
+Deno.test("Phase 1 compatibility: summarizeCanonicalLayout output is unchanged by the new optional fields (schema_version/provider present but unread)", async () => {
+  const raw = azureLike3PageDoclingRaw();
+  const layout = await legacyDoclingToCanonicalLayout(raw, { uploadedFileId: "uf-1" });
+  assert(typeof layout.schema_version === "number", "schema_version must be set on every newly-built layout");
+  assertEquals(layout.provider, "legacy_docling_compatibility");
+
+  const summary = summarizeCanonicalLayout(layout);
+  // Same assertions as the original Task G.6 test -- summarizeCanonicalLayout
+  // must not have started reading (or being affected by) the new fields.
+  assertEquals(summary.layout_provider, "azure_document_intelligence");
+  assertEquals(summary.page_count, 3);
+  assertEquals(summary.table_count, 1);
+  assertEquals(summary.warnings, []);
+});
+
+Deno.test("Phase 1 compatibility: new optional fields are never set to an explicit undefined value on the legacy path (would corrupt any JSON.stringify-based hashing/equality)", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  for (const key of ["provider_model_id", "provider_api_version", "warnings"]) {
+    assertFalse(Object.prototype.hasOwnProperty.call(layout, key), `legacy layout should omit ${key} entirely rather than set it to undefined`);
+  }
+});
+
+// ── Phase 1, Task A: schema version, compatibility policy, invariants ────────
+
+Deno.test("Phase 1 contract: CANONICAL_LAYOUT_SCHEMA_VERSION and MINIMUM_SUPPORTED_SCHEMA_VERSION are stable, positive integers with version >= minimum", () => {
+  assert(Number.isInteger(CANONICAL_LAYOUT_SCHEMA_VERSION) && CANONICAL_LAYOUT_SCHEMA_VERSION >= 1);
+  assert(Number.isInteger(MINIMUM_SUPPORTED_SCHEMA_VERSION) && MINIMUM_SUPPORTED_SCHEMA_VERSION >= 1);
+  assert(CANONICAL_LAYOUT_SCHEMA_VERSION >= MINIMUM_SUPPORTED_SCHEMA_VERSION);
+});
+
+Deno.test("validateCanonicalLayout: a well-formed legacy-built layout is valid with no fatal errors", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  const result = validateCanonicalLayout(layout);
+  assertEquals(result.errors, []);
+  assert(result.valid);
+});
+
+Deno.test("validateCanonicalLayout: null layout is fatal-invalid, never throws", () => {
+  const result = validateCanonicalLayout(null);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "missing_layout" && e.severity === "fatal"));
+});
+
+Deno.test("validateCanonicalLayout: duplicate page_number is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[1] = { ...layout.pages[1], page_number: layout.pages[0].page_number };
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "duplicate_page_number"));
+});
+
+Deno.test("validateCanonicalLayout: duplicate block_id across pages is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[1].blocks = [{ ...layout.pages[1].blocks[0], block_id: layout.pages[0].blocks[0].block_id }];
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "duplicate_block_id"));
+});
+
+Deno.test("validateCanonicalLayout: duplicate reading_order_index within one page is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[0].blocks = [
+    { ...layout.pages[0].blocks[0], block_id: "b-a", reading_order_index: 0 },
+    { ...layout.pages[0].blocks[0], block_id: "b-b", reading_order_index: 0 },
+  ];
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "duplicate_reading_order_index"));
+});
+
+Deno.test("validateCanonicalLayout: bounding_regions referencing a nonexistent page is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[0].blocks[0].bounding_regions = [{ page_number: 999, polygon: [] }];
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "bounding_region_unknown_page"));
+});
+
+Deno.test("validateCanonicalLayout: overlapping spans within one block is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[0].blocks[0].spans = [{ offset: 0, length: 10 }, { offset: 5, length: 10 }];
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "overlapping_spans"));
+});
+
+Deno.test("validateCanonicalLayout: a malformed (odd-length) polygon is a recoverable warning, not fatal", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[0].blocks[0].polygon = [1, 2, 3];
+  const result = validateCanonicalLayout(layout);
+  assert(result.valid, "a malformed polygon must not invalidate the layout");
+  assert(result.warnings.some((w) => w.code === "malformed_polygon" && w.severity === "recoverable"));
+});
+
+Deno.test("validateCanonicalLayout: a non-finite polygon coordinate is a recoverable warning, not fatal", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.pages[0].blocks[0].polygon = [1, 2, Infinity, 4];
+  const result = validateCanonicalLayout(layout);
+  assert(result.valid);
+  assert(result.warnings.some((w) => w.code === "malformed_polygon"));
+});
+
+Deno.test("validateCanonicalLayout: inconsistent table dimensions (row_count smaller than a cell's row_index) is fatal", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  const table = layout.pages.flatMap((p) => p.tables)[0];
+  table.row_count = 0;
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "table_dimensions_conflict"));
+});
+
+Deno.test("validateCanonicalLayout: page_count mismatch between declared and actual pages is fatal", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  layout.page_count = 999;
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "page_count_mismatch"));
+});
+
+Deno.test("validateCanonicalLayout: missing schema_version is a fatal invariant violation", async () => {
+  const layout = await legacyDoclingToCanonicalLayout(azureLike3PageDoclingRaw(), { uploadedFileId: "uf-1" });
+  delete layout.schema_version;
+  const result = validateCanonicalLayout(layout);
+  assertFalse(result.valid);
+  assert(result.errors.some((e) => e.code === "missing_schema_version"));
 });

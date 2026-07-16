@@ -174,3 +174,19 @@ Deno.test("resolveDocumentIndex: a docling_raw with tables but no headers/rows d
   const layoutIndex = result.index as any;
   assertEquals(layoutIndex.tablePlaceholders.length, 1);
 });
+
+// ── Phase 1 compatibility regression ─────────────────────────────────────────
+// document-index-v3.ts imports buildCanonicalLayoutFromAzureLikeOutput
+// unchanged (Phase 1, Task B: this file was NOT edited -- it still resolves
+// via the deprecated alias). This test proves that keeps working exactly as
+// before the canonical-layout.ts rename/contract-extension.
+
+Deno.test("Phase 1 compatibility: buildCanonicalDocumentIndexFromLayout behavior is unchanged after canonical-layout.ts's Phase 1 evolution", async () => {
+  const layout = await buildCanonicalLayoutFromAzureLikeOutput(azureLikeDoclingRaw(), { uploadedFileId: "uf-1" });
+  // New Phase 1 fields exist on the layout but must not change this index's shape.
+  assert(typeof layout.schema_version === "number");
+  const index = buildCanonicalDocumentIndexFromLayout(layout);
+  assertEquals(index.blockIds.length, 2);
+  assertEquals(index.pageCount, 2);
+  assert(index.fullText.includes("Base Rent is $5,000 per month."));
+});

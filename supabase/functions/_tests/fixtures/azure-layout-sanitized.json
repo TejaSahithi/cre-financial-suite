@@ -1,0 +1,396 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "content": "LEASE AGREEMENT\nThis Lease is between Café Properties, LLC and Beta Tenant Corp.\n\nSection 2. Rent.\nBase Rent is $5,000.00 per month, due on the 1st of each month.\n",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 0,
+          "length": 82
+        }
+      ],
+      "lines": [
+        {
+          "content": "LEASE AGREEMENT",
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ],
+          "spans": [
+            {
+              "offset": 0,
+              "length": 15
+            }
+          ]
+        },
+        {
+          "content": "This Lease is between Café Properties, LLC and Beta Tenant Corp.",
+          "polygon": [
+            1,
+            1.5,
+            7.5,
+            1.5,
+            7.5,
+            1.8,
+            1,
+            1.8
+          ],
+          "spans": [
+            {
+              "offset": 16,
+              "length": 64
+            }
+          ]
+        }
+      ],
+      "selectionMarks": [
+        {
+          "state": "selected",
+          "polygon": [
+            1,
+            2,
+            1.2,
+            2,
+            1.2,
+            2.2,
+            1,
+            2.2
+          ],
+          "confidence": 0.98
+        }
+      ]
+    },
+    {
+      "pageNumber": 2,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 82,
+          "length": 81
+        }
+      ],
+      "lines": [
+        {
+          "content": "Section 2. Rent.",
+          "polygon": [
+            1,
+            1,
+            4,
+            1,
+            4,
+            1.3,
+            1,
+            1.3
+          ],
+          "spans": [
+            {
+              "offset": 82,
+              "length": 16
+            }
+          ]
+        },
+        {
+          "content": "Base Rent is $5,000.00 per month, due on the 1st of each month.",
+          "polygon": [
+            1,
+            1.5,
+            7.5,
+            1.5,
+            7.5,
+            1.8,
+            1,
+            1.8
+          ],
+          "spans": [
+            {
+              "offset": 99,
+              "length": 63
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "paragraphs": [
+    {
+      "role": "title",
+      "content": "LEASE AGREEMENT",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 0,
+          "length": 15
+        }
+      ]
+    },
+    {
+      "content": "This Lease is between Café Properties, LLC and Beta Tenant Corp.",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            1,
+            1.5,
+            7.5,
+            1.5,
+            7.5,
+            1.8,
+            1,
+            1.8
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 16,
+          "length": 64
+        }
+      ]
+    },
+    {
+      "role": "sectionHeading",
+      "content": "Section 2. Rent.",
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            1,
+            4,
+            1,
+            4,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 82,
+          "length": 16
+        }
+      ]
+    },
+    {
+      "content": "Base Rent is $5,000.00 per month, due on the 1st of each month.",
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            1.5,
+            7.5,
+            1.5,
+            7.5,
+            1.8,
+            1,
+            1.8
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 99,
+          "length": 63
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "rowCount": 4,
+      "columnCount": 2,
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            2.5,
+            7.5,
+            2.5,
+            7.5,
+            4.2,
+            1,
+            4.2
+          ]
+        }
+      ],
+      "cells": [
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "columnSpan": 2,
+          "content": "Rent Schedule",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                2.5,
+                7.5,
+                2.5,
+                7.5,
+                2.8,
+                1,
+                2.8
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "content": "Item",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                2.8,
+                4.25,
+                2.8,
+                4.25,
+                3.1,
+                1,
+                3.1
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "content": "Amount",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                2.8,
+                7.5,
+                2.8,
+                7.5,
+                3.1,
+                4.25,
+                3.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "content": "Base Rent",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                3.1,
+                4.25,
+                3.1,
+                4.25,
+                3.4,
+                1,
+                3.4
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "content": "$5,000.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                3.1,
+                7.5,
+                3.1,
+                7.5,
+                3.4,
+                4.25,
+                3.4
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "content": "CAM",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                3.4,
+                4.25,
+                3.4,
+                4.25,
+                3.7,
+                1,
+                3.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "content": "$750.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                3.4,
+                7.5,
+                3.4,
+                7.5,
+                3.7,
+                4.25,
+                3.7
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

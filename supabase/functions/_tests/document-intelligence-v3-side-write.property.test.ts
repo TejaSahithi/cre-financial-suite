@@ -23,6 +23,10 @@
 import { assert, assertEquals, assertExists, assertFalse } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.99.2";
 import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
+import {
+  legacyDoclingToCanonicalLayout,
+  summarizeCanonicalLayout,
+} from "../_shared/extraction/document-intelligence-v3/canonical-layout.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
@@ -870,6 +874,87 @@ Deno.test({
       assertNoError(error);
       assertEquals(runRow.coverage.evidence_anchor_source, "unavailable");
       assertEquals(runRow.coverage.evidence_rows_with_block_ids, 0);
+    } finally {
+      Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
+    }
+  },
+});
+
+// ── Phase 1 compatibility regression ─────────────────────────────────────────
+// side-write.ts imports buildCanonicalLayoutFromAzureLikeOutput/
+// summarizeCanonicalLayout unchanged (Phase 1, Task B: this file was NOT
+// edited). This proves the persisted layout_summary column is byte-for-byte
+// what the same pure functions produce directly, after canonical-layout.ts's
+// Phase 1 rename/contract-extension.
+
+Deno.test({
+  name: "Phase 1 compatibility: document_intelligence_runs.layout_summary is unchanged after canonical-layout.ts's Phase 1 evolution",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, uploadedFile } = await setupOrgAndUpload(admin, suffix);
+
+    const doclingRaw = {
+      extraction_method: "azure_layout",
+      full_text: "[[PAGE 1]]\nLEASE AGREEMENT\n\n[[PAGE 2]]\nBase Rent is $5,000 per month.",
+      page_count: 2,
+      pages: [
+        { page: 1, text: "LEASE AGREEMENT" },
+        { page: 2, text: "Base Rent is $5,000 per month." },
+      ],
+      text_blocks: [
+        { block_index: 0, type: "title", text: "LEASE AGREEMENT", page: 1 },
+        { block_index: 1, type: "paragraph", text: "Base Rent is $5,000 per month.", page: 2 },
+      ],
+      tables: [],
+      fields: [],
+      warnings: [],
+      raw_response: null,
+      _metadata: {
+        provider: "azure_document_intelligence",
+        extraction_method: "azure_layout",
+        api_version: "2024-11-30",
+        page_markers_present: true,
+        page_mapping_coverage: 1,
+        raw_response_stored: false,
+      },
+    };
+
+    // Independently-computed expectation, using the same renamed pure
+    // functions computeCanonicalLayoutAndSummary() calls internally via the
+    // (untouched) buildCanonicalLayoutFromAzureLikeOutput alias.
+    const expectedLayout = await legacyDoclingToCanonicalLayout(doclingRaw, {
+      uploadedFileId: uploadedFile.id,
+      orgId: org.id,
+    });
+    const expectedSummary = summarizeCanonicalLayout(expectedLayout);
+
+    Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+    try {
+      const outcome = await runDocumentIntelligenceV3SideWrite({
+        supabaseAdmin: admin,
+        orgId: org.id,
+        uploadedFileId: uploadedFile.id,
+        uploadedFile: { ...uploadedFile, docling_raw: doclingRaw },
+        leaseId: null,
+        pipelineJobId: null,
+        result: legacyHybridResult(),
+        logger: null,
+      });
+
+      assert(outcome.attempted);
+      assertEquals(outcome.status, "completed");
+      assertExists(outcome.runId);
+
+      const { data: runRow, error } = await admin
+        .from("document_intelligence_runs")
+        .select("layout_summary")
+        .eq("id", outcome.runId)
+        .single();
+      assertNoError(error);
+      assertEquals(runRow.layout_summary, expectedSummary);
     } finally {
       Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
     }
