@@ -1,0 +1,108 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "content": "ASSIGNMENT AND ASSUMPTION OF LEASE\nAssignor hereby assigns all right, title, and interest in the lease to Assignee, effective as of the Effective Date.\n\nAssignee accepts the assignment and assumes all obligations of the Assignor under the original lease.\n",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 0,
+          "length": 152
+        }
+      ]
+    },
+    {
+      "pageNumber": 2,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 153,
+          "length": 101
+        }
+      ]
+    }
+  ],
+  "paragraphs": [
+    {
+      "role": "title",
+      "content": "ASSIGNMENT AND ASSUMPTION OF LEASE",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 0,
+          "length": 34
+        }
+      ]
+    },
+    {
+      "content": "Assignor hereby assigns all right, title, and interest in the lease to Assignee, effective as of the Effective Date.",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            1,
+            1.5,
+            7.5,
+            1.5,
+            7.5,
+            1.8,
+            1,
+            1.8
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 35,
+          "length": 116
+        }
+      ]
+    },
+    {
+      "role": "sectionHeading",
+      "content": "Assignee accepts the assignment and assumes all obligations of the Assignor under the original lease.",
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 153,
+          "length": 101
+        }
+      ]
+    }
+  ],
+  "tables": []
+}

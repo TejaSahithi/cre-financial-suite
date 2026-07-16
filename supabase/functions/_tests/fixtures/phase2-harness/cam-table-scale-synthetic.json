@@ -1,0 +1,1904 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "content": "CAM Reconciliation Schedule 1. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 2. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 3. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 4. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 5. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 6. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 7. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 8. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 9. Common area maintenance charges are allocated pro-rata across the property.\n\nCAM Reconciliation Schedule 10. Common area maintenance charges are allocated pro-rata across the property.\n\n",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 0,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 2,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 108,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 3,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 216,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 4,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 324,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 5,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 432,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 6,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 540,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 7,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 648,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 8,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 756,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 9,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 864,
+          "length": 108
+        }
+      ]
+    },
+    {
+      "pageNumber": 10,
+      "width": 8.5,
+      "height": 11,
+      "unit": "inch",
+      "spans": [
+        {
+          "offset": 972,
+          "length": 109
+        }
+      ]
+    }
+  ],
+  "paragraphs": [
+    {
+      "role": "title",
+      "content": "CAM Reconciliation Schedule 1. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 0,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 2. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 108,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 3. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 3,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 216,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 4. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 4,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 324,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 5. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 5,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 432,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 6. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 6,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 540,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 7. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 7,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 648,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 8. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 8,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 756,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 9. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 9,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 864,
+          "length": 106
+        }
+      ]
+    },
+    {
+      "content": "CAM Reconciliation Schedule 10. Common area maintenance charges are allocated pro-rata across the property.",
+      "boundingRegions": [
+        {
+          "pageNumber": 10,
+          "polygon": [
+            1,
+            1,
+            7.5,
+            1,
+            7.5,
+            1.3,
+            1,
+            1.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 972,
+          "length": 107
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "rowCount": 9,
+      "columnCount": 2,
+      "cells": [
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "content": "CAM Category",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                5,
+                3,
+                5,
+                3,
+                5.3,
+                1,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "content": "Annual Amount",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                5,
+                5,
+                5,
+                5,
+                5.3,
+                3,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "content": "Landscaping",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                5.3,
+                3,
+                5.3,
+                3,
+                5.6,
+                1,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "content": "$1000.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                5.3,
+                5,
+                5.3,
+                5,
+                5.6,
+                3,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "content": "Snow Removal",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                5.6,
+                3,
+                5.6,
+                3,
+                5.8999999999999995,
+                1,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "content": "$1137.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                5.6,
+                5,
+                5.6,
+                5,
+                5.8999999999999995,
+                3,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "content": "Common Area Utilities",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                5.8999999999999995,
+                3,
+                5.8999999999999995,
+                3,
+                6.199999999999999,
+                1,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "content": "$1274.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                5.8999999999999995,
+                5,
+                5.8999999999999995,
+                5,
+                6.199999999999999,
+                3,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 0,
+          "content": "Security",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                6.199999999999999,
+                3,
+                6.199999999999999,
+                3,
+                6.5,
+                1,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 1,
+          "content": "$1411.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                6.199999999999999,
+                5,
+                6.199999999999999,
+                5,
+                6.5,
+                3,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 0,
+          "content": "Insurance",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                6.5,
+                3,
+                6.5,
+                3,
+                6.8,
+                1,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 1,
+          "content": "$1548.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                6.5,
+                5,
+                6.5,
+                5,
+                6.8,
+                3,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 0,
+          "content": "Property Management",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                6.8,
+                3,
+                6.8,
+                3,
+                7.1,
+                1,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 1,
+          "content": "$1685.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                6.8,
+                5,
+                6.8,
+                5,
+                7.1,
+                3,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 0,
+          "content": "Repairs",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                7.1,
+                3,
+                7.1,
+                3,
+                7.3999999999999995,
+                1,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 1,
+          "content": "$1822.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                7.1,
+                5,
+                7.1,
+                5,
+                7.3999999999999995,
+                3,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 0,
+          "content": "Janitorial",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                1,
+                7.4,
+                3,
+                7.4,
+                3,
+                7.699999999999999,
+                1,
+                7.699999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 1,
+          "content": "$1959.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3,
+                7.4,
+                5,
+                7.4,
+                5,
+                7.699999999999999,
+                3,
+                7.699999999999999
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            1,
+            5,
+            5,
+            5,
+            5,
+            8,
+            1,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 9,
+      "columnCount": 2,
+      "cells": [
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "content": "CAM Category",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                5,
+                3,
+                5,
+                3,
+                5.3,
+                1,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "content": "Annual Amount",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                5,
+                5,
+                5,
+                5,
+                5.3,
+                3,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "content": "Landscaping",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                5.3,
+                3,
+                5.3,
+                3,
+                5.6,
+                1,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "content": "$1050.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                5.3,
+                5,
+                5.3,
+                5,
+                5.6,
+                3,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "content": "Snow Removal",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                5.6,
+                3,
+                5.6,
+                3,
+                5.8999999999999995,
+                1,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "content": "$1187.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                5.6,
+                5,
+                5.6,
+                5,
+                5.8999999999999995,
+                3,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "content": "Common Area Utilities",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                5.8999999999999995,
+                3,
+                5.8999999999999995,
+                3,
+                6.199999999999999,
+                1,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "content": "$1324.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                5.8999999999999995,
+                5,
+                5.8999999999999995,
+                5,
+                6.199999999999999,
+                3,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 0,
+          "content": "Security",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                6.199999999999999,
+                3,
+                6.199999999999999,
+                3,
+                6.5,
+                1,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 1,
+          "content": "$1461.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                6.199999999999999,
+                5,
+                6.199999999999999,
+                5,
+                6.5,
+                3,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 0,
+          "content": "Insurance",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                6.5,
+                3,
+                6.5,
+                3,
+                6.8,
+                1,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 1,
+          "content": "$1598.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                6.5,
+                5,
+                6.5,
+                5,
+                6.8,
+                3,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 0,
+          "content": "Property Management",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                6.8,
+                3,
+                6.8,
+                3,
+                7.1,
+                1,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 1,
+          "content": "$1735.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                6.8,
+                5,
+                6.8,
+                5,
+                7.1,
+                3,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 0,
+          "content": "Repairs",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                7.1,
+                3,
+                7.1,
+                3,
+                7.3999999999999995,
+                1,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 1,
+          "content": "$1872.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                7.1,
+                5,
+                7.1,
+                5,
+                7.3999999999999995,
+                3,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 0,
+          "content": "Janitorial",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                1,
+                7.4,
+                3,
+                7.4,
+                3,
+                7.699999999999999,
+                1,
+                7.699999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 1,
+          "content": "$2009.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                3,
+                7.4,
+                5,
+                7.4,
+                5,
+                7.699999999999999,
+                3,
+                7.699999999999999
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 4,
+          "polygon": [
+            1,
+            5,
+            5,
+            5,
+            5,
+            8,
+            1,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 9,
+      "columnCount": 2,
+      "cells": [
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "content": "CAM Category",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                5,
+                3,
+                5,
+                3,
+                5.3,
+                1,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "content": "Annual Amount",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                5,
+                5,
+                5,
+                5,
+                5.3,
+                3,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "content": "Landscaping",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                5.3,
+                3,
+                5.3,
+                3,
+                5.6,
+                1,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "content": "$1100.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                5.3,
+                5,
+                5.3,
+                5,
+                5.6,
+                3,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "content": "Snow Removal",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                5.6,
+                3,
+                5.6,
+                3,
+                5.8999999999999995,
+                1,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "content": "$1237.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                5.6,
+                5,
+                5.6,
+                5,
+                5.8999999999999995,
+                3,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "content": "Common Area Utilities",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                5.8999999999999995,
+                3,
+                5.8999999999999995,
+                3,
+                6.199999999999999,
+                1,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "content": "$1374.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                5.8999999999999995,
+                5,
+                5.8999999999999995,
+                5,
+                6.199999999999999,
+                3,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 0,
+          "content": "Security",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                6.199999999999999,
+                3,
+                6.199999999999999,
+                3,
+                6.5,
+                1,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 1,
+          "content": "$1511.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                6.199999999999999,
+                5,
+                6.199999999999999,
+                5,
+                6.5,
+                3,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 0,
+          "content": "Insurance",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                6.5,
+                3,
+                6.5,
+                3,
+                6.8,
+                1,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 1,
+          "content": "$1648.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                6.5,
+                5,
+                6.5,
+                5,
+                6.8,
+                3,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 0,
+          "content": "Property Management",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                6.8,
+                3,
+                6.8,
+                3,
+                7.1,
+                1,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 1,
+          "content": "$1785.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                6.8,
+                5,
+                6.8,
+                5,
+                7.1,
+                3,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 0,
+          "content": "Repairs",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                7.1,
+                3,
+                7.1,
+                3,
+                7.3999999999999995,
+                1,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 1,
+          "content": "$1922.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                7.1,
+                5,
+                7.1,
+                5,
+                7.3999999999999995,
+                3,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 0,
+          "content": "Janitorial",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                1,
+                7.4,
+                3,
+                7.4,
+                3,
+                7.699999999999999,
+                1,
+                7.699999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 1,
+          "content": "$2059.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                3,
+                7.4,
+                5,
+                7.4,
+                5,
+                7.699999999999999,
+                3,
+                7.699999999999999
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 6,
+          "polygon": [
+            1,
+            5,
+            5,
+            5,
+            5,
+            8,
+            1,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 9,
+      "columnCount": 2,
+      "cells": [
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "content": "CAM Category",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                5,
+                3,
+                5,
+                3,
+                5.3,
+                1,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "columnHeader",
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "content": "Annual Amount",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                5,
+                5,
+                5,
+                5,
+                5.3,
+                3,
+                5.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "content": "Landscaping",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                5.3,
+                3,
+                5.3,
+                3,
+                5.6,
+                1,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "content": "$1150.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                5.3,
+                5,
+                5.3,
+                5,
+                5.6,
+                3,
+                5.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "content": "Snow Removal",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                5.6,
+                3,
+                5.6,
+                3,
+                5.8999999999999995,
+                1,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "content": "$1287.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                5.6,
+                5,
+                5.6,
+                5,
+                5.8999999999999995,
+                3,
+                5.8999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "content": "Common Area Utilities",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                5.8999999999999995,
+                3,
+                5.8999999999999995,
+                3,
+                6.199999999999999,
+                1,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "content": "$1424.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                5.8999999999999995,
+                5,
+                5.8999999999999995,
+                5,
+                6.199999999999999,
+                3,
+                6.199999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 0,
+          "content": "Security",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                6.199999999999999,
+                3,
+                6.199999999999999,
+                3,
+                6.5,
+                1,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 4,
+          "columnIndex": 1,
+          "content": "$1561.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                6.199999999999999,
+                5,
+                6.199999999999999,
+                5,
+                6.5,
+                3,
+                6.5
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 0,
+          "content": "Insurance",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                6.5,
+                3,
+                6.5,
+                3,
+                6.8,
+                1,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 5,
+          "columnIndex": 1,
+          "content": "$1698.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                6.5,
+                5,
+                6.5,
+                5,
+                6.8,
+                3,
+                6.8
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 0,
+          "content": "Property Management",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                6.8,
+                3,
+                6.8,
+                3,
+                7.1,
+                1,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 6,
+          "columnIndex": 1,
+          "content": "$1835.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                6.8,
+                5,
+                6.8,
+                5,
+                7.1,
+                3,
+                7.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 0,
+          "content": "Repairs",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                7.1,
+                3,
+                7.1,
+                3,
+                7.3999999999999995,
+                1,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 7,
+          "columnIndex": 1,
+          "content": "$1972.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                7.1,
+                5,
+                7.1,
+                5,
+                7.3999999999999995,
+                3,
+                7.3999999999999995
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 0,
+          "content": "Janitorial",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                1,
+                7.4,
+                3,
+                7.4,
+                3,
+                7.699999999999999,
+                1,
+                7.699999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 8,
+          "columnIndex": 1,
+          "content": "$2109.00",
+          "boundingRegions": [
+            {
+              "pageNumber": 8,
+              "polygon": [
+                3,
+                7.4,
+                5,
+                7.4,
+                5,
+                7.699999999999999,
+                3,
+                7.699999999999999
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 8,
+          "polygon": [
+            1,
+            5,
+            5,
+            5,
+            5,
+            8,
+            1,
+            8
+          ]
+        }
+      ]
+    }
+  ]
+}
