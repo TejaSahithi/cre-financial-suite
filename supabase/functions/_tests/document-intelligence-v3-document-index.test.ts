@@ -108,14 +108,19 @@ Deno.test("enrichFactWithBlockEvidence: no layout / no sourcePage / no sourceTex
 
 // ── Task H.4: missing canonical layout falls back to legacy path ────────────
 
-Deno.test("resolveDocumentIndex: a docling_raw with no pages/text still synthesizes a minimal canonical layout (the adapter never loses text, by design)", async () => {
+Deno.test("resolveDocumentIndex: a fully content-free docling_raw falls back to legacy_evidence_index rather than reporting a hollow 'successful' canonical index (Phase 4a behavior change)", async () => {
+  // Pre-Phase-4a, this synthesized a single empty page and reported
+  // indexSource: "canonical_layout" with fullText: "" -- a silent
+  // empty-but-"successful" index. Phase 4a's resolver adoption explicitly
+  // rejects that: validateCanonicalLayout() correctly flags this layout
+  // fatal (missing_content -- a page exists but has no text and there's no
+  // text_projection either), and resolveDocumentIndex() now treats fatal
+  // validation as unusable and falls back, per the adoption contract's
+  // "never return a silent empty-but-successful document index."
   const degenerate = { full_text: "", pages: [], text_blocks: [], tables: [] };
   const result = await resolveDocumentIndex(degenerate, { strategy: "canonical_layout" });
-  // Phase 5's adapter deliberately always synthesizes at least one page
-  // rather than returning zero pages -- so this is NOT the fallback case;
-  // canonical_layout still resolves successfully with an empty index.
-  assertEquals(result.indexSource, "canonical_layout");
-  assertEquals(result.fallbackReason, null);
+  assertEquals(result.indexSource, "legacy_evidence_index");
+  assert(result.fallbackReason?.includes("missing_content"));
   assertEquals(result.index.fullText, "");
 });
 

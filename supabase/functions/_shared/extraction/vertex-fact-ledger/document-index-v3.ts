@@ -1,6 +1,7 @@
 // @ts-nocheck
 /**
- * Vertex Fact Ledger — Canonical-Layout-Backed Document Index (Phase 6)
+ * Vertex Fact Ledger — Canonical-Layout-Backed Document Index (Phase 6,
+ * adopted onto the Phase 3 resolver in Phase 4a)
  *
  * An OPT-IN alternate to document-index.ts's buildCanonicalDocumentIndex().
  * document-index.ts itself is untouched by this file (per Phase 6 Task A:
@@ -8,9 +9,24 @@
  * orchestrator.ts calls conditionally, falling straight back to the
  * existing legacy_evidence_index path on any failure or when not opted in.
  *
+ * Phase 4a: this module's only layout-construction entry point is now
+ * `resolveCanonicalDocumentLayout()` (../document-intelligence-v3/canonical-layout-resolver.ts).
+ * No direct import of `buildCanonicalLayoutFromAzureLikeOutput`/
+ * `legacyDoclingToCanonicalLayout`, and no direct import of the Azure
+ * adapter, remain in this file. Current runtime input here is always
+ * `docling_raw` (per Phase 2's durable-input finding), so the resolver call
+ * below always resolves `source: "legacy_docling_raw"` /
+ * `fidelity: "legacy_lossy"` in practice -- both explicitly accepted, not
+ * treated as degraded. The resolver's `lossless` Azure-native fidelity is
+ * supported by its contract but is not reachable from this consumer's
+ * current input until a future phase passes a raw Azure `analyzeResult`
+ * through. `resolution.warnings` are read only for logging/diagnostics --
+ * this module never branches on a warning `code`, per the resolver's own
+ * design contract (Phase 3A).
+ *
  * Reuses, rather than reimplements:
- *   - canonical-layout.ts's buildCanonicalLayoutFromAzureLikeOutput() (Phase 5)
- *     to build the richer CanonicalDocumentLayout from persisted docling_raw.
+ *   - the resolver's own resolution of the richer CanonicalDocumentLayout
+ *     from persisted docling_raw.
  *   - evidence-index.ts's buildEvidenceIndex()/normalizeForPageMatch()/
  *     compactForPageMatch() for the actual page-matching machinery, so this
  *     module and legacy_hybrid never disagree about how a snippet maps to a
@@ -20,11 +36,8 @@
 
 import { buildEvidenceIndex, normalizeForPageMatch, compactForPageMatch } from "../evidence-index.ts";
 import { isDocumentIntelligenceV3Enabled } from "../document-intelligence-v3/feature-flag.ts";
-import {
-  buildCanonicalLayoutFromAzureLikeOutput,
-  type CanonicalDocumentLayout,
-  type BuildCanonicalLayoutContext,
-} from "../document-intelligence-v3/canonical-layout.ts";
+import type { CanonicalDocumentLayout, BuildCanonicalLayoutContext } from "../document-intelligence-v3/canonical-layout.ts";
+import { resolveCanonicalDocumentLayout } from "../document-intelligence-v3/canonical-layout-resolver.ts";
 import { buildCanonicalDocumentIndex } from "./document-index.ts";
 import type { CanonicalDocumentIndex, Fact } from "./types.ts";
 
@@ -127,6 +140,11 @@ export interface ResolveDocumentIndexOptions {
    *  path is already vertex_fact_ledger or an explicit test calls it").
    *  Undefined defers to ENABLE_DOCUMENT_INTELLIGENCE_V3. */
   strategy?: DocumentIndexSource;
+  /** Not currently forwarded through the resolver-based canonical_layout
+   *  path (Phase 4a) -- the Phase 3 resolver's `docling_raw` input has no
+   *  generic context passthrough today. Kept on this options type for
+   *  backward API compatibility; no current caller (runtime or test) sets
+   *  it, confirmed by inspection before this change. */
   context?: BuildCanonicalLayoutContext;
 }
 
@@ -147,6 +165,26 @@ export interface ResolveDocumentIndexResult {
  * pages and no text) falls straight back to the legacy path, logs a
  * diagnostic warning, and never throws beyond what the legacy path itself
  * would throw (Task C).
+ *
+ * Phase 4a: the canonical-layout attempt now goes through
+ * `resolveCanonicalDocumentLayout({ doclingRaw })` rather than calling the
+ * legacy builder directly. The resolver never throws by itself (Phase 3
+ * contract) -- this function is what decides a resolver outcome is
+ * unusable and explicitly triggers the pre-existing fallback path,
+ * preserving the exact same catch/fallback/log shape as before:
+ *   - `layout: null` (source "none", or any source that failed to resolve
+ *     a layout) -- never silently reported as a successful empty index.
+ *   - `validation.valid === false` (fatal structural errors) -- never
+ *     built into a document index that would look successful; the fatal
+ *     error codes are folded into the same diagnostic message the fallback
+ *     path already logs.
+ *   - a degenerate resolved layout (no pages, no text) -- same check as
+ *     before Phase 4a, now applied to the resolver's `layout`.
+ * `resolution.source`/`resolution.fidelity` are inspected only to confirm
+ * they're in the accepted set (`legacy_docling_raw`/`legacy_lossy` is the
+ * only combination reachable from this consumer's current input, and is
+ * explicitly accepted, not treated as a degradation);
+ * `resolution.warnings` are informational only and never drive branching.
  */
 export async function resolveDocumentIndex(
   doclingRaw: Record<string, unknown> | null | undefined,
@@ -161,10 +199,21 @@ export async function resolveDocumentIndex(
   }
 
   try {
-    const layout = await buildCanonicalLayoutFromAzureLikeOutput(doclingRaw, options.context ?? {});
+    const resolution = await resolveCanonicalDocumentLayout({ doclingRaw });
+
+    if (!resolution.layout) {
+      throw new Error(`canonical layout resolution returned no layout (source: ${resolution.source})`);
+    }
+    if (resolution.validation && !resolution.validation.valid) {
+      const fatalCodes = resolution.validation.errors.map((e) => e.code).join(", ") || "unspecified";
+      throw new Error(`canonical layout failed validation (fatal: ${fatalCodes})`);
+    }
+
+    const layout = resolution.layout;
     if (layout.pages.length === 0 && !layout.text_projection) {
       throw new Error("canonical layout has no pages and no text_projection");
     }
+
     return { index: buildCanonicalDocumentIndexFromLayout(layout), indexSource: "canonical_layout", fallbackReason: null };
   } catch (error) {
     const message = (error as Error)?.message ?? String(error);
