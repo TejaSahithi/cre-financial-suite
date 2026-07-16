@@ -22,6 +22,25 @@ const NORMALIZE_TIMEOUT_MS = 240_000;
 // still-potentially-slow enrich stage can be tuned independently.
 const ENRICH_TIMEOUT_MS = 240_000;
 
+// Azure staging P0: durable-state reconciliation must distinguish "confirmed
+// absent" from "couldn't determine" — a reconciliation read failing under the
+// same resource pressure that caused the original transport failure must
+// never be silently treated as proof the durable data is missing. Every
+// caller below switches on this exhaustively; there is no boolean collapse.
+type DurabilityState = "durable" | "not_durable" | "unknown";
+
+/**
+ * Run a Supabase query once; on a query-level error, run it exactly once
+ * more before giving up. A single retry is enough to distinguish "the read
+ * itself is failing under resource pressure" (→ unknown, bounded) from a
+ * durable, repeatable error — it is not a general-purpose retry policy.
+ */
+async function selectWithRetry<T extends { data: any; error: any }>(queryFn: () => Promise<T>): Promise<T> {
+  const first = await queryFn();
+  if (!first.error) return first;
+  return await queryFn();
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -171,6 +190,89 @@ const LEASE_MANUAL_REVIEW_FIELDS = [
   "renewal_options", "ti_allowance", "free_rent_months", "notes",
 ];
 
+/**
+ * Reset a job back to a genuinely retryable state after a reconciliation
+ * read came back "unknown" — never touches uploaded_files, never counts as
+ * a terminal outcome. `attempt` was already incremented for this invocation
+ * at claim time, so leaving it alone (only clearing error fields and status)
+ * correctly consumes one unit of the existing max_attempts budget without
+ * inventing new retry infrastructure.
+ */
+async function resetJobForRetryableReconciliation(supabaseAdmin: any, job: any, fileId: string, reason: string) {
+  await supabaseAdmin
+    .from("pipeline_jobs")
+    .update({
+      status: "queued",
+      error_code: null,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", job.id);
+  console.warn(
+    `[${WORKER_NAME}] reconciliation_inconclusive file_id=${fileId} job=${job.id} — ` +
+    `read failed even after retry; requeueing without touching uploaded_files (${reason})`,
+  );
+}
+
+/**
+ * Repair a row that reconciliation has just confirmed holds durable, valid
+ * data but whose status/processing_status/failed_step/error_message were
+ * left stale or contradictory by an earlier failed attempt (the exact
+ * incident shape this patch fixes). This is a genuine repair, not merely
+ * "avoid writing something worse" — it actively clears prior corruption.
+ *
+ * Prefers the existing setStatus() transition machinery (review_required →
+ * pdf_parsed and failed → review_required/parsing are both already legal
+ * transitions in ALLOWED_TRANSITIONS, so the common repair path needs no
+ * FSM bypass). If the row's `status` already equals the target (a same-state
+ * "transition" setStatus's FSM does not model), setStatus is skipped and a
+ * direct, tenant-scoped update repairs only the sibling fields — status
+ * itself is never written outside the FSM.
+ */
+async function repairStaleReconciledState(
+  supabaseAdmin: any,
+  fileId: string,
+  orgId: string,
+  targetStatus: string,
+  targetProcessingStatus: string,
+) {
+  const { data: currentRow } = await supabaseAdmin
+    .from("uploaded_files")
+    .select("status")
+    .eq("id", fileId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  const currentStatus = currentRow?.status ?? null;
+
+  if (currentStatus && currentStatus !== targetStatus) {
+    const { error } = await setStatus(supabaseAdmin, fileId, targetStatus as any, {
+      processing_status: targetProcessingStatus,
+      failed_step: null,
+      error_message: null,
+    });
+    if (!error) return;
+    console.warn(
+      `[${WORKER_NAME}] repairStaleReconciledState: setStatus(${currentStatus} -> ${targetStatus}) rejected for ` +
+      `file_id=${fileId} (${error.message}); falling back to a direct sibling-field repair without changing status`,
+    );
+  }
+
+  // Same-state (or setStatus rejected the transition): repair only the
+  // sibling fields, scoped by both id and org_id, never touching `status`
+  // outside setStatus's own FSM.
+  await supabaseAdmin
+    .from("uploaded_files")
+    .update({
+      processing_status: targetProcessingStatus,
+      failed_step: null,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileId)
+    .eq("org_id", orgId);
+}
+
 async function parkLeaseForManualReview(
   supabaseAdmin: any,
   job: any,
@@ -182,22 +284,35 @@ async function parkLeaseForManualReview(
   errorCode: string,
   reason: string,
   failedStage: "parse" | "normalize" = "parse",
-) {
-  // Never overwrite a valid, already-persisted non-fallback payload — e.g.
-  // normalize-pdf-output's minimal early persist, or a fully enriched
-  // payload from a prior successful run. A transport failure on THIS
-  // attempt does not mean the durable data underneath it is gone.
-  const existing = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
-  if (existing.durable) {
+): Promise<{ outcome: "resume_from_durable_parse" | "resume_from_durable_normalize" | "parked" | "reconciliation_unknown" }> {
+  // Stage-aware, tri-state-aware guard. Checking reconcileDurableNormalize
+  // for a PARSE-stage failure is the wrong signal (normalize hasn't run
+  // yet) — this is the structural gap the Azure staging P0 incident traced
+  // back to. On durable discovery this never fails the job: it repairs the
+  // stale fields and signals the caller to resume the pipeline instead of
+  // parking a genuinely successful parse/normalize as manual-review.
+  const check = failedStage === "parse"
+    ? await reconcileDurableParse(supabaseAdmin, fileId, orgId)
+    : await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
+
+  if (check.state === "durable") {
     console.log(
-      `[${WORKER_NAME}] fallback_aborted_existing_values_found file_id=${fileId} ` +
-      `status=${existing.status} method=${existing.extractionMethod} — ` +
-      `failing job without touching ui_review_payload/parsed_data/normalized_output`,
+      `[${WORKER_NAME}] resume_from_durable_${failedStage} file_id=${fileId} status=${check.status} — ` +
+      `repairing stale state and resuming instead of parking for manual review`,
     );
-    await failJob(supabaseAdmin, job, errorCode, reason);
-    return;
+    const targetStatus = failedStage === "parse" ? "pdf_parsed" : (check.status ?? "review_required");
+    const targetProcessingStatus = failedStage === "parse" ? "pdf_parsed" : String(check.status ?? "review_required");
+    await repairStaleReconciledState(supabaseAdmin, fileId, orgId, targetStatus, targetProcessingStatus);
+    return { outcome: failedStage === "parse" ? "resume_from_durable_parse" : "resume_from_durable_normalize" };
   }
 
+  if (check.state === "unknown") {
+    await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, `${failedStage}_guard`);
+    return { outcome: "reconciliation_unknown" };
+  }
+
+  // state === "not_durable": genuinely nothing durable exists yet — proceed
+  // with the existing fallback-write behavior below.
   await failJob(supabaseAdmin, job, errorCode, reason);
 
   const standardFields = LEASE_MANUAL_REVIEW_FIELDS.map((fieldKey) => ({
@@ -295,6 +410,8 @@ async function parkLeaseForManualReview(
     console.error(`[${WORKER_NAME}] parkLeaseForManualReview setStatus error:`, error.message);
     await setFailed(supabaseAdmin, fileId, reason, failedStage, failedStage === "normalize" ? 45 : 15);
   }
+
+  return { outcome: "parked" };
 }
 
 async function failJobAndUpload(
@@ -352,89 +469,129 @@ function isTransportShapedFailure(stageResult: any): boolean {
   );
 }
 
+// Azure staging P0: the provider value parse-pdf-docling/azure-layout-adapter
+// write into docling_raw._metadata.provider for a genuine Azure Document
+// Intelligence parse (confirmed against the observed incident row).
+const EXPECTED_AZURE_PROVIDER_METADATA = "azure_document_intelligence";
+
 /**
  * Durable-state reconciliation: the database, not the HTTP response, is the
  * authority on whether parsing succeeded. parse-pdf-docling persists
  * docling_raw and flips status to pdf_parsed BEFORE serializing its HTTP
  * response, so a transport failure can arrive after a fully successful parse.
  *
- * Reads only lightweight JSON-path projections — never the whole docling_raw.
+ * Returns a tri-state `state`, never a boolean: "unknown" means the
+ * reconciliation reads themselves failed (even after one retry) and must
+ * never be treated as proof the durable data is absent — the Azure staging
+ * P0 incident traced back to exactly this collapse. Reads only lightweight
+ * JSON-path projections — never the whole docling_raw.
+ *
+ * Structural criteria (Correction round 2, item 2): text length alone is
+ * insufficient. When rawMethod is Azure specifically, provider metadata and
+ * page_count > 0 are also required — kept Azure-specific deliberately (item
+ * 5): other recognized methods (docling, gemini_vision, pdf_text, openxml,
+ * hybrid) are not known to share Azure's corruption mode and keep the
+ * existing method+text-length criteria unchanged.
  */
 async function reconcileDurableParse(supabaseAdmin: any, fileId: string, orgId: string): Promise<{
-  durable: boolean;
+  state: DurabilityState;
   status: string | null;
   rawMethod: string;
   fullTextChars: number;
+  pageCount: number;
 }> {
-  const none = { durable: false, status: null, rawMethod: "", fullTextChars: 0 };
+  const unknown = { state: "unknown" as DurabilityState, status: null, rawMethod: "", fullTextChars: 0, pageCount: 0 };
 
   let status: string | null = null;
   let rawMethod = "";
+  let rawProvider = "";
   let fullTextChars = 0;
+  let pageCount = 0;
 
-  const projected = await supabaseAdmin
-    .from("uploaded_files")
-    .select(
-      "id, status, processing_status, extraction_method, " +
-      "raw_extraction_method:docling_raw->>extraction_method, " +
-      "raw_provider:docling_raw->_metadata->>provider, " +
-      "metadata_full_text_chars:docling_raw->_metadata->>full_text_chars",
-    )
-    .eq("id", fileId)
-    .eq("org_id", orgId)
-    .maybeSingle();
+  const projected = await selectWithRetry(() =>
+    supabaseAdmin
+      .from("uploaded_files")
+      .select(
+        "id, status, processing_status, extraction_method, " +
+        "raw_extraction_method:docling_raw->>extraction_method, " +
+        "raw_provider:docling_raw->_metadata->>provider, " +
+        "metadata_full_text_chars:docling_raw->_metadata->>full_text_chars, " +
+        "raw_page_count:docling_raw->>page_count",
+      )
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle(),
+  );
 
   if (!projected.error && projected.data) {
     status = projected.data.status ?? null;
     rawMethod = String(projected.data.raw_extraction_method || "");
+    rawProvider = String(projected.data.raw_provider || "");
     fullTextChars = Number(projected.data.metadata_full_text_chars || 0);
+    pageCount = Number(projected.data.raw_page_count || 0);
   } else {
-    // Aliased JSON-path projection unsupported or failed — fall back to plain
-    // columns plus a non-aliased JSON-path query. Still never the full JSONB.
+    // Aliased JSON-path projection unsupported or failed even after retry —
+    // fall back to plain columns plus a non-aliased JSON-path query (also
+    // retried once). Still never the full JSONB. If even the fallback
+    // fails, this is genuinely "unknown", not "not durable".
     console.warn(
-      `[${WORKER_NAME}] aliased JSON-path reconciliation select failed ` +
+      `[${WORKER_NAME}] aliased JSON-path reconciliation select failed even after retry ` +
       `(${projected.error?.message ?? "no row"}); using fallback projection`,
     );
-    const basic = await supabaseAdmin
-      .from("uploaded_files")
-      .select("id, status, processing_status, extraction_method")
-      .eq("id", fileId)
-      .eq("org_id", orgId)
-      .maybeSingle();
-    if (basic.error || !basic.data) return none;
+    const basic = await selectWithRetry(() =>
+      supabaseAdmin
+        .from("uploaded_files")
+        .select("id, status, processing_status, extraction_method")
+        .eq("id", fileId)
+        .eq("org_id", orgId)
+        .maybeSingle(),
+    );
+    if (basic.error || !basic.data) return unknown;
     status = basic.data.status ?? null;
 
-    const jsonPaths = await supabaseAdmin
-      .from("uploaded_files")
-      .select("docling_raw->>extraction_method, docling_raw->>full_text")
-      .eq("id", fileId)
-      .eq("org_id", orgId)
-      .maybeSingle();
-    if (jsonPaths.error || !jsonPaths.data) return none;
+    const jsonPaths = await selectWithRetry(() =>
+      supabaseAdmin
+        .from("uploaded_files")
+        .select("docling_raw->>extraction_method, docling_raw->_metadata->>provider, docling_raw->>full_text, docling_raw->>page_count")
+        .eq("id", fileId)
+        .eq("org_id", orgId)
+        .maybeSingle(),
+    );
+    if (jsonPaths.error || !jsonPaths.data) return unknown;
     rawMethod = String(jsonPaths.data.extraction_method || "");
+    rawProvider = String(jsonPaths.data.provider || "");
     fullTextChars = String(jsonPaths.data.full_text || "").length;
+    pageCount = Number(jsonPaths.data.page_count || 0);
   }
 
   // Older rows may lack _metadata.full_text_chars — measure the text string
   // itself (a string projection, not the whole docling_raw object).
   if (!fullTextChars && VALID_DURABLE_PARSER_METHODS.has(rawMethod)) {
-    const textOnly = await supabaseAdmin
-      .from("uploaded_files")
-      .select("docling_raw->>full_text")
-      .eq("id", fileId)
-      .eq("org_id", orgId)
-      .maybeSingle();
-    if (!textOnly.error && textOnly.data) {
+    const textOnly = await selectWithRetry(() =>
+      supabaseAdmin
+        .from("uploaded_files")
+        .select("docling_raw->>full_text")
+        .eq("id", fileId)
+        .eq("org_id", orgId)
+        .maybeSingle(),
+    );
+    if (textOnly.error) return unknown;
+    if (textOnly.data) {
       fullTextChars = String(textOnly.data.full_text || "").length;
     }
   }
 
-  const durable =
-    VALID_DURABLE_PARSER_METHODS.has(rawMethod) &&
-    fullTextChars >= MIN_LEASE_TEXT_CHARS &&
-    POST_PARSE_STATUSES.has(String(status));
+  const isRecognizedMethod = VALID_DURABLE_PARSER_METHODS.has(rawMethod) && rawMethod !== "manual_review_fallback";
+  const hasSufficientText = fullTextChars >= MIN_LEASE_TEXT_CHARS;
+  const isAzure = rawMethod === "azure_layout";
+  const azureStructureValid = !isAzure || (rawProvider === EXPECTED_AZURE_PROVIDER_METADATA && pageCount > 0);
 
-  return { durable, status, rawMethod, fullTextChars };
+  const contentBasedDurable = isRecognizedMethod && hasSufficientText && azureStructureValid;
+  const statusBasedDurable = isRecognizedMethod && hasSufficientText && POST_PARSE_STATUSES.has(String(status));
+
+  const state: DurabilityState = (contentBasedDurable || statusBasedDurable) ? "durable" : "not_durable";
+
+  return { state, status, rawMethod, fullTextChars, pageCount };
 }
 
 // Statuses through which a file legitimately holds a durably-persisted
@@ -463,24 +620,43 @@ const POST_NORMALIZE_STATUSES = new Set(["review_required", "validated", "approv
  * normalized_output / ui_review_payload for actual meaningful values
  * directly (guarantees 1-3) is independent of whatever status the retry
  * machinery left behind.
+ *
+ * Correction round 2, item 4: durability requires actual meaningful content,
+ * not merely an extraction_method string that isn't literally
+ * "manual_review_fallback". `uploadedFileRowHasMeaningfulValues()` (and the
+ * functions it composes — normalizedOutputHasMeaningfulValues /
+ * parsedDataHasMeaningfulValues) already check structural shape directly:
+ * a fallback-shaped `rows: [{}]` row has zero own keys, so
+ * `Object.values(row).some(isMeaningfulFieldValue)` is false regardless of
+ * what extraction_method says. The `isFallback` string check below is kept
+ * as an additional, explicit, non-load-bearing safety net (defense in
+ * depth) — it is not the sole mechanism protecting against empty artifacts,
+ * and this function correctly rejects a structurally-empty payload even if
+ * a future fallback writer used a different method string.
+ *
+ * Returns a tri-state `state`: "unknown" means the read itself failed (even
+ * after one retry) and must never be treated as proof durable data is
+ * absent.
  */
 async function reconcileDurableNormalize(supabaseAdmin: any, fileId: string, orgId: string): Promise<{
-  durable: boolean;
+  state: DurabilityState;
   status: string | null;
   extractionMethod: string;
   hasRecords: boolean;
   enrichmentStatus: string | null;
 }> {
-  const none = { durable: false, status: null, extractionMethod: "", hasRecords: false, enrichmentStatus: null };
+  const unknown = { state: "unknown" as DurabilityState, status: null, extractionMethod: "", hasRecords: false, enrichmentStatus: null };
 
-  const { data, error } = await supabaseAdmin
-    .from("uploaded_files")
-    .select("id, status, extraction_method, ui_review_payload, parsed_data, normalized_output")
-    .eq("id", fileId)
-    .eq("org_id", orgId)
-    .maybeSingle();
+  const { data, error } = await selectWithRetry(() =>
+    supabaseAdmin
+      .from("uploaded_files")
+      .select("id, status, extraction_method, ui_review_payload, parsed_data, normalized_output")
+      .eq("id", fileId)
+      .eq("org_id", orgId)
+      .maybeSingle(),
+  );
 
-  if (error || !data) return none;
+  if (error || !data) return unknown;
 
   const status: string | null = data.status ?? null;
   const payload = data.ui_review_payload || {};
@@ -489,16 +665,18 @@ async function reconcileDurableNormalize(supabaseAdmin: any, fileId: string, org
   const isFallback = !extractionMethod || extractionMethod === "manual_review_fallback";
   const enrichmentStatus = payload.enrichment_status ?? null;
 
-  const statusBasedDurable = POST_NORMALIZE_STATUSES.has(String(status)) && hasRecords && !isFallback;
-  const contentBasedDurable = uploadedFileRowHasMeaningfulValues({
+  const hasMeaningfulContent = uploadedFileRowHasMeaningfulValues({
     ui_review_payload: data.ui_review_payload,
     parsed_data: data.parsed_data,
     normalized_output: data.normalized_output,
-  }) && !isFallback;
+  });
 
-  const durable = statusBasedDurable || contentBasedDurable;
+  const statusBasedDurable = POST_NORMALIZE_STATUSES.has(String(status)) && hasRecords && !isFallback && hasMeaningfulContent;
+  const contentBasedDurable = hasMeaningfulContent && !isFallback;
 
-  return { durable, status, extractionMethod, hasRecords, enrichmentStatus };
+  const state: DurabilityState = (statusBasedDurable || contentBasedDurable) ? "durable" : "not_durable";
+
+  return { state, status, extractionMethod, hasRecords, enrichmentStatus };
 }
 
 // Test hook (same pattern as _shared/extraction/parser.ts).
@@ -507,6 +685,9 @@ export const __test__ = {
   reconcileDurableParse,
   reconcileDurableNormalize,
   parkLeaseForManualReview,
+  repairStaleReconciledState,
+  resetJobForRetryableReconciliation,
+  selectWithRetry,
   isCancelRequested,
   stopForCancellation,
 };
@@ -718,11 +899,12 @@ Deno.serve(async (req: Request) => {
       let parseReconciledToNormalize = false;
       if (!parseResult.ok && isTransportShapedFailure(parseResult)) {
         const reconciled = await reconcileDurableParse(supabaseAdmin, fileId, orgId);
-        if (reconciled.durable) {
+
+        if (reconciled.state === "durable") {
           console.warn(
             `[${WORKER_NAME}] parse_transport_failed_but_persisted file_id=${fileId} ` +
             `durable_status=${reconciled.status} method=${reconciled.rawMethod} ` +
-            `chars=${reconciled.fullTextChars} http_status=${parseResult.status}`,
+            `chars=${reconciled.fullTextChars} pages=${reconciled.pageCount} http_status=${parseResult.status}`,
           );
           await logger.event("parse", "reconciled", {
             provider: "lease-extraction-worker",
@@ -732,16 +914,29 @@ Deno.serve(async (req: Request) => {
               durable_status: reconciled.status,
               parser_method: reconciled.rawMethod,
               full_text_chars: reconciled.fullTextChars,
+              page_count: reconciled.pageCount,
               transport_status: parseResult.status,
               transport_error: String(parseResult.error || "").slice(0, 300),
             },
           });
 
-          if (reconciled.status === "pdf_parsed") {
-            // Parse persisted; continue to normalize via the guarded stage
-            // claim below (same path as a normal parse success).
-            parseReconciledToNormalize = true;
-          } else if (reconciled.status === "validated" || reconciled.status === "review_required") {
+          // Repair, not just "avoid overwriting" — a row already left with a
+          // stale status/failed_step/error_message by an earlier failed
+          // attempt gets actively corrected here, in addition to preventing
+          // a fresh incident.
+          await repairStaleReconciledState(
+            supabaseAdmin,
+            fileId,
+            orgId,
+            reconciled.status === "pdf_parsed" || !POST_PARSE_STATUSES.has(String(reconciled.status))
+              ? "pdf_parsed"
+              : String(reconciled.status),
+            reconciled.status === "pdf_parsed" || !POST_PARSE_STATUSES.has(String(reconciled.status))
+              ? "pdf_parsed"
+              : String(reconciled.status),
+          );
+
+          if (reconciled.status === "validated" || reconciled.status === "review_required") {
             // The workflow already progressed past normalization (e.g. a
             // previous attempt completed it). Nothing left for this job.
             await supabaseAdmin
@@ -780,8 +975,30 @@ Deno.serve(async (req: Request) => {
               message: "Durable parse output found; normalization already in flight",
             });
           }
-          // Any other durable status falls through to the normal failure path.
+          // "pdf_parsed" (or any other durable status without a more specific
+          // handler above): parse persisted; continue to normalize via the
+          // guarded stage claim below (same path as a normal parse success).
+          parseReconciledToNormalize = true;
+        } else if (reconciled.state === "unknown") {
+          // The reconciliation read itself failed even after a retry — this
+          // must never be treated as proof the durable data is absent.
+          // Requeue for a genuine retry instead of parking or failing.
+          await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "parse_call_site");
+          await logger.event("parse", "reconciliation_unknown", {
+            provider: "lease-extraction-worker",
+            metadata: { job_id: job.id, transport_status: parseResult.status },
+          });
+          return jsonResponse({
+            error: true,
+            error_code: "RECONCILIATION_INCONCLUSIVE",
+            job_id: job.id,
+            stage: "parse",
+            retryable: true,
+            message: "Could not determine durable parse state after a transport failure; job requeued for retry.",
+          }, 200);
         }
+        // state === "not_durable": falls through to the normal failure path
+        // below exactly as before.
       }
 
       if (!parseResult.ok && !parseReconciledToNormalize) {
@@ -816,30 +1033,58 @@ Deno.serve(async (req: Request) => {
         }
 
         if (isLeaseModule) {
-          // For lease files, park for manual review so users can enter fields
-          // manually instead of showing a hard failure with no path forward.
-          await parkLeaseForManualReview(
+          // Stage-aware, tri-state-aware guard: on durable discovery this
+          // resumes the pipeline instead of parking (and never fails the
+          // job); on "unknown" it requeues for a genuine retry; only a true
+          // "not_durable" result writes the manual-review fallback.
+          const parkResult = await parkLeaseForManualReview(
             supabaseAdmin, job, fileId, orgId,
             fileRecord.file_name ?? "Lease document",
             fileRecord.module_type ?? "leases",
             fileRecord.document_subtype ?? "base_lease",
             errorCode, message, "parse",
           );
+
+          if (parkResult.outcome === "resume_from_durable_parse") {
+            await logger.event("parse", "reconciled", {
+              provider: "lease-extraction-worker",
+              metadata: { job_id: job.id, reason: "resume_from_durable_parse_guard", status: parseResult.status },
+            });
+            parseReconciledToNormalize = true;
+            // Deliberately no return here — control falls through to the
+            // stage-claim/normalize-dispatch code below, the same path a
+            // normal parse success takes.
+          } else if (parkResult.outcome === "reconciliation_unknown") {
+            await logger.event("parse", "reconciliation_unknown", {
+              provider: "lease-extraction-worker",
+              metadata: { job_id: job.id, status: parseResult.status },
+            });
+            return jsonResponse({
+              error: true,
+              error_code: "RECONCILIATION_INCONCLUSIVE",
+              job_id: job.id,
+              stage: "parse",
+              retryable: true,
+              message: "Could not determine durable parse state after a transport failure; job requeued for retry.",
+            }, 200);
+          } else {
+            // "parked": genuinely nothing durable exists yet.
+            await logger.event("parse", "failed", {
+              error_code: errorCode,
+              error_message: message,
+              metadata: { job_id: job.id, status: parseResult.status, parked_for_manual_review: true },
+            });
+            return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", parked_for_manual_review: true, message }, 200);
+          }
+        } else {
+          await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "parse", 15);
           await logger.event("parse", "failed", {
             error_code: errorCode,
             error_message: message,
-            metadata: { job_id: job.id, status: parseResult.status, parked_for_manual_review: true },
+            metadata: { job_id: job.id, status: parseResult.status, retryable: Boolean(parseResult.retryable) },
           });
-          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", parked_for_manual_review: true, message }, 200);
+          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", message }, 200);
         }
-
-        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "parse", 15);
-        await logger.event("parse", "failed", {
-          error_code: errorCode,
-          error_message: message,
-          metadata: { job_id: job.id, status: parseResult.status, retryable: Boolean(parseResult.retryable) },
-        });
-        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "parse", message }, 200);
       }
 
       // Concurrency guard: only advance parse → normalize if no other worker
@@ -943,6 +1188,8 @@ Deno.serve(async (req: Request) => {
       });
 
       const normalizeResult = await callInternalFunction("normalize-pdf-output", { file_id: fileId, pipeline_job_id: job.id, worker_attempt: attempt }, orgId, NORMALIZE_TIMEOUT_MS);
+      let normalizeReconciledToComplete = false;
+
       if (!normalizeResult.ok) {
         const message = normalizeResult.error || "Document normalization failed";
         const errorCode = normalizeResult.error_code || normalizeResult.data?.error_code || "NORMALIZE_FAILED";
@@ -955,7 +1202,8 @@ Deno.serve(async (req: Request) => {
         // full enriched one — already landed. Re-read before parking.
         if (isTransportShapedFailure(normalizeResult)) {
           const reconciled = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
-          if (reconciled.durable) {
+
+          if (reconciled.state === "durable") {
             console.warn(
               `[${WORKER_NAME}] normalize_transport_failed_but_persisted file_id=${fileId} ` +
               `durable_status=${reconciled.status} method=${reconciled.extractionMethod} ` +
@@ -972,6 +1220,13 @@ Deno.serve(async (req: Request) => {
                 transport_error: String(normalizeResult.error || "").slice(0, 300),
               },
             });
+            await repairStaleReconciledState(
+              supabaseAdmin,
+              fileId,
+              orgId,
+              String(reconciled.status ?? "review_required"),
+              String(reconciled.status ?? "review_required"),
+            );
             await supabaseAdmin
               .from("pipeline_jobs")
               .update({
@@ -996,31 +1251,73 @@ Deno.serve(async (req: Request) => {
               durable_status: reconciled.status,
             });
           }
+
+          if (reconciled.state === "unknown") {
+            await resetJobForRetryableReconciliation(supabaseAdmin, job, fileId, "normalize_call_site");
+            await logger.event("normalize", "reconciliation_unknown", {
+              provider: "lease-extraction-worker",
+              metadata: { job_id: job.id, transport_status: normalizeResult.status },
+            });
+            return jsonResponse({
+              error: true,
+              error_code: "RECONCILIATION_INCONCLUSIVE",
+              job_id: job.id,
+              stage: "normalize",
+              retryable: true,
+              message: "Could not determine durable normalize state after a transport failure; job requeued for retry.",
+            }, 200);
+          }
+          // state === "not_durable": falls through below exactly as before.
         }
 
         if (isLeaseModule) {
-          await parkLeaseForManualReview(
+          const parkResult = await parkLeaseForManualReview(
             supabaseAdmin, job, fileId, orgId,
             fileRecord.file_name ?? "Lease document",
             fileRecord.module_type ?? "leases",
             fileRecord.document_subtype ?? "base_lease",
             errorCode, message, "normalize",
           );
+
+          if (parkResult.outcome === "resume_from_durable_normalize") {
+            await logger.event("normalize", "reconciled", {
+              provider: "lease-extraction-worker",
+              metadata: { job_id: job.id, reason: "resume_from_durable_normalize_guard" },
+            });
+            normalizeReconciledToComplete = true;
+            // No return — falls through to the "mark completed" block below,
+            // the same path a normal normalize success takes.
+          } else if (parkResult.outcome === "reconciliation_unknown") {
+            await logger.event("normalize", "reconciliation_unknown", {
+              provider: "lease-extraction-worker",
+              metadata: { job_id: job.id, status: normalizeResult.status },
+            });
+            return jsonResponse({
+              error: true,
+              error_code: "RECONCILIATION_INCONCLUSIVE",
+              job_id: job.id,
+              stage: "normalize",
+              retryable: true,
+              message: "Could not determine durable normalize state after a transport failure; job requeued for retry.",
+            }, 200);
+          } else {
+            // "parked": genuinely nothing durable exists yet.
+            await logger.event("normalize", "failed", {
+              error_code: errorCode,
+              error_message: message,
+              metadata: { job_id: job.id, status: normalizeResult.status, parked_for_manual_review: true },
+            });
+            return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", parked_for_manual_review: true, message }, 200);
+          }
+        } else {
+          await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "normalize", 45);
           await logger.event("normalize", "failed", {
             error_code: errorCode,
             error_message: message,
-            metadata: { job_id: job.id, status: normalizeResult.status, parked_for_manual_review: true },
+            metadata: { job_id: job.id, status: normalizeResult.status, retryable: Boolean(normalizeResult.retryable) },
           });
-          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", parked_for_manual_review: true, message }, 200);
+          return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", message }, 200);
         }
-
-        await failJobAndUpload(supabaseAdmin, job, fileId, errorCode, message, "normalize", 45);
-        await logger.event("normalize", "failed", {
-          error_code: errorCode,
-          error_message: message,
-          metadata: { job_id: job.id, status: normalizeResult.status, retryable: Boolean(normalizeResult.retryable) },
-        });
-        return jsonResponse({ error: true, error_code: errorCode, job_id: job.id, stage: "normalize", message }, 200);
       }
 
       await supabaseAdmin
@@ -1032,12 +1329,13 @@ Deno.serve(async (req: Request) => {
           metadata: {
             ...(job.metadata || {}),
             normalize_completed_at: new Date().toISOString(),
+            ...(normalizeReconciledToComplete ? { reconciled_from: "resume_from_durable_normalize_guard" } : {}),
           },
         })
         .eq("id", job.id);
 
       await logger.event("normalize", "completed", {
-        metadata: { job_id: job.id },
+        metadata: { job_id: job.id, reconciled: normalizeReconciledToComplete },
       });
 
       // Defensive second dispatch path (P0.1/§3): normalize-pdf-output
@@ -1046,9 +1344,16 @@ Deno.serve(async (req: Request) => {
       // worker observing the response, re-check and re-dispatch here so an
       // enrich job is never silently lost.
       const postNormalizeCheck = await reconcileDurableNormalize(supabaseAdmin, fileId, orgId);
-      if (postNormalizeCheck.durable && postNormalizeCheck.enrichmentStatus !== "completed" && postNormalizeCheck.enrichmentStatus !== "running") {
+      if (
+        postNormalizeCheck.state === "durable" &&
+        postNormalizeCheck.enrichmentStatus !== "completed" &&
+        postNormalizeCheck.enrichmentStatus !== "running"
+      ) {
         await enqueueEnrichmentJob({ supabaseAdmin, orgId, fileId, moduleType: fileRecord.module_type, logger });
       }
+      // state === "not_durable" or "unknown": safe default is to skip the
+      // enrich dispatch rather than guess — an inconclusive determination
+      // should not trigger new work.
 
       return jsonResponse({ error: false, job_id: job.id, stage: "normalize", status: "completed" });
     }
