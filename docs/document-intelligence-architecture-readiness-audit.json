@@ -1,0 +1,260 @@
+{
+  "audit": "document-intelligence-architecture-readiness",
+  "date": "2026-07-15",
+  "scope": "bounded discovery and verification only",
+  "recommendation": "No Gate",
+  "classification": "ready with conditions",
+  "source_changed_in_this_audit": false,
+  "provider_calls_made": false,
+  "remote_reads_made": false,
+  "remote_writes_made": false,
+  "deploy_performed": false,
+  "extraction_rerun": false,
+  "summary": {
+    "current_path": "Upload to parse to normalize to Lease Review is architecturally connected and suitable for controlled local or staging upload testing with explicit conditions.",
+    "v3_path": "Diagnostic/advisory only. Durable v3 scaffold, side-write, readiness, canonical layout, evidence anchors, and package graph exist, but no verified completed provider-backed v3 run is available.",
+    "approval_path": "Current approval workflow remains non-v3-gated. This is correct for No Gate, but not ready for evidence-based approval gating."
+  },
+  "readiness": {
+    "controlled_upload_test": "ready with conditions",
+    "controlled_production": "not ready",
+    "v3_hard_gate": "not ready",
+    "global_vertex_fact_ledger": "not ready"
+  },
+  "architecture_flow": [
+    "FileUploader / LeaseUpload",
+    "uploaded_files row and storage object",
+    "confirm-upload / ingest-file",
+    "pipeline_jobs",
+    "lease-extraction-worker",
+    "parse-pdf-docling",
+    "parser provider: legacy or Azure layout",
+    "uploaded_files.docling_raw",
+    "normalize-pdf-output",
+    "legacy_hybrid or vertex_fact_ledger business extraction",
+    "normalized_output and ui_review_payload",
+    "optional v3 diagnostic side-write",
+    "LeaseUpload pipeline-status",
+    "ensureLeaseReviewDraftForUpload",
+    "leases row linked to uploaded file",
+    "LeaseReview",
+    "normalizeLeaseReviewData",
+    "tab tables, readiness, blockers, debug",
+    "save draft / update field / approve workflow"
+  ],
+  "component_status": [
+    {
+      "component": "src/pages/LeaseUpload.jsx",
+      "role": "Upload status and Open Lease Review handoff",
+      "status": "connected_with_risks",
+      "notes": "Uses pipeline-status, fallback uploaded_files query, and ensureLeaseReviewDraftForUpload. Stale failed_step is debug-only for review-ready rows."
+    },
+    {
+      "component": "src/lib/leaseUploadReviewAction.js",
+      "role": "Find-or-create lease review draft",
+      "status": "connected",
+      "notes": "Resolves existing lease id, searches linked leases, then calls server prepare flow."
+    },
+    {
+      "component": "src/pages/LeaseReview.jsx",
+      "role": "Lease Review UI orchestration",
+      "status": "connected_with_risks",
+      "notes": "Loads lease plus uploaded-file payload and uses normalizeLeaseReviewData. Auto-link fallback can search same-org uploads if source link is missing."
+    },
+    {
+      "component": "src/lib/leaseReviewFieldNormalizer.js",
+      "role": "Single frontend projection and normalization layer",
+      "status": "connected",
+      "notes": "Combines standard fields, dynamic rows, CAM/expense/rent/security fallbacks, clause records, readiness, and blockers."
+    },
+    {
+      "component": "src/lib/leaseReviewCurrentPolicy.js",
+      "role": "Profile-aware current review requiredness",
+      "status": "connected",
+      "notes": "Prevents assignment and unknown documents from inheriting full base-lease blockers."
+    },
+    {
+      "component": "supabase/functions/ingest-file/index.ts",
+      "role": "Pipeline entrypoint and worker dispatch",
+      "status": "connected",
+      "notes": "Creates/updates pipeline jobs and dispatches the lease extraction worker."
+    },
+    {
+      "component": "supabase/functions/lease-extraction-worker/index.ts",
+      "role": "Parse then normalize worker",
+      "status": "connected",
+      "notes": "Handles parse-normalize sequencing and durable status reconciliation."
+    },
+    {
+      "component": "supabase/functions/parse-pdf-docling/index.ts",
+      "role": "Parser output producer",
+      "status": "connected",
+      "notes": "Writes docling_raw and parser status. Parser provider is separate from business extraction provider."
+    },
+    {
+      "component": "supabase/functions/normalize-pdf-output/index.ts",
+      "role": "Business output producer and optional v3 side-write",
+      "status": "connected_with_conditions",
+      "notes": "BUSINESS_EXTRACTION_PROVIDER selects legacy_hybrid vs vertex_fact_ledger. ENABLE_DOCUMENT_INTELLIGENCE_V3 controls diagnostic side-write."
+    },
+    {
+      "component": "supabase/functions/_shared/extraction/document-intelligence-v3/side-write.ts",
+      "role": "v3 diagnostic durable write path",
+      "status": "advisory_ready",
+      "notes": "Flag-gated and failure-isolated from legacy normalize."
+    },
+    {
+      "component": "supabase/functions/_shared/extraction/vertex-fact-ledger/orchestrator.ts",
+      "role": "Provider-backed claim/evidence path",
+      "status": "partial_not_runtime_verified",
+      "notes": "Architecture exists, but no completed provider-backed real run has been verified."
+    },
+    {
+      "component": "supabase/functions/phase52-vertex-diagnostic/index.ts",
+      "role": "Single-request provider diagnostic wrapper",
+      "status": "diagnostic_only_failed_live_attempt",
+      "notes": "No DB path; recent bounded invocation returned HTTP 502 and should not be retried without approval."
+    }
+  ],
+  "schema_assessment": {
+    "strong_points": [
+      "v3 tables are org-scoped and read-protected by RLS policies",
+      "document_claim_evidence cascades from document_claims",
+      "canonical projections are unique by run_id and field_key",
+      "side-write uses idempotency key when supplied",
+      "v3 side-write failures do not break legacy normalize"
+    ],
+    "risks": [
+      {
+        "risk": "document_canonical_field_projections.source_claim_ids is not FK-enforced",
+        "severity": "medium"
+      },
+      {
+        "risk": "document_claim_evidence.uploaded_file_id can become null on uploaded file delete",
+        "severity": "medium"
+      },
+      {
+        "risk": "multiple null idempotency keys are possible",
+        "severity": "low"
+      },
+      {
+        "risk": "reviewer decisions are primarily JSONB in leases.extraction_data.field_reviews",
+        "severity": "high"
+      },
+      {
+        "risk": "lease source linkage is mostly JSONB instead of an enforceable top-level relation",
+        "severity": "high"
+      }
+    ]
+  },
+  "duplicate_paths": [
+    {
+      "area": "parser/layout",
+      "paths": ["legacy parser", "Azure layout", "fallback/shadow modes"],
+      "recommended_authority": "EXTRACTION_PROVIDER only controls parser/layout"
+    },
+    {
+      "area": "business extraction",
+      "paths": ["legacy_hybrid", "vertex_fact_ledger"],
+      "recommended_authority": "legacy_hybrid remains default until scoped provider test succeeds"
+    },
+    {
+      "area": "Lease Review rows",
+      "paths": ["ui_review_payload", "normalized_output", "leases.extraction_data", "frontend fallbacks", "v3 projections"],
+      "recommended_authority": "current authority is normalizeLeaseReviewData over current payloads; v3 remains advisory"
+    },
+    {
+      "area": "reviewer decisions",
+      "paths": ["leases.extraction_data.field_reviews", "lease_field_reviews table"],
+      "recommended_authority": "current app uses JSONB map; row-table promotion needs a separate phase"
+    },
+    {
+      "area": "expense and CAM rules",
+      "paths": ["workflow_output.expense_rules", "lease_expense_rules", "frontend no-provider fallbacks"],
+      "recommended_authority": "persisted rules first, then structured workflow/fallback rows as needs_review"
+    }
+  ],
+  "config_matrix": [
+    { "name": "VITE_SUPABASE_URL", "purpose": "frontend Supabase URL", "status": "required_not_verified" },
+    { "name": "VITE_SUPABASE_ANON_KEY", "purpose": "frontend anon auth", "status": "required_not_verified" },
+    { "name": "WORKER_INTERNAL_SECRET", "purpose": "internal function auth", "status": "server_side_required_value_not_inspected" },
+    { "name": "EXTRACTION_PROVIDER", "purpose": "parser/layout provider", "status": "must_not_be_reused_for_business_provider" },
+    { "name": "BUSINESS_EXTRACTION_PROVIDER", "purpose": "business extraction provider", "status": "must_not_be_globally_set_to_vertex_fact_ledger_without_approval" },
+    { "name": "ENABLE_DOCUMENT_INTELLIGENCE_V3", "purpose": "v3 side-write/canonical diagnostics", "status": "diagnostic_flag_not_gate" },
+    { "name": "VERTEX_PROJECT_ID or GOOGLE_PROJECT_ID", "purpose": "Vertex project", "status": "required_for_provider_test_not_rechecked" },
+    { "name": "VERTEX_LOCATION", "purpose": "Vertex region", "status": "supported_explicit_preferred" },
+    { "name": "GOOGLE_SERVICE_ACCOUNT_KEY", "purpose": "Google service account JSON", "status": "server_side_secret_do_not_print" },
+    { "name": "GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY", "purpose": "split Google credentials", "status": "server_side_secret_do_not_print" }
+  ],
+  "top_risks": [
+    { "rank": 1, "risk": "No verified completed provider-backed v3 run", "severity": "high" },
+    { "rank": 2, "risk": "Lease Review business rows still come from legacy JSON, not durable v3 claims", "severity": "high" },
+    { "rank": 3, "risk": "Source-file link can be missing and recovered by same-org heuristic", "severity": "high" },
+    { "rank": 4, "risk": "Reviewer decisions are JSONB-map authoritative", "severity": "high" },
+    { "rank": 5, "risk": "Runtime env and deployment alignment not verified", "severity": "high" },
+    { "rank": 6, "risk": "Fallback rows can be useful but not provider-confirmed", "severity": "medium" },
+    { "rank": 7, "risk": "View Source behavior may not fully navigate to source document page", "severity": "medium" },
+    { "rank": 8, "risk": "v3 schemas are diagnostic with some weak referential enforcement", "severity": "medium" },
+    { "rank": 9, "risk": "Duplicate legacy and v3 paths can confuse product expectations", "severity": "medium" },
+    { "rank": 10, "risk": "Approval workflow is not evidence-gated", "severity": "medium" }
+  ],
+  "blockers_before_upload_acceptance_test": [
+    "Confirm target environment and function versions match inspected code",
+    "Confirm frontend env points to intended Supabase project",
+    "Confirm pipeline-status is available for the test org and upload",
+    "Confirm ingest-file, lease-extraction-worker, parse-pdf-docling, and normalize-pdf-output are available",
+    "Confirm parser provider mode intentionally",
+    "Confirm business provider remains legacy_hybrid unless scoped provider test is approved",
+    "Confirm ENABLE_DOCUMENT_INTELLIGENCE_V3 state intentionally",
+    "Confirm uploaded_files.docling_raw, normalized_output, and ui_review_payload are populated",
+    "Confirm Open Lease Review creates or finds the correct lease row",
+    "Confirm Lease Review loads from linked source file, not same-org heuristic discovery",
+    "Confirm reviewer changes persist and reload",
+    "Confirm no v3 advisory result blocks approval",
+    "Confirm debug panels are admin-only",
+    "Confirm no secrets appear in browser logs or docs"
+  ],
+  "blockers_before_controlled_production": [
+    "Real provider-backed v3 run must complete successfully if v3 is part of production story",
+    "Durable claims, evidence, projections, validation drops, and package graph rows need real business validation",
+    "Reviewer decision authority must be documented or normalized",
+    "Source-file linkage should be enforceable and queryable without heuristic discovery",
+    "Browser E2E must prove upload to review to save draft to reload to approval handoff",
+    "Evidence view must open correct document page or source region",
+    "Assignment, base lease, CAM-heavy base lease, and unknown document behavior need staging coverage",
+    "RLS must be verified for user, admin, and super admin roles",
+    "Provider failures must return bounded sanitized errors",
+    "QA recommendation must remain No Gate until business users approve stricter v3 behavior"
+  ],
+  "recommended_next_steps": [
+    {
+      "step": "Runtime alignment check",
+      "estimated_effort": "2 to 4 hours",
+      "description": "Verify local/staging env, function versions, and frontend Supabase project."
+    },
+    {
+      "step": "Controlled upload test",
+      "estimated_effort": "4 to 8 hours",
+      "description": "Prove one current-path upload-to-review flow without production writes."
+    },
+    {
+      "step": "Source-link hardening",
+      "estimated_effort": "1 to 2 days",
+      "description": "Make uploaded file to lease linkage explicit and enforceable."
+    },
+    {
+      "step": "Reviewer-state authority decision",
+      "estimated_effort": "1 to 3 days",
+      "description": "Choose JSONB or lease_field_reviews as authoritative state."
+    },
+    {
+      "step": "Provider-backed v3 one-document test",
+      "estimated_effort": "1 to 2 days after runtime readiness",
+      "description": "Run one approved provider-backed diagnostic test only after explicit approval."
+    }
+  ],
+  "files_created": [
+    "docs/document-intelligence-architecture-readiness-audit.md",
+    "docs/document-intelligence-architecture-readiness-audit.json"
+  ]
+}
