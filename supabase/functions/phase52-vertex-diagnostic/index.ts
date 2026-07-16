@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 /**
  * Phase 52B internal-only Vertex diagnostic.
  *
@@ -75,7 +75,15 @@ function sanitizeText(value: unknown): string {
 }
 
 function errorCategory(error: unknown): string {
+  const structuredCategory = (error as { category?: unknown })?.category;
+  if (typeof structuredCategory === "string" && structuredCategory.trim()) {
+    return structuredCategory;
+  }
+
   const message = String((error as Error)?.message ?? error ?? "").toLowerCase();
+  if (/oauth_timeout/.test(message)) return "oauth_timeout";
+  if (/vertex_timeout/.test(message)) return "vertex_timeout";
+  if (/oauth/.test(message) && /status|token|json|credential|auth/.test(message)) return "oauth_error";
   if (/credential|service account|private key|access token|unauthorized|permission|auth/.test(message)) return "auth_or_credentials";
   if (/timeout|abort/.test(message)) return "timeout";
   if (/network|fetch|connection|reset/.test(message)) return "network";
@@ -151,6 +159,7 @@ export async function handlePhase52VertexDiagnosticRequest(
   const diagnosticLabel = ((body as Record<string, unknown>).diagnostic_label as string | undefined)?.slice(0, 120) ?? null;
   const vertexCaller = deps.vertexCaller ?? callVertexAISingleRequestDiagnostic;
   const startedAt = deps.now?.() ?? Date.now();
+  const stageTimings: Array<{ stage: string; elapsedMs: number }> = [];
 
   try {
     const result = await vertexCaller({
@@ -159,6 +168,9 @@ export async function handlePhase52VertexDiagnosticRequest(
       responseMimeType: "application/json",
       temperature: 0,
       maxOutputTokens: 1200,
+      onStage: (event) => {
+        stageTimings.push({ stage: event.stage, elapsedMs: event.elapsedMs });
+      },
     });
     const latencyMs = Math.max(0, result.latencyMs ?? ((deps.now?.() ?? Date.now()) - startedAt));
     return jsonResponse({
@@ -172,6 +184,7 @@ export async function handlePhase52VertexDiagnosticRequest(
         input_tokens: result.inputTokens ?? 0,
         output_tokens: result.outputTokens ?? 0,
       },
+      stage_timings: stageTimings.length > 0 ? stageTimings : result.stages ?? [],
       diagnostic_label: diagnosticLabel,
       parsed_diagnostic_facts: parseDiagnosticJson(result.content),
       sanitized_response_text: sanitizeText(result.content),
@@ -183,6 +196,7 @@ export async function handlePhase52VertexDiagnosticRequest(
       request_count: 1,
       error_category: errorCategory(error),
       sanitized_error: sanitizeText((error as Error)?.message ?? error),
+      stage_timings: stageTimings,
       diagnostic_label: diagnosticLabel,
     }, 502);
   }

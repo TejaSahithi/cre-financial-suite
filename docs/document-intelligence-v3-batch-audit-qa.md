@@ -1665,3 +1665,76 @@ Report created: `docs/document-intelligence-v3-phase52B-single-request-diagnosti
 Recommendation remains: **No Gate**.
 
 Recommended Phase 52C: only after explicit approval, deploy or serve the diagnostic endpoint in an internal environment with configured Vertex credentials, invoke it exactly once with the approved Craven sample, capture sanitized output, and immediately stop.
+
+## Phase 52C: Timeout Postmortem
+
+Phase 52C instrumented the internal-only Phase 52 Vertex diagnostic path after the prior live diagnostic request entered the handler but did not return before Edge isolate termination. No VertexAI, Gemini, OpenAI, Azure, parse, extraction, deploy, database access, endpoint invocation, provider retry, or secret-value exposure occurred in this phase.
+
+Report created: `docs/document-intelligence-v3-phase52C-timeout-postmortem.md`.
+
+### Phase 52C Live Diagnostic Result
+
+| Area | Result |
+| --- | --- |
+| internal authentication | passed |
+| request validation | passed |
+| request entered diagnostic handler | confirmed |
+| provider response | not received |
+| Edge isolate | terminated after wall-clock timeout |
+| output artifact | not created |
+| provider-call budget | indeterminate / treated as consumed |
+| retry approved | no |
+
+### Phase 52C Instrumentation
+
+| Area | Result |
+| --- | --- |
+| safe stage timing names | `auth_config_loaded`, `jwt_created`, `oauth_request_started`, `oauth_request_completed`, `vertex_request_started`, `vertex_response_received`, `response_parsed` |
+| OAuth timeout | bounded with `AbortController`; sanitized category `oauth_timeout` |
+| Vertex timeout | bounded with `AbortController`; sanitized category `vertex_timeout` |
+| non-2xx OAuth | sanitized category `oauth_error` |
+| non-2xx Vertex | sanitized category `vertex_error` |
+| secret output | credentials, JWTs, access tokens, authorization headers, private keys, and service-account JSON are not logged or returned |
+| local `GOOGLE_SERVICE_ACCOUNT_KEY` dotenv inspection | `.env` missing; `.env.production` missing; no values printed |
+
+### Phase 52C Verification
+
+| Check | Result |
+| --- | --- |
+| Deno check | passed for focused Phase 52 diagnostic test file |
+| Deno test | passed outside sandbox: 10 focused tests |
+| provider call | none |
+| endpoint invocation | none |
+| QA JSON parse | passed |
+
+Recommendation remains: **No Gate**.
+
+Recommended Phase 52D: do not retry automatically. First review the timeout/stage instrumentation, then decide whether to approve exactly one new bounded internal diagnostic invocation.
+
+## Phase 52D: Bounded Retry Precheck
+
+Phase 52D performed a safe local runtime precheck of `.env.phase52.local` before any future bounded Vertex diagnostic retry. No VertexAI, Gemini, OpenAI, Azure, endpoint invocation, deploy, database access, network request, parse, extraction, or secret-value printing occurred.
+
+Report created: `docs/document-intelligence-v3-phase52D-bounded-retry-precheck.md`.
+
+### Phase 52D Results
+
+| Area | Result |
+| --- | --- |
+| env file inspected | `.env.phase52.local` only |
+| `WORKER_INTERNAL_SECRET` | present |
+| `VERTEX_PROJECT_ID` or `GOOGLE_PROJECT_ID` | present |
+| `VERTEX_LOCATION` | present |
+| `GOOGLE_SERVICE_ACCOUNT_KEY` | present |
+| split `GOOGLE_CLIENT_EMAIL` + `GOOGLE_PRIVATE_KEY` | missing |
+| service-account JSON | valid JSON |
+| required fields | `type`, `project_id`, `private_key`, `client_email`, and `token_uri` present |
+| private key markers | BEGIN/END PRIVATE KEY markers present |
+| serve command confirmed | `supabase functions serve phase52-vertex-diagnostic --env-file .env.phase52.local --no-verify-jwt` |
+| command executed | no |
+| timeout readiness | OAuth 5000 ms; Vertex 30000 ms; bounded below prior isolate termination window |
+| stage timing readiness | all Phase 52C safe stage names can be returned, with partial stages on failure |
+
+Recommendation remains: **No Gate**.
+
+Recommended next step: only after explicit approval, run exactly one bounded internal sample-text diagnostic invocation with `.env.phase52.local` and stop after the sanitized response or timeout category is captured.

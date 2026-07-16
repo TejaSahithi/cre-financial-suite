@@ -1,10 +1,10 @@
 {
-  "phase": "52B",
-  "generated_at": "2026-07-15T15:30:00.000Z",
+  "phase": "52D-Precheck",
+  "generated_at": "2026-07-15T00:00:00.000Z",
   "diagnostic_only": true,
   "phase_goal": "Run authenticated local visual verification of the Phase 36 Lease Review UI contract fixes and report results.",
   "backfill_performed": true,
-  "status": "phase52B_single_request_diagnostic_wrapper_implemented",
+  "status": "phase52D_bounded_retry_precheck_completed",
   "blocker": null,
   "recommendation": "no_gate",
   "approved_ids": {
@@ -4057,5 +4057,199 @@
     ],
     "recommendation": "no_gate"
   },
-  "recommended_phase_52C": "Only after explicit approval, deploy or serve the internal-only diagnostic endpoint in an environment with configured Vertex credentials, invoke it exactly once with the approved Craven sample, capture sanitized output, and stop."
+  "recommended_phase_52C": "Only after explicit approval, deploy or serve the internal-only diagnostic endpoint in an environment with configured Vertex credentials, invoke it exactly once with the approved Craven sample, capture sanitized output, and stop.",
+  "phase52C_timeout_postmortem": {
+    "performed": true,
+    "provider_calls_made": false,
+    "vertex_calls_made": false,
+    "gemini_calls_made": false,
+    "openai_calls_made": false,
+    "azure_calls_made": false,
+    "endpoint_invoked": false,
+    "deployed": false,
+    "db_access": false,
+    "db_reads": false,
+    "db_writes": false,
+    "parse_rerun": false,
+    "extraction_rerun": false,
+    "secret_values_printed": false,
+    "provider_call_budget": "indeterminate_treated_as_consumed",
+    "retry_approved": false,
+    "live_diagnostic_result": {
+      "internal_authentication": "passed",
+      "request_validation": "passed",
+      "request_entered_diagnostic_handler": "confirmed",
+      "provider_response": "not_received",
+      "edge_isolate": "terminated_after_wall_clock_timeout",
+      "output_artifact": "not_created",
+      "recommendation": "no_gate"
+    },
+    "blocking_operations_traced": [
+      "service_account_credential_parsing",
+      "jwt_signing",
+      "google_oauth_token_request",
+      "vertex_generate_content_request",
+      "response_body_parsing"
+    ],
+    "stage_timings_added": [
+      "auth_config_loaded",
+      "jwt_created",
+      "oauth_request_started",
+      "oauth_request_completed",
+      "vertex_request_started",
+      "vertex_response_received",
+      "response_parsed"
+    ],
+    "timeouts_added": {
+      "oauth_timeout_ms_default": 5000,
+      "vertex_timeout_ms_default": 30000,
+      "implementation": "AbortController"
+    },
+    "sanitized_error_categories": [
+      "oauth_timeout",
+      "vertex_timeout",
+      "oauth_error",
+      "vertex_error",
+      "auth_or_credentials",
+      "network",
+      "provider_response",
+      "unknown"
+    ],
+    "secret_safety": {
+      "credentials_logged_or_returned": false,
+      "jwts_logged_or_returned": false,
+      "access_tokens_logged_or_returned": false,
+      "authorization_headers_logged_or_returned": false,
+      "private_keys_logged_or_returned": false,
+      "service_account_json_logged_or_returned": false,
+      "raw_env_stack_traces_returned": false
+    },
+    "dotenv_google_service_account_key": {
+      "files_inspected": [
+        ".env",
+        ".env.production"
+      ],
+      "env": {
+        "present": false,
+        "json_validity": "not_applicable",
+        "required_fields": "not_applicable"
+      },
+      "env_production": {
+        "present": false,
+        "json_validity": "not_applicable",
+        "required_fields": "not_applicable"
+      },
+      "values_printed": false
+    },
+    "verification": {
+      "deno_check_phase52_test": "passed",
+      "deno_test_phase52_test": "passed_outside_sandbox_10_tests",
+      "oauth_timeout_mocked": "passed",
+      "vertex_timeout_mocked": "passed",
+      "non_2xx_oauth_sanitized": "passed",
+      "non_2xx_vertex_sanitized": "passed",
+      "exactly_one_vertex_generate_content_request": "passed",
+      "no_retry_model_or_location_fallback": "passed",
+      "no_db_or_alternate_provider_path": "passed",
+      "qa_json_parse": "passed"
+    },
+    "files_created": [
+      "docs/document-intelligence-v3-phase52C-timeout-postmortem.md"
+    ],
+    "files_updated": [
+      "supabase/functions/_shared/vertex-ai.ts",
+      "supabase/functions/phase52-vertex-diagnostic/index.ts",
+      "supabase/functions/_tests/phase52-vertex-diagnostic.test.ts",
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "recommendation": "no_gate"
+  },
+  "recommended_phase_52D": "Do not retry automatically. Review the Phase 52C timeout/stage instrumentation first, then only with explicit approval run exactly one bounded internal sample-text diagnostic invocation.",
+  "phase52D_bounded_retry_precheck": {
+    "performed": true,
+    "env_file_inspected": ".env.phase52.local",
+    "env_file_scope_only": true,
+    "provider_calls_made": false,
+    "vertex_calls_made": false,
+    "gemini_calls_made": false,
+    "openai_calls_made": false,
+    "azure_calls_made": false,
+    "endpoint_invoked": false,
+    "phase52_vertex_diagnostic_invoked": false,
+    "deployed": false,
+    "db_access": false,
+    "db_reads": false,
+    "db_writes": false,
+    "network_requests_made": false,
+    "parse_rerun": false,
+    "extraction_rerun": false,
+    "secret_values_printed": false,
+    "secrets_changed": false,
+    "env_presence_shape": {
+      "WORKER_INTERNAL_SECRET": "present",
+      "VERTEX_PROJECT_ID_or_GOOGLE_PROJECT_ID": "present",
+      "VERTEX_LOCATION": "present",
+      "VERTEX_LOCATION_defaultable_if_missing": true,
+      "GOOGLE_SERVICE_ACCOUNT_KEY": "present",
+      "GOOGLE_CLIENT_EMAIL_plus_GOOGLE_PRIVATE_KEY": "missing",
+      "GOOGLE_CLIENT_EMAIL": "missing",
+      "GOOGLE_PRIVATE_KEY": "missing"
+    },
+    "google_service_account_key_shape": {
+      "parsed_in_memory_only": true,
+      "values_printed": false,
+      "json": "valid_json",
+      "required_fields": {
+        "type": "present",
+        "project_id": "present",
+        "private_key": "present",
+        "client_email": "present",
+        "token_uri": "present"
+      },
+      "private_key_begin_marker": "present",
+      "private_key_end_marker": "present"
+    },
+    "local_runtime_command_confirmed_not_executed": "supabase functions serve phase52-vertex-diagnostic --env-file .env.phase52.local --no-verify-jwt",
+    "timeout_review": {
+      "oauth_timeout_ms_default": 5000,
+      "vertex_timeout_ms_default": 30000,
+      "combined_nominal_network_bound_ms": 35000,
+      "below_prior_edge_isolate_wall_clock_window": true,
+      "expected_timeout_categories": [
+        "oauth_timeout",
+        "vertex_timeout"
+      ]
+    },
+    "safe_stage_timings_ready": [
+      "auth_config_loaded",
+      "jwt_created",
+      "oauth_request_started",
+      "oauth_request_completed",
+      "vertex_request_started",
+      "vertex_response_received",
+      "response_parsed"
+    ],
+    "precheck_verdict": {
+      "internal_auth_material_available": true,
+      "vertex_project_config_available": true,
+      "vertex_location_config_available": true,
+      "usable_service_account_json_shape": true,
+      "timeout_instrumentation_ready": true,
+      "safe_stage_timings_ready": true,
+      "approved_to_retry": false
+    },
+    "files_created": [
+      "docs/document-intelligence-v3-phase52D-bounded-retry-precheck.md"
+    ],
+    "files_updated": [
+      "docs/document-intelligence-v3-batch-audit-qa.md",
+      "docs/document-intelligence-v3-batch-audit-qa.json"
+    ],
+    "verification": {
+      "qa_json_parse": "passed"
+    },
+    "recommendation": "no_gate"
+  },
+  "recommended_phase_52E": "Only after explicit approval, run exactly one bounded internal sample-text diagnostic invocation with .env.phase52.local and stop after the sanitized response or timeout category is captured."
 }

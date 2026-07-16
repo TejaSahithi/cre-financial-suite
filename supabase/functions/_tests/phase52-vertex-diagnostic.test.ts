@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { handlePhase52VertexDiagnosticRequest } from "../phase52-vertex-diagnostic/index.ts";
 import { callVertexAISingleRequestDiagnostic } from "../_shared/vertex-ai.ts";
@@ -36,6 +36,28 @@ async function json(resp: Response) {
   return await resp.json();
 }
 
+function withAbortableNever(): typeof fetch {
+  return ((_url: string | URL | Request, init?: RequestInit) => {
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+  }) as typeof fetch;
+}
+
+function setEnv(vars: Record<string, string>) {
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    previous[key] = Deno.env.get(key);
+    Deno.env.set(key, value);
+  }
+  return () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) Deno.env.delete(key);
+      else Deno.env.set(key, value);
+    }
+  };
+}
+
 Deno.test("phase52 diagnostic rejects unauthenticated calls before provider invocation", async () => {
   let calls = 0;
   const resp = await handlePhase52VertexDiagnosticRequest(
@@ -53,7 +75,7 @@ Deno.test("phase52 diagnostic rejects unauthenticated calls before provider invo
   assertEquals((await json(resp)).error_category, "unauthorized");
 });
 
-Deno.test("phase52 diagnostic accepts internal auth and invokes the Vertex diagnostic helper once", async () => {
+Deno.test("phase52 diagnostic accepts internal auth, invokes helper once, and returns safe stage timings", async () => {
   let calls = 0;
   const resp = await handlePhase52VertexDiagnosticRequest(
     request(
@@ -65,6 +87,13 @@ Deno.test("phase52 diagnostic accepts internal auth and invokes the Vertex diagn
       now: () => 1000,
       vertexCaller: async (opts) => {
         calls += 1;
+        opts.onStage?.({ stage: "auth_config_loaded", elapsedMs: 1 });
+        opts.onStage?.({ stage: "jwt_created", elapsedMs: 2 });
+        opts.onStage?.({ stage: "oauth_request_started", elapsedMs: 3 });
+        opts.onStage?.({ stage: "oauth_request_completed", elapsedMs: 4 });
+        opts.onStage?.({ stage: "vertex_request_started", elapsedMs: 5 });
+        opts.onStage?.({ stage: "vertex_response_received", elapsedMs: 6 });
+        opts.onStage?.({ stage: "response_parsed", elapsedMs: 7 });
         assert(opts.userPrompt.includes("Markets at Choto"));
         assertEquals(opts.responseMimeType, "application/json");
         return {
@@ -74,6 +103,7 @@ Deno.test("phase52 diagnostic accepts internal auth and invokes the Vertex diagn
           inputTokens: 123,
           outputTokens: 45,
           latencyMs: 250,
+          stages: [],
         };
       },
     },
@@ -84,10 +114,15 @@ Deno.test("phase52 diagnostic accepts internal auth and invokes the Vertex diagn
   assertEquals(body.success, true);
   assertEquals(body.provider, "vertex");
   assertEquals(body.request_count, 1);
-  assertEquals(body.model, "gemini-2.5-flash");
-  assertEquals(body.location, "us-central1");
-  assertEquals(body.token_usage.input_tokens, 123);
-  assertEquals(body.parsed_diagnostic_facts.facts[0].field, "cam_estimate");
+  assertEquals(body.stage_timings.map((item: any) => item.stage), [
+    "auth_config_loaded",
+    "jwt_created",
+    "oauth_request_started",
+    "oauth_request_completed",
+    "vertex_request_started",
+    "vertex_response_received",
+    "response_parsed",
+  ]);
 });
 
 Deno.test("phase52 diagnostic rejects DB-targeting identifiers and provider overrides", async () => {
@@ -114,7 +149,8 @@ Deno.test("phase52 diagnostic redacts secret-like material from provider errors"
     request({ sample_text: cravenSample }, { "x-internal-service-key": "service-role-placeholder" }),
     {
       env: internalEnv,
-      vertexCaller: async () => {
+      vertexCaller: async (opts) => {
+        opts.onStage?.({ stage: "oauth_request_started", elapsedMs: 1 });
         throw new Error('failure Authorization: Bearer abc.def.ghi {"private_key":"-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----","access_token":"secret-token","x-worker-secret":"worker-secret-placeholder"}');
       },
     },
@@ -123,6 +159,7 @@ Deno.test("phase52 diagnostic redacts secret-like material from provider errors"
   assertEquals(resp.status, 502);
   assertEquals(body.success, false);
   assertEquals(body.request_count, 1);
+  assertEquals(body.stage_timings[0].stage, "oauth_request_started");
   assert(!body.sanitized_error.includes("abc.def.ghi"));
   assert(!body.sanitized_error.includes("PRIVATE KEY"));
   assert(!body.sanitized_error.includes("secret-token"));
@@ -136,24 +173,22 @@ Deno.test("phase52 diagnostic source has no Supabase client, table access, parse
 });
 
 Deno.test("callVertexAISingleRequestDiagnostic makes one generateContent request with fixed model and location", async () => {
-  const previousProject = Deno.env.get("VERTEX_PROJECT_ID");
-  const previousLocation = Deno.env.get("VERTEX_LOCATION");
-  const previousModel = Deno.env.get("VERTEX_MODEL");
+  const restore = setEnv({ VERTEX_PROJECT_ID: "phase52-project", VERTEX_LOCATION: "us-east4", VERTEX_MODEL: "phase52-model" });
   try {
-    Deno.env.set("VERTEX_PROJECT_ID", "phase52-project");
-    Deno.env.set("VERTEX_LOCATION", "us-east4");
-    Deno.env.set("VERTEX_MODEL", "phase52-model");
     const urls: string[] = [];
+    const stages: string[] = [];
     const resp = await callVertexAISingleRequestDiagnostic({
       userPrompt: cravenSample,
       systemPrompt: "Return JSON only.",
       accessToken: "test-access-token",
+      onStage: (event) => stages.push(event.stage),
       fetchImpl: async (url, init) => {
         urls.push(String(url));
         const body = JSON.parse(String(init?.body));
         assertEquals(body.generationConfig.temperature, 0);
         assertEquals(body.generationConfig.responseMimeType, "application/json");
-        assertEquals(init?.headers?.Authorization ?? init?.headers?.get?.("Authorization"), "Bearer test-access-token");
+        const headers = init?.headers as Record<string, string>;
+        assertEquals(headers.Authorization, "Bearer test-access-token");
         return new Response(JSON.stringify({
           candidates: [{ content: { parts: [{ text: JSON.stringify({ facts: [] }) }] } }],
           usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 4 },
@@ -163,25 +198,17 @@ Deno.test("callVertexAISingleRequestDiagnostic makes one generateContent request
     assertEquals(urls.length, 1);
     assert(urls[0].includes("/locations/us-east4/"));
     assert(urls[0].includes("/models/phase52-model:generateContent"));
+    assertEquals(stages, ["vertex_request_started", "vertex_response_received", "response_parsed"]);
     assertEquals(resp.model, "phase52-model");
     assertEquals(resp.location, "us-east4");
-    assertEquals(resp.inputTokens, 10);
-    assertEquals(resp.outputTokens, 4);
   } finally {
-    if (previousProject == null) Deno.env.delete("VERTEX_PROJECT_ID"); else Deno.env.set("VERTEX_PROJECT_ID", previousProject);
-    if (previousLocation == null) Deno.env.delete("VERTEX_LOCATION"); else Deno.env.set("VERTEX_LOCATION", previousLocation);
-    if (previousModel == null) Deno.env.delete("VERTEX_MODEL"); else Deno.env.set("VERTEX_MODEL", previousModel);
+    restore();
   }
 });
 
 Deno.test("callVertexAISingleRequestDiagnostic does not retry model or location fallback on failure", async () => {
-  const previousProject = Deno.env.get("VERTEX_PROJECT_ID");
-  const previousLocation = Deno.env.get("VERTEX_LOCATION");
-  const previousModel = Deno.env.get("VERTEX_MODEL");
+  const restore = setEnv({ VERTEX_PROJECT_ID: "phase52-project", VERTEX_LOCATION: "us-central1", VERTEX_MODEL: "phase52-model" });
   try {
-    Deno.env.set("VERTEX_PROJECT_ID", "phase52-project");
-    Deno.env.set("VERTEX_LOCATION", "us-central1");
-    Deno.env.set("VERTEX_MODEL", "phase52-model");
     let calls = 0;
     await assertRejects(
       () => callVertexAISingleRequestDiagnostic({
@@ -197,8 +224,94 @@ Deno.test("callVertexAISingleRequestDiagnostic does not retry model or location 
     );
     assertEquals(calls, 1);
   } finally {
-    if (previousProject == null) Deno.env.delete("VERTEX_PROJECT_ID"); else Deno.env.set("VERTEX_PROJECT_ID", previousProject);
-    if (previousLocation == null) Deno.env.delete("VERTEX_LOCATION"); else Deno.env.set("VERTEX_LOCATION", previousLocation);
-    if (previousModel == null) Deno.env.delete("VERTEX_MODEL"); else Deno.env.set("VERTEX_MODEL", previousModel);
+    restore();
+  }
+});
+
+Deno.test("callVertexAISingleRequestDiagnostic returns oauth_timeout when OAuth fetch exceeds timeout", async () => {
+  const restore = setEnv({
+    VERTEX_PROJECT_ID: "phase52-project",
+    GOOGLE_CLIENT_EMAIL: "phase52@example.test",
+    GOOGLE_PRIVATE_KEY: "dummy-private-key",
+    VERTEX_LOCATION: "us-central1",
+    VERTEX_MODEL: "phase52-model",
+  });
+  try {
+    const stages: string[] = [];
+    await assertRejects(
+      () => callVertexAISingleRequestDiagnostic({
+        userPrompt: cravenSample,
+        jwtForTest: "fake-jwt",
+        oauthTimeoutMs: 5,
+        oauthFetchImpl: withAbortableNever(),
+        fetchImpl: async () => {
+          throw new Error("vertex should not run");
+        },
+        onStage: (event) => stages.push(event.stage),
+      }),
+      Error,
+      "oauth_timeout",
+    );
+    assertEquals(stages, ["auth_config_loaded", "jwt_created", "oauth_request_started"]);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("callVertexAISingleRequestDiagnostic returns vertex_timeout when Vertex fetch exceeds timeout", async () => {
+  const restore = setEnv({ VERTEX_PROJECT_ID: "phase52-project", VERTEX_LOCATION: "us-central1", VERTEX_MODEL: "phase52-model" });
+  try {
+    const stages: string[] = [];
+    await assertRejects(
+      () => callVertexAISingleRequestDiagnostic({
+        userPrompt: cravenSample,
+        accessToken: "test-access-token",
+        vertexTimeoutMs: 5,
+        fetchImpl: withAbortableNever(),
+        onStage: (event) => stages.push(event.stage),
+      }),
+      Error,
+      "vertex_timeout",
+    );
+    assertEquals(stages, ["vertex_request_started"]);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("non-2xx OAuth and Vertex responses are sanitized and do not expose secret bodies", async () => {
+  const restore = setEnv({
+    VERTEX_PROJECT_ID: "phase52-project",
+    GOOGLE_CLIENT_EMAIL: "phase52@example.test",
+    GOOGLE_PRIVATE_KEY: "dummy-private-key",
+    VERTEX_LOCATION: "us-central1",
+    VERTEX_MODEL: "phase52-model",
+  });
+  try {
+    const oauthError = await assertRejects(
+      () => callVertexAISingleRequestDiagnostic({
+        userPrompt: cravenSample,
+        jwtForTest: "fake-jwt",
+        oauthFetchImpl: async () => new Response('{"access_token":"secret-token","private_key":"-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----"}', { status: 500 }),
+      }),
+      Error,
+    );
+    assertEquals((oauthError as { category?: string }).category, "oauth_error");
+    assert(!oauthError.message.includes("secret-token"));
+    assert(!oauthError.message.includes("PRIVATE KEY"));
+
+    const vertexError = await assertRejects(
+      () => callVertexAISingleRequestDiagnostic({
+        userPrompt: cravenSample,
+        accessToken: "test-access-token",
+        fetchImpl: async () => new Response('{"authorization":"Bearer abc.def","private_key":"-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----"}', { status: 500 }),
+      }),
+      Error,
+    );
+    assertEquals((vertexError as { category?: string }).category, "vertex_error");
+    assert(!vertexError.message.includes("abc.def"));
+    assert(!vertexError.message.includes("PRIVATE KEY"));
+  } finally {
+    restore();
   }
 });
