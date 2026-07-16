@@ -37,7 +37,8 @@ import {
   type DocumentIntelligenceV3ClaimRow,
   type DocumentIntelligenceV3ClaimEvidenceRow,
 } from "./fact-mapper.ts";
-import { buildCanonicalLayoutFromAzureLikeOutput, summarizeCanonicalLayout } from "./canonical-layout.ts";
+import { summarizeCanonicalLayout } from "./canonical-layout.ts";
+import { resolveCanonicalDocumentLayout } from "./canonical-layout-resolver.ts";
 import { buildDiagnosticProfileAndPlan } from "./profile-planner.ts";
 import { buildStaticCoverageImportanceSummary } from "./coverage-importance.ts";
 import { upsertPackageGraphForRun } from "./package-graph.ts";
@@ -182,6 +183,23 @@ function computeEvidenceDiagnosticCounts(
  * warning rather than failing the whole side-write (the claim/evidence/
  * projection writes are the load-bearing part of this function;
  * layout_summary/content_hash are diagnostic/idempotency inputs only).
+ *
+ * Phase 4b: the canonical layout is now obtained via
+ * `resolveCanonicalDocumentLayout({ doclingRaw })` (../document-intelligence-v3/canonical-layout-resolver.ts)
+ * rather than calling the legacy builder directly -- no direct import of
+ * `buildCanonicalLayoutFromAzureLikeOutput`/`legacyDoclingToCanonicalLayout`
+ * or the Azure adapter remains in this file. Unlike Phase 4a's
+ * document-index-v3.ts (which has an alternate legacy_evidence_index path
+ * to fall back to), there is no alternate "summary" here -- a null layout
+ * or a fatally-invalid resolved layout is turned into the exact same
+ * degrade-in-place outcome this function already produced for any other
+ * failure (thrown into the existing catch below, same message prefix),
+ * never a load-bearing failure of the side-write as a whole. Current
+ * runtime input here is always `docling_raw` (Phase 2's durable-input
+ * finding), so the resolver call below always resolves
+ * `source: "legacy_docling_raw"` / `fidelity: "legacy_lossy"` in practice
+ * -- both accepted implicitly by proceeding whenever a layout is present
+ * and valid. `resolution.warnings` are never consulted for control flow.
  */
 async function computeCanonicalLayoutAndSummary(
   uploadedFile: Record<string, unknown>,
@@ -190,13 +208,19 @@ async function computeCanonicalLayoutAndSummary(
   const doclingRaw = uploadedFile?.docling_raw as Record<string, unknown> | null | undefined;
   if (!doclingRaw) return { summary: {}, contentHash: null };
   try {
-    const layout = await buildCanonicalLayoutFromAzureLikeOutput(doclingRaw, {
-      uploadedFileId: context.uploadedFileId,
-      orgId: context.orgId,
-    });
+    const resolution = await resolveCanonicalDocumentLayout({ doclingRaw });
+
+    if (!resolution.layout) {
+      throw new Error(`layout resolution returned no layout (source: ${resolution.source})`);
+    }
+    if (resolution.validation && !resolution.validation.valid) {
+      const fatalCodes = resolution.validation.errors.map((e) => e.code).join(", ") || "unspecified";
+      throw new Error(`layout failed validation (fatal: ${fatalCodes})`);
+    }
+
     return {
-      summary: summarizeCanonicalLayout(layout) as unknown as Record<string, unknown>,
-      contentHash: layout.content_hash,
+      summary: summarizeCanonicalLayout(resolution.layout) as unknown as Record<string, unknown>,
+      contentHash: resolution.layout.content_hash,
     };
   } catch (error: any) {
     return { summary: { warnings: [`layout_summary_computation_failed: ${error?.message ?? error}`] }, contentHash: null };

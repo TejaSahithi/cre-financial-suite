@@ -961,3 +961,190 @@ Deno.test({
   },
 });
 
+// ── Phase 4b: resolver adoption regression ───────────────────────────────────
+// side-write.ts's computeCanonicalLayoutAndSummary() now obtains its layout
+// via resolveCanonicalDocumentLayout({ doclingRaw }) instead of calling
+// legacyDoclingToCanonicalLayout() directly. These tests prove
+// layout_summary/content_hash persisted on document_intelligence_runs are
+// unchanged for valid fixtures, and that a fatally-invalid resolved layout
+// degrades to the existing { warnings: [...] } shape rather than a
+// misleading "successful" summary -- without breaking the rest of the run.
+
+function assignmentScaleDoclingRawFixture() {
+  return {
+    extraction_method: "azure_layout",
+    full_text: "[[PAGE 1]]\nASSIGNMENT AND ASSUMPTION OF LEASE",
+    page_count: 1,
+    pages: [{ page: 1, text: "ASSIGNMENT AND ASSUMPTION OF LEASE" }],
+    text_blocks: [{ block_index: 0, type: "title", text: "ASSIGNMENT AND ASSUMPTION OF LEASE", page: 1 }],
+    tables: [],
+    fields: [],
+    warnings: [],
+    raw_response: null,
+    _metadata: { provider: "azure_document_intelligence", extraction_method: "azure_layout", api_version: "2024-11-30", page_markers_present: true, page_mapping_coverage: 1, raw_response_stored: false },
+  };
+}
+
+function camTableHeavyDoclingRawFixture() {
+  return {
+    extraction_method: "azure_layout",
+    full_text: "[[PAGE 1]]\nCAM Reconciliation\n\n[[PAGE 2]]\nSchedule of expenses follows.",
+    page_count: 2,
+    pages: [
+      { page: 1, text: "CAM Reconciliation" },
+      { page: 2, text: "Schedule of expenses follows." },
+    ],
+    text_blocks: [
+      { block_index: 0, type: "title", text: "CAM Reconciliation", page: 1 },
+      { block_index: 1, type: "paragraph", text: "Schedule of expenses follows.", page: 2 },
+    ],
+    tables: [
+      { table_index: 0, headers: ["Category", "Amount"], rows: [["Landscaping", "$1,200.00"], ["Security", "$3,400.00"]], markdown: "Category\tAmount\nLandscaping\t$1,200.00\nSecurity\t$3,400.00" },
+    ],
+    fields: [],
+    warnings: [],
+    raw_response: null,
+    _metadata: { provider: "azure_document_intelligence", extraction_method: "azure_layout", api_version: "2024-11-30", page_markers_present: true, page_mapping_coverage: 1, raw_response_stored: false },
+  };
+}
+
+const PHASE_4B_FIXTURES: Array<[string, () => Record<string, unknown>]> = [
+  ["base-lease-scale", azureLikeDoclingRawFixture],
+  ["assignment-scale", assignmentScaleDoclingRawFixture],
+  ["CAM-table-heavy-scale", camTableHeavyDoclingRawFixture],
+];
+
+for (const [label, buildFixture] of PHASE_4B_FIXTURES) {
+  Deno.test({
+    name: `Phase 4b: layout_summary and content_hash-derived idempotency key are unchanged for [${label}] after side-write.ts's resolver adoption`,
+    sanitizeResources: false,
+    sanitizeOps: false,
+    fn: async () => {
+      const admin = adminClient();
+      const suffix = crypto.randomUUID();
+      const { org, uploadedFile } = await setupOrgAndUpload(admin, suffix);
+      const doclingRaw = buildFixture();
+
+      const expectedLayout = await legacyDoclingToCanonicalLayout(doclingRaw, {
+        uploadedFileId: uploadedFile.id,
+        orgId: org.id,
+      });
+      const expectedSummary = summarizeCanonicalLayout(expectedLayout);
+
+      Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+      try {
+        const outcome = await runDocumentIntelligenceV3SideWrite({
+          supabaseAdmin: admin,
+          orgId: org.id,
+          uploadedFileId: uploadedFile.id,
+          uploadedFile: { ...uploadedFile, docling_raw: doclingRaw },
+          leaseId: null,
+          pipelineJobId: null,
+          result: legacyHybridResult(),
+          logger: null,
+        });
+
+        assertEquals(outcome.status, "completed");
+
+        const { data: runRow, error } = await admin
+          .from("document_intelligence_runs")
+          .select("layout_summary, idempotency_key")
+          .eq("id", outcome.runId)
+          .single();
+        assertNoError(error);
+        assertEquals(runRow.layout_summary, expectedSummary);
+        assert(
+          runRow.idempotency_key.includes(`content_hash:${expectedLayout.content_hash}`),
+          "the persisted idempotency_key must include the exact same content_hash the old direct-builder chain would compute",
+        );
+      } finally {
+        Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
+      }
+    },
+  });
+}
+
+Deno.test({
+  name: "Phase 4b: a content-free docling_raw still completes the run, but layout_summary degrades honestly instead of reporting a misleading successful summary",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, uploadedFile } = await setupOrgAndUpload(admin, suffix);
+    const degenerate = { full_text: "", pages: [], text_blocks: [], tables: [] };
+
+    Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+    try {
+      const outcome = await runDocumentIntelligenceV3SideWrite({
+        supabaseAdmin: admin,
+        orgId: org.id,
+        uploadedFileId: uploadedFile.id,
+        uploadedFile: { ...uploadedFile, docling_raw: degenerate },
+        leaseId: null,
+        pipelineJobId: null,
+        result: legacyHybridResult(),
+        logger: null,
+      });
+
+      // The rest of side-write is unaffected by a fatally-invalid layout --
+      // it is diagnostic/idempotency-input only, never load-bearing.
+      assertEquals(outcome.status, "completed");
+      assertExists(outcome.runId);
+
+      const { data: runRow, error } = await admin
+        .from("document_intelligence_runs")
+        .select("layout_summary, idempotency_key")
+        .eq("id", outcome.runId)
+        .single();
+      assertNoError(error);
+      // Degraded shape, not a hollow "successful" summary claiming real
+      // page/table counts for a document that has none.
+      assert(Array.isArray(runRow.layout_summary?.warnings), "expected the degrade-in-place { warnings: [...] } shape");
+      assertEquals(runRow.layout_summary.page_count, undefined);
+      assertFalse(runRow.idempotency_key.includes("content_hash:"), "no content_hash should be present in the key when the layout failed validation");
+    } finally {
+      Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
+    }
+  },
+});
+
+Deno.test({
+  name: "Phase 4b: retry/idempotency (delete-and-replace) behavior is unchanged for a resolver-routed fixture",
+  sanitizeResources: false,
+  sanitizeOps: false,
+  fn: async () => {
+    const admin = adminClient();
+    const suffix = crypto.randomUUID();
+    const { org, uploadedFile } = await setupOrgAndUpload(admin, suffix);
+    const uploadedFileWithDocling = { ...uploadedFile, docling_raw: azureLikeDoclingRawFixture() };
+
+    Deno.env.set("ENABLE_DOCUMENT_INTELLIGENCE_V3", "true");
+    try {
+      const params = {
+        supabaseAdmin: admin,
+        orgId: org.id,
+        uploadedFileId: uploadedFile.id,
+        uploadedFile: uploadedFileWithDocling,
+        leaseId: null,
+        pipelineJobId: null,
+        result: vertexFactLedgerResult(),
+        logger: null,
+      };
+
+      const first = await runDocumentIntelligenceV3SideWrite(params);
+      const second = await runDocumentIntelligenceV3SideWrite(params);
+
+      assertEquals(first.status, "completed");
+      assertEquals(first.runId, second.runId, "a retry through the resolver-routed path must still reuse the same run_id");
+      assertEquals(first.claimsCount, second.claimsCount, "delete-and-replace must not accumulate duplicate claims across a retry");
+
+      const { data: claims, error } = await admin.from("document_claims").select("id").eq("run_id", first.runId);
+      assertNoError(error);
+      assertEquals(claims?.length, first.claimsCount, "no duplicate claim rows after retrying the resolver-routed path");
+    } finally {
+      Deno.env.delete("ENABLE_DOCUMENT_INTELLIGENCE_V3");
+    }
+  },
+});
+
