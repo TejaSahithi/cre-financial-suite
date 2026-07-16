@@ -25,6 +25,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyUser, getUserOrgId } from "../_shared/supabase.ts";
 import { isInternalCall } from "../_shared/internal-auth.ts";
 import { runExtractionPipeline } from "../_shared/extraction/pipeline.ts";
+import { runVertexFactLedgerPipeline } from "../_shared/extraction/vertex-fact-ledger/orchestrator.ts";
 import { isAzureLayoutOutput } from "../_shared/extraction/extraction-provider.ts";
 import { getFieldGroups, getSchema } from "../_shared/extraction/schemas.ts";
 import { buildLeaseWorkflowAbstraction } from "../_shared/extraction/lease-workflow.ts";
@@ -34,6 +35,7 @@ import { setStatus, setFailed } from "../_shared/pipeline-status.ts";
 import { createLogger } from "../_shared/logger.ts";
 import { computeCoreReady, uploadedFileRowHasMeaningfulValues } from "../_shared/extraction/payload-guard.ts";
 import { enqueueEnrichmentJob } from "../_shared/extraction/enrichment-dispatch.ts";
+import { runDocumentIntelligenceV3SideWrite } from "../_shared/extraction/document-intelligence-v3/side-write.ts";
 import type { ModuleType as ExtractionModuleType } from "../_shared/extraction/types.ts";
 import {
   buildBlockedReviewPayload,
@@ -106,6 +108,30 @@ function buildPipelineLayoutInput(
     warnings: (doclingRaw as any)?.warnings,
     _metadata: (doclingRaw as any)?._metadata,
   };
+}
+
+/**
+ * Resolve which extraction/reasoning provider runs the pipeline.
+ * Default is "legacy_hybrid" (runExtractionPipeline, unchanged) whenever
+ * BUSINESS_EXTRACTION_PROVIDER is unset or any value other than the exact
+ * string "vertex_fact_ledger" — vertex_fact_ledger is strictly opt-in.
+ *
+ * `internalDebugOverride` lets a scoped, single request pick the provider
+ * without touching the BUSINESS_EXTRACTION_PROVIDER project secret — the
+ * caller must only pass a value here when the request has already passed
+ * isInternalCall(req) (service-role/worker auth), so a normal browser/user
+ * request can never set it. Used for one-off live provider comparisons
+ * without making vertex_fact_ledger the project's live default.
+ */
+function resolveBusinessExtractionProvider(
+  internalDebugOverride?: string | null,
+): "legacy_hybrid" | "vertex_fact_ledger" {
+  const override = String(internalDebugOverride ?? "").trim().toLowerCase();
+  if (override === "vertex_fact_ledger" || override === "legacy_hybrid") {
+    return override;
+  }
+  const raw = String(Deno.env.get("BUSINESS_EXTRACTION_PROVIDER") ?? "").trim().toLowerCase();
+  return raw === "vertex_fact_ledger" ? "vertex_fact_ledger" : "legacy_hybrid";
 }
 
 function toExtractionModuleType(moduleType: string): ExtractionModuleType {
@@ -999,6 +1025,9 @@ function buildReviewPayload(opts: {
       };
     })
     .filter((f) => f.value != null && f.value !== "");
+  // vertex_fact_ledger diagnostics (undefined for legacy_hybrid — both
+  // spreads below become no-ops, preserving existing behavior exactly).
+  const vertexFactLedgerDebug = (reviewExtractionDebug as any)?.vertex_fact_ledger ?? null;
   const workflowOutputs = extractionModuleType === "lease"
     ? result.rows.map((row, rowIndex) =>
       buildLeaseWorkflowAbstraction({
@@ -1006,6 +1035,10 @@ function buildReviewPayload(opts: {
         doclingRaw: doclingRaw ?? null,
         documentSubtype,
         ...(rowIndex === 0 ? { unmappedLlmFields } : {}),
+        ...(vertexFactLedgerDebug?.document_profile ? { documentProfileOverride: vertexFactLedgerDebug.document_profile } : {}),
+        ...(rowIndex === 0 && Array.isArray(vertexFactLedgerDebug?.dynamic_items)
+          ? { factLedgerDynamicItems: vertexFactLedgerDebug.dynamic_items }
+          : {}),
       })
     )
     : [];
@@ -1834,29 +1867,46 @@ Deno.serve(async (req: Request) => {
 
       let extraction: Record<string, unknown> | null = null;
       if (typeof sample_text === "string" && sample_text.length > 0) {
+        // Tier 1 (dry_run) live comparison support: an internal/service-role
+        // caller may request vertex_fact_ledger for this one sample_text call
+        // without touching the BUSINESS_EXTRACTION_PROVIDER project secret.
+        // No uploaded_files row exists in this branch, so there is nothing to
+        // write — this is the zero-DB-write comparison path.
+        const dryRunProvider = resolveBusinessExtractionProvider(
+          isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+        );
         try {
-          const result = await runExtractionPipeline(
-            {
+          const dryRunDocling = {
+            full_text: sample_text,
+            text_blocks: [],
+            tables: [],
+            fields: [],
+            page_count: 1,
+            extraction_method: "dry_run",
+          };
+          const result = dryRunProvider === "vertex_fact_ledger"
+            ? await runVertexFactLedgerPipeline({
               moduleType: "lease",
               fileName: "dry_run_sample.txt",
-              docling: {
-                full_text: sample_text,
-                text_blocks: [],
-                tables: [],
-                fields: [],
-                page_count: 1,
-                extraction_method: "dry_run",
+              docling: dryRunDocling,
+              documentSubtype: null,
+            })
+            : await runExtractionPipeline(
+              {
+                moduleType: "lease",
+                fileName: "dry_run_sample.txt",
+                docling: dryRunDocling,
               },
-            },
-            { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
-          );
+              { maxLLMChunks: 1, chunkSize: 3000, llmTemperature: 0 },
+            );
           extraction = {
             rows: result.rows?.length ?? 0,
             method: result.method ?? "unknown",
             warnings: result.warnings ?? [],
+            provider: dryRunProvider,
           };
         } catch (pipeErr: any) {
-          extraction = { error: pipeErr?.message ?? String(pipeErr) };
+          extraction = { error: pipeErr?.message ?? String(pipeErr), provider: dryRunProvider };
         }
       }
 
@@ -2231,29 +2281,40 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode}`);
+      const businessExtractionProvider = resolveBusinessExtractionProvider(
+        isInternalCall(req) ? (body as any)?.debug_business_extraction_provider : null,
+      );
+      console.log(`[normalize-pdf-output] STAGE pipeline_start file_id=${file_id} fileBase64=${!!fileBase64} azureLayoutMode=${azureLayoutMode} provider=${businessExtractionProvider}`);
       // Run the canonical extraction pipeline.
       // Rule → Table → LLM(missing only) → Merge → Validate → Calculate.
       const pipelineDocling = buildPipelineLayoutInput(fileRecord.docling_raw as Record<string, unknown> | null);
-      const result = await runExtractionPipeline(
-        {
+      const result = businessExtractionProvider === "vertex_fact_ledger"
+        ? await runVertexFactLedgerPipeline({
           moduleType: extractionModuleType,
           fileName,
           docling: pipelineDocling,
+          documentSubtype: fileRecord.document_subtype ?? null,
           ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
-        },
-        {
-          // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
-          // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
-          // handles structured tables; LLM fills in fields rules couldn't resolve.
-          // Keeping this at 2 prevents accumulating too many Gemini response
-          // buffers in memory simultaneously (546 resource-exhaustion error).
-          maxLLMChunks: 2,
-          chunkSize: 3000,
-          llmTemperature: 0,
-        },
-      );
-      console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method}`);
+        })
+        : await runExtractionPipeline(
+          {
+            moduleType: extractionModuleType,
+            fileName,
+            docling: pipelineDocling,
+            ...(fileBase64 && !azureLayoutMode ? { fileBase64, fileMimeType: fileMimeType || "application/pdf" } : {}),
+          },
+          {
+            // maxLLMChunks: 2 — lease metadata (parties, dates, rent) lives in
+            // the first 1–2 chunks of a well-formatted lease. Rule/table extraction
+            // handles structured tables; LLM fills in fields rules couldn't resolve.
+            // Keeping this at 2 prevents accumulating too many Gemini response
+            // buffers in memory simultaneously (546 resource-exhaustion error).
+            maxLLMChunks: 2,
+            chunkSize: 3000,
+            llmTemperature: 0,
+          },
+        );
+      console.log(`[normalize-pdf-output] STAGE pipeline_done file_id=${file_id} rows=${result.rows?.length ?? 0} method=${result.method} provider=${businessExtractionProvider}`);
       console.log(
         `[normalize-pdf-output] core_extraction_done file_id=${file_id} rows=${result.rows?.length ?? 0} ` +
         `fields=${(result.metadata as any)?.extractionDebug?.fields_returned_count ?? 0} ` +
@@ -2453,6 +2514,34 @@ Deno.serve(async (req: Request) => {
         console.log(
           `[normalize-pdf-output] minimal_payload_persisted file_id=${file_id} ` +
           `values=${minimalValueCount} source_backed=${minimalSourceBackedCount} core_ready=${minimalPayload.core_ready}`,
+        );
+      }
+
+      // ── Document Intelligence v3 side-write (Phase 2, opt-in) ────────────
+      // Runs only when ENABLE_DOCUMENT_INTELLIGENCE_V3=true (checked first
+      // thing inside runDocumentIntelligenceV3SideWrite -- zero DB calls
+      // when unset, matching current default behavior exactly). Placed
+      // after the minimal ui_review_payload/normalized_output persist above
+      // so the durable, UI-visible write this endpoint exists to make has
+      // already happened before any v3-only side effect is attempted. Never
+      // throws: a v3 side-write failure is caught and logged inside the
+      // helper itself, and defensively caught again here, so it can never
+      // change this request's outcome.
+      try {
+        await runDocumentIntelligenceV3SideWrite({
+          supabaseAdmin,
+          orgId,
+          uploadedFileId: file_id,
+          uploadedFile: fileRecord,
+          leaseId: null,
+          pipelineJobId: finalPipelineJobId ?? null,
+          result,
+          logger,
+        });
+      } catch (v3SideWriteError: any) {
+        console.warn(
+          `[normalize-pdf-output] document_intelligence_v3 side-write threw unexpectedly for file_id=${file_id}: ` +
+          `${v3SideWriteError?.message ?? v3SideWriteError} — current normalize flow continues unaffected.`,
         );
       }
 
@@ -2781,6 +2870,8 @@ Deno.serve(async (req: Request) => {
 export const __test__ = {
   buildPipelineLayoutInput,
   buildMinimalReviewPayload,
+  buildReviewPayload,
   rejectMarkupValue,
   buildReviewField,
+  resolveBusinessExtractionProvider,
 };

@@ -15,7 +15,14 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { leaseService, persistLeaseExtractionMerge } from "@/services/leaseService";
+import {
+  leaseService,
+  persistLeaseExtractionMerge,
+  updateLeaseFieldAndColumns,
+  updateLeaseExtractionField,
+  backfillLeaseEvidence,
+  sendLeaseBackForReextraction,
+} from "@/services/leaseService";
 import { NotificationService } from "@/services/api";
 import { expenseService } from "@/services/expenseService";
 import useOrgQuery from "@/hooks/useOrgQuery";
@@ -89,9 +96,6 @@ import { leaseRulePipelineService } from "@/services/leaseRulePipelineService";
 import { leaseExpenseRuleService } from "@/services/leaseExpenseRuleService";
 import { useAuth } from "@/lib/AuthContext";
 import { isSuperAdmin } from "@/lib/rbac";
-import { detectDocumentProfile } from "@/lib/documentProfile";
-import FieldReviewTable from "@/components/lease-review/FieldReviewTable";
-import FieldTableFilter from "@/components/lease-review/FieldTableFilter";
 import { SummaryStat } from "@/components/lease-review/SummaryStat";
 import {
   SourceFileLink,
@@ -125,12 +129,14 @@ import { validateCrossFieldWarnings } from "@/components/lease-review/utils/cros
 
 import {
   RentScheduleTable,
-  ExpenseRulesTable,
-  CamRulesTable,
-  CriticalDatesTable,
-  ClauseRecordsTable,
 } from "@/components/lease-review/SpecializedTables";
 import ExtractionDebugPanel from "@/components/lease-review/ExtractionDebugPanel";
+import ApprovalBlockersPanel from "@/components/lease-review/ApprovalBlockersPanel";
+import LeaseReviewTabTable from "@/components/lease-review/LeaseReviewTabTable";
+import LeaseReviewReadinessSummary from "@/components/lease-review/LeaseReviewReadinessSummary";
+import { normalizeLeaseReviewData } from "@/lib/leaseReviewFieldNormalizer";
+import { getFieldPolicyLabel } from "@/lib/leaseReviewCurrentPolicy";
+import { isLeaseReviewEnrichmentInFlight } from "@/lib/leaseReviewUiState";
 
 // Minimum number of source-backed fields required before a new extraction is
 // considered "richer" than the previous one. Used only for debug diagnostics.
@@ -240,7 +246,7 @@ export default function LeaseReview() {
     // are derived further down this component, after this query is declared.
     refetchInterval: (query) => {
       const status = query.state.data?.ui_review_payload?.enrichment_status;
-      return status === "pending" || status === "running" ? 4000 : false;
+      return isLeaseReviewEnrichmentInFlight(status) ? 4000 : false;
     },
   });
 
@@ -296,6 +302,16 @@ export default function LeaseReview() {
   }, [leaseFull, userCustomFields]);
 
   const allReviewRows = useMemo(() => Object.values(fieldsForTab).flat(), [fieldsForTab]);
+
+  // Additive, normalized view of the same underlying payload — grouped by
+  // the 17 standard field-model groups. Computed once here and passed down
+  // to the new grouped sections; does not replace fieldsForTab/allReviewRows,
+  // which still drive the original tab structure unchanged.
+  const normalized = useMemo(
+    () => normalizeLeaseReviewData(leaseFull, { fieldReviews }),
+    [leaseFull, fieldReviews],
+  );
+  const enterpriseTabs = normalized.tabs || {};
   const reviewRowByKey = useMemo(() => {
     const map = new Map();
     allReviewRows.forEach((row) => {
@@ -304,6 +320,15 @@ export default function LeaseReview() {
     });
     return map;
   }, [allReviewRows]);
+
+  const standardRowByKey = useMemo(() => {
+    const map = new Map();
+    (normalized.standardFields || []).forEach((row) => {
+      if (row?.canonicalKey && !map.has(row.canonicalKey)) map.set(row.canonicalKey, row);
+      if (row?.key && !map.has(row.key)) map.set(row.key, row);
+    });
+    return map;
+  }, [normalized.standardFields]);
 
   const crossFieldWarnings = useMemo(
     () => validateCrossFieldWarnings(reviewRowByKey, leaseFull),
@@ -495,6 +520,7 @@ export default function LeaseReview() {
           auto_link_score: chosen.score,
           auto_link_reasons: chosen.reasons,
         };
+        const nextExtraction = { ...(lease.extraction_data || {}), ...autoLinkPatch };
         const { error: updateErr } = await supabase
           .from("leases")
           .update({ extraction_data: nextExtraction })
@@ -531,6 +557,7 @@ export default function LeaseReview() {
         source_file_name: picked?.file_name ?? null,
         manually_linked_at: new Date().toISOString(),
       };
+      const nextExtraction = { ...(lease.extraction_data || {}), ...manualLinkPatch };
       const { error: updateErr } = await supabase
         .from("leases")
         .update({ extraction_data: nextExtraction })
@@ -896,30 +923,37 @@ export default function LeaseReview() {
   }, [leaseFull, lease, workflowExpenseRulesCount, ruleSetSummary?.ruleSet?.id, ruleSetSummary?.tableMissing, queryClient]);
 
   // Detect assignment/amendment-only documents so the rule-readiness banner
-  // says something accurate. The pipeline tags these docs with
-  // Classify the document using leaseFull so uploaded-file payload data
-  // (ui_review_payload.records[0].*) is included in the signal check.
-  // detectDocumentProfile uses full-lease signals (commencement, expiration,
-  // rent) to override an incorrect AI-stamped "assignment" documentType.
+  // says something accurate. Phase 39: derive this from
+  // normalized.currentReviewPolicy.profile (leaseReviewCurrentPolicy.js)
+  // instead of calling detectDocumentProfile(leaseFull) directly. The two
+  // used to disagree - detectDocumentProfile only checks the primary
+  // workflow_output.document_profile.documentType path and falls back to
+  // "unknown" when that's empty, while currentReviewPolicy additionally
+  // scans a wider set of payload paths before giving up. Reusing the same
+  // resolved profile here keeps the assignment banner and
+  // FULL_LEASE_ONLY_TABS hiding below in sync with the blocker/readiness
+  // logic instead of running a second, weaker classifier. Base-lease
+  // documents are unaffected: currentReviewPolicy still calls
+  // detectDocumentProfile first and short-circuits on its full-lease-signal
+  // override, so a genuine full lease (or a reviewer's "mark as full lease"
+  // override) still resolves to "base_lease" here too.
   const isAssignmentOnlyDocument = useMemo(
-    () => {
-      const profile = detectDocumentProfile(leaseFull);
-      return profile === "assignment" || profile === "amendment" || profile === "estoppel" || profile === "consent";
-    },
-    [leaseFull],
+    () => normalized.currentReviewPolicy?.profile === "assignment",
+    [normalized.currentReviewPolicy],
   );
 
   const handleMarkAsFullLease = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            document_type_override: "full_lease",
-          },
-        },
+      await updateLeaseExtractionField({
+        leaseId: lease.id,
+        fieldArea: "lease_flag",
+        action: "document_type_override_set",
+        patch: { document_type_override: "full_lease" },
       });
+      updateLeaseQueryCache(queryClient, leaseId, {
+        extraction_data: { ...(lease.extraction_data || {}), document_type_override: "full_lease" },
+      });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Marked as full lease - banner dismissed.");
     } catch (err) {
       console.error("[LeaseReview] mark as full lease failed:", err);
@@ -946,7 +980,7 @@ export default function LeaseReview() {
   // "pending" | "running" | "completed" | "failed"). Not yet consumed
   // anywhere else in this file before this change.
   const enrichmentStatus = uploadedFile?.ui_review_payload?.enrichment_status ?? null;
-  const isEnrichmentInFlight = enrichmentStatus === "pending" || enrichmentStatus === "running";
+  const isEnrichmentInFlight = isLeaseReviewEnrichmentInFlight(enrichmentStatus);
 
   // Temporary read-only fallback: when ui_review_payload hasn't landed yet
   // (or has none of the field-map shapes buildLeaseReviewRowsByTab knows
@@ -1096,12 +1130,15 @@ export default function LeaseReview() {
   }
 
   // --- Derived data --------------------------------------------------------
-  const requiredReviewedKeys = REQUIRED_FIELD_KEYS.filter((k) => isResolvedReview(fieldReviews[k]));
-  const requiredPendingKeys = REQUIRED_FIELD_KEYS.filter((k) => !isResolvedReview(fieldReviews[k]));
+  const currentReviewPolicy = normalized.currentReviewPolicy || {};
+  const requiredFieldKeys = currentReviewPolicy.requiredFieldKeys || REQUIRED_FIELD_KEYS;
+  const requiredFieldKeySet = new Set(requiredFieldKeys);
+  const requiredReviewedKeys = requiredFieldKeys.filter((k) => isResolvedReview(fieldReviews[k]));
+  const requiredPendingKeys = requiredFieldKeys.filter((k) => !isResolvedReview(fieldReviews[k]));
   const requiredResolved = requiredPendingKeys.length === 0;
 
   if (import.meta.env.DEV) {
-    const requiredLogs = REQUIRED_FIELD_KEYS.map(k => {
+    const requiredLogs = requiredFieldKeys.map(k => {
       const resolved = resolveLeaseField(lease, k, { mode: "canonical" });
       return {
         field: k,
@@ -1250,7 +1287,7 @@ export default function LeaseReview() {
     pass: requiredResolved,
     label: "Required fields reviewed",
     detail: requiredResolved
-      ? `All ${REQUIRED_FIELD_KEYS.length} required fields are resolved`
+      ? `All ${requiredFieldKeys.length} required fields are resolved`
       : `${requiredPendingKeys.length} required field(s) pending review`,
   });
   validationChecks.push({
@@ -1278,6 +1315,7 @@ export default function LeaseReview() {
       if (f.key) allKnownKeys.add(f.key);
       if (f.field_key) allKnownKeys.add(f.field_key);
     });
+    requiredFieldKeys.forEach((key) => allKnownKeys.add(key));
 
     const eligibleFields = [];
     const requiredBlockers = [];
@@ -1288,9 +1326,9 @@ export default function LeaseReview() {
     const validationBlockers = [];
 
     allKnownKeys.forEach((key) => {
-      const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || {};
-      const row = reviewRowByKey.get(key) || fieldDef;
-      const isRequired = REQUIRED_FIELD_KEYS.includes(key);
+      const fieldDef = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { key, label: getFieldPolicyLabel(key) };
+      const row = reviewRowByKey.get(key) || standardRowByKey.get(key) || fieldDef;
+      const isRequired = requiredFieldKeySet.has(key);
       const isDynamic = !fieldDef.key;
       
       const review = fieldReviews[key];
@@ -1627,6 +1665,16 @@ export default function LeaseReview() {
       status: REVIEW_STATUSES.MANUAL_REQUIRED,
       previousReview: fieldReviews[field.key],
     });
+
+  const handleTabRowQuickAction = (row, action) => {
+    if (action === "accept") handleAccept(row);
+    else if (action === "edit") openDrawer(row, "edit");
+    else if (action === "reject") handleReject(row);
+    else if (action === "na") handleMarkNA(row);
+    else if (action === "needs_review" || action === "legal") handleNeedsLegal(row);
+    else if (action === "manual_required" || action === "manual") handleMarkManualRequired(row);
+    else if (action === "view_source") openDrawer(row, "view");
+  };
   const handleResetField = async (field) => {
     const previousReview = fieldReviews[field.key];
     const next = { ...fieldReviews };
@@ -1967,19 +2015,8 @@ export default function LeaseReview() {
 
   const handleSendBack = async () => {
     try {
-      await updateLeaseMutation.mutateAsync({
-        id: lease.id,
-        data: {
-          status: "draft",
-          extraction_data: {
-            ...(lease.extraction_data || {}),
-            send_back: {
-              reason: sendBackReason,
-              sent_back_at: new Date().toISOString(),
-            },
-          },
-        },
-      });
+      await sendLeaseBackForReextraction({ leaseId: lease.id, reason: sendBackReason });
+      queryClient.invalidateQueries({ queryKey: ["lease", leaseId] });
       toast.success("Sent back for re-extraction");
       setShowSendBack(false);
       const params = new URLSearchParams();
@@ -2667,7 +2704,7 @@ export default function LeaseReview() {
 
   // --- Render --------------------------------------------------------------
   const leaseStatus = lease.status || "draft";
-  const requiredCounterTitle = `Required Reviewed ${requiredReviewedKeys.length} / ${REQUIRED_FIELD_KEYS.length}`;
+  const requiredCounterTitle = `Required Reviewed ${requiredReviewedKeys.length} / ${requiredFieldKeys.length}`;
   const requiredCounterPendingLabel = requiredResolved
     ? "All required fields reviewed"
     : `Required Pending ${requiredPendingKeys.length}`;
@@ -3085,13 +3122,24 @@ export default function LeaseReview() {
       </div>
       )}
 
+      <div className="mb-4">
+        <LeaseReviewReadinessSummary
+          summary={normalized.readinessSummary}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+        />
+      </div>
+
+      <div className="mb-4">
+        <ApprovalBlockersPanel approvalBlockers={normalized.approvalBlockers} />
+      </div>
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex h-auto flex-wrap justify-start gap-1 border bg-white">
           {LEASE_REVIEW_TABS.map((tab) => {
             if (tab.key === "extraction_debug" && !isSuperAdminUser) return null;
-            const tabFields = fieldsForTab[tab.key] || [];
-            const extractedInTab = tabFields.filter((f) => isReviewRowDisplayable(f, { showMissing: false })).length;
+            const tabFields = enterpriseTabs[tab.key] || [];
+            const extractedInTab = tabFields.filter((f) => isMeaningfulValue(f.value ?? f.normalized_value ?? f.normalizedValue) || f.sourceText || f.source_text).length;
             // Flag tabs that are inapplicable for assignment/amendment docs.
             // A tab is "not in this document" when: we're in assignment mode AND
             // every standard field in the tab is empty (no extracted value).
@@ -3253,8 +3301,8 @@ export default function LeaseReview() {
                   Approval is blocked until every required field is accepted, edited, marked N/A, or marked manual_required.
                 </p>
                 <ul className="mt-2 space-y-1 text-xs">
-                  {REQUIRED_FIELD_KEYS.map((key) => {
-                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key);
+                  {requiredFieldKeys.map((key) => {
+                    const field = LEASE_REVIEW_FIELDS.find((f) => f.key === key) || standardRowByKey.get(key) || { label: getFieldPolicyLabel(key) };
                     const review = fieldReviews[key];
                     const resolved = isResolvedReview(review);
                     return (
@@ -3272,179 +3320,68 @@ export default function LeaseReview() {
           </div>
         </TabsContent>
 
-        {/* Field tabs - table-first per business section. */}
+        {/* Business tabs - one spreadsheet-style table per section. */}
         {LEASE_REVIEW_TABS
           .filter((t) => !["summary", "rent_charges", "expenses_recoveries", "cam_rules", "clause_records", "critical_dates", "documents_exhibits", "budget_preview", "extraction_debug"].includes(t.key))
           .map((tab) => (
             <TabsContent key={tab.key} value={tab.key} className="mt-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <FieldTableFilter
-                  showMissing={showMissingByTab[tab.key] || false}
-                  onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, [tab.key]: val }))}
-                />
+              <div className="flex justify-end">
                 <Button variant="outline" size="sm" className="h-7 text-xs"
                   onClick={() => { setCustomFieldDialog({ tabKey: tab.key }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
                   + Add Custom Field
                 </Button>
               </div>
-              <FieldReviewTable
-                fields={fieldsForTab[tab.key] || []}
-                lease={leaseFull}
-                fieldReviews={fieldReviews}
-                onOpenDetail={(field) => openDrawer(field, "view")}
-                onQuickAction={(field, action) => {
-                  if (action === "accept") handleAccept(field);
-                  else if (action === "edit") openDrawer(field, "edit");
-                  else if (action === "reject") handleReject(field);
-                  else if (action === "na") handleMarkNA(field);
-                  else if (action === "legal") handleNeedsLegal(field);
-                  else if (action === "manual") handleMarkManualRequired(field);
-                }}
-                showMissing={showMissingByTab[tab.key] || false}
-                conflictKeys={conflictKeySet}
-                crossFieldWarnings={crossFieldWarnings}
+              <LeaseReviewTabTable
+                rows={enterpriseTabs[tab.key] || []}
+                onOpenDetail={(row) => openDrawer(row, "view")}
+                onQuickAction={handleTabRowQuickAction}
               />
             </TabsContent>
           ))}
-
-        {/* Rent & Charges - single-value rent fields + generated rent rows.
-            The rent_schedules table remains in the backend (rent projection,
-            billing, etc. read from it); we just surface the rows here so
-            reviewers see the schedule that approval will publish. */}
         <TabsContent value="rent_charges" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.rent_charges || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, rent_charges: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setCustomFieldDialog({ tabKey: "rent_charges" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>+ Add Custom Field</Button>
           </div>
-          <FieldReviewTable
-            fields={fieldsForTab.rent_charges || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.rent_charges || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
+          <LeaseReviewTabTable rows={enterpriseTabs.rent_charges || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
           <RentScheduleTable leaseId={lease.id} />
         </TabsContent>
 
-        {/* Expense Rules - single-value lease fields + repeatable rule rows. */}
         <TabsContent value="expenses_recoveries" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.expenses_recoveries || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, expenses_recoveries: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "expenses_recoveries" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
-          </div>
-          <FieldReviewTable
-            fields={fieldsForTab.expenses_recoveries || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.expenses_recoveries || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
-          <ExpenseRulesTable leaseId={lease.id} lease={leaseFull || lease} />
+          <LeaseReviewTabTable rows={enterpriseTabs.expenses_recoveries || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
-        {/* CAM Rules - single-value CAM lease fields + repeatable CAM rules. */}
         <TabsContent value="cam_rules" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <FieldTableFilter
-              showMissing={showMissingByTab.cam_rules || false}
-              onToggle={(val) => setShowMissingByTab((prev) => ({ ...prev, cam_rules: val }))}
-            />
-            <Button variant="outline" size="sm" className="h-7 text-xs"
-              onClick={() => { setCustomFieldDialog({ tabKey: "cam_rules" }); setCustomFieldForm({ label: "", value: "", sourceText: "", sourcePage: "" }); }}>
-              + Add Custom Field
-            </Button>
-          </div>
-          <FieldReviewTable
-            fields={fieldsForTab.cam_rules || []}
-            lease={leaseFull}
-            fieldReviews={fieldReviews}
-            onOpenDetail={(field) => openDrawer(field, "view")}
-            onQuickAction={(field, action) => {
-              if (action === "accept") handleAccept(field);
-              else if (action === "edit") openDrawer(field, "edit");
-              else if (action === "reject") handleReject(field);
-              else if (action === "na") handleMarkNA(field);
-              else if (action === "legal") handleNeedsLegal(field); else if (action === "manual") handleMarkManualRequired(field);
-            }}
-            showMissing={showMissingByTab.cam_rules || false}
-            conflictKeys={conflictKeySet}
-            crossFieldWarnings={crossFieldWarnings}
-          />
-          <CamRulesTable leaseId={lease.id} lease={leaseFull || lease} />
+          <LeaseReviewTabTable rows={enterpriseTabs.cam_rules || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} onNavigateRules={() => navigate(createPageUrl("LeaseExpenseRules") + `?lease_id=${lease.id}`)} />
         </TabsContent>
 
-        {/* Clause Records - all meaningful lease clauses against a predefined checklist. */}
         <TabsContent value="clause_records" className="mt-4 space-y-3">
-          <ClauseRecordsTable lease={leaseFull} />
+          <LeaseReviewTabTable rows={enterpriseTabs.clause_records || []} onOpenDetail={(row) => openDrawer(row, "view")} />
         </TabsContent>
 
-        {/* Critical Dates - derived from approved abstract. */}
         <TabsContent value="critical_dates" className="mt-4 space-y-3">
-          <CriticalDatesTable lease={leaseFull} />
+          <LeaseReviewTabTable rows={enterpriseTabs.critical_dates || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
         </TabsContent>
 
-        {/* Documents / Exhibits tab */}
         <TabsContent value="documents_exhibits" className="mt-4 space-y-3">
+          <LeaseReviewTabTable rows={enterpriseTabs.documents_exhibits || []} onOpenDetail={(row) => openDrawer(row, "view")} onQuickAction={handleTabRowQuickAction} />
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Source Document</CardTitle>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Source Document</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              {lease.approval_document_url ? (
-                <a
-                  href={lease.approval_document_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
-                >
-                  <FileText className="h-4 w-4" />
-                  Approved signed copy
-                </a>
-              ) : null}
+              {lease.approval_document_url ? <a href={lease.approval_document_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"><FileText className="h-4 w-4" />Approved signed copy</a> : null}
               <SourceFileLink lease={lease} />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Budget Preview tab */}
         <TabsContent value="budget_preview" className="mt-4 space-y-3">
+          <LeaseReviewTabTable rows={enterpriseTabs.budget_preview || []} onOpenDetail={(row) => openDrawer(row, "view")} />
           <BudgetPreviewCard lease={lease} />
         </TabsContent>
 
         {/* Extraction Debug tab - superadmin only. */}
         {isSuperAdminUser && (
           <TabsContent value="extraction_debug" className="mt-4 space-y-3">
-            <ExtractionDebugPanel lease={lease} />
+            <ExtractionDebugPanel lease={leaseFull} />
           </TabsContent>
         )}
       </Tabs>
@@ -3499,7 +3436,7 @@ export default function LeaseReview() {
           }
         }}
         field={drawerField}
-        lease={lease}
+        lease={leaseFull}
         review={drawerReview}
         initialMode={drawerMode}
         onAccept={(f) => handleAccept(f)}
@@ -3630,6 +3567,7 @@ export default function LeaseReview() {
           // sees the same shape the extractor would have produced.
           try {
             const prevField = lease.extraction_data?.fields?.[f.key] || null;
+            const prevEvidence = lease.extraction_data?.field_evidence?.[f.key] || null;
             const cleanPatch = {
               raw_value: evidencePatch.raw_value ?? null,
               source_page:
@@ -3682,11 +3620,11 @@ export default function LeaseReview() {
                 ...(confValue != null ? { [f.key]: confValue } : {}),
               },
             };
-            const { error: updateErr } = await supabase
-              .from("leases")
-              .update({ extraction_data: nextExtraction })
-              .eq("id", lease.id);
-            if (updateErr) throw updateErr;
+            // updateLeaseExtractionField() above already persisted this patch
+            // server-side (merged, not replaced, onto fields[key]/
+            // field_evidence[key]) — do not also write extraction_data
+            // directly here, that would be a redundant second write racing
+            // the server's own merge with a client-reconstructed object.
             // Seed the cache with the new extraction_data immediately so the
             // drawer / table re-render before the invalidation refetch
             // round-trips. Previously only invalidateQueries fired here,

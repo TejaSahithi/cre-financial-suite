@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -13,13 +12,18 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import FileUploader, { getFriendlyExtractionLabel } from "@/components/FileUploader";
-import { computeCanOpenReview } from "@/lib/extractionStatusLabels";
+import {
+  ensureLeaseReviewDraftForUpload,
+  getLeaseUploadReviewStatusLabel,
+  getLeaseReviewActionState,
+  isLeaseUploadReviewReady,
+  resolveLeaseReviewIdFromUploadRecord,
+} from "@/lib/leaseUploadReviewAction";
 import ScopeSelector from "@/components/ScopeSelector";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { clearCache } from "@/services/api";
 import useOrgQuery from "@/hooks/useOrgQuery";
 import { supabase } from "@/services/supabaseClient";
 import { invokeEdgeFunction } from "@/services/edgeFunctions";
@@ -130,12 +134,18 @@ async function fetchUploadedFileStatus(id) {
 function normalizePipelineStatusRecord(data, id) {
   const fileMetadata = data?.file_metadata || {};
   const pipeline = data?.pipeline || {};
+  const status = data?.status || statusFromDisplayState(data?.display_state);
+  const normalizedOutput = data?.normalized_output || {};
   return {
     id: data?.id || data?.file_id || fileMetadata.id || id,
     org_id: data?.org_id || fileMetadata.org_id || null,
     file_name: data?.file_name || fileMetadata.file_name || "Lease document",
     file_url: data?.file_url || fileMetadata.file_url || null,
-    status: data?.status || statusFromDisplayState(data?.display_state),
+    lease_id: data?.lease_id || data?.leaseId || fileMetadata.lease_id || null,
+    leaseId: data?.leaseId || data?.lease_id || fileMetadata.leaseId || null,
+    metadata: data?.metadata || fileMetadata.metadata || null,
+    extraction_data: data?.extraction_data || fileMetadata.extraction_data || null,
+    status,
     processing_status: data?.processing_status || data?.display_state || null,
     failed_step: data?.failed_step || pipeline.stage || data?.latest_job?.stage || null,
     error_message: data?.error_message || data?.message || data?.latest_job?.error_message || null,
@@ -145,7 +155,13 @@ function normalizePipelineStatusRecord(data, id) {
     extraction_method: data?.extraction_method || null,
     ui_review_payload: data?.ui_review_payload || null,
     reviewed_output: data?.reviewed_output || null,
-    normalized_output: { metadata: { pipeline } },
+    normalized_output: {
+      ...normalizedOutput,
+      metadata: {
+        ...(normalizedOutput?.metadata || {}),
+        pipeline,
+      },
+    },
     row_count: data?.row_count ?? null,
     property_id: data?.property_id || fileMetadata.property_id || null,
     building_id: data?.building_id || fileMetadata.building_id || null,
@@ -256,7 +272,6 @@ function buildPipelineFailure(record, reviewPayload) {
 export default function LeaseUpload() {
   const location = useLocation();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const urlParams = new URLSearchParams(location.search);
   const queryPropertyId = urlParams.get("property");
   const queryBuildingId = urlParams.get("building");
@@ -272,12 +287,9 @@ export default function LeaseUpload() {
   const [retryingExtraction, setRetryingExtraction] = useState(false);
   const [deletingUpload, setDeletingUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Set when review-approve fails while preparing a Lease Review draft.
-  // No client-side fallback creates a lease in this case (see ensureLeaseDraft) --
-  // this is the persistent failure/retry state shown to the user instead.
-  const [leaseDraftError, setLeaseDraftError] = useState(null);
+  const [linkedLeaseId, setLinkedLeaseId] = useState(null);
+  const [leaseReviewHandoffError, setLeaseReviewHandoffError] = useState(null);
   const retriedUploadedFiles = useRef(new Set());
-  const retriedManualFallbackFiles = useRef(new Set());
   const preparedLeaseDraftFiles = useRef(new Set());
   // Ref keeps the latest fileRecord status visible inside the polling interval
   // without requiring the interval to be recreated on every status change.
@@ -419,102 +431,6 @@ export default function LeaseUpload() {
     setFileRecord(data);
   }, []);
 
-  const invalidateLeaseQueries = async () => {
-    clearCache();
-    await queryClient.invalidateQueries({ queryKey: ["Lease"] });
-  };
-
-  // Accept an explicit snapshot to avoid stale-closure issues in effects.
-  const ensureLeaseDraft = async ({ silent = false, record: recordOverride } = {}) => {
-    if (!fileId) return null;
-
-    // Use the caller-supplied snapshot when provided; fall back to state.
-    const record = recordOverride ?? fileRecord;
-
-    const existing = await findLeaseByFileId(fileId);
-    if (existing?.id) {
-      setLeaseDraftError(null);
-      await invalidateLeaseQueries();
-      return existing.id;
-    }
-
-    // Statuses where the file has been processed enough that a lease draft is
-    // either already expected or can be safely manufactured client-side.
-    const fileIsReady =
-      record?.review_required === true ||
-      ["review_required", "validated", "approved", "storing", "stored", "computing", "completed"].includes(record?.status || "");
-
-    if (!fileIsReady) {
-      return null;
-    }
-
-    let data = null;
-    let edgeFailed = false;
-    let edgeError = null;
-    try {
-      data = await invokeEdgeFunction("review-approve", {
-        file_id: fileId,
-        action: "prepare",
-        review_payload: record?.ui_review_payload || null,
-      });
-    } catch (prepareErr) {
-      if (!isUnsupportedPrepareAction(prepareErr)) {
-        edgeFailed = true;
-        edgeError = prepareErr;
-      } else {
-        try {
-          data = await invokeEdgeFunction("review-approve", {
-            file_id: fileId,
-            action: "approve",
-            review_payload: record?.ui_review_payload || null,
-          });
-        } catch (approveErr) {
-          edgeFailed = true;
-          edgeError = approveErr;
-        }
-      }
-    }
-
-    if (!edgeFailed) {
-      const insertedLeaseId =
-        data?.store_result?.inserted_ids?.[0] ||
-        data?.store_result?.insertedIds?.[0] ||
-        null;
-
-      await fetchFileRecord(fileId);
-      const linkedLeaseId = insertedLeaseId || (await findLeaseByFileId(fileId))?.id || null;
-      if (linkedLeaseId) {
-        await ensureLeaseSourceFileLink(linkedLeaseId, record || { id: fileId });
-        setLeaseDraftError(null);
-        await invalidateLeaseQueries();
-        return linkedLeaseId;
-      }
-    }
-
-    // Client-side fallback. If review-approve isn't usable on this deployment
-    // (older function, schema drift, or any 4xx), create the lease row
-    // directly from the reviewed UI payload so the user can still open Lease
-    // Review and edit fields. This is the same shape review-approve would
-    // produce on the happy path.
-    try {
-      const fallbackLeaseId = await createLeaseDraftFromUploadedFile(fileId, record);
-      if (fallbackLeaseId) {
-        await invalidateLeaseQueries();
-        await fetchFileRecord(fileId);
-        return fallbackLeaseId;
-      }
-    } catch (fallbackErr) {
-      console.warn("[LeaseUpload] client-side lease draft fallback failed:", fallbackErr?.message || fallbackErr);
-    }
-
-    if (edgeError && !silent) {
-      toast.error(edgeError?.message || "Could not prepare lease review draft.");
-    } else if (!silent) {
-      toast.info("Lease review draft is being prepared. Try again in a moment.");
-    }
-    return null;
-  };
-
   useEffect(() => {
     if (!fileId) return undefined;
 
@@ -652,23 +568,30 @@ export default function LeaseUpload() {
     }
   }, [fileId, fetchFileRecord]);
 
-  // Open Lease Review for the lease draft tied to this file. If a draft does
-  // not yet exist, send the existing extraction to the review pipeline (which
-  // creates the lease draft on the backend) and then navigate. The actual
-  // approval still happens in Lease Review — this just promotes the raw AI
-  // output into a reviewable draft, per the upgraded workflow.
+  // Open Lease Review for the lease draft tied to this file. The click path is
+  // find-or-create: use any existing linked lease first, otherwise ask the
+  // server-owned review-approve flow to prepare the draft from this upload.
   const openLeaseReview = async () => {
     if (!fileId) return;
     setOpeningReview(true);
+    setLeaseReviewHandoffError(null);
     try {
-      const leaseId = await ensureLeaseDraft({ record: fileRecord });
-      if (leaseId) {
-        navigate(createPageUrl("LeaseReview", { id: leaseId }));
-      } else {
-        toast.info("Lease review draft is still being prepared. Try again in a moment.");
-      }
+      const { leaseId } = await ensureLeaseReviewDraftForUpload({
+        fileId,
+        fileRecord,
+        linkedLeaseId,
+        findLeaseByFileId,
+        prepareLeaseReviewDraft: (body) => invokeEdgeFunction("review-approve", body),
+        linkLeaseToUploadedFile,
+      });
+
+      setLinkedLeaseId(leaseId);
+      navigate(createPageUrl("LeaseReview", { id: leaseId }));
     } catch (error) {
-      toast.error(error?.message || "Could not open Lease Review");
+      console.error("[LeaseUpload] Could not create Lease Review record from this upload:", error?.cause || error);
+      const message = "Could not create Lease Review record from this upload.";
+      setLeaseReviewHandoffError(message);
+      toast.error(message);
     } finally {
       setOpeningReview(false);
     }
@@ -746,8 +669,8 @@ export default function LeaseUpload() {
     if (
       !fileId ||
       !fileRecord ||
-      fileRecord.status !== "review_required" ||
-      fileRecord.review_required !== true ||
+      !isLeaseUploadReviewReady(fileRecord) ||
+      resolveLeaseReviewIdFromUploadRecord(fileRecord) ||
       preparedLeaseDraftFiles.current.has(fileId)
     ) {
       return undefined;
@@ -756,53 +679,25 @@ export default function LeaseUpload() {
     preparedLeaseDraftFiles.current.add(fileId);
     let cancelled = false;
 
-    // Capture the current fileRecord snapshot so the async call doesn't
-    // read stale state from a re-render that fires mid-execution.
-    const capturedRecord = fileRecord;
     (async () => {
       try {
-        const leaseId = await ensureLeaseDraft({ silent: true, record: capturedRecord });
-        if (!leaseId && !cancelled) {
+        const linkedLease = await findLeaseByFileId(fileId);
+        if (!cancelled) setLinkedLeaseId(linkedLease?.id || null);
+        if (!linkedLease?.id && !cancelled) {
           preparedLeaseDraftFiles.current.delete(fileId);
         }
       } catch (error) {
         if (!cancelled) {
           preparedLeaseDraftFiles.current.delete(fileId);
         }
-        console.warn("[LeaseUpload] Could not auto-stage lease draft:", error?.message || error);
+        console.warn("[LeaseUpload] Could not resolve linked lease review:", error?.message || error);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [fileId, fileRecord, queryClient]);
-
-  useEffect(() => {
-    if (
-      !fileId ||
-      fileRecord?.status !== "review_required" ||
-      !isEmptyExtractionFallback ||
-      retriedManualFallbackFiles.current.has(fileId)
-    ) {
-      return undefined;
-    }
-
-    const staleStatusHelperBug = fallbackWarnings.some((warning) =>
-      String(warning).includes(".catch is not a function"),
-    );
-    const emptyExtraction = fallbackWarnings.some((warning) =>
-      /text is too short|no structured fields/i.test(String(warning)),
-    );
-    if (!staleStatusHelperBug && !emptyExtraction) return undefined;
-
-    retriedManualFallbackFiles.current.add(fileId);
-    const retryTimer = window.setTimeout(() => {
-      retryExtraction();
-    }, 750);
-
-    return () => window.clearTimeout(retryTimer);
-  }, [fileId, fileRecord?.status, isEmptyExtractionFallback, fallbackWarnings, retryExtraction]);
+  }, [fileId, fileRecord]);
 
   const failed = fileRecord?.status === "failed";
 
@@ -818,27 +713,17 @@ export default function LeaseUpload() {
     return Date.now() - updatedAt > 3 * 60 * 1000; // stuck for > 3 minutes
   }, [fileRecord?.status, fileRecord?.updated_at]);
 
-  // "Open Lease Review" is only meaningful when there is an actual review
-  // payload (i.e. extraction produced fields the user can inspect/approve).
-  // A failed parse produces a blocked placeholder payload — not a real review.
-  // Hiding the button avoids confusion and prevents navigating to an empty review.
+  const reviewReadyForAction = isLeaseUploadReviewReady(fileRecord);
+  const leaseReviewAction = getLeaseReviewActionState(fileRecord, linkedLeaseId);
+  const canOpenReview = leaseReviewAction.showOpenButton;
+  const uploadStatusLabel = getLeaseUploadReviewStatusLabel(
+    fileRecord,
+    getFriendlyExtractionLabel(fileRecord?.status),
+  );
   const hasValidReviewPayload =
-    fileRecord?.review_required === true &&
+    reviewReadyForAction &&
     fileRecord?.ui_review_payload != null &&
     fileRecord?.status !== "failed";
-
-  // §1 / guarantee 10: read the backend-computed core_ready flag directly
-  // (persisted on ui_review_payload by buildMinimalReviewPayload, P0.2)
-  // rather than re-deriving readiness client-side — see computeCanOpenReview
-  // (src/lib/extractionStatusLabels.js) for the shared, unit-tested logic.
-  // This intentionally drops "validating"/"pdf_parsed" from the old blind
-  // status allow-list — those statuses can never produce a payload with
-  // core_ready:true because no minimal payload exists yet at that point.
-  const canOpenReview = computeCanOpenReview({
-    hasValidReviewPayload,
-    uiReviewPayload: fileRecord?.ui_review_payload,
-    status: fileRecord?.status,
-  });
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -941,12 +826,12 @@ export default function LeaseUpload() {
               <div className="flex flex-wrap items-center gap-2">
                 {loadingRecord && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
                 <Badge className={statusBadgeStyle(fileRecord?.status)}>
-                  {getFriendlyExtractionLabel(fileRecord?.status)}
+                  {uploadStatusLabel}
                 </Badge>
                 {fileRecord?.document_subtype && (
                   <Badge className="bg-blue-50 text-blue-700">{fileRecord.document_subtype.replace(/_/g, " ")}</Badge>
                 )}
-                {fileRecord?.status === "review_required" && (
+                {reviewReadyForAction && (
                   <Badge className="bg-amber-100 text-amber-800">Review Required</Badge>
                 )}
               </div>
@@ -1006,28 +891,12 @@ export default function LeaseUpload() {
               </Button>
             </div>
 
-            {leaseDraftError && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                <div>
-                  <div className="font-medium">Could not prepare the Lease Review draft</div>
-                  <div className="mt-1 text-xs text-red-600">{leaseDraftError}</div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={openLeaseReview}
-                  disabled={openingReview}
-                  className="shrink-0 border-red-200 bg-white text-red-700 hover:bg-red-100"
-                >
-                  {openingReview ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                  )}
-                  Retry
-                </Button>
+            {leaseReviewHandoffError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+                {leaseReviewHandoffError}
               </div>
             )}
+
           </CardContent>
         </Card>
       )}
@@ -1037,7 +906,7 @@ export default function LeaseUpload() {
           <CardContent className="p-4">
             <h3 className="text-sm font-semibold text-slate-900">Processing Status</h3>
             <p className="mt-1 text-sm font-medium text-blue-600">
-              {getFriendlyExtractionLabel(fileRecord?.status)}
+              {uploadStatusLabel}
             </p>
             <details className="mt-3 text-xs text-slate-400">
               <summary className="cursor-pointer select-none">Advanced</summary>
@@ -1194,58 +1063,59 @@ export default function LeaseUpload() {
   );
 }
 
-async function findLeaseByFileId(fileId) {
-  const { data, error } = await supabase
-    .from("leases")
-    .select("id")
-    .filter("extraction_data->>source_file_id", "eq", fileId)
-    .limit(1)
-    .maybeSingle();
-  if (error) return null;
-  return data;
-}
+async function linkLeaseToUploadedFile(leaseId, fileRecord) {
+  if (!leaseId || !fileRecord?.id) return null;
 
-async function ensureLeaseSourceFileLink(leaseId, fileRecordOrId) {
-  if (!leaseId || !fileRecordOrId) return null;
-
-  let fileRecord = typeof fileRecordOrId === "string" ? { id: fileRecordOrId } : fileRecordOrId;
-  if (!fileRecord?.file_name) {
-    const { data } = await fetchUploadedFileStatus(fileRecord.id);
-    fileRecord = { ...fileRecord, ...(data || {}) };
-  }
-
-  const { data: lease, error } = await supabase
+  const sourceFileId = fileRecord.id;
+  const { data: lease, error: fetchError } = await supabase
     .from("leases")
     .select("id, extraction_data")
     .eq("id", leaseId)
     .maybeSingle();
-  if (error || !lease) return null;
 
-  const currentExtraction = lease.extraction_data || {};
-  if (currentExtraction.source_file_id === fileRecord.id) {
-    return lease.id;
+  if (fetchError) {
+    console.warn("[LeaseUpload] Could not inspect Lease Review source link:", fetchError.message);
   }
 
-  const sourceLinkPatch = {
-    source_file_id: fileRecord.id,
-    source_file_name: fileRecord.file_name ?? currentExtraction.source_file_name ?? null,
-    document_subtype: currentExtraction.document_subtype ?? fileRecord.document_subtype ?? null,
-    source_file_linked_at: new Date().toISOString(),
-  };
 
-  try {
-    await updateLeaseExtractionField({
-      leaseId: lease.id,
-      fieldArea: "source_link",
-      action: "source_file_linked_on_upload",
-      patch: sourceLinkPatch,
-    });
-  } catch (updateError) {
-    console.warn("[LeaseUpload] could not persist source_file_id on lease draft:", updateError?.message || updateError);
-    return null;
+  const extractionSourceFileId = lease?.extraction_data?.source_file_id || null;
+  if (extractionSourceFileId !== sourceFileId) {
+    try {
+      await updateLeaseExtractionField({
+        leaseId,
+        fieldArea: "source_link",
+        action: "source_file_linked_on_upload",
+        patch: {
+          source_file_id: sourceFileId,
+          source_file_name: fileRecord.file_name ?? null,
+          document_subtype: fileRecord.document_subtype ?? null,
+          source_file_linked_at: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.warn("[LeaseUpload] Could not refresh extraction_data source link:", error?.message || error);
+    }
   }
 
-  return lease.id;
+  return leaseId;
+}
+
+
+async function findLeaseByFileId(fileId) {
+  if (!fileId) return null;
+
+  const attempts = [
+    (query) => query.filter("extraction_data->>source_file_id", "eq", fileId),
+    (query) => query.filter("extraction_data->>uploaded_file_id", "eq", fileId),
+  ];
+
+  for (const applyFilter of attempts) {
+    const query = supabase.from("leases").select("id").limit(1);
+    const { data, error } = await applyFilter(query).maybeSingle();
+    if (!error && data?.id) return data;
+  }
+
+  return null;
 }
 
 function getRecordValue(record, key) {
@@ -1330,18 +1200,6 @@ function isMeaningfulLeaseValue(value) {
   return true;
 }
 
-function isUnsupportedPrepareAction(error) {
-  const message = String(error?.message || "").toLowerCase();
-  if (/invalid action[:\s]*prepare/.test(message)) return true;
-  if (/unknown action[:\s]*prepare/.test(message)) return true;
-  if (/unsupported action[:\s]*prepare/.test(message)) return true;
-  if (/prepare/.test(message) && /(invalid|unknown|unsupported|bad request|not supported)/.test(message)) return true;
-  // Some deployed builds drop the message; fall back to status-only detection
-  // so an old function returning a generic 400 still triggers the approve path.
-  const status = Number(error?.context?.status ?? error?.status ?? error?.statusCode ?? 0);
-  if (status === 400 || status === 404 || status === 405) return true;
-  return false;
-}
 
 async function resolveUploadedFileUrl(fileRecord) {
   if (!fileRecord) return null;

@@ -1,0 +1,100 @@
+import { invokeEdgeFunction } from "@/services/edgeFunctions";
+
+/**
+ * Document Intelligence v3 â€” Readiness diagnostic fetch (Phase 4).
+ *
+ * Unlike invokeEdgeFunction itself (which throws on any failure),
+ * this wrapper always resolves and never throws -- callers (currently only
+ * ExtractionDebugPanel.jsx's on-demand "Load v3 Diagnostics" button) can
+ * render a non-blocking inline error without needing their own try/catch
+ * around every call site. This is a read-only diagnostic call: it performs
+ * no writes and has no side effects on the current Lease Review flow.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.uploadedFileId] - required unless runId is given
+ * @param {string|null} [params.runId] - optional; when omitted the endpoint
+ *   resolves the latest completed Document Intelligence v3 run for uploadedFileId
+ * @returns {Promise<{error: false, readiness: Object} | {error: true, message: string}>}
+ */
+export async function fetchDocumentIntelligenceV3Readiness({ uploadedFileId = null, runId = null } = {}) {
+  if (!uploadedFileId && !runId) {
+    return { error: true, message: "No uploaded_file_id or run_id available for this document." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v3-readiness", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+    });
+    return { error: false, readiness: data?.readiness ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v3 diagnostics." };
+  }
+}
+/**
+ * Document Intelligence v3 - Advisory audit / current review comparison
+ * fetch (Phase 14). Read-only diagnostic call used only by the admin
+ * Extraction Debug panel.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.uploadedFileId]
+ * @param {string|null} [params.runId]
+ * @param {string|null} [params.leaseId]
+ * @returns {Promise<{error: false, advisoryAudit: Object} | {error: true, message: string}>}
+ */
+export async function fetchDocumentIntelligenceV3AdvisoryAudit({
+  uploadedFileId = null,
+  runId = null,
+  leaseId = null,
+} = {}) {
+  if (!uploadedFileId && !runId && !leaseId) {
+    return { error: true, message: "No uploaded_file_id, run_id, or lease_id available for this document." };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v3-advisory-audit", {
+      uploaded_file_id: uploadedFileId,
+      run_id: runId,
+      lease_id: leaseId,
+      persist_snapshot: false,
+    });
+    return { error: false, advisoryAudit: data?.advisory_audit ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v3 advisory audit." };
+  }
+}
+/**
+ * Document Intelligence v3 - Batch advisory audit report fetch (Phase 15).
+ * Read-only diagnostic call used only by the admin Extraction Debug panel
+ * and manual QA utilities.
+ *
+ * @param {Object} params
+ * @param {string[]} [params.uploadedFileIds]
+ * @param {string[]} [params.runIds]
+ * @param {string[]} [params.leaseIds]
+ * @param {number|null} [params.limit]
+ * @returns {Promise<{error: false, batchAudit: Object} | {error: true, message: string}>}
+ */
+export async function fetchDocumentIntelligenceV3AdvisoryAuditBatch({
+  uploadedFileIds = [],
+  runIds = [],
+  leaseIds = [],
+  limit = null,
+} = {}) {
+  const hasInput = uploadedFileIds.length > 0 || runIds.length > 0 || leaseIds.length > 0;
+  if (!hasInput) {
+    return { error: false, batchAudit: null };
+  }
+
+  try {
+    const data = await invokeEdgeFunction("document-intelligence-v3-advisory-audit-batch", {
+      uploaded_file_ids: uploadedFileIds,
+      run_ids: runIds,
+      lease_ids: leaseIds,
+      limit,
+    });
+    return { error: false, batchAudit: data?.batch_audit ?? null };
+  } catch (err) {
+    return { error: true, message: err?.message || "Failed to load Document Intelligence v3 batch advisory audit." };
+  }
+}

@@ -18,14 +18,14 @@ describe("guarantee 10: computeCanOpenReview", () => {
     ).toBe(false);
   });
 
-  it("is false when core_ready is explicitly false, even with a valid payload envelope", () => {
+  it("opens review_required payloads even when core_ready is false because they are manual review drafts", () => {
     expect(
       computeCanOpenReview({
         hasValidReviewPayload: true,
         uiReviewPayload: payloadWithCoreReady(false),
         status: "review_required",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is true once core_ready is true", () => {

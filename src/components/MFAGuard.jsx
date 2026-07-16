@@ -286,7 +286,7 @@ export default function MFAGuard({ onVerified }) {
                       variant="outline"
                       size="sm"
                       disabled={resetting}
-                      onClick={error?.includes("Maximum number") ? handleResetAndShowQR : startEnrollment}
+                      onClick={startEnrollment}
                       className="w-full"
                     >
                       {resetting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}

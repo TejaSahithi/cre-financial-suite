@@ -155,7 +155,7 @@ const GENERIC_EXPENSE_RULE_SOURCE_PATTERNS = [
   /billable exception charge under/i,
 ];
 
-const CLAUSE_DEFINITIONS = [
+export const CLAUSE_DEFINITIONS = [
   { type: "rent_escalation", title: "Rent & Escalation", keywords: ["base rent", "monthly rent", "minimum rent", "rent shall", "annual rent", "escalation", "increase"], maxChars: 720 },
   { type: "security_deposit", title: "Security Deposit", keywords: ["security deposit", "deposit"], maxChars: 520 },
   { type: "operating_expense_recovery", title: "Operating Expense Recovery", keywords: ["operating expenses", "additional rent", "tenant shall reimburse", "tenant shall pay", "taxes, insurance", "common area maintenance"], maxChars: 820 },
@@ -202,6 +202,12 @@ const FIELD_SPECS = [
   { key: "assignee_name", group: "assignment_amendment", aliases: ["assignee_name", "assignee", "new_tenant", "transferee"], patterns: [/\b(?:assignee|new tenant|transferee)\b[:\s-]+([^\n]{2,160})/i] },
   { key: "assignment_effective_date", group: "assignment_amendment", aliases: ["assignment_effective_date", "assignment_date"], patterns: [/\b(?:assignment effective date|assignment date|effective date)\b[:\s-]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i] },
   { key: "landlord_consent", group: "assignment_amendment", aliases: ["landlord_consent"], patterns: [/\b(landlord[^.\n]{0,120}(?:consents?|approves?)[^.\n]{0,120}(?:assignment|transfer)|consent\s+to\s+assignment[^.\n]{0,160}(?:granted|approved|given))/i] },
+  // Distinct from landlord_consent (boolean — was consent actually GIVEN for
+  // this specific assignment) — this is the lease's general rule about
+  // future assignments/transfers. Was previously referenced throughout this
+  // file's sentinel-filtering/humanization logic with no real extraction
+  // path of its own (see the LEASE_SCHEMA entry added alongside this one).
+  { key: "landlord_consent_for_transfer", group: "assignment_amendment", aliases: ["landlord_consent_for_transfer"], patterns: [/\blandlord[^.\n]{0,40}consent[^.\n]{0,120}(?:assignment|transfer|sublet)/i] },
   { key: "assumption_scope", group: "assignment_amendment", aliases: ["assumption_scope"], patterns: [/\b(assignee[^.\n]{0,220}\b(?:assumes?|agrees\s+to\s+perform|shall\s+perform)[^.\n]{0,220}(?:obligations|liabilities|lease))/i] },
   { key: "assignee_notice_address", group: "assignment_amendment", aliases: ["assignee_notice_address"], patterns: [/\b(?:assignee(?:'s)?\s+notice\s+address|address\s+for\s+notices\s+to\s+assignee|assignee\s+address)\b[:\s-]+([^\n]{8,220})/i] },
   { key: "assignment_consideration", group: "assignment_amendment", aliases: ["assignment_consideration"], patterns: [/\b(?:assignment\s+consideration|consideration)\b[^\n$]{0,80}\$?\s*([\d,]+(?:\.\d{2})?)/i] },
@@ -212,6 +218,7 @@ const FIELD_SPECS = [
   // where the signer wasn't tagged explicitly.
   { key: "tenant_contact_name", group: "lease_header", aliases: ["tenant_contact_name", "tenant_signatory_name", "signed_by"], patterns: [/\bBy:\s*([A-Z][A-Za-z.' -]{3,80})/, /\btenant(?:\s+contact|\s+representative|\s+signatory)?\b[:\s-]+([A-Z][A-Za-z.' -]{3,80})/i] },
   { key: "tenant_address", group: "lease_header", aliases: ["tenant_address"], patterns: [/\btenant(?:'s)?\s+address\b[:\s-]+([^\n]{6,180})/i] },
+  { key: "tenant_contact_phone", group: "lease_header", aliases: ["tenant_contact_phone"], patterns: [/\btenant(?:'s)?\s+(?:contact\s+)?(?:phone|telephone)\b[:\s-]+([\d()+\-.\s]{7,20})/i] },
   { key: "property_name", group: "premises", aliases: ["property_name"], patterns: [/\bknown\s+as\s+(The\s+[A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i, /\bknown\s+as\s+([A-Z][A-Za-z0-9 &'.,-]+?)(?:\s+in\b|,|\.|;|\))/i] },
   { key: "property_address", group: "lease_header", aliases: ["property_address", "premises_address", "demised_premises_address", "leased_premises_address", "shopping_center_address", "building_address", "premises_location", "property_location"], patterns: [/\bfor\s+the\s+lease\s+of\s+approximately\s+[\d,]+\s+rentable\s+square\s+feet\s+of\s+space\s+\(?(?:the\s+['"]?premises['"]?)\)?\s+located\s+at\s+([^\n.]{10,220})/i, /\b(?:premises|demised premises|leased premises|leased property|shopping center|the property|the building)\s+(?:is\s+)?(?:located|situated|known|having an address)\s*(?:at|as)?[:\s-]+([^\n]{10,220})/i, /\bpremises\s+located\s+at\s+([^\n.]{10,220})/i, /\baddress\s+of\s+(?:the\s+)?(?:premises|property|building|shopping center)[:\s-]+([^\n]{10,220})/i, /\bpremises[:\s-]+([0-9]{1,6}\s+[A-Z][^\n]{6,200})/i] },
   { key: "suite_number", group: "premises", aliases: ["suite_number", "unit_number", "space_number", "premises_suite"], patterns: [/\b(?:suite|unit|space|apartment)\s+#?\s*([A-Za-z0-9-]+)/i] },
@@ -2056,7 +2063,7 @@ function isStrongAmendmentSignal(fullText: string, documentSubtype?: string | nu
   return false;
 }
 
-function detectDocumentProfileSignals(
+export function detectDocumentProfileSignals(
   fullText: string,
   documentSubtype?: string | null,
   leaseFields?: Record<string, LeaseWorkflowField>,
@@ -2128,7 +2135,7 @@ function detectDocumentProfileSignals(
   };
 }
 
-function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
+export function detectDocumentProfile(fullText: string, documentSubtype?: string | null) {
   return detectDocumentProfileSignals(fullText, documentSubtype).selected_document_profile;
 }
 
@@ -2170,7 +2177,7 @@ function normalizeUniversalValue(itemType: string, raw: unknown) {
   return cleanText(raw);
 }
 
-function createDocumentItem(args: Record<string, unknown>) {
+export function createDocumentItem(args: Record<string, unknown>) {
   const sourceText = cleanText(args.source_text || "");
   const safeSourceText = cleanSourceText(sourceText);
   const fieldKey = args.field_key ? String(args.field_key) : null;
@@ -2215,8 +2222,12 @@ function buildUniversalDocumentItems(args: {
   documentProfile: string;
   leaseFields: Record<string, LeaseWorkflowField>;
   clauses: LeaseWorkflowClause[];
+  /** Already-built document items (e.g. from vertex-fact-ledger's
+   *  dynamic-fact-surfacer.ts) to merge in via this function's existing
+   *  addItem()/seen dedup — optional, backward compatible. */
+  externalItems?: any[];
 }) {
-  const { row, doclingRaw, fullText, documentProfile, leaseFields, clauses } = args;
+  const { row, doclingRaw, fullText, documentProfile, leaseFields, clauses, externalItems } = args;
   const items: any[] = [];
   const seen = new Set<string>();
   const addItem = (item: any) => {
@@ -2299,6 +2310,11 @@ function buildUniversalDocumentItems(args: {
       maps_to_existing_field: false,
       creates_lease_expense_rule: ["operating_expense_recovery", "cam_recoveries", "insurance_requirements", "repairs_maintenance", "late_fees"].includes(clauseType),
     }));
+  }
+
+  for (const externalItem of externalItems || []) {
+    if (!externalItem?.source_text) continue;
+    addItem({ ...externalItem, document_profile: externalItem.document_profile ?? documentProfile });
   }
 
   const hasExpenseClause = items.some((item) =>
@@ -4273,6 +4289,15 @@ export function buildLeaseWorkflowAbstraction(args: {
   doclingRaw?: Record<string, unknown> | null;
   documentSubtype?: string | null;
   unmappedLlmFields?: Array<{ key: string; value: unknown; sourceText?: string | null; sourcePage?: number | null; confidence?: number | null }>;
+  /** Optional — when present, short-circuits the regex-based profile
+   *  classifier (e.g. vertex_fact_ledger's Vertex-classified profile).
+   *  Undefined/null preserves existing regex-detection behavior exactly. */
+  documentProfileOverride?: string | null;
+  /** Optional — pre-built document items (e.g. from vertex_fact_ledger's
+   *  dynamic-fact-surfacer.ts) merged into extractedDocumentItems via the
+   *  existing dedup logic in buildUniversalDocumentItems. Undefined/empty
+   *  preserves existing behavior exactly. */
+  factLedgerDynamicItems?: any[];
 }) {
   const row = args?.row || {};
   const doclingRaw = args?.doclingRaw || {};
@@ -4298,7 +4323,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const pagesDetected = doclingPagesParsed;
   const clauses = buildClauseRecords(doclingRaw, fullText);
   let profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null);
-  let documentProfile = profileDetection.selected_document_profile;
+  let documentProfile = args?.documentProfileOverride || profileDetection.selected_document_profile;
   const leaseFields = buildLeaseFieldMap(row, doclingRaw, clauses, args?.unmappedLlmFields);
   let extractedDocumentItems = buildUniversalDocumentItems({
     row,
@@ -4307,6 +4332,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     documentProfile,
     leaseFields,
     clauses,
+    externalItems: args?.factLedgerDynamicItems,
   });
   applyDocumentItemsToLeaseFields(leaseFields, extractedDocumentItems);
   const fieldEvidenceClauses = buildFieldEvidenceClauses(leaseFields, clauses);
@@ -4314,7 +4340,7 @@ export function buildLeaseWorkflowAbstraction(args: {
   const expenseCamEvidenceClauses = buildExpenseCamEvidenceClauses(leaseFields, clauses);
   if (expenseCamEvidenceClauses.length > 0) clauses.push(...expenseCamEvidenceClauses);
   profileDetection = detectDocumentProfileSignals(fullText, args?.documentSubtype || null, leaseFields, extractedDocumentItems);
-  if (profileDetection.selected_document_profile !== documentProfile) {
+  if (!args?.documentProfileOverride && profileDetection.selected_document_profile !== documentProfile) {
     documentProfile = profileDetection.selected_document_profile;
   }
   extractedDocumentItems = buildUniversalDocumentItems({
@@ -4324,6 +4350,7 @@ export function buildLeaseWorkflowAbstraction(args: {
     documentProfile,
     leaseFields,
     clauses,
+    externalItems: args?.factLedgerDynamicItems,
   });
   const genericSourceTextRejected = Object.values(leaseFields).reduce((count, field) => {
     if (field?.source_clause && isGenericSourceText(field.source_clause)) {
@@ -4690,4 +4717,8 @@ export function buildLeaseWorkflowAbstraction(args: {
 // Test hook (same pattern as _shared/extraction/parser.ts).
 export const __test__ = {
   buildClauseRecords,
+  buildLeaseFieldMap,
+  deriveCamProfile,
+  deriveBudgetPreview,
+  buildBudgetHandoffReadiness,
 };

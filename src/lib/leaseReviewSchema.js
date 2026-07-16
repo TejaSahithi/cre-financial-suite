@@ -56,11 +56,16 @@ export const LEASE_REVIEW_TABS = [
   { key: "rent_charges", label: "Rent & Charges" },
   { key: "expenses_recoveries", label: "Expenses / Recoveries" },
   { key: "cam_rules", label: "CAM Rules" },
+  { key: "taxes", label: "Taxes" },
   { key: "insurance", label: "Insurance" },
+  { key: "utilities", label: "Utilities" },
+  { key: "repairs_maintenance", label: "Repairs & Maintenance" },
   { key: "legal_options", label: "Legal / Options" },
-  { key: "clause_records", label: "Clause Records" },
   { key: "critical_dates", label: "Critical Dates" },
+  { key: "notices", label: "Notices" },
+  { key: "signatures", label: "Signatures" },
   { key: "documents_exhibits", label: "Documents / Exhibits" },
+  { key: "clause_records", label: "Clause Records" },
   { key: "budget_preview", label: "Budget Preview" },
   { key: "extraction_debug", label: "Extraction Debug" },
 ];
@@ -602,6 +607,19 @@ export function isMeaningfulValue(value) {
   return !SENTINEL_NOT_FOUND_VALUES.has(trimmed.toLowerCase());
 }
 
+// Phase 39: a value that is entirely one bare HTML/XML tag (e.g. "<figure>",
+// "</figure>", "<table>") is a layout artifact leaking through from the
+// document's raw markup, never a real field value. Narrow on purpose - only
+// matches a string that IS a single tag, not text that merely contains one.
+const MARKUP_ARTIFACT_VALUE_PATTERN = /^<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?\/?>$/i;
+
+export function isMarkupArtifactValue(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return MARKUP_ARTIFACT_VALUE_PATTERN.test(trimmed);
+}
+
 export function readFieldValue(lease, key) {
   if (!lease) return null;
   const resolved = resolveLeaseField(lease, key, { mode: "canonical" });
@@ -642,7 +660,10 @@ export function hasNaturalSourceBoundary(value) {
   return true;
 }
 
-function normalizeEvidenceComparable(value) {
+// Exported for reuse by clause-record content-based dedup
+// (leaseReviewFieldNormalizer.js) - same normalization used here to compare
+// evidence text against extracted values.
+export function normalizeEvidenceComparable(value) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[()]/g, " ")
@@ -683,9 +704,18 @@ function isoDateSupportTokens(value) {
   };
 }
 
+// Phase 44A-Fix: several of these keywords are verbs whose conjugated forms
+// ("consents", "waived", "renewing", "terminated") were missing entirely
+// under the old exact-word \b(...)\b matching - a real boolean-topic
+// sentence like "Landlord hereby consents to..." never matched "consent".
+// Widened to a word-stem (\w*) match for exactly the verb-like keywords;
+// the non-verb keywords (shall, must, insurance, additional insured,
+// option, not required, no right, none) are left as literal words since
+// they don't have the same conjugation problem and broadening them further
+// would risk over-matching unrelated text.
 function booleanSourceSupportsValue(sourceText) {
   const source = normalizeEvidenceComparable(sourceText);
-  return /\b(shall|must|required|insurance|additional insured|waiver|consent|option|renewal|terminate|not required|no right|none)\b/.test(source);
+  return /\b(shall|must|requir\w*|insurance|additional insured|waiv\w*|consent\w*|option|renew\w*|terminat\w*|not required|no right|none)\b/.test(source);
 }
 
 function sourceTextSupportsValue({ value, rawValue, sourceText, evidenceType, extractionStatus } = {}) {
@@ -949,6 +979,19 @@ export function readFieldEvidence(lease, key) {
       (sourceTextQuality === SOURCE_TEXT_QUALITIES.MISSING || sourceTextQuality === SOURCE_TEXT_QUALITIES.INCONSISTENT));
 
   return {
+    // Phase 44A-Fix: without this, callers that recompute
+    // resolveSourceTextQuality/sourceTextSupportsValue from this returned
+    // evidence object (e.g. hasValidSourceEvidence(evidence) in
+    // normalizeStandardFields) only ever see `rawValue`, which
+    // buildResolverOutput (leaseFieldResolver.js) stringifies via
+    // String(value) whenever there's no dedicated raw-text source on the
+    // entry - turning boolean `true` into the string "true". That silently
+    // defeats sourceTextSupportsValue's `typeof candidate === "boolean"`
+    // check, so booleanSourceSupportsValue never runs for real boolean
+    // fields. Threading the properly-typed value through fixes that at the
+    // source; non-boolean fields are unaffected since String(value) and
+    // value stringify identically for substring matching.
+    value: resolved?.value ?? null,
     rawValue: evRawValue,
     sourcePage: normalizeSourcePage(evSourcePage),
     sourceText: evSourceText ?? null,
@@ -1032,6 +1075,34 @@ export const SOURCE_TEXT_QUALITIES = {
   // accepted list below, so it still blocks required-field approval exactly
   // like MISSING did before this value existed.
   INCONSISTENT: "inconsistent",
+};
+
+// Phase 40: user-facing extraction-mode vocabulary, distinct from
+// EXTRACTION_STATUSES above. Status answers "is this row usable right now"
+// (missing/needs_review/etc.); mode answers "how did this value come to
+// exist" (was it read straight off the page, normalized from a direct
+// quote, inferred, computed, or provided by a human). Resolved by
+// resolveLeaseReviewExtractionMode() in leaseReviewFieldNormalizer.js from
+// existing extraction-status/evidence-quality/review signals only - never
+// fabricated.
+export const EXTRACTION_MODES = {
+  EXPLICIT: "explicit",
+  NORMALIZED: "normalized",
+  INFERRED: "inferred",
+  CALCULATED: "calculated",
+  REVIEWER_ENTERED: "reviewer_entered",
+  MANUAL: "manual",
+  UNKNOWN: "unknown",
+};
+
+export const EXTRACTION_MODE_LABELS = {
+  [EXTRACTION_MODES.EXPLICIT]: "Explicit",
+  [EXTRACTION_MODES.NORMALIZED]: "Normalized",
+  [EXTRACTION_MODES.INFERRED]: "Inferred",
+  [EXTRACTION_MODES.CALCULATED]: "Calculated",
+  [EXTRACTION_MODES.REVIEWER_ENTERED]: "Reviewer Entered",
+  [EXTRACTION_MODES.MANUAL]: "Manual",
+  [EXTRACTION_MODES.UNKNOWN]: "Unknown",
 };
 
 export const EXTRACTION_STATUS_LABELS = {

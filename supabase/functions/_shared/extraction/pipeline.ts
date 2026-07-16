@@ -175,7 +175,7 @@ function getAllExtractableFieldNames(moduleType: ModuleType): string[] {
     .map(([name]) => name);
 }
 
-function snapshotFieldMap(records: any[]): Record<string, Record<string, unknown>> {
+export function snapshotFieldMap(records: any[]): Record<string, Record<string, unknown>> {
   const first = records?.[0]?.fields ?? {};
   const out: Record<string, Record<string, unknown>> = {};
   for (const [field, entry] of Object.entries(first)) {

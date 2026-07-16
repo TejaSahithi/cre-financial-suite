@@ -439,6 +439,242 @@ export async function callVertexAI(opts: VertexAIOptions): Promise<VertexAIRespo
   throw lastError || new Error("All Vertex AI model attempts failed with 404");
 }
 
+export type VertexAIDiagnosticStageName =
+  | "auth_config_loaded"
+  | "jwt_created"
+  | "oauth_request_started"
+  | "oauth_request_completed"
+  | "vertex_request_started"
+  | "vertex_response_received"
+  | "response_parsed";
+
+export interface VertexAIDiagnosticStageEvent {
+  stage: VertexAIDiagnosticStageName;
+  elapsedMs: number;
+}
+
+export class VertexAIDiagnosticError extends Error {
+  category: string;
+  status?: number;
+
+  constructor(category: string, message: string, status?: number) {
+    super(message);
+    this.name = "VertexAIDiagnosticError";
+    this.category = category;
+    this.status = status;
+  }
+}
+
+export interface VertexAISingleRequestDiagnosticOptions extends VertexAIOptions {
+  /** Fixed model for the diagnostic request. Defaults to the primary Vertex model only. */
+  model?: string;
+  /** Fixed location for the diagnostic request. Defaults to VERTEX_LOCATION / GOOGLE_LOCATION / us-central1. */
+  location?: string;
+  /** Test-only escape hatch so unit tests never request an OAuth token. */
+  accessToken?: string;
+  /** Test-only fetch implementation for the Vertex generateContent request. */
+  fetchImpl?: typeof fetch;
+  /** Test-only fetch implementation for the OAuth token request. */
+  oauthFetchImpl?: typeof fetch;
+  /** Test-only JWT override so timeout/error paths can be tested without embedding a private key. */
+  jwtForTest?: string;
+  timeoutMs?: number;
+  oauthTimeoutMs?: number;
+  vertexTimeoutMs?: number;
+  onStage?: (event: VertexAIDiagnosticStageEvent) => void;
+}
+
+function sanitizeDiagnosticProviderText(value: unknown): string {
+  let text = String(value ?? "");
+  const replacements = [
+    /Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi,
+    /-----BEGIN[\s\S]*?PRIVATE KEY-----[\s\S]*?-----END[\s\S]*?PRIVATE KEY-----/gi,
+    /"private_key"\s*:\s*"(?:\\"|[^"])*"/gi,
+    /"client_email"\s*:\s*"(?:\\"|[^"])*"/gi,
+    /"access_token"\s*:\s*"(?:\\"|[^"])*"/gi,
+    /"authorization"\s*:\s*"(?:\\"|[^"])*"/gi,
+  ];
+  for (const pattern of replacements) {
+    text = text.replace(pattern, "[REDACTED]");
+  }
+  return text.slice(0, 500);
+}
+function emitDiagnosticStage(
+  onStage: ((event: VertexAIDiagnosticStageEvent) => void) | undefined,
+  stage: VertexAIDiagnosticStageName,
+  start: number,
+) {
+  try {
+    onStage?.({ stage, elapsedMs: Date.now() - start });
+  } catch {
+    // Stage callbacks are diagnostic-only and must never affect execution.
+  }
+}
+
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutCategory: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    const message = String((error as Error)?.message ?? error ?? "");
+    if ((error as Error)?.name === "AbortError" || /abort|timeout/i.test(message)) {
+      throw new VertexAIDiagnosticError(timeoutCategory, `${timeoutCategory}: request exceeded ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestDiagnosticAccessToken(opts: VertexAISingleRequestDiagnosticOptions, start: number): Promise<string> {
+  const candidates = getServiceAccountCandidates();
+  emitDiagnosticStage(opts.onStage, "auth_config_loaded", start);
+  if (candidates.length === 0) {
+    throw new VertexAIDiagnosticError("auth_or_credentials", "Vertex AI service account is not configured");
+  }
+
+  const saKey = candidates[0].key;
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = opts.jwtForTest ?? await signJWT({
+    iss: saKey.client_email,
+    sub: saKey.client_email,
+    aud: "https://oauth2.googleapis.com/token",
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    iat: now,
+    exp: now + 3600,
+  }, saKey.private_key);
+  emitDiagnosticStage(opts.onStage, "jwt_created", start);
+
+  const oauthFetchImpl = opts.oauthFetchImpl || fetch;
+  const oauthTimeoutMs = opts.oauthTimeoutMs ?? 5000;
+  emitDiagnosticStage(opts.onStage, "oauth_request_started", start);
+  const tokenRes = await fetchWithTimeout(
+    oauthFetchImpl,
+    "https://oauth2.googleapis.com/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion: jwt,
+      }),
+    },
+    oauthTimeoutMs,
+    "oauth_timeout",
+  );
+  emitDiagnosticStage(opts.onStage, "oauth_request_completed", start);
+
+  const tokenText = await tokenRes.text().catch(() => "");
+  if (!tokenRes.ok) {
+    throw new VertexAIDiagnosticError(
+      "oauth_error",
+      `OAuth token request failed with status ${tokenRes.status}: ${sanitizeDiagnosticProviderText(tokenText)}`,
+      tokenRes.status,
+    );
+  }
+
+  let tokenData: any = null;
+  try {
+    tokenData = tokenText ? JSON.parse(tokenText) : null;
+  } catch {
+    throw new VertexAIDiagnosticError("oauth_error", "OAuth token response was not valid JSON");
+  }
+
+  const token = tokenData?.access_token;
+  if (!token) {
+    throw new VertexAIDiagnosticError("oauth_error", "OAuth token response did not contain an access token");
+  }
+  return String(token);
+}
+
+/**
+ * Phase 52B/52C diagnostic helper: one Vertex generateContent request, no
+ * model fallback, no location fallback, no retry loop, no Gemini/OpenAI
+ * fallback. This intentionally does not call callVertexAI(), whose production
+ * behavior retries across model/location attempts.
+ */
+export async function callVertexAISingleRequestDiagnostic(
+  opts: VertexAISingleRequestDiagnosticOptions,
+): Promise<VertexAIResponse & { location: string; latencyMs: number; stages: VertexAIDiagnosticStageEvent[] }> {
+  const start = Date.now();
+  const stages: VertexAIDiagnosticStageEvent[] = [];
+  const onStage = opts.onStage;
+  const recordStage = (event: VertexAIDiagnosticStageEvent) => {
+    stages.push(event);
+    onStage?.(event);
+  };
+
+  const projectId = Deno.env.get("VERTEX_PROJECT_ID") || Deno.env.get("GOOGLE_PROJECT_ID");
+  if (!projectId) {
+    throw new VertexAIDiagnosticError("auth_or_credentials", "Neither VERTEX_PROJECT_ID nor GOOGLE_PROJECT_ID environment variable is set");
+  }
+
+  const location = opts.location || Deno.env.get("VERTEX_LOCATION") || Deno.env.get("GOOGLE_LOCATION") || "us-central1";
+  const model = opts.model || Deno.env.get("VERTEX_MODEL") || Deno.env.get("GEMINI_MODEL") || DEFAULT_MODEL;
+  const accessToken = opts.accessToken || await requestDiagnosticAccessToken({ ...opts, onStage: recordStage }, start);
+  const fetchImpl = opts.fetchImpl || fetch;
+  const vertexTimeoutMs = opts.vertexTimeoutMs ?? opts.timeoutMs ?? 30000;
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  const requestBody: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: opts.userPrompt }] }],
+    generationConfig: {
+      maxOutputTokens: opts.maxOutputTokens ?? 1200,
+      temperature: opts.temperature ?? 0,
+      responseMimeType: opts.responseMimeType ?? "application/json",
+    },
+  };
+
+  if (opts.systemPrompt) {
+    requestBody.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
+  }
+
+  emitDiagnosticStage(recordStage, "vertex_request_started", start);
+  const response = await fetchWithTimeout(
+    fetchImpl,
+    url,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(requestBody),
+    },
+    vertexTimeoutMs,
+    "vertex_timeout",
+  );
+  emitDiagnosticStage(recordStage, "vertex_response_received", start);
+
+  const textBody = await response.text().catch(() => "");
+  let data: any = null;
+  try {
+    data = textBody ? JSON.parse(textBody) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    throw new VertexAIDiagnosticError(
+      "vertex_error",
+      `Vertex AI single diagnostic request failed with status ${response.status}: ${sanitizeDiagnosticProviderText(textBody)}`,
+      response.status,
+    );
+  }
+
+  const content = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const inputTokens = data?.usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = data?.usageMetadata?.candidatesTokenCount ?? 0;
+  emitDiagnosticStage(recordStage, "response_parsed", start);
+  return { content, model, location, inputTokens, outputTokens, latencyMs: Date.now() - start, stages };
+}
 /**
  * Call Vertex AI and parse the response as JSON.
  * Strips markdown code fences if present.

@@ -28,7 +28,7 @@ import {
   readFieldValue,
   resolveSourceTextQuality,
 } from "@/lib/leaseReviewSchema";
-import { collectExtractedDocumentItems } from "@/components/lease-review/utils/dynamicFields";
+import { computeFallbackClauseRows } from "@/lib/leaseReviewFieldNormalizer";
 
 const dollars = (v) => {
   const n = Number(v);
@@ -50,34 +50,6 @@ function cleanDocumentItemSource(value) {
   if (/^[a-z][a-z0-9_]*_[a-z0-9_]*\s*:\s*/i.test(text)) return null;
   if (/^[a-z][a-z0-9_]{2,60}$/i.test(text)) return null;
   return text;
-}
-
-function looksLikeClauseEvidence(value) {
-  const text = cleanDocumentItemSource(value);
-  if (!text) return false;
-  if (text.length > 180) return true;
-  return /\b(?:summary of basic lease information|this lease|article\s+\d+|section\s+\d+|tenant shall|landlord shall|premises|rent:|security deposit|common area|operating expense|insurance|utilities|maintenance|repairs?)\b/i.test(text);
-}
-
-function documentItemSource(item) {
-  if (!item || typeof item !== "object") return null;
-  return cleanDocumentItemSource(
-    item.source_text
-      || item.exact_source_text
-      || item.source_clause
-      || item.exact_text
-      || item.clause_text
-      || item.snippet
-      || (looksLikeClauseEvidence(item.normalized_value ?? item.value ?? item.raw_value ?? item.rawValue)
-        ? item.normalized_value ?? item.value ?? item.raw_value ?? item.rawValue
-        : null),
-  );
-}
-
-function documentItemValue(item) {
-  if (!item || typeof item !== "object") return null;
-  const value = item.normalized_value ?? item.normalizedValue ?? item.normalized_meaning ?? item.normalizedMeaning ?? item.value ?? item.raw_value ?? item.rawValue ?? null;
-  return looksLikeClauseEvidence(value) ? null : value;
 }
 
 export function RentScheduleTable({ leaseId }) {
@@ -181,7 +153,7 @@ export function RentScheduleTable({ leaseId }) {
 }
 
 // ─── Expense Rules / CAM Rules ────────────────────────────────────────
-function useLeaseExpenseRules(leaseOrId) {
+export function useLeaseExpenseRules(leaseOrId) {
   const lease = leaseOrId && typeof leaseOrId === "object" ? leaseOrId : null;
   const leaseId = lease?.id || leaseOrId;
 
@@ -409,108 +381,11 @@ export function ClauseRecordsTable({ lease }) {
   const tableMissing = error && /lease_clauses/i.test(error?.message || "");
 
   // Combine DB rows with extraction_data fallback so we never lose extracted
-  // clause text just because the table isn't deployed yet.
-  const fallbackClauses = useMemo(() => {
-    const rawWorkflowOutput = lease?.extraction_data?.workflow_output || {};
-    const workflowOutput = rawWorkflowOutput.workflow_output || rawWorkflowOutput;
-    const ufPayload = lease?.uploaded_files?.ui_review_payload || lease?.uploaded_file?.ui_review_payload || {};
-    const ufMetaWorkflow = ufPayload?.metadata?.workflow_output || {};
-    const ufWorkflowOutput = ufMetaWorkflow.workflow_output || ufMetaWorkflow;
-    const ufRecordOutput = (ufPayload?.records || ufPayload?.rows || [])[0]?.workflow_output || {};
-    
-    const fromWorkflow = workflowOutput?.lease_clauses;
-    const fromTopLevel = lease?.extraction_data?.lease_clauses;
-    const fromUploadMeta = ufWorkflowOutput?.lease_clauses;
-    const fromUploadRecord = ufRecordOutput?.lease_clauses;
-    const recordOutput = Array.isArray(rawWorkflowOutput.records) ? rawWorkflowOutput.records[0] || {} : {};
-    const itemRows = [
-      workflowOutput.extracted_document_items,
-      workflowOutput.clause_records,
-      recordOutput.extracted_document_items,
-      recordOutput.clause_records,
-      rawWorkflowOutput.extracted_document_items,
-      rawWorkflowOutput.clause_records,
-      lease?.extraction_data?.extracted_document_items,
-      lease?.extraction_data?.clause_records,
-      ufWorkflowOutput.extracted_document_items,
-      ufWorkflowOutput.clause_records,
-      ufRecordOutput.extracted_document_items,
-      ufRecordOutput.clause_records,
-      collectExtractedDocumentItems(lease),
-    ].flatMap((rows) => (Array.isArray(rows) ? rows : []));
-    const fieldMapRows = [
-      workflowOutput.lease_fields,
-      recordOutput.lease_fields,
-      lease?.extraction_data?.fields,
-      ufWorkflowOutput.lease_fields,
-      ufRecordOutput.lease_fields,
-    ].flatMap((map, mapIdx) => {
-      if (!map || typeof map !== "object" || Array.isArray(map)) return [];
-      return Object.entries(map).map(([key, entry]) => ({
-        item_id: `field-map-${mapIdx}-${key}`,
-        item_type: key,
-        label: key.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
-        business_area: "clause_records",
-        source_text: documentItemSource(entry),
-        source_page: entry?.source_page ?? entry?.page_number ?? entry?.page ?? null,
-        confidence: entry?.confidence_score ?? entry?.confidence ?? null,
-        normalized_value: documentItemValue(entry),
-        value: documentItemValue(entry),
-        extraction_status: entry?.extraction_status ?? null,
-      }));
-    });
-    const list = [fromWorkflow, fromTopLevel, fromUploadMeta, fromUploadRecord, recordOutput.lease_clauses]
-      .flatMap((rows) => (Array.isArray(rows) ? rows : []));
-    const clauseRows = list
-      .map((c, idx) => ({
-        id: c.id || c.item_id || `extract-${idx}`,
-        clause_type: normalizeClauseType(c.clause_type || c.type || c.item_type || "clause_records"),
-        clause_title: c.clause_title || c.title || c.label || c.section_title || "Extracted Clause",
-        clause_text: cleanDocumentItemSource(c.clause_text || c.exact_text || c.exact_source_text || c.source_text || c.source_clause),
-        source_page: c.source_page ?? c.page_number ?? c.page ?? null,
-        confidence_score: c.confidence_score ?? c.confidence ?? null,
-        structured_fields_json: c.structured_fields_json || {
-          normalized_meaning: c.normalized_meaning || c.normalized_value || c.value || null,
-          evidence_type: c.evidence_type || null,
-          requires_review: c.requires_review ?? null,
-        },
-      }))
-      .filter((row) => cleanDocumentItemSource(row.clause_text));
-    const discoveredRows = Array.isArray(itemRows)
-      ? [...itemRows, ...fieldMapRows]
-          .filter((item) => documentItemSource(item))
-          .map((item, idx) => {
-            const semanticType = String(item.item_type || item.field_key || item.clause_type || item.business_area || item.display_tab || "clause_records").replace(/^clause[_-]/i, "");
-            return {
-              id: item.item_id || item.id || `document-item-${idx}`,
-              is_document_item: true,
-              clause_type: normalizeClauseType(semanticType),
-              clause_title: item.label || item.section_title || item.item_type || item.field_key || "Discovered Field",
-              clause_text: documentItemSource(item),
-              source_page: item.source_page ?? item.page_number ?? item.page ?? null,
-              confidence_score: item.confidence_score ?? item.confidence ?? null,
-              structured_fields_json: {
-                item_type: item.item_type || null,
-                display_tab: item.display_tab || null,
-                value: documentItemValue(item),
-                extraction_status: item.extraction_status || null,
-                evidence_type: item.evidence_type || null,
-                maps_to_fixed_field: item.maps_to_fixed_field ?? null,
-                creates_dynamic_row: item.creates_dynamic_row ?? null,
-              },
-            };
-          })
-      : [];
-    const dedupedDiscovered = [];
-    const seenDiscovered = new Set();
-    for (const row of discoveredRows) {
-      const key = `${row.clause_title}|${row.source_page ?? ""}|${row.clause_text}`;
-      if (seenDiscovered.has(key)) continue;
-      seenDiscovered.add(key);
-      dedupedDiscovered.push(row);
-    }
-    return [...clauseRows, ...dedupedDiscovered];
-  }, [lease]);
+  // clause text just because the table isn't deployed yet. The union logic
+  // itself now lives in computeFallbackClauseRows() (leaseReviewFieldNormalizer.js)
+  // — shared with the debug panel's clause count so the two can't disagree —
+  // ported verbatim here, not reimplemented.
+  const fallbackClauses = useMemo(() => computeFallbackClauseRows(lease), [lease]);
 
   const allClauses = useMemo(() => {
     const sourceBackedFallbacks = fallbackClauses.filter((clause) => cleanDocumentItemSource(clause.clause_text));
