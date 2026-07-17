@@ -2,7 +2,7 @@
 
 Date: 2026-07-17
 Branch: feature/document-intelligence-v3
-Verdict: PHASE 5D COMPLETE � SOURCE LINKAGE VALIDATED
+Verdict: PHASE 5D COMPLETE — SOURCE LINKAGE AND RPC SECURITY VALIDATED
 
 ## 1. Executive Result
 
@@ -209,18 +209,87 @@ Changed files and this report were checked for:
 - Azure Document Intelligence keys.
 - Vertex service-account private keys.
 - OAuth access tokens.
-- Production project references used as credentials.
-- Real customer document content.
+- Production credential references.
+- Non-synthetic document text.
 
-Result: PASS. Secret value scan passed for 13 files. No committed secrets or real customer document content were found.
+Result: PASS. Secret value scan passed for 13 files. No committed secrets or non-synthetic document text were found.
 
 Notes:
 
 - Phase 5D removed hardcoded local Supabase dev-key fallbacks from the touched source-link property test; local keys are supplied by environment during verification.
 - Phase 5D fixtures use sanitized local-only text and `example.test` emails.
 
-## 16. Final Verdict
+## 16. Final Gate - Migration Replay and RPC Authorization
 
-PHASE 5D COMPLETE � SOURCE LINKAGE VALIDATED
+Preserved state:
+
+- Branch: `feature/document-intelligence-v3`.
+- HEAD: `fc595a0`.
+- Initial `git status --short`: clean in this checkout; Phase 5D implementation files were already tracked at HEAD before this final gate.
+- Supabase CLI: `2.105.0`.
+- Migration files around the Phase 5D timestamp were ordered as:
+  - `20260819000000_document_intelligence_v3_scaffold.sql`
+  - `20260820000000_document_intelligence_v3_idempotency.sql`
+  - `20260820000001_phase5d_source_link_typed_source.sql`
+  - `20260821000000_document_intelligence_v3_run_profile_columns.sql`
+  - `20260822000000_document_intelligence_v3_layout_summary_column.sql`
+  - `20260823000000_document_intelligence_v3_package_graph.sql`
+- Duplicate migration timestamp check by filename prefix: PASS, no duplicate timestamp exists.
+
+Clean local replay evidence:
+
+- Local DB content check before reset showed synthetic/test fixture names only, e.g. `Audit Cleanup Org ...`; no non-synthetic document text was inspected.
+- Migration file count: `170` SQL files.
+- `supabase db reset --local`: SQL replay reached and applied `20260823000000_document_intelligence_v3_package_graph.sql`; process exit code `1` after SQL replay during local Supabase CLI post-reset `Updating vector buckets` with `FeatureNotEnabled`.
+- `supabase db reset --db-url postgresql://postgres:postgres@127.0.0.1:54322/postgres`: same result; SQL replay reached and applied `20260823000000_document_intelligence_v3_package_graph.sql`; process exit code `1` at the same post-SQL vector-bucket step.
+- Local migration table after replay: `170` recorded migrations.
+- Phase 5D/package-graph ordering in `supabase_migrations.schema_migrations`: `20260820000000`, `20260820000001`, `20260823000000`.
+- `supabase migration list --local`: PASS; local and database migration versions matched through `20260823000000`.
+- `update_lease_extraction_field` final signature: `update_lease_extraction_field(uuid,uuid,uuid,text,text,text,text,jsonb)`.
+- Overload count for `public.update_lease_extraction_field`: `1`.
+- `leases.source_file_id`: present as nullable `uuid`.
+- Constraint/index evidence: `leases_source_file_id_fkey` references `uploaded_files(id) ON DELETE SET NULL`; `idx_leases_source_file_id` exists; `idx_leases_extraction_source_file` exists.
+
+RPC security posture:
+
+- Function: `public.update_lease_extraction_field(uuid,uuid,uuid,text,text,text,text,jsonb)`.
+- Security mode: `SECURITY DEFINER`.
+- Owner: `postgres`.
+- `search_path`: `public, pg_temp`.
+- Grants: `PUBLIC=false`, `anon=false`, `authenticated=false`, `service_role=true`; function ACL is `postgres=X/postgres,service_role=X/postgres`.
+- The function body does not reference `auth.uid()`.
+- The function does not internally check organization membership.
+- The function does not internally validate `source_file_id` ownership.
+- Callers can supply actor identity parameters (`p_actor_user_id`, `p_actor_email`).
+- Direct tenant/source authorization therefore remains intentionally outside this RPC and is enforced by the service-role Edge Function boundary.
+- Browser/authenticated users cannot execute the RPC directly, so the lack of internal membership/source checks is not exploitable from browser direct RPC in the current local schema.
+
+Direct authenticated RPC negative test:
+
+- Added `scripts/phase5d-direct-rpc-authorization.test.js`.
+- It seeds two orgs, one lease, same-org and different-org uploads, then calls PostgREST RPC directly as authenticated users, not through an Edge Function.
+- A. Same-org authenticated user with valid same-org source upload: rejected because authenticated has no EXECUTE.
+- B. Same-org authenticated user with different-org source upload: rejected because authenticated has no EXECUTE.
+- C. Different-org authenticated user targeting the lease: rejected because authenticated has no EXECUTE.
+- Failed calls left `leases.source_file_id` null, left `leases.extraction_data.source_file_id` null, and created `0` `source_file_manually_linked` audit rows.
+
+Final verification after replay:
+
+- Focused source-link Vitest: `3 passed (3)` test files, `13 passed (13)` tests.
+- Phase 5D authenticated integration after replay/Kong refresh: `1 passed (1)` test file, `1 passed (1)` test.
+- Direct RPC authorization test after replay/Kong refresh: `1 passed (1)` test file, `1 passed (1)` test.
+- Related Deno backend after replay/Kong refresh: `18 passed | 0 failed`.
+- Deno check: PASS for `review-approve`, `update-lease-extraction-field`, `approve-lease-workflow`, and shared lease approval workflow files.
+- Full frontend regression: `61 passed (61)` test files, `675 passed (675)` tests.
+- `npm run lint`: PASS.
+- `npm run typecheck`: PASS.
+- `npm run build`: PASS, built in `10.15s` with existing Vite chunk/dynamic-import warnings.
+- `git diff --check`: PASS.
+- Migration drift/status: PASS via `supabase migration list --local`; local DB recorded all `170` migrations.
+- Local Auth 502s immediately after the second reset were traced to Kong routing to the pre-reset Auth container IP; `docker restart supabase_kong_cre-financial-suite-main` refreshed local routing, and a sanitized Auth admin probe returned HTTP `200` before final reruns.
+- No Azure, Vertex, parser, worker, deployment, remote Supabase, provider default, canonical-layout, or live-provider path was touched.
+## 17. Final Verdict
+
+PHASE 5D COMPLETE — SOURCE LINKAGE AND RPC SECURITY VALIDATED
 
 Deployment remains out of scope for this phase. No remote Supabase project was accessed, and no live provider call was made.
