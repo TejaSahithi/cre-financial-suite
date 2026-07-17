@@ -92,6 +92,14 @@ function collectProfileCandidates(lease) {
   ].filter(Boolean);
 }
 
+function collectStoredProfileCandidates(lease) {
+  return [
+    lease?.document_profile,
+    lease?.document_type,
+    lease?.document_subtype,
+  ].filter(Boolean);
+}
+
 export function normalizeCurrentReviewProfile(profile) {
   const token = normalizeToken(profile);
   if (!token) return "unknown_cre_document";
@@ -102,6 +110,11 @@ export function normalizeCurrentReviewProfile(profile) {
 }
 
 export function resolveCurrentReviewProfile(lease) {
+  for (const candidate of collectStoredProfileCandidates(lease)) {
+    const normalized = normalizeCurrentReviewProfile(candidate);
+    if (normalized !== "unknown_cre_document") return normalized;
+  }
+
   const detected = normalizeCurrentReviewProfile(detectDocumentProfile(lease));
   if (detected === "base_lease") return "base_lease";
 

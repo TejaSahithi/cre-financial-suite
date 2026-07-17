@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { resolveBudgetPreviewInputs } from "@/components/lease-review/utils/budgetPreviewInputs";
 
 function normalizeWorkflow(lease) {
   return lease?.extraction_data?.workflow_output || lease?.extraction_data?.workflowOutput || {};
@@ -19,19 +20,16 @@ export function BudgetPreviewCard({ lease }) {
   const excludedInputs = Array.isArray(readiness.excluded_unapproved_inputs) ? readiness.excluded_unapproved_inputs : [];
   const gateReady = readiness.ready === true;
 
-  const monthly = useMemo(() => {
-    const workflowRent = workflowPreview?.rent_revenue_budget?.[0]?.monthly_rent;
-    const v = Number(workflowRent || lease.monthly_rent || (lease.annual_rent ? lease.annual_rent / 12 : 0));
-    return Number.isFinite(v) ? v : 0;
-  }, [workflowPreview?.rent_revenue_budget, lease.monthly_rent, lease.annual_rent]);
-
-  const startBasis = workflowPreview?.rent_revenue_budget?.[0]?.start_date || lease.commencement_date || lease.start_date;
+  const { monthly, startBasis, escalationRate } = useMemo(
+    () => resolveBudgetPreviewInputs(lease),
+    [lease],
+  );
 
   const months = useMemo(() => {
     const out = [];
     if (!startBasis) return out;
     const start = new Date(startBasis);
-    const escalation = Number(lease.escalation_rate || 0) / 100;
+    const escalation = Number(escalationRate || 0) / 100;
     for (let i = 0; i < 12; i++) {
       const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
       const yearsIn = Math.floor(i / 12);
@@ -39,7 +37,7 @@ export function BudgetPreviewCard({ lease }) {
       out.push({ label: d.toLocaleDateString(undefined, { year: "numeric", month: "short" }), amount: stepRent });
     }
     return out;
-  }, [startBasis, lease.escalation_rate, monthly]);
+  }, [startBasis, escalationRate, monthly]);
 
   if (!startBasis || !monthly) {
     return (

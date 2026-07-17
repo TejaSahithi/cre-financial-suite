@@ -181,6 +181,24 @@ describe("Phase 39: profile detection reconciliation", () => {
     expect(source).toContain('normalized.currentReviewPolicy?.profile === "assignment"');
   });
 
+  it("stored amendment metadata keeps reduced-review policy even when carried-forward lease values are present", () => {
+    const fixture = {
+      ...leaseWithDocumentType("amendment", {
+        commencement_date: { value: "2026-06-01" },
+        expiration_date: { value: "2031-12-31" },
+        monthly_rent: { value: 5000 },
+      }),
+      document_subtype: "amendment",
+      monthly_rent: 5000,
+      commencement_date: "2026-06-01",
+    };
+
+    const policy = buildCurrentReviewPolicy(fixture);
+
+    expect(policy.profile).toBe("assignment");
+    expect(policy.applyBaseLeaseBlockers).toBe(false);
+    expect(policy.requiredFieldKeys).not.toContain("monthly_rent");
+  });
   it("base lease documents still resolve as base_lease (full-lease-signal override preserved)", () => {
     // AI mis-stamped this as "assignment", but 3 full-lease signals
     // (commencement, expiration, rent) are present, so detectDocumentProfile
