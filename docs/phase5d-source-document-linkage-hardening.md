@@ -2,7 +2,7 @@
 
 Date: 2026-07-17
 Branch: feature/document-intelligence-v3
-Verdict: PHASE 5D COMPLETE — SOURCE LINKAGE VALIDATED
+Verdict: PHASE 5D COMPLETE ï¿½ SOURCE LINKAGE VALIDATED
 
 ## 1. Executive Result
 
@@ -221,6 +221,6 @@ Notes:
 
 ## 16. Final Verdict
 
-PHASE 5D COMPLETE — SOURCE LINKAGE VALIDATED
+PHASE 5D COMPLETE ï¿½ SOURCE LINKAGE VALIDATED
 
 Deployment remains out of scope for this phase. No remote Supabase project was accessed, and no live provider call was made.
